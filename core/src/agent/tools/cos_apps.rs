@@ -145,9 +145,7 @@ fn apps_root() -> PathBuf {
 }
 
 fn data_dir() -> String {
-    if crate::paths::is_routed_job()
-        || crate::paths::current_owner_uid_override().is_some()
-    {
+    if crate::paths::is_routed_job() || crate::paths::current_owner_uid_override().is_some() {
         crate::paths::user_data_dir().to_string_lossy().into_owned()
     } else {
         crate::paths::data_dir().to_string_lossy().into_owned()
@@ -158,8 +156,8 @@ fn manifest_schema_at(app_dir: &Path) -> Result<String, String> {
     let path = app_dir.join("app.json");
     let body = std::fs::read_to_string(&path)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
-    let manifest = Manifest::from_json(&body)
-        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    let manifest =
+        Manifest::from_json(&body).map_err(|error| format!("parse {}: {error}", path.display()))?;
     Ok(crate::apps::manifest_schema(&manifest).to_string())
 }
 
@@ -220,21 +218,10 @@ impl Tool for CosAppTool {
             })
             .unwrap_or_default();
 
-        // Coarse capability gate. Each cos app is reached through
-        // `agent.invoke` with a Name scope equal to the app name —
-        // e.g. holding `agent.invoke:fs` (or `agent.invoke:*`) is the
-        // permission to dispatch *any* `cos_app_fs` command. The
-        // fine-grained per-arg checks (e.g. `fs.read` on a specific
-        // path) happen *inside* the Python app via
-        // `cos_runtime.policy.require`, where the args have already
-        // been parsed. Schema introspection bypasses this gate so
-        // tooling / the agent registry can still describe an app it
-        // is not allowed to call.
+        // Metadata inspection grants nothing. Brokered launches settle invoke
+        // and argument-bound needs together; only local launches preflight here.
         if command != "__schema__" {
-            if let Err(denial) = crate::caps::require(
-                crate::caps::Verb::AGENT_INVOKE,
-                crate::caps::Scope::name(&self.app),
-            ) {
+            if let Err(denial) = require_local_invocation(&self.app) {
                 return ToolResult::err(denial.to_string());
             }
         }
@@ -255,9 +242,7 @@ impl Tool for CosAppTool {
             }
         };
         if command == "__schema__" {
-            return ToolResult::ok(
-                crate::apps::manifest_schema(app_launch.manifest()).to_string(),
-            );
+            return ToolResult::ok(crate::apps::manifest_schema(app_launch.manifest()).to_string());
         }
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
@@ -367,13 +352,15 @@ impl Tool for CosAppCatalog {
             .unwrap_or_default();
 
         let apps_dir = apps_root();
-        let apps = match tokio::task::spawn_blocking(move || crate::apps::discover_verified(&apps_dir)).await
-        {
-            Ok(map) => map,
-            Err(join_err) => {
-                return ToolResult::err(format!("apps catalogue scan panicked: {join_err}"));
-            }
-        };
+        let apps =
+            match tokio::task::spawn_blocking(move || crate::apps::discover_verified(&apps_dir))
+                .await
+            {
+                Ok(map) => map,
+                Err(join_err) => {
+                    return ToolResult::err(format!("apps catalogue scan panicked: {join_err}"));
+                }
+            };
 
         match command.as_str() {
             "list" => ToolResult::ok(render_catalog_list(&apps)),
@@ -416,7 +403,12 @@ fn render_catalog_list(apps: &std::collections::BTreeMap<String, crate::apps::Ap
         } else {
             summary
         };
-        out.push_str(&format!("  {:<width$}  {}\n", id, summary, width = id_width));
+        out.push_str(&format!(
+            "  {:<width$}  {}\n",
+            id,
+            summary,
+            width = id_width
+        ));
     }
     out
 }
@@ -476,12 +468,7 @@ fn render_catalog_search(
 fn render_app_detail(app: &crate::apps::App) -> String {
     let m = &app.manifest;
     let mut out = String::new();
-    out.push_str(&format!(
-        "{} ({} v{})\n",
-        m.name.current(),
-        m.id,
-        m.version
-    ));
+    out.push_str(&format!("{} ({} v{})\n", m.name.current(), m.id, m.version));
     let summary = m.summary.current();
     if !summary.is_empty() {
         out.push_str(&format!("Summary: {}\n", summary));
@@ -521,10 +508,18 @@ fn render_app_detail(app: &crate::apps::App) -> String {
     for (verb, op) in &m.operations {
         out.push_str(&format!("  {} — {}\n", verb, op.label.current()));
         if !op.effects.is_empty() {
-            let effects = op.effects.iter().map(|effect| {
-                format!("{} ({:?}, recovery {:?}, App-declared only)",
-                    effect.label.current(), effect.kind, effect.recovery)
-            }).collect::<Vec<_>>();
+            let effects = op
+                .effects
+                .iter()
+                .map(|effect| {
+                    format!(
+                        "{} ({:?}, recovery {:?}, App-declared only)",
+                        effect.label.current(),
+                        effect.kind,
+                        effect.recovery
+                    )
+                })
+                .collect::<Vec<_>>();
             out.push_str(&format!("      expected effects: {}\n", effects.join("; ")));
         }
         let op_summary = op.summary.current();
@@ -557,10 +552,9 @@ fn render_app_detail(app: &crate::apps::App) -> String {
                         crate::caps::manifest::ScopeBinding::FromArgMap { arg, .. } => {
                             format!("from-arg-map({arg})")
                         }
-                        crate::caps::manifest::ScopeBinding::FromArgOrWild {
-                            arg,
-                            wild_when,
-                        } => format!("from-arg-or-wild({arg}, {wild_when})"),
+                        crate::caps::manifest::ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                            format!("from-arg-or-wild({arg}, {wild_when})")
+                        }
                         crate::caps::manifest::ScopeBinding::Fixed { scope } => scope.to_string(),
                         crate::caps::manifest::ScopeBinding::Wild => "*".to_string(),
                     };
@@ -681,15 +675,10 @@ impl Tool for CosAppRun {
         };
 
         if command == "__schema__" {
-            return ToolResult::ok(
-                crate::apps::manifest_schema(app_launch.manifest()).to_string(),
-            );
+            return ToolResult::ok(crate::apps::manifest_schema(app_launch.manifest()).to_string());
         }
 
-        if let Err(denial) = crate::caps::require(
-            crate::caps::Verb::AGENT_INVOKE,
-            crate::caps::Scope::name(&app_name),
-        ) {
+        if let Err(denial) = require_local_invocation(&app_name) {
             return ToolResult::err(denial.to_string());
         }
 
@@ -697,6 +686,19 @@ impl Tool for CosAppRun {
         let apps = apps_root().to_string_lossy().to_string();
         invocation::run(app_launch, command, args, data, apps).await
     }
+}
+
+pub(super) fn require_local_invocation(app_id: &str) -> Result<(), crate::caps::Denial> {
+    if crate::bridge::use_clawd_app_session_backend()
+        && crate::proc::current_session_id().is_some_and(|id| !id.is_empty())
+    {
+        // Registration includes agent.invoke in the root's all-or-none plan.
+        return Ok(());
+    }
+    crate::caps::require(
+        crate::caps::Verb::AGENT_INVOKE,
+        crate::caps::Scope::name(app_id),
+    )
 }
 
 fn is_valid_app_id(s: &str) -> bool {

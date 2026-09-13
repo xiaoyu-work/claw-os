@@ -981,7 +981,7 @@ impl Tool for AppSessionTool {
         let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
 
         let hosted = crate::clawd::client::has_gateway();
-        if !hosted {
+        if !crate::bridge::use_clawd_app_session_backend() {
             for cap in &caps {
                 if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
                     let msg = denial.to_string();
@@ -1227,10 +1227,7 @@ impl Tool for CosAppSessionOpen {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::err("missing `app` field".to_string()),
         };
-        if let Err(denial) = crate::caps::require(
-            crate::caps::Verb::AGENT_INVOKE,
-            crate::caps::Scope::name(&app_id),
-        ) {
+        if let Err(denial) = super::cos_apps::require_local_invocation(&app_id) {
             return ToolResult::err(denial.to_string());
         }
         // The verified lookup: a quarantined install is not something

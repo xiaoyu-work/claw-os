@@ -89,7 +89,8 @@ async fn trusted_non_app_task_checks_caps_without_opening_extension_runtime_stat
         "session_id":"task-scope","pid":std::process::id(),"command":["task"],
         "started_at":"now","stdout_path":"","stderr_path":"","group":"agent",
         "caps":CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("demo"))])
-    })).unwrap();
+    }))
+    .unwrap();
     for (group, app, allowed) in [
         ("agent", None, true),
         ("app", Some("demo"), false),
@@ -99,13 +100,26 @@ async fn trusted_non_app_task_checks_caps_without_opening_extension_runtime_stat
         session.group = Some(group.to_string());
         session.app_id = app.map(str::to_string);
         crate::paths::with_routed_job(crate::paths::with_user_override(
-            uid, directory.path().to_path_buf(),
+            uid,
+            directory.path().to_path_buf(),
             crate::proc::with_trusted_session_override(session, async {
-                let result = require_impl(Verb::AGENT_INVOKE, Scope::name("demo"), Mode::Strict, Some("task-scope"));
+                let result = require_impl(
+                    Verb::AGENT_INVOKE,
+                    Scope::name("demo"),
+                    Mode::Strict,
+                    Some("task-scope"),
+                );
                 assert_eq!(result.is_ok(), allowed, "{group}: {result:?}");
-                assert!(require_impl(Verb::AGENT_INVOKE, Scope::name("other"), Mode::Strict, Some("task-scope")).is_err());
+                assert!(require_impl(
+                    Verb::AGENT_INVOKE,
+                    Scope::name("other"),
+                    Mode::Strict,
+                    Some("task-scope")
+                )
+                .is_err());
             }),
-        )).await;
+        ))
+        .await;
     }
 }
 
@@ -188,9 +202,10 @@ fn denies_with_verb_not_granted_when_verb_missing() {
         err.reason,
         super::super::denial::DenialReason::VerbNotGranted
     ));
-    assert!(err.hint.as_deref().is_some_and(|hint| {
-        hint.contains("approval request") && hint.contains("pending")
-    }));
+    assert!(err
+        .hint
+        .as_deref()
+        .is_some_and(|hint| { hint.contains("approval request") && hint.contains("pending") }));
     let pending = crate::approvals::list_pending();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].verb, Verb::FS_DELETE.as_str());
@@ -208,9 +223,10 @@ fn low_risk_denial_creates_an_exact_approval_request() {
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
     let err = require(Verb::NET_RESOLVE, Scope::host("example.com")).unwrap_err();
-    assert!(err.hint.as_deref().is_some_and(|hint| {
-        hint.contains("approval request") && hint.contains("pending")
-    }));
+    assert!(err
+        .hint
+        .as_deref()
+        .is_some_and(|hint| { hint.contains("approval request") && hint.contains("pending") }));
     let pending = crate::approvals::list_pending();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].verb, Verb::NET_RESOLVE.as_str());
@@ -257,7 +273,10 @@ fn approved_high_risk_request_allows_retry() {
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
 
     let first = require(Verb::SYS_CRASH, Scope::name("system")).unwrap_err();
-    assert!(first.hint.as_deref().is_some_and(|hint| hint.contains("pending")));
+    assert!(first
+        .hint
+        .as_deref()
+        .is_some_and(|hint| hint.contains("pending")));
     let pending = crate::approvals::list_pending();
     assert_eq!(pending.len(), 1);
     crate::approvals::approve(
@@ -622,6 +641,7 @@ fn require_writes_to_caps_jsonl() {
 /// asked and answers with whatever the test configured.
 #[derive(Debug)]
 struct FakeGateway {
+    boundary: std::sync::Mutex<Result<crate::activities::CapabilityBoundaryDecision, String>>,
     consume: std::sync::Mutex<Result<bool, String>>,
     request: std::sync::Mutex<Result<crate::caps::PendingApproval, String>>,
     asked: std::sync::Mutex<Vec<(String, String)>>,
@@ -633,6 +653,9 @@ impl FakeGateway {
         request: Result<crate::caps::PendingApproval, String>,
     ) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
+            boundary: std::sync::Mutex::new(Ok(
+                crate::activities::CapabilityBoundaryDecision::Normal,
+            )),
             consume: std::sync::Mutex::new(consume),
             request: std::sync::Mutex::new(request),
             asked: std::sync::Mutex::new(Vec::new()),
@@ -647,6 +670,14 @@ impl FakeGateway {
 }
 
 impl crate::caps::ApprovalGateway for FakeGateway {
+    fn boundary(
+        &self,
+        _verb: Verb,
+        _scope: &Scope,
+    ) -> Result<crate::activities::CapabilityBoundaryDecision, String> {
+        self.boundary.lock().unwrap().clone()
+    }
+
     fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
         self.record(verb, scope);
         self.consume.lock().unwrap().clone()
@@ -731,4 +762,63 @@ fn an_unavailable_broker_keeps_the_gate_closed() {
         .expect_err("mediation failure must not open the gate");
     let hint = denial.hint.unwrap_or_default();
     assert!(hint.contains("could not create approval request"), "{hint}");
+}
+
+#[test]
+fn activity_deny_precedes_standing_caps_and_never_files_or_consumes_consent() {
+    let _lock = env_lock();
+    let reg = registry_with_caps(
+        "s-policy",
+        r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#,
+    );
+    let _g = EnvGuard::new(&reg, Some("s-policy"), Some("strict"));
+    let gateway = FakeGateway::new(
+        Ok(true),
+        Ok(crate::caps::PendingApproval { request_id: None }),
+    );
+    *gateway.boundary.lock().unwrap() = Ok(crate::activities::CapabilityBoundaryDecision::Deny);
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+    let denial = require(Verb::FS_READ, Scope::path("/home/jay/file")).unwrap_err();
+    assert!(matches!(denial.reason, DenialReason::ActivityPolicy));
+    assert!(gateway.asked.lock().unwrap().is_empty());
+    assert!(crate::approvals::list_pending().is_empty());
+    *gateway.boundary.lock().unwrap() = Err("policy store unavailable".into());
+    assert!(matches!(
+        require(Verb::FS_READ, Scope::path("/home/jay/file"))
+            .unwrap_err()
+            .reason,
+        DenialReason::ActivityPolicy
+    ));
+    assert!(gateway.asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn activity_confirmation_is_required_even_for_held_caps_and_permissive_mode() {
+    let _lock = env_lock();
+    let reg = registry_with_caps(
+        "s-policy",
+        r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#,
+    );
+    let _g = EnvGuard::new(&reg, Some("s-policy"), Some("permissive"));
+    let gateway = FakeGateway::new(
+        Ok(false),
+        Ok(crate::caps::PendingApproval {
+            request_id: Some("ap-exact".into()),
+        }),
+    );
+    *gateway.boundary.lock().unwrap() =
+        Ok(crate::activities::CapabilityBoundaryDecision::RequireApproval);
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+    let denial = require(Verb::FS_READ, Scope::path("/home/jay/file")).unwrap_err();
+    assert!(matches!(
+        denial.reason,
+        DenialReason::ActivityApprovalRequired
+    ));
+    assert!(denial.hint.unwrap().contains("ap-exact"));
+    assert_eq!(gateway.asked.lock().unwrap().len(), 2);
+    *gateway.consume.lock().unwrap() = Ok(true);
+    require(Verb::FS_READ, Scope::path("/home/jay/file")).unwrap();
+    assert_eq!(gateway.asked.lock().unwrap().len(), 3);
 }

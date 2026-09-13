@@ -32,6 +32,10 @@ pub struct Denial {
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DenialReason {
+    /// Activity constraints deny this request or cannot be checked.
+    ActivityPolicy,
+    /// Existing permissions do not replace this Activity's one-time consent.
+    ActivityApprovalRequired,
     /// Session has no capability for the requested verb at all.
     VerbNotGranted,
     /// Session holds the verb but at scopes that don't cover the request.
@@ -54,11 +58,7 @@ impl Denial {
         }
     }
 
-    pub fn scope_out_of_range(
-        verb: Verb,
-        requested_scope: Scope,
-        granted: &CapSet,
-    ) -> Self {
+    pub fn scope_out_of_range(verb: Verb, requested_scope: Scope, granted: &CapSet) -> Self {
         let granted_scopes = granted
             .iter()
             .filter(|c| c.verb == verb)
@@ -109,6 +109,8 @@ impl Denial {
     /// Localized one-line summary suitable for logs and CLI errors.
     pub fn summary(&self) -> String {
         let header = match self.reason {
+            DenialReason::ActivityPolicy => SUMMARY_ACTIVITY_POLICY.current(),
+            DenialReason::ActivityApprovalRequired => SUMMARY_ACTIVITY_APPROVAL.current(),
             DenialReason::VerbNotGranted => SUMMARY_VERB_NOT_GRANTED.current(),
             DenialReason::ScopeOutOfRange => SUMMARY_SCOPE_OUT_OF_RANGE.current(),
             DenialReason::NoSession => SUMMARY_NO_SESSION.current(),
@@ -160,10 +162,13 @@ const SUMMARY_VERB_NOT_GRANTED: LocalizedStr =
     LocalizedStr::new("Permission denied (capability not granted)");
 const SUMMARY_SCOPE_OUT_OF_RANGE: LocalizedStr =
     LocalizedStr::new("Permission denied (outside granted scope)");
-const SUMMARY_NO_SESSION: LocalizedStr =
-    LocalizedStr::new("Permission denied (no active session)");
+const SUMMARY_NO_SESSION: LocalizedStr = LocalizedStr::new("Permission denied (no active session)");
 const SUMMARY_PID_MISMATCH: LocalizedStr =
     LocalizedStr::new("Permission denied (process tree mismatch)");
+const SUMMARY_ACTIVITY_POLICY: LocalizedStr =
+    LocalizedStr::new("Permission denied (Activity capability boundary)");
+const SUMMARY_ACTIVITY_APPROVAL: LocalizedStr =
+    LocalizedStr::new("Permission denied (Activity requires confirmation)");
 
 #[cfg(test)]
 mod tests {

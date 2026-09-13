@@ -33,6 +33,12 @@ pub enum Command {
     ActivityExecutionLimitsSet,
     #[serde(rename = "activity.execution_limits.enabled")]
     ActivityExecutionLimitsEnabled,
+    #[serde(rename = "activity.capability_policy.get")]
+    ActivityCapabilityPolicyGet,
+    #[serde(rename = "activity.capability_policy.set")]
+    ActivityCapabilityPolicySet,
+    #[serde(rename = "activity.capability_policy.enabled")]
+    ActivityCapabilityPolicyEnabled,
     #[serde(rename = "activity.objects")]
     ActivityObjects,
     #[serde(rename = "activity.object.attach")]
@@ -70,7 +76,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 29] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -80,6 +86,9 @@ impl Command {
         Self::ActivityExecutionLimitsGet,
         Self::ActivityExecutionLimitsSet,
         Self::ActivityExecutionLimitsEnabled,
+        Self::ActivityCapabilityPolicyGet,
+        Self::ActivityCapabilityPolicySet,
+        Self::ActivityCapabilityPolicyEnabled,
         Self::ActivityObjects,
         Self::ActivityObjectAttach,
         Self::ActivityObjectStateList,
@@ -110,6 +119,9 @@ impl Command {
             Self::ActivityExecutionLimitsGet => "activity.execution_limits.get",
             Self::ActivityExecutionLimitsSet => "activity.execution_limits.set",
             Self::ActivityExecutionLimitsEnabled => "activity.execution_limits.enabled",
+            Self::ActivityCapabilityPolicyGet => "activity.capability_policy.get",
+            Self::ActivityCapabilityPolicySet => "activity.capability_policy.set",
+            Self::ActivityCapabilityPolicyEnabled => "activity.capability_policy.enabled",
             Self::ActivityObjects => "activity.objects",
             Self::ActivityObjectAttach => "activity.object.attach",
             Self::ActivityObjectStateList => "activity.object_state.list",

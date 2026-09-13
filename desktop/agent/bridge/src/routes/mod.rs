@@ -32,6 +32,14 @@ pub fn api() -> Router<AppState> {
         .route("/activities/:id", get(activities::get).patch(activities::update))
         .route("/activities/:id/receipts", get(activities::receipts))
         .route(
+            "/activities/:id/capability-policy",
+            get(activities::capability_policy::get).post(activities::capability_policy::set),
+        )
+        .route(
+            "/activities/:id/capability-policy/enabled",
+            post(activities::capability_policy::enabled),
+        )
+        .route(
             "/activities/:id/execution-limits",
             get(activities::execution_limits::get).post(activities::execution_limits::set),
         )

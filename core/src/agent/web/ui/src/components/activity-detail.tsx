@@ -5,12 +5,13 @@ import { ActivityForm } from "@/components/activity-form";
 import { ActivityObjectsPanel } from "@/components/activity-objects";
 import { ActivityObjectStatePanel } from "@/components/activity-object-state";
 import { ActivityExecutionLimitsPanel } from "@/components/activity-execution-limits";
+import { ActivityCapabilityPolicyPanel } from "@/components/activity-capability-policy";
 import { ActivityReceiptsPanel } from "@/components/activity-receipts";
 import { ActivityWork } from "@/components/activity-work";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { activityError, useActivity, useActivityObjects, useActivityObjectState, useActivityReceipts, useActivityExecutionLimits } from "@/hooks/use-activities";
+import { activityError, useActivity, useActivityObjects, useActivityObjectState, useActivityReceipts, useActivityExecutionLimits, useActivityCapabilityPolicy } from "@/hooks/use-activities";
 import { activityApi, activityStateLabels, type ActivityState } from "@/lib/activities";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,7 @@ export function ActivityDetailPanel({
   const receipts = useActivityReceipts(id);
   const objectState = useActivityObjectState(id);
   const executionLimits = useActivityExecutionLimits(id);
+  const capabilityPolicy = useActivityCapabilityPolicy(id);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
@@ -64,6 +66,7 @@ export function ActivityDetailPanel({
       void receipts.refresh();
       void objectState.refresh();
       void executionLimits.refresh();
+      void capabilityPolicy.refresh();
       const [fresh] = await Promise.all([view.refresh(), changed.current()]);
       if (!mounted.current) return false;
       setNotice(message);
@@ -95,7 +98,7 @@ export function ActivityDetailPanel({
         <h2 className="break-words text-lg font-semibold">{activity?.title ?? "Activity detail"}</h2>
         <Button size="sm" variant="outline" disabled={view.loading || busy}
           aria-label="Refresh activity detail"
-          onClick={() => void Promise.all([view.refresh(), objects.refresh(), receipts.refresh(), objectState.refresh(), executionLimits.refresh()])}>
+          onClick={() => void Promise.all([view.refresh(), objects.refresh(), receipts.refresh(), objectState.refresh(), executionLimits.refresh(), capabilityPolicy.refresh()])}>
           {view.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Refresh"}
         </Button>
       </div>
@@ -223,6 +226,8 @@ export function ActivityDetailPanel({
           <ActivityWork detail={detail} disabled={disabled} mutate={mutate} />
           <ActivityExecutionLimitsPanel key={`limits-${id}`} activityId={id} ownerUid={activity.owner_uid}
             editable={editable} disabled={disabled} view={executionLimits} mutate={mutate} />
+          <ActivityCapabilityPolicyPanel key={`capability-policy-${id}`} activityId={id} ownerUid={activity.owner_uid}
+            editable={editable} disabled={disabled || view.loading || editing} view={capabilityPolicy} mutate={mutate} />
           <ActivityReceiptsPanel view={receipts} ownerUid={activity.owner_uid} />
           <ActivityObjectStatePanel key={id} activityId={id} ownerUid={activity.owner_uid}
             resources={activity.resources} view={objectState} disabled={disabled} />

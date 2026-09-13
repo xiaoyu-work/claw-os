@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
+    ActivityCapabilityPolicy, ActivityCapabilityPolicyEnabledRequest,
+    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest,
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
     ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
     ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest,
@@ -572,6 +574,60 @@ pub async fn enable_activity_execution_limits(
     activity_response(request, selected).await
 }
 
+fn capability_policy_get_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(endpoint, reqwest::Method::GET, &["activities", id, "capability-policy"])
+}
+
+pub async fn fetch_activity_capability_policy(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityCapabilityPolicyResponse> {
+    let (request, selected) = capability_policy_get_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn capability_policy_set_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityCapabilityPolicySetRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "capability-policy"])?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn set_activity_capability_policy(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityCapabilityPolicySetRequest,
+) -> Result<ActivityCapabilityPolicy> {
+    let (request, selected) = capability_policy_set_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn capability_policy_enabled_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityCapabilityPolicyEnabledRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint, reqwest::Method::POST, &["activities", id, "capability-policy", "enabled"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn enable_activity_capability_policy(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityCapabilityPolicyEnabledRequest,
+) -> Result<ActivityCapabilityPolicy> {
+    let (request, selected) = capability_policy_enabled_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
 pub async fn create_activity(
     endpoint: BridgeEndpoint,
     body: ActivityCreateRequest,
@@ -703,4 +759,11 @@ pub async fn response_error(response: reqwest::Response, url: &str) -> anyhow::E
 #[cfg(test)]
 mod tests {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/bridge.rs"));
+
+    mod capability_policy {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test/unit/bridge/capability_policy.rs"
+        ));
+    }
 }

@@ -1,9 +1,11 @@
 //! Fetched Activity views and unsaved forms. The broker, not this reducer,
 //! owns Activity lifecycle and durable work; leaving this view cancels nothing.
 
+mod capability_policy;
 mod execution_limits;
 mod object_state;
 
+pub use capability_policy::Message as CapabilityPolicyMessage;
 pub use execution_limits::Message as ExecutionLimitsMessage;
 pub use object_state::Message as ObjectStateMessage;
 
@@ -18,6 +20,8 @@ use cosmic::widget::{Column, Row, button, container, scrollable, text};
 use cosmic::{Element, theme, widget};
 
 use crate::bridge::{
+    ActivityCapabilityPolicy, ActivityCapabilityPolicyEnabledRequest,
+    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest,
     ActivityCreateRequest, ActivityDetailResponse, ActivityListResponse,
     ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
     ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest,
@@ -54,6 +58,7 @@ pub enum Message {
     Back,
     Refresh,
     RefreshReceipts,
+    CapabilityPolicy(CapabilityPolicyMessage),
     ExecutionLimits(ExecutionLimitsMessage),
     ObjectState(ObjectStateMessage),
     Tick,
@@ -90,6 +95,17 @@ pub(crate) enum Action {
     List(Option<ActivityState>),
     Get(String),
     Receipts(String),
+    GetCapabilityPolicy(String),
+    SetCapabilityPolicy {
+        activity_id: String,
+        request: ActivityCapabilityPolicySetRequest,
+        previous: Option<Box<ActivityCapabilityPolicy>>,
+    },
+    EnableCapabilityPolicy {
+        activity_id: String,
+        request: ActivityCapabilityPolicyEnabledRequest,
+        previous: Box<ActivityCapabilityPolicy>,
+    },
     GetExecutionLimits(String),
     SetExecutionLimits {
         activity_id: String,
@@ -135,6 +151,8 @@ pub enum Response {
     List(ActivityListResponse),
     Detail(Box<ActivityDetailResponse>),
     Receipts(ActivityReceiptsResponse),
+    CapabilityPolicy(ActivityCapabilityPolicyResponse),
+    CapabilityPolicySaved(Box<ActivityCapabilityPolicy>),
     ExecutionLimits(ActivityExecutionLimitsResponse),
     ExecutionLimitsSaved(Box<ActivityExecutionLimits>),
     ObjectState(ActivityObjectStateResponse),
@@ -156,6 +174,7 @@ pub(crate) struct Activities {
     selected: Option<String>,
     detail: Option<ActivityDetailResponse>,
     receipts: Option<ActivityReceiptsResponse>,
+    capability_policy: capability_policy::State,
     execution_limits: execution_limits::State,
     object_state: object_state::State,
     form: Option<ActivityCreateRequest>,
@@ -189,6 +208,7 @@ impl Activities {
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.capability_policy.form.is_none()
             && self.prompt.is_empty()
             && self.completion_note.is_empty()
             && self.error.is_none()
@@ -198,6 +218,7 @@ impl Activities {
         self.visible = false;
         self.receipts = None;
         self.execution_limits.response = None;
+        self.capability_policy.response = None;
         self.object_state.entries = None;
         self.operation_preview = None;
         if !self.can_edit_forms() {
@@ -205,6 +226,7 @@ impl Activities {
             self.object_form = None;
             self.object_state.form = None;
             self.execution_limits.form = None;
+            self.capability_policy.form = None;
         }
         self.invalidate();
     }
@@ -217,6 +239,7 @@ impl Activities {
                     | Action::Get(_)
                     | Action::Receipts(_)
                     | Action::GetExecutionLimits(_)
+                    | Action::GetCapabilityPolicy(_)
                     | Action::ObjectStateList { .. }
                     | Action::Objects(_)
                     | Action::OperationPreview { .. }
@@ -269,6 +292,7 @@ impl Activities {
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.capability_policy.form.is_none()
             && self
                 .declared_object_description(reference)
                 .is_some_and(|description| {
@@ -282,6 +306,7 @@ impl Activities {
             || self.object_form.is_some()
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
+            || self.capability_policy.form.is_some()
             || self
                 .pending
                 .as_ref()
@@ -335,6 +360,7 @@ impl Activities {
             || self.object_form.is_some()
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
+            || self.capability_policy.form.is_some()
         {
             return None;
         }
@@ -353,6 +379,7 @@ impl Activities {
         self.receipts = None;
         self.object_state = object_state::State::default();
         self.execution_limits = execution_limits::State::default();
+        self.capability_policy = capability_policy::State::default();
         self.form = None;
         self.object_form = None;
         self.objects = None;
@@ -396,11 +423,16 @@ impl Activities {
             Message::PreviewObjectOperation(reference) => {
                 return self.begin_operation_preview(reference, connected);
             }
+            Message::CapabilityPolicy(message) => {
+                return self.update_capability_policy(message, connected);
+            }
             Message::ExecutionLimits(message) => {
-                return self.update_execution_limits(message, connected);
+                if self.capability_policy.form.is_none() {
+                    return self.update_execution_limits(message, connected);
+                }
             }
             Message::ObjectState(message) => {
-                if self.execution_limits.form.is_none() {
+                if self.execution_limits.form.is_none() && self.capability_policy.form.is_none() {
                     return self.update_object_state(message, connected);
                 }
             }
@@ -408,6 +440,7 @@ impl Activities {
                 if !self.can_edit_forms()
                     || self.object_state.form.is_some()
                     || self.execution_limits.form.is_some()
+                    || self.capability_policy.form.is_some()
                 {
                     return None;
                 }
@@ -434,6 +467,7 @@ impl Activities {
                 if !self.can_edit_forms()
                     || self.object_state.form.is_some()
                     || self.execution_limits.form.is_some()
+                    || self.capability_policy.form.is_some()
                 {
                     return None;
                 }
@@ -455,6 +489,7 @@ impl Activities {
             _ if self.pending.is_some() => {}
             _ if self.object_state.form.is_some() => {}
             _ if self.execution_limits.form.is_some() => {}
+            _ if self.capability_policy.form.is_some() => {}
             _ if self.object_form.is_some()
                 && !matches!(&message, Message::AttachObject | Message::DiscardObject) => {}
             Message::RefreshReceipts => {
@@ -676,6 +711,25 @@ impl Activities {
         };
         match (pending, response) {
             (Action::List(_), Response::List(response)) => self.list = response.activities,
+            (Action::GetCapabilityPolicy(id), Response::CapabilityPolicy(response)) => {
+                self.capability_policy_loaded(&id, response);
+            }
+            (
+                Action::SetCapabilityPolicy { activity_id, request, previous },
+                Response::CapabilityPolicySaved(policy),
+            ) => {
+                return self.capability_policy_saved(
+                    &activity_id, &request, previous.as_deref(), *policy, connected,
+                );
+            }
+            (
+                Action::EnableCapabilityPolicy { activity_id, request, previous },
+                Response::CapabilityPolicySaved(policy),
+            ) => {
+                return self.capability_policy_enabled(
+                    &activity_id, &request, &previous, *policy, connected,
+                );
+            }
             (Action::GetExecutionLimits(id), Response::ExecutionLimits(response)) => {
                 self.execution_limits_loaded(&id, response);
             }
@@ -831,6 +885,7 @@ impl Activities {
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.capability_policy.form.is_none()
         {
             header = header
                 .push(control(
@@ -1001,11 +1056,16 @@ impl Activities {
         available: bool,
     ) -> Element<'a, AppMessage> {
         let activity = &detail.activity;
-        let execution_limits_available = available && self.object_state.form.is_none();
-        let object_state_available = available && self.execution_limits.form.is_none();
+        let capability_policy_available = available
+            && self.object_state.form.is_none() && self.execution_limits.form.is_none();
+        let execution_limits_available = available
+            && self.object_state.form.is_none() && self.capability_policy.form.is_none();
+        let object_state_available = available
+            && self.execution_limits.form.is_none() && self.capability_policy.form.is_none();
         let available = available
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none();
+        let available = available && self.capability_policy.form.is_none();
         let mut content = Column::new()
             .spacing(12)
             .push(text(&activity.title).size(22.0))
@@ -1090,6 +1150,7 @@ impl Activities {
             .push(self.object_resources_view(editable(activity.state), available))
             .push(self.object_state_view(detail, object_state_available))
             .push(self.execution_limits_view(detail, execution_limits_available))
+            .push(self.capability_policy_view(detail, capability_policy_available))
             .push(text(fl!("activity-work")).size(18.0))
             .push(text(fl!("activity-work-hint")).size(12.0));
         if activity.state == ActivityState::Active {

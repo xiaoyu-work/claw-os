@@ -114,6 +114,7 @@ struct LauncherAuthority {
     scope: Option<String>,
     priority: Option<String>,
     role: Option<String>,
+    activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
 }
 
 /// Everything the capability derivation is allowed to consult.
@@ -137,6 +138,7 @@ struct Delegation {
     /// `/proc/<pid>/cwd` — so the scope derived for a path argument
     /// names the resource the App will actually touch.
     paths: crate::caps::args::PathContext,
+    activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
 }
 
 impl Delegation {
@@ -159,6 +161,7 @@ impl Delegation {
                 home: home.to_path_buf(),
                 cwd: process_cwd(launcher.pid),
             },
+            activity: launcher.activity.clone(),
         })
     }
 }
@@ -339,15 +342,8 @@ async fn register_with_launcher(
         start_time_ticks: None,
     };
 
-    let proc_dir = install_session(delegation.uid, home, info).await?;
-    let handle = issue_launch_grant(
-        &session_id,
-        Some(app_id),
-        delegation.uid,
-        &launcher,
-        &grant_caps,
-        Some(&ceiling),
-    )?;
+    let (proc_dir, handle) =
+        install_authorized_session(delegation.uid, home, info, &launcher, Some(&ceiling)).await?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -378,6 +374,17 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
     let mut caps = native_manifest_caps(&app.manifest)?;
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)));
     let caps = clamp_to_ceiling(&ceiling, &app_id, &caps, "register_native");
+    let delegation = Delegation::new(&launcher, uid, &home, &params)?;
+    let caps = authorize_plan(
+        &delegation,
+        LaunchPlan {
+            caps,
+            missing: Vec::new(),
+        },
+        &ceiling,
+        &app_id,
+    )
+    .map_err(|error| error.message)?;
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
     let role = Role::Worker;
     let info = SessionInfo {
@@ -402,15 +409,8 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         pending_bind: true,
         start_time_ticks: None,
     };
-    let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(
-        &session_id,
-        Some(&app_id),
-        uid,
-        &launcher,
-        &caps,
-        Some(&ceiling),
-    )?;
+    let (proc_dir, handle) =
+        install_authorized_session(uid, home, info, &launcher, Some(&ceiling)).await?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -429,6 +429,12 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
     let caps = attenuated_ceiling(&launcher, &params)?;
     if caps.is_empty() {
         return Err("launcher has no capabilities to delegate to an MCP child".to_string());
+    }
+    if launcher.activity.is_some() {
+        return Err(
+            "Activity tasks require verified App-owned sessions, not a general MCP launcher"
+                .to_string(),
+        );
     }
     let session_id = format!("mcp-{}", uuid::Uuid::new_v4().simple());
     let info = SessionInfo {
@@ -453,8 +459,7 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
         pending_bind: true,
         start_time_ticks: None,
     };
-    let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(&session_id, None, uid, &launcher, &caps, None)?;
+    let (proc_dir, handle) = install_authorized_session(uid, home, info, &launcher, None).await?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -476,6 +481,9 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
     // still inside the bind window, and the process being bound really
     // is the launcher's child.
     let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    if let Some(binding) = &launch.subject.activity {
+        binding.check()?;
+    }
     if launch.issued_ago > BIND_WINDOW {
         return Err("App launch handle expired before binding a process".to_string());
     }
@@ -627,7 +635,12 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
-    require_launch_grant(client, &handle, &session_id, uid)?;
+    let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    if params.get("call").is_some_and(|call| !call.is_null()) {
+        if let Some(binding) = &launch.subject.activity {
+            binding.check()?;
+        }
+    }
 
     // Held across the read, the write and the re-derivation, so a
     // concurrent re-scope, clear or teardown cannot land between them.
@@ -734,7 +747,13 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
         TransientRollback::RestorePrevious,
         || {
             reissue_session_grant(
-                &handle, &session_id, Some(&app_id), uid, child_pid, &effective, ceiling,
+                &handle,
+                &session_id,
+                Some(&app_id),
+                uid,
+                child_pid,
+                &effective,
+                ceiling,
             )
             .map_err(BrokerError::from)
         },
@@ -917,7 +936,14 @@ async fn authenticate_launcher(
         crate::proc::registry_sessions()
     })
     .await;
-    launcher_authority(&sessions, pid, start_time_ticks, &home)
+    let mut launcher = launcher_authority(&sessions, pid, start_time_ticks, &home)?;
+    launcher.activity = launcher
+        .parent
+        .as_deref()
+        .map(|session| crate::caps::activity_boundary::ActivityBoundary::for_session(uid, session))
+        .transpose()?
+        .flatten();
+    Ok(launcher)
 }
 
 fn launcher_authority(
@@ -940,6 +966,7 @@ fn launcher_authority(
             scope: session.scope.clone(),
             priority: session.priority.clone(),
             role: session.role.clone(),
+            activity: None,
         }),
         None => Ok(LauncherAuthority {
             pid,
@@ -950,6 +977,7 @@ fn launcher_authority(
             scope: None,
             priority: None,
             role: Some(Role::Worker.name().to_string()),
+            activity: None,
         }),
     }
 }
@@ -1201,7 +1229,11 @@ fn session_tool_plan(
 ) -> Result<LaunchPlan, BrokerError> {
     let (tool, effective) = session_tool_call(app, call, delegation)?;
     derive_plan(
-        &tool.needs, &effective.needs, delegation, ceiling, &app.manifest.id,
+        &tool.needs,
+        &effective.needs,
+        delegation,
+        ceiling,
+        &app.manifest.id,
     )
 }
 
@@ -1210,7 +1242,10 @@ fn session_tool_call<'a>(
     call: &Value,
     delegation: &Delegation,
 ) -> Result<
-    (&'a crate::caps::manifest::SessionTool, crate::caps::manifest::EffectiveCall),
+    (
+        &'a crate::caps::manifest::SessionTool,
+        crate::caps::manifest::EffectiveCall,
+    ),
     BrokerError,
 > {
     let app_id = app.manifest.id.as_str();
@@ -1301,21 +1336,33 @@ fn authorize_plan(
     // the plan are filtered, so `missing` cannot resurrect a dropped
     // capability through consent.
     let (caps, dropped_caps) = ceiling.clamp(&plan.caps);
-    let (missing, dropped_missing) = ceiling.clamp_vec(&plan.missing);
+    let (mut missing, dropped_missing) = ceiling.clamp_vec(&plan.missing);
     let mut dropped = dropped_caps;
     dropped.extend(dropped_missing);
     record_ceiling_drop(ceiling, app_id, "authorize_plan", &dropped);
 
+    let exact = match &delegation.activity {
+        Some(boundary) => boundary
+            .approval_needs(&caps)
+            .map_err(BrokerError::authorization)?,
+        None => Vec::new(),
+    };
+    for cap in &exact {
+        if !missing.contains(cap) {
+            missing.push(cap.clone());
+        }
+    }
     if missing.is_empty() {
         return Ok(caps);
     }
-    match crate::approvals::consume_grant_set_once_for_owner(
+    match crate::approvals::consume_grant_set_with_exact_once_for_owner(
         &delegation.grant_session,
         &missing,
+        &exact,
         Some(delegation.uid),
     ) {
         Ok(true) => Ok(caps),
-        Ok(false) => Err(request_approvals(delegation, &missing)),
+        Ok(false) => Err(request_approvals(delegation, &missing, &exact)),
         Err(error) => Err(format!("could not settle approved permission grants: {error}").into()),
     }
 }
@@ -1326,7 +1373,7 @@ fn authorize_plan(
 /// The returned ids are not authority: a sibling that reads them still
 /// cannot make the daemon derive this launcher's identity, and the
 /// grants are matched on that identity plus the exact verb and scope.
-fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
+fn request_approvals(delegation: &Delegation, missing: &[Cap], exact: &[Cap]) -> BrokerError {
     let pending = crate::approvals::list_pending_for_owner(Some(delegation.uid));
     let mut ids = Vec::with_capacity(missing.len());
     let mut failures = Vec::new();
@@ -1334,11 +1381,12 @@ fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
         // A capability the user already approved is settled at retry
         // time; asking again would queue a second prompt for the same
         // decision.
-        match crate::approvals::has_approved_grant_for_owner(
-            &delegation.grant_session,
-            cap,
-            Some(delegation.uid),
-        ) {
+        let lookup = if exact.contains(cap) {
+            crate::approvals::has_approved_exact_grant_for_owner
+        } else {
+            crate::approvals::has_approved_grant_for_owner
+        };
+        match lookup(&delegation.grant_session, cap, Some(delegation.uid)) {
             Ok(true) => continue,
             Ok(false) => {}
             Err(error) => {
@@ -1530,6 +1578,39 @@ async fn install_session(
     .await
 }
 
+async fn install_authorized_session(
+    uid: u32,
+    home: std::path::PathBuf,
+    info: SessionInfo,
+    launcher: &LauncherAuthority,
+    ceiling: Option<&Ceiling>,
+) -> Result<(std::path::PathBuf, String), String> {
+    let session_id = info.session_id.clone();
+    let app_id = info.app_id.clone();
+    let caps = info
+        .caps
+        .as_ref()
+        .ok_or_else(|| "App registration has no capability plan".to_string())?
+        .clone();
+    let proc_dir = install_session(uid, home, info).await?;
+    match issue_launch_grant(
+        &session_id,
+        app_id.as_deref(),
+        uid,
+        launcher,
+        &caps,
+        ceiling,
+    ) {
+        Ok(handle) => Ok((proc_dir, handle)),
+        Err(error) => {
+            crate::proc::try_deregister_session_for_owner(&session_id, uid).map_err(|cleanup| {
+                format!("{error}; could not remove the refused App registration: {cleanup}")
+            })?;
+            Err(error)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Launch grants
 // ---------------------------------------------------------------------------
@@ -1550,7 +1631,13 @@ fn issue_launch_grant(
     ceiling: Option<&Ceiling>,
 ) -> Result<String, String> {
     let issuance = launch_issuance(
-        session_id, app_id, uid, launcher, caps, ceiling, LAUNCH_GRANT_TTL,
+        session_id,
+        app_id,
+        uid,
+        launcher,
+        caps,
+        ceiling,
+        LAUNCH_GRANT_TTL,
     )?;
     let (handle, view) = authority::authority()
         .issue(issuance)
@@ -1573,12 +1660,18 @@ fn launch_issuance(
     if principal.start_time_ticks != launcher.start_time_ticks {
         return Err("App launcher process identity changed during registration".to_string());
     }
+    let activity = launcher
+        .activity
+        .as_ref()
+        .map(|boundary| boundary.binding_for_authorized(caps))
+        .transpose()?;
     Ok(authority::Issuance {
         issuer: authority::Issuer::AppSessionAuthority,
         principal,
         binding: authority::Binding::Process,
         subject: authority::Subject::session(session_id)
-            .with_app(app_id.map(ToOwned::to_owned)),
+            .with_app(app_id.map(ToOwned::to_owned))
+            .with_activity(activity),
         // The launch grant is the parent of the session grant and
         // of the launcher's relay grant, so it has to carry every
         // audience either will need; `bind` narrows the session
@@ -1623,7 +1716,13 @@ fn issue_session_grant(
     ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
     let request = session_attenuation(
-        session_id, app_id, uid, child_pid, caps, ceiling, SESSION_GRANT_TTL,
+        session_id,
+        app_id,
+        uid,
+        child_pid,
+        caps,
+        ceiling,
+        SESSION_GRANT_TTL,
     )?;
     let (_handle, view) = authority::authority()
         .attenuate(launch_handle, request)
@@ -1647,8 +1746,7 @@ fn session_attenuation(
         issuer: authority::Issuer::AppSessionAuthority,
         principal,
         binding: authority::Binding::ProcessTree,
-        subject: authority::Subject::session(session_id)
-            .with_app(app_id.map(ToOwned::to_owned)),
+        subject: authority::Subject::session(session_id).with_app(app_id.map(ToOwned::to_owned)),
         audience: permitted_audiences(
             ceiling,
             &[
@@ -1697,7 +1795,9 @@ pub async fn relay(
     // The middleware resolved the handle against this process. What is
     // left is the route's own contract: the grant names *this* session.
     if relay_grant.session_id() != Some(session_id.as_str()) {
-        return Err("relay handle does not cover this App session".to_string().into());
+        return Err("relay handle does not cover this App session"
+            .to_string()
+            .into());
     }
     // Before the grant is resolved, before the body is decoded and
     // before any provider spends a capability: is the package behind
@@ -1871,8 +1971,7 @@ fn relay_attenuation(
         issuer: authority::Issuer::AppSessionAuthority,
         principal,
         binding: authority::Binding::Process,
-        subject: authority::Subject::session(session_id)
-            .with_app(app_id.map(ToOwned::to_owned)),
+        subject: authority::Subject::session(session_id).with_app(app_id.map(ToOwned::to_owned)),
         audience: authority::AudienceSet::of(&[authority::Audience::AppRelay]),
         caps: CapSet::new(),
         lifetime,

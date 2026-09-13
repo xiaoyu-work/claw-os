@@ -401,6 +401,11 @@ fn authenticate_task_host(
         scope: parent.scope.clone(),
         priority: parent.priority.clone(),
         role: parent.role.clone(),
+        activity: crate::caps::activity_boundary::ActivityBoundary::for_session(
+            uid,
+            &parent.session_id,
+        )
+        .map_err(BrokerError::authorization)?,
     })
 }
 

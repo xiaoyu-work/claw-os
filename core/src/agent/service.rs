@@ -2929,6 +2929,10 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    let activity_boundary = match crate::caps::activity_boundary::ActivityBoundary::for_job(job) {
+        Ok(boundary) => boundary,
+        Err(error) => return FinishOutcome::Error(error),
+    };
     let mut execution_limits = match execution_limits::ExecutionLimitsGuard::new(job) {
         Ok(guard) => guard,
         Err(error) => return FinishOutcome::Error(error),
@@ -2955,20 +2959,39 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         progress_sink,
         hooks,
     );
-    tokio::pin!(run);
+    let mut run = Box::pin(crate::caps::activity_boundary::scope(
+        activity_boundary.clone(),
+        Box::pin(run),
+    ));
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut next_boundary_check = std::time::Instant::now();
     loop {
         tokio::select! {
             outcome = &mut run => {
+                if let Some(boundary) = &activity_boundary {
+                    if let Err(error) = boundary.check() {
+                        return FinishOutcome::Error(error);
+                    }
+                }
                 return match execution_limits.check_now(job) {
                     Ok(None) => outcome,
                     Ok(Some(reason)) | Err(reason) => FinishOutcome::Error(reason),
                 };
             }
-            _ = tick.tick() => match execution_limits.check(job) {
-                Ok(None) => {}
-                Ok(Some(reason)) | Err(reason) => return FinishOutcome::Error(reason),
+            _ = tick.tick() => {
+                match execution_limits.check(job) {
+                    Ok(None) => {}
+                    Ok(Some(reason)) | Err(reason) => return FinishOutcome::Error(reason),
+                }
+                if std::time::Instant::now() >= next_boundary_check {
+                    next_boundary_check = std::time::Instant::now() + Duration::from_secs(1);
+                    if let Some(boundary) = &activity_boundary {
+                        if let Err(error) = boundary.check() {
+                            return FinishOutcome::Error(error);
+                        }
+                    }
+                }
             },
         }
     }

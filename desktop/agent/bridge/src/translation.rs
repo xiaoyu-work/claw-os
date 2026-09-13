@@ -2,6 +2,7 @@
 //! stable desktop presentation protocol.
 
 pub mod activities;
+pub mod capability_policy;
 pub mod execution_limits;
 
 use cos_agent_protocol::{

@@ -319,6 +319,48 @@ persistence; the desktop retains only fetched DTOs and unsaved revision-bound
 forms. Successful mutations refetch current constraints without changing
 Activity, receipt or object-state data locally.
 
+### Activity capability policies
+
+The fixed **Capability policy** card uses the owner-scoped
+`activity.capability_policy.get/set/enabled` service. These policies constrain
+controlled execution; they never supply capabilities or approval grants.
+`normal` retains ordinary authorization, `require_approval` additionally
+requires exact one-shot approval, and `deny` blocks the entire verb and
+approval escalation. Missing verbs and empty rules add no constraints, not
+permissions. Disabling a configured policy blocks controlled capability use
+instead of removing the policy or restoring unrestricted behavior.
+
+The editor has fixed typed rule rows, verb text, mode buttons, and path/host/
+name/self-reference/explicit-wildcard scope controls. It is not model-generated
+UI and does not expose a JSON command form. The broker validates known catalogue
+verbs and compatible scopes; the native client does not copy the catalogue or
+resolve resources. Resource-addressing verbs require explicit same-kind scopes
+rather than raw Wild. Path scopes must already be canonical absolute patterns.
+A deny row has no scopes; Normal/Ask rows require 1-32 scopes. There are at most
+64 distinct rules and the complete JSON draft is bounded to 16 KiB.
+
+Refresh is explicit. Only an explicit `capability_policy: null` is treated as
+unconfigured; malformed replies are errors. Creation sends null CAS and starts
+enabled at revision 1. Edits retain the captured revision and preserve enabled
+state. Stale conflicts never silently rebase or replay mutations. Replies must
+match owner, Activity, revision progression and submitted rule meaning. Matching
+allows only the storage contract's ASCII host lowercasing, scope deduplication
+and deterministic ordering. Other values and verb spelling remain exact; no
+scope-coverage matcher or competing path canonicalizer is used.
+
+Creating/editing/enabling is available only for active or paused Activities.
+Inspection and disabling remain available in terminal states. Policy creation,
+editing and revocation stop running old-policy attempts; admitted effects are
+not undone. Ask applies to exact primitive, App invocation or session-call
+confirmation even when permission is held. Approval decisions remain in the
+existing gate; no grant or approval-decision route exists on this card.
+Denying `fs.delete` alone does not prevent deletion via writes/exec or other
+allowed verbs, and this feature makes no universal sandbox or undo guarantee.
+
+The independent `crates/clawd-client` inventory includes all three routes in
+its enum, Serde names, `ALL` and `as_str`; core route additions alone are not
+sufficient to wire a desktop consumer.
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -368,6 +410,9 @@ the prior non-disruptive `start` behavior.
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
 | `GET /api/activities/:id/receipts?limit=…` | `ActivityReceiptsQuery` → schema-1 `ActivityReceiptsResponse`; read-only `activity.receipts` |
+| `GET /api/activities/:id/capability-policy` | Required-nullable schema-1 `ActivityCapabilityPolicyResponse`; `activity.capability_policy.get` |
+| `POST /api/activities/:id/capability-policy` | `ActivityCapabilityPolicySetRequest` → `ActivityCapabilityPolicy`; CAS `activity.capability_policy.set` |
+| `POST /api/activities/:id/capability-policy/enabled` | `ActivityCapabilityPolicyEnabledRequest` → `ActivityCapabilityPolicy`; `activity.capability_policy.enabled` |
 | `GET /api/activities/:id/execution-limits` | Required-nullable schema-1 `ActivityExecutionLimitsResponse`; `activity.execution_limits.get` |
 | `POST /api/activities/:id/execution-limits` | `ActivityExecutionLimitsSetRequest` → `ActivityExecutionLimits`; CAS `activity.execution_limits.set` |
 | `POST /api/activities/:id/execution-limits/enabled` | `ActivityExecutionLimitsEnabledRequest` → `ActivityExecutionLimits`; explicit `activity.execution_limits.enabled` |
@@ -400,7 +445,7 @@ fields: clawd derives ownership from the bridge's kernel identity. The
 translation module validates the broker's Activity schema and removes private
 job fields before emitting presentation DTOs. Object-state entries retain the
 contract's typed server-supplied `owner_uid`; it is never a caller selector.
-Execution-limit replies also retain it and are checked against the same
+Execution-limit and capability-policy replies also retain it and are checked against the same
 process-identity helper used for private bridge discovery. Other Activity views omit owner internals. Additive
 job/session/approval fields have defaults within presentation protocol v1.
 

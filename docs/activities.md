@@ -67,7 +67,9 @@ desktop or starting a model.
 Activities start `active`. Users can pause, resume, explicitly complete, or
 cancel them. A terminal Activity must be explicitly reopened with `resume`
 before it accepts new work or planning edits. Late receipts and object-state
-annotations remain recordable without reopening the goal.
+annotations remain recordable without reopening the goal. Existing capability
+policies remain readable and can be disabled on terminal Activities; editing
+or re-enabling them requires reopening.
 
 - Pausing prevents subsequent work from being admitted or claimed. It does
   not undo effects or automatically stop an already-running job.
@@ -102,10 +104,18 @@ Explicit [execution limits](activity-execution-limits.md) add finite
 attempt/turn/expiry controls through that same backend. They constrain work
 without granting capabilities; free-text boundaries remain planning guidance.
 
+Shared [capability policies](activity-capability-policies.md) add typed Normal,
+Ask and Deny rules. They constrain both existing capabilities and approval
+escalation; they are not permission grants or model instructions. Disabling
+a policy blocks controlled capability checks rather than removing constraints.
+Terminal and graphical clients use the same revision-checked backend.
+This is not process-wide kernel protection against a compromised same-UID
+Agent; the exact App sandbox and broker remain authoritative.
+
 App-owned object references can now be attached and described through the same
 backend; see [App-owned objects](app-objects.md). Declaration inspection does
-not fetch object data. Executable delegation policies, automatic event-driven
-progression and cross-device continuation remain later steps.
+not fetch object data. Automatic event-driven progression and cross-device
+continuation remain later steps.
 
 [Object-state annotations](object-state.md) distinguish reported user
 statements, Agent inferences, linked App receipts, planning relationships and
@@ -126,6 +136,9 @@ receive a bounded, recorded, untrusted snapshot when claimed.
 | `activity.execution_limits.get` | Owner-scoped finite execution policy and usage |
 | `activity.execution_limits.set` | Version-checked limits update without resetting usage or granting authority |
 | `activity.execution_limits.enabled` | Explicit enable/disable, not policy deletion or unlimited execution |
+| `activity.capability_policy.get` | Owner-scoped capability policy or explicit absence |
+| `activity.capability_policy.set` | Revision-checked Normal/Ask/Deny rules without granting authority or changing enabled state |
+| `activity.capability_policy.enabled` | Explicit enable/disable; disabled blocks controlled checks and preserves the rules |
 | `activity.objects` | Authenticated declaration metadata or explicit diagnostics for App references |
 | `activity.object.attach` | Atomically attached reference; no App execution or new authority |
 | `activity.operation.preview` | App-declared expected effects; no execution, authorization, or confirmed changes |
@@ -134,8 +147,9 @@ receive a bounded, recorded, untrusted snapshot when claimed.
 | `activity.object_state.list` | Bounded observations, relationships and correction history |
 | `activity.object_state.record` | Append an owner-scoped annotation or retraction without changing goal state |
 
-No request accepts an owner UID, capability set, or grant. Root does not receive
-an implicit cross-owner Activity view. Mutation routes use the existing
+No request accepts an owner UID or authorization grant. Policy drafts name
+constraints, never permission sets. Root does not receive an implicit
+cross-owner Activity view. Mutation routes use the existing
 authorization, audit projection, and durable journal brackets. Goal text,
 resource references, and confirmation notes are not copied into broker audit
 metadata.

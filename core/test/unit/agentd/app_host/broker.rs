@@ -144,6 +144,7 @@ impl Fixture {
             DaemonState::new().unwrap(),
             Admission::new(crate::clawd::transport::limits::Limits::default()),
             Instant::now() + Duration::from_secs(60),
+            None,
         );
         Self {
             _env: env,

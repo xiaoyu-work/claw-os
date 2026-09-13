@@ -71,6 +71,44 @@ fn permission_mediation_is_the_only_consent_surface_and_carries_no_identity() {
 }
 
 #[test]
+fn activity_boundary_messages_are_constraints_not_authority_or_selectable_identity() {
+    let ask = json!({"ask":"boundary","verb":"fs.read","scope":{"kind":"path","value":"/workspace/file"}});
+    let decoded: ApprovalAsk = serde_json::from_value(ask.clone()).unwrap();
+    assert_eq!(decoded.verb(), "fs.read");
+    for key in [
+        "owner_uid",
+        "session_id",
+        "task_id",
+        "activity_id",
+        "revision",
+        "decision",
+        "caps",
+    ] {
+        let mut forged = ask.clone();
+        forged[key] = json!("forged");
+        assert!(
+            serde_json::from_value::<ApprovalAsk>(forged).is_err(),
+            "{key}"
+        );
+    }
+    for decision in ["normal", "require_approval", "deny"] {
+        assert!(serde_json::from_value::<ApprovalReply>(
+            json!({"status":"boundary","decision":decision})
+        )
+        .is_ok());
+    }
+    assert!(serde_json::from_value::<ApprovalReply>(
+        json!({"status":"boundary","decision":"allow"})
+    )
+    .is_err());
+    assert!(serde_json::from_value::<ApprovalReply>(
+        json!({"status":"boundary","decision":"normal","grant":"forged"})
+    )
+    .is_err());
+    assert!(MAX_BOUNDARY_CHECKS > MAX_APPROVAL_ASKS);
+}
+
+#[test]
 fn receipt_requests_are_closed_reports_not_identity_or_authority_requests() {
     let report = crate::operations::receipts::capture(
         uuid::Uuid::new_v4().to_string(),

@@ -40,6 +40,7 @@ web UI.
 | `ui/src/components/activity-receipts.tsx`, `ui/src/lib/activity-receipts.ts` | Read-only caller-reported receipts, source/identity checks, inert summaries, and declaration diagnostics |
 | `ui/src/components/activity-object-state.tsx`, `ui/src/lib/object-state.ts` | Shared object-state forms/history, source/validity caveats and selection-safe correction/retraction |
 | `ui/src/components/activity-execution-limits.tsx`, `ui/src/lib/execution-limits.ts` | Revision-checked finite execution controls with backend-owned counters; no permission or goal-state authority |
+| `ui/src/components/activity-capability-policy.tsx`, `ui/src/lib/capability-policy.ts` | Fixed typed Normal/Ask/Deny rules, strict owner/revision/scope acknowledgements and retained stale drafts; no local capability authority |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
 
@@ -101,3 +102,19 @@ never verified facts; linked App output is projected from an existing receipt.
 The Web holds no authoritative copy, does not resolve an object, and never
 turns a relationship into scheduled work. See
 [`docs/object-state.md`](../../../../docs/object-state.md).
+
+Capability policy uses `activity.capability_policy.get/set/enabled` and the
+same bounded broker DTOs as terminal/native clients. The authenticated
+`/api/activities/capability-policy-catalog` projects only `caps::CATALOG`;
+it performs no App discovery, filesystem or credential I/O. Forms never
+evaluate permissions or coverage locally. Failed writes retain the draft and
+require explicit refresh; newer revisions need an explicit review action
+before the draft can be saved again. See
+[`docs/activity-capability-policies.md`](../../../../docs/activity-capability-policies.md).
+
+Focused `ui/test/capability-policy*.test.*` tests cover closed policy responses,
+typed scope compatibility, bounded drafts, owner/revision checks, inert
+rendering, terminal controls and stale edits. The existing Chromium harness
+exercises real rule edits, persistence, HTTP failures, explicit conflict
+recovery and selection-safe late requests; it does not substitute HTTP 200
+checks for completed user operations.

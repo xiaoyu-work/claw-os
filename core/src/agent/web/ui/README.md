@@ -71,6 +71,10 @@ ownership, and work submission. The authenticated adapters are:
 | `GET /api/activities/{id}/execution-limits` | `activity.execution_limits.get` |
 | `POST /api/activities/{id}/execution-limits` | `activity.execution_limits.set` |
 | `POST /api/activities/{id}/execution-limits/enabled` | `activity.execution_limits.enabled` |
+| `GET /api/activities/{id}/capability-policy` | `activity.capability_policy.get` |
+| `POST /api/activities/{id}/capability-policy` | `activity.capability_policy.set` |
+| `POST /api/activities/{id}/capability-policy/enabled` | `activity.capability_policy.enabled` |
+| `GET /api/activities/capability-policy-catalog` | Static `caps::CATALOG` metadata only; no broker operation or App discovery |
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
@@ -225,6 +229,39 @@ Disabled policies mean no bounded work, not unlimited work. Backend expiry
 and cancellation remain authoritative; the UI does not locally schedule or
 complete a goal. See [execution limits](../../../../../docs/activity-execution-limits.md).
 
+### Capability policies
+
+The fixed **Capability policy** card lists saved Normal, Ask and Deny rows and
+edits typed verb/mode/scope fields. The authenticated catalogue endpoint only
+projects compiled core metadata; forms never execute Apps, read credentials or
+inspect filesystem paths. Scope matching and canonicalization remain at root.
+Missing rules and empty policies grant no permission. Disabled policies block
+all controlled capability checks, rather than removing the constraints.
+
+The form captures its revision and enabled state. Failed writes retain the
+draft and require **Refresh**; background reads never retry or rebase it.
+If the revision changed, **Use refreshed revision for this draft** is a separate
+review action, not a submission. A response with another owner, an unsafe
+revision, an unexpected enabled state or changed rules/scopes is not a successful
+acknowledgement. Set responses allow only ASCII host folding, ordering and
+scope deduplication; no trimming, path rewriting or coverage-based fallback.
+Read errors hide saved rules and block mutations until refresh
+succeeds. Terminal Activities permit disabling an existing policy, not editing
+or re-enabling it. Ordinary capability/provenance checks and exact single-use
+approvals remain authoritative. Ask cannot borrow a broader-scope grant, and
+its approval is retired once even if the original consent duration was session
+or forever. App calls settle the whole requirement set at root; later effects
+recheck the immutable root-grant policy binding without asking again.
+
+Creating the first policy also invalidates old attempts. These constraints are
+not process-wide kernel protection against a compromised same-UID Agent; the
+exact App sandbox and broker remain authoritative.
+
+The shared [policy guide](../../../../../docs/activity-capability-policies.md)
+defines scope coverage, all-or-none App confirmation, live revocation and the
+limits of content protection. The browser never stores policy authority or
+turns a policy edit into a task, approval or goal-completion operation.
+
 ### Refresh behavior
 
 Views refetch after mutations and on focus/notification changes. Activity
@@ -242,7 +279,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts
+bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/capability-policy.test.ts test/capability-policy-views.test.tsx
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
@@ -266,8 +303,10 @@ Receipt cases cover source/identity validation, recording time, bounded inert
 JSON/text/empty results, errors and uncertain outcomes, declaration failures,
 existing/dedicated refresh, late reads, no goal completion, and read-only access
 on paused and terminal Activities.
-Console errors and unexpected outbound
-requests fail the test. It neither contacts a model nor uses real credentials.
+Console exceptions, failed network loads, unexpected HTTP errors and outbound
+requests fail the test. The deliberate policy-conflict HTTP failure is checked
+against its exact request and status; its browser network log is the only
+expected error. It neither contacts a model nor uses real credentials.
 Browser profiles stay under `.activity-validation/` and are removed after the
 test; the build never touches `dist/`. Set `ACTIVITY_BROWSER` to an installed
 browser executable or `ACTIVITY_UI_DIST` to another prebuilt output if needed.
@@ -276,3 +315,10 @@ Object-state cases exercise actual completed form submissions, correction and
 retraction history, expired/unknown window labels, inert statement/receipt
 content, relationship links, unchanged Activity/job state, persistence across
 reload and selection-safe late reads/writes.
+
+Capability-policy cases exercise empty creation, typed rule rows and all scope
+kinds, canonical acknowledgements, read/reload persistence, real HTTP conflict
+handling, retained drafts, explicit revision review, enable/disable, unsafe
+owner/shape responses, ambiguous acknowledgements, paused edits, terminal
+disabling and late reads/writes across Activities. Assertions await completed
+UI operations and verify stored policy state; an HTTP 200 alone is insufficient.

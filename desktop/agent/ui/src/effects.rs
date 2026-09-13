@@ -60,6 +60,21 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Receipts(id) => bridge::fetch_activity_receipts(endpoint, &id)
                     .await
                     .map(ActivityResponse::Receipts),
+                ActivityAction::GetCapabilityPolicy(id) => {
+                    bridge::fetch_activity_capability_policy(endpoint, &id)
+                        .await
+                        .map(ActivityResponse::CapabilityPolicy)
+                }
+                ActivityAction::SetCapabilityPolicy { activity_id, request, .. } => {
+                    bridge::set_activity_capability_policy(endpoint, &activity_id, request)
+                        .await
+                        .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy)))
+                }
+                ActivityAction::EnableCapabilityPolicy { activity_id, request, .. } => {
+                    bridge::enable_activity_capability_policy(endpoint, &activity_id, request)
+                        .await
+                        .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy)))
+                }
                 ActivityAction::GetExecutionLimits(id) => {
                     bridge::fetch_activity_execution_limits(endpoint, &id)
                         .await

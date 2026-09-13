@@ -30,7 +30,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -80,6 +80,7 @@ pub const WORKER_ROUTES: &[&str] = &[
 /// Hard ceiling on permission mediation for one task, so a looping
 /// model cannot flood the consent store or the broker.
 pub const MAX_APPROVAL_ASKS: u32 = 128;
+pub const MAX_BOUNDARY_CHECKS: u32 = 4096;
 pub const MAX_RECEIPT_REPORTS: u32 = 128;
 pub const MAX_RECEIPT_REPORT_BYTES: usize = 16 * 1024;
 
@@ -162,8 +163,10 @@ fn receipt_report<'de, D: serde::Deserializer<'de>>(
 /// task and worker identity are never sent — the broker takes all four
 /// from the verified grant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "ask", rename_all = "snake_case")]
+#[serde(tag = "ask", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApprovalAsk {
+    /// Read a live Activity constraint without consuming or filing consent.
+    Boundary { verb: String, scope: Scope },
     /// Spend an already-approved, exactly-matching grant. One-shot: the
     /// broker consumes it, so a replay finds nothing.
     Consume { verb: String, scope: Scope },
@@ -174,20 +177,28 @@ pub enum ApprovalAsk {
 impl ApprovalAsk {
     pub fn verb(&self) -> &str {
         match self {
-            ApprovalAsk::Consume { verb, .. } | ApprovalAsk::Request { verb, .. } => verb.as_str(),
+            ApprovalAsk::Boundary { verb, .. }
+            | ApprovalAsk::Consume { verb, .. }
+            | ApprovalAsk::Request { verb, .. } => verb.as_str(),
         }
     }
 
     pub fn scope(&self) -> &Scope {
         match self {
-            ApprovalAsk::Consume { scope, .. } | ApprovalAsk::Request { scope, .. } => scope,
+            ApprovalAsk::Boundary { scope, .. }
+            | ApprovalAsk::Consume { scope, .. }
+            | ApprovalAsk::Request { scope, .. } => scope,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApprovalReply {
+    /// A constraint only; this cannot satisfy an approval-consumption waiter.
+    Boundary {
+        decision: crate::activities::CapabilityBoundaryDecision,
+    },
     /// An exact approved grant existed and has been spent.
     Granted,
     /// No grant to spend, or the request is still waiting on the user.
@@ -233,6 +244,10 @@ pub struct JobSpec {
     /// Reporting hint only; the broker resolves the Activity from its own Job.
     #[serde(default)]
     pub record_activity_receipts: bool,
+    /// The ordinary worker checks each capability through its private channel.
+    /// Root still derives the actual policy from its own Job, not this hint.
+    #[serde(default)]
+    pub activity_capability_checks: bool,
 }
 
 fn default_true() -> bool {

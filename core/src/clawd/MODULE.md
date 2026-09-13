@@ -36,6 +36,7 @@ and agent tasks.
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |
+| `activity_capability_policy.rs` | Owner-scoped rule/CAS controls shared by terminal, Web and native desktop; never permission decisions or grant issuance |
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
 | `activity_object_state.rs` | Shared owner-scoped observation/relationship history and immutable correction/retraction submission |
 | `operation_previews.rs` | Shared App effect previews and owner-scoped Activity adaptation; never executes Apps |
@@ -149,6 +150,12 @@ descriptor says it derives its own exact capability must spend it through
 `Decision::require_all` before it answers; if it did not, the response is
 withheld, so "the provider forgot to check" fails closed instead of succeeding
 silently.
+
+Activity-associated App grants also retain the root plan's policy revision
+and confirmed invocation scopes. Attenuation carries that binding forward;
+broker effects recheck live policy before spending ordinary grant authority.
+No serialized policy or registry row can reconstruct confirmation, and a
+policy denial cannot be overridden by filing another permission request.
 
 Three subject kinds cover the surface. `Peer` routes act for the connecting
 process and resolve no grant. `Session` routes are addressed by an App/MCP

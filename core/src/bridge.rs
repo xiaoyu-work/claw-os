@@ -693,26 +693,18 @@ impl AppIdentitySession {
         }
         crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
             .map_err(|err| format!("App parent session identity check failed: {err}"))?;
+        if use_clawd_app_session_backend() {
+            // The root plan settles the complete approval set once. A local
+            // preflight must not spend consent before that authoritative check.
+            return Self::register_with_clawd(app_id, &request, parent_caps, ceiling.as_ref());
+        }
         let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id));
         if !parent_caps.covers(&invoke) {
             return Err(format!("parent session cannot invoke App `{app_id}`"));
         }
 
-        // Derived on both paths: the daemon mints the session, and the
-        // launcher still needs the same set to build the sandbox that
-        // session will run inside.
         let mut caps = local_caps(&parent_caps)?;
         caps.insert(invoke);
-
-        if use_clawd_app_session_backend() {
-            return Self::register_with_clawd(
-                app_id,
-                &request,
-                parent_caps,
-                caps,
-                ceiling.as_ref(),
-            );
-        }
         Self::register_local(&parent, app_id, &request.command(app_id), caps, parent_caps)
     }
 
@@ -720,7 +712,6 @@ impl AppIdentitySession {
         app_id: &str,
         request: &LaunchRequest<'_>,
         parent_caps: CapSet,
-        granted_caps: CapSet,
         ceiling: Option<&crate::provenance::Ceiling>,
     ) -> Result<Self, String> {
         // Only `parent_caps` crosses the wire, and only ever to narrow
@@ -805,7 +796,6 @@ impl AppIdentitySession {
         // the approvals and applies the provenance ceiling itself.
         // Adopting its answer is what keeps the isolation shape and the
         // live grant describing the same world.
-        let _ = granted_caps;
         let granted_caps = result
             .get("caps")
             .ok_or_else(|| {
@@ -1184,7 +1174,7 @@ fn set_app_session_transient_call(
     }
 }
 
-fn use_clawd_app_session_backend() -> bool {
+pub(crate) fn use_clawd_app_session_backend() -> bool {
     if crate::clawd::client::has_gateway() {
         return true;
     }

@@ -26,7 +26,14 @@ fn catalogue_contains_every_public_router_namespace() {
 fn activity_commands_are_discoverable_without_model_authority() {
     assert_eq!(
         command_names("activity").unwrap(),
-        vec!["create", "list", "show", "update", "run", "pause", "resume", "complete", "cancel", "objects", "attach-object", "receipts", "record-receipt"]
+        vec![
+            "create", "list", "show", "update", "run", "pause", "resume", "complete", "cancel",
+            "objects", "attach-object", "receipts", "record-receipt", "object-state", "observe",
+            "relate", "retract-object-state", "record-object-state", "execution-limits",
+            "set-execution-limits", "enable-execution-limits", "disable-execution-limits",
+            "capability-policy", "set-capability-policy", "enable-capability-policy",
+            "disable-capability-policy",
+        ]
     );
     for command in command_names("activity").unwrap() {
         let help = command_help("activity", command).unwrap();

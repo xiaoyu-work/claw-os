@@ -60,6 +60,7 @@ pub(crate) struct AppHost {
     closed: AtomicBool,
     used: AtomicU32,
     permits: Arc<Semaphore>,
+    activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
 }
 
 pub(crate) struct HostLifetime(Arc<AppHost>);
@@ -126,6 +127,7 @@ impl AppHost {
         state: DaemonState,
         admission: Arc<Admission>,
         deadline: Instant,
+        activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             task_id,
@@ -138,6 +140,7 @@ impl AppHost {
             closed: AtomicBool::new(false),
             used: AtomicU32::new(0),
             permits: Arc::new(Semaphore::new(MAX_ACTIVE_CALLS)),
+            activity,
         })
     }
 
@@ -181,12 +184,25 @@ impl AppHost {
         {
             return Err("App-host process identity is no longer current".to_string());
         }
+        if let Some(boundary) = &self.activity {
+            boundary.require_identity(
+                self.client.require_uid()?,
+                self.parent
+                    .as_ref()
+                    .map(|session| session.session_id.as_str()),
+            )?;
+            boundary.check()?;
+        }
         Ok(())
     }
 
     pub(crate) async fn handle(&self, request: AppHostRequest) -> Response {
         let id = request.request_id.clone();
-        let result = self.handle_inner(request).await;
+        let result = crate::caps::activity_boundary::scope(
+            self.activity.clone(),
+            self.handle_inner(request),
+        )
+        .await;
         match result {
             Ok(response) => response,
             Err(error) => {

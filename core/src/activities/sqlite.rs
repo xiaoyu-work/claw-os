@@ -1,3 +1,4 @@
+mod capability_policy;
 mod execution_limits;
 mod object_state;
 
@@ -12,8 +13,9 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
-    Activity, ActivityDraft, ActivityError, ActivityExecutionLimits, ActivityPatch, ActivityReceipt,
-    ActivityResource, ActivityService, ActivityState, ExecutionLimitsDraft, ExecutionReservation,
+    Activity, ActivityCapabilityPolicy, ActivityDraft, ActivityError, ActivityExecutionLimits,
+    ActivityPatch, ActivityReceipt, ActivityResource, ActivityService, ActivityState,
+    CapabilityPolicyDraft, ExecutionLimitsDraft, ExecutionReservation,
     ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration,
     ReceiptReport, ReceiptSource,
     DATABASE_SCHEMA_VERSION, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
@@ -144,6 +146,10 @@ impl SqliteActivityService {
             tx.execute_batch(execution_limits::MIGRATE_TO_V4)?;
         }
         execution_limits::validate_schema(&tx)?;
+        if version < 5 {
+            tx.execute_batch(capability_policy::MIGRATE_TO_V5)?;
+        }
+        capability_policy::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -531,6 +537,34 @@ impl ActivityService for SqliteActivityService {
             requested_max_turns,
         )
     }
+
+    fn capability_policy(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<Option<ActivityCapabilityPolicy>, ActivityError> {
+        capability_policy::get(self, owner_uid, activity_id)
+    }
+
+    fn set_capability_policy(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: Option<u64>,
+        draft: CapabilityPolicyDraft,
+    ) -> Result<ActivityCapabilityPolicy, ActivityError> {
+        capability_policy::set(self, owner_uid, activity_id, expected_revision, draft)
+    }
+
+    fn set_capability_policy_enabled(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityCapabilityPolicy, ActivityError> {
+        capability_policy::set_enabled(self, owner_uid, activity_id, expected_revision, enabled)
+    }
 }
 
 fn list_limit(limit: usize) -> Result<i64, ActivityError> {
@@ -559,7 +593,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1..=3 => {}
+        1..=4 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

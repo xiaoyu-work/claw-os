@@ -3,6 +3,13 @@ use crate::clawd::authority::{MAX_CHILDREN, MAX_LINEAGE_DEPTH};
 
 use crate::caps::{Cap, Scope, Verb};
 
+mod activity_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/authority/activity_policy.rs"
+    ));
+}
+
 /// Most fixtures bind to this process; relay tests keep a separate live
 /// App process so resolving and consuming cannot confuse the two principals.
 fn self_principal() -> Principal {

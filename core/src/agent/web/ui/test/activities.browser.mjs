@@ -18,9 +18,14 @@ const jobs = new Map();
 const receiptRecords = new Map();
 const objectStateRecords = new Map();
 const executionLimitRecords = new Map();
+const capabilityPolicyRecords = new Map();
 const requests = [];
 const fixtureErrors = [];
 const browserErrors = [];
+const expectedHttpErrors = [];
+const failedResponses = [];
+const networkErrors = [];
+const networkRequests = new Map();
 const holds = [];
 const objectDescription = {
   object: { app_id: "archive", object_type: "entry", object_id: " release.status /?#& ", revision: "rev 2" },
@@ -72,11 +77,69 @@ let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
 let invalidReceiptsOnce = null;
 let invalidObjectStateAckOnce = false;
+let invalidCapabilityPolicyOnce = null;
+let conflictCapabilityPolicyOnce = false;
+let invalidCapabilityPolicyAckOnce = false;
 let browser;
 let cdp;
 
 const clone = (value) => structuredClone(value);
 const timestamp = () => new Date().toISOString();
+const capabilityPolicyCatalog = {
+  schema: 1,
+  verbs: [
+    { verb: "fs.read", scope_kind: "path", label: "Read files", description: "Read file data." },
+    { verb: "fs.write", scope_kind: "path", label: "Write files", description: "Change file data." },
+    { verb: "fs.delete", scope_kind: "path", label: "Delete files", description: "Remove files." },
+    { verb: "net.dial", scope_kind: "host", label: "Connect", description: "Connect to a host." },
+    { verb: "secret.read", scope_kind: "name", label: "Read secrets", description: "Read a named secret." },
+    { verb: "proc.spawn", scope_kind: "self-ref", label: "Spawn processes", description: "Start a process." },
+    { verb: "ui.notify", scope_kind: "none", label: "Notify", description: "Show a notification." },
+  ],
+};
+
+function checkedCapabilityDraft(draft) {
+  assert.deepEqual(Object.keys(draft), ["rules"]);
+  assert.ok(Array.isArray(draft.rules) && draft.rules.length <= 64);
+  assert.ok(Buffer.byteLength(JSON.stringify(draft)) <= 16 * 1024);
+  assert.equal(new Set(draft.rules.map((rule) => rule.verb)).size, draft.rules.length);
+  const rules = draft.rules.map((rule) => {
+    assert.deepEqual(Object.keys(rule).sort(), ["mode", "scopes", "verb"]);
+    const verb = capabilityPolicyCatalog.verbs.find((entry) => entry.verb === rule.verb);
+    assert.ok(verb, "policy verbs come from the compiled catalogue");
+    assert.ok(["normal", "require_approval", "deny"].includes(rule.mode));
+    assert.ok(Array.isArray(rule.scopes));
+    if (rule.mode === "deny") {
+      assert.deepEqual(rule.scopes, [], "deny is whole-verb, not an approval override");
+      return clone(rule);
+    }
+    assert.ok(rule.scopes.length >= 1 && rule.scopes.length <= 32);
+    const scopes = rule.scopes.map((scope) => {
+      if (scope.kind === "wild") {
+        assert.ok(["none", "wild", "self-ref"].includes(verb.scope_kind));
+        assert.deepEqual(Object.keys(scope), ["kind"]);
+        return clone(scope);
+      }
+      assert.deepEqual(Object.keys(scope).sort(), ["kind", "value"]);
+      assert.equal(scope.kind, verb.scope_kind);
+      assert.ok(typeof scope.value === "string" && scope.value.length > 0);
+      assert.doesNotMatch(scope.value, /[\u0000-\u001f\u007f-\u009f]/);
+      if (scope.kind === "path") {
+        assert.ok(scope.value.startsWith("/"));
+        assert.ok(!scope.value.includes("$"));
+        assert.equal(path.posix.normalize(scope.value), scope.value, "policy paths must already be canonical");
+        assert.ok(!scope.value.split("/").some((part) => part === "." || part === ".."));
+      }
+      return { kind: scope.kind, value: scope.kind === "host"
+        ? scope.value.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) : scope.value };
+    });
+    const key = (scope) => scope.kind === "wild" ? "*" : `${scope.kind === "self-ref" ? "self" : scope.kind}:${scope.value}`;
+    scopes.sort((left, right) => Buffer.compare(Buffer.from(key(left)), Buffer.from(key(right))));
+    return { verb: rule.verb, mode: rule.mode, scopes: scopes.filter((scope, index) => !index || key(scope) !== key(scopes[index - 1])) };
+  });
+  rules.sort((left, right) => Buffer.compare(Buffer.from(left.verb), Buffer.from(right.verb)));
+  return { rules };
+}
 
 function receiptRecord(id, outcome = "returned") {
   return {
@@ -189,6 +252,11 @@ async function fixture(req, res) {
       }))) });
   }
   if (url.pathname === "/api/approvals/recent") return reply(req, res, { entries: [] });
+  if (url.pathname === "/api/activities/capability-policy-catalog") {
+    assert.equal(req.method, "GET");
+    assert.deepEqual([...url.searchParams], []);
+    return reply(req, res, capabilityPolicyCatalog);
+  }
   if (/^\/api\/approvals\/[^/]+\/approve$/.test(url.pathname)) {
     const id = url.pathname.split("/")[3];
     assert.equal(body.duration, "once");
@@ -217,6 +285,60 @@ async function fixture(req, res) {
     };
     activities.set(item.id, item);
     return reply(req, res, item);
+  }
+  const policyRoute = /^\/api\/activities\/([^/]+)\/capability-policy(?:\/(enabled))?$/.exec(url.pathname);
+  if (policyRoute) {
+    const item = activities.get(decodeURIComponent(policyRoute[1]));
+    assert.ok(item, "capability policy belongs to an existing owner-scoped Activity");
+    assert.deepEqual([...url.searchParams], []);
+    let current = capabilityPolicyRecords.get(item.id);
+    if (req.method === "GET") {
+      assert.equal(policyRoute[2], undefined);
+      if (invalidCapabilityPolicyOnce?.id === item.id) {
+        const invalid = invalidCapabilityPolicyOnce;
+        invalidCapabilityPolicyOnce = null;
+        return reply(req, res, invalid.response);
+      }
+      return reply(req, res, { schema: 1, activity_id: item.id, capability_policy: current || null });
+    }
+    assert.equal(req.method, "POST");
+    assert.deepEqual(Object.keys(body).sort(),
+      policyRoute[2] === "enabled" ? ["enabled", "expected_revision"] : ["expected_revision", "policy"]);
+    if (conflictCapabilityPolicyOnce && !policyRoute[2]) {
+      assert.ok(current);
+      conflictCapabilityPolicyOnce = false;
+      current = { ...current, revision: current.revision + 1, enabled: false, updated_at: timestamp(),
+        rules: [{ verb: "fs.read", mode: "normal", scopes: [{ kind: "path", value: "/srv/concurrent/**" }] }] };
+      capabilityPolicyRecords.set(item.id, current);
+    }
+    if (body.expected_revision !== (current?.revision ?? null)) {
+      expectedHttpErrors.push({ method: req.method, path: url.pathname, status: 400 });
+      return reply(req, res, { error: "Capability policy revision conflict" }, 400);
+    }
+    if (policyRoute[2] === "enabled") {
+      assert.ok(current);
+      assert.equal(typeof body.enabled, "boolean");
+      assert.ok(!body.enabled || item.state === "active" || item.state === "paused");
+      const policy = { ...current, revision: current.revision + 1, enabled: body.enabled, updated_at: timestamp() };
+      capabilityPolicyRecords.set(item.id, policy);
+      return reply(req, res, policy);
+    }
+    assert.ok(item.state === "active" || item.state === "paused");
+    const policy = {
+      ...checkedCapabilityDraft(body.policy), activity_id: item.id, owner_uid: item.owner_uid,
+      revision: (current?.revision ?? 0) + 1, enabled: current?.enabled ?? true,
+      created_at: current?.created_at ?? timestamp(), updated_at: timestamp(),
+    };
+    capabilityPolicyRecords.set(item.id, policy);
+    if (invalidCapabilityPolicyAckOnce) {
+      invalidCapabilityPolicyAckOnce = false;
+      const mismatched = clone(policy);
+      const rule = mismatched.rules.find((entry) => entry.verb === "fs.read");
+      assert.ok(rule);
+      rule.scopes = [{ kind: "path", value: "/**" }];
+      return reply(req, res, mismatched);
+    }
+    return reply(req, res, policy);
   }
   const limitRoute = /^\/api\/activities\/([^/]+)\/execution-limits(?:\/(enabled))?$/.exec(url.pathname);
   if (limitRoute) {
@@ -501,13 +623,24 @@ try {
       browserErrors.push(event.params.args.map((value) => value.description || value.value).join(" "));
     }
     if (event.method === "Log.entryAdded" && event.params.entry.level === "error") {
-      browserErrors.push(event.params.entry.text);
+      if (event.params.entry.source === "network") networkErrors.push(event.params.entry);
+      else browserErrors.push(event.params.entry.text);
     }
     if (event.method === "Network.requestWillBeSent") {
+      networkRequests.set(event.params.requestId, event.params.request);
       const url = event.params.request.url;
       if (!url.startsWith(origin) && !url.startsWith("data:") && url !== "about:blank") {
         browserErrors.push(`Unexpected outbound request: ${url}`);
       }
+    }
+    if (event.method === "Network.responseReceived" && event.params.response.status >= 400) {
+      failedResponses.push({
+        requestId: event.params.requestId, url: event.params.response.url,
+        method: networkRequests.get(event.params.requestId)?.method, status: event.params.response.status,
+      });
+    }
+    if (event.method === "Network.loadingFailed" && !event.params.canceled) {
+      browserErrors.push(`Network failure: ${event.params.errorText}`);
     }
   });
   await Promise.all(["Runtime.enable", "Page.enable", "Log.enable", "Network.enable"].map((method) => send(method)));
@@ -1118,9 +1251,226 @@ try {
   assert.deepEqual(activities.get("activity-1"), unchangedGoal);
   assert.deepEqual([...jobs.values()], unchangedJobs);
   console.log("PASS explicit execution-limit configuration, revision updates, disable/enable and preserved usage");
+
+  const policyPanel = `document.querySelector('[aria-label="Activity capability policy"]')`;
+  const expectPolicy = (text) => wait(`(${policyPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const policyEndpoint = "/api/activities/activity-1/capability-policy";
+  const policyWrites = () => requests.filter((request) => request.method === "POST" && request.path.includes("/capability-policy"));
+  const savedPolicy = () => capabilityPolicyRecords.get("activity-1");
+  const savedReadRule = () => savedPolicy().rules.find((rule) => rule.verb === "fs.read");
+  const expectPolicyRevision = (revision) => expectPolicy(`Revision: ${revision}`);
+  await expectPolicy("No Activity capability policy is configured.");
+  await clickText("Configure capability policy");
+  await expectPolicy("Empty rules add no constraints, not permission.");
+  await clickText("Save capability policy");
+  await expectPolicyRevision(1);
+  assert.equal(savedPolicy().enabled, true, "initial policies are enabled, not grants");
+  assert.deepEqual(savedPolicy().rules, []);
+  await expectPolicy("No rules. An enabled empty policy adds no constraints and grants no permissions.");
+  await clickText("Edit capability policy");
+  for (const [index, verb, mode, kind, value] of [
+    [1, "fs.read", "normal", "path", "/home/user/project/**"],
+    [2, "net.dial", "require_approval", "host", "EXAMPLE.COM:443"],
+    [3, "fs.delete", "deny", null, null],
+    [4, "secret.read", "normal", "name", "release/token"],
+    [5, "proc.spawn", "require_approval", "self-ref", "self"],
+    [6, "ui.notify", "normal", null, null],
+  ]) {
+    await clickText("Add capability rule");
+    await fill(`Rule ${index} capability`, verb);
+    await fill(`Rule ${index} mode`, mode);
+    if (kind) await fill(`Rule ${index} ${kind} scope 1`, value);
+  }
+  await clickText("Add scope to rule 1");
+  await fill("Rule 1 path scope 2", "/home/user/shared/**");
+  await clickText("Add scope to rule 1");
+  await fill("Rule 1 path scope 3", "/home/user/project/**");
+  await clickText("Add scope to rule 4");
+  await fill("Rule 4 name scope 2", " ");
+  assert.equal(await evaluate(`Array.from((${fieldExpression("Rule 2 capability")}).options).find(option => option.value === 'fs.read').disabled`), true);
+  assert.equal(await evaluate(`${policyPanel}.querySelectorAll('textarea').length`), 0, "fixed typed rows, not model-generated UI or raw JSON");
+  await clickText("Save capability policy");
+  await expectPolicyRevision(2);
+  await wait(`!${policyPanel}.querySelector('form')`, "policy edit completed");
+  assert.equal(savedPolicy().rules.length, 6);
+  assert.deepEqual(savedPolicy().rules.find((rule) => rule.verb === "fs.delete").scopes, []);
+  assert.deepEqual(savedPolicy().rules.find((rule) => rule.verb === "net.dial").scopes, [{ kind: "host", value: "example.com:443" }]);
+  assert.deepEqual(savedPolicy().rules.find((rule) => rule.verb === "proc.spawn").scopes, [{ kind: "self-ref", value: "self" }]);
+  assert.deepEqual(savedPolicy().rules.find((rule) => rule.verb === "ui.notify").scopes, [{ kind: "wild" }]);
+  assert.deepEqual(savedPolicy().rules.find((rule) => rule.verb === "secret.read").scopes, [
+    { kind: "name", value: " " }, { kind: "name", value: "release/token" },
+  ], "literal scope values are preserved, not trimmed or rejected by presentation");
+  assert.deepEqual(savedReadRule().scopes, [
+    { kind: "path", value: "/home/user/project/**" }, { kind: "path", value: "/home/user/shared/**" },
+  ]);
+  assert.deepEqual(activities.get("activity-1"), unchangedGoal);
+  assert.deepEqual([...jobs.values()], unchangedJobs);
+  await reload();
+  await expectPolicyRevision(2);
+  await expectPolicy("example.com:443");
+  await expectPolicy("Deny cannot be overridden by approval.");
+  await expectPolicy("once even if consent said session or forever");
+  await expectPolicy("immutable root-grant policy binding without asking again");
+  await expectPolicy("A first policy also invalidates existing attempts");
+  await expectPolicy("compromised same-UID Agent");
+  console.log("PASS empty policy creation, fixed rule editing, every scope kind, canonical acknowledgements and reload persistence");
+
+  const preservedScope = "/home/user/preserved-draft/**";
+  await clickText("Edit capability policy");
+  await fill("Rule 2 mode", "require_approval");
+  await fill("Rule 2 path scope 1", preservedScope);
+  conflictCapabilityPolicyOnce = true;
+  const beforeConflict = policyWrites().length;
+  await clickText("Save capability policy");
+  await expectPolicy("Capability policy revision conflict");
+  assert.equal(policyWrites().length, beforeConflict + 1, "stale writes are sent once, never retried");
+  assert.equal(await evaluate(`(${fieldExpression("Rule 2 path scope 1")}).value`), preservedScope);
+  assert.equal(await evaluate(`(${fieldExpression("Rule 2 mode")}).value`), "require_approval");
+  assert.equal(await evaluate(`(${buttonExpression("Save capability policy")}).matches(':disabled')`), true);
+  await evaluate("window.dispatchEvent(new Event('focus'))");
+  await expectPolicyRevision(3);
+  await expectPolicy("/srv/concurrent/**");
+  assert.equal(await evaluate(`(${buttonExpression("Use refreshed revision for this draft")}).matches(':disabled')`), true);
+  await clickLabel("Refresh capability policy");
+  await wait(`!(${buttonExpression("Use refreshed revision for this draft")}).matches(':disabled')`, "explicitly refreshed policy revision");
+  assert.equal(await evaluate(`(${buttonExpression("Save capability policy")}).matches(':disabled')`), true);
+  assert.equal(policyWrites().length, beforeConflict + 1);
+  await clickText("Use refreshed revision for this draft");
+  assert.equal(policyWrites().length, beforeConflict + 1, "review never automatically resubmits a draft");
+  assert.equal(await evaluate(`(${fieldExpression("Rule 2 path scope 1")}).value`), preservedScope);
+  await clickText("Save capability policy");
+  await expectPolicyRevision(4);
+  await wait(`!${policyPanel}.querySelector('form')`, "explicit stale-draft save completed");
+  assert.equal(savedPolicy().enabled, false, "editing preserves a concurrently disabled policy");
+  assert.equal(savedReadRule().scopes[0].value, preservedScope);
+  assert.equal(savedReadRule().mode, "require_approval");
+  await clickText("Enable capability policy");
+  await expectPolicyRevision(5);
+  assert.equal(savedPolicy().enabled, true);
+  const enabledRules = clone(savedPolicy().rules);
+  await clickText("Disable capability policy");
+  await expectPolicyRevision(6);
+  assert.equal(savedPolicy().enabled, false);
+  assert.deepEqual(savedPolicy().rules, enabledRules, "disable preserves rules instead of deleting the policy");
+  await expectPolicy("all controlled capability checks are blocked, not unrestricted.");
+  await clickText("Enable capability policy");
+  await expectPolicyRevision(7);
+  console.log("PASS real HTTP policy conflict, retained drafts, explicit refresh/review and revision-checked enable/disable");
+
+  await clickText("Edit capability policy");
+  await fill("Rule 2 mode", "normal");
+  invalidCapabilityPolicyAckOnce = true;
+  const beforeAmbiguous = policyWrites().length;
+  await clickText("Save capability policy");
+  await expectPolicy("acknowledgement changed the requested rules");
+  assert.equal(policyWrites().length, beforeAmbiguous + 1);
+  assert.equal(await evaluate(`(${fieldExpression("Rule 2 mode")}).value`), "normal");
+  assert.equal(await evaluate(`(${fieldExpression("Rule 2 path scope 1")}).value`), preservedScope);
+  assert.equal(savedReadRule().scopes[0].value, preservedScope, "an altered acknowledgement is not accepted as the requested policy");
+  assert.equal(await evaluate(`(${buttonExpression("Save capability policy")}).matches(':disabled')`), true);
+  await clickLabel("Refresh capability policy");
+  await expectPolicyRevision(8);
+  await clickText("Cancel policy edit");
+  assert.equal(policyWrites().length, beforeAmbiguous + 1, "an ambiguous acknowledgement does not duplicate a mutation");
+  invalidCapabilityPolicyOnce = {
+    id: "activity-1",
+    response: { schema: 1, activity_id: "activity-1", capability_policy: { ...clone(savedPolicy()), owner_uid: 2000 } },
+  };
+  await clickLabel("Refresh capability policy");
+  await expectPolicy("owner does not match this Activity");
+  assert.equal(await evaluate(`${policyPanel}.querySelectorAll('article').length`), 0);
+  assert.equal(await evaluate(`${policyPanel}.querySelector('form') !== null`), false);
+  await clickLabel("Refresh capability policy");
+  await expectPolicyRevision(8);
+  const malformedPolicy = clone(savedPolicy());
+  malformedPolicy.rules.find((rule) => rule.verb === "fs.read").scopes = [{ kind: "wild" }];
+  invalidCapabilityPolicyOnce = {
+    id: "activity-1", response: { schema: 1, activity_id: "activity-1", capability_policy: malformedPolicy },
+  };
+  await clickLabel("Refresh capability policy");
+  await expectPolicy("Use a compatible path scope");
+  assert.equal(await evaluate(`${policyPanel}.querySelectorAll('article').length`), 0);
+  await clickLabel("Refresh capability policy");
+  await expectPolicyRevision(8);
+  assert.equal(await evaluate(`${policyPanel}.querySelectorAll('a,img,script').length`), 0);
+  console.log("PASS unsafe policy reads and ambiguous acknowledgements hide saved state without losing or retrying drafts");
+
+  const latePolicyRead = holdRequest("GET", policyEndpoint);
+  await clickLabel("Refresh capability policy");
+  await latePolicyRead.seen;
+  await open("Second goal");
+  await expectPolicy("No Activity capability policy is configured.");
+  latePolicyRead.release();
+  await delay(250);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
+  await expectPolicy("No Activity capability policy is configured.");
+  await open("Release preparation");
+  await expectPolicyRevision(8);
+  await clickText("Edit capability policy");
+  await fill("Rule 2 mode", "require_approval");
+  const latePolicyWrite = holdRequest("POST", policyEndpoint);
+  await clickText("Save capability policy");
+  await latePolicyWrite.seen;
+  await open("Second goal");
+  await expectPolicy("No Activity capability policy is configured.");
+  await clickText("Configure capability policy");
+  await clickText("Add capability rule");
+  await fill("Rule 1 capability", "fs.read");
+  await fill("Rule 1 path scope 1", "/second-activity/unsaved/**");
+  latePolicyWrite.release();
+  await delay(250);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
+  assert.equal(await evaluate(`(${fieldExpression("Rule 1 path scope 1")}).value`), "/second-activity/unsaved/**");
+  assert.equal(await evaluate(`(${detailText}).includes('Activity capability policy saved;')`), false);
+  assert.equal(capabilityPolicyRecords.has("activity-2"), false);
+  await clickText("Cancel policy edit");
+  await open("Release preparation");
+  await expectPolicyRevision(9);
+  assert.deepEqual(activities.get("activity-1"), unchangedGoal);
+  assert.deepEqual([...jobs.values()], unchangedJobs);
+  console.log("PASS selection-safe policy reads and writes preserve the other Activity's unsaved draft");
+
+  await clickText("Pause activity");
+  await expectDetail("Activity paused.");
+  await clickText("Edit capability policy");
+  await fill("Rule 2 mode", "normal");
+  await clickText("Save capability policy");
+  await expectPolicyRevision(10);
+  assert.equal(activities.get("activity-1").state, "paused");
+  await clickText("Mark completed");
+  await fill("Completion note", "I explicitly reviewed the goal independently of its capability policy.");
+  await clickText("Confirm completion");
+  await expectDetail("Activity completed with your confirmation.");
+  assert.equal(await evaluate(`(${buttonExpression("Edit capability policy")}).matches(':disabled')`), true);
+  await clickText("Disable capability policy");
+  await expectPolicyRevision(11);
+  assert.equal(activities.get("activity-1").state, "completed", "policy disabling never reopens or completes goals");
+  assert.equal(await evaluate(`(${buttonExpression("Enable capability policy")}).matches(':disabled')`), true);
+  await clickText("Reopen activity");
+  await expectDetail("Activity explicitly reopened.");
+  await clickText("Enable capability policy");
+  await expectPolicyRevision(12);
+  await clickText("Cancel activity");
+  await expectDetail("Activity cancelled.");
+  await clickText("Disable capability policy");
+  await expectPolicyRevision(13);
+  assert.equal(activities.get("activity-1").state, "cancelled");
+  assert.equal(await evaluate(`(${buttonExpression("Enable capability policy")}).matches(':disabled')`), true);
+  assert.equal(await evaluate(`(${buttonExpression("Edit capability policy")}).matches(':disabled')`), true);
+  console.log("PASS paused policy edits and terminal-state reads/disabling without new work, permissions or implicit goal changes");
+
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);
+  assert.deepEqual(failedResponses.map((response) => ({
+    method: response.method, path: new URL(response.url).pathname, status: response.status,
+  })), expectedHttpErrors, "only deliberately exercised HTTP failures are expected");
+  assert.equal(expectedHttpErrors.length, 1, "the stale-write regression exercised one actual HTTP error, not a 200-only proxy");
+  for (const entry of networkErrors) {
+    assert.ok(failedResponses.some((response) =>
+      (entry.networkRequestId ? entry.networkRequestId === response.requestId : entry.url === response.url)
+      && entry.text.includes(String(response.status))), `Unexpected network console error: ${entry.text}`);
+  }
   console.log("PASS visible read errors, filters, and selection-safe late reads/mutations/creation");
   console.log(`PASS Activities browser regression (${requests.length} authenticated API interactions, no console errors)`);
 } finally {

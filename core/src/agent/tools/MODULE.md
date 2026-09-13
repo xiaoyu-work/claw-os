@@ -56,6 +56,15 @@ or unreliable, to verify current facts at their App/OS source, and to report
 remaining uncertainty if permissions or execution budgets prevent resolution.
 No pre-model keyword router or mandatory extra planning call selects memories.
 
+## Activity capability constraints
+
+For brokered Apps, the invoke preflight and session-tool wrapper do not spend
+consent locally. Root registration/call planning settles ordinary missing
+permissions and Activity-required confirmations as one complete set. Local
+App execution retains its existing preflight. Denied calls never fall back
+to a local or unverified launcher; all execution still crosses the ordinary
+App boundary.
+
 ## Activity receipts
 
 One-shot App gateways share the ordinary manifest-selected runtime and report

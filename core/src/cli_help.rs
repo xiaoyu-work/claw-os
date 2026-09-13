@@ -689,6 +689,34 @@ fn activity_schemas() -> Vec<CommandSchema> {
     ));
     let mut schemas = vec![
         CommandSchema {
+            command: "capability-policy",
+            description: "Read shared Activity capability constraints; missing rules mean ordinary permission checks",
+            params: vec![id()],
+            example: "cos activity capability-policy 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-capability-policy",
+            description: "Create or revise a policy without granting permissions or re-enabling a disabled policy; changes stop old-policy attempts, not admitted effects",
+            params: vec![
+                id(),
+                Param::flag("--policy", "json", true, "Draft {rules:[{verb,mode,scopes}]}, at most 16 KiB and 64 unique catalogue verbs; normal/require_approval require 1-32 compatible scopes; deny uses []"),
+                Param::flag("--expected-revision", "integer", false, "Positive current revision when updating; omit only for initial creation"),
+            ],
+            example: r#"cos activity set-capability-policy 00000000-0000-4000-8000-000000000001 --policy '{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}]}'"#,
+        },
+        CommandSchema {
+            command: "enable-capability-policy",
+            description: "Enable an existing policy for an active or paused Activity; ordinary capability and provenance checks still apply",
+            params: vec![id(), Param::flag("--expected-revision", "integer", true, "Positive current policy revision; stale writes are refused")],
+            example: "cos activity enable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+        },
+        CommandSchema {
+            command: "disable-capability-policy",
+            description: "Block all controlled capability checks, including for terminal Activities; never delete the policy or undo admitted effects",
+            params: vec![id(), Param::flag("--expected-revision", "integer", true, "Positive current policy revision; stale writes are refused")],
+            example: "cos activity disable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+        },
+        CommandSchema {
             command: "execution-limits",
             description: "Read Activity attempt/turn/expiry controls; no capabilities are granted",
             params: vec![id()],
@@ -1043,4 +1071,12 @@ pub(crate) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<
     });
     append_object_schema(&mut output, app);
     Ok(Some(output.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/cli_help.rs"
+    ));
 }

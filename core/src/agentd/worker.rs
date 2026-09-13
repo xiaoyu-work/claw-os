@@ -102,6 +102,7 @@ fn run() -> Result<(), String> {
     crate::caps::approval_gateway::install(Arc::new(ChannelApprovalGateway {
         task_id: task_id.clone(),
         state: io.state.clone(),
+        activity_checks: assignment.job.activity_capability_checks,
     }));
     crate::clawd::client::install_gateway(Arc::new(ChannelAppGateway {
         task_id: task_id.clone(),
@@ -272,6 +273,7 @@ struct ChannelState {
     pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
+    boundaries_used: AtomicU32,
     receipts_used: AtomicU32,
     app_calls_used: AtomicU32,
 }
@@ -351,6 +353,7 @@ impl ChannelIo {
             pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
+            boundaries_used: AtomicU32::new(0),
             receipts_used: AtomicU32::new(0),
             app_calls_used: AtomicU32::new(0),
         });
@@ -626,6 +629,7 @@ where
 struct ChannelApprovalGateway {
     task_id: String,
     state: Arc<ChannelState>,
+    activity_checks: bool,
 }
 
 impl ChannelApprovalGateway {
@@ -638,11 +642,15 @@ impl ChannelApprovalGateway {
         if self.state.cancelled.load(Ordering::SeqCst) {
             return Err("agent task was cancelled".to_string());
         }
-        let used = self.state.asks_used.fetch_add(1, Ordering::SeqCst);
-        if used >= protocol::MAX_APPROVAL_ASKS {
+        let (counter, limit) = if matches!(ask, ApprovalAsk::Boundary { .. }) {
+            (&self.state.boundaries_used, protocol::MAX_BOUNDARY_CHECKS)
+        } else {
+            (&self.state.asks_used, protocol::MAX_APPROVAL_ASKS)
+        };
+        let used = counter.fetch_add(1, Ordering::SeqCst);
+        if used >= limit {
             return Err(format!(
-                "agent task exceeded its permission-mediation budget of {}",
-                protocol::MAX_APPROVAL_ASKS
+                "agent task exceeded its permission-mediation budget of {limit}"
             ));
         }
         let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
@@ -678,6 +686,24 @@ impl ChannelApprovalGateway {
 }
 
 impl ApprovalGateway for ChannelApprovalGateway {
+    fn boundary(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+    ) -> Result<crate::activities::CapabilityBoundaryDecision, String> {
+        if !self.activity_checks {
+            return Ok(crate::activities::CapabilityBoundaryDecision::Normal);
+        }
+        match self.ask(ApprovalAsk::Boundary {
+            verb: verb.as_str().to_string(),
+            scope: scope.clone(),
+        })? {
+            ApprovalReply::Boundary { decision } => Ok(decision),
+            ApprovalReply::Refused { message } => Err(message),
+            _ => Err("supervisor answered a boundary check with a consent reply".to_string()),
+        }
+    }
+
     fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
         match self.ask(ApprovalAsk::Consume {
             verb: verb.as_str().to_string(),
@@ -686,6 +712,9 @@ impl ApprovalGateway for ChannelApprovalGateway {
             ApprovalReply::Granted => Ok(true),
             ApprovalReply::Pending { .. } => Ok(false),
             ApprovalReply::Refused { message } => Err(message),
+            ApprovalReply::Boundary { .. } => {
+                Err("supervisor answered consent consumption with a boundary reply".to_string())
+            }
         }
     }
 
@@ -700,6 +729,11 @@ impl ApprovalGateway for ChannelApprovalGateway {
             ApprovalReply::Granted => PendingApproval { request_id: None },
             ApprovalReply::Pending { request_id } => PendingApproval { request_id },
             ApprovalReply::Refused { message } => return Err(message),
+            ApprovalReply::Boundary { .. } => {
+                return Err(
+                    "supervisor answered a consent request with a boundary reply".to_string(),
+                );
+            }
         };
         if let Some(request_id) = pending.request_id.as_ref() {
             self.state.record_pending_approval(request_id.clone());

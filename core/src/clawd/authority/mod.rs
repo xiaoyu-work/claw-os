@@ -262,13 +262,59 @@ async fn mint_peer_session_grant(
         });
     }
 
+    let source = if session.app_id.is_some() || session.group.as_deref() == Some("mcp") {
+        session.parent.as_deref()
+    } else {
+        Some(session_id)
+    };
+    let boundary = source
+        .map(|source| crate::caps::activity_boundary::ActivityBoundary::for_session(uid, source))
+        .transpose()
+        .map_err(|_| AuthorityError::ActivityPolicy)?
+        .flatten();
+    let activity = match boundary {
+        Some(boundary) if session.app_id.is_some() || session.group.as_deref() == Some("mcp") => {
+            // A persisted App row cannot manufacture confirmation or survive a
+            // policy change by obtaining a new peer-session grant.
+            let live = authority().resolve_session(
+                session_id,
+                &Presentation::new(
+                    uid,
+                    pid,
+                    client.start_time_ticks,
+                    descriptor.audience,
+                    route_name,
+                ),
+            )?;
+            let binding = live
+                .subject
+                .activity
+                .ok_or(AuthorityError::ActivityPolicy)?;
+            let expected = boundary.binding();
+            if binding.owner_uid != expected.owner_uid
+                || binding.activity_id != expected.activity_id
+                || binding.revision != expected.revision
+            {
+                return Err(AuthorityError::ActivityPolicy);
+            }
+            binding
+                .check()
+                .map_err(|_| AuthorityError::ActivityPolicy)?;
+            caps = live.caps.intersect(&caps);
+            Some(binding)
+        }
+        Some(boundary) => Some(boundary.binding()),
+        None => None,
+    };
     let principal =
         Principal::of_process(uid, session.pid).ok_or(AuthorityError::UnverifiablePrincipal)?;
     let (_handle, view) = authority().issue(Issuance {
         issuer: Issuer::TrustedSession,
         principal,
         binding: Binding::ProcessTree,
-        subject: Subject::session(session_id).with_app(session.app_id.clone()),
+        subject: Subject::session(session_id)
+            .with_app(session.app_id.clone())
+            .with_activity(activity),
         audience: AudienceSet::one(descriptor.audience),
         caps,
         lifetime: PEER_SESSION_GRANT_TTL,
@@ -400,7 +446,8 @@ async fn finish(
         presentation,
         session,
         &requirement,
-    ).with_relay(relay);
+    )
+    .with_relay(relay);
 
     if let Requirement::Exact(caps) = &requirement {
         if !caps.is_empty() {

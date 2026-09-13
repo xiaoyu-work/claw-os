@@ -150,6 +150,10 @@ async fn activity_http_routes_require_authentication() {
             "POST",
             "/api/activities/activity-1/execution-limits/enabled",
         ),
+        ("GET", "/api/activities/capability-policy-catalog"),
+        ("GET", "/api/activities/activity-1/capability-policy"),
+        ("POST", "/api/activities/activity-1/capability-policy"),
+        ("POST", "/api/activities/activity-1/capability-policy/enabled"),
     ] {
         let response = crate::agent::web::server::build_app(state.clone())
             .oneshot(
@@ -168,6 +172,64 @@ async fn activity_http_routes_require_authentication() {
             "{method} {path}"
         );
     }
+}
+
+#[test]
+fn activity_capability_policy_requests_preserve_cas_and_reject_authority_fields() {
+    let policy = json!({"rules": [{"verb": "fs.delete", "mode": "deny", "scopes": []}]});
+    let body = json!({"expected_revision": 2, "policy": policy});
+    let request = with_id::<ActivityCapabilityPolicySet>("activity-1".into(), body.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        json!({"id": "activity-1", "expected_revision": 2, "policy": policy})
+    );
+    let enabled = with_id::<ActivityCapabilityPolicyEnabled>(
+        "activity-1".into(), json!({"expected_revision": 2, "enabled": false}),
+    ).unwrap();
+    assert_eq!(serde_json::to_value(enabled).unwrap(),
+        json!({"id": "activity-1", "expected_revision": 2, "enabled": false}));
+    for (field, value) in [
+        ("id", json!("another")),
+        ("owner_uid", json!(0)),
+        ("enabled", json!(true)),
+        ("revision", json!(2)),
+        ("grant", json!("forged")),
+        ("expected_revision", json!(-1)),
+        ("policy", json!({"rules": [], "enabled": false})),
+        ("policy", json!({"rules": [{
+            "verb": "fs.read", "mode": "normal", "scopes": [{"kind": "wild"}],
+        }]})),
+        ("policy", json!({"rules": [{
+            "verb": "fs.read", "mode": "normal",
+            "scopes": [{"kind": "path", "value": "x".repeat(16 * 1024)}],
+        }]})),
+    ] {
+        let mut invalid = body.clone();
+        invalid[field] = value;
+        assert!(with_id::<ActivityCapabilityPolicySet>("activity-1".into(), invalid).is_err());
+    }
+    assert!(with_id::<ActivityCapabilityPolicyEnabled>(
+        "activity-1".into(), json!({"enabled": false}),
+    ).is_err());
+    assert!(with_id::<ActivityCapabilityPolicyEnabled>(
+        "activity-1".into(), json!({"expected_revision": 1, "enabled": "false"}),
+    ).is_err());
+}
+
+#[tokio::test]
+async fn capability_policy_catalog_is_static_core_metadata_not_app_or_owner_data() {
+    let Json(catalog) = capability_policy_catalog(Ok(Query(NoBody::default()))).await.unwrap();
+    assert_eq!(catalog["schema"], 1);
+    let verbs = catalog["verbs"].as_array().unwrap();
+    assert_eq!(verbs.len(), crate::caps::CATALOG.len());
+    for (value, entry) in verbs.iter().zip(crate::caps::CATALOG) {
+        assert_eq!(value, &json!({
+            "verb": entry.verb, "scope_kind": entry.scope_kind,
+            "label": entry.label.current(), "description": entry.blurb.current(),
+        }));
+    }
+    assert!(catalog.get("owner_uid").is_none());
+    assert!(catalog.get("capabilities").is_none());
 }
 
 #[test]
@@ -332,9 +394,19 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
         }],
     });
     let receipt_result = receipt_view.clone();
+    let policy_draft = json!({"rules": [{"verb": "fs.delete", "mode": "deny", "scopes": []}]});
+    let policy_result = json!({
+        "activity_id": "activity-1", "owner_uid": 1000, "revision": 1, "enabled": true,
+        "rules": policy_draft["rules"], "created_at": "2026-09-11T00:00:00Z",
+        "updated_at": "2026-09-11T00:00:00Z",
+    });
+    let policy_response = policy_result.clone();
+    let forwarded_draft = policy_draft.clone();
     let broker = tokio::spawn(async move {
         let mut preview_count = 0;
         let mut receipt_count = 0;
+        let mut policy_reads = 0;
+        let mut policy_writes = 0;
         for command in [
             Command::ActivityRun,
             Command::ActivityGet,
@@ -344,6 +416,11 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             Command::ActivityOperationPreview,
             Command::ActivityReceipts,
             Command::ActivityReceipts,
+            Command::ActivityCapabilityPolicyGet,
+            Command::ActivityCapabilityPolicySet,
+            Command::ActivityCapabilityPolicyEnabled,
+            Command::ActivityCapabilityPolicySet,
+            Command::ActivityCapabilityPolicyGet,
         ] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut header = [0; HEADER_BYTES];
@@ -402,6 +479,40 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
                     } else {
                         Response::error(request.id, "unavailable", "Receipt ledger unavailable")
                     }
+                }
+                Command::ActivityCapabilityPolicyGet => {
+                    assert_eq!(request.params, json!({"id": "activity-1"}));
+                    policy_reads += 1;
+                    if policy_reads == 1 {
+                        Response::ok(request.id, json!({
+                            "schema": 1, "activity_id": "activity-1", "capability_policy": null,
+                        }))
+                    } else {
+                        Response::error(request.id, "unavailable", "Capability policy unavailable")
+                    }
+                }
+                Command::ActivityCapabilityPolicySet => {
+                    policy_writes += 1;
+                    if policy_writes == 1 {
+                        assert_eq!(request.params, json!({
+                            "id": "activity-1", "policy": forwarded_draft,
+                        }));
+                        Response::ok(request.id, policy_response.clone())
+                    } else {
+                        assert_eq!(request.params, json!({
+                            "id": "activity-1", "expected_revision": 1, "policy": forwarded_draft,
+                        }));
+                        Response::error(request.id, "execution_failed", "Capability policy revision conflict")
+                    }
+                }
+                Command::ActivityCapabilityPolicyEnabled => {
+                    assert_eq!(request.params, json!({
+                        "id": "activity-1", "expected_revision": 1, "enabled": false,
+                    }));
+                    let mut disabled = policy_response.clone();
+                    disabled["revision"] = json!(2);
+                    disabled["enabled"] = json!(false);
+                    Response::ok(request.id, disabled)
                 }
                 _ => unreachable!(),
             };
@@ -501,6 +612,43 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             assert_eq!(body["error"], "Receipt ledger unavailable");
         }
     }
+    let Json(absent) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        capability_policy(Path("activity-1".into()), Ok(Query(NoBody::default()))),
+    ).await.unwrap().unwrap();
+    assert_eq!(absent, json!({
+        "schema": 1, "activity_id": "activity-1", "capability_policy": null,
+    }));
+    let Json(saved) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        set_capability_policy(Path("activity-1".into()), Ok(Json(json!({
+            "expected_revision": null, "policy": policy_draft,
+        })))),
+    ).await.unwrap().unwrap();
+    assert_eq!(saved, policy_result);
+    let Json(disabled) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        enable_capability_policy(Path("activity-1".into()), Ok(Json(json!({
+            "expected_revision": 1, "enabled": false,
+        })))),
+    ).await.unwrap().unwrap();
+    assert_eq!(disabled["revision"], 2);
+    assert_eq!(disabled["enabled"], false);
+    assert_eq!(disabled["rules"], policy_result["rules"]);
+    let (status, Json(error)) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        set_capability_policy(Path("activity-1".into()), Ok(Json(json!({
+            "expected_revision": 1, "policy": policy_draft,
+        })))),
+    ).await.unwrap().unwrap_err();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"], "Capability policy revision conflict");
+    let (status, Json(error)) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        capability_policy(Path("activity-1".into()), Ok(Query(NoBody::default()))),
+    ).await.unwrap().unwrap_err();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error"], "Capability policy unavailable");
     broker.await.unwrap();
     let unavailable = list(Ok(Query(ActivityList {
         state: None,
@@ -530,6 +678,9 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
             post(operation_preview),
         )
         .route("/activities/{id}/receipts", http_get(receipts))
+        .route("/activities/capability-policy-catalog", http_get(capability_policy_catalog))
+        .route("/activities/{id}/capability-policy", http_get(capability_policy).post(set_capability_policy))
+        .route("/activities/{id}/capability-policy/enabled", post(enable_capability_policy))
         .route("/activities/{id}/update", post(update));
     for (method, path, body) in [
         (
@@ -548,6 +699,19 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
             "",
         ),
         ("GET", "/activities/activity-1/receipts?limit=-1", ""),
+        ("GET", "/activities/capability-policy-catalog?owner_uid=0", ""),
+        ("GET", "/activities/activity-1/capability-policy?owner_uid=0", ""),
+        ("GET", "/activities/activity-1/capability-policy?expected_revision=1", ""),
+        ("POST", "/activities/activity-1/capability-policy", r#"{"id":"other","policy":{"rules":[]}}"#),
+        ("POST", "/activities/activity-1/capability-policy", r#"{"owner_uid":0,"policy":{"rules":[]}}"#),
+        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":{"rules":[]},"enabled":true}"#),
+        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}],"grant":"forged"}}"#),
+        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":{"rules":[{"verb":"not.known","mode":"deny","scopes":[]}]}}"#),
+        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":"rules"}"#),
+        ("POST", "/activities/activity-1/capability-policy", "{"),
+        ("POST", "/activities/activity-1/capability-policy/enabled", r#"{"enabled":false}"#),
+        ("POST", "/activities/activity-1/capability-policy/enabled", r#"{"expected_revision":1,"enabled":false,"id":"other"}"#),
+        ("POST", "/activities/activity-1/capability-policy/enabled", r#"{"expected_revision":1,"enabled":false,"owner_uid":0}"#),
         (
             "POST",
             "/activities/activity-1/operation-preview",

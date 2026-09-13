@@ -27,6 +27,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use super::activity_capability_policy;
 use super::activity_execution_limits;
 use crate::audit_policy::FieldRule;
 
@@ -570,6 +571,36 @@ routes! {
         body: body::ActivityExecutionLimitsEnabled,
         audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
         run: |c| activity_execution_limits::enabled(c.params, c.client),
+    }
+    ActivityCapabilityPolicyGet {
+        name: "activity.capability_policy.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCapabilityPolicyGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_capability_policy::get(c.params, c.client),
+    }
+    ActivityCapabilityPolicySet {
+        name: "activity.capability_policy.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCapabilityPolicySet,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("policy", FieldRule::Size)],
+        run: |c| activity_capability_policy::set(c.params, c.client),
+    }
+    ActivityCapabilityPolicyEnabled {
+        name: "activity.capability_policy.enabled",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCapabilityPolicyEnabled,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
+        run: |c| activity_capability_policy::enabled(c.params, c.client),
     }
     ActivityObjects {
         name: "activity.objects",

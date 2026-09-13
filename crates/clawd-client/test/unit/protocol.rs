@@ -23,6 +23,18 @@ fn activity_commands_have_stable_names_and_round_trip() {
             Command::ActivityExecutionLimitsEnabled,
             "activity.execution_limits.enabled",
         ),
+        (
+            Command::ActivityCapabilityPolicyGet,
+            "activity.capability_policy.get",
+        ),
+        (
+            Command::ActivityCapabilityPolicySet,
+            "activity.capability_policy.set",
+        ),
+        (
+            Command::ActivityCapabilityPolicyEnabled,
+            "activity.capability_policy.enabled",
+        ),
         (Command::ActivityObjects, "activity.objects"),
         (Command::ActivityObjectAttach, "activity.object.attach"),
         (
@@ -49,6 +61,23 @@ fn activity_commands_have_stable_names_and_round_trip() {
             command
         );
     }
+}
+
+#[test]
+fn capability_policy_commands_have_stable_names_and_unique_inventory_entries() {
+    for (command, name) in [
+        (Command::ActivityCapabilityPolicyGet, "activity.capability_policy.get"),
+        (Command::ActivityCapabilityPolicySet, "activity.capability_policy.set"),
+        (Command::ActivityCapabilityPolicyEnabled, "activity.capability_policy.enabled"),
+    ] {
+        assert_eq!(command.as_str(), name);
+        assert_eq!(command.to_string(), name);
+        assert_eq!(Command::ALL.iter().filter(|entry| **entry == command).count(), 1);
+        assert_eq!(serde_json::to_value(command).unwrap(), json!(name));
+        assert_eq!(serde_json::from_value::<Command>(json!(name)).unwrap(), command);
+    }
+    assert!(serde_json::from_value::<Command>(json!("activity.capability_policy.grant")).is_err());
+    assert!(serde_json::from_value::<Command>(json!("activity.capability_policy.approve")).is_err());
 }
 
 #[test]

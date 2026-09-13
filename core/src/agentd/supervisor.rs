@@ -534,6 +534,10 @@ async fn pump(
     child: &mut tokio::process::Child,
     services: BrokerServices,
 ) -> TaskOutcome {
+    let activity_boundary = match crate::caps::activity_boundary::ActivityBoundary::for_job(job) {
+        Ok(boundary) => boundary,
+        Err(error) => return TaskOutcome::Failed(error),
+    };
     let mut execution_limits =
         match crate::agent::service::execution_limits::ExecutionLimitsGuard::new(job) {
             Ok(guard) => guard,
@@ -559,10 +563,29 @@ async fn pump(
         services.state,
         services.admission,
         lease.deadline,
+        activity_boundary.clone(),
     );
     let _host_lifetime = host.lifetime();
     let (host_tx, mut host_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    if let Some(boundary) = &activity_boundary {
+        let policy = match boundary.policy() {
+            Ok(policy) => policy,
+            Err(error) => return TaskOutcome::Failed(error),
+        };
+        if let Err(error) = store.append_stream_progress(
+            &job.id,
+            serde_json::json!({
+                "kind":"activity_capability_policy",
+                "activity_id":job.activity_id,
+                "policy":policy,
+            }),
+        ) {
+            return TaskOutcome::Failed(format!(
+                "could not record the Activity capability-policy snapshot: {error}"
+            ));
+        }
+    }
     let assignment = Assignment {
         protocol: protocol::PROTOCOL_VERSION,
         grant: signer.issue(claims_for(broker_pid, &lease, config.lease)),
@@ -577,6 +600,7 @@ async fn pump(
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
             record_activity_receipts: job.activity_id.is_some(),
+            activity_capability_checks: job.activity_id.is_some(),
         },
         session,
     };
@@ -590,6 +614,8 @@ async fn pump(
     let mut execution_stop_reason: Option<String> = None;
     let mut cancelled_at: Option<Instant> = None;
     let mut approvals_used: u32 = 0;
+    let mut boundaries_used: u32 = 0;
+    let mut next_boundary_check = Instant::now();
     let mut receipts_used: u32 = 0;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
@@ -635,7 +661,15 @@ async fn pump(
                             ask,
                             ..
                         } => {
-                            let mut reply = mediate_approval(&mut approvals_used, &lease, &ask);
+                            let used = if matches!(ask, ApprovalAsk::Boundary { .. }) {
+                                &mut boundaries_used
+                            } else {
+                                &mut approvals_used
+                            };
+                            let mut reply = crate::caps::activity_boundary::scope(
+                                activity_boundary.clone(),
+                                async { mediate_approval(used, &lease, &ask) },
+                            ).await;
                             if let ApprovalReply::Pending {
                                 request_id: Some(request_id),
                             } = &reply
@@ -726,6 +760,11 @@ async fn pump(
                                 Ok(None) => {}
                                 Ok(Some(reason)) | Err(reason) => return TaskOutcome::Failed(reason),
                             }
+                            if let Some(boundary) = &activity_boundary {
+                                if let Err(error) = boundary.check() {
+                                    return TaskOutcome::Failed(error);
+                                }
+                            }
                             if let (Some(reservation), WorkerOutcome::Ok(run)) =
                                 (&job.execution_reservation, outcome.as_ref())
                             {
@@ -784,10 +823,16 @@ async fn pump(
             },
             _ = ticker.tick() => {
                 if !cancel_sent {
-                    let stop = match execution_limits.check(job) {
+                    let mut stop = match execution_limits.check(job) {
                         Ok(reason) => reason,
                         Err(error) => Some(error),
                     };
+                    if stop.is_none() && Instant::now() >= next_boundary_check {
+                        next_boundary_check = Instant::now() + Duration::from_secs(1);
+                        if let Some(boundary) = &activity_boundary {
+                            stop = boundary.check().err();
+                        }
+                    }
                     if let Some(reason) = stop {
                         if let Err(error) = store.append_stream_progress(&job.id, serde_json::json!({
                             "kind":"activity_execution_stopped",
@@ -932,7 +977,12 @@ fn accept(
 /// approved grant existed and has now been spent".
 fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> ApprovalReply {
     *used = used.saturating_add(1);
-    if *used > protocol::MAX_APPROVAL_ASKS {
+    let limit = if matches!(ask, ApprovalAsk::Boundary { .. }) {
+        protocol::MAX_BOUNDARY_CHECKS
+    } else {
+        protocol::MAX_APPROVAL_ASKS
+    };
+    if *used > limit {
         return refuse(
             lease,
             ask,
@@ -957,9 +1007,61 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
         return refuse(lease, ask, "capability scope is not recordable");
     }
     let owner = Some(lease.owner_uid);
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let boundary = match crate::caps::activity_boundary::current() {
+        Some(boundary) => {
+            if let Err(error) = boundary.require_identity(lease.owner_uid, Some(session_id)) {
+                return refuse(lease, ask, &error);
+            }
+            match boundary.decision(&crate::caps::Cap::new(verb, scope.clone())) {
+                Ok(decision) => decision,
+                Err(error) => return refuse(lease, ask, &error),
+            }
+        }
+        None => Boundary::Normal,
+    };
+    crate::clawd::audit::record_worker_boundary(
+        &lease.task_id,
+        lease.owner_uid,
+        session_id,
+        verb.as_str(),
+        scope,
+        boundary,
+    );
+    if matches!(ask, ApprovalAsk::Boundary { .. }) {
+        return ApprovalReply::Boundary { decision: boundary };
+    }
+    if boundary == Boundary::Deny {
+        return refuse(
+            lease,
+            ask,
+            "Activity capability policy denies this request; an approval cannot override it",
+        );
+    }
+    let exact = boundary == Boundary::RequireApproval;
 
     match ask {
+        ApprovalAsk::Boundary { .. } => unreachable!("boundary checks do not spend consent"),
         ApprovalAsk::Consume { .. } => {
+            if exact {
+                let cap = crate::caps::Cap::new(verb, scope.clone());
+                return match crate::approvals::consume_grant_set_with_exact_once_for_owner(
+                    session_id,
+                    std::slice::from_ref(&cap),
+                    std::slice::from_ref(&cap),
+                    owner,
+                ) {
+                    Ok(true) => {
+                        audit_approval(lease, verb, scope, "consumed");
+                        ApprovalReply::Granted
+                    }
+                    Ok(false) => ApprovalReply::Pending { request_id: None },
+                    Err(error) => {
+                        tracing::warn!(task = %lease.task_id, %error, "Activity confirmation failed");
+                        refuse(lease, ask, "Activity confirmation store is unavailable")
+                    }
+                };
+            }
             match crate::approvals::consume_matching_grant_for_owner(session_id, verb, scope, owner)
             {
                 Ok(Some(_)) => {
@@ -979,7 +1081,11 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                 .find(|request| {
                     request.session == session_id
                         && request.verb == verb.as_str()
-                        && request.scope.covers(scope)
+                        && if exact {
+                            request.scope == *scope
+                        } else {
+                            request.scope.covers(scope)
+                        }
                 });
             if let Some(request) = existing {
                 return ApprovalReply::Pending {
@@ -1030,7 +1136,7 @@ fn refuse(lease: &Lease, ask: &ApprovalAsk, message: &str) -> ApprovalReply {
 /// become a durable consent record the user is asked to read.
 fn scope_is_recordable(scope: &crate::caps::Scope) -> bool {
     let rendered = scope.to_string();
-    !rendered.is_empty() && rendered.len() <= 512 && !rendered.contains(['\n', '\r', '\0'])
+    !rendered.is_empty() && rendered.len() <= 512 && !rendered.chars().any(char::is_control)
 }
 
 fn audit_approval(

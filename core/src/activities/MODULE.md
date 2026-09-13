@@ -20,6 +20,8 @@ and the owner-scoped broker contract; only their presentations differ.
   correction/retraction history in the same owner-scoped Activity database.
 - Store finite execution constraints and conservative attempt reservations,
   without creating capabilities, approvals, execution authority or goal completion.
+- Define and persist capability/confirmation boundaries as constraints only,
+  with a pure decision function and no grant or approval consumption.
 - Reject unreadable, invalid, unsupported-schema, and poisoned-lock storage
   explicitly rather than resetting the database or returning empty defaults.
 
@@ -34,6 +36,8 @@ and the owner-scoped broker contract; only their presentations differ.
 | `sqlite/object_state.rs` | Immutable object-state ledger, reference/receipt binding, schema-3 migration and integrity checks |
 | `execution_limits.rs` | Bounded execution policies, reservation DTOs, validation and typed blocking reasons |
 | `sqlite/execution_limits.rs` | Policy CAS, durable attempt accounting, revocation/retry checks and schema-4 migration |
+| `capability_policy.rs` | Strict capability-rule DTOs, canonicalization and pure constraint decisions |
+| `sqlite/capability_policy.rs` | Owner-scoped capability policy CAS, revocation and schema-5 migration |
 | `../clawd/activities.rs` | Owner-scoped broker consumer and execution projections |
 | `../activity.rs` | Terminal presentation |
 | `../../test/unit/activities/` | Domain and provider unit tests |
@@ -46,8 +50,9 @@ worker, or model-provider dependency, and Activity metadata grants no new
 capabilities or approvals.
 
 `ActivityDraft::validate`, `ActivityPatch::validate`,
-`ObjectStateDraft::validate`, `ExecutionLimitsDraft::validate`, and `validate_id`
-validate inputs without opening storage. UUID lookups return a canonical
+`ObjectStateDraft::validate`, `ExecutionLimitsDraft::validate`,
+`CapabilityPolicyDraft::validate`, and `validate_id` validate inputs without
+opening storage. UUID lookups return a canonical
 `Activity.id`; job/session associations should store that returned value.
 
 On Unix, new private directories use `0700`; an existing non-listable,
@@ -58,15 +63,18 @@ parent directories are rejected.
 
 Disk connections require WAL journaling, `synchronous=FULL`, and a five-second
 busy timeout. Creation, partial updates, transitions, receipt appends and
-object-state appends, execution policy changes and reservations use immediate
-transactions. A new empty database receives schema version 4 through explicit
-sequential migrations. Schema 1 first adds
+object-state appends, execution reservations and both kinds of policy changes
+use immediate transactions. A new empty database receives schema version 5
+through explicit sequential migrations. Schema 1 first adds
 the schema-2 `activity_receipts` ledger; schema 2 then adds
 `activity_object_state` and the receipt composite index needed for
 owner/Activity-bound links. Schema 3 adds `activity_execution_limits` and
 `activity_execution_reservations`, with composite owner/Activity foreign keys.
+Schema 4 adds the bounded `activity_capability_policies` table in the same
+database and owner boundary.
 These migrations do not rewrite Activity rows, resources, lifecycle state,
-timestamps, completion confirmations, receipts or object-state history.
+timestamps, completion confirmations, receipts, object-state history,
+execution policies or reservations.
 The version advances only after schema/index/foreign-key definitions, SQLite
 integrity, foreign-key relationships and persisted legacy metadata validate.
 A failure rolls back both schema additions and the version. An existing
@@ -76,7 +84,7 @@ than initializing a replacement database over them. Reads validate stored
 metadata rather than silently repairing it. The in-memory provider is for
 tests and uses SQLite's in-memory journal instead of WAL.
 
-`DATABASE_SCHEMA_VERSION = 4` controls SQLite `user_version` and migration.
+`DATABASE_SCHEMA_VERSION = 5` controls SQLite `user_version` and migration.
 The broker independently owns `clawd::activities::WIRE_SCHEMA_VERSION = 1`
 for `activity.list` and `activity.get`; it does not emit the database version.
 The existing public `activities::SCHEMA_VERSION = 1` is retained for wire
@@ -335,6 +343,89 @@ revision exhaustion use `ActivityError::Conflict`; malformed inputs use
 constraints and observes live policy changes through existing job
 cancellation and lease mechanisms.
 
+## Capability and Confirmation Boundaries
+
+`CapabilityPolicyDraft` contains an explicit `rules` array. Each
+`ActivityCapabilityRule` contains a catalog `Verb`, a `CapabilityRuleMode`
+and typed `Scope` values. The modes and `CapabilityBoundaryDecision` values
+are `normal`, `require_approval` and `deny`. Normal means continue through
+ordinary authorization, never allow or authorize. Require-approval is a
+constraint requiring additional exact confirmation, not proof that consent
+exists. Deny blocks that controlled capability even if ordinary permissions
+would cover it.
+
+`ActivityCapabilityPolicy::decision(&Cap)` is pure and assumes the caller
+supplies a validated canonical capability request. A disabled policy denies
+all controlled checks; no matching verb rule is normal. A deny rule has no
+scopes and denies its whole verb. Other modes apply only when one of the
+rule's same-kind scopes fully covers the request; otherwise the decision is
+deny. A policy is neither a grant nor a substitute for peer/process identity,
+capability checks or approval settlement. Denying one verb does not promise
+that equivalent effects cannot occur through other writable or executable
+capabilities.
+
+Drafts require unique catalog verbs, at most 64 rules, 1..=32 scopes per
+non-deny rule, no scopes for deny, and at most 16 KiB of serialized draft JSON.
+Unknown fields/verbs, empty or control-bearing scope values, and mismatched
+scope kinds are rejected. Resource-addressing verbs reject raw `Scope::Wild`;
+canonical self/unscoped cases follow the existing catalog and provenance
+scope contract. Explicit same-kind wildcard patterns remain constraint data,
+not permissions. Bounds apply before deduplication. Canonicalization sorts
+rules and scopes, folds the host case already ignored by `Scope::covers`,
+and removes equal scopes; it does not merge duplicate verb rules or normalize
+case-sensitive names.
+
+Path policies require canonical absolute POSIX strings without environment
+placeholders, dot segments, repeated separators or trailing separators other
+than root. No home expansion or filesystem/host resolution occurs. Because
+the ordinary Path branch of `Scope::covers` resolves live filesystem paths,
+the pure matcher uses a root-preserving lexical adapter to its existing
+slash-segment Name matcher, after validating both Path kinds. This reuses
+the existing glob engine without another parser or filesystem lookup.
+Normal authorization remains responsible for real resource identity.
+
+`Scope::covers` matches literal targets, not arbitrary glob-language
+inclusion. Symbolic requests therefore require an equivalent pattern, an
+explicit universal (`/**` for Path, `**` for Name/Host, or a port-qualified
+universal Host), or containment beneath a literal subtree ending in `/**`.
+Other symbolic inclusion cases conservatively return deny rather than
+accepting a partial textual match. Ordinary literal requests retain the
+shared scope matcher's segment, host-port and self-reference semantics.
+
+The same matcher is exported crate-internally as
+`activities::capability_scope_covers(verb, boundary, requested) -> bool`.
+It checks both scopes against the catalog and canonical-input constraints
+before containment. Consumers comparing confirmed and requested `Cap` values
+must first require equal verbs, then use this helper rather than interpreting
+a requested pattern as a literal through `CapSet::covers`. The helper does
+not authenticate a confirmation or consume approval state.
+
+`ActivityService::capability_policy` reads an optional policy.
+`set_capability_policy` with `expected_revision: None` creates only when
+absent, at revision 1 and enabled. A supplied revision must match exactly;
+updates advance it, preserve enabled state and creation time, and leave
+Activity lifecycle and execution accounting untouched. An empty rule array
+is an explicit unconstrained-by-this-layer policy, not deletion or authority.
+Configuration requires active/paused lifecycle.
+
+`set_capability_policy_enabled` uses revision CAS and advances the revision
+on every explicit call. Disable/revoke remains available after an Activity
+ends; enabling requires active/paused lifecycle. Editing a disabled policy,
+including replacing its rules with an empty array, never re-enables it.
+There is no delete or implicit reset API. Root has no cross-owner exemption.
+CAS/lifecycle refusals and revision exhaustion are `ActivityError::Conflict`;
+malformed IDs/revisions/drafts are `Invalid`. Revisions use checked positive
+SQLite `i64` values behind the public `u64` field.
+
+The provider stores only bounded canonical rules, server-owned identity,
+revision/enabled state and UTC timestamps. Reads validate rule structure and
+ordering, nested scope fields, integer ranges, canonical IDs/timestamps and
+the composite owner/Activity relation. Corruption is an error, never an empty
+policy, a silently skipped rule or a repaired record. Storage never reads
+Apps, credentials or job files, authenticates a peer, consumes an approval,
+or creates capabilities. Root enforcement, policy bindings, forced one-shot
+approval and stale/revoked-job cleanup remain the consumers' responsibility.
+
 See [the Activity contract](../../../docs/activities.md) for presentations and
 [object-state annotations](../../../docs/object-state.md) for the cross-client
 contract, and [the system architecture](../../../ARCHITECTURE.md) for authority
@@ -360,3 +451,7 @@ owner/root isolation, policy CAS and revocation, preserved usage, clamped
 turns, concurrent reservations, current-policy checks on retries, lifecycle
 independence, corrupt counters/rows/foreign keys, revision overflow and
 schema-3 preservation/failed schema-4 migration rollback.
+Capability-policy coverage includes all decision modes, canonical scopes and
+strict bounds, symbolic containment, filesystem-independent matching,
+owner/root isolation, CAS/revocation and terminal behavior, unchanged budgets
+and lifecycle, corrupt policy rows and schema-4 preservation/migration rollback.

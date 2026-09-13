@@ -20,6 +20,7 @@ pub(super) struct ProcessContext {
     pub stateful: bool,
     pub expected: Vec<serde_json::Value>,
     pub execution_limits: Option<ExecutionLimitCase>,
+    pub capability_policy: Option<CapabilityPolicyCase>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -28,6 +29,22 @@ pub(super) enum ExecutionLimitCase {
     Expiry,
     Disable,
     Revision,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CapabilityPolicyCase {
+    Confirm,
+    Deny,
+    Disable,
+    Revision,
+    Introduce,
+}
+
+impl CapabilityPolicyCase {
+    pub fn stops_worker(self) -> bool {
+        matches!(self, Self::Disable | Self::Revision | Self::Introduce)
+    }
 }
 
 impl ProcessContext {

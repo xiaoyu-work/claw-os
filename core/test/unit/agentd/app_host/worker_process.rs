@@ -107,7 +107,46 @@ fn controlled_host_child() {
     crate::caps::approval_gateway::install(Arc::new(ChannelApprovalGateway {
         task_id: task_id.clone(),
         state: io.state.clone(),
+        activity_checks: assignment.job.activity_capability_checks,
     }));
+    assert!(assignment.job.activity_capability_checks);
+    if context
+        .capability_policy
+        .is_some_and(|case| case.stops_worker())
+    {
+        let gateway = crate::caps::approval_gateway::installed().unwrap();
+        assert_eq!(
+            gateway
+                .boundary(
+                    crate::caps::Verb::FS_WRITE,
+                    &crate::caps::Scope::path(context.input().to_string_lossy()),
+                )
+                .unwrap(),
+            crate::activities::CapabilityBoundaryDecision::Normal,
+        );
+        std::fs::write(
+            context.home().join("capability-ready.json"),
+            json!({"worker_pid":identity.pid,"boundary_checks":io.state.boundaries_used.load(Ordering::SeqCst)}).to_string(),
+        ).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        while !io.state.cancelled.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "policy change never stopped the worker"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        io.state
+            .tx
+            .send(WorkerFrame::Result {
+                task_id,
+                outcome: Box::new(WorkerOutcome::Cancelled),
+            })
+            .unwrap();
+        io.finish();
+        std::thread::sleep(Duration::from_millis(500));
+        return;
+    }
     crate::clawd::client::install_gateway(Arc::new(ChannelAppGateway {
         task_id: task_id.clone(),
         state: io.state.clone(),

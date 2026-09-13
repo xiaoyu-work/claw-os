@@ -4,6 +4,7 @@
 //! [`ActivityService`]. Activities grant no authority and never infer goal
 //! completion from an execution result.
 
+mod capability_policy;
 mod execution_limits;
 mod object_state;
 mod receipts;
@@ -11,6 +12,11 @@ mod sqlite;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) use capability_policy::capability_scope_covers;
+pub use capability_policy::{
+    ActivityCapabilityPolicy, ActivityCapabilityRule, CapabilityBoundaryDecision,
+    CapabilityPolicyDraft, CapabilityRuleMode,
+};
 pub use execution_limits::{
     ActivityExecutionLimits, ExecutionBlockedReason, ExecutionLimitsDraft, ExecutionReservation,
 };
@@ -27,7 +33,7 @@ pub use sqlite::SqliteActivityService;
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 4;
+pub const DATABASE_SCHEMA_VERSION: u32 = 5;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -355,6 +361,33 @@ pub trait ActivityService: Send + Sync {
         job_id: &str,
         requested_max_turns: Option<u32>,
     ) -> Result<Option<ExecutionReservation>, ActivityError>;
+
+    /// Read optional capability constraints, never permissions or grants.
+    fn capability_policy(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<Option<ActivityCapabilityPolicy>, ActivityError>;
+
+    /// Create only when absent or replace the exact expected revision.
+    /// Updates preserve enabled state and all execution accounting.
+    fn set_capability_policy(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: Option<u64>,
+        draft: CapabilityPolicyDraft,
+    ) -> Result<ActivityCapabilityPolicy, ActivityError>;
+
+    /// Disabling denies all controlled checks and remains possible after the
+    /// Activity ends. Enabling requires active/paused lifecycle.
+    fn set_capability_policy_enabled(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityCapabilityPolicy, ActivityError>;
 }
 
 /// Daemon composition only. Direct clients use owner-scoped broker routes.

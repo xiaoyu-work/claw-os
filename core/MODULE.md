@@ -27,6 +27,7 @@ persistence, and structured primitive dispatch.
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
 | `src/activities/`, `src/clawd/activities.rs`, `src/activity.rs` | Shared Activity service/provider, owner-scoped broker, and terminal presentation; also consumed by Web/native desktop |
+| `src/caps/activity_boundary.rs`, `src/clawd/activity_capability_policy.rs` | Live Activity capability constraints, root-held policy bindings and owner-scoped controls |
 | `src/objects/`, `src/router/object_commands.rs` | Verified App object catalogue and explicit resolution through ordinary App dispatch |
 | `src/operations/`, `src/clawd/operation_previews.rs` | Shared, non-executing previews of App-declared effects and requested targets |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |

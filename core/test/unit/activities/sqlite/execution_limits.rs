@@ -1208,13 +1208,13 @@ fn migration_from_schema_three_preserves_every_goal_receipt_and_object_state_fie
     };
     let service = SqliteActivityService::open(&path).unwrap();
     assert_eq!(SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 4);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 5);
     {
         let conn = service.lock().unwrap();
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            4
+            i64::from(DATABASE_SCHEMA_VERSION)
         );
         for (table, original) in tables.iter().zip(&before) {
             assert_eq!(stored_rows(&conn, table), *original);

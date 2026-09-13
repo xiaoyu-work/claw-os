@@ -68,6 +68,19 @@ pub fn build_app(state: AppState) -> Router {
             "/api/activities/{id}/execution-limits/enabled",
             post(routes::activities::enable_execution_limits),
         )
+        .route(
+            "/api/activities/capability-policy-catalog",
+            get(routes::activities::capability_policy_catalog),
+        )
+        .route(
+            "/api/activities/{id}/capability-policy",
+            get(routes::activities::capability_policy)
+                .post(routes::activities::set_capability_policy),
+        )
+        .route(
+            "/api/activities/{id}/capability-policy/enabled",
+            post(routes::activities::enable_capability_policy),
+        )
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/{id}", get(routes::sessions::detail))
         .route("/api/sessions/{id}/history", get(routes::sessions::history))

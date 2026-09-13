@@ -1,6 +1,42 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn activity_policy_wire_is_closed_bounded_and_cannot_supply_authority() {
+    let valid = json!({"id":"00000000-0000-4000-8000-000000000001","policy":{"rules":[
+        {"verb":"fs.delete","mode":"deny","scopes":[]}
+    ]}});
+    assert!(serde_json::from_value::<ActivityCapabilityPolicySet>(valid.clone()).is_ok());
+    for field in ["owner_uid", "caps", "grant", "enabled", "revision"] {
+        let mut forged = valid.clone();
+        forged[field] = json!(0);
+        assert!(serde_json::from_value::<ActivityCapabilityPolicySet>(forged).is_err());
+        let mut forged = valid.clone();
+        forged["policy"][field] = json!(0);
+        assert!(serde_json::from_value::<ActivityCapabilityPolicySet>(forged).is_err());
+    }
+    for rule in [
+        json!({"verb":"unknown.action","mode":"deny","scopes":[]}),
+        json!({"verb":"fs.read","mode":"normal","scopes":[{"kind":"wild"}]}),
+        json!({"verb":"fs.read","mode":"normal","scopes":[{"kind":"host","value":"example.test"}]}),
+        json!({"verb":"fs.delete","mode":"deny","scopes":[{"kind":"path","value":"/workspace"}]}),
+    ] {
+        let mut malformed = valid.clone();
+        malformed["policy"]["rules"] = json!([rule]);
+        assert!(serde_json::from_value::<ActivityCapabilityPolicySet>(malformed).is_err());
+    }
+    let mut huge = valid;
+    huge["policy"]["rules"] = json!(vec![
+        json!({"verb":"fs.delete","mode":"deny","scopes":[]});
+        65
+    ]);
+    assert!(serde_json::from_value::<ActivityCapabilityPolicySet>(huge).is_err());
+    assert!(serde_json::from_value::<ActivityCapabilityPolicyEnabled>(
+        json!({"id":"id","enabled":false})
+    )
+    .is_err());
+}
+
 fn file_replace_body() -> serde_json::Value {
     json!({
         "session":"session-1",
@@ -20,49 +56,89 @@ fn file_replace_wire_is_closed_and_requires_an_explicit_nullable_precondition() 
     assert!(serde_json::from_value::<FileReplace>(body.clone()).is_ok());
     let mut absent = body.clone();
     absent["expected"] = serde_json::Value::Null;
-    let canonical = serde_json::to_value(serde_json::from_value::<FileReplace>(absent.clone()).unwrap()).unwrap();
+    let canonical =
+        serde_json::to_value(serde_json::from_value::<FileReplace>(absent.clone()).unwrap())
+            .unwrap();
     assert!(canonical.get("expected").unwrap().is_null());
     absent.as_object_mut().unwrap().remove("expected");
     assert!(serde_json::from_value::<FileReplace>(absent).is_err());
-    for field in ["owner_uid", "grant", "directory", "force", "follow_symlinks"] {
+    for field in [
+        "owner_uid",
+        "grant",
+        "directory",
+        "force",
+        "follow_symlinks",
+    ] {
         let mut forged = body.clone();
         forged[field] = json!(true);
-        assert!(serde_json::from_value::<FileReplace>(forged).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<FileReplace>(forged).is_err(),
+            "{field}"
+        );
     }
     for field in ["uid", "gid", "owner_uid", "grant", "link_count"] {
         let mut forged = body.clone();
         forged["expected"][field] = json!(0);
-        assert!(serde_json::from_value::<FileReplace>(forged).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<FileReplace>(forged).is_err(),
+            "{field}"
+        );
     }
-    for key in ["sha256", "size", "device", "inode", "mode", "modified_ns", "changed_ns"] {
+    for key in [
+        "sha256",
+        "size",
+        "device",
+        "inode",
+        "mode",
+        "modified_ns",
+        "changed_ns",
+    ] {
         let mut missing = body.clone();
         missing["expected"].as_object_mut().unwrap().remove(key);
-        assert!(serde_json::from_value::<FileReplace>(missing).is_err(), "{key}");
+        assert!(
+            serde_json::from_value::<FileReplace>(missing).is_err(),
+            "{key}"
+        );
     }
 }
 
 #[test]
 fn file_replace_wire_enforces_hash_integer_path_and_content_bounds() {
     let body = file_replace_body();
-    for hash in ["sha256:ABC".to_string(), format!("sha256:{}", "A".repeat(64)), "a".repeat(64), format!("sha256:{}", "f".repeat(65))] {
+    for hash in [
+        "sha256:ABC".to_string(),
+        format!("sha256:{}", "A".repeat(64)),
+        "a".repeat(64),
+        format!("sha256:{}", "f".repeat(65)),
+    ] {
         let mut bad = body.clone();
         bad["expected"]["sha256"] = json!(hash);
         assert!(serde_json::from_value::<FileReplace>(bad).is_err());
     }
     for (field, value) in [
-        ("size", json!(65537)), ("size", json!(-1)), ("size", json!(true)),
-        ("device", json!(-1)), ("inode", json!("3")),
+        ("size", json!(65537)),
+        ("size", json!(-1)),
+        ("size", json!(true)),
+        ("device", json!(-1)),
+        ("inode", json!("3")),
         ("mode", json!(u64::from(u32::MAX) + 1)),
-        ("modified_ns", json!(u64::MAX)), ("changed_ns", json!(1.5)),
+        ("modified_ns", json!(u64::MAX)),
+        ("changed_ns", json!(1.5)),
     ] {
         let mut bad = body.clone();
         bad["expected"][field] = value;
-        assert!(serde_json::from_value::<FileReplace>(bad).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<FileReplace>(bad).is_err(),
+            "{field}"
+        );
     }
-    for (field, size) in [("path",4097), ("content_base64",90001), ("session",129)] {
+    for (field, size) in [("path", 4097), ("content_base64", 90001), ("session", 129)] {
         let mut bad = body.clone();
         bad[field] = json!("x".repeat(size));
-        assert!(serde_json::from_value::<FileReplace>(bad).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<FileReplace>(bad).is_err(),
+            "{field}"
+        );
     }
     let mut exact = body;
     exact["path"] = json!("x".repeat(4096));
@@ -95,10 +171,19 @@ fn receipt_reports_are_bounded_data_and_cannot_claim_authority_or_os_verificatio
     });
     let valid = json!({"id":"00000000-0000-4000-8000-000000000001","report":report});
     assert!(serde_json::from_value::<ActivityReceiptRecord>(valid.clone()).is_ok());
-    for field in ["source","owner_uid","effects_confirmed","grant","declaration"] {
+    for field in [
+        "source",
+        "owner_uid",
+        "effects_confirmed",
+        "grant",
+        "declaration",
+    ] {
         let mut forged = valid.clone();
         forged["report"][field] = json!("caller chooses");
-        assert!(serde_json::from_value::<ActivityReceiptRecord>(forged).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<ActivityReceiptRecord>(forged).is_err(),
+            "{field}"
+        );
     }
     let mut oversized = valid;
     oversized["report"]["error"] = json!("x".repeat(2049));
@@ -108,7 +193,8 @@ fn receipt_reports_are_bounded_data_and_cannot_claim_authority_or_os_verificatio
 
 #[test]
 fn operation_preview_requests_are_bounded_and_cannot_supply_authority() {
-    let good = json!({"app_id":"fs","operation":"write","args":["/home/user/file","--content","draft"]});
+    let good =
+        json!({"app_id":"fs","operation":"write","args":["/home/user/file","--content","draft"]});
     assert!(serde_json::from_value::<OperationPreview>(good.clone()).is_ok());
     for field in ["owner_uid", "grant", "authorized", "execute"] {
         let mut bad = good.clone();
@@ -116,7 +202,7 @@ fn operation_preview_requests_are_bounded_and_cannot_supply_authority() {
         assert!(serde_json::from_value::<OperationPreview>(bad).is_err());
     }
     let mut flood = good.clone();
-    flood["args"] = json!(vec!["x";65]);
+    flood["args"] = json!(vec!["x"; 65]);
     assert!(serde_json::from_value::<OperationPreview>(flood).is_err());
     let mut long = good;
     long["args"] = json!(["x".repeat(8193)]);
@@ -144,9 +230,10 @@ fn activity_object_requests_are_bounded_closed_references_not_authority() {
     let mut bad_app = valid;
     bad_app["object"]["app_id"] = json!("../other");
     assert!(serde_json::from_value::<ActivityObjectAttach>(bad_app).is_err());
-    assert!(serde_json::from_value::<ActivityObjects>(
-        json!({"id":"activity-id","owner_uid":0})
-    ).is_err());
+    assert!(
+        serde_json::from_value::<ActivityObjects>(json!({"id":"activity-id","owner_uid":0}))
+            .is_err()
+    );
 }
 
 #[test]
@@ -183,7 +270,10 @@ fn activity_requests_are_closed_bounded_and_never_choose_an_owner() {
 fn activity_linkage_is_additive_to_legacy_task_requests() {
     let legacy: TaskSubmit = serde_json::from_value(json!({"prompt": "hello"})).unwrap();
     assert!(legacy.activity_id.is_none());
-    assert!(serde_json::to_value(legacy).unwrap().get("activity_id").is_none());
+    assert!(serde_json::to_value(legacy)
+        .unwrap()
+        .get("activity_id")
+        .is_none());
     let linked: TaskSubmit = serde_json::from_value(json!({
         "prompt": "prepare the release",
         "activity_id": "00000000-0000-4000-8000-000000000001",

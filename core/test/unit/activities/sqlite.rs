@@ -630,7 +630,7 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "PRAGMA user_version = 5;
+            "PRAGMA user_version = 6;
              CREATE TABLE future_data (value TEXT NOT NULL);
              INSERT INTO future_data VALUES ('preserve this');",
         )
@@ -639,15 +639,15 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     assert!(matches!(
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
-            found: 5,
-            supported: 4
+            found: 6,
+            supported: 5
         })
     ));
     let conn = Connection::open(&path).unwrap();
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         conn.query_row("SELECT value FROM future_data", [], |row| row

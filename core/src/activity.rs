@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::activities::{ActivityDraft, ActivityPatch};
 use crate::clawd::{client, config, protocol::Request, routes::Command};
 
+mod capability_policy;
 mod execution_limits;
 mod object_state;
 
@@ -41,6 +42,15 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
+    if matches!(
+        command,
+        "capability-policy"
+            | "set-capability-policy"
+            | "enable-capability-policy"
+            | "disable-capability-policy"
+    ) {
+        return capability_policy::parse(command, args);
+    }
     if matches!(
         command,
         "execution-limits"

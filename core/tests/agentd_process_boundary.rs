@@ -102,6 +102,7 @@ fn assignment(
             max_turns: Some(1),
             use_memory: true,
             record_activity_receipts: false,
+            activity_capability_checks: false,
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
         },

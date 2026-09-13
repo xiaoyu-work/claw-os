@@ -14,6 +14,7 @@ use crate::clawd::wire::requests::{
     ActivityRun, ActivityTransition, ActivityUpdate, NoBody,
 };
 use crate::clawd::wire::requests::{
+    ActivityCapabilityPolicyEnabled, ActivityCapabilityPolicyGet, ActivityCapabilityPolicySet,
     ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
 };
 
@@ -194,6 +195,58 @@ pub async fn enable_execution_limits(
     request(
         Command::ActivityExecutionLimitsEnabled,
         with_id::<ActivityExecutionLimitsEnabled>(id, json_body(body)?)?,
+    )
+    .await
+}
+
+pub async fn capability_policy_catalog(
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    let verbs: Vec<Value> = crate::caps::CATALOG
+        .iter()
+        .map(|entry| {
+            json!({
+                "verb": entry.verb,
+                "scope_kind": entry.scope_kind,
+                "label": entry.label.current(),
+                "description": entry.blurb.current(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({"schema": 1, "verbs": verbs})))
+}
+
+pub async fn capability_policy(
+    Path(id): Path<String>,
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    request(
+        Command::ActivityCapabilityPolicyGet,
+        with_id::<ActivityCapabilityPolicyGet>(id, json!({}))?,
+    )
+    .await
+}
+
+pub async fn set_capability_policy(
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    request(
+        Command::ActivityCapabilityPolicySet,
+        with_id::<ActivityCapabilityPolicySet>(id, json_body(body)?)?,
+    )
+    .await
+}
+
+pub async fn enable_capability_policy(
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    request(
+        Command::ActivityCapabilityPolicyEnabled,
+        with_id::<ActivityCapabilityPolicyEnabled>(id, json_body(body)?)?,
     )
     .await
 }

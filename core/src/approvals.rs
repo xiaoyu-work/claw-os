@@ -812,6 +812,18 @@ pub fn has_approved_grant_for_owner(
         .any(|path| load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid).is_some()))
 }
 
+pub(crate) fn has_approved_exact_grant_for_owner(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+) -> Result<bool, String> {
+    ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
+    Ok(list_dir(&approved_dir()).into_iter().any(|path| {
+        load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid)
+            .is_some_and(|resolved| resolved.request.scope == cap.scope)
+    }))
+}
+
 /// Decision state of one request, as reported to the requester.
 ///
 /// Carries no payload beyond the state itself: a requester learns
@@ -911,6 +923,17 @@ pub fn consume_grant_set_once_for_owner(
     required: &[Cap],
     owner_uid: Option<u32>,
 ) -> Result<bool, String> {
+    consume_grant_set_with_exact_once_for_owner(session, required, &[], owner_uid)
+}
+
+/// Activity-confirmed needs cannot borrow a broader approval. The remaining
+/// ordinary needs keep their existing containment and all-or-none semantics.
+pub(crate) fn consume_grant_set_with_exact_once_for_owner(
+    session: &str,
+    required: &[Cap],
+    exact: &[Cap],
+    owner_uid: Option<u32>,
+) -> Result<bool, String> {
     if required.is_empty() {
         return Ok(true);
     }
@@ -920,7 +943,10 @@ pub fn consume_grant_set_once_for_owner(
         for cap in required {
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
                 !claimed.contains(path)
-                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid).is_some()
+                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid)
+                        .is_some_and(|resolved| {
+                            !exact.contains(cap) || resolved.request.scope == cap.scope
+                        })
             });
             match found {
                 Some(path) => claimed.push(path),

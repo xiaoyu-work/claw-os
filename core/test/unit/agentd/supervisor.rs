@@ -3,6 +3,13 @@ use super::*;
 use crate::agent::service::{JobStatus, Store};
 use crate::agentd::grant::GRANT_AUDIENCE;
 
+mod activity_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/supervisor/activity_policy.rs"
+    ));
+}
+
 fn new_lease() -> Lease {
     Lease {
         task_id: "task-a".to_string(),

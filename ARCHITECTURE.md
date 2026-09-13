@@ -310,6 +310,44 @@ Policy or reservation JSON is accounting/constraint data, never restored
 authority. Schema 4 preserves existing Activity, receipt and object-state
 data. See [`docs/activity-execution-limits.md`](docs/activity-execution-limits.md).
 
+### Activity capability boundaries
+
+The same Activity service stores revision-checked capability constraints.
+`caps/activity_boundary.rs` consumes that service; `normal` proceeds through
+ordinary authorization, `require_approval` additionally requires exact
+single-use confirmation, and `deny` blocks both authority use and consent
+escalation. A missing rule is normal, not a grant. Disabling a configured
+policy blocks controlled checks rather than restoring unrestricted behavior.
+
+The supervisor selects owner, Activity and session from its retained Job and
+lease. Worker protocol v8 carries only a bounded verb/scope boundary question
+or consent request. Boundary replies cannot satisfy consent waiters. A
+bounded policy snapshot is recorded in the task stream before assignment.
+Both supervised and standalone attempts stop on policy changes, including
+the first policy being introduced while an attempt is already running.
+
+App launch and session-call plans settle ordinary missing needs and
+Activity-required confirmations together, all or none. Brokered clients do
+not spend that consent in a local preflight. Root-created grants retain a
+non-serialized policy binding and their confirmed invocation scopes; children
+inherit it and cannot replace it. Broker effects recheck the binding and
+ordinary live grant without consuming the invocation's confirmation twice.
+Peer-session grants cannot reconstruct an App's confirmation from a registry
+row. A raw non-App broker grant is not an App-confirmation proof.
+
+Policy and confirmation boundaries share conservative whole-scope matching.
+Executable Path checks also apply the ordinary symlink-aware containment
+check, including not-yet-created leaves. Validation and stored-policy
+canonicalization remain metadata-only.
+
+These are constraints on controlled execution, not a replacement for App
+sandboxing or a kernel sandbox for a compromised same-UID Agent. A verb
+denial is not a semantic guarantee against equivalent effects through other
+verbs, and admitted effects are not undone. Schema 5 preserves existing
+Activity data and budgets. Terminal, Web and native desktop use the same
+owner-scoped policy routes; see
+[`docs/activity-capability-policies.md`](docs/activity-capability-policies.md).
+
 ### App-owned object references
 
 Public SDK wire definitions and pure URI helpers identify an object by App,
@@ -396,7 +434,7 @@ the manifest-selected runtime once and captures its result. For an
 Activity-associated task, `operations::reporting` supplies a task-local
 recorder backed by the authenticated worker channel.
 
-Worker protocol v7 carries a bounded report and a correlated acknowledgement.
+Worker protocol v8 carries a bounded report and a correlated acknowledgement.
 The supervisor checks the signed reporting route and live task lease, derives
 the owner and Activity from the lease and its own Job, then calls the same
 receipt service used by direct clients. A metadata-only task-stream link

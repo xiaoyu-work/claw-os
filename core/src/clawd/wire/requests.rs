@@ -200,6 +200,43 @@ pub struct ActivityObjectAttach {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
+pub struct BoundedCapabilityPolicy(pub crate::activities::CapabilityPolicyDraft);
+
+impl<'de> Deserialize<'de> for BoundedCapabilityPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let policy = crate::activities::CapabilityPolicyDraft::deserialize(deserializer)?;
+        policy
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid Activity capability policy"))?;
+        Ok(Self(policy))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCapabilityPolicyGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCapabilityPolicySet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub policy: BoundedCapabilityPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCapabilityPolicyEnabled {
+    pub id: Token,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
 pub struct BoundedObjectStateDraft(pub crate::activities::ObjectStateDraft);
 
 impl<'de> Deserialize<'de> for BoundedObjectStateDraft {

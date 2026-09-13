@@ -71,7 +71,15 @@ replays the operation. Root live-capability queries also check the actual
 grant, so broker endpoint threads do not depend on inherited task-local paths
 or trust stale serialized capabilities.
 
-Worker protocol v7 adds these private controls. General external MCP servers,
+Worker protocol v8 retains these private controls and adds Activity boundary
+mediation. The root host pins its Job's policy context; grants record the
+policy revision and the invocation's confirmed scopes. All-or-none confirmation
+happens at registration/call start, not in a consuming local preflight and not
+again for each mediated effect. Policy changes stop new controls immediately
+and stop the worker through existing cancellation. See
+[Activity policies](../../../../docs/activity-capability-policies.md).
+
+General external MCP servers,
 GUI launches, native-host exemptions and arbitrary broker calls are not
 accepted through this surface. App-owned sessions remain ordinary Apps, not a
 new product category.
@@ -135,3 +143,9 @@ The sibling process regression
 uses that same isolated-root command/fixture to cover reserved turn assignment,
 expiry, disable and revision changes while the real worker channel continues
 heartbeating. A stopped attempt remains charged and does not complete its goal.
+
+`agentd::supervisor::tests::app_host_process::controlled_host_enforces_activity_capability_policies_end_to_end`
+uses the same isolated-root fixture for exact one-time confirmation and denial
+across one-shot/stateful execution, plus live disable/revision/first-policy
+stops with continued heartbeats. It rejects duplicate confirmations, leaves
+broader approvals unspent, and checks actual file effects and the shared ledger.

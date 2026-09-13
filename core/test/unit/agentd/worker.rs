@@ -134,6 +134,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
+        boundaries_used: AtomicU32::new(0),
         receipts_used: AtomicU32::new(0),
         app_calls_used: AtomicU32::new(0),
     });
@@ -141,6 +142,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         ChannelApprovalGateway {
             task_id: "task-a".to_string(),
             state,
+            activity_checks: false,
         },
         rx,
     )
@@ -148,6 +150,83 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
 
 fn scope() -> Scope {
     Scope::path("/home/user/notes.txt")
+}
+
+#[tokio::test]
+async fn boundary_and_consent_replies_cannot_satisfy_each_others_waiters() {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    for (operation, reply) in [
+        ("boundary", ApprovalReply::Granted),
+        (
+            "consume",
+            ApprovalReply::Boundary {
+                decision: Boundary::Normal,
+            },
+        ),
+        (
+            "request",
+            ApprovalReply::Boundary {
+                decision: Boundary::Normal,
+            },
+        ),
+    ] {
+        let (mut gateway, mut rx) = gateway();
+        gateway.activity_checks = true;
+        let state = gateway.state.clone();
+        let caller = std::thread::spawn(move || match operation {
+            "boundary" => gateway.boundary(Verb::FS_READ, &scope()).map(|_| ()),
+            "consume" => gateway.consume(Verb::FS_READ, &scope()).map(|_| ()),
+            _ => gateway.request(Verb::FS_READ, &scope()).map(|_| ()),
+        });
+        let frame = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let WorkerFrame::Approval { correlation_id, .. } = frame else {
+            panic!("wrong frame");
+        };
+        state.deliver(correlation_id, reply);
+        assert!(caller.join().unwrap().is_err());
+        assert!(state.pending_approvals().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn live_boundary_checks_use_their_own_counter_and_never_record_an_approval_wait() {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let (mut gateway, mut rx) = gateway();
+    gateway.activity_checks = true;
+    let state = gateway.state.clone();
+    state
+        .asks_used
+        .store(protocol::MAX_APPROVAL_ASKS, Ordering::SeqCst);
+    let caller = std::thread::spawn(move || gateway.boundary(Verb::FS_READ, &scope()));
+    let frame = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let WorkerFrame::Approval {
+        correlation_id,
+        ask,
+        ..
+    } = frame
+    else {
+        panic!("wrong frame");
+    };
+    assert!(matches!(ask, ApprovalAsk::Boundary { .. }));
+    state.deliver(
+        correlation_id,
+        ApprovalReply::Boundary {
+            decision: Boundary::RequireApproval,
+        },
+    );
+    assert_eq!(caller.join().unwrap().unwrap(), Boundary::RequireApproval);
+    assert_eq!(state.boundaries_used.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.asks_used.load(Ordering::SeqCst),
+        protocol::MAX_APPROVAL_ASKS
+    );
+    assert!(state.pending_approvals().is_empty());
 }
 
 #[test]

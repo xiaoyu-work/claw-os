@@ -32,6 +32,13 @@ mod stateful {
     ));
 }
 
+mod capability_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/app_host/supervisor_capability_policy.rs"
+    ));
+}
+
 const APP_SOURCE: &str = r#"
 import hashlib
 import json
@@ -115,6 +122,7 @@ impl ProcessFixture {
             stateful: false,
             expected: Vec::new(),
             execution_limits: None,
+            capability_policy: None,
         };
         let mut fixture = Self {
             context,
@@ -498,13 +506,13 @@ async fn inspect_live_app(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
 async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
-    exercise_controlled_host(false, None).await;
+    exercise_controlled_host(false, None, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
 async fn controlled_host_keeps_one_stateful_app_with_per_call_authority_and_receipts() {
-    exercise_controlled_host(true, None).await;
+    exercise_controlled_host(true, None, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -515,11 +523,35 @@ async fn controlled_host_enforces_execution_limits_despite_heartbeats() {
         support::ExecutionLimitCase::Disable,
         support::ExecutionLimitCase::Revision,
     ] {
-        exercise_controlled_host(false, Some(case)).await;
+        exercise_controlled_host(false, Some(case), None).await;
     }
 }
 
-async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::ExecutionLimitCase>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
+async fn controlled_host_enforces_activity_capability_policies_end_to_end() {
+    for stateful in [false, true] {
+        for case in [
+            support::CapabilityPolicyCase::Confirm,
+            support::CapabilityPolicyCase::Deny,
+        ] {
+            exercise_controlled_host(stateful, None, Some(case)).await;
+        }
+    }
+    for case in [
+        support::CapabilityPolicyCase::Disable,
+        support::CapabilityPolicyCase::Revision,
+        support::CapabilityPolicyCase::Introduce,
+    ] {
+        exercise_controlled_host(false, None, Some(case)).await;
+    }
+}
+
+async fn exercise_controlled_host(
+    stateful: bool,
+    limit_case: Option<support::ExecutionLimitCase>,
+    policy_case: Option<support::CapabilityPolicyCase>,
+) {
     let _env = crate::test_env::lock_env();
     assert_private_run();
     let binary = PathBuf::from(std::env::var_os("COS_APP_HOST_COS_BIN").expect("fresh cos binary"))
@@ -534,6 +566,7 @@ async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::Ex
     let mut fixture = ProcessFixture::new(uid, identity.gid);
     fixture.context.stateful = stateful;
     fixture.context.execution_limits = limit_case;
+    fixture.context.capability_policy = policy_case;
     fixture.install(&binary);
     let context = fixture.context.clone();
     // Isolate HOME without changing the real passwd-derived uid/gid.
@@ -587,6 +620,41 @@ async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::Ex
             .unwrap(),
         )
         .unwrap();
+    if let Some(case) = policy_case {
+        if case != support::CapabilityPolicyCase::Introduce {
+            service
+                .set_capability_policy(
+                    uid,
+                    &activity.id,
+                    None,
+                    capability_policy::initial_policy(&context, case),
+                )
+                .unwrap();
+        }
+        if case == support::CapabilityPolicyCase::Confirm {
+            let broad = Cap::new(
+                Verb::FS_READ,
+                Scope::path(format!("{}/**", context.root.display())),
+            );
+            let id = crate::approvals::submit_owned(
+                broad.verb,
+                broad.scope,
+                session.as_str(),
+                "broader permission is not Activity confirmation",
+                Some("test".into()),
+                Some(uid),
+            )
+            .unwrap();
+            crate::approvals::approve_for_owner(
+                &id,
+                crate::approvals::GrantDuration::Session,
+                Some("test".into()),
+                None,
+                Some(uid),
+            )
+            .unwrap();
+        }
+    }
     if let Some(case) = limit_case {
         let duration = if matches!(case, support::ExecutionLimitCase::Expiry) {
             chrono::Duration::seconds(8)
@@ -737,12 +805,48 @@ async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::Ex
                 .await
                 .expect("heartbeats prolonged Activity execution beyond its policy");
             (outcome, None, None, ready)
+        } else if let Some(case) = policy_case.filter(|case| case.stops_worker()) {
+            let ready = async {
+                let file = context.home().join("capability-ready.json");
+                tokio::time::timeout(Duration::from_secs(12), async {
+                    while !file.is_file() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("worker never checked its live capability boundary");
+                let ready: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+                assert_eq!(ready["worker_pid"], pid);
+                assert_eq!(ready["boundary_checks"], 1);
+                ready
+            };
+            let ready = tokio::select! {
+                ready = ready => ready,
+                outcome = &mut run => panic!("worker ended before policy check: {}", describe_outcome(&outcome)),
+            };
+            capability_policy::change_policy(&service, &context, &activity.id, case);
+            let outcome = tokio::time::timeout(Duration::from_secs(20), &mut run)
+                .await
+                .expect("heartbeats outlived a revoked Activity capability policy");
+            (outcome, None, None, ready)
+        } else if policy_case == Some(support::CapabilityPolicyCase::Deny) {
+            let outcome = tokio::time::timeout(Duration::from_secs(30), &mut run)
+                .await
+                .expect("denied App operation did not return");
+            (outcome, None, None, Value::Null)
         } else {
             let observe = async {
-                if stateful {
-                    stateful::inspect(&context, session.as_str(), &package, pid).await
+                let inspect = async {
+                    if stateful {
+                        stateful::inspect(&context, session.as_str(), &package, pid).await
+                    } else {
+                        inspect_live_app(&context, session.as_str(), &package, pid).await
+                    }
+                };
+                if policy_case == Some(support::CapabilityPolicyCase::Confirm) {
+                    capability_policy::confirm_while(&context, session.as_str(), inspect).await
                 } else {
-                    inspect_live_app(&context, session.as_str(), &package, pid).await
+                    inspect.await
                 }
             };
             let (app_session, app_identity, app_facts) = tokio::select! {
@@ -770,6 +874,60 @@ async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::Ex
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
+    if let Some(case) = policy_case.filter(|case| *case != support::CapabilityPolicyCase::Confirm) {
+        let message = match outcome {
+            TaskOutcome::Failed(message) if case.stops_worker() => message,
+            TaskOutcome::Reported(outcome) if case == support::CapabilityPolicyCase::Deny => {
+                match *outcome {
+                    WorkerOutcome::Error { message } => message,
+                    other => panic!("denied App reported success: {other:?}"),
+                }
+            }
+            other => panic!(
+                "unexpected capability-policy outcome: {}",
+                describe_outcome(&other)
+            ),
+        };
+        let expected = match case {
+            support::CapabilityPolicyCase::Deny => "denies",
+            support::CapabilityPolicyCase::Disable => "disabled",
+            _ => "changed",
+        };
+        assert!(message.contains(expected), "{case:?}: {message}");
+        let finished = store
+            .finish(job, crate::agent::service::FinishOutcome::Error(message))
+            .unwrap();
+        assert_eq!(finished.status, crate::agent::service::JobStatus::Error);
+        assert_eq!(
+            service.get(uid, &activity.id).unwrap().state,
+            ActivityState::Active
+        );
+        assert_eq!(std::fs::read_to_string(context.input()).unwrap(), BODY);
+        if stateful {
+            assert_eq!(
+                std::fs::read_to_string(context.second_input()).unwrap(),
+                BODY
+            );
+        }
+        assert!(!context.app_data().join("counter").exists());
+        assert!(crate::approvals::list_pending_for_owner(Some(uid)).is_empty());
+        assert!(service
+            .receipts(uid, &activity.id, 100)
+            .unwrap()
+            .iter()
+            .all(|receipt| receipt.report.outcome != ReceiptOutcome::Returned));
+        let (_, events) = store.read_stream_events(&finished.id, 0).unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event["progress"]["kind"] == "activity_capability_policy"));
+        if case.stops_worker() {
+            assert!(events
+                .iter()
+                .any(|event| event["progress"]["kind"] == "activity_execution_stopped"));
+        }
+        assert!(!cleanup.worker.still_matches());
+        return;
+    }
     if let Some(case) = limit_case {
         let TaskOutcome::Failed(message) = outcome else {
             panic!(
@@ -807,6 +965,33 @@ async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::Ex
         assert!(service.receipts(uid, &activity.id, 100).unwrap().is_empty());
         assert!(!context.app_data().join("counter").exists());
         let (_, events) = store.read_stream_events(&finished.id, 0).unwrap();
+        if policy_case == Some(support::CapabilityPolicyCase::Confirm) {
+            let snapshots: Vec<_> = events
+                .iter()
+                .filter(|event| event["progress"]["kind"] == "activity_capability_policy")
+                .collect();
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0]["progress"]["policy"]["revision"], 1);
+            assert_eq!(
+                snapshots[0]["progress"]["policy"]["rules"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                3
+            );
+            assert!(
+                crate::approvals::has_approved_exact_grant_for_owner(
+                    session.as_str(),
+                    &Cap::new(
+                        Verb::FS_READ,
+                        Scope::path(format!("{}/**", context.root.display()))
+                    ),
+                    Some(uid),
+                )
+                .unwrap(),
+                "a broader standing approval must remain unspent"
+            );
+        }
         assert!(events
             .iter()
             .any(|event| event["progress"]["kind"] == "activity_execution_stopped"));

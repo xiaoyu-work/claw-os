@@ -225,6 +225,7 @@ pub struct Subject {
     pub session_id: Option<String>,
     pub app_id: Option<String>,
     pub task_id: Option<String>,
+    pub(crate) activity: Option<crate::caps::activity_boundary::PolicyBinding>,
 }
 
 impl Subject {
@@ -242,6 +243,14 @@ impl Subject {
 
     pub fn with_task(mut self, task_id: Option<String>) -> Self {
         self.task_id = task_id;
+        self
+    }
+
+    pub(crate) fn with_activity(
+        mut self,
+        activity: Option<crate::caps::activity_boundary::PolicyBinding>,
+    ) -> Self {
+        self.activity = activity;
         self
     }
 }
@@ -389,6 +398,8 @@ pub struct Attenuation {
 /// Why an attenuation was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttenuationError {
+    /// Activity constraints or their confirmed invocation must not be replaced.
+    ActivityChanged,
     /// The child asked for a capability the parent does not cover.
     CapabilityWiden { verb: &'static str },
     /// The child asked for `Scope::Wild` on a verb that addresses a
@@ -415,6 +426,9 @@ pub enum AttenuationError {
 impl std::fmt::Display for AttenuationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AttenuationError::ActivityChanged => {
+                f.write_str("child grant would replace its Activity capability boundary")
+            }
             AttenuationError::CapabilityWiden { verb } => {
                 write!(f, "child grant would widen `{verb}` beyond its parent")
             }
@@ -463,6 +477,9 @@ impl Attenuation {
         }
         if self.principal.uid != parent.principal.uid {
             return Err(AttenuationError::OwnerChanged);
+        }
+        if self.subject.activity.is_some() && self.subject.activity != parent.subject.activity {
+            return Err(AttenuationError::ActivityChanged);
         }
         if !self.audience.is_subset_of(parent.audience) {
             return Err(AttenuationError::AudienceWiden);

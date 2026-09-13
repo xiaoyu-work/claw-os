@@ -204,38 +204,29 @@ fn validate_process_identity(
                 ));
             }
             AncestryResult::Unsupported if strict => {
-                return Err(
-                    "pid-ancestry checking is not implemented on this platform"
-                        .to_string(),
-                );
+                return Err("pid-ancestry checking is not implemented on this platform".to_string());
             }
             AncestryResult::Unsupported => {}
         }
     }
 
     match nearest_app_session(registry, caller_pid) {
-        Ok(Some(nearest)) if nearest.session_id != session.session_id => {
-            Err(format!(
-                "process {caller_pid} is bound to nearer App session `{}` ({}) \
+        Ok(Some(nearest)) if nearest.session_id != session.session_id => Err(format!(
+            "process {caller_pid} is bound to nearer App session `{}` ({}) \
                  and cannot select ancestor session `{}`",
-                nearest.session_id,
-                nearest.app_id.as_deref().unwrap_or("unknown"),
-                session.session_id
-            ))
-        }
+            nearest.session_id,
+            nearest.app_id.as_deref().unwrap_or("unknown"),
+            session.session_id
+        )),
         Ok(_) => Ok(()),
-        Err(()) if strict => Err(
-            "could not determine the nearest App identity in the process tree"
-                .to_string(),
-        ),
+        Err(()) if strict => {
+            Err("could not determine the nearest App identity in the process tree".to_string())
+        }
         Err(()) => Ok(()),
     }
 }
 
-fn nearest_app_session(
-    registry: &Registry,
-    caller_pid: u32,
-) -> Result<Option<&SessionRow>, ()> {
+fn nearest_app_session(registry: &Registry, caller_pid: u32) -> Result<Option<&SessionRow>, ()> {
     if !registry
         .sessions
         .iter()
@@ -350,10 +341,13 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
 /// is spent at the gate by [`approved_grant_covers`] rather than
 /// written back into any session's capability set.
 fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&str>) {
-    if mode != Mode::Strict
+    let exact = matches!(denial.reason, DenialReason::ActivityApprovalRequired);
+    if (mode != Mode::Strict && !exact)
         || matches!(
             denial.reason,
-            DenialReason::NoSession | DenialReason::PidAncestryMismatch { .. }
+            DenialReason::NoSession
+                | DenialReason::PidAncestryMismatch { .. }
+                | DenialReason::ActivityPolicy
         )
     {
         return;
@@ -405,7 +399,11 @@ fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&
         .find(|request| {
             request.session == session_id
                 && request.verb == denial.verb.as_str()
-                && request.scope.covers(&denial.requested_scope)
+                && if exact {
+                    request.scope == denial.requested_scope
+                } else {
+                    request.scope.covers(&denial.requested_scope)
+                }
         });
     let request_id = match existing {
         Some(request) => Ok(request.id),
@@ -413,11 +411,7 @@ fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&
             denial.verb,
             denial.requested_scope.clone(),
             session_id,
-            format!(
-                "{}: {}",
-                meta.label.current(),
-                denial.requested_scope
-            ),
+            format!("{}: {}", meta.label.current(), denial.requested_scope),
             Some("system-agent".to_string()),
             owner_uid,
         ),
@@ -463,9 +457,8 @@ fn require_impl(
 
     if let Some(session) = crate::proc::current_trusted_session_for_caps() {
         if session.session_id != session_id {
-            return Err(Denial::no_session(verb, scope).with_hint(
-                "trusted task session does not match the selected session id",
-            ));
+            return Err(Denial::no_session(verb, scope)
+                .with_hint("trusted task session does not match the selected session id"));
         }
         return authorize_session_caps(
             session_id,
@@ -496,15 +489,11 @@ fn require_impl(
     };
 
     let caller_pid = std::process::id();
-    if let Err(error) = validate_process_identity(
-        &registry,
-        session,
-        caller_pid,
-        matches!(mode, Mode::Strict),
-    ) {
+    if let Err(error) =
+        validate_process_identity(&registry, session, caller_pid, matches!(mode, Mode::Strict))
+    {
         return Err(
-            Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid)
-                .with_hint(error),
+            Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid).with_hint(error),
         );
     }
 
@@ -541,7 +530,8 @@ fn authorize_session_caps(
     // record to lose and pass through.
     let trusted_task = !is_app
         && crate::paths::is_routed_job()
-        && crate::paths::current_owner_uid_override().is_some_and(|owner| Some(owner) == current_euid())
+        && crate::paths::current_owner_uid_override()
+            .is_some_and(|owner| Some(owner) == current_euid())
         && crate::proc::current_trusted_session_for_caps().is_some_and(|session| {
             session.session_id == session_id
                 && session.pid == std::process::id()
@@ -571,8 +561,37 @@ fn authorize_session_caps(
     }
 
     let requested = Cap::new(verb, scope.clone());
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let boundary = match super::approval_gateway::installed() {
+        Some(gateway) => gateway.boundary(verb, &scope),
+        None => super::activity_boundary::current().map_or(Ok(Boundary::Normal), |boundary| {
+            boundary.decision(&requested)
+        }),
+    };
+    let policy_denial = |hint| Denial {
+        verb,
+        requested_scope: scope.clone(),
+        granted_scopes: Vec::new(),
+        reason: DenialReason::ActivityPolicy,
+        hint: Some(hint),
+    };
+    let boundary = boundary.map_err(policy_denial)?;
+    if boundary == Boundary::Deny {
+        return Err(policy_denial(
+            "Activity capability policy denies this request; an approval cannot override it"
+                .to_string(),
+        ));
+    }
+    let exact_approval = boundary == Boundary::RequireApproval;
+    if exact_approval && is_app {
+        return Err(policy_denial(
+            "Activity confirmation must be settled by the App invocation or session call"
+                .to_string(),
+        ));
+    }
     let mut caps = match caps {
         Some(c) => c.clone(),
+        None if exact_approval && mode == Mode::Permissive => CapSet::new(),
         None => {
             return match mode {
                 Mode::Permissive => Ok(()),
@@ -587,10 +606,18 @@ fn authorize_session_caps(
         caps.extend(transient.iter().cloned());
     }
 
-    if caps.covers(&requested)
-        || (!is_app && approved_grant_covers(session_id, verb, &scope))
+    if (!exact_approval && caps.covers(&requested))
+        || (!is_app && approved_grant_covers(session_id, verb, &scope, exact_approval))
     {
         Ok(())
+    } else if exact_approval {
+        Err(Denial {
+            verb,
+            requested_scope: scope,
+            granted_scopes: Vec::new(),
+            reason: DenialReason::ActivityApprovalRequired,
+            hint: Some("Activity requires an exact one-time confirmation".to_string()),
+        })
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.
         Err(Denial::scope_out_of_range(verb, scope, &caps))
@@ -599,7 +626,7 @@ fn authorize_session_caps(
     }
 }
 
-fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
+fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope, exact_once: bool) -> bool {
     // Same one-shot semantics either way: the grant is spent at the
     // gate, never written back into a session's capability set. A
     // worker asks the broker to spend it because the store is
@@ -615,6 +642,22 @@ fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
                     error = %error,
                     "approval mediation unavailable; keeping the gate closed"
                 );
+                false
+            }
+        };
+    }
+    if exact_once {
+        let cap = Cap::new(verb, scope.clone());
+        return match crate::approvals::consume_grant_set_with_exact_once_for_owner(
+            session_id,
+            std::slice::from_ref(&cap),
+            std::slice::from_ref(&cap),
+            crate::paths::current_owner_uid_override().or_else(current_euid),
+        ) {
+            Ok(granted) => granted,
+            Err(error) => {
+                tracing::warn!(session_id, verb = %verb.as_str(), %error,
+                    "Activity confirmation could not be consumed");
                 false
             }
         };

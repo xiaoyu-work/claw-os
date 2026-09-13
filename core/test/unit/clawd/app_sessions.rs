@@ -2,6 +2,13 @@ use super::*;
 
 use crate::caps::Verb;
 
+mod activity_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/app_sessions/activity_policy.rs"
+    ));
+}
+
 const FS_MANIFEST: &str = r#"{
   "id": "fs",
   "version": "0.1.0",
@@ -132,6 +139,7 @@ fn delegation(ceiling: CapSet) -> Delegation {
             home: home(),
             cwd: Some(home()),
         },
+        activity: None,
     }
 }
 
@@ -218,6 +226,7 @@ fn authority_for(
         scope: None,
         priority: None,
         role: None,
+        activity: None,
     }
 }
 
@@ -1141,6 +1150,7 @@ fn test_authority() -> LauncherAuthority {
         scope: None,
         priority: None,
         role: None,
+        activity: None,
     }
 }
 
@@ -1499,6 +1509,7 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
         scope: None,
         priority: None,
         role: None,
+        activity: None,
     };
     let handle = issue_launch_grant(
         session_id,
@@ -2009,7 +2020,10 @@ fn a_relay_grant_is_bound_to_the_launcher_and_carries_no_capabilities() {
         )
         .expect("relay resolves for the launcher");
     assert_eq!(view.subject.session_id.as_deref(), Some(session_id));
-    assert!(view.caps.is_empty(), "a relay grant carries no capabilities");
+    assert!(
+        view.caps.is_empty(),
+        "a relay grant carries no capabilities"
+    );
 
     // Inert for another audience: it authorizes presenting, never acting.
     assert!(authority::authority()
@@ -2152,9 +2166,8 @@ fn a_relay_is_refused_without_the_exact_handle_and_session() {
     let (launcher_pid, _) = this_process();
     let relay = issue_relay_grant(&launch, session_id, Some("fs"), E2E_UID, launcher_pid)
         .expect("relay grant");
-    let other_relay =
-        issue_relay_grant(&other_launch, other_id, Some("fs"), E2E_UID, launcher_pid)
-            .expect("relay grant");
+    let other_relay = issue_relay_grant(&other_launch, other_id, Some("fs"), E2E_UID, launcher_pid)
+        .expect("relay grant");
 
     let route = Command::SystemNetworkControl.route();
     let decide = |handle: &str, session: &str| {
@@ -2266,7 +2279,10 @@ fn the_outer_relay_audience_is_distinct_from_the_inner_one() {
     // forward is decided with SystemService. Collapsing the two would
     // let a relay grant act directly on a provider.
     let relay_route = Command::AppSessionRelay.route();
-    assert_eq!(relay_route.authority.audience, authority::Audience::AppRelay);
+    assert_eq!(
+        relay_route.authority.audience,
+        authority::Audience::AppRelay
+    );
     assert_eq!(
         relay_route.authority.subject,
         authority::SubjectSource::Handle
@@ -2437,7 +2453,9 @@ fn the_daemon_clamps_a_developer_operation_plan_before_it_becomes_authority() {
 
     // The launcher could delegate every one of these, so the plan the
     // daemon starts from really does contain them.
-    assert!(plan.caps.covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
+    assert!(plan
+        .caps
+        .covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
     assert!(plan
         .caps
         .covers(&Cap::new(Verb::SECRET_READ, Scope::name("default/TOKEN"))));
@@ -2458,8 +2476,7 @@ fn a_signed_package_keeps_everything_the_same_plan_asked_for() {
     let delegation = omnipotent_delegation();
 
     for ceiling in [publisher_ceiling(), vendor_ceiling()] {
-        let plan =
-            operation_plan(&app, "grab", &[], &delegation, &ceiling).expect("plan");
+        let plan = operation_plan(&app, "grab", &[], &delegation, &ceiling).expect("plan");
         let granted =
             authorize_plan(&delegation, plan, &ceiling, "scratch").expect("signed content");
         for (verb, name) in FORBIDDEN_FOR_DEVELOPER {
@@ -2568,8 +2585,7 @@ fn a_developer_package_never_inherits_a_wild_scope_binding() {
 
     // … and unsigned content borrows none of the launcher's reach over
     // a real resource namespace.
-    let plan =
-        operation_plan(&app, "grab", &[], &delegation, &developer_ceiling()).expect("plan");
+    let plan = operation_plan(&app, "grab", &[], &delegation, &developer_ceiling()).expect("plan");
     assert!(
         !plan.caps.iter().any(|cap| cap.verb == Verb::FS_META),
         "a wild need over a resource must not expand for developer content"
@@ -2578,8 +2594,8 @@ fn a_developer_package_never_inherits_a_wild_scope_binding() {
     // `proc.spawn` and `agent.spawn` address no resource namespace, so
     // the *binding* is not what stops them — the allow-list is, one
     // step later, where authority is actually granted.
-    let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
-        .expect("authorization");
+    let granted =
+        authorize_plan(&delegation, plan, &developer_ceiling(), "scratch").expect("authorization");
     assert!(!granted.iter().any(|cap| cap.verb == Verb::PROC_SPAWN));
     assert!(!granted.iter().any(|cap| cap.verb == Verb::AGENT_SPAWN));
 
@@ -2736,8 +2752,14 @@ fn a_developer_package_is_never_issued_a_relay_grant() {
     // ever calls it anyway, the attenuation itself must refuse, because
     // the parent grant does not carry the relay audience.
     assert!(!ceiling.allows_relay());
-    issue_relay_grant(&handle, "app-dev-4", Some("scratch"), this_uid(), std::process::id())
-        .expect_err("a developer launch grant cannot be attenuated into a relay");
+    issue_relay_grant(
+        &handle,
+        "app-dev-4",
+        Some("scratch"),
+        this_uid(),
+        std::process::id(),
+    )
+    .expect_err("a developer launch grant cannot be attenuated into a relay");
     authority::authority().clear_for_test();
 }
 
@@ -2994,7 +3016,10 @@ fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
     assert!(granted.covers(&Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))));
     assert!(granted.covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch"))));
 
-    let session_id = result["session_id"].as_str().expect("session id").to_string();
+    let session_id = result["session_id"]
+        .as_str()
+        .expect("session id")
+        .to_string();
     let handle = result["handle"].as_str().expect("handle").to_string();
 
     // 2. What the routed registry row records — this is what
@@ -3137,9 +3162,7 @@ fn a_dev_trusted_app_cannot_widen_itself_through_a_session_tool() {
         "the allowed half of the tool call must survive"
     );
     assert!(
-        !transient
-            .iter()
-            .any(|cap| cap.verb == Verb::SYS_PACKAGE),
+        !transient.iter().any(|cap| cap.verb == Verb::SYS_PACKAGE),
         "a session tool must not lift a developer package"
     );
 
@@ -3257,8 +3280,7 @@ fn a_relay_refuses_a_session_whose_package_was_revoked() {
     // runs per call.
     let _lock = crate::caps::test_env_lock::env_lock();
     let scratch = crate::test_env::secure_scratch_dir("relay-revoked");
-    let _proc =
-        crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", &scratch);
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", &scratch);
 
     let session_id = "app-relay-revoked";
     let (pid, ticks) = this_process();
@@ -3302,9 +3324,6 @@ fn a_relay_refuses_a_session_whose_package_was_revoked() {
         "unexpected: {error}"
     );
 
-    crate::provenance::runtime::deregister(
-        crate::provenance::fsec::effective_uid(),
-        session_id,
-    );
+    crate::provenance::runtime::deregister(crate::provenance::fsec::effective_uid(), session_id);
     let _ = std::fs::remove_dir_all(&scratch);
 }

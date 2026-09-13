@@ -110,7 +110,7 @@ compatible Agent package, or restore a consistent pre-upgrade backup through
 the operator's recovery process. Receipt records remain caller-reported data,
 never restored authorization.
 
-Controlled App operation/session hosting and receipt reporting use worker protocol v7.
+Controlled App hosting, Activity boundary checks and receipt reporting use worker protocol v8.
 `clawd` and `claw-agentd` must be upgraded together; a mixed pair fails closed
 at assignment rather than dropping reports or inventing compatibility.
 Activity wire schema 1 is unchanged. The App-host
@@ -142,6 +142,20 @@ disabled or expired policies do not fall back to unlimited work. Old cores
 must not open schema-4 state; preserve the database and restore a compatible
 package or a consistent pre-upgrade backup. See
 [execution limits](activity-execution-limits.md).
+
+Database schema 5 adds owner-scoped Activity capability policies without
+rewriting goals, receipts, object-state history or execution reservations.
+An existing attempt is stopped when its capability policy changes or is first
+configured; it must restart under the new revision. Disabling a policy is a
+revocation, not deletion or unrestricted fallback. Existing associated Apps
+lose broker authority when their root-held policy binding becomes stale.
+Already-admitted effects are not undone.
+
+Upgrade `cos`, `clawd` and `claw-agentd` together for the v8 boundary/consent
+messages. Older cores refuse schema-5 state; preserve the database and restore
+a compatible package or a consistent pre-upgrade backup, never delete policy
+rows or deserialize an old grant to bypass the version check. See
+[Activity capability policies](activity-capability-policies.md).
 
 Session receipts use the new `session:<tool>` identifier vocabulary in the
 existing receipt string field. Older cores may reject these identifiers while

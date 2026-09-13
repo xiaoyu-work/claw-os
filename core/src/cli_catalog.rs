@@ -42,6 +42,10 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("set-execution-limits", "Set or revise Activity limits without granting capabilities"),
                 ("enable-execution-limits", "Explicitly enable an unexpired Activity limit policy"),
                 ("disable-execution-limits", "Disable bounded Activity work without deleting its policy or usage"),
+                ("capability-policy", "Read shared Activity capability constraints; never permission grants"),
+                ("set-capability-policy", "Create or revise normal, ask and deny capability rules"),
+                ("enable-capability-policy", "Explicitly enable an Activity capability policy at its current revision"),
+                ("disable-capability-policy", "Block all controlled capability checks without deleting the policy"),
             ],
         ),
         (

@@ -289,10 +289,55 @@ pub fn record_worker_approval(
     scope: &crate::caps::Scope,
     action: &'static str,
 ) {
+    record_worker_gate(
+        task_id,
+        owner_uid,
+        session_id,
+        verb,
+        scope,
+        action,
+        "clawd.agent.approval.mediated",
+    );
+}
+
+pub(crate) fn record_worker_boundary(
+    task_id: &str,
+    owner_uid: u32,
+    session_id: &str,
+    verb: &str,
+    scope: &crate::caps::Scope,
+    decision: crate::activities::CapabilityBoundaryDecision,
+) {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let action = match decision {
+        Boundary::Normal => "normal",
+        Boundary::RequireApproval => "require_approval",
+        Boundary::Deny => "deny",
+    };
+    record_worker_gate(
+        task_id,
+        owner_uid,
+        session_id,
+        verb,
+        scope,
+        action,
+        "clawd.agent.capability_boundary",
+    );
+}
+
+fn record_worker_gate(
+    task_id: &str,
+    owner_uid: u32,
+    session_id: &str,
+    verb: &str,
+    scope: &crate::caps::Scope,
+    action: &'static str,
+    event: &'static str,
+) {
     let job_id = audit_policy::safe_identity(task_id);
     let record = WorkerApprovalAudit {
         ts: Utc::now(),
-        event: "clawd.agent.approval.mediated",
+        event,
         job_id: &job_id,
         owner_uid,
         session_id: audit_policy::safe_identity(session_id),
@@ -301,7 +346,7 @@ pub fn record_worker_approval(
         action,
     };
     if let Err(err) = append_jsonl(&record) {
-        tracing::error!(error = %err, "failed to write agentd approval audit record");
+        tracing::error!(error = %err, "failed to write agentd capability gate audit record");
     }
 }
 

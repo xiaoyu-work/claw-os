@@ -106,9 +106,32 @@ is what stops that from deadlocking against streaming or tool execution. Human
 wait time does not hold a worker: the queue persists the task under `waiting/`,
 and the supervisor requeues it after approval.
 
+## Activity capability boundaries
+
+The supervisor pins the Activity association and policy revision from its
+retained Job, records the bounded policy snapshot before assignment, and
+rechecks the live revision independently of heartbeat renewal. Disabled,
+changed or newly introduced policies stop old attempts through normal
+cancellation and exact-child cleanup; admitted effects are not undone.
+
+Worker protocol v8 adds a `Boundary` question to the consent seam. It carries
+only verb/scope, never Activity, owner or policy selectors. Its typed reply is
+a constraint, not an approval, and cannot satisfy a consent waiter. Up to
+4096 boundary checks have their own counter, separate from 128 consent asks.
+Root also rechecks the boundary when a worker directly requests or consumes
+consent: deny cannot escalate, and required confirmation retires an exact
+scope grant once rather than borrowing a broader reusable approval.
+
+App hosting uses the same root-pinned context. Registration and each session
+call settle their full approval set all-or-none; consuming local preflights
+are skipped on this brokered path. Root-held App grants carry their confirmed
+invocation and policy revision, checked again before effects. This does not
+turn the Agent's same-UID process into a kernel sandbox. See
+[Activity policies](../../../docs/activity-capability-policies.md).
+
 ## Activity receipt reporting
 
-The reporting request/reply remains reporting-only in worker protocol v7. The broker marks
+The reporting request/reply remains reporting-only in worker protocol v8. The broker marks
 Activity-associated assignments for capture; an enabled assignment requires
 the signed `receipt` route. The supervisor retains that handshake decision
 and checks the route, task and live lease before recording.
@@ -193,11 +216,11 @@ the agent its own unprivileged account; there is no opt-out switch.
 Removing the worker's broker access is deliberate, and two things change with
 it:
 
-- **Stateful App/MCP sessions and GUI launches.** The controlled host currently
-  admits only one-shot operations. Session-tool attachment, transient
-  re-scoping and GUI launch are not on that control surface and still fail
-  closed. Extending them must preserve the same owner, provenance, permission
-  and sandbox boundaries; it must not expose arbitrary `app_session.*` calls.
+- **General MCP and GUI launches.** Verified App-owned sessions and one-shot
+  operations use the controlled host. General external MCP and GUI launch
+  are not on that surface and still fail closed. Extending it must preserve
+  owner, provenance, permission and sandbox boundaries, not expose arbitrary
+  `app_session.*` calls.
 - **Scheduler mutation from inside a task.** `cos cron` / `cos triggers` state
   lives in the root-owned daemon tree, so a worker can read its own scope but
   cannot persist system schedules. `scheduler.run` is a broker route and is not

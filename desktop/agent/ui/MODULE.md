@@ -13,6 +13,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
 | `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
+| `src/activities/capability_policy.rs` | Fixed typed capability rule/scope controls, owner-scoped snapshots and CAS-bound edits/toggles; no grants, approval decisions or resource resolution |
 | `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
@@ -128,6 +129,30 @@ cleanup on expiry/disable/revision change and no promise to undo already-admitte
 privileged mutations. These constraints never grant capabilities or approvals,
 execute an App/model or transition a goal.
 
+Capability policies use the same generation-aware Activity reducer and normal
+authenticated bridge. The fixed editor uses verb text and closed mode/scope
+types rather than model-generated controls or a copied catalogue. Catalogue
+membership and scope compatibility remain broker validations. Normal follows
+existing permissions; Ask adds exact one-shot confirmation even for held
+permission; Deny blocks the entire verb and consent escalation. Scope ceilings
+deny requests outside the listed scopes, and empty/missing rules grant nothing.
+Disabling the policy blocks controlled capability use.
+
+Forms capture the fetched revision and never rebase or replay after conflicts.
+Set/toggle acknowledgements verify Activity/owner, exact revision progression,
+preserved creation identity and enabled state, and submitted rule meaning.
+Rule matching permits only ASCII host lowercasing, scope deduplication and
+ordering from the shared storage contract; all other scope values and verb
+spelling remain exact. It does not run scope matching, filesystem resolution
+or App code. Successful mutations refetch the backend state.
+
+Creation/editing/enabling require an active or paused Activity; terminal
+inspection/disabling remain available. Messages explain live old-policy
+attempt cancellation, no undo of admitted effects, no universal sandbox
+guarantee, and that `fs.delete` denial is not protection from equivalent
+effects via other allowed verbs. There is no grant/approval-decision endpoint
+or local policy persistence, and other Activity forms exclude this editor.
+
 ## Dependencies
 
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
@@ -157,6 +182,7 @@ Private-access unit tests mirror production modules under `test/unit/`.
 ```bash
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui activit -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-protocol -p cos-agent-bridge -p cos-agent-ui execution_limits -- --test-threads=1
+cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-protocol -p cos-agent-bridge -p cos-agent-ui capability_policy -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui
 cargo clippy --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui -- -D warnings
 ```
@@ -184,3 +210,11 @@ stale conflicts without rebasing, terminal-state rules, owner/revision
 acknowledgements and stale selection. Matching protocol/translation/route/
 transport tests cover required-nullable fields, selector rejection, bounded
 inputs, authenticated owner scope and the absence of reset/delete endpoints.
+Capability-policy coverage under `test/unit/activities/capability_policy.rs`
+adds all fixed modes/scope kinds, required-nullable snapshots, empty and
+disabled policies, scoped editor bounds, CAS conflicts, canonical rule
+acknowledgements, terminal rules and stale get/set/toggle rejection. Transport
+tests live in `test/unit/bridge/capability_policy.rs` as a nested test module
+with module-level test functions. Matching protocol/translation/route and
+independent client inventory tests cover strict shapes, byte limits, identity,
+normalization and the absence of grant/approval-decision routes.

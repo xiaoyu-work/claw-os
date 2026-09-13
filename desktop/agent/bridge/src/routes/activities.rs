@@ -1,6 +1,7 @@
 //! Stateless adapters to the same owner-scoped Activity service used by `cos`.
 //! Unlike chat SSE, a work submission has no cancel-on-disconnect guard.
 
+pub(super) mod capability_policy;
 pub(super) mod execution_limits;
 
 use axum::{
