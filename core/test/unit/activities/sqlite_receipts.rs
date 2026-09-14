@@ -655,7 +655,7 @@ fn receipt_schema_rejects_unsupported_old_versions_without_resetting_data() {
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
             found: -1,
-            supported: 5
+            supported: 6
         })
     ));
     let conn = Connection::open(&path).unwrap();

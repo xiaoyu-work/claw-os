@@ -74,6 +74,7 @@ fn activity_capability_policy_commands_have_explicit_non_model_schemas() {
         assert_eq!(help["schema_available"], true);
         assert!(!help["parameters"].as_array().unwrap().is_empty());
     }
+
     let set = command_schema_value("activity", "set-capability-policy").unwrap();
     let parameters = set["parameters"].to_string();
     assert!(parameters.contains("--policy"));
@@ -86,4 +87,31 @@ fn activity_capability_policy_commands_have_explicit_non_model_schemas() {
             .to_string()
             .contains("--expected-revision"));
     }
+}
+
+#[test]
+fn activity_monetary_budget_help_is_explicit_and_non_model_callable() {
+    for command in [
+        "monetary-budget",
+        "set-monetary-budget",
+        "enable-monetary-budget",
+        "disable-monetary-budget",
+    ] {
+        let help = command_schema_value("activity", command).unwrap();
+        assert_eq!(help["schema_available"], true);
+        assert_eq!(help["model_callable"], false);
+        assert!(help["model_tool"].is_null());
+        assert!(!help["parameters"].to_string().contains("--owner"));
+    }
+    let set = command_schema_value("activity", "set-monetary-budget").unwrap();
+    let parameters = set["parameters"].to_string();
+    for flag in [
+        "--max-total-microusd",
+        "--input-microusd-per-million-tokens",
+        "--output-microusd-per-million-tokens",
+        "--max-output-tokens-per-turn",
+    ] {
+        assert!(parameters.contains(flag), "{flag}");
+    }
+    assert!(set["description"].as_str().unwrap().contains("preserving"));
 }

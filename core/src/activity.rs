@@ -7,6 +7,7 @@ use crate::clawd::{client, config, protocol::Request, routes::Command};
 
 mod capability_policy;
 mod execution_limits;
+mod monetary_budget;
 mod object_state;
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -59,6 +60,15 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             | "disable-execution-limits"
     ) {
         return execution_limits::parse(command, args);
+    }
+    if matches!(
+        command,
+        "monetary-budget"
+            | "set-monetary-budget"
+            | "enable-monetary-budget"
+            | "disable-monetary-budget"
+    ) {
+        return monetary_budget::parse(command, args);
     }
     if command == "attach-object" {
         return parse_object_attachment(args);

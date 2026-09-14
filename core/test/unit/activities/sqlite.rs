@@ -630,24 +630,25 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "PRAGMA user_version = 6;
+            "PRAGMA user_version = 7;
              CREATE TABLE future_data (value TEXT NOT NULL);
              INSERT INTO future_data VALUES ('preserve this');",
         )
         .unwrap();
     }
+
     assert!(matches!(
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
-            found: 6,
-            supported: 5
+            found: 7,
+            supported: 6
         })
     ));
     let conn = Connection::open(&path).unwrap();
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
     assert_eq!(
         conn.query_row("SELECT value FROM future_data", [], |row| row
@@ -660,6 +661,54 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
             .unwrap(),
         "delete"
     );
+}
+
+#[test]
+fn version_five_migrates_to_six_without_changing_activities() {
+    let directory = TestDirectory::new();
+    let path = directory.database();
+    let activity = {
+        let service = SqliteActivityService::open(&path).unwrap();
+        service
+            .create(
+                31,
+                ActivityDraft {
+                    title: "preserve".into(),
+                    goal: "migration".into(),
+                    completion_criteria: String::new(),
+                    boundaries: String::new(),
+                    resources: vec![],
+                },
+            )
+            .unwrap()
+    };
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "DROP TABLE activity_monetary_ledger;
+             DROP TABLE activity_monetary_budgets;
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+    }
+    let service = SqliteActivityService::open(&path).unwrap();
+    assert_eq!(service.get(31, &activity.id).unwrap(), activity);
+    assert!(service.monetary_budget(31, &activity.id).unwrap().is_none());
+    assert_eq!(
+        service
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    drop(service);
+    let reopened = SqliteActivityService::open(&path).unwrap();
+    assert_eq!(reopened.get(31, &activity.id).unwrap(), activity);
+    assert!(reopened
+        .monetary_budget(31, &activity.id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]

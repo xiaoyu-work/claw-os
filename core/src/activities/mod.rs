@@ -6,6 +6,7 @@
 
 mod capability_policy;
 mod execution_limits;
+mod monetary_budget;
 mod object_state;
 mod receipts;
 mod sqlite;
@@ -20,6 +21,11 @@ pub use capability_policy::{
 pub use execution_limits::{
     ActivityExecutionLimits, ExecutionBlockedReason, ExecutionLimitsDraft, ExecutionReservation,
 };
+pub use monetary_budget::{
+    accounted_cost, ActivityMonetaryBudget, MonetaryBlockedReason, MonetaryBudgetDraft,
+    MonetaryReservation, MonetaryReservationRequest, MonetarySettlement, CURRENCY_USD,
+    MAX_OUTPUT_TOKENS_PER_TURN, MAX_RATE_MICROUSD_PER_MILLION_TOKENS, MAX_TOTAL_MICROUSD,
+};
 pub use object_state::{
     ObjectRelationKind, ObjectStateContent, ObjectStateDraft, ObjectStateEntry, ObjectStateSource,
     ObjectStateValidity,
@@ -33,7 +39,7 @@ pub use sqlite::SqliteActivityService;
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 5;
+pub const DATABASE_SCHEMA_VERSION: u32 = 6;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -58,6 +64,8 @@ pub enum ActivityError {
     LimitReached,
     #[error("activity execution blocked: {0}")]
     ExecutionBlocked(ExecutionBlockedReason),
+    #[error("activity monetary budget blocked: {0}")]
+    MonetaryBlocked(MonetaryBlockedReason),
     #[error("activity database is unavailable: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("activity storage failed: {0}")]
@@ -361,6 +369,62 @@ pub trait ActivityService: Send + Sync {
         job_id: &str,
         requested_max_turns: Option<u32>,
     ) -> Result<Option<ExecutionReservation>, ActivityError>;
+
+    fn monetary_budget(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+    ) -> Result<Option<ActivityMonetaryBudget>, ActivityError> {
+        Ok(None)
+    }
+
+    fn set_monetary_budget(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _expected_revision: Option<u64>,
+        _draft: MonetaryBudgetDraft,
+    ) -> Result<ActivityMonetaryBudget, ActivityError> {
+        Err(ActivityError::Invalid(
+            "Activity monetary budgets are unsupported by this service".into(),
+        ))
+    }
+
+    fn set_monetary_budget_enabled(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _expected_revision: u64,
+        _enabled: bool,
+    ) -> Result<ActivityMonetaryBudget, ActivityError> {
+        Err(ActivityError::Invalid(
+            "Activity monetary budgets are unsupported by this service".into(),
+        ))
+    }
+
+    fn reserve_monetary(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _request: MonetaryReservationRequest,
+    ) -> Result<Option<MonetaryReservation>, ActivityError> {
+        Ok(None)
+    }
+
+    fn settle_monetary(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _call_id: &str,
+        _job_id: &str,
+        _session_id: Option<&str>,
+        _turn_index: u32,
+        _settlement: MonetarySettlement,
+    ) -> Result<ActivityMonetaryBudget, ActivityError> {
+        Err(ActivityError::Invalid(
+            "Activity monetary budgets are unsupported by this service".into(),
+        ))
+    }
 
     /// Read optional capability constraints, never permissions or grants.
     fn capability_policy(

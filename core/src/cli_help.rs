@@ -892,6 +892,38 @@ fn activity_schemas() -> Vec<CommandSchema> {
             example: "cos activity disable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
         },
         CommandSchema {
+            command: "monetary-budget",
+            description: "Read conservative policy-priced USD accounting; this is not provider invoice data",
+            params: vec![id()],
+            example: "cos activity monetary-budget 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-monetary-budget",
+            description: "Create or revise a USD micro-unit budget while preserving enabled state and all spent/reserved accounting",
+            params: vec![
+                id(),
+                Param::flag("--revision", "integer", false, "Current revision when updating; omit only for initial creation"),
+                Param::flag("--currency", "currency", false, "Must be USD; defaults to USD"),
+                Param::flag("--max-total-microusd", "integer", true, "Total policy-accounted ceiling, 1-1000000000000"),
+                Param::flag("--input-microusd-per-million-tokens", "integer", true, "Input price per million provider-reported tokens, 1-1000000000000"),
+                Param::flag("--output-microusd-per-million-tokens", "integer", true, "Output price per million provider-reported tokens, 1-1000000000000"),
+                Param::flag("--max-output-tokens-per-turn", "integer", true, "Outgoing model output ceiling, 1-1000000"),
+            ],
+            example: "cos activity set-monetary-budget 00000000-0000-4000-8000-000000000001 --max-total-microusd 5000000 --input-microusd-per-million-tokens 250000 --output-microusd-per-million-tokens 1000000 --max-output-tokens-per-turn 4096",
+        },
+        CommandSchema {
+            command: "enable-monetary-budget",
+            description: "Enable an existing monetary budget for an active or paused Activity",
+            params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
+            example: "cos activity enable-monetary-budget 00000000-0000-4000-8000-000000000001 --revision 2",
+        },
+        CommandSchema {
+            command: "disable-monetary-budget",
+            description: "Block new model turns while preserving spent and crash-reserved accounting",
+            params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
+            example: "cos activity disable-monetary-budget 00000000-0000-4000-8000-000000000001 --revision 2",
+        },
+        CommandSchema {
             command: "object-state",
             description: "Read caller-reported object state, time windows, relations and correction history",
             params: vec![

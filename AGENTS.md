@@ -40,6 +40,7 @@ editing additional surfaces.
 | Model-visible content or prompt-injection containment | `core/src/agent/trust/` | `agent/prompt/`, `agent/safety/untrusted.rs`, the ingestion adapter, `test/unit/agent/trust/` |
 | Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
 | Activity execution limits or attempt accounting | `core/src/activities/execution_limits.rs`, `core/src/agent/service/execution_limits.rs`, `docs/activity-execution-limits.md` | Root claim reservations, actual turn ceiling, supervisor/standalone expiry and revocation, CLI/Web/native; constraints never grant capabilities |
+| Activity monetary budget or model-turn accounting | `core/src/activities/monetary_budget.rs`, `core/src/agent/runtime/monetary_budget.rs`, `docs/activity-monetary-budgets.md` | SQLite policy/ledger, shared turn reservation/output cap/settlement, private worker exchange, owner-scoped broker and terminal controls; policy prices are not provider invoices or authority |
 | Activity capability or confirmation boundaries | `core/src/caps/activity_boundary.rs`, `core/src/clawd/activity_capability_policy.rs`, `docs/activity-capability-policies.md` | Shared policy storage, root Job/lease identity, capability/approval gates, App grant bindings, live revocation and terminal/Web/native controls; policy never supplies permission |
 | Activity event-triggered work | `core/src/triggers.rs`, `core/src/clawd/scheduler.rs`, `docs/activities.md` | Owner/lifecycle/finite-limit preflight before consent, unattended task/session associations, durable delivery correlation and existing Activity result views; no model polling or serialized grants |
 | Activity attention or decision summary | `core/src/clawd/activity_attention.rs`, `core/src/notifications/`, `docs/activities.md` | Protected approval reads, associated Job issues/counts, task-linked notification projection, terminal/Web/native presentation; acknowledgement is never consent |
@@ -293,6 +294,14 @@ associations backward compatible; an execution completing never proves that
 the Activity goal was achieved. Preserve explicit completion confirmation and
 the existing capability, approval, task-cancellation and audit boundaries.
 Update [`docs/activities.md`](docs/activities.md) with user-facing changes.
+
+Monetary budgets remain separate from execution limits and authority. Reserve
+before every Activity model dispatch, bind the durable UUID to Root-derived
+owner/Activity/Job/session/turn identity, clamp outgoing output, and settle
+only from provider-reported usage under the reservation's policy-rate snapshot.
+Missing usage, errors and ambiguous retry/fallback accounting must not silently
+refund. Document policy pricing as a conservative upper bound, never a
+provider invoice.
 
 Capability policies must constrain both standing permissions and approval
 escalation. Deny precedes any consent side effect; required confirmation is

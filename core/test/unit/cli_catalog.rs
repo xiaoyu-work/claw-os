@@ -43,11 +43,13 @@ fn activity_commands_are_discoverable_without_model_authority() {
     assert_eq!(
         command_names("activity").unwrap(),
         vec![
-            "create", "list", "show", "update", "run", "pause", "resume", "complete", "cancel",
-            "objects", "attach-object", "receipts", "record-receipt", "object-state", "observe",
-            "relate", "retract-object-state", "record-object-state", "execution-limits",
+            "create", "list", "show", "attention", "update", "run", "pause", "resume", "complete",
+            "cancel", "objects", "attach-object", "receipts", "record-receipt", "object-state",
+            "observe", "relate", "retract-object-state", "record-object-state", "execution-limits",
             "set-execution-limits", "enable-execution-limits", "disable-execution-limits",
-            "capability-policy", "set-capability-policy", "enable-capability-policy",
+            "monetary-budget", "set-monetary-budget", "enable-monetary-budget",
+            "disable-monetary-budget", "capability-policy", "set-capability-policy",
+            "enable-capability-policy",
             "disable-capability-policy",
         ]
     );

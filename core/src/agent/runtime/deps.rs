@@ -61,6 +61,7 @@ pub struct RuntimeDeps {
     config: Option<Arc<crate::config::CosConfig>>,
     routed_paths: crate::paths::RoutedPathContext,
     curation_log: PathBuf,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
     _auto_hook_guard: Option<Arc<super::hooks_config::AutoHookGuard>>,
 }
 
@@ -79,6 +80,7 @@ impl RuntimeDeps {
             config: None,
             routed_paths: crate::paths::RoutedPathContext::capture(),
             curation_log: crate::paths::agent_curation_log_path(),
+            monetary_budget: None,
             _auto_hook_guard: None,
         }
     }
@@ -176,6 +178,20 @@ impl RuntimeDeps {
 
     pub fn curation_log(&self) -> &std::path::Path {
         &self.curation_log
+    }
+
+    pub(crate) fn with_monetary_budget(
+        mut self,
+        controller: Arc<dyn super::monetary_budget::MonetaryBudgetController>,
+    ) -> Self {
+        self.monetary_budget = Some(controller);
+        self
+    }
+
+    pub(crate) fn monetary_budget(
+        &self,
+    ) -> Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>> {
+        self.monetary_budget.clone()
     }
 }
 

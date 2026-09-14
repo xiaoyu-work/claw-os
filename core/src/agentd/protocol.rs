@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -60,6 +60,7 @@ pub const ROUTE_RESULT: &str = "result";
 /// session, an owner, a decision, raw arguments, or a capability set.
 pub const ROUTE_APPROVAL: &str = "approval";
 pub const ROUTE_RECEIPT: &str = "receipt";
+pub const ROUTE_MONETARY_BUDGET: &str = "monetary_budget";
 
 /// The complete route surface a worker grant may carry. Nothing else
 /// exists on this channel, so a leaked descriptor is still only an
@@ -74,6 +75,7 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_RESULT,
     ROUTE_APPROVAL,
     ROUTE_RECEIPT,
+    ROUTE_MONETARY_BUDGET,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
@@ -82,6 +84,7 @@ pub const MAX_APPROVAL_ASKS: u32 = 128;
 pub const MAX_BOUNDARY_CHECKS: u32 = 4096;
 pub const MAX_RECEIPT_REPORTS: u32 = 128;
 pub const MAX_RECEIPT_REPORT_BYTES: usize = 16 * 1024;
+pub const MAX_MONETARY_EXCHANGES: u32 = 256;
 
 pub fn worker_routes() -> Vec<String> {
     WORKER_ROUTES
@@ -126,6 +129,47 @@ pub enum BrokerFrame {
         correlation_id: u64,
         reply: ReceiptReply,
     },
+    MonetaryBudgetReply {
+        correlation_id: u64,
+        reply: MonetaryBudgetReply,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MonetaryBudgetReply {
+    Reserved {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reservation: Option<Box<crate::activities::MonetaryReservation>>,
+    },
+    Settled,
+    Refused {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MonetaryBudgetOperation {
+    Reserve {
+        call_id: String,
+        turn_index: u32,
+        input_upper_bound_tokens: u64,
+        requested_max_output_tokens: u32,
+    },
+    Settle {
+        call_id: String,
+        turn_index: u32,
+        settlement: crate::activities::MonetarySettlement,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetRequest {
+    pub task_id: String,
+    pub correlation_id: u64,
+    pub operation: MonetaryBudgetOperation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +379,9 @@ pub struct JobSpec {
     /// Root still derives the actual policy from its own Job, not this hint.
     #[serde(default)]
     pub activity_capability_checks: bool,
+    /// Reporting hint only; Root derives owner, Activity, Job and session.
+    #[serde(default)]
+    pub activity_monetary_checks: bool,
 }
 
 fn default_true() -> bool {
@@ -376,6 +423,7 @@ pub enum WorkerFrame {
         exchange: ApprovalExchange,
     },
     Receipt(Box<ReceiptRequest>),
+    MonetaryBudget(Box<MonetaryBudgetRequest>),
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -393,6 +441,7 @@ impl WorkerFrame {
             WorkerFrame::Heartbeat { .. } => ROUTE_HEARTBEAT,
             WorkerFrame::Approval { .. } => ROUTE_APPROVAL,
             WorkerFrame::Receipt(_) => ROUTE_RECEIPT,
+            WorkerFrame::MonetaryBudget(_) => ROUTE_MONETARY_BUDGET,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -404,6 +453,7 @@ impl WorkerFrame {
             WorkerFrame::Prepared(prepared) => Some(prepared.grant.claims.task_id.as_str()),
             WorkerFrame::Hello(hello) => Some(hello.grant.claims.task_id.as_str()),
             WorkerFrame::Receipt(request) => Some(request.task_id.as_str()),
+            WorkerFrame::MonetaryBudget(request) => Some(request.task_id.as_str()),
             WorkerFrame::Stream { task_id, .. }
             | WorkerFrame::Progress { task_id, .. }
             | WorkerFrame::Audit { task_id, .. }

@@ -29,7 +29,8 @@ use crate::clawd::transport::limits::{Admission, Limits};
 use super::grant::{GrantClaims, GrantExpectation, GrantSigner, GRANT_AUDIENCE, GRANT_VERSION};
 use super::protocol::{
     self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, ExecutionCommit, FrameReader,
-    JobSpec, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome, WorkerPrepared,
+    JobSpec, MonetaryBudgetOperation, MonetaryBudgetReply, RuntimeAuditRecord, WorkerFrame,
+    WorkerHello, WorkerOutcome, WorkerPrepared,
 };
 use super::spawn;
 
@@ -1195,6 +1196,7 @@ async fn pump(
             owner_home: job.owner_home.clone().unwrap_or_default(),
             record_activity_receipts: job.activity_id.is_some(),
             activity_capability_checks: job.activity_id.is_some(),
+            activity_monetary_checks: job.activity_id.is_some(),
         },
         consent_context: lease.consent_context,
         session,
@@ -1322,6 +1324,7 @@ async fn pump(
     let mut boundaries_used: u32 = 0;
     let mut next_boundary_check = Instant::now();
     let mut receipts_used: u32 = 0;
+    let mut monetary_exchanges: u32 = 0;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1458,6 +1461,87 @@ async fn pump(
                             ).await {
                                 return TaskOutcome::Indeterminate(format!(
                                     "could not acknowledge the Activity receipt; do not repeat the App operation: {error}"
+                                ));
+                            }
+                        }
+                        WorkerFrame::MonetaryBudget(request) => {
+                            monetary_exchanges = monetary_exchanges.saturating_add(1);
+                            let reply = if monetary_exchanges > protocol::MAX_MONETARY_EXCHANGES {
+                                MonetaryBudgetReply::Refused {
+                                    message: "agent task exceeded its monetary accounting exchange budget".into(),
+                                }
+                            } else if let Some(activity_id) = job.activity_id.as_deref() {
+                                match crate::activities::open_default() {
+                                    Ok(service) => {
+                                        use crate::activities::ActivityService;
+                                        match request.operation {
+                                            MonetaryBudgetOperation::Reserve {
+                                                call_id,
+                                                turn_index,
+                                                input_upper_bound_tokens,
+                                                requested_max_output_tokens,
+                                            } => {
+                                                let reserve = service.reserve_monetary(
+                                                    lease.owner_uid,
+                                                    activity_id,
+                                                    crate::activities::MonetaryReservationRequest {
+                                                        call_id,
+                                                        job_id: job.id.clone(),
+                                                        session_id: job.session_id.clone(),
+                                                        turn_index,
+                                                        input_upper_bound_tokens,
+                                                        requested_max_output_tokens,
+                                                    },
+                                                );
+                                                match reserve {
+                                                    Ok(reservation) => MonetaryBudgetReply::Reserved {
+                                                        reservation: reservation.map(Box::new),
+                                                    },
+                                                    Err(error) => MonetaryBudgetReply::Refused {
+                                                        message: error.to_string(),
+                                                    },
+                                                }
+                                            }
+                                            MonetaryBudgetOperation::Settle {
+                                                call_id,
+                                                turn_index,
+                                                settlement,
+                                            } => {
+                                                match service.settle_monetary(
+                                                    lease.owner_uid,
+                                                    activity_id,
+                                                    &call_id,
+                                                    &job.id,
+                                                    job.session_id.as_deref(),
+                                                    turn_index,
+                                                    settlement,
+                                                ) {
+                                                    Ok(_) => MonetaryBudgetReply::Settled,
+                                                    Err(error) => MonetaryBudgetReply::Refused {
+                                                        message: error.to_string(),
+                                                    },
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(error) => MonetaryBudgetReply::Refused {
+                                        message: error.to_string(),
+                                    },
+                                }
+                            } else {
+                                MonetaryBudgetReply::Refused {
+                                    message: "task has no Activity monetary budget association".into(),
+                                }
+                            };
+                            if let Err(error) = send(
+                                &mut writer,
+                                &BrokerFrame::MonetaryBudgetReply {
+                                    correlation_id: request.correlation_id,
+                                    reply,
+                                },
+                            ).await {
+                                return TaskOutcome::Indeterminate(format!(
+                                    "could not acknowledge Activity monetary accounting: {error}"
                                 ));
                             }
                         }
@@ -1745,6 +1829,11 @@ fn accept(
     {
         if *correlation_id == 0 {
             return Err("approval correlation id is invalid".to_string());
+        }
+        if let WorkerFrame::MonetaryBudget(request) = frame {
+            if request.correlation_id == 0 {
+                return Err("monetary budget correlation id is invalid".to_string());
+            }
         }
         if !exchange.is_valid() {
             return Err("approval exchange nonce is invalid".to_string());

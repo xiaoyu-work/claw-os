@@ -45,6 +45,7 @@ and agent tasks.
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `activity_attention.rs` | Shared read-only Job issue/count, protected approval, and task-linked notification projection; never consent or authority |
 | `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |
+| `activity_monetary_budget.rs` | Owner-scoped monetary policy get/set/enabled controls over the shared Activity ledger |
 | `activity_capability_policy.rs` | Owner-scoped rule/CAS controls shared by terminal, Web and native desktop; never permission decisions or grant issuance |
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
 | `activity_object_state.rs` | Shared owner-scoped observation/relationship history and immutable correction/retraction submission |

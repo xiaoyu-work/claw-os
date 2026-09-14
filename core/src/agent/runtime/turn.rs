@@ -70,6 +70,7 @@ struct TurnRequest<'a> {
     allow_tools: bool,
     delivery: ProviderDelivery,
     interrupt: Option<&'a interrupt::Handle>,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 }
 
 fn interrupted(handle: &interrupt::Handle) -> super::loop_::AgentError {
@@ -147,6 +148,7 @@ pub async fn run_turn(
         allow_tools: true,
         delivery: ProviderDelivery::Buffered { retry_policy },
         interrupt: None,
+        monetary_budget: None,
     })
     .await
 }
@@ -167,6 +169,7 @@ pub(crate) async fn run_turn_interruptible(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
     interrupt: &interrupt::Handle,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_inner(TurnRequest {
         provider,
@@ -184,6 +187,7 @@ pub(crate) async fn run_turn_interruptible(
         allow_tools: true,
         delivery: ProviderDelivery::Buffered { retry_policy },
         interrupt: Some(interrupt),
+        monetary_budget,
     })
     .await
 }
@@ -222,6 +226,7 @@ pub async fn run_final_turn(
         allow_tools: false,
         delivery: ProviderDelivery::Buffered { retry_policy },
         interrupt: None,
+        monetary_budget: None,
     })
     .await
 }
@@ -242,6 +247,7 @@ pub(crate) async fn run_final_turn_interruptible(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
     interrupt: &interrupt::Handle,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_inner(TurnRequest {
         provider,
@@ -259,6 +265,7 @@ pub(crate) async fn run_final_turn_interruptible(
         allow_tools: false,
         delivery: ProviderDelivery::Buffered { retry_policy },
         interrupt: Some(interrupt),
+        monetary_budget,
     })
     .await
 }
@@ -280,6 +287,7 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
         allow_tools,
         delivery,
         interrupt,
+        monetary_budget,
     } = request;
     let fallback_exposure = ToolExposureContext::isolated(tools.guardrails().clone());
     let exposure = exposure.unwrap_or(&fallback_exposure);
@@ -322,6 +330,38 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
         }
     }
 
+    let monetary_reservation = if let Some(controller) = &monetary_budget {
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let input_upper_bound_tokens =
+            super::monetary_budget::serialized_input_upper_bound(&request)
+                .map_err(super::loop_::AgentError::Internal)?;
+        let reservation = controller
+            .reserve(crate::activities::MonetaryReservationRequest {
+                call_id,
+                job_id: String::new(),
+                session_id: session_id.map(str::to_string),
+                turn_index: hook_ctx.map(|context| context.turn_index).unwrap_or(0),
+                input_upper_bound_tokens,
+                requested_max_output_tokens: max_tokens,
+            })
+            .map_err(super::loop_::AgentError::Internal)?;
+        if let Some(reservation) = &reservation {
+            request.max_tokens = Some(reservation.max_output_tokens);
+        }
+        reservation
+    } else {
+        None
+    };
+    let retry_accounting_ambiguous = matches!(
+        &delivery,
+        ProviderDelivery::Buffered {
+            retry_policy: Some(policy)
+        } if policy.max_attempts > 1
+    );
+    let fallback_switches_before = provider
+        .fallback_state()
+        .map(|state| state.switches.len())
+        .unwrap_or(0);
     let start = Instant::now();
     let chat_result = await_interruptible(interrupt, async {
         match delivery {
@@ -346,8 +386,39 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
             },
         }
     })
-    .await?;
-    check_interrupted(interrupt)?;
+    .await;
+    let chat_result = match chat_result {
+        Ok(result) => result,
+        Err(error) => {
+            if let (Some(controller), Some(reservation)) = (&monetary_budget, &monetary_reservation)
+            {
+                controller
+                    .settle(
+                        reservation,
+                        super::monetary_budget::conservative_settlement(
+                            provider.effective_provider_name(),
+                            provider.effective_model_name(model),
+                        ),
+                    )
+                    .map_err(super::loop_::AgentError::Internal)?;
+            }
+            return Err(error);
+        }
+    };
+    if let Err(error) = check_interrupted(interrupt) {
+        if let (Some(controller), Some(reservation)) = (&monetary_budget, &monetary_reservation) {
+            controller
+                .settle(
+                    reservation,
+                    super::monetary_budget::conservative_settlement(
+                        provider.effective_provider_name(),
+                        provider.effective_model_name(model),
+                    ),
+                )
+                .map_err(super::loop_::AgentError::Internal)?;
+        }
+        return Err(error);
+    }
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Capture engine_info AFTER the call — for local engines the
@@ -381,9 +452,44 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
                 session_id,
             );
             run_log::record(&rec);
+            if let (Some(controller), Some(reservation)) = (&monetary_budget, &monetary_reservation)
+            {
+                controller
+                    .settle(
+                        reservation,
+                        super::monetary_budget::conservative_settlement(
+                            provider_name.clone(),
+                            effective_model.clone(),
+                        ),
+                    )
+                    .map_err(super::loop_::AgentError::Internal)?;
+            }
             return Err(super::loop_::AgentError::Llm(e));
         }
     };
+
+    if let (Some(controller), Some(reservation)) = (&monetary_budget, &monetary_reservation) {
+        let fallback_ambiguous = provider
+            .fallback_state()
+            .is_some_and(|state| state.switches.len() > fallback_switches_before);
+        let incomplete_usage =
+            response.usage.input_tokens == 0 || response.usage.output_tokens == 0;
+        let settlement = if retry_accounting_ambiguous || fallback_ambiguous || incomplete_usage {
+            super::monetary_budget::conservative_settlement(
+                provider_name.clone(),
+                effective_model.clone(),
+            )
+        } else {
+            super::monetary_budget::actual_settlement(
+                &response.usage,
+                provider_name.clone(),
+                effective_model.clone(),
+            )
+        };
+        controller
+            .settle(reservation, settlement)
+            .map_err(super::loop_::AgentError::Internal)?;
+    }
 
     // Always append the assistant message verbatim so subsequent turns have
     // the full history.
@@ -503,6 +609,7 @@ pub async fn run_turn_streaming(
         progress,
         true,
         None,
+        None,
     )
     .await
 }
@@ -523,6 +630,7 @@ pub(crate) async fn run_turn_streaming_interruptible(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
     interrupt: &interrupt::Handle,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_streaming_inner(
         provider,
@@ -540,6 +648,7 @@ pub(crate) async fn run_turn_streaming_interruptible(
         progress,
         true,
         Some(interrupt),
+        monetary_budget,
     )
     .await
 }
@@ -576,6 +685,7 @@ pub async fn run_final_turn_streaming(
         progress,
         false,
         None,
+        None,
     )
     .await
 }
@@ -596,6 +706,7 @@ pub(crate) async fn run_final_turn_streaming_interruptible(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
     interrupt: &interrupt::Handle,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_streaming_inner(
         provider,
@@ -613,6 +724,7 @@ pub(crate) async fn run_final_turn_streaming_interruptible(
         progress,
         false,
         Some(interrupt),
+        monetary_budget,
     )
     .await
 }
@@ -634,6 +746,7 @@ async fn run_turn_streaming_inner(
     progress: Arc<dyn ProgressSink>,
     allow_tools: bool,
     interrupt: Option<&interrupt::Handle>,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_inner(TurnRequest {
         provider,
@@ -651,6 +764,7 @@ async fn run_turn_streaming_inner(
         allow_tools,
         delivery: ProviderDelivery::Streaming { sink },
         interrupt,
+        monetary_budget,
     })
     .await
 }

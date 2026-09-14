@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 
 use super::activity_capability_policy;
 use super::activity_execution_limits;
+use super::activity_monetary_budget;
 use crate::audit_policy::FieldRule;
 
 use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
@@ -592,6 +593,36 @@ routes! {
         body: body::ActivityExecutionLimitsEnabled,
         audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
         run: |c| activity_execution_limits::enabled(c.params, c.client),
+    }
+    ActivityMonetaryBudgetGet {
+        name: "activity.monetary_budget.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityMonetaryBudgetGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_monetary_budget::get(c.params, c.client),
+    }
+    ActivityMonetaryBudgetSet {
+        name: "activity.monetary_budget.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityMonetaryBudgetSet,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("budget", FieldRule::Size)],
+        run: |c| activity_monetary_budget::set(c.params, c.client),
+    }
+    ActivityMonetaryBudgetEnabled {
+        name: "activity.monetary_budget.enabled",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityMonetaryBudgetEnabled,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
+        run: |c| activity_monetary_budget::enabled(c.params, c.client),
     }
     ActivityCapabilityPolicyGet {
         name: "activity.capability_policy.get",

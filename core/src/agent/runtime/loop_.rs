@@ -2211,6 +2211,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     Some(&hook_ctx),
                     progress.clone(),
                     &interrupt_handle,
+                    deps.monetary_budget(),
                 )
                 .await
             }
@@ -2230,6 +2231,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     Some(&hook_ctx),
                     progress.clone(),
                     &interrupt_handle,
+                    deps.monetary_budget(),
                 )
                 .await
             }
@@ -2249,6 +2251,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     Some(&hook_ctx),
                     progress.clone(),
                     &interrupt_handle,
+                    deps.monetary_budget(),
                 )
                 .await
             }
@@ -2268,6 +2271,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     Some(&hook_ctx),
                     progress.clone(),
                     &interrupt_handle,
+                    deps.monetary_budget(),
                 )
                 .await
             }

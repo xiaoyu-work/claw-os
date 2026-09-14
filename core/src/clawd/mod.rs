@@ -4,6 +4,7 @@ pub mod activities;
 pub mod activity_attention;
 pub mod activity_capability_policy;
 pub mod activity_execution_limits;
+pub mod activity_monetary_budget;
 pub mod activity_object_state;
 pub mod activity_objects;
 pub mod activity_receipts;

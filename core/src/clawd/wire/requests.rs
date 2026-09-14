@@ -207,6 +207,43 @@ pub struct ActivityExecutionLimitsEnabled {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedMonetaryBudget(pub crate::activities::MonetaryBudgetDraft);
+
+impl<'de> Deserialize<'de> for BoundedMonetaryBudget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let budget = crate::activities::MonetaryBudgetDraft::deserialize(deserializer)?;
+        budget
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid Activity monetary budget"))?;
+        Ok(Self(budget))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityMonetaryBudgetGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityMonetaryBudgetSet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub budget: BoundedMonetaryBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityMonetaryBudgetEnabled {
+    pub id: Token,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActivityObjectAttach {

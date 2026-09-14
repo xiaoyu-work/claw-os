@@ -1378,11 +1378,272 @@ async fn bridged_parallel_tools_resolve_before_planning_and_hooks() {
     assert!(recorded.iter().all(|row| row.success == Some(true)));
 }
 
+#[derive(Default)]
+struct BudgetSpy {
+    block: bool,
+    absent: bool,
+    settlements: std::sync::Mutex<Vec<crate::activities::MonetarySettlement>>,
+}
+
+impl crate::agent::runtime::monetary_budget::MonetaryBudgetController for BudgetSpy {
+    fn reserve(
+        &self,
+        request: crate::activities::MonetaryReservationRequest,
+    ) -> Result<Option<crate::activities::MonetaryReservation>, String> {
+        if self.block {
+            return Err("budget exhausted".into());
+        }
+        if self.absent {
+            return Ok(None);
+        }
+        Ok(Some(crate::activities::MonetaryReservation {
+            call_id: request.call_id,
+            activity_id: "00000000-0000-4000-8000-000000000001".into(),
+            owner_uid: 7,
+            job_id: "job".into(),
+            session_id: request.session_id,
+            turn_index: request.turn_index,
+            policy_revision: 1,
+            reserved_microusd: 100,
+            input_upper_bound_tokens: request.input_upper_bound_tokens,
+            requested_max_output_tokens: request.requested_max_output_tokens,
+            policy_max_output_tokens_per_turn: 17,
+            max_output_tokens: 17,
+            input_microusd_per_million_tokens: 1,
+            output_microusd_per_million_tokens: 1,
+            reserved_at: "2026-09-13T00:00:00Z".into(),
+        }))
+    }
+
+    fn settle(
+        &self,
+        _reservation: &crate::activities::MonetaryReservation,
+        settlement: crate::activities::MonetarySettlement,
+    ) -> Result<(), String> {
+        self.settlements.lock().unwrap().push(settlement);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn monetary_budget_blocks_before_dispatch_and_caps_output() {
+    let config = cfg();
+    let blocked = Arc::new(BudgetSpy {
+        block: true,
+        ..Default::default()
+    });
+    let mock = Arc::new(MockProvider::new(&config.model, &config));
+    let provider: Arc<dyn crate::agent::llm::Provider> = mock.clone();
+    let tools = ToolRegistry::new();
+    let mut messages = vec![Message::user_text("hello")];
+    let hook_ctx = ctx();
+    let result = run_turn_inner(TurnRequest {
+        provider,
+        model: &config.model,
+        system: "system",
+        messages: &mut messages,
+        tools: &tools,
+        exposure: None,
+        llm_tools: &[],
+        max_tokens: 100,
+        temperature: 0.0,
+        session_id: Some("session"),
+        hook_ctx: Some(&hook_ctx),
+        progress: progress::null_progress(),
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered { retry_policy: None },
+        interrupt: None,
+        monetary_budget: Some(blocked),
+    })
+    .await;
+    assert!(
+        matches!(result, Err(super::super::loop_::AgentError::Internal(message)) if message.contains("exhausted"))
+    );
+    assert!(mock.last_request().is_none());
+
+    let controller = Arc::new(BudgetSpy::default());
+    mock.set_usage(Usage {
+        input_tokens: 3,
+        output_tokens: 4,
+        cache_read_tokens: 5,
+        cache_write_tokens: 6,
+    });
+    let provider: Arc<dyn crate::agent::llm::Provider> = mock.clone();
+    let mut messages = vec![Message::user_text("hello")];
+    run_turn_inner(TurnRequest {
+        provider,
+        model: &config.model,
+        system: "system",
+        messages: &mut messages,
+        tools: &tools,
+        exposure: None,
+        llm_tools: &[],
+        max_tokens: 100,
+        temperature: 0.0,
+        session_id: Some("session"),
+        hook_ctx: Some(&hook_ctx),
+        progress: progress::null_progress(),
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered { retry_policy: None },
+        interrupt: None,
+        monetary_budget: Some(controller.clone()),
+    })
+    .await
+    .unwrap();
+    assert_eq!(mock.last_request().unwrap().max_tokens, Some(17));
+    let settlements = controller.settlements.lock().unwrap();
+    assert_eq!(settlements.len(), 1);
+    assert!(!settlements[0].conservative);
+    assert_eq!(settlements[0].input_tokens, Some(3));
+    assert_eq!(settlements[0].cache_read_tokens, Some(5));
+}
+
+#[tokio::test]
+async fn monetary_budget_charges_conservatively_on_provider_error() {
+    let config = cfg();
+    let mock = Arc::new(MockProvider::new(&config.model, &config));
+    mock.push_response(MockResponse::Error(crate::agent::llm::LlmError::Internal(
+        "failed".into(),
+    )));
+    let controller = Arc::new(BudgetSpy::default());
+    let provider: Arc<dyn crate::agent::llm::Provider> = mock;
+    let tools = ToolRegistry::new();
+    let mut messages = vec![Message::user_text("hello")];
+    let hook_ctx = ctx();
+    let result = run_turn_inner(TurnRequest {
+        provider,
+        model: &config.model,
+        system: "system",
+        messages: &mut messages,
+        tools: &tools,
+        exposure: None,
+        llm_tools: &[],
+        max_tokens: 100,
+        temperature: 0.0,
+        session_id: None,
+        hook_ctx: Some(&hook_ctx),
+        progress: progress::null_progress(),
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered { retry_policy: None },
+        interrupt: None,
+        monetary_budget: Some(controller.clone()),
+    })
+    .await;
+    assert!(result.is_err());
+    let settlements = controller.settlements.lock().unwrap();
+    assert_eq!(settlements.len(), 1);
+    assert!(settlements[0].conservative);
+    assert_eq!(settlements[0].input_tokens, None);
+}
+
+#[tokio::test]
+async fn monetary_budget_absence_preserves_output_and_ambiguity_is_conservative() {
+    let config = cfg();
+    let mock = Arc::new(MockProvider::new(&config.model, &config));
+    let tools = ToolRegistry::new();
+    let hook_ctx = ctx();
+    let absent = Arc::new(BudgetSpy {
+        absent: true,
+        ..Default::default()
+    });
+    let provider: Arc<dyn crate::agent::llm::Provider> = mock.clone();
+    let mut messages = vec![Message::user_text("hello")];
+    run_turn_inner(TurnRequest {
+        provider,
+        model: &config.model,
+        system: "system",
+        messages: &mut messages,
+        tools: &tools,
+        exposure: None,
+        llm_tools: &[],
+        max_tokens: 100,
+        temperature: 0.0,
+        session_id: None,
+        hook_ctx: Some(&hook_ctx),
+        progress: progress::null_progress(),
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered { retry_policy: None },
+        interrupt: None,
+        monetary_budget: Some(absent.clone()),
+    })
+    .await
+    .unwrap();
+    assert_eq!(mock.last_request().unwrap().max_tokens, Some(100));
+    assert!(absent.settlements.lock().unwrap().is_empty());
+
+    mock.set_usage(Usage {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+    });
+    let retry = Arc::new(BudgetSpy::default());
+    let provider: Arc<dyn crate::agent::llm::Provider> = mock.clone();
+    let mut messages = vec![Message::user_text("hello")];
+    run_turn_inner(TurnRequest {
+        provider,
+        model: &config.model,
+        system: "system",
+        messages: &mut messages,
+        tools: &tools,
+        exposure: None,
+        llm_tools: &[],
+        max_tokens: 100,
+        temperature: 0.0,
+        session_id: None,
+        hook_ctx: Some(&hook_ctx),
+        progress: progress::null_progress(),
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered {
+            retry_policy: Some(crate::agent::llm::rate_limit::RetryPolicy::standard()),
+        },
+        interrupt: None,
+        monetary_budget: Some(retry.clone()),
+    })
+    .await
+    .unwrap();
+    assert!(retry.settlements.lock().unwrap()[0].conservative);
+
+    mock.set_usage(Usage {
+        input_tokens: 7,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+    });
+    let missing = Arc::new(BudgetSpy::default());
+    let provider: Arc<dyn crate::agent::llm::Provider> = mock;
+    let mut messages = vec![Message::user_text("hello")];
+    run_turn_inner(TurnRequest {
+        provider,
+        model: &config.model,
+        system: "system",
+        messages: &mut messages,
+        tools: &tools,
+        exposure: None,
+        llm_tools: &[],
+        max_tokens: 100,
+        temperature: 0.0,
+        session_id: None,
+        hook_ctx: Some(&hook_ctx),
+        progress: progress::null_progress(),
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered {
+            retry_policy: Some(crate::agent::llm::rate_limit::RetryPolicy::no_retry()),
+        },
+        interrupt: None,
+        monetary_budget: Some(missing.clone()),
+    })
+    .await
+    .unwrap();
+    assert!(missing.settlements.lock().unwrap()[0].conservative);
+}
+
 #[tokio::test]
 async fn rejected_bridge_call_keeps_underlying_identity_for_hooks_and_progress() {
     struct NameSpy {
         seen: Arc<std::sync::Mutex<Vec<String>>>,
     }
+
     impl Hook for NameSpy {
         fn name(&self) -> &str {
             "rejected-bridge-name-spy"

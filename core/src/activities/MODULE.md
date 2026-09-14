@@ -20,6 +20,8 @@ and the owner-scoped broker contract; only their presentations differ.
   correction/retraction history in the same owner-scoped Activity database.
 - Store finite execution constraints and conservative attempt reservations,
   without creating capabilities, approvals, execution authority or goal completion.
+- Store separate owner-priced USD monetary policy, per-turn reservations and
+  settlements without becoming an invoice or authorization mechanism.
 - Define and persist capability/confirmation boundaries as constraints only,
   with a pure decision function and no grant or approval consumption.
 - Reject unreadable, invalid, unsupported-schema, and poisoned-lock storage
@@ -36,6 +38,8 @@ and the owner-scoped broker contract; only their presentations differ.
 | `sqlite/object_state.rs` | Immutable object-state ledger, reference/receipt binding, schema-3 migration and integrity checks |
 | `execution_limits.rs` | Bounded execution policies, reservation DTOs, validation and typed blocking reasons |
 | `sqlite/execution_limits.rs` | Policy CAS, durable attempt accounting, revocation/retry checks and schema-4 migration |
+| `monetary_budget.rs` | USD micro-unit policy, finite bounds, reservation/settlement DTOs and rounding |
+| `sqlite/monetary_budget.rs` | Policy CAS, durable turn ledger, conservative settlement and schema-6 migration |
 | `capability_policy.rs` | Strict capability-rule DTOs, canonicalization and pure constraint decisions |
 | `sqlite/capability_policy.rs` | Owner-scoped capability policy CAS, revocation and schema-5 migration |
 | `../clawd/activities.rs` | Owner-scoped broker consumer and execution projections |
@@ -51,6 +55,7 @@ capabilities or approvals.
 
 `ActivityDraft::validate`, `ActivityPatch::validate`,
 `ObjectStateDraft::validate`, `ExecutionLimitsDraft::validate`,
+`MonetaryBudgetDraft::validate`,
 `CapabilityPolicyDraft::validate`, and `validate_id` validate inputs without
 opening storage. UUID lookups return a canonical
 `Activity.id`; job/session associations should store that returned value.
@@ -63,8 +68,8 @@ parent directories are rejected.
 
 Disk connections require WAL journaling, `synchronous=FULL`, and a five-second
 busy timeout. Creation, partial updates, transitions, receipt appends and
-object-state appends, execution reservations and both kinds of policy changes
-use immediate transactions. A new empty database receives schema version 5
+object-state appends, execution and monetary reservations, settlements and policy changes
+use immediate transactions. A new empty database receives schema version 6
 through explicit sequential migrations. Schema 1 first adds
 the schema-2 `activity_receipts` ledger; schema 2 then adds
 `activity_object_state` and the receipt composite index needed for
@@ -72,6 +77,8 @@ owner/Activity-bound links. Schema 3 adds `activity_execution_limits` and
 `activity_execution_reservations`, with composite owner/Activity foreign keys.
 Schema 4 adds the bounded `activity_capability_policies` table in the same
 database and owner boundary.
+Schema 5 adds separate monetary policy and reservation/settlement ledger
+tables; it does not alter execution-limit accounting.
 These migrations do not rewrite Activity rows, resources, lifecycle state,
 timestamps, completion confirmations, receipts, object-state history,
 execution policies or reservations.
@@ -84,7 +91,7 @@ than initializing a replacement database over them. Reads validate stored
 metadata rather than silently repairing it. The in-memory provider is for
 tests and uses SQLite's in-memory journal instead of WAL.
 
-`DATABASE_SCHEMA_VERSION = 5` controls SQLite `user_version` and migration.
+`DATABASE_SCHEMA_VERSION = 6` controls SQLite `user_version` and migration.
 The broker independently owns `clawd::activities::WIRE_SCHEMA_VERSION = 1`
 for `activity.list` and `activity.get`; it does not emit the database version.
 The existing public `activities::SCHEMA_VERSION = 1` is retained for wire

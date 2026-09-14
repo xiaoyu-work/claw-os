@@ -50,8 +50,9 @@ use crate::operations::reporting::{self, ReceiptRecorder};
 
 use super::protocol::{
     self, ApprovalAsk, ApprovalExchange, ApprovalReply, Assignment, BrokerFrame, ExecutionCommit,
-    FrameReader, ProgressRecord, ReceiptReply, ReceiptRequest, RuntimeAuditRecord, WorkerFrame,
-    WorkerHello, WorkerOutcome, WorkerPrepared,
+    FrameReader, MonetaryBudgetOperation, MonetaryBudgetReply, MonetaryBudgetRequest,
+    ProgressRecord, ReceiptReply, ReceiptRequest, RuntimeAuditRecord, WorkerFrame, WorkerHello,
+    WorkerOutcome, WorkerPrepared,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -61,6 +62,7 @@ const INTERRUPT_RETRY: Duration = Duration::from_millis(100);
 /// supervisor can cost a tool call.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15);
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(15);
+const MONETARY_BUDGET_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -288,11 +290,13 @@ struct ChannelState {
     cancelled: Arc<AtomicBool>,
     waiters: Mutex<HashMap<u64, ApprovalWaiter>>,
     receipt_waiters: Mutex<HashMap<u64, SyncSender<ReceiptReply>>>,
+    monetary_waiters: Mutex<HashMap<u64, SyncSender<MonetaryBudgetReply>>>,
     pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
     boundaries_used: AtomicU32,
     receipts_used: AtomicU32,
+    monetary_used: AtomicU32,
 }
 
 #[derive(Debug)]
@@ -325,11 +329,26 @@ impl ChannelState {
         Ok(rx)
     }
 
+    fn register_monetary(
+        &self,
+        correlation_id: u64,
+    ) -> Result<Receiver<MonetaryBudgetReply>, String> {
+        let (tx, rx) = sync_channel(1);
+        self.monetary_waiters
+            .lock()
+            .map_err(|_| "agent monetary reply registry is poisoned".to_string())?
+            .insert(correlation_id, tx);
+        Ok(rx)
+    }
+
     fn forget(&self, correlation_id: u64) {
         if let Ok(mut waiters) = self.waiters.lock() {
             waiters.remove(&correlation_id);
         }
         if let Ok(mut waiters) = self.receipt_waiters.lock() {
+            waiters.remove(&correlation_id);
+        }
+        if let Ok(mut waiters) = self.monetary_waiters.lock() {
             waiters.remove(&correlation_id);
         }
     }
@@ -349,6 +368,17 @@ impl ChannelState {
     fn deliver_receipt(&self, correlation_id: u64, reply: ReceiptReply) {
         let waiter = self
             .receipt_waiters
+            .lock()
+            .ok()
+            .and_then(|mut waiters| waiters.remove(&correlation_id));
+        if let Some(waiter) = waiter {
+            let _ = waiter.try_send(reply);
+        }
+    }
+
+    fn deliver_monetary(&self, correlation_id: u64, reply: MonetaryBudgetReply) {
+        let waiter = self
+            .monetary_waiters
             .lock()
             .ok()
             .and_then(|mut waiters| waiters.remove(&correlation_id));
@@ -377,6 +407,16 @@ impl ChannelState {
             .unwrap_or_default();
         for waiter in receipts {
             let _ = waiter.try_send(ReceiptReply::Refused {
+                message: message.to_string(),
+            });
+        }
+        let monetary: Vec<_> = self
+            .monetary_waiters
+            .lock()
+            .map(|mut waiters| waiters.drain().map(|(_, sender)| sender).collect())
+            .unwrap_or_default();
+        for waiter in monetary {
+            let _ = waiter.try_send(MonetaryBudgetReply::Refused {
                 message: message.to_string(),
             });
         }
@@ -415,11 +455,13 @@ impl ChannelIo {
             cancelled: Arc::new(AtomicBool::new(false)),
             waiters: Mutex::new(HashMap::new()),
             receipt_waiters: Mutex::new(HashMap::new()),
+            monetary_waiters: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
             boundaries_used: AtomicU32::new(0),
             receipts_used: AtomicU32::new(0),
+            monetary_used: AtomicU32::new(0),
         });
         let (handshake_tx, handshake_rx) = sync_channel(1);
         let io_state = state.clone();
@@ -809,7 +851,16 @@ where
             })) => {
                 state.deliver_receipt(correlation_id, reply);
             }
-            Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => break,
+            Ok(Some(BrokerFrame::MonetaryBudgetReply {
+                correlation_id,
+                reply,
+            })) => {
+                state.deliver_monetary(correlation_id, reply);
+            }
+            Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => {
+                state.cancelled.store(true, Ordering::SeqCst);
+                crate::agent::runtime::interrupt::signal(&task_id);
+            }
             Ok(Some(BrokerFrame::Shutdown)) => break,
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => {
@@ -974,6 +1025,7 @@ impl ReceiptRecorder for ChannelReceiptRecorder {
         if used >= protocol::MAX_RECEIPT_REPORTS {
             return Err("agent task exceeded its receipt-reporting budget".to_string());
         }
+
         // Late reports remain useful during cancellation; this grants no work.
         let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
         let waiter = self.state.register_receipt(correlation_id)?;
@@ -999,6 +1051,92 @@ impl ReceiptRecorder for ChannelReceiptRecorder {
             Err(error) => {
                 self.state.forget(correlation_id);
                 Err(format!("receipt acknowledgement was unavailable: {error}"))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ChannelMonetaryBudgetController {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+impl crate::agent::runtime::monetary_budget::MonetaryBudgetController
+    for ChannelMonetaryBudgetController
+{
+    fn reserve(
+        &self,
+        request: crate::activities::MonetaryReservationRequest,
+    ) -> Result<Option<crate::activities::MonetaryReservation>, String> {
+        match self.exchange(MonetaryBudgetOperation::Reserve {
+            call_id: request.call_id,
+            turn_index: request.turn_index,
+            input_upper_bound_tokens: request.input_upper_bound_tokens,
+            requested_max_output_tokens: request.requested_max_output_tokens,
+        })? {
+            MonetaryBudgetReply::Reserved { reservation } => Ok(reservation.map(|value| *value)),
+            MonetaryBudgetReply::Refused { message } => Err(message),
+            MonetaryBudgetReply::Settled => {
+                Err("supervisor answered monetary reserve with settlement".into())
+            }
+        }
+    }
+
+    fn settle(
+        &self,
+        reservation: &crate::activities::MonetaryReservation,
+        settlement: crate::activities::MonetarySettlement,
+    ) -> Result<(), String> {
+        match self.exchange(MonetaryBudgetOperation::Settle {
+            call_id: reservation.call_id.clone(),
+            turn_index: reservation.turn_index,
+            settlement,
+        })? {
+            MonetaryBudgetReply::Settled => Ok(()),
+            MonetaryBudgetReply::Refused { message } => Err(message),
+            MonetaryBudgetReply::Reserved { .. } => {
+                Err("supervisor answered monetary settlement with reservation".into())
+            }
+        }
+    }
+}
+
+impl ChannelMonetaryBudgetController {
+    fn exchange(&self, operation: MonetaryBudgetOperation) -> Result<MonetaryBudgetReply, String> {
+        let used = self.state.monetary_used.fetch_add(1, Ordering::SeqCst);
+        if used >= protocol::MAX_MONETARY_EXCHANGES {
+            return Err("agent task exceeded its monetary accounting exchange budget".into());
+        }
+        if self.state.cancelled.load(Ordering::SeqCst)
+            && matches!(&operation, MonetaryBudgetOperation::Reserve { .. })
+        {
+            return Err("agent task is cancelled".into());
+        }
+        let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
+        let waiter = self.state.register_monetary(correlation_id)?;
+        if self
+            .state
+            .tx
+            .send(WorkerFrame::MonetaryBudget(Box::new(
+                MonetaryBudgetRequest {
+                    task_id: self.task_id.clone(),
+                    correlation_id,
+                    operation,
+                },
+            )))
+            .is_err()
+        {
+            self.state.forget(correlation_id);
+            return Err("agent worker lost its monetary accounting channel".into());
+        }
+        match waiter.recv_timeout(MONETARY_BUDGET_TIMEOUT) {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                self.state.forget(correlation_id);
+                Err(format!(
+                    "monetary accounting acknowledgement was unavailable: {error}"
+                ))
             }
         }
     }
@@ -1039,6 +1177,12 @@ async fn execute(
     } else {
         None
     };
+    let monetary_budget = job.activity_monetary_checks.then(|| {
+        Arc::new(ChannelMonetaryBudgetController {
+            task_id: task_id.clone(),
+            state: state.clone(),
+        }) as Arc<dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController>
+    });
 
     let request = JobExecution {
         id: task_id.clone(),
@@ -1055,11 +1199,12 @@ async fn execute(
     let home = std::path::PathBuf::from(&job.owner_home);
     let config = crate::config::load_for_home(&home);
     // Keep the large runtime future out of each task-local wrapper's stack frame.
-    let scoped = Box::pin(crate::agent::service::execute_job_with_hooks(
+    let scoped = Box::pin(crate::agent::service::execute_job_with_hooks_and_budget(
         request,
         stream_sink,
         progress_sink,
         hooks,
+        monetary_budget,
     ));
     let scoped = reporting::with_recorder(recorder, scoped);
     let scoped = with_session(assignment.session, scoped);

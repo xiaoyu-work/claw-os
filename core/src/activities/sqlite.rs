@@ -1,5 +1,6 @@
 mod capability_policy;
 mod execution_limits;
+mod monetary_budget;
 mod object_state;
 
 use std::fs::{self, OpenOptions};
@@ -14,10 +15,10 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
     Activity, ActivityCapabilityPolicy, ActivityDraft, ActivityError, ActivityExecutionLimits,
-    ActivityPatch, ActivityReceipt, ActivityResource, ActivityService, ActivityState,
-    CapabilityPolicyDraft, ExecutionLimitsDraft, ExecutionReservation,
-    ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration,
-    ReceiptReport, ReceiptSource,
+    ActivityMonetaryBudget, ActivityPatch, ActivityReceipt, ActivityResource, ActivityService,
+    ActivityState, CapabilityPolicyDraft, ExecutionLimitsDraft, ExecutionReservation,
+    MonetaryBudgetDraft, MonetaryReservation, MonetaryReservationRequest, MonetarySettlement,
+    ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration, ReceiptReport, ReceiptSource,
     DATABASE_SCHEMA_VERSION, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
 };
 
@@ -150,6 +151,10 @@ impl SqliteActivityService {
             tx.execute_batch(capability_policy::MIGRATE_TO_V5)?;
         }
         capability_policy::validate_schema(&tx)?;
+        if version < 6 {
+            tx.execute_batch(monetary_budget::MIGRATE_TO_V6)?;
+        }
+        monetary_budget::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -565,6 +570,65 @@ impl ActivityService for SqliteActivityService {
     ) -> Result<ActivityCapabilityPolicy, ActivityError> {
         capability_policy::set_enabled(self, owner_uid, activity_id, expected_revision, enabled)
     }
+
+    fn monetary_budget(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<Option<ActivityMonetaryBudget>, ActivityError> {
+        monetary_budget::get(self, owner_uid, activity_id)
+    }
+
+    fn set_monetary_budget(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: Option<u64>,
+        draft: MonetaryBudgetDraft,
+    ) -> Result<ActivityMonetaryBudget, ActivityError> {
+        monetary_budget::set(self, owner_uid, activity_id, expected_revision, draft)
+    }
+
+    fn set_monetary_budget_enabled(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityMonetaryBudget, ActivityError> {
+        monetary_budget::set_enabled(self, owner_uid, activity_id, expected_revision, enabled)
+    }
+
+    fn reserve_monetary(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        request: MonetaryReservationRequest,
+    ) -> Result<Option<MonetaryReservation>, ActivityError> {
+        monetary_budget::reserve(self, owner_uid, activity_id, request)
+    }
+
+    fn settle_monetary(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        call_id: &str,
+        job_id: &str,
+        session_id: Option<&str>,
+        turn_index: u32,
+        settlement: MonetarySettlement,
+    ) -> Result<ActivityMonetaryBudget, ActivityError> {
+        monetary_budget::settle(
+            self,
+            owner_uid,
+            activity_id,
+            call_id,
+            job_id,
+            session_id,
+            turn_index,
+            settlement,
+        )
+    }
 }
 
 fn list_limit(limit: usize) -> Result<i64, ActivityError> {
@@ -593,7 +657,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1..=4 => {}
+        1..=5 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

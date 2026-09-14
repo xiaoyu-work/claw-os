@@ -87,6 +87,7 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
             owner_home: "/home/test".to_string(),
             record_activity_receipts: false,
             activity_capability_checks: false,
+            activity_monetary_checks: false,
         },
         consent_context: ConsentContext::Unattended,
         session: None,
@@ -269,11 +270,13 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         cancelled: Arc::new(AtomicBool::new(false)),
         waiters: Mutex::new(HashMap::new()),
         receipt_waiters: Mutex::new(HashMap::new()),
+        monetary_waiters: Mutex::new(HashMap::new()),
         pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
         boundaries_used: AtomicU32::new(0),
         receipts_used: AtomicU32::new(0),
+        monetary_used: AtomicU32::new(0),
     });
     (
         ChannelApprovalGateway {
@@ -284,6 +287,86 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         },
         rx,
     )
+}
+
+#[test]
+fn cancelled_worker_refuses_reservations_but_can_settle_an_existing_turn() {
+    use crate::agent::runtime::monetary_budget::MonetaryBudgetController;
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let state = Arc::new(ChannelState {
+        tx,
+        cancelled: Arc::new(AtomicBool::new(true)),
+        waiters: Mutex::new(HashMap::new()),
+        receipt_waiters: Mutex::new(HashMap::new()),
+        monetary_waiters: Mutex::new(HashMap::new()),
+        pending_approvals: Mutex::new(Vec::new()),
+        next_correlation: AtomicU64::new(1),
+        asks_used: AtomicU32::new(0),
+        boundaries_used: AtomicU32::new(0),
+        receipts_used: AtomicU32::new(0),
+        monetary_used: AtomicU32::new(0),
+    });
+    let controller = Arc::new(ChannelMonetaryBudgetController {
+        task_id: "task-a".into(),
+        state: state.clone(),
+    });
+    assert!(controller
+        .reserve(crate::activities::MonetaryReservationRequest {
+            call_id: uuid::Uuid::new_v4().to_string(),
+            job_id: String::new(),
+            session_id: None,
+            turn_index: 4,
+            input_upper_bound_tokens: 10,
+            requested_max_output_tokens: 20,
+        })
+        .is_err());
+
+    let reservation = crate::activities::MonetaryReservation {
+        call_id: uuid::Uuid::new_v4().to_string(),
+        activity_id: uuid::Uuid::new_v4().to_string(),
+        owner_uid: 1000,
+        job_id: "task-a".into(),
+        session_id: Some("session-a".into()),
+        turn_index: 4,
+        policy_revision: 1,
+        reserved_microusd: 10,
+        input_upper_bound_tokens: 10,
+        requested_max_output_tokens: 20,
+        policy_max_output_tokens_per_turn: 20,
+        max_output_tokens: 20,
+        input_microusd_per_million_tokens: 1,
+        output_microusd_per_million_tokens: 1,
+        reserved_at: "2026-09-13T00:00:00Z".into(),
+    };
+    let worker = {
+        let controller = controller.clone();
+        let reservation = reservation.clone();
+        std::thread::spawn(move || {
+            controller.settle(
+                &reservation,
+                crate::agent::runtime::monetary_budget::conservative_settlement(
+                    "provider".into(),
+                    "model".into(),
+                ),
+            )
+        })
+    };
+    let frame = rx.blocking_recv().unwrap();
+    let WorkerFrame::MonetaryBudget(request) = frame else {
+        panic!("expected monetary settlement exchange");
+    };
+    assert_eq!(request.task_id, "task-a");
+    assert!(matches!(
+        request.operation,
+        MonetaryBudgetOperation::Settle {
+            ref call_id,
+            turn_index: 4,
+            ..
+        } if call_id == &reservation.call_id
+    ));
+    state.deliver_monetary(request.correlation_id, MonetaryBudgetReply::Settled);
+    worker.join().unwrap().unwrap();
 }
 
 fn scope() -> Scope {
@@ -901,7 +984,7 @@ fn cancellation_does_not_discard_a_late_report_or_create_an_approval() {
 }
 
 #[test]
-fn receipt_and_nonce_bound_consent_waiters_are_separate_even_for_the_same_counter() {
+fn receipt_monetary_and_consent_waiters_are_separate_even_for_the_same_counter() {
     let (gateway, _rx) = gateway();
     let state = gateway.state;
     let exchange = ApprovalExchange::new(ApprovalAsk::Consume {
@@ -911,6 +994,7 @@ fn receipt_and_nonce_bound_consent_waiters_are_separate_even_for_the_same_counte
     });
     let consent = state.register(7, exchange.clone());
     let receipt = state.register_receipt(7).unwrap();
+    let monetary = state.register_monetary(7).unwrap();
     state.deliver_receipt(
         7,
         ReceiptReply::Recorded {
@@ -924,6 +1008,7 @@ fn receipt_and_nonce_bound_consent_waiters_are_separate_even_for_the_same_counte
         })
     );
     assert!(consent.try_recv().is_err());
+    assert!(monetary.try_recv().is_err());
     assert!(state.waiters.lock().unwrap().contains_key(&7));
     state.deliver(7, &exchange, ApprovalReply::Granted);
     assert_eq!(
@@ -933,13 +1018,17 @@ fn receipt_and_nonce_bound_consent_waiters_are_separate_even_for_the_same_counte
 
     let consent = state.register(8, exchange);
     let receipt = state.register_receipt(8).unwrap();
+    let monetary = state.register_monetary(8).unwrap();
     state.refuse_all("closed current worker channel");
     assert!(matches!(consent.recv_timeout(Duration::from_millis(50)),
         Ok(ApprovalReply::Refused { message }) if message.contains("closed")));
     assert!(matches!(receipt.recv_timeout(Duration::from_millis(50)),
         Ok(ReceiptReply::Refused { message }) if message.contains("closed")));
+    assert!(matches!(monetary.recv_timeout(Duration::from_millis(50)),
+        Ok(MonetaryBudgetReply::Refused { message }) if message.contains("closed")));
     assert!(state.waiters.lock().unwrap().is_empty());
     assert!(state.receipt_waiters.lock().unwrap().is_empty());
+    assert!(state.monetary_waiters.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

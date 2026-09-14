@@ -1154,6 +1154,29 @@ Policy or reservation JSON is accounting/constraint data, never restored
 authority. Schema 4 preserves existing Activity, receipt and object-state
 data. See [`docs/activity-execution-limits.md`](docs/activity-execution-limits.md).
 
+### Activity monetary budgets
+
+The Activity service separately persists owner-defined USD micro-unit
+accounting policy and a durable per-turn reservation ledger. The agent runtime
+injects one monetary controller at the shared turn seam. Standalone execution
+uses the service directly; `claw-agentd` uses its closed task channel and the
+Root supervisor re-derives owner, Activity, Job and Session before touching the
+same database. Neither path creates another provider implementation.
+
+Each call reserves a policy-priced upper bound before provider dispatch and
+clamps outgoing output tokens. Successful, unambiguous calls settle from
+provider-reported input/output usage. Provider errors, missing usage and
+retry/fallback ambiguity retain the upper bound because internal failed
+attempts are not completely billable from final `Usage`; crashes may leave a
+durable reserved balance. Cache counts are retained but neither discounted nor
+double-counted. Actual usage is never clamped to the cap.
+
+This accounting is an owner policy upper bound, not provider invoice
+reconciliation. It never replaces global AI consent, capability/approval
+checks, execution limits or cancellation. Schema 6 preserves all prior
+Activity data. See
+[`docs/activity-monetary-budgets.md`](docs/activity-monetary-budgets.md).
+
 ### Activity capability boundaries
 
 The same Activity service stores revision-checked capability constraints.

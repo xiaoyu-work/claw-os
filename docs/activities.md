@@ -138,6 +138,13 @@ Explicit [execution limits](activity-execution-limits.md) add finite
 attempt/turn/expiry controls through that same backend. They constrain work
 without granting capabilities; free-text boundaries remain planning guidance.
 
+Optional [monetary budgets](activity-monetary-budgets.md) add persistent,
+policy-priced USD accounting at the shared model-turn seam. They reserve a
+conservative upper bound before dispatch, clamp per-turn output, and settle
+provider-reported usage when retry/fallback accounting is unambiguous. These
+budgets are not provider invoices and do not replace AI consent, capabilities,
+approvals, or execution limits.
+
 Shared [capability policies](activity-capability-policies.md) add typed Normal,
 Ask and Deny rules. They constrain both existing capabilities and approval
 escalation; they are not permission grants or model instructions. Disabling

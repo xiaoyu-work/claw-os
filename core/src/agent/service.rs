@@ -3483,7 +3483,32 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         Arc::new(JobProgressSink {
             job_id: job.id.clone(),
         });
-    let run = execute_job_with_hooks(
+    let monetary_budget = match (job.owner_uid, job.activity_id.as_deref()) {
+        (Some(owner_uid), Some(activity_id)) => {
+            let service = match crate::activities::open_default() {
+                Ok(service) => Arc::new(service) as Arc<dyn crate::activities::ActivityService>,
+                Err(error) => {
+                    return FinishOutcome::Error(format!(
+                        "Activity monetary budget unavailable: {error}"
+                    ))
+                }
+            };
+            Some(Arc::new(
+                crate::agent::runtime::monetary_budget::DirectMonetaryBudgetController::new(
+                    service,
+                    owner_uid,
+                    activity_id.to_string(),
+                    job.id.clone(),
+                    job.session_id.clone(),
+                ),
+            )
+                as Arc<
+                    dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController,
+                >)
+        }
+        _ => None,
+    };
+    let run = execute_job_with_hooks_and_budget(
         JobExecution {
             id: job.id.clone(),
             prompt: job.prompt.clone(),
@@ -3498,6 +3523,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         stream_sink,
         progress_sink,
         hooks,
+        monetary_budget,
     );
     let mut run = Box::pin(crate::caps::activity_boundary::scope(
         activity_boundary.clone(),
@@ -3594,6 +3620,18 @@ pub async fn execute_job_with_hooks(
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
     hooks: crate::agent::runtime::hooks::HookRegistry,
 ) -> FinishOutcome {
+    execute_job_with_hooks_and_budget(job, stream_sink, progress_sink, hooks, None).await
+}
+
+pub(crate) async fn execute_job_with_hooks_and_budget(
+    job: JobExecution,
+    stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
+    progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+    hooks: crate::agent::runtime::hooks::HookRegistry,
+    monetary_budget: Option<
+        Arc<dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController>,
+    >,
+) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
     if let Err(error) = crate::agentd::guard::ensure_agent_runtime_allowed("agent job execution") {
@@ -3630,7 +3668,10 @@ pub async fn execute_job_with_hooks(
         crate::agent::tools::registry::RegistryPaths::from_process(),
         hooks.clone(),
     );
-    let runtime_deps = registry_deps.runtime.clone();
+    let mut runtime_deps = registry_deps.runtime.clone();
+    if let Some(controller) = monetary_budget {
+        runtime_deps = runtime_deps.with_monetary_budget(controller);
+    }
     let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     tools.set_guardrails(guardrails);
     tools.set_approval(loop_::approval_from_cfg(&cfg));

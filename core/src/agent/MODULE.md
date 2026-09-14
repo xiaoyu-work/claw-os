@@ -70,6 +70,7 @@ surfaces.
 | `runtime/deps.rs` | Explicit hooks, clock, semantic indexer, and runtime path context |
 | `context/packet.rs`, `runtime/context.rs` | Budgeted labelled request data and exposure-gated pinned memory |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
+| `runtime/monetary_budget.rs` | Injected Activity turn reservation/settlement contract and request-byte upper bound |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `service/activity_context.rs` | Bounded untrusted Activity planning/object-state snapshots, recorded at task claim and refreshed on retry |
 | `service/execution_limits.rs` | Shared live Activity-policy and monotonic-expiry guard for supervised and standalone job execution |
@@ -112,8 +113,12 @@ surface reads owner-owned task memory directly, reads approval state through
 
 `runtime/turn.rs` is the contract seam between providers and tools. Provider
 changes must preserve equivalent streaming/non-streaming text, tools, opaque
-reasoning state, usage, and error behavior. Tool schemas and calls use the same
-trusted per-request exposure context, then execute through registry
+reasoning state, usage, and error behavior.
+Activity-associated turns also pass through the injected monetary controller
+before provider dispatch. It clamps output and settles reported usage without
+changing provider implementations; retry/fallback ambiguity retains the
+reserved upper bound.
+Tool schemas and calls use the same trusted per-request exposure context, then execute through registry
 reauthorization, guardrails, exact capability approval, and hooks. Opaque MCP
 handles retain a non-model-visible internal policy identity; hosted invocation
 audit binds that identity to the server, descriptor digest, capability

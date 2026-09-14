@@ -48,9 +48,10 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_RESULT,
             ROUTE_APPROVAL,
             ROUTE_RECEIPT,
+            ROUTE_MONETARY_BUDGET,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 12);
+    assert_eq!(PROTOCOL_VERSION, 13);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
@@ -70,6 +71,7 @@ fn requested_model_round_trips_in_the_worker_assignment() {
         owner_home: "/home/test".to_string(),
         record_activity_receipts: false,
         activity_capability_checks: false,
+        activity_monetary_checks: false,
     };
     let document = serde_json::to_value(spec).unwrap();
     assert_eq!(document["requested_model"], "provider/model-v2");
@@ -78,6 +80,54 @@ fn requested_model_round_trips_in_the_worker_assignment() {
         decoded.requested_model.as_deref(),
         Some("provider/model-v2")
     );
+}
+
+#[test]
+fn monetary_exchange_is_closed_and_carries_no_owner_or_activity_selector() {
+    let value = serde_json::json!({
+        "task_id":"task-a",
+        "correlation_id":1,
+        "operation":{
+            "operation":"reserve",
+            "call_id":"00000000-0000-4000-8000-000000000001",
+            "turn_index":2,
+            "input_upper_bound_tokens":10,
+            "requested_max_output_tokens":20
+        }
+    });
+    let request: MonetaryBudgetRequest = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(request.task_id, "task-a");
+    let encoded = serde_json::to_string(&request).unwrap();
+    for forbidden in ["owner_uid", "activity_id", "job_id", "session_id"] {
+        assert!(!encoded.contains(forbidden), "{encoded}");
+        let mut forged = value.clone();
+        forged[forbidden] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<MonetaryBudgetRequest>(forged).is_err());
+    }
+    let settlement: MonetaryBudgetRequest = serde_json::from_value(serde_json::json!({
+        "task_id":"task-a",
+        "correlation_id":2,
+        "operation":{
+            "operation":"settle",
+            "call_id":"00000000-0000-4000-8000-000000000001",
+            "turn_index":2,
+            "settlement":{
+                "input_tokens":1,
+                "output_tokens":2,
+                "cache_read_tokens":0,
+                "cache_write_tokens":0,
+                "provider":"provider",
+                "model":"model",
+                "conservative":false
+            }
+        }
+    }))
+    .unwrap();
+    assert!(matches!(
+        settlement.operation,
+        MonetaryBudgetOperation::Settle { turn_index: 2, .. }
+    ));
+    assert_eq!(MAX_MONETARY_EXCHANGES, 256);
 }
 
 #[test]
