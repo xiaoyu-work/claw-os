@@ -10,6 +10,7 @@ mod execution_limits;
 mod http;
 mod monetary_budget;
 mod object_state;
+mod scheduling_priority;
 mod stream;
 mod version;
 
@@ -19,5 +20,6 @@ pub use execution_limits::*;
 pub use http::*;
 pub use monetary_budget::*;
 pub use object_state::*;
+pub use scheduling_priority::*;
 pub use stream::*;
 pub use version::*;

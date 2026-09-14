@@ -161,6 +161,8 @@ async fn activity_http_routes_require_authentication() {
             "POST",
             "/api/activities/activity-1/monetary-budget/enabled",
         ),
+        ("GET", "/api/activities/activity-1/scheduling-priority"),
+        ("POST", "/api/activities/activity-1/scheduling-priority"),
         ("GET", "/api/activities/capability-policy-catalog"),
         ("GET", "/api/activities/activity-1/capability-policy"),
         ("POST", "/api/activities/activity-1/capability-policy"),
@@ -256,6 +258,86 @@ fn activity_monetary_budget_http_dto_is_closed_bounded_and_precision_safe() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn activity_scheduling_priority_http_dto_is_closed_and_precision_safe() {
+    let body: SchedulingPriorityHttpSet = serde_json::from_value(json!({
+        "expected_revision": "9007199254740993",
+        "priority": "background",
+    }))
+    .unwrap();
+    assert_eq!(
+        decimal_revision(
+            "expected_revision",
+            body.expected_revision.as_deref().unwrap()
+        )
+        .unwrap(),
+        9_007_199_254_740_993
+    );
+    assert_eq!(body.priority, ActivitySchedulingPriority::Background);
+
+    for value in [
+        json!({"priority": "standard"}),
+        json!({"expected_revision": null, "priority": "urgent"}),
+        json!({"expected_revision": 7, "priority": "foreground"}),
+        json!({"expected_revision": "7", "priority": "foreground", "owner_uid": 0}),
+        json!({"expected_revision": "7", "priority": "foreground", "job_id": "job-1"}),
+        json!({"expected_revision": "7", "priority": "foreground", "preempt": true}),
+    ] {
+        assert!(
+            serde_json::from_value::<SchedulingPriorityHttpSet>(value.clone()).is_err(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn activity_scheduling_priority_validates_owner_identity_revision_and_timestamps() {
+    let policy = ActivitySchedulingPolicy {
+        activity_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into(),
+        owner_uid: 1000,
+        revision: u64::MAX,
+        priority: ActivitySchedulingPriority::Foreground,
+        created_at: "2026-09-13T00:00:00Z".into(),
+        updated_at: "2026-09-13T01:00:00Z".into(),
+    };
+    let view = validate_scheduling_policy(
+        policy.clone(),
+        "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+        1000,
+    )
+    .unwrap();
+    assert_eq!(view.revision, u64::MAX.to_string());
+    assert_eq!(view.priority, ActivitySchedulingPriority::Foreground);
+
+    for invalid in [
+        ActivitySchedulingPolicy {
+            owner_uid: 1001,
+            ..policy.clone()
+        },
+        ActivitySchedulingPolicy {
+            revision: 0,
+            ..policy.clone()
+        },
+        ActivitySchedulingPolicy {
+            created_at: "not-a-time".into(),
+            ..policy.clone()
+        },
+        ActivitySchedulingPolicy {
+            activity_id: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff".into(),
+            ..policy
+        },
+    ] {
+        assert!(
+            validate_scheduling_policy(
+                invalid,
+                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                1000,
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

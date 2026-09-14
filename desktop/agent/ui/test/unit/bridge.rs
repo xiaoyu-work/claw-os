@@ -360,3 +360,34 @@ fn activity_monetary_budget_transport_is_authenticated_versioned_and_preserves_u
         toggle
     );
 }
+
+#[test]
+fn activity_scheduling_priority_transport_is_authenticated_closed_and_preserves_u64_cas() {
+    let endpoint = endpoint(1, 1);
+    let id = "activity/id?not-a-query";
+    let (get, selected) = scheduling_priority_get_request(&endpoint, id).unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    let get = get.build().unwrap();
+    assert_eq!(
+        get.url().path(),
+        "/api/activities/activity%2Fid%3Fnot-a-query/scheduling-priority"
+    );
+    assert!(get.url().query().is_none());
+    assert!(get.headers().contains_key(reqwest::header::AUTHORIZATION));
+    let body = ActivitySchedulingPrioritySetRequest {
+        expected_revision: Some(u64::MAX - 1),
+        priority: ActivitySchedulingPriority::Background,
+    };
+    let (request, _) = scheduling_priority_set_request(&endpoint, id, &body).unwrap();
+    let request = request.build().unwrap();
+    let encoded = request.body().unwrap().as_bytes().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<ActivitySchedulingPrioritySetRequest>(encoded).unwrap(),
+        body
+    );
+    let value: serde_json::Value = serde_json::from_slice(encoded).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 2);
+    for field in ["owner_uid", "activity_id", "job_id", "authority", "preempt"] {
+        assert!(value.get(field).is_none(), "{field}");
+    }
+}

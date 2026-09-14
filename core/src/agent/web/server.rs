@@ -81,6 +81,11 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::activities::enable_monetary_budget),
         )
         .route(
+            "/api/activities/{id}/scheduling-priority",
+            get(routes::activities::scheduling_priority)
+                .post(routes::activities::set_scheduling_priority),
+        )
+        .route(
             "/api/activities/capability-policy-catalog",
             get(routes::activities::capability_policy_catalog),
         )

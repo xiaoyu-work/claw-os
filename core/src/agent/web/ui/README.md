@@ -244,6 +244,24 @@ Disabled policies mean no bounded work, not unlimited work. Backend expiry
 and cancellation remain authoritative; the UI does not locally schedule or
 complete a goal. See [execution limits](../../../../../docs/activity-execution-limits.md).
 
+### Scheduling priority
+
+The **Scheduling priority** card reads and updates the broker-owned
+`activity.scheduling_policy.get/set` record through authenticated
+`GET/POST /api/activities/:id/scheduling-priority` adapters. The server derives
+the owner from the authenticated token, converts `u64` revisions to decimal
+strings for JavaScript, and accepts only the Activity URL identity, a closed
+foreground/standard/background value, and the exact expected revision. The UI
+stores only fetched state and an unsaved CAS-bound draft.
+
+Foreground is preferred at pending admission, standard preserves legacy
+compatibility, and background may defer to fresher preferred work. Queued work
+aged for 30 minutes is admitted before non-aged work in FIFO order. This is an
+admission preference only: it grants no authority, bypasses no capability,
+consent or budget check, does not start, preempt or cancel work, and provides no
+latency or provider-QoS guarantee. Failed/stale writes retain the selected draft
+without automatic rebasing; explicit refresh and review are required.
+
 ### Capability policies
 
 The fixed **Capability policy** card lists saved Normal, Ask and Deny rows and
@@ -294,7 +312,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/monetary-budget.test.ts test/capability-policy.test.ts test/capability-policy-views.test.tsx
+bun test test/activities.test.ts test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/monetary-budget.test.ts test/scheduling-priority.test.tsx test/capability-policy.test.ts test/capability-policy-views.test.tsx
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```

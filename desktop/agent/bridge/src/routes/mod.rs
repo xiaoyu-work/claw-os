@@ -62,6 +62,10 @@ pub fn api() -> Router<AppState> {
             post(activities::monetary_budget::enabled),
         )
         .route(
+            "/activities/:id/scheduling-priority",
+            get(activities::scheduling_priority::get).post(activities::scheduling_priority::set),
+        )
+        .route(
             "/activities/:id/object-state",
             get(activities::object_state_list).post(activities::object_state_record),
         )

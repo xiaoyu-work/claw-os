@@ -110,6 +110,7 @@ impl Activities {
             || self.object_form.is_some()
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
+            || self.scheduling_priority.form.is_some()
             || self.capability_policy.form.is_some()
         {
             return None;

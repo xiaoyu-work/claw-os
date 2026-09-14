@@ -5,6 +5,7 @@ pub mod activities;
 pub mod capability_policy;
 pub mod execution_limits;
 pub mod monetary_budget;
+pub mod scheduling_priority;
 
 use cos_agent_protocol::{
     CancelResponse, DeltaPayload, DonePayload, HistoryResponse, SessionSummary, StreamEvent,

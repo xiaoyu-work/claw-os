@@ -37,6 +37,14 @@ fn activity_commands_have_stable_names_and_round_trip() {
             "activity.monetary_budget.enabled",
         ),
         (
+            Command::ActivitySchedulingPolicyGet,
+            "activity.scheduling_policy.get",
+        ),
+        (
+            Command::ActivitySchedulingPolicySet,
+            "activity.scheduling_policy.set",
+        ),
+        (
             Command::ActivityCapabilityPolicyGet,
             "activity.capability_policy.get",
         ),
@@ -117,10 +125,48 @@ fn capability_policy_commands_have_stable_names_and_unique_inventory_entries() {
             command
         );
     }
+
     assert!(serde_json::from_value::<Command>(json!("activity.capability_policy.grant")).is_err());
     assert!(
         serde_json::from_value::<Command>(json!("activity.capability_policy.approve")).is_err()
     );
+}
+
+#[test]
+fn scheduling_policy_commands_are_closed_unique_and_never_root_exempt() {
+    for (command, name) in [
+        (
+            Command::ActivitySchedulingPolicyGet,
+            "activity.scheduling_policy.get",
+        ),
+        (
+            Command::ActivitySchedulingPolicySet,
+            "activity.scheduling_policy.set",
+        ),
+    ] {
+        assert_eq!(command.as_str(), name);
+        assert_eq!(command.to_string(), name);
+        assert_eq!(
+            Command::ALL
+                .iter()
+                .filter(|entry| **entry == command)
+                .count(),
+            1
+        );
+        assert!(!command.requires_root_peer());
+        assert_eq!(serde_json::to_value(command).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Command>(json!(name)).unwrap(),
+            command
+        );
+    }
+    for invalid in [
+        "activity.scheduling_policy.grant",
+        "activity.scheduling_policy.preempt",
+        "activity.scheduling_priority.set",
+    ] {
+        assert!(serde_json::from_value::<Command>(json!(invalid)).is_err());
+    }
 }
 
 #[test]
@@ -159,7 +205,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 44);
+    assert_eq!(Command::ALL.len(), 46);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

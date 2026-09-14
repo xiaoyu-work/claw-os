@@ -1138,7 +1138,9 @@ and monetary-budget checks remain in their existing seams. Activity storage
 failure while resolving a linked pending Job is an explicit claim failure.
 Activity database schema 7 adds this policy table without rewriting existing
 Activities, Jobs, execution-limit accounting, capability rules, or monetary
-budget ledgers.
+budget ledgers. Terminal, Agent Web and native desktop all use authenticated
+adapters over this same broker-owned record; presentation layers keep only
+fetched DTOs and unsaved CAS-bound forms.
 
 `activity.attention` is a read-only, owner-scoped projection over the same
 associated Jobs, protected approval records, and task-linked Notification

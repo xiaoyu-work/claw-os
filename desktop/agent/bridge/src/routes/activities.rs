@@ -4,6 +4,7 @@
 pub(super) mod capability_policy;
 pub(super) mod execution_limits;
 pub(super) mod monetary_budget;
+pub(super) mod scheduling_priority;
 
 use axum::{
     Json,

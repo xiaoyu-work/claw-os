@@ -8,8 +8,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::activities::{
-    ActivityMonetaryBudget, MonetaryBudgetDraft, MAX_RATE_MICROUSD_PER_MILLION_TOKENS,
-    MAX_TOTAL_MICROUSD,
+    ActivityMonetaryBudget, ActivitySchedulingPolicy, ActivitySchedulingPriority,
+    MonetaryBudgetDraft, MAX_RATE_MICROUSD_PER_MILLION_TOKENS, MAX_TOTAL_MICROUSD,
 };
 use crate::agent::web::auth::AuthenticatedToken;
 use crate::clawd::routes::Command;
@@ -17,6 +17,7 @@ use crate::clawd::wire::requests::{
     ActivityCapabilityPolicyEnabled, ActivityCapabilityPolicyGet, ActivityCapabilityPolicySet,
     ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
     ActivityMonetaryBudgetEnabled, ActivityMonetaryBudgetGet, ActivityMonetaryBudgetSet,
+    ActivitySchedulingPolicyGet, ActivitySchedulingPolicySet,
 };
 use crate::clawd::wire::requests::{
     ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjectState,
@@ -131,6 +132,42 @@ struct BrokerMonetaryBudgetView {
     activity_id: String,
     #[serde(deserialize_with = "required_nullable")]
     monetary_budget: Option<ActivityMonetaryBudget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingPriorityHttpSet {
+    #[serde(deserialize_with = "required_nullable")]
+    expected_revision: Option<String>,
+    priority: ActivitySchedulingPriority,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingPriorityHttpPolicy {
+    activity_id: String,
+    owner_uid: u32,
+    revision: String,
+    priority: ActivitySchedulingPriority,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingPriorityHttpView {
+    schema: u32,
+    activity_id: String,
+    scheduling_policy: Option<SchedulingPriorityHttpPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrokerSchedulingPriorityView {
+    schema: u32,
+    activity_id: String,
+    #[serde(deserialize_with = "required_nullable")]
+    scheduling_policy: Option<ActivitySchedulingPolicy>,
 }
 
 pub async fn list(
@@ -413,6 +450,74 @@ pub async fn enable_monetary_budget(
     validate_monetary_policy(policy, &id, authenticated.uid).map(Json)
 }
 
+pub async fn scheduling_priority(
+    Extension(authenticated): Extension<AuthenticatedToken>,
+    Path(id): Path<String>,
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<SchedulingPriorityHttpView>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    let Json(value) = request(
+        Command::ActivitySchedulingPolicyGet,
+        with_id::<ActivitySchedulingPolicyGet>(id.clone(), json!({}))?,
+    )
+    .await?;
+    let response: BrokerSchedulingPriorityView = serde_json::from_value(value)
+        .map_err(|error| bad_gateway(format!("invalid scheduling-priority response: {error}")))?;
+    if response.schema != 1 || !same_activity(&response.activity_id, &id) {
+        return Err(bad_gateway(
+            "scheduling-priority response did not match the requested Activity",
+        ));
+    }
+    let scheduling_policy = response
+        .scheduling_policy
+        .map(|policy| validate_scheduling_policy(policy, &id, authenticated.uid))
+        .transpose()?;
+    Ok(Json(SchedulingPriorityHttpView {
+        schema: 1,
+        activity_id: response.activity_id,
+        scheduling_policy,
+    }))
+}
+
+pub async fn set_scheduling_priority(
+    Extension(authenticated): Extension<AuthenticatedToken>,
+    Path(id): Path<String>,
+    body: Result<Json<SchedulingPriorityHttpSet>, JsonRejection>,
+) -> Result<Json<SchedulingPriorityHttpPolicy>, ApiError> {
+    let body = json_body(body)?;
+    let expected_revision = body
+        .expected_revision
+        .as_deref()
+        .map(|revision| decimal_revision("expected_revision", revision))
+        .transpose()?;
+    let expected_next = expected_revision
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| bad_request("expected_revision cannot be incremented"))?;
+    let Json(value) = request(
+        Command::ActivitySchedulingPolicySet,
+        with_id::<ActivitySchedulingPolicySet>(
+            id.clone(),
+            json!({
+                "expected_revision": expected_revision,
+                "priority": body.priority,
+            }),
+        )?,
+    )
+    .await?;
+    let policy: ActivitySchedulingPolicy = serde_json::from_value(value).map_err(|error| {
+        bad_gateway(format!(
+            "invalid scheduling-priority acknowledgement: {error}"
+        ))
+    })?;
+    if policy.revision != expected_next || policy.priority != body.priority {
+        return Err(bad_gateway(
+            "scheduling-priority acknowledgement did not match the submitted priority or revision",
+        ));
+    }
+    validate_scheduling_policy(policy, &id, authenticated.uid).map(Json)
+}
+
 pub async fn capability_policy_catalog(
     query: Result<Query<NoBody>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -522,6 +627,31 @@ fn validate_monetary_policy(
                 .to_string(),
             max_output_tokens_per_turn: policy.budget.max_output_tokens_per_turn,
         },
+        created_at: policy.created_at,
+        updated_at: policy.updated_at,
+    })
+}
+
+fn validate_scheduling_policy(
+    policy: ActivitySchedulingPolicy,
+    activity_id: &str,
+    owner_uid: u32,
+) -> Result<SchedulingPriorityHttpPolicy, ApiError> {
+    if !same_activity(&policy.activity_id, activity_id)
+        || policy.owner_uid != owner_uid
+        || policy.revision == 0
+        || chrono::DateTime::parse_from_rfc3339(&policy.created_at).is_err()
+        || chrono::DateTime::parse_from_rfc3339(&policy.updated_at).is_err()
+    {
+        return Err(bad_gateway(
+            "scheduling-priority response returned an invalid Activity, owner, revision, or timestamp",
+        ));
+    }
+    Ok(SchedulingPriorityHttpPolicy {
+        activity_id: policy.activity_id,
+        owner_uid: policy.owner_uid,
+        revision: policy.revision.to_string(),
+        priority: policy.priority,
         created_at: policy.created_at,
         updated_at: policy.updated_at,
     })

@@ -117,6 +117,18 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 } => bridge::enable_activity_monetary_budget(endpoint, &activity_id, request)
                     .await
                     .map(|budget| ActivityResponse::MonetaryBudgetSaved(Box::new(budget))),
+                ActivityAction::GetSchedulingPriority(id) => {
+                    bridge::fetch_activity_scheduling_priority(endpoint, &id)
+                        .await
+                        .map(ActivityResponse::SchedulingPriority)
+                }
+                ActivityAction::SetSchedulingPriority {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::set_activity_scheduling_priority(endpoint, &activity_id, request)
+                    .await
+                    .map(|policy| ActivityResponse::SchedulingPrioritySaved(Box::new(policy))),
                 ActivityAction::ObjectStateList { activity_id, query } => {
                     bridge::fetch_activity_object_state(endpoint, &activity_id, query)
                         .await

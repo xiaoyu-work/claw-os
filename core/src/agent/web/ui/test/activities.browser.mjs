@@ -19,6 +19,7 @@ const receiptRecords = new Map();
 const objectStateRecords = new Map();
 const executionLimitRecords = new Map();
 const monetaryBudgetRecords = new Map();
+const schedulingPriorityRecords = new Map();
 const capabilityPolicyRecords = new Map();
 const requests = [];
 const fixtureErrors = [];
@@ -81,6 +82,7 @@ let invalidObjectStateAckOnce = false;
 let invalidCapabilityPolicyOnce = null;
 let conflictCapabilityPolicyOnce = false;
 let invalidCapabilityPolicyAckOnce = false;
+let conflictSchedulingPriorityOnce = false;
 let browser;
 let cdp;
 
@@ -432,6 +434,50 @@ async function fixture(req, res) {
       updated_at: timestamp(),
     };
     monetaryBudgetRecords.set(item.id, policy);
+    return reply(req, res, policy);
+  }
+  const schedulingRoute = /^\/api\/activities\/([^/]+)\/scheduling-priority$/.exec(url.pathname);
+  if (schedulingRoute) {
+    const item = activities.get(decodeURIComponent(schedulingRoute[1]));
+    assert.ok(item, "scheduling priority belongs to an existing owner-scoped Activity");
+    assert.deepEqual([...url.searchParams], []);
+    let current = schedulingPriorityRecords.get(item.id);
+    if (req.method === "GET") {
+      assert.deepEqual(body, {});
+      return reply(req, res, {
+        schema: 1,
+        activity_id: item.id,
+        scheduling_policy: current || null,
+      });
+    }
+    assert.equal(req.method, "POST");
+    assert.deepEqual(Object.keys(body).sort(), ["expected_revision", "priority"]);
+    assert.ok(["foreground", "standard", "background"].includes(body.priority));
+    assert.ok(item.state === "active" || item.state === "paused");
+    if (conflictSchedulingPriorityOnce) {
+      assert.ok(current);
+      conflictSchedulingPriorityOnce = false;
+      current = {
+        ...current,
+        revision: (BigInt(current.revision) + 1n).toString(),
+        priority: "standard",
+        updated_at: timestamp(),
+      };
+      schedulingPriorityRecords.set(item.id, current);
+    }
+    if (body.expected_revision !== (current?.revision ?? null)) {
+      expectedHttpErrors.push({ method: req.method, path: url.pathname, status: 400 });
+      return reply(req, res, { error: "Scheduling policy revision conflict" }, 400);
+    }
+    const policy = {
+      activity_id: item.id,
+      owner_uid: item.owner_uid,
+      revision: (BigInt(current?.revision ?? "0") + 1n).toString(),
+      priority: body.priority,
+      created_at: current?.created_at ?? timestamp(),
+      updated_at: timestamp(),
+    };
+    schedulingPriorityRecords.set(item.id, policy);
     return reply(req, res, policy);
   }
   const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts|object-state|attention))?$/.exec(url.pathname);
@@ -1369,6 +1415,53 @@ try {
   assert.deepEqual([...jobs.values()], unchangedJobs);
   console.log("PASS explicit execution-limit configuration, revision updates, disable/enable and preserved usage");
 
+  const priorityPanel = `document.querySelector('[aria-label="Activity scheduling priority"]')`;
+  const expectPriority = (text) => wait(`(${priorityPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  await expectPriority("No scheduling policy is configured.");
+  await expectPriority("30 minutes");
+  await expectPriority("grants no authority");
+  await clickText("Configure scheduling priority");
+  await clickText("Foreground");
+  await clickText("Save scheduling priority");
+  await expectPriority("Current priority: Foreground");
+  assert.equal(schedulingPriorityRecords.get("activity-1").priority, "foreground");
+  const createdPriorityAt = schedulingPriorityRecords.get("activity-1").created_at;
+  schedulingPriorityRecords.set("activity-1", {
+    ...schedulingPriorityRecords.get("activity-1"),
+    revision: "9007199254740993",
+  });
+  await clickLabel("Refresh scheduling priority");
+  await expectPriority("Revision: 9007199254740993");
+  await clickText("Edit scheduling priority");
+  await clickText("Background");
+  conflictSchedulingPriorityOnce = true;
+  await clickText("Save scheduling priority");
+  await expectDetail("Scheduling policy revision conflict");
+  assert.equal(await evaluate(`(${buttonExpression("Background")}).getAttribute('aria-pressed')`), "true");
+  assert.equal(await evaluate(`(${priorityPanel}.innerText).includes('Editing revision 9007199254740993')`), true);
+  await clickText("Cancel priority edit");
+  await clickLabel("Refresh scheduling priority");
+  await expectPriority("Current priority: Standard");
+  await clickText("Edit scheduling priority");
+  await clickText("Background");
+  await clickText("Save scheduling priority");
+  await expectPriority("Current priority: Background");
+  await reload();
+  await expectPriority("Current priority: Background");
+  assert.equal(schedulingPriorityRecords.get("activity-1").created_at, createdPriorityAt);
+  assert.deepEqual(activities.get("activity-1"), unchangedGoal);
+  assert.deepEqual([...jobs.values()], unchangedJobs);
+  const priorityWrites = requests.filter((request) =>
+    request.path.endsWith("/scheduling-priority") && request.method === "POST");
+  assert.ok(priorityWrites.length >= 3);
+  for (const request of priorityWrites) {
+    assert.deepEqual(Object.keys(request.body).sort(), ["expected_revision", "priority"]);
+    assert.ok(!Object.hasOwn(request.body, "owner_uid"));
+    assert.ok(!Object.hasOwn(request.body, "job_id"));
+    assert.ok(!Object.hasOwn(request.body, "preempt"));
+  }
+  console.log("PASS owner-derived scheduling priority, exact large CAS, stale-draft retention, reload persistence and no work mutation");
+
   const monetaryPanel = `document.querySelector('[aria-label="Activity monetary budget"]')`;
   const expectMonetary = (text) => wait(`(${monetaryPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   await expectMonetary("No monetary budget is configured.");
@@ -1637,7 +1730,14 @@ try {
   assert.deepEqual(failedResponses.map((response) => ({
     method: response.method, path: new URL(response.url).pathname, status: response.status,
   })), expectedHttpErrors, "only deliberately exercised HTTP failures are expected");
-  assert.equal(expectedHttpErrors.length, 1, "the stale-write regression exercised one actual HTTP error, not a 200-only proxy");
+  assert.deepEqual(
+    expectedHttpErrors.map((error) => error.path).sort(),
+    [
+      "/api/activities/activity-1/capability-policy",
+      "/api/activities/activity-1/scheduling-priority",
+    ],
+    "both stale-write regressions exercise actual HTTP errors, not 200-only proxies",
+  );
   for (const entry of networkErrors) {
     assert.ok(failedResponses.some((response) =>
       (entry.networkRequestId ? entry.networkRequestId === response.requestId : entry.url === response.url)

@@ -3,6 +3,7 @@ import { executionLimitsApi } from "@/lib/execution-limits";
 import { monetaryBudgetApi } from "@/lib/monetary-budget";
 import { capabilityPolicyApi } from "@/lib/capability-policy";
 import { activityAttentionApi } from "@/lib/activity-attention";
+import { schedulingPriorityApi } from "@/lib/scheduling-priority";
 
 import {
   activityApi,
@@ -115,6 +116,11 @@ export function useActivityExecutionLimits(id: string) {
 
 export function useActivityMonetaryBudget(id: string) {
   const read = useCallback((signal: AbortSignal) => monetaryBudgetApi.get(id, signal), [id]);
+  return useActivityView(read, listInterval);
+}
+
+export function useActivitySchedulingPriority(id: string) {
+  const read = useCallback((signal: AbortSignal) => schedulingPriorityApi.get(id, signal), [id]);
   return useActivityView(read, listInterval);
 }
 

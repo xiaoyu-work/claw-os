@@ -18,10 +18,12 @@ pub use cos_agent_protocol::{
     ActivityMonetaryBudgetResponse, ActivityMonetaryBudgetSetRequest, ActivityObjectAttachRequest,
     ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
     ActivityObjectsResponse, ActivityOperationPreview, ActivityOperationPreviewRequest,
-    ActivityReceiptsQuery, ActivityReceiptsResponse, ActivityRunRequest, ActivityState,
-    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
-    BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse,
-    ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
+    ActivityReceiptsQuery, ActivityReceiptsResponse, ActivityRunRequest, ActivitySchedulingPolicy,
+    ActivitySchedulingPriority, ActivitySchedulingPriorityResponse,
+    ActivitySchedulingPrioritySetRequest, ActivityState, ActivityTransitionRequest,
+    ActivityUpdateRequest, ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse,
+    ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse, ObjectStateEntry, SessionSummary,
+    StreamEvent, ToolCallView, ToolResultView,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -650,6 +652,47 @@ pub async fn enable_activity_monetary_budget(
     body: ActivityMonetaryBudgetEnabledRequest,
 ) -> Result<ActivityMonetaryBudget> {
     let (request, selected) = monetary_budget_enabled_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn scheduling_priority_get_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(
+        endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "scheduling-priority"],
+    )
+}
+
+pub async fn fetch_activity_scheduling_priority(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivitySchedulingPriorityResponse> {
+    let (request, selected) = scheduling_priority_get_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn scheduling_priority_set_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivitySchedulingPrioritySetRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "scheduling-priority"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn set_activity_scheduling_priority(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivitySchedulingPrioritySetRequest,
+) -> Result<ActivitySchedulingPolicy> {
+    let (request, selected) = scheduling_priority_set_request(&endpoint, id, &body)?;
     activity_response(request, selected).await
 }
 

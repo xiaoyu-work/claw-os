@@ -351,6 +351,25 @@ enabled state, toggles preserve configured rates, and successful replies
 refetch broker state. The protocol, bridge and UI own no policy, ledger,
 persistence, provider pricing, job admission or goal-state authority.
 
+### Scheduling priority
+
+The fixed **Scheduling priority** card uses the same owner-scoped
+`activity.scheduling_policy.get/set` service as terminal and Agent Web clients.
+The bridge derives the current owner, accepts no owner selector, and forwards
+only the Activity path identity, closed foreground/standard/background value,
+and exact `u64` revision CAS. The native UI retains only the fetched DTO and an
+unsaved revision-bound form; it has no scheduling database or Job-level
+priority input.
+
+Foreground is preferred for pending admission, standard preserves legacy
+compatibility, and background may be deferred. After 30 minutes, aged queued
+work precedes non-aged work in FIFO order. The card describes this as
+admission-only metadata: it grants no authority or capability, bypasses no
+consent or budget check, proves no execution or completion, does not preempt or
+cancel running/approval-waiting work, and promises neither latency nor provider
+QoS. Stale writes remain explicit conflicts and are never automatically
+rebased.
+
 ### Activity capability policies
 
 The fixed **Capability policy** card uses the owner-scoped
@@ -450,6 +469,8 @@ the prior non-disruptive `start` behavior.
 | `GET /api/activities/:id/monetary-budget` | Required-nullable schema-1 `ActivityMonetaryBudgetResponse`; `activity.monetary_budget.get` |
 | `POST /api/activities/:id/monetary-budget` | `ActivityMonetaryBudgetSetRequest` → `ActivityMonetaryBudget`; CAS `activity.monetary_budget.set` |
 | `POST /api/activities/:id/monetary-budget/enabled` | `ActivityMonetaryBudgetEnabledRequest` → `ActivityMonetaryBudget`; exact-revision `activity.monetary_budget.enabled` |
+| `GET /api/activities/:id/scheduling-priority` | Required-nullable schema-1 `ActivitySchedulingPriorityResponse`; `activity.scheduling_policy.get` |
+| `POST /api/activities/:id/scheduling-priority` | `ActivitySchedulingPrioritySetRequest` → `ActivitySchedulingPolicy`; CAS `activity.scheduling_policy.set` |
 | `GET /api/activities/:id/object-state?reference=…&limit=…` | `ActivityObjectStateQuery` → schema-1 `ActivityObjectStateResponse`; `activity.object_state.list` |
 | `POST /api/activities/:id/object-state` | `ActivityObjectStateRecordRequest` (`entry: ObjectStateDraft`) → `ObjectStateEntry`; append-only `activity.object_state.record` |
 | `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |

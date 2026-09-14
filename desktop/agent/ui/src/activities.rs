@@ -5,11 +5,13 @@ mod capability_policy;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
+mod scheduling_priority;
 
 pub use capability_policy::Message as CapabilityPolicyMessage;
 pub use execution_limits::Message as ExecutionLimitsMessage;
 pub use monetary_budget::Message as MonetaryBudgetMessage;
 pub use object_state::Message as ObjectStateMessage;
+pub use scheduling_priority::Message as SchedulingPriorityMessage;
 
 use cos_agent_protocol::{
     ActivityAttentionDecision, ActivityAttentionIssue, ActivityAttentionNotification,
@@ -31,8 +33,10 @@ use crate::bridge::{
     ActivityMonetaryBudgetSetRequest, ActivityObjectAttachRequest, ActivityObjectStateQuery,
     ActivityObjectStateRecordRequest, ActivityObjectStateResponse, ActivityObjectsResponse,
     ActivityOperationPreview, ActivityOperationPreviewRequest, ActivityReceiptsResponse,
-    ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
-    ActivityView, ActivityWorkResponse, CancelResponse, ObjectStateEntry,
+    ActivityRunRequest, ActivitySchedulingPolicy, ActivitySchedulingPriority,
+    ActivitySchedulingPriorityResponse, ActivitySchedulingPrioritySetRequest, ActivityState,
+    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
+    CancelResponse, ObjectStateEntry,
 };
 use crate::{Message as AppMessage, fl, styles};
 
@@ -64,6 +68,7 @@ pub enum Message {
     CapabilityPolicy(CapabilityPolicyMessage),
     ExecutionLimits(ExecutionLimitsMessage),
     MonetaryBudget(MonetaryBudgetMessage),
+    SchedulingPriority(SchedulingPriorityMessage),
     ObjectState(ObjectStateMessage),
     Tick,
     Filter(Option<ActivityState>),
@@ -132,6 +137,12 @@ pub(crate) enum Action {
         request: ActivityMonetaryBudgetEnabledRequest,
         previous: Box<ActivityMonetaryBudget>,
     },
+    GetSchedulingPriority(String),
+    SetSchedulingPriority {
+        activity_id: String,
+        request: ActivitySchedulingPrioritySetRequest,
+        previous: Option<Box<ActivitySchedulingPolicy>>,
+    },
     ObjectStateList {
         activity_id: String,
         query: ActivityObjectStateQuery,
@@ -172,6 +183,8 @@ pub enum Response {
     ExecutionLimitsSaved(Box<ActivityExecutionLimits>),
     MonetaryBudget(ActivityMonetaryBudgetResponse),
     MonetaryBudgetSaved(Box<ActivityMonetaryBudget>),
+    SchedulingPriority(ActivitySchedulingPriorityResponse),
+    SchedulingPrioritySaved(Box<ActivitySchedulingPolicy>),
     ObjectState(ActivityObjectStateResponse),
     ObjectStateRecorded(Box<ObjectStateEntry>),
     Objects(ActivityObjectsResponse),
@@ -194,6 +207,7 @@ pub(crate) struct Activities {
     capability_policy: capability_policy::State,
     execution_limits: execution_limits::State,
     monetary_budget: monetary_budget::State,
+    scheduling_priority: scheduling_priority::State,
     object_state: object_state::State,
     form: Option<ActivityCreateRequest>,
     object_form: Option<ActivityObjectAttachRequest>,
@@ -227,6 +241,7 @@ impl Activities {
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
             && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none()
             && self.prompt.is_empty()
             && self.completion_note.is_empty()
@@ -238,6 +253,7 @@ impl Activities {
         self.receipts = None;
         self.execution_limits.response = None;
         self.monetary_budget.response = None;
+        self.scheduling_priority.response = None;
         self.capability_policy.response = None;
         self.object_state.entries = None;
         self.operation_preview = None;
@@ -247,6 +263,7 @@ impl Activities {
             self.object_state.form = None;
             self.execution_limits.form = None;
             self.monetary_budget.form = None;
+            self.scheduling_priority.form = None;
             self.capability_policy.form = None;
         }
         self.invalidate();
@@ -261,6 +278,7 @@ impl Activities {
                     | Action::Receipts(_)
                     | Action::GetExecutionLimits(_)
                     | Action::GetMonetaryBudget(_)
+                    | Action::GetSchedulingPriority(_)
                     | Action::GetCapabilityPolicy(_)
                     | Action::ObjectStateList { .. }
                     | Action::Objects(_)
@@ -315,6 +333,7 @@ impl Activities {
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
             && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none()
             && self
                 .declared_object_description(reference)
@@ -330,6 +349,7 @@ impl Activities {
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
             || self.monetary_budget.form.is_some()
+            || self.scheduling_priority.form.is_some()
             || self.capability_policy.form.is_some()
             || self
                 .pending
@@ -385,6 +405,7 @@ impl Activities {
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
             || self.monetary_budget.form.is_some()
+            || self.scheduling_priority.form.is_some()
             || self.capability_policy.form.is_some()
         {
             return None;
@@ -405,6 +426,7 @@ impl Activities {
         self.object_state = object_state::State::default();
         self.execution_limits = execution_limits::State::default();
         self.monetary_budget = monetary_budget::State::default();
+        self.scheduling_priority = scheduling_priority::State::default();
         self.capability_policy = capability_policy::State::default();
         self.form = None;
         self.object_form = None;
@@ -453,18 +475,33 @@ impl Activities {
                 return self.update_capability_policy(message, connected);
             }
             Message::ExecutionLimits(message) => {
-                if self.capability_policy.form.is_none() && self.monetary_budget.form.is_none() {
+                if self.capability_policy.form.is_none()
+                    && self.monetary_budget.form.is_none()
+                    && self.scheduling_priority.form.is_none()
+                {
                     return self.update_execution_limits(message, connected);
                 }
             }
             Message::MonetaryBudget(message) => {
-                if self.execution_limits.form.is_none() && self.capability_policy.form.is_none() {
+                if self.execution_limits.form.is_none()
+                    && self.scheduling_priority.form.is_none()
+                    && self.capability_policy.form.is_none()
+                {
                     return self.update_monetary_budget(message, connected);
+                }
+            }
+            Message::SchedulingPriority(message) => {
+                if self.execution_limits.form.is_none()
+                    && self.monetary_budget.form.is_none()
+                    && self.capability_policy.form.is_none()
+                {
+                    return self.update_scheduling_priority(message, connected);
                 }
             }
             Message::ObjectState(message) => {
                 if self.execution_limits.form.is_none()
                     && self.monetary_budget.form.is_none()
+                    && self.scheduling_priority.form.is_none()
                     && self.capability_policy.form.is_none()
                 {
                     return self.update_object_state(message, connected);
@@ -475,6 +512,7 @@ impl Activities {
                     || self.object_state.form.is_some()
                     || self.execution_limits.form.is_some()
                     || self.monetary_budget.form.is_some()
+                    || self.scheduling_priority.form.is_some()
                     || self.capability_policy.form.is_some()
                 {
                     return None;
@@ -503,6 +541,7 @@ impl Activities {
                     || self.object_state.form.is_some()
                     || self.execution_limits.form.is_some()
                     || self.monetary_budget.form.is_some()
+                    || self.scheduling_priority.form.is_some()
                     || self.capability_policy.form.is_some()
                 {
                     return None;
@@ -526,6 +565,7 @@ impl Activities {
             _ if self.object_state.form.is_some() => {}
             _ if self.execution_limits.form.is_some() => {}
             _ if self.monetary_budget.form.is_some() => {}
+            _ if self.scheduling_priority.form.is_some() => {}
             _ if self.capability_policy.form.is_some() => {}
             _ if self.object_form.is_some()
                 && !matches!(&message, Message::AttachObject | Message::DiscardObject) => {}
@@ -853,6 +893,25 @@ impl Activities {
                     connected,
                 );
             }
+            (Action::GetSchedulingPriority(id), Response::SchedulingPriority(response)) => {
+                self.scheduling_priority_loaded(&id, response);
+            }
+            (
+                Action::SetSchedulingPriority {
+                    activity_id,
+                    request,
+                    previous,
+                },
+                Response::SchedulingPrioritySaved(policy),
+            ) => {
+                return self.scheduling_priority_saved(
+                    &activity_id,
+                    &request,
+                    previous.as_deref(),
+                    *policy,
+                    connected,
+                );
+            }
             (Action::ObjectStateList { activity_id, query }, Response::ObjectState(response)) => {
                 self.object_state_loaded(&activity_id, &query, response)
             }
@@ -992,6 +1051,7 @@ impl Activities {
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
             && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none()
         {
             header = header
@@ -1166,23 +1226,33 @@ impl Activities {
         let capability_policy_available = available
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
-            && self.monetary_budget.form.is_none();
+            && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none();
+        let scheduling_priority_available = available
+            && self.object_state.form.is_none()
+            && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none()
+            && self.capability_policy.form.is_none();
         let execution_limits_available = available
             && self.object_state.form.is_none()
             && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none();
         let monetary_budget_available = available
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none();
         let object_state_available = available
             && self.execution_limits.form.is_none()
             && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none();
         let available = available
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
-            && self.monetary_budget.form.is_none();
+            && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none();
         let available = available && self.capability_policy.form.is_none();
         let mut content = Column::new()
             .spacing(12)
@@ -1269,6 +1339,7 @@ impl Activities {
             .push(self.object_state_view(detail, object_state_available))
             .push(self.execution_limits_view(detail, execution_limits_available))
             .push(self.monetary_budget_view(detail, monetary_budget_available))
+            .push(self.scheduling_priority_view(detail, scheduling_priority_available))
             .push(self.capability_policy_view(detail, capability_policy_available))
             .push(text(fl!("activity-work")).size(18.0))
             .push(text(fl!("activity-work-hint")).size(12.0));
