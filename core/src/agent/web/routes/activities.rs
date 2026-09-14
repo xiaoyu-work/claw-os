@@ -1,16 +1,22 @@
 //! Authenticated HTTP presentation of the shared, owner-scoped Activity broker.
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::extract::{Path, Query};
+use axum::extract::{Extension, Path, Query};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::activities::{
+    ActivityMonetaryBudget, MonetaryBudgetDraft, MAX_RATE_MICROUSD_PER_MILLION_TOKENS,
+    MAX_TOTAL_MICROUSD,
+};
+use crate::agent::web::auth::AuthenticatedToken;
 use crate::clawd::routes::Command;
 use crate::clawd::wire::requests::{
     ActivityCapabilityPolicyEnabled, ActivityCapabilityPolicyGet, ActivityCapabilityPolicySet,
     ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
+    ActivityMonetaryBudgetEnabled, ActivityMonetaryBudgetGet, ActivityMonetaryBudgetSet,
 };
 use crate::clawd::wire::requests::{
     ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjectState,
@@ -31,6 +37,100 @@ pub struct DetailQuery {
 pub struct ObjectStateQuery {
     reference: Option<String>,
     limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetHttpDraft {
+    currency: String,
+    max_total_microusd: String,
+    input_microusd_per_million_tokens: String,
+    output_microusd_per_million_tokens: String,
+    max_output_tokens_per_turn: u32,
+}
+
+impl MonetaryBudgetHttpDraft {
+    fn into_core(self) -> Result<MonetaryBudgetDraft, ApiError> {
+        let budget = MonetaryBudgetDraft {
+            currency: self.currency,
+            max_total_microusd: decimal_u64(
+                "max_total_microusd",
+                &self.max_total_microusd,
+                MAX_TOTAL_MICROUSD,
+            )?,
+            input_microusd_per_million_tokens: decimal_u64(
+                "input_microusd_per_million_tokens",
+                &self.input_microusd_per_million_tokens,
+                MAX_RATE_MICROUSD_PER_MILLION_TOKENS,
+            )?,
+            output_microusd_per_million_tokens: decimal_u64(
+                "output_microusd_per_million_tokens",
+                &self.output_microusd_per_million_tokens,
+                MAX_RATE_MICROUSD_PER_MILLION_TOKENS,
+            )?,
+            max_output_tokens_per_turn: self.max_output_tokens_per_turn,
+        };
+        budget
+            .validate()
+            .map_err(|error| bad_request(error.to_string()))?;
+        Ok(budget)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetHttpSet {
+    #[serde(deserialize_with = "required_nullable")]
+    expected_revision: Option<String>,
+    budget: MonetaryBudgetHttpDraft,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetHttpEnabled {
+    expected_revision: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetHttpPolicy {
+    activity_id: String,
+    owner_uid: u32,
+    revision: String,
+    enabled: bool,
+    spent_microusd: String,
+    reserved_microusd: String,
+    budget: MonetaryBudgetHttpPolicyDraft,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetHttpPolicyDraft {
+    currency: String,
+    max_total_microusd: String,
+    input_microusd_per_million_tokens: String,
+    output_microusd_per_million_tokens: String,
+    max_output_tokens_per_turn: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonetaryBudgetHttpView {
+    schema: u32,
+    activity_id: String,
+    monetary_budget: Option<MonetaryBudgetHttpPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrokerMonetaryBudgetView {
+    schema: u32,
+    activity_id: String,
+    #[serde(deserialize_with = "required_nullable")]
+    monetary_budget: Option<ActivityMonetaryBudget>,
 }
 
 pub async fn list(
@@ -217,6 +317,102 @@ pub async fn enable_execution_limits(
     .await
 }
 
+pub async fn monetary_budget(
+    Extension(authenticated): Extension<AuthenticatedToken>,
+    Path(id): Path<String>,
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<MonetaryBudgetHttpView>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    let Json(value) = request(
+        Command::ActivityMonetaryBudgetGet,
+        with_id::<ActivityMonetaryBudgetGet>(id.clone(), json!({}))?,
+    )
+    .await?;
+    let response: BrokerMonetaryBudgetView = serde_json::from_value(value)
+        .map_err(|error| bad_gateway(format!("invalid monetary-budget response: {error}")))?;
+    if response.schema != 1 || !same_activity(&response.activity_id, &id) {
+        return Err(bad_gateway(
+            "monetary-budget response did not match the requested Activity",
+        ));
+    }
+    let monetary_budget = response
+        .monetary_budget
+        .map(|policy| validate_monetary_policy(policy, &id, authenticated.uid))
+        .transpose()?;
+    Ok(Json(MonetaryBudgetHttpView {
+        schema: 1,
+        activity_id: response.activity_id,
+        monetary_budget,
+    }))
+}
+
+pub async fn set_monetary_budget(
+    Extension(authenticated): Extension<AuthenticatedToken>,
+    Path(id): Path<String>,
+    body: Result<Json<MonetaryBudgetHttpSet>, JsonRejection>,
+) -> Result<Json<MonetaryBudgetHttpPolicy>, ApiError> {
+    let body = json_body(body)?;
+    let expected_revision = body
+        .expected_revision
+        .as_deref()
+        .map(|revision| decimal_revision("expected_revision", revision))
+        .transpose()?;
+    let expected_next = expected_revision
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| bad_request("expected_revision cannot be incremented"))?;
+    let budget = body.budget.into_core()?;
+    let Json(value) = request(
+        Command::ActivityMonetaryBudgetSet,
+        with_id::<ActivityMonetaryBudgetSet>(
+            id.clone(),
+            json!({"expected_revision": expected_revision, "budget": budget}),
+        )?,
+    )
+    .await?;
+    let policy: ActivityMonetaryBudget = serde_json::from_value(value).map_err(|error| {
+        bad_gateway(format!("invalid monetary-budget acknowledgement: {error}"))
+    })?;
+    if policy.revision != expected_next
+        || policy.budget != budget
+        || (expected_revision.is_none() && !policy.enabled)
+    {
+        return Err(bad_gateway(
+            "monetary-budget acknowledgement did not match the submitted budget or revision",
+        ));
+    }
+    validate_monetary_policy(policy, &id, authenticated.uid).map(Json)
+}
+
+pub async fn enable_monetary_budget(
+    Extension(authenticated): Extension<AuthenticatedToken>,
+    Path(id): Path<String>,
+    body: Result<Json<MonetaryBudgetHttpEnabled>, JsonRejection>,
+) -> Result<Json<MonetaryBudgetHttpPolicy>, ApiError> {
+    let body = json_body(body)?;
+    let expected_revision = decimal_revision("expected_revision", &body.expected_revision)?;
+    let expected_next = expected_revision
+        .checked_add(1)
+        .ok_or_else(|| bad_request("expected_revision cannot be incremented"))?;
+    let Json(value) = request(
+        Command::ActivityMonetaryBudgetEnabled,
+        with_id::<ActivityMonetaryBudgetEnabled>(
+            id.clone(),
+            json!({"expected_revision": expected_revision, "enabled": body.enabled}),
+        )?,
+    )
+    .await?;
+    let policy: ActivityMonetaryBudget = serde_json::from_value(value).map_err(|error| {
+        bad_gateway(format!("invalid monetary-budget acknowledgement: {error}"))
+    })?;
+    if policy.revision != expected_next || policy.enabled != body.enabled {
+        return Err(bad_gateway(
+            "monetary-budget acknowledgement did not match the requested enabled state or revision",
+        ));
+    }
+    validate_monetary_policy(policy, &id, authenticated.uid).map(Json)
+}
+
 pub async fn capability_policy_catalog(
     query: Result<Query<NoBody>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -287,6 +483,86 @@ fn with_id<T: DeserializeOwned>(id: String, mut body: Value) -> Result<T, ApiErr
     serde_json::from_value(body).map_err(|error| bad_request(error.to_string()))
 }
 
+fn validate_monetary_policy(
+    policy: ActivityMonetaryBudget,
+    activity_id: &str,
+    owner_uid: u32,
+) -> Result<MonetaryBudgetHttpPolicy, ApiError> {
+    if !same_activity(&policy.activity_id, activity_id)
+        || policy.owner_uid != owner_uid
+        || policy.revision == 0
+        || chrono::DateTime::parse_from_rfc3339(&policy.created_at).is_err()
+        || chrono::DateTime::parse_from_rfc3339(&policy.updated_at).is_err()
+    {
+        return Err(bad_gateway(
+            "monetary-budget response returned an invalid Activity, owner, revision, or timestamp",
+        ));
+    }
+    policy
+        .budget
+        .validate()
+        .map_err(|error| bad_gateway(format!("invalid monetary-budget policy: {error}")))?;
+    Ok(MonetaryBudgetHttpPolicy {
+        activity_id: policy.activity_id,
+        owner_uid: policy.owner_uid,
+        revision: policy.revision.to_string(),
+        enabled: policy.enabled,
+        spent_microusd: policy.spent_microusd.to_string(),
+        reserved_microusd: policy.reserved_microusd.to_string(),
+        budget: MonetaryBudgetHttpPolicyDraft {
+            currency: policy.budget.currency,
+            max_total_microusd: policy.budget.max_total_microusd.to_string(),
+            input_microusd_per_million_tokens: policy
+                .budget
+                .input_microusd_per_million_tokens
+                .to_string(),
+            output_microusd_per_million_tokens: policy
+                .budget
+                .output_microusd_per_million_tokens
+                .to_string(),
+            max_output_tokens_per_turn: policy.budget.max_output_tokens_per_turn,
+        },
+        created_at: policy.created_at,
+        updated_at: policy.updated_at,
+    })
+}
+
+fn decimal_u64(field: &str, value: &str, maximum: u64) -> Result<u64, ApiError> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(bad_request(format!(
+            "{field} must be a positive decimal integer"
+        )));
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| bad_request(format!("{field} is not representable")))?;
+    if !(1..=maximum).contains(&parsed) {
+        return Err(bad_request(format!(
+            "{field} must be between 1 and {maximum}"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn decimal_revision(field: &str, value: &str) -> Result<u64, ApiError> {
+    decimal_u64(field, value, u64::MAX - 1)
+}
+
+fn same_activity(left: &str, right: &str) -> bool {
+    match (uuid::Uuid::parse_str(left), uuid::Uuid::parse_str(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 async fn request(command: Command, body: impl Serialize) -> Result<Json<Value>, ApiError> {
     let params = serde_json::to_value(body).map_err(|error| {
         (
@@ -303,6 +579,13 @@ async fn request(command: Command, body: impl Serialize) -> Result<Json<Value>, 
 fn bad_request(message: impl Into<String>) -> ApiError {
     (
         StatusCode::BAD_REQUEST,
+        Json(json!({ "error": message.into() })),
+    )
+}
+
+fn bad_gateway(message: impl Into<String>) -> ApiError {
+    (
+        StatusCode::BAD_GATEWAY,
         Json(json!({ "error": message.into() })),
     )
 }

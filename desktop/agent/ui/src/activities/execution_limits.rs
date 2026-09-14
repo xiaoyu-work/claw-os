@@ -97,6 +97,7 @@ impl Activities {
             || self.form.is_some()
             || self.object_form.is_some()
             || self.object_state.form.is_some()
+            || self.monetary_budget.form.is_some()
         {
             return None;
         }

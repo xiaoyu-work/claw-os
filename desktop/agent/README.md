@@ -333,6 +333,24 @@ persistence; the desktop retains only fetched DTOs and unsaved revision-bound
 forms. Successful mutations refetch current constraints without changing
 Activity, receipt or object-state data locally.
 
+### Configured monetary budget
+
+The fixed **Monetary budget** card uses the same owner-scoped
+`activity.monetary_budget.get/set/enabled` service as terminal and Agent Web
+clients. Its closed protocol preserves integer micro-USD values and revisions
+as `u64`, and mutations use the exact fetched revision. The card presents
+configured rates, total, output limit, spent, reserved and remaining amounts,
+while clearly separating configured accounting from provider prices, invoices
+or billing reconciliation. The bridge derives owner identity from the
+authenticated desktop process and accepts no caller-selected owner.
+
+Absent policy is distinct from an invalid or failed read. Creation/update and
+enable require active or paused Activities; terminal Activities remain
+inspectable and can be disabled. Edits preserve backend ledger amounts and
+enabled state, toggles preserve configured rates, and successful replies
+refetch broker state. The protocol, bridge and UI own no policy, ledger,
+persistence, provider pricing, job admission or goal-state authority.
+
 ### Activity capability policies
 
 The fixed **Capability policy** card uses the owner-scoped
@@ -429,6 +447,9 @@ the prior non-disruptive `start` behavior.
 | `GET /api/activities/:id/execution-limits` | Required-nullable schema-1 `ActivityExecutionLimitsResponse`; `activity.execution_limits.get` |
 | `POST /api/activities/:id/execution-limits` | `ActivityExecutionLimitsSetRequest` → `ActivityExecutionLimits`; CAS `activity.execution_limits.set` |
 | `POST /api/activities/:id/execution-limits/enabled` | `ActivityExecutionLimitsEnabledRequest` → `ActivityExecutionLimits`; explicit `activity.execution_limits.enabled` |
+| `GET /api/activities/:id/monetary-budget` | Required-nullable schema-1 `ActivityMonetaryBudgetResponse`; `activity.monetary_budget.get` |
+| `POST /api/activities/:id/monetary-budget` | `ActivityMonetaryBudgetSetRequest` → `ActivityMonetaryBudget`; CAS `activity.monetary_budget.set` |
+| `POST /api/activities/:id/monetary-budget/enabled` | `ActivityMonetaryBudgetEnabledRequest` → `ActivityMonetaryBudget`; exact-revision `activity.monetary_budget.enabled` |
 | `GET /api/activities/:id/object-state?reference=…&limit=…` | `ActivityObjectStateQuery` → schema-1 `ActivityObjectStateResponse`; `activity.object_state.list` |
 | `POST /api/activities/:id/object-state` | `ActivityObjectStateRecordRequest` (`entry: ObjectStateDraft`) → `ObjectStateEntry`; append-only `activity.object_state.record` |
 | `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |

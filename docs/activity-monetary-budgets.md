@@ -4,7 +4,9 @@ Activity monetary budgets are owner-defined accounting constraints for model
 turns. They do not replace global AI consent, capabilities, approvals,
 execution limits, provider configuration, or task cancellation. Terminal-only
 and desktop installations use the same `clawd` broker and `activities.db`
-backend; this increment intentionally adds no Web or native presentation.
+backend. Agent Web and the native desktop Activity view are presentation
+clients of those same owner-scoped broker routes and own no policy, ledger,
+pricing, persistence, identity, or authority.
 
 ## Accounting semantics
 
@@ -55,6 +57,14 @@ has no cross-owner exemption.
 An Activity with no monetary budget retains legacy model behavior. Once a
 budget exists, disabled, inactive, stale, or exhausted state blocks the model
 turn before provider dispatch.
+
+Agent Web and native desktop controls display the configured total, rates,
+output limit, spent amount, reserved amount, remaining configured balance,
+enabled state, and revision. Their create/update and enable/disable requests
+bind to the exact fetched revision. Web amounts and revisions use decimal
+strings so the full broker `u64` accounting state is not rounded by JavaScript.
+Both surfaces label these values as configured accounting rather than provider
+billing or invoice data.
 
 ## Reservation and settlement
 

@@ -294,7 +294,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/capability-policy.test.ts test/capability-policy-views.test.tsx
+bun test test/activities.test.ts test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/monetary-budget.test.ts test/capability-policy.test.ts test/capability-policy-views.test.tsx
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
@@ -330,6 +330,11 @@ Object-state cases exercise actual completed form submissions, correction and
 retraction history, expired/unknown window labels, inert statement/receipt
 content, relationship links, unchanged Activity/job state, persistence across
 reload and selection-safe late reads/writes.
+
+Monetary-budget cases exercise absent state, configured USD accounting,
+spent/reserved/remaining presentation, exact decimal-string CAS above
+JavaScript's safe integer range, edits that preserve ledger amounts and enabled
+state, explicit disable/enable, reload persistence, and unchanged Activity/jobs.
 
 Capability-policy cases exercise empty creation, typed rule rows and all scope
 kinds, canonical acknowledgements, read/reload persistence, real HTTP conflict

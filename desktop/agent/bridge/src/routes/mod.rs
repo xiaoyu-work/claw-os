@@ -28,8 +28,14 @@ pub fn api() -> Router<AppState> {
         .route("/health", get(|| async { "ok" }))
         .route("/chat", post(chat::stream_chat))
         .route("/chat/:task_id/cancel", post(chat::cancel_chat))
-        .route("/activities", get(activities::list).post(activities::create))
-        .route("/activities/:id", get(activities::get).patch(activities::update))
+        .route(
+            "/activities",
+            get(activities::list).post(activities::create),
+        )
+        .route(
+            "/activities/:id",
+            get(activities::get).patch(activities::update),
+        )
         .route("/activities/:id/receipts", get(activities::receipts))
         .route(
             "/activities/:id/capability-policy",
@@ -46,6 +52,14 @@ pub fn api() -> Router<AppState> {
         .route(
             "/activities/:id/execution-limits/enabled",
             post(activities::execution_limits::enabled),
+        )
+        .route(
+            "/activities/:id/monetary-budget",
+            get(activities::monetary_budget::get).post(activities::monetary_budget::set),
+        )
+        .route(
+            "/activities/:id/monetary-budget/enabled",
+            post(activities::monetary_budget::enabled),
         )
         .route(
             "/activities/:id/object-state",

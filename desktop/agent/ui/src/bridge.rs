@@ -11,18 +11,17 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
     ActivityCapabilityPolicy, ActivityCapabilityPolicyEnabledRequest,
-    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest,
-    ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
-    ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
-    ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest,
-    ActivityObjectAttachRequest, ActivityObjectsResponse,
+    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest, ActivityCreateRequest,
+    ActivityDetailResponse, ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
+    ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest, ActivityListQuery,
+    ActivityListResponse, ActivityMonetaryBudget, ActivityMonetaryBudgetEnabledRequest,
+    ActivityMonetaryBudgetResponse, ActivityMonetaryBudgetSetRequest, ActivityObjectAttachRequest,
     ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
-    ActivityOperationPreview, ActivityOperationPreviewRequest,
-    ActivityReceiptsQuery, ActivityReceiptsResponse,
-    ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
-    ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
-    HistoryMessage, ModelsResponse, ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView,
-    ToolResultView,
+    ActivityObjectsResponse, ActivityOperationPreview, ActivityOperationPreviewRequest,
+    ActivityReceiptsQuery, ActivityReceiptsResponse, ActivityRunRequest, ActivityState,
+    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
+    BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse,
+    ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -425,7 +424,8 @@ pub async fn fetch_activities(
 }
 
 pub async fn fetch_activity(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityDetailResponse> {
-    let (request, selected) = activity_request(&endpoint, reqwest::Method::GET, &["activities", id])?;
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::GET, &["activities", id])?;
     activity_response(request, selected).await
 }
 
@@ -479,7 +479,8 @@ pub async fn fetch_activity_receipts(
     activity_response(
         request.query(&ActivityReceiptsQuery { limit: Some(100) }),
         selected,
-    ).await
+    )
+    .await
 }
 
 fn object_state_list_request(
@@ -487,8 +488,11 @@ fn object_state_list_request(
     id: &str,
     query: &ActivityObjectStateQuery,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
-    let (request, selected) =
-        activity_request(endpoint, reqwest::Method::GET, &["activities", id, "object-state"])?;
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "object-state"],
+    )?;
     Ok((request.query(query), selected))
 }
 
@@ -506,8 +510,11 @@ fn object_state_record_request(
     id: &str,
     body: &ActivityObjectStateRecordRequest,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
-    let (request, selected) =
-        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "object-state"])?;
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "object-state"],
+    )?;
     Ok((request.json(body), selected))
 }
 
@@ -524,7 +531,11 @@ fn execution_limits_get_request(
     endpoint: &BridgeEndpoint,
     id: &str,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
-    activity_request(endpoint, reqwest::Method::GET, &["activities", id, "execution-limits"])
+    activity_request(
+        endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "execution-limits"],
+    )
 }
 
 pub async fn fetch_activity_execution_limits(
@@ -540,8 +551,11 @@ fn execution_limits_set_request(
     id: &str,
     body: &ActivityExecutionLimitsSetRequest,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
-    let (request, selected) =
-        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "execution-limits"])?;
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "execution-limits"],
+    )?;
     Ok((request.json(body), selected))
 }
 
@@ -560,7 +574,9 @@ fn execution_limits_enabled_request(
     body: &ActivityExecutionLimitsEnabledRequest,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
     let (request, selected) = activity_request(
-        endpoint, reqwest::Method::POST, &["activities", id, "execution-limits", "enabled"],
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "execution-limits", "enabled"],
     )?;
     Ok((request.json(body), selected))
 }
@@ -574,11 +590,78 @@ pub async fn enable_activity_execution_limits(
     activity_response(request, selected).await
 }
 
+fn monetary_budget_get_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(
+        endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "monetary-budget"],
+    )
+}
+
+pub async fn fetch_activity_monetary_budget(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityMonetaryBudgetResponse> {
+    let (request, selected) = monetary_budget_get_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn monetary_budget_set_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityMonetaryBudgetSetRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "monetary-budget"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn set_activity_monetary_budget(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityMonetaryBudgetSetRequest,
+) -> Result<ActivityMonetaryBudget> {
+    let (request, selected) = monetary_budget_set_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn monetary_budget_enabled_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityMonetaryBudgetEnabledRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "monetary-budget", "enabled"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn enable_activity_monetary_budget(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityMonetaryBudgetEnabledRequest,
+) -> Result<ActivityMonetaryBudget> {
+    let (request, selected) = monetary_budget_enabled_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
 fn capability_policy_get_request(
     endpoint: &BridgeEndpoint,
     id: &str,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
-    activity_request(endpoint, reqwest::Method::GET, &["activities", id, "capability-policy"])
+    activity_request(
+        endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "capability-policy"],
+    )
 }
 
 pub async fn fetch_activity_capability_policy(
@@ -594,8 +677,11 @@ fn capability_policy_set_request(
     id: &str,
     body: &ActivityCapabilityPolicySetRequest,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
-    let (request, selected) =
-        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "capability-policy"])?;
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "capability-policy"],
+    )?;
     Ok((request.json(body), selected))
 }
 
@@ -614,7 +700,9 @@ fn capability_policy_enabled_request(
     body: &ActivityCapabilityPolicyEnabledRequest,
 ) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
     let (request, selected) = activity_request(
-        endpoint, reqwest::Method::POST, &["activities", id, "capability-policy", "enabled"],
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "capability-policy", "enabled"],
     )?;
     Ok((request.json(body), selected))
 }
@@ -641,7 +729,8 @@ pub async fn update_activity(
     id: &str,
     body: ActivityUpdateRequest,
 ) -> Result<ActivityView> {
-    let (request, selected) = activity_request(&endpoint, reqwest::Method::PATCH, &["activities", id])?;
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::PATCH, &["activities", id])?;
     activity_response(request.json(&body), selected).await
 }
 
@@ -663,11 +752,8 @@ pub async fn run_activity(
     id: &str,
     body: ActivityRunRequest,
 ) -> Result<ActivityWorkResponse> {
-    let (request, selected) = activity_request(
-        &endpoint,
-        reqwest::Method::POST,
-        &["activities", id, "run"],
-    )?;
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::POST, &["activities", id, "run"])?;
     activity_response(request.json(&body), selected).await
 }
 
@@ -677,7 +763,10 @@ pub async fn cancel_activity_job(endpoint: BridgeEndpoint, id: &str) -> Result<C
     activity_response(request, selected).await
 }
 
-pub async fn retry_activity_job(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityWorkResponse> {
+pub async fn retry_activity_job(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityWorkResponse> {
     let (request, selected) =
         activity_request(&endpoint, reqwest::Method::POST, &["tasks", id, "retry"])?;
     activity_response(request, selected).await

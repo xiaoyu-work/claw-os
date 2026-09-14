@@ -73,6 +73,14 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::activities::enable_execution_limits),
         )
         .route(
+            "/api/activities/{id}/monetary-budget",
+            get(routes::activities::monetary_budget).post(routes::activities::set_monetary_budget),
+        )
+        .route(
+            "/api/activities/{id}/monetary-budget/enabled",
+            post(routes::activities::enable_monetary_budget),
+        )
+        .route(
             "/api/activities/capability-policy-catalog",
             get(routes::activities::capability_policy_catalog),
         )

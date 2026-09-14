@@ -40,6 +40,7 @@ web UI.
 | `ui/src/components/activity-receipts.tsx`, `ui/src/lib/activity-receipts.ts` | Read-only caller-reported receipts, source/identity checks, inert summaries, and declaration diagnostics |
 | `ui/src/components/activity-object-state.tsx`, `ui/src/lib/object-state.ts` | Shared object-state forms/history, source/validity caveats and selection-safe correction/retraction |
 | `ui/src/components/activity-execution-limits.tsx`, `ui/src/lib/execution-limits.ts` | Revision-checked finite execution controls with backend-owned counters; no permission or goal-state authority |
+| `ui/src/components/activity-monetary-budget.tsx`, `ui/src/lib/monetary-budget.ts` | Exact-revision configured-accounting controls with decimal-string micro-USD values; no pricing, invoice, ledger or policy authority |
 | `ui/src/components/activity-capability-policy.tsx`, `ui/src/lib/capability-policy.ts` | Fixed typed Normal/Ask/Deny rules, strict owner/revision/scope acknowledgements and retained stale drafts; no local capability authority |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
@@ -62,6 +63,11 @@ Activities always cross `clawd`; they have no private fallback if a read or
 mutation fails. Resources are inert text, boundaries do not grant permissions,
 and successful jobs never imply completed goals. The shared contract is in
 [`docs/activities.md`](../../../../docs/activities.md).
+Activity monetary-budget routes use the same owner-scoped broker service as
+terminal and native clients. The Web DTO uses decimal strings for revisions and
+micro-USD values that may exceed JavaScript's safe integer range, and labels
+rates/totals as configured accounting rather than provider billing. See
+[`docs/activity-monetary-budgets.md`](../../../../docs/activity-monetary-budgets.md).
 Object attachments use `activity.object.attach`, not a client-side replacement
 of the resource list. `activity.objects` supplies descriptions only after App
 verification; `declared` does not prove data existence, freshness, or permission.

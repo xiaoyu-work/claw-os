@@ -155,6 +155,12 @@ async fn activity_http_routes_require_authentication() {
             "POST",
             "/api/activities/activity-1/execution-limits/enabled",
         ),
+        ("GET", "/api/activities/activity-1/monetary-budget"),
+        ("POST", "/api/activities/activity-1/monetary-budget"),
+        (
+            "POST",
+            "/api/activities/activity-1/monetary-budget/enabled",
+        ),
         ("GET", "/api/activities/capability-policy-catalog"),
         ("GET", "/api/activities/activity-1/capability-policy"),
         ("POST", "/api/activities/activity-1/capability-policy"),
@@ -185,6 +191,105 @@ async fn activity_http_routes_require_authentication() {
             );
         }
     }
+}
+
+#[test]
+fn activity_monetary_budget_http_dto_is_closed_bounded_and_precision_safe() {
+    let body: MonetaryBudgetHttpSet = serde_json::from_value(json!({
+        "expected_revision": "9007199254740993",
+        "budget": {
+            "currency": "USD",
+            "max_total_microusd": "5000000",
+            "input_microusd_per_million_tokens": "250000",
+            "output_microusd_per_million_tokens": "1000000",
+            "max_output_tokens_per_turn": 4096,
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        decimal_revision(
+            "expected_revision",
+            body.expected_revision.as_deref().unwrap()
+        )
+        .unwrap(),
+        9_007_199_254_740_993
+    );
+    let budget = body.budget.into_core().unwrap();
+    assert_eq!(budget.currency, "USD");
+    assert_eq!(budget.max_total_microusd, 5_000_000);
+    assert_eq!(budget.max_output_tokens_per_turn, 4096);
+
+    for value in [
+        json!({"budget": {
+            "currency": "USD", "max_total_microusd": "1",
+            "input_microusd_per_million_tokens": "1",
+            "output_microusd_per_million_tokens": "1",
+            "max_output_tokens_per_turn": 1,
+        }}),
+        json!({"expected_revision": null, "owner_uid": 0, "budget": {
+            "currency": "USD", "max_total_microusd": "1",
+            "input_microusd_per_million_tokens": "1",
+            "output_microusd_per_million_tokens": "1",
+            "max_output_tokens_per_turn": 1,
+        }}),
+        json!({"expected_revision": null, "budget": {
+            "currency": "EUR", "max_total_microusd": "1",
+            "input_microusd_per_million_tokens": "1",
+            "output_microusd_per_million_tokens": "1",
+            "max_output_tokens_per_turn": 1,
+        }}),
+        json!({"expected_revision": null, "budget": {
+            "currency": "USD", "max_total_microusd": 1,
+            "input_microusd_per_million_tokens": "1",
+            "output_microusd_per_million_tokens": "1",
+            "max_output_tokens_per_turn": 1,
+        }}),
+    ] {
+        match serde_json::from_value::<MonetaryBudgetHttpSet>(value) {
+            Ok(body) => assert!(body.budget.into_core().is_err()),
+            Err(_) => {}
+        }
+    }
+    assert!(
+        serde_json::from_value::<MonetaryBudgetHttpEnabled>(json!({
+            "expected_revision": "7", "enabled": false, "spent_microusd": "0"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn activity_monetary_budget_http_projection_preserves_u64_amounts_as_decimal_strings() {
+    let policy = ActivityMonetaryBudget {
+        activity_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into(),
+        owner_uid: 1000,
+        revision: 9_007_199_254_740_993,
+        enabled: false,
+        spent_microusd: 9_007_199_254_740_993,
+        reserved_microusd: u64::MAX,
+        budget: MonetaryBudgetDraft {
+            currency: "USD".into(),
+            max_total_microusd: 1_000_000_000_000,
+            input_microusd_per_million_tokens: 1,
+            output_microusd_per_million_tokens: 1_000_000_000_000,
+            max_output_tokens_per_turn: 1_000_000,
+        },
+        created_at: "2026-09-13T00:00:00Z".into(),
+        updated_at: "2026-09-13T01:00:00Z".into(),
+    };
+    let projected = validate_monetary_policy(
+        policy,
+        "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+        1000,
+    )
+    .unwrap();
+    let value = serde_json::to_value(projected).unwrap();
+    assert_eq!(value["revision"], "9007199254740993");
+    assert_eq!(value["spent_microusd"], "9007199254740993");
+    assert_eq!(value["reserved_microusd"], u64::MAX.to_string());
+    assert_eq!(value["budget"]["currency"], "USD");
+    assert_eq!(value["budget"]["max_total_microusd"], "1000000000000");
+    assert_eq!(value.as_object().unwrap().len(), 9);
 }
 
 #[test]

@@ -9,6 +9,10 @@ Its closed command inventory includes owner-scoped
 identifiers only; canonical session identity and all ownership checks remain in
 `clawd`.
 
+The inventory also includes `activity.monetary_budget.get/set/enabled` for the
+native Agent bridge. These names only expose the existing broker service; the
+client owns neither Activity identity nor monetary policy/accounting state.
+
 ## System review contract
 
 [`src/system_review.rs`](src/system_review.rs) defines the closed version-1

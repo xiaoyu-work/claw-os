@@ -25,6 +25,18 @@ fn activity_commands_have_stable_names_and_round_trip() {
             "activity.execution_limits.enabled",
         ),
         (
+            Command::ActivityMonetaryBudgetGet,
+            "activity.monetary_budget.get",
+        ),
+        (
+            Command::ActivityMonetaryBudgetSet,
+            "activity.monetary_budget.set",
+        ),
+        (
+            Command::ActivityMonetaryBudgetEnabled,
+            "activity.monetary_budget.enabled",
+        ),
+        (
             Command::ActivityCapabilityPolicyGet,
             "activity.capability_policy.get",
         ),
@@ -147,7 +159,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 41);
+    assert_eq!(Command::ALL.len(), 44);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

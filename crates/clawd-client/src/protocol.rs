@@ -35,6 +35,12 @@ pub enum Command {
     ActivityExecutionLimitsSet,
     #[serde(rename = "activity.execution_limits.enabled")]
     ActivityExecutionLimitsEnabled,
+    #[serde(rename = "activity.monetary_budget.get")]
+    ActivityMonetaryBudgetGet,
+    #[serde(rename = "activity.monetary_budget.set")]
+    ActivityMonetaryBudgetSet,
+    #[serde(rename = "activity.monetary_budget.enabled")]
+    ActivityMonetaryBudgetEnabled,
     #[serde(rename = "activity.capability_policy.get")]
     ActivityCapabilityPolicyGet,
     #[serde(rename = "activity.capability_policy.set")]
@@ -111,7 +117,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 44] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -122,6 +128,9 @@ impl Command {
         Self::ActivityExecutionLimitsGet,
         Self::ActivityExecutionLimitsSet,
         Self::ActivityExecutionLimitsEnabled,
+        Self::ActivityMonetaryBudgetGet,
+        Self::ActivityMonetaryBudgetSet,
+        Self::ActivityMonetaryBudgetEnabled,
         Self::ActivityCapabilityPolicyGet,
         Self::ActivityCapabilityPolicySet,
         Self::ActivityCapabilityPolicyEnabled,
@@ -167,6 +176,9 @@ impl Command {
             Self::ActivityExecutionLimitsGet => "activity.execution_limits.get",
             Self::ActivityExecutionLimitsSet => "activity.execution_limits.set",
             Self::ActivityExecutionLimitsEnabled => "activity.execution_limits.enabled",
+            Self::ActivityMonetaryBudgetGet => "activity.monetary_budget.get",
+            Self::ActivityMonetaryBudgetSet => "activity.monetary_budget.set",
+            Self::ActivityMonetaryBudgetEnabled => "activity.monetary_budget.enabled",
             Self::ActivityCapabilityPolicyGet => "activity.capability_policy.get",
             Self::ActivityCapabilityPolicySet => "activity.capability_policy.set",
             Self::ActivityCapabilityPolicyEnabled => "activity.capability_policy.enabled",

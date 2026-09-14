@@ -51,9 +51,9 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
         async move {
             use crate::bridge;
             let result = match request.action {
-                ActivityAction::List(state) => {
-                    bridge::fetch_activities(endpoint, state).await.map(ActivityResponse::List)
-                }
+                ActivityAction::List(state) => bridge::fetch_activities(endpoint, state)
+                    .await
+                    .map(ActivityResponse::List),
                 ActivityAction::Get(id) => bridge::fetch_activity(endpoint, &id)
                     .await
                     .map(|detail| ActivityResponse::Detail(Box::new(detail))),
@@ -65,49 +65,79 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                         .await
                         .map(ActivityResponse::CapabilityPolicy)
                 }
-                ActivityAction::SetCapabilityPolicy { activity_id, request, .. } => {
-                    bridge::set_activity_capability_policy(endpoint, &activity_id, request)
-                        .await
-                        .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy)))
-                }
-                ActivityAction::EnableCapabilityPolicy { activity_id, request, .. } => {
-                    bridge::enable_activity_capability_policy(endpoint, &activity_id, request)
-                        .await
-                        .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy)))
-                }
+                ActivityAction::SetCapabilityPolicy {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::set_activity_capability_policy(endpoint, &activity_id, request)
+                    .await
+                    .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy))),
+                ActivityAction::EnableCapabilityPolicy {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::enable_activity_capability_policy(endpoint, &activity_id, request)
+                    .await
+                    .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy))),
                 ActivityAction::GetExecutionLimits(id) => {
                     bridge::fetch_activity_execution_limits(endpoint, &id)
                         .await
                         .map(ActivityResponse::ExecutionLimits)
                 }
-                ActivityAction::SetExecutionLimits { activity_id, request, .. } => {
-                    bridge::set_activity_execution_limits(endpoint, &activity_id, request)
+                ActivityAction::SetExecutionLimits {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::set_activity_execution_limits(endpoint, &activity_id, request)
+                    .await
+                    .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits))),
+                ActivityAction::EnableExecutionLimits {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::enable_activity_execution_limits(endpoint, &activity_id, request)
+                    .await
+                    .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits))),
+                ActivityAction::GetMonetaryBudget(id) => {
+                    bridge::fetch_activity_monetary_budget(endpoint, &id)
                         .await
-                        .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits)))
+                        .map(ActivityResponse::MonetaryBudget)
                 }
-                ActivityAction::EnableExecutionLimits { activity_id, request, .. } => {
-                    bridge::enable_activity_execution_limits(endpoint, &activity_id, request)
-                        .await
-                        .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits)))
-                }
+                ActivityAction::SetMonetaryBudget {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::set_activity_monetary_budget(endpoint, &activity_id, request)
+                    .await
+                    .map(|budget| ActivityResponse::MonetaryBudgetSaved(Box::new(budget))),
+                ActivityAction::EnableMonetaryBudget {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::enable_activity_monetary_budget(endpoint, &activity_id, request)
+                    .await
+                    .map(|budget| ActivityResponse::MonetaryBudgetSaved(Box::new(budget))),
                 ActivityAction::ObjectStateList { activity_id, query } => {
                     bridge::fetch_activity_object_state(endpoint, &activity_id, query)
                         .await
                         .map(ActivityResponse::ObjectState)
                 }
-                ActivityAction::RecordObjectState { activity_id, request } => {
-                    bridge::record_activity_object_state(endpoint, &activity_id, request)
-                        .await
-                        .map(|entry| ActivityResponse::ObjectStateRecorded(Box::new(entry)))
-                }
+                ActivityAction::RecordObjectState {
+                    activity_id,
+                    request,
+                } => bridge::record_activity_object_state(endpoint, &activity_id, request)
+                    .await
+                    .map(|entry| ActivityResponse::ObjectStateRecorded(Box::new(entry))),
                 ActivityAction::Objects(id) => bridge::fetch_activity_objects(endpoint, &id)
                     .await
                     .map(ActivityResponse::Objects),
-                ActivityAction::OperationPreview { activity_id, request, .. } => {
-                    bridge::preview_activity_operation(endpoint, &activity_id, request)
-                        .await
-                        .map(|preview| ActivityResponse::OperationPreview(Box::new(preview)))
-                }
+                ActivityAction::OperationPreview {
+                    activity_id,
+                    request,
+                    ..
+                } => bridge::preview_activity_operation(endpoint, &activity_id, request)
+                    .await
+                    .map(|preview| ActivityResponse::OperationPreview(Box::new(preview))),
                 ActivityAction::AttachObject(id, body) => {
                     bridge::attach_activity_object(endpoint, &id, body)
                         .await

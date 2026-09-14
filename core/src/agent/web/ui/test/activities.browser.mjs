@@ -18,6 +18,7 @@ const jobs = new Map();
 const receiptRecords = new Map();
 const objectStateRecords = new Map();
 const executionLimitRecords = new Map();
+const monetaryBudgetRecords = new Map();
 const capabilityPolicyRecords = new Map();
 const requests = [];
 const fixtureErrors = [];
@@ -139,6 +140,25 @@ function checkedCapabilityDraft(draft) {
   });
   rules.sort((left, right) => Buffer.compare(Buffer.from(left.verb), Buffer.from(right.verb)));
   return { rules };
+}
+
+function checkedMonetaryDraft(draft) {
+  assert.deepEqual(Object.keys(draft).sort(), [
+    "currency", "input_microusd_per_million_tokens", "max_output_tokens_per_turn",
+    "max_total_microusd", "output_microusd_per_million_tokens",
+  ]);
+  assert.equal(draft.currency, "USD");
+  for (const field of [
+    "max_total_microusd",
+    "input_microusd_per_million_tokens",
+    "output_microusd_per_million_tokens",
+  ]) {
+    assert.match(draft[field], /^[0-9]+$/);
+    assert.ok(BigInt(draft[field]) >= 1n && BigInt(draft[field]) <= 1_000_000_000_000n);
+  }
+  assert.ok(Number.isSafeInteger(draft.max_output_tokens_per_turn));
+  assert.ok(draft.max_output_tokens_per_turn >= 1 && draft.max_output_tokens_per_turn <= 1_000_000);
+  return clone(draft);
 }
 
 function receiptRecord(id, outcome = "returned") {
@@ -370,6 +390,48 @@ async function fixture(req, res) {
       created_at: current?.created_at || timestamp(), updated_at: timestamp(),
     };
     executionLimitRecords.set(item.id, policy);
+    return reply(req, res, policy);
+  }
+  const monetaryRoute = /^\/api\/activities\/([^/]+)\/monetary-budget(?:\/(enabled))?$/.exec(url.pathname);
+  if (monetaryRoute) {
+    const item = activities.get(decodeURIComponent(monetaryRoute[1]));
+    assert.ok(item, "monetary budget belongs to an existing owner-scoped Activity");
+    assert.deepEqual([...url.searchParams], []);
+    const current = monetaryBudgetRecords.get(item.id);
+    if (req.method === "GET") {
+      assert.equal(monetaryRoute[2], undefined);
+      return reply(req, res, { schema: 1, activity_id: item.id, monetary_budget: current || null });
+    }
+    assert.equal(req.method, "POST");
+    assert.deepEqual(Object.keys(body).sort(),
+      monetaryRoute[2] === "enabled" ? ["enabled", "expected_revision"] : ["budget", "expected_revision"]);
+    assert.equal(body.expected_revision, current?.revision ?? null, "writes use the exact decimal-string revision");
+    if (monetaryRoute[2] === "enabled") {
+      assert.ok(current);
+      assert.equal(typeof body.enabled, "boolean");
+      assert.ok(!body.enabled || item.state === "active" || item.state === "paused");
+      const policy = {
+        ...current,
+        revision: (BigInt(current.revision) + 1n).toString(),
+        enabled: body.enabled,
+        updated_at: timestamp(),
+      };
+      monetaryBudgetRecords.set(item.id, policy);
+      return reply(req, res, policy);
+    }
+    assert.ok(item.state === "active" || item.state === "paused");
+    const policy = {
+      activity_id: item.id,
+      owner_uid: item.owner_uid,
+      revision: (BigInt(current?.revision ?? "0") + 1n).toString(),
+      enabled: current?.enabled ?? true,
+      spent_microusd: current?.spent_microusd ?? "0",
+      reserved_microusd: current?.reserved_microusd ?? "0",
+      budget: checkedMonetaryDraft(body.budget),
+      created_at: current?.created_at ?? timestamp(),
+      updated_at: timestamp(),
+    };
+    monetaryBudgetRecords.set(item.id, policy);
     return reply(req, res, policy);
   }
   const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts|object-state|attention))?$/.exec(url.pathname);
@@ -1306,6 +1368,60 @@ try {
   assert.deepEqual(activities.get("activity-1"), unchangedGoal);
   assert.deepEqual([...jobs.values()], unchangedJobs);
   console.log("PASS explicit execution-limit configuration, revision updates, disable/enable and preserved usage");
+
+  const monetaryPanel = `document.querySelector('[aria-label="Activity monetary budget"]')`;
+  const expectMonetary = (text) => wait(`(${monetaryPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  await expectMonetary("No monetary budget is configured.");
+  await clickText("Configure monetary budget");
+  await fill("Maximum configured total (micro-USD)", "10000000");
+  await fill("Configured input rate (micro-USD per million tokens)", "250000");
+  await fill("Configured output rate (micro-USD per million tokens)", "1000000");
+  await fill("Maximum output tokens per turn", "8192");
+  await clickText("Save monetary budget");
+  await expectMonetary("Revision: 1");
+  const monetary = monetaryBudgetRecords.get("activity-1");
+  assert.deepEqual(monetary.budget, {
+    currency: "USD",
+    max_total_microusd: "10000000",
+    input_microusd_per_million_tokens: "250000",
+    output_microusd_per_million_tokens: "1000000",
+    max_output_tokens_per_turn: 8192,
+  });
+  Object.assign(monetary, {
+    revision: "9007199254740993",
+    spent_microusd: "2000000",
+    reserved_microusd: "1000000",
+    updated_at: timestamp(),
+  });
+  await clickLabel("Refresh monetary budget");
+  await expectMonetary("Revision: 9007199254740993");
+  await expectMonetary("Spent (configured accounting): USD 2.000000");
+  await expectMonetary("Reserved (configured accounting): USD 1.000000");
+  await expectMonetary("Remaining (configured accounting): USD 7.000000");
+  await expectMonetary("not provider prices, invoice data, or billing reconciliation");
+  await clickText("Disable monetary budget");
+  await expectMonetary("Revision: 9007199254740994");
+  assert.equal(monetaryBudgetRecords.get("activity-1").enabled, false);
+  await clickText("Edit monetary budget");
+  await fill("Maximum configured total (micro-USD)", "12000000");
+  await clickText("Save monetary budget");
+  await expectMonetary("Revision: 9007199254740995");
+  assert.equal(monetaryBudgetRecords.get("activity-1").enabled, false, "editing does not re-enable");
+  assert.equal(monetaryBudgetRecords.get("activity-1").spent_microusd, "2000000", "editing preserves spent accounting");
+  assert.equal(monetaryBudgetRecords.get("activity-1").reserved_microusd, "1000000", "editing preserves reservations");
+  await clickText("Enable monetary budget");
+  await expectMonetary("Revision: 9007199254740996");
+  await reload();
+  await expectMonetary("Configured accounting total: USD 12.000000");
+  await expectMonetary("Revision: 9007199254740996");
+  const monetaryWrites = requests.filter((request) =>
+    request.method === "POST" && request.path.includes("/monetary-budget"));
+  assert.deepEqual(monetaryWrites.map((request) => request.body.expected_revision), [
+    null, "9007199254740993", "9007199254740994", "9007199254740995",
+  ]);
+  assert.deepEqual(activities.get("activity-1"), unchangedGoal);
+  assert.deepEqual([...jobs.values()], unchangedJobs);
+  console.log("PASS configured monetary accounting, exact large revisions, preserved ledgers, disable/enable and reload persistence");
 
   const policyPanel = `document.querySelector('[aria-label="Activity capability policy"]')`;
   const expectPolicy = (text) => wait(`(${policyPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);

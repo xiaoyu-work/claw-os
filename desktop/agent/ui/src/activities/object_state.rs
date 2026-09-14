@@ -227,7 +227,11 @@ impl Activities {
         message: Message,
         connected: bool,
     ) -> Option<Request> {
-        if !self.visible || self.form.is_some() || self.object_form.is_some() {
+        if !self.visible
+            || self.form.is_some()
+            || self.object_form.is_some()
+            || self.monetary_budget.form.is_some()
+        {
             return None;
         }
         if let Message::Filter(value) = &message

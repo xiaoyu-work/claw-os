@@ -312,3 +312,51 @@ fn activity_execution_limits_toggle_transport_preserves_large_cas_and_has_no_res
     assert_eq!(value["expected_revision"].as_u64(), Some(u64::MAX - 1));
     assert_eq!(value["enabled"], false);
 }
+
+#[test]
+fn activity_monetary_budget_transport_is_authenticated_versioned_and_preserves_u64_cas() {
+    use cos_agent_protocol::{MonetaryBudgetDraft, MonetaryCurrency};
+    let endpoint = endpoint(1, 1);
+    let id = "activity/id?not-a-query";
+    let (get, selected) = monetary_budget_get_request(&endpoint, id).unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    let get = get.build().unwrap();
+    assert_eq!(
+        get.url().path(),
+        "/api/activities/activity%2Fid%3Fnot-a-query/monetary-budget"
+    );
+    assert!(get.headers().contains_key(reqwest::header::AUTHORIZATION));
+    let body = ActivityMonetaryBudgetSetRequest {
+        expected_revision: Some(u64::MAX - 1),
+        budget: MonetaryBudgetDraft {
+            currency: MonetaryCurrency::Usd,
+            max_total_microusd: 5_000_000,
+            input_microusd_per_million_tokens: 250_000,
+            output_microusd_per_million_tokens: 1_000_000,
+            max_output_tokens_per_turn: 4096,
+        },
+    };
+    let (request, _) = monetary_budget_set_request(&endpoint, id, &body).unwrap();
+    let request = request.build().unwrap();
+    let encoded = request.body().unwrap().as_bytes().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<ActivityMonetaryBudgetSetRequest>(encoded).unwrap(),
+        body
+    );
+    let value: serde_json::Value = serde_json::from_slice(encoded).unwrap();
+    assert!(value.get("owner_uid").is_none());
+    assert!(value.get("spent_microusd").is_none());
+    let toggle = ActivityMonetaryBudgetEnabledRequest {
+        expected_revision: u64::MAX - 1,
+        enabled: false,
+    };
+    let (request, _) = monetary_budget_enabled_request(&endpoint, id, &toggle).unwrap();
+    let request = request.build().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<ActivityMonetaryBudgetEnabledRequest>(
+            request.body().unwrap().as_bytes().unwrap()
+        )
+        .unwrap(),
+        toggle
+    );
+}

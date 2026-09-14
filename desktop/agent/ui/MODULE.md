@@ -13,6 +13,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/activities.rs` | Activity list/detail and shared attention widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
 | `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
+| `src/activities/monetary_budget.rs` | Fixed configured-accounting card, exact-CAS create/update/toggles, and spent/reserved/remaining presentation; no pricing, invoice, ledger or policy authority |
 | `src/activities/capability_policy.rs` | Fixed typed capability rule/scope controls, owner-scoped snapshots and CAS-bound edits/toggles; no grants, approval decisions or resource resolution |
 | `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
@@ -137,6 +138,15 @@ recovery attempts, actual model-turn enforcement, normal cancellation/lease
 cleanup on expiry/disable/revision change and no promise to undo already-admitted
 privileged mutations. These constraints never grant capabilities or approvals,
 execute an App/model or transition a goal.
+
+Monetary budgets are another fixed card over the shared
+`activity.monetary_budget.get/set/enabled` service. Closed DTOs preserve `u64`
+micro-USD values and revisions exactly. Forms capture the fetched revision,
+creation uses an absent revision, and acknowledgements must preserve Activity,
+owner, creation identity, configured rates and exact revision progression.
+Spent/reserved accounting may advance concurrently and is always refetched.
+The UI labels totals and rates as configured accounting rather than provider
+pricing, invoice data or billing reconciliation, and owns no ledger or policy.
 
 Capability policies use the same generation-aware Activity reducer and normal
 authenticated bridge. The fixed editor uses verb text and closed mode/scope

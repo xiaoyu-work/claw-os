@@ -3,16 +3,18 @@
 
 mod capability_policy;
 mod execution_limits;
+mod monetary_budget;
 mod object_state;
 
 pub use capability_policy::Message as CapabilityPolicyMessage;
 pub use execution_limits::Message as ExecutionLimitsMessage;
+pub use monetary_budget::Message as MonetaryBudgetMessage;
 pub use object_state::Message as ObjectStateMessage;
 
 use cos_agent_protocol::{
     ActivityAttentionDecision, ActivityAttentionIssue, ActivityAttentionNotification,
     ActivityDecisionStatus, ActivityJobView, ActivityObjectStatus, ActivityReceiptOutcome,
-    ActivityReceiptSource, ActivityReceiptReport, ActivityReceiptView, ActivityResource,
+    ActivityReceiptReport, ActivityReceiptSource, ActivityReceiptView, ActivityResource,
     AppDeclaredEffect, AppEffectKind, AppEffectRecovery, AppEffectTargetKind, AppEffectTargetState,
     AppObjectDescription, ReceiptDeclaredEffect, ReceiptResultKind,
 };
@@ -22,15 +24,15 @@ use cosmic::{Element, theme, widget};
 
 use crate::bridge::{
     ActivityCapabilityPolicy, ActivityCapabilityPolicyEnabledRequest,
-    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest,
-    ActivityCreateRequest, ActivityDetailResponse, ActivityListResponse,
-    ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
-    ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest,
-    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
-    ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
-    ActivityOperationPreviewRequest, ActivityReceiptsResponse, ActivityRunRequest, ActivityState,
-    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
-    CancelResponse, ObjectStateEntry,
+    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest, ActivityCreateRequest,
+    ActivityDetailResponse, ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
+    ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest, ActivityListResponse,
+    ActivityMonetaryBudget, ActivityMonetaryBudgetEnabledRequest, ActivityMonetaryBudgetResponse,
+    ActivityMonetaryBudgetSetRequest, ActivityObjectAttachRequest, ActivityObjectStateQuery,
+    ActivityObjectStateRecordRequest, ActivityObjectStateResponse, ActivityObjectsResponse,
+    ActivityOperationPreview, ActivityOperationPreviewRequest, ActivityReceiptsResponse,
+    ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
+    ActivityView, ActivityWorkResponse, CancelResponse, ObjectStateEntry,
 };
 use crate::{Message as AppMessage, fl, styles};
 
@@ -61,6 +63,7 @@ pub enum Message {
     RefreshReceipts,
     CapabilityPolicy(CapabilityPolicyMessage),
     ExecutionLimits(ExecutionLimitsMessage),
+    MonetaryBudget(MonetaryBudgetMessage),
     ObjectState(ObjectStateMessage),
     Tick,
     Filter(Option<ActivityState>),
@@ -118,6 +121,17 @@ pub(crate) enum Action {
         request: ActivityExecutionLimitsEnabledRequest,
         previous: Box<ActivityExecutionLimits>,
     },
+    GetMonetaryBudget(String),
+    SetMonetaryBudget {
+        activity_id: String,
+        request: ActivityMonetaryBudgetSetRequest,
+        previous: Option<Box<ActivityMonetaryBudget>>,
+    },
+    EnableMonetaryBudget {
+        activity_id: String,
+        request: ActivityMonetaryBudgetEnabledRequest,
+        previous: Box<ActivityMonetaryBudget>,
+    },
     ObjectStateList {
         activity_id: String,
         query: ActivityObjectStateQuery,
@@ -156,6 +170,8 @@ pub enum Response {
     CapabilityPolicySaved(Box<ActivityCapabilityPolicy>),
     ExecutionLimits(ActivityExecutionLimitsResponse),
     ExecutionLimitsSaved(Box<ActivityExecutionLimits>),
+    MonetaryBudget(ActivityMonetaryBudgetResponse),
+    MonetaryBudgetSaved(Box<ActivityMonetaryBudget>),
     ObjectState(ActivityObjectStateResponse),
     ObjectStateRecorded(Box<ObjectStateEntry>),
     Objects(ActivityObjectsResponse),
@@ -177,6 +193,7 @@ pub(crate) struct Activities {
     receipts: Option<ActivityReceiptsResponse>,
     capability_policy: capability_policy::State,
     execution_limits: execution_limits::State,
+    monetary_budget: monetary_budget::State,
     object_state: object_state::State,
     form: Option<ActivityCreateRequest>,
     object_form: Option<ActivityObjectAttachRequest>,
@@ -209,6 +226,7 @@ impl Activities {
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none()
             && self.capability_policy.form.is_none()
             && self.prompt.is_empty()
             && self.completion_note.is_empty()
@@ -219,6 +237,7 @@ impl Activities {
         self.visible = false;
         self.receipts = None;
         self.execution_limits.response = None;
+        self.monetary_budget.response = None;
         self.capability_policy.response = None;
         self.object_state.entries = None;
         self.operation_preview = None;
@@ -227,6 +246,7 @@ impl Activities {
             self.object_form = None;
             self.object_state.form = None;
             self.execution_limits.form = None;
+            self.monetary_budget.form = None;
             self.capability_policy.form = None;
         }
         self.invalidate();
@@ -240,6 +260,7 @@ impl Activities {
                     | Action::Get(_)
                     | Action::Receipts(_)
                     | Action::GetExecutionLimits(_)
+                    | Action::GetMonetaryBudget(_)
                     | Action::GetCapabilityPolicy(_)
                     | Action::ObjectStateList { .. }
                     | Action::Objects(_)
@@ -293,6 +314,7 @@ impl Activities {
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none()
             && self.capability_policy.form.is_none()
             && self
                 .declared_object_description(reference)
@@ -307,6 +329,7 @@ impl Activities {
             || self.object_form.is_some()
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
+            || self.monetary_budget.form.is_some()
             || self.capability_policy.form.is_some()
             || self
                 .pending
@@ -361,6 +384,7 @@ impl Activities {
             || self.object_form.is_some()
             || self.object_state.form.is_some()
             || self.execution_limits.form.is_some()
+            || self.monetary_budget.form.is_some()
             || self.capability_policy.form.is_some()
         {
             return None;
@@ -380,6 +404,7 @@ impl Activities {
         self.receipts = None;
         self.object_state = object_state::State::default();
         self.execution_limits = execution_limits::State::default();
+        self.monetary_budget = monetary_budget::State::default();
         self.capability_policy = capability_policy::State::default();
         self.form = None;
         self.object_form = None;
@@ -428,12 +453,20 @@ impl Activities {
                 return self.update_capability_policy(message, connected);
             }
             Message::ExecutionLimits(message) => {
-                if self.capability_policy.form.is_none() {
+                if self.capability_policy.form.is_none() && self.monetary_budget.form.is_none() {
                     return self.update_execution_limits(message, connected);
                 }
             }
-            Message::ObjectState(message) => {
+            Message::MonetaryBudget(message) => {
                 if self.execution_limits.form.is_none() && self.capability_policy.form.is_none() {
+                    return self.update_monetary_budget(message, connected);
+                }
+            }
+            Message::ObjectState(message) => {
+                if self.execution_limits.form.is_none()
+                    && self.monetary_budget.form.is_none()
+                    && self.capability_policy.form.is_none()
+                {
                     return self.update_object_state(message, connected);
                 }
             }
@@ -441,6 +474,7 @@ impl Activities {
                 if !self.can_edit_forms()
                     || self.object_state.form.is_some()
                     || self.execution_limits.form.is_some()
+                    || self.monetary_budget.form.is_some()
                     || self.capability_policy.form.is_some()
                 {
                     return None;
@@ -468,6 +502,7 @@ impl Activities {
                 if !self.can_edit_forms()
                     || self.object_state.form.is_some()
                     || self.execution_limits.form.is_some()
+                    || self.monetary_budget.form.is_some()
                     || self.capability_policy.form.is_some()
                 {
                     return None;
@@ -490,6 +525,7 @@ impl Activities {
             _ if self.pending.is_some() => {}
             _ if self.object_state.form.is_some() => {}
             _ if self.execution_limits.form.is_some() => {}
+            _ if self.monetary_budget.form.is_some() => {}
             _ if self.capability_policy.form.is_some() => {}
             _ if self.object_form.is_some()
                 && !matches!(&message, Message::AttachObject | Message::DiscardObject) => {}
@@ -716,46 +752,115 @@ impl Activities {
                 self.capability_policy_loaded(&id, response);
             }
             (
-                Action::SetCapabilityPolicy { activity_id, request, previous },
+                Action::SetCapabilityPolicy {
+                    activity_id,
+                    request,
+                    previous,
+                },
                 Response::CapabilityPolicySaved(policy),
             ) => {
                 return self.capability_policy_saved(
-                    &activity_id, &request, previous.as_deref(), *policy, connected,
+                    &activity_id,
+                    &request,
+                    previous.as_deref(),
+                    *policy,
+                    connected,
                 );
             }
             (
-                Action::EnableCapabilityPolicy { activity_id, request, previous },
+                Action::EnableCapabilityPolicy {
+                    activity_id,
+                    request,
+                    previous,
+                },
                 Response::CapabilityPolicySaved(policy),
             ) => {
                 return self.capability_policy_enabled(
-                    &activity_id, &request, &previous, *policy, connected,
+                    &activity_id,
+                    &request,
+                    &previous,
+                    *policy,
+                    connected,
                 );
             }
             (Action::GetExecutionLimits(id), Response::ExecutionLimits(response)) => {
                 self.execution_limits_loaded(&id, response);
             }
             (
-                Action::SetExecutionLimits { activity_id, request, previous },
+                Action::SetExecutionLimits {
+                    activity_id,
+                    request,
+                    previous,
+                },
                 Response::ExecutionLimitsSaved(limits),
             ) => {
                 return self.execution_limits_saved(
-                    &activity_id, &request, previous.as_deref(), *limits, connected,
+                    &activity_id,
+                    &request,
+                    previous.as_deref(),
+                    *limits,
+                    connected,
                 );
             }
             (
-                Action::EnableExecutionLimits { activity_id, request, previous },
+                Action::EnableExecutionLimits {
+                    activity_id,
+                    request,
+                    previous,
+                },
                 Response::ExecutionLimitsSaved(limits),
             ) => {
                 return self.execution_limits_enabled(
-                    &activity_id, &request, &previous, *limits, connected,
+                    &activity_id,
+                    &request,
+                    &previous,
+                    *limits,
+                    connected,
+                );
+            }
+            (Action::GetMonetaryBudget(id), Response::MonetaryBudget(response)) => {
+                self.monetary_budget_loaded(&id, response);
+            }
+            (
+                Action::SetMonetaryBudget {
+                    activity_id,
+                    request,
+                    previous,
+                },
+                Response::MonetaryBudgetSaved(budget),
+            ) => {
+                return self.monetary_budget_saved(
+                    &activity_id,
+                    &request,
+                    previous.as_deref(),
+                    *budget,
+                    connected,
                 );
             }
             (
-                Action::ObjectStateList { activity_id, query },
-                Response::ObjectState(response),
-            ) => self.object_state_loaded(&activity_id, &query, response),
+                Action::EnableMonetaryBudget {
+                    activity_id,
+                    request,
+                    previous,
+                },
+                Response::MonetaryBudgetSaved(budget),
+            ) => {
+                return self.monetary_budget_enabled(
+                    &activity_id,
+                    &request,
+                    &previous,
+                    *budget,
+                    connected,
+                );
+            }
+            (Action::ObjectStateList { activity_id, query }, Response::ObjectState(response)) => {
+                self.object_state_loaded(&activity_id, &query, response)
+            }
             (
-                Action::RecordObjectState { activity_id, request },
+                Action::RecordObjectState {
+                    activity_id,
+                    request,
+                },
                 Response::ObjectStateRecorded(entry),
             ) => {
                 return self.object_state_recorded(&activity_id, &request, *entry, connected);
@@ -886,6 +991,7 @@ impl Activities {
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none()
             && self.capability_policy.form.is_none()
         {
             header = header
@@ -1058,14 +1164,25 @@ impl Activities {
     ) -> Element<'a, AppMessage> {
         let activity = &detail.activity;
         let capability_policy_available = available
-            && self.object_state.form.is_none() && self.execution_limits.form.is_none();
+            && self.object_state.form.is_none()
+            && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none();
         let execution_limits_available = available
-            && self.object_state.form.is_none() && self.capability_policy.form.is_none();
+            && self.object_state.form.is_none()
+            && self.monetary_budget.form.is_none()
+            && self.capability_policy.form.is_none();
+        let monetary_budget_available = available
+            && self.object_state.form.is_none()
+            && self.execution_limits.form.is_none()
+            && self.capability_policy.form.is_none();
         let object_state_available = available
-            && self.execution_limits.form.is_none() && self.capability_policy.form.is_none();
+            && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none()
+            && self.capability_policy.form.is_none();
         let available = available
             && self.object_state.form.is_none()
-            && self.execution_limits.form.is_none();
+            && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none();
         let available = available && self.capability_policy.form.is_none();
         let mut content = Column::new()
             .spacing(12)
@@ -1151,6 +1268,7 @@ impl Activities {
             .push(self.object_resources_view(editable(activity.state), available))
             .push(self.object_state_view(detail, object_state_available))
             .push(self.execution_limits_view(detail, execution_limits_available))
+            .push(self.monetary_budget_view(detail, monetary_budget_available))
             .push(self.capability_policy_view(detail, capability_policy_available))
             .push(text(fl!("activity-work")).size(18.0))
             .push(text(fl!("activity-work-hint")).size(12.0));
@@ -1733,7 +1851,9 @@ fn attention_view(detail: &ActivityDetailResponse) -> Element<'_, AppMessage> {
         return content
             .push(match &detail.attention_error {
                 Some(error) => error_card(error),
-                None => text(fl!("activity-attention-unavailable")).size(12.0).into(),
+                None => text(fl!("activity-attention-unavailable"))
+                    .size(12.0)
+                    .into(),
             })
             .into();
     };
@@ -1776,9 +1896,7 @@ fn attention_view(detail: &ActivityDetailResponse) -> Element<'_, AppMessage> {
     for notification in &attention.notifications {
         content = content.push(attention_notification_view(notification));
     }
-    if attention.has_more.decisions
-        || attention.has_more.issues
-        || attention.has_more.notifications
+    if attention.has_more.decisions || attention.has_more.issues || attention.has_more.notifications
     {
         content = content.push(
             text(fl!(

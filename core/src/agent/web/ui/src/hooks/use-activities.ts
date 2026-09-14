@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { executionLimitsApi } from "@/lib/execution-limits";
+import { monetaryBudgetApi } from "@/lib/monetary-budget";
 import { capabilityPolicyApi } from "@/lib/capability-policy";
 import { activityAttentionApi } from "@/lib/activity-attention";
 
@@ -109,6 +110,11 @@ export function useActivityObjectState(id: string) {
 
 export function useActivityExecutionLimits(id: string) {
   const read = useCallback((signal: AbortSignal) => executionLimitsApi.get(id, signal), [id]);
+  return useActivityView(read, listInterval);
+}
+
+export function useActivityMonetaryBudget(id: string) {
+  const read = useCallback((signal: AbortSignal) => monetaryBudgetApi.get(id, signal), [id]);
   return useActivityView(read, listInterval);
 }
 
