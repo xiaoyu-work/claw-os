@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::CapabilityPolicyScope;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
@@ -325,6 +327,206 @@ pub struct ActivityApprovalView {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityDecisionStatus {
+    Pending,
+    Approved,
+    Denied,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityIssueKind {
+    WaitingApproval,
+    Indeterminate,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityDecisionRisk {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityNotificationSeverity {
+    Info,
+    Warning,
+    Error,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityNotificationState {
+    Unread,
+    Read,
+    Acknowledged,
+    Dismissed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionCounts {
+    pub queued: u64,
+    pub running: u64,
+    pub waiting: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub indeterminate: u64,
+    pub pending_decisions: u64,
+    pub unavailable_decisions: u64,
+    pub unread_notifications: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionDecision {
+    pub id: String,
+    pub job_id: String,
+    pub session_id: Option<String>,
+    pub status: ActivityDecisionStatus,
+    pub requested_at: Option<u64>,
+    pub verb: Option<String>,
+    pub scope: Option<CapabilityPolicyScope>,
+    pub risk: Option<ActivityDecisionRisk>,
+    pub reason: Option<String>,
+    pub review_id: Option<String>,
+    pub error: Option<String>,
+}
+
+impl ActivityAttentionDecision {
+    fn is_consistent(&self) -> bool {
+        if self.id.is_empty() || self.job_id.is_empty() {
+            return false;
+        }
+        let details = self.requested_at.is_some()
+            && self.verb.as_ref().is_some_and(|value| !value.is_empty())
+            && self.scope.is_some()
+            && self.risk.is_some()
+            && self.reason.is_some()
+            && self
+                .review_id
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+            && self.error.is_none();
+        let unavailable = self.requested_at.is_none()
+            && self.verb.is_none()
+            && self.scope.is_none()
+            && self.risk.is_none()
+            && self.reason.is_none()
+            && self.review_id.is_none()
+            && self.error.as_ref().is_some_and(|value| !value.is_empty());
+        match self.status {
+            ActivityDecisionStatus::Unavailable => unavailable,
+            _ => details,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionIssue {
+    pub job_id: String,
+    pub session_id: Option<String>,
+    pub kind: ActivityIssueKind,
+    pub status: String,
+    pub execution_phase: String,
+    pub title: String,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionNotification {
+    pub id: String,
+    pub source: String,
+    pub kind: String,
+    pub severity: ActivityNotificationSeverity,
+    pub title: String,
+    pub body: String,
+    pub task_id: Option<String>,
+    pub session_id: Option<String>,
+    pub state: ActivityNotificationState,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionTotals {
+    pub decisions: u64,
+    pub issues: u64,
+    pub notifications: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionHasMore {
+    pub decisions: bool,
+    pub issues: bool,
+    pub notifications: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityAttentionResponse {
+    pub schema: u32,
+    pub activity_id: String,
+    pub activity_state: ActivityState,
+    pub limit: u32,
+    pub counts: ActivityAttentionCounts,
+    pub decisions: Vec<ActivityAttentionDecision>,
+    pub issues: Vec<ActivityAttentionIssue>,
+    pub notifications: Vec<ActivityAttentionNotification>,
+    pub totals: ActivityAttentionTotals,
+    pub has_more: ActivityAttentionHasMore,
+}
+
+impl ActivityAttentionResponse {
+    pub fn matches_activity(&self, id: &str, state: ActivityState) -> bool {
+        self.schema == 1
+            && self.activity_id == id
+            && self.activity_state == state
+            && (1..=100).contains(&self.limit)
+            && self.decisions.len() <= self.limit as usize
+            && self.issues.len() <= self.limit as usize
+            && self.notifications.len() <= self.limit as usize
+            && self
+                .decisions
+                .iter()
+                .all(ActivityAttentionDecision::is_consistent)
+            && self.issues.iter().all(|issue| {
+                !issue.job_id.is_empty()
+                    && !issue.status.is_empty()
+                    && !issue.execution_phase.is_empty()
+            })
+            && self.notifications.iter().all(|notification| {
+                !notification.id.is_empty()
+                    && notification
+                        .task_id
+                        .as_ref()
+                        .is_some_and(|id| !id.is_empty())
+            })
+            && page_matches(
+                self.totals.decisions,
+                self.decisions.len(),
+                self.has_more.decisions,
+            )
+            && page_matches(self.totals.issues, self.issues.len(), self.has_more.issues)
+            && page_matches(
+                self.totals.notifications,
+                self.notifications.len(),
+                self.has_more.notifications,
+            )
+    }
+}
+
+fn page_matches(total: u64, shown: usize, has_more: bool) -> bool {
+    total >= shown as u64 && has_more == (total > shown as u64)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivityListResponse {
     #[serde(default)]
@@ -342,6 +544,10 @@ pub struct ActivityDetailResponse {
     pub pending_approvals: Vec<ActivityApprovalView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approvals_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<ActivityAttentionResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

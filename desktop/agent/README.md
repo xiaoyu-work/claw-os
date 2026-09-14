@@ -78,7 +78,10 @@ The bridge and approval applet share `crates/clawd-client` for canonical
 v2 broker envelopes and request correlation, `CBK1` length-prefixed framing,
 deadlines, bounds, and typed transport/protocol errors. This broker wire
 version is independent of the desktop HTTP/SSE presentation protocol v1.
-The additive Activity routes leave both versions unchanged.
+The additive Activity routes leave both versions unchanged. Activity detail
+also carries the shared `activity.attention` projection; the bridge validates
+its Activity identity and derives the legacy pending-approval presentation only
+from exact pending decisions in that projection.
 
 The shared client inventory also retains mainline's protected
 [`system.review.*` contract](../../crates/clawd-client/MODULE.md), including

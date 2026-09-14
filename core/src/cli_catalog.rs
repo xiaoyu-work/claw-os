@@ -36,6 +36,7 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("create", "Create an Activity with a goal and completion criteria"),
                 ("list", "List the authenticated owner's Activities"),
                 ("show", "Show an Activity and its related jobs, sessions, and resources"),
+                ("attention", "Read shared pending decisions, attempt issues, and notifications"),
                 ("update", "Edit an active or paused Activity"),
                 ("run", "Submit a durable job for an active Activity"),
                 ("pause", "Pause future work without undoing in-flight effects"),

@@ -11,12 +11,12 @@ use axum::{
 };
 use clawd_client::{Command, Error as BrokerError, ErrorCode as BrokerErrorCode};
 use cos_agent_protocol::{
-    ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
-    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
-    ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
-    ActivityOperationPreviewRequest, ActivityReceiptsQuery, ActivityReceiptsResponse,
-    ActivityRunRequest, ActivityTransitionRequest, ActivityUpdateRequest, ActivityView,
-    ActivityWorkResponse, ErrorCode, ObjectStateEntry,
+    ActivityApprovalView, ActivityCreateRequest, ActivityDecisionStatus, ActivityDetailResponse,
+    ActivityListQuery, ActivityListResponse, ActivityObjectAttachRequest, ActivityObjectStateQuery,
+    ActivityObjectStateRecordRequest, ActivityObjectStateResponse, ActivityObjectsResponse,
+    ActivityOperationPreview, ActivityOperationPreviewRequest, ActivityReceiptsQuery,
+    ActivityReceiptsResponse, ActivityRunRequest, ActivityTransitionRequest, ActivityUpdateRequest,
+    ActivityView, ActivityWorkResponse, ErrorCode, ObjectStateEntry,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -56,17 +56,43 @@ pub async fn get(
             "Activity response id did not match the request",
         ));
     }
-    let pending = match state
+    let attention = match state
         .clawd
-        .call(Command::PermissionPending, json!({"limit": 100}))
+        .call(
+            Command::ActivityAttention,
+            with_id(&id, json!({"limit": 100}))?,
+        )
         .await
     {
-        Ok(value) => translation::approvals(value, &detail),
+        Ok(value) => translation::attention(value),
         Err(error) => Err(error.to_string()),
     };
-    match pending {
-        Ok(approvals) => detail.pending_approvals = approvals,
-        Err(error) => detail.approvals_error = Some(error),
+    match attention {
+        Ok(attention) if attention.matches_activity(&detail.activity.id, detail.activity.state) => {
+            detail.pending_approvals = attention
+                .decisions
+                .iter()
+                .filter(|decision| decision.status == ActivityDecisionStatus::Pending)
+                .filter_map(|decision| {
+                    Some(ActivityApprovalView {
+                        id: decision.id.clone(),
+                        session_id: decision.session_id.clone()?,
+                        label: decision.verb.clone()?,
+                        reason: decision.reason.clone().unwrap_or_default(),
+                    })
+                })
+                .collect();
+            detail.attention = Some(attention);
+        }
+        Ok(_) => {
+            let error = "Activity attention response did not match the requested Activity";
+            detail.approvals_error = Some(error.into());
+            detail.attention_error = Some(error.into());
+        }
+        Err(error) => {
+            detail.approvals_error = Some(error.clone());
+            detail.attention_error = Some(error);
+        }
     }
     Ok(Json(detail))
 }

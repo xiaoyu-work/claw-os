@@ -31,6 +31,8 @@ fn detail(id: &str, state: ActivityState) -> ActivityDetailResponse {
         sessions: vec!["session-1".into()],
         pending_approvals: vec![],
         approvals_error: None,
+        attention: None,
+        attention_error: None,
     }
 }
 

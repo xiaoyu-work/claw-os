@@ -8,6 +8,7 @@ fn activity_commands_have_stable_names_and_round_trip() {
         (Command::ActivityCreate, "activity.create"),
         (Command::ActivityList, "activity.list"),
         (Command::ActivityGet, "activity.get"),
+        (Command::ActivityAttention, "activity.attention"),
         (Command::ActivityUpdate, "activity.update"),
         (Command::ActivityTransition, "activity.transition"),
         (Command::ActivityRun, "activity.run"),
@@ -126,7 +127,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 36);
+    assert_eq!(Command::ALL.len(), 37);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");
@@ -175,16 +176,14 @@ fn requests_are_closed_typed_envelopes_with_fresh_bounded_ids() {
         serde_json::to_value(&first).unwrap()["command"],
         json!("task.submit")
     );
-    assert!(
-        serde_json::from_value::<Request>(json!({
-            "v": PROTOCOL_VERSION,
-            "id": "r1",
-            "command": "task.submit",
-            "params": {},
-            "uid": 0,
-        }))
-        .is_err()
-    );
+    assert!(serde_json::from_value::<Request>(json!({
+        "v": PROTOCOL_VERSION,
+        "id": "r1",
+        "command": "task.submit",
+        "params": {},
+        "uid": 0,
+    }))
+    .is_err());
 }
 
 #[test]

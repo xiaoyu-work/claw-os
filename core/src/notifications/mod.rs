@@ -215,9 +215,10 @@ impl NotificationPresentation {
     pub fn validate(&self) -> Result<(), NotificationError> {
         validate_text("app_name", &self.app_name, 128, false)?;
         if self.icon.len() > 128
-            || !self.icon.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-            })
+            || !self
+                .icon
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         {
             return Err(NotificationError::Invalid(
                 "icon must be an icon-theme name, not a path or URL".into(),
@@ -526,6 +527,13 @@ pub struct SourceNotificationPage {
     pub total: u64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TaskNotificationPage {
+    pub notifications: Vec<Notification>,
+    pub total: u64,
+    pub unread: u64,
+}
+
 pub trait NotificationService: Send + Sync {
     fn publish(
         &self,
@@ -548,6 +556,15 @@ pub trait NotificationService: Send + Sync {
         source: &str,
         limit: usize,
     ) -> Result<SourceNotificationPage, NotificationError>;
+
+    /// One snapshot of retained, unexpired, non-dismissed task-linked records.
+    /// Ownership and task membership apply before counts and the display limit.
+    fn list_tasks(
+        &self,
+        owner_uid: u32,
+        task_ids: &[String],
+        limit: usize,
+    ) -> Result<TaskNotificationPage, NotificationError>;
 
     fn get(&self, owner_uid: u32, id: &str) -> Result<Notification, NotificationError>;
 

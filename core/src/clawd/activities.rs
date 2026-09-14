@@ -152,7 +152,7 @@ pub(super) fn owner(client: &ClientIdentity) -> Result<u32, BrokerError> {
     client.require_uid().map_err(BrokerError::authorization)
 }
 
-fn list_limit(limit: Option<u64>) -> Result<usize, BrokerError> {
+pub(super) fn list_limit(limit: Option<u64>) -> Result<usize, BrokerError> {
     match limit {
         None => Ok(DEFAULT_LIST_LIMIT),
         Some(limit) if (1..=MAX_LIST_LIMIT as u64).contains(&limit) => Ok(limit as usize),

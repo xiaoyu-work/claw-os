@@ -21,6 +21,8 @@ pub enum Command {
     ActivityList,
     #[serde(rename = "activity.get")]
     ActivityGet,
+    #[serde(rename = "activity.attention")]
+    ActivityAttention,
     #[serde(rename = "activity.update")]
     ActivityUpdate,
     #[serde(rename = "activity.transition")]
@@ -101,10 +103,11 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
+        Self::ActivityAttention,
         Self::ActivityUpdate,
         Self::ActivityTransition,
         Self::ActivityRun,
@@ -145,6 +148,7 @@ impl Command {
             Self::ActivityCreate => "activity.create",
             Self::ActivityList => "activity.list",
             Self::ActivityGet => "activity.get",
+            Self::ActivityAttention => "activity.attention",
             Self::ActivityUpdate => "activity.update",
             Self::ActivityTransition => "activity.transition",
             Self::ActivityRun => "activity.run",

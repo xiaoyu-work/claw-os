@@ -5,14 +5,17 @@ const ID: &str = "00000000-0000-4000-8000-000000000001";
 #[test]
 fn receipt_recording_is_explicit_bounded_stdin_and_never_an_execution_command() {
     let report = crate::operations::receipts::capture(
-        uuid::Uuid::new_v4().to_string(),"demo".into(),"get".into(),
-        format!("sha256:{}", "a".repeat(64)), Ok(Some("result".into())),
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "get".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("result".into())),
     );
     let decoded = read_receipt(serde_json::to_vec(&report).unwrap().as_slice()).unwrap();
     assert_eq!(decoded.id, report.id);
     assert!(read_receipt("x".repeat(16 * 1024 + 1).as_bytes()).is_err());
     assert!(read_receipt(br#"{"source":"os_confirmed"}"#.as_slice()).is_err());
-    let (command, params) = parse("receipts", &args(&[ID,"--limit","2"])).unwrap();
+    let (command, params) = parse("receipts", &args(&[ID, "--limit", "2"])).unwrap();
     assert_eq!(command, Command::ActivityReceipts);
     assert_eq!(params["limit"], 2);
 }
@@ -22,20 +25,41 @@ fn object_attachment_uses_the_shared_typed_broker_without_local_uri_logic() {
     let (command, params) = parse(
         "attach-object",
         &args(&[
-            ID, "--label", "Status", "--app", "kv", "--type", "entry",
-            "--object-id=--schema", "--revision=v1",
+            ID,
+            "--label",
+            "Status",
+            "--app",
+            "kv",
+            "--type",
+            "entry",
+            "--object-id=--schema",
+            "--revision=v1",
         ]),
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(command, Command::ActivityObjectAttach);
     assert_eq!(params["object"]["object_id"], "--schema");
     assert_eq!(params["object"]["revision"], "v1");
     assert!(params.get("owner_uid").is_none());
     assert!(params.get("reference").is_none());
     assert!(parse("attach-object", &args(&[ID, "--app", "kv"])).is_err());
-    assert!(parse("attach-object", &args(&[
-        ID, "--label", "Status", "--app", "kv", "--type", "entry",
-        "--object-id", "key", "--owner", "0",
-    ])).is_err());
+    assert!(parse(
+        "attach-object",
+        &args(&[
+            ID,
+            "--label",
+            "Status",
+            "--app",
+            "kv",
+            "--type",
+            "entry",
+            "--object-id",
+            "key",
+            "--owner",
+            "0",
+        ])
+    )
+    .is_err());
     let (command, params) = parse("objects", &args(&[ID])).unwrap();
     assert_eq!(command, Command::ActivityObjects);
     assert_eq!(params, json!({"id":ID}));
@@ -79,6 +103,8 @@ fn invalid_cli_requests_fail_before_connecting() {
         ("show", args(&["../foreign"])),
         ("show", args(&[ID, "--limit", "0"])),
         ("show", args(&[ID, "--limit", "101"])),
+        ("attention", args(&[ID, "--limit", "0"])),
+        ("attention", args(&[ID, "--limit", "101"])),
         ("update", args(&[ID])),
         ("update", args(&[ID, "--resource", "not-a-reference"])),
         ("pause", args(&[ID, "--approve", "true"])),
@@ -86,6 +112,15 @@ fn invalid_cli_requests_fail_before_connecting() {
     ] {
         assert!(parse(command, &values).is_err(), "{command}: {values:?}");
     }
+}
+
+#[test]
+fn attention_uses_the_read_only_shared_broker_contract() {
+    let (route, params) = parse("attention", &args(&[ID, "--limit", "12"])).unwrap();
+    assert_eq!(route, Command::ActivityAttention);
+    assert_eq!(params, json!({"id":ID,"limit":12}));
+    assert!(params.get("owner_uid").is_none());
+    assert!(params.get("decision").is_none());
 }
 
 #[test]

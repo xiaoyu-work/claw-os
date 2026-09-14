@@ -8,8 +8,8 @@ use super::{
     ChangeBatch, DeliveryChannel, DeliveryClaim, DeliveryPolicy, DeliveryResult, DeliveryState,
     DeliveryStatus, Notification, NotificationAction, NotificationChange, NotificationDraft,
     NotificationError, NotificationMutation, NotificationPreferences, NotificationService,
-    NotificationState, Severity, SourceNotificationPage, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT,
-    SCHEMA_VERSION,
+    NotificationState, Severity, SourceNotificationPage, TaskNotificationPage, DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT, SCHEMA_VERSION,
 };
 
 const DEDUPE_WINDOW_MS: i64 = 15 * 60 * 1_000;
@@ -159,7 +159,11 @@ impl NotificationService for SqliteNotificationService {
         draft.validate()?;
         let now = super::now_ms();
         let actions_json = serde_json::to_string(&draft.actions)?;
-        let presentation_json = draft.presentation.as_ref().map(serde_json::to_string).transpose()?;
+        let presentation_json = draft
+            .presentation
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let preferences = preferences_tx(&tx, owner_uid)?;
@@ -311,8 +315,7 @@ impl NotificationService for SqliteNotificationService {
             params![owner_uid, source, now],
             |row| {
                 let count = row.get::<_, i64>(0)?;
-                u64::try_from(count)
-                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, count))
+                u64::try_from(count).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, count))
             },
         )?;
         let mut statement = tx.prepare(
@@ -336,6 +339,71 @@ impl NotificationService for SqliteNotificationService {
         Ok(SourceNotificationPage {
             notifications,
             total,
+        })
+    }
+
+    fn list_tasks(
+        &self,
+        owner_uid: u32,
+        task_ids: &[String],
+        limit: usize,
+    ) -> Result<TaskNotificationPage, NotificationError> {
+        for id in task_ids {
+            super::validate_identifier("task_id", id, 192)?;
+        }
+        if task_ids.is_empty() {
+            return Ok(TaskNotificationPage::default());
+        }
+        let task_ids: std::collections::HashSet<&str> =
+            task_ids.iter().map(String::as_str).collect();
+        let limit = normalize_limit(limit);
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let mut statement = tx.prepare(
+            "SELECT id, task_id, state FROM notifications
+             WHERE owner_uid = ?1 AND state != ?2
+               AND (expires_at_ms IS NULL OR expires_at_ms > ?3)
+             ORDER BY updated_at_ms DESC, sequence DESC",
+        )?;
+        let rows = statement.query_map(
+            params![
+                owner_uid,
+                notification_state_code(NotificationState::Dismissed),
+                super::now_ms()
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
+        let mut ids = Vec::new();
+        let mut total = 0;
+        let mut unread = 0;
+        for row in rows {
+            let (id, task_id, state) = row?;
+            if !task_id.as_deref().is_some_and(|id| task_ids.contains(id)) {
+                continue;
+            }
+            let state = notification_state_from_code(state)?;
+            total += 1;
+            unread += u64::from(state == NotificationState::Unread);
+            if ids.len() < limit {
+                ids.push(id);
+            }
+        }
+        drop(statement);
+        let notifications = ids
+            .into_iter()
+            .map(|id| load_notification(&tx, owner_uid, &id))
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit()?;
+        Ok(TaskNotificationPage {
+            notifications,
+            total,
+            unread,
         })
     }
 
@@ -446,7 +514,10 @@ impl NotificationService for SqliteNotificationService {
         if changed == 0 {
             return Err(NotificationError::NotFound);
         }
-        if matches!(mutation, NotificationMutation::Dismiss | NotificationMutation::Acknowledge) {
+        if matches!(
+            mutation,
+            NotificationMutation::Dismiss | NotificationMutation::Acknowledge
+        ) {
             tx.execute(
                 "UPDATE notification_deliveries
                  SET state = ?1, next_attempt_at_ms = NULL
@@ -1172,7 +1243,11 @@ impl NotificationRow {
             dismissed_at_ms: self.dismissed_at_ms,
             actions: serde_json::from_str::<Vec<NotificationAction>>(&self.actions_json)?,
             deliveries,
-            presentation: self.presentation_json.as_deref().map(serde_json::from_str).transpose()?,
+            presentation: self
+                .presentation_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?,
         })
     }
 }

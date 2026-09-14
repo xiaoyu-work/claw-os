@@ -49,6 +49,7 @@ Use the returned `id` in later commands:
 activity_id="00000000-0000-4000-8000-000000000001" # replace with the returned ID
 
 cos activity show "$activity_id"
+cos activity attention "$activity_id"
 cos activity run "$activity_id" "Prepare a release draft"
 cos activity pause "$activity_id"
 cos activity update "$activity_id" --criteria "Reviewed, published, and announced"
@@ -90,6 +91,27 @@ or re-enabling them requires reopening.
 Ordinary conversations and jobs without an Activity remain supported.
 Associated session continuations retain their Activity; a session already
 assigned to one Activity cannot silently be moved to another.
+
+## Attention and decisions
+
+`cos activity attention ID [--limit N]` reads the same owner-scoped summary in
+terminal-only and desktop installations. It combines associated Job counts,
+pending or recorded permission decisions, prioritized execution issues, and
+retained task-linked notifications. Counts and totals cover the full retained
+scope; the 1-100 limit applies independently to each returned detail list.
+
+The view is informational and does not mutate the Activity, Jobs, approvals,
+or notifications. Pending decisions link to the existing protected OS review
+presenter. An approved entry is historical consent evidence, not proof that
+authority is still valid, the Job resumed, an effect succeeded, or the goal is
+complete. Missing, corrupt, foreign, or mismatched approval details appear as
+bounded `unavailable` entries without exposing capability metadata.
+
+Notification sender labels, text, task tags, read state, and acknowledgement
+are never authority or decisions. Reading or acknowledging a notification
+cannot approve work. Indeterminate execution is counted in addition to the
+Job's ordinary status and is prioritized above waiting and failed issues so an
+uncertain effect is not hidden by lower-risk attention.
 
 ## Resources and boundaries
 
@@ -212,6 +234,7 @@ receive a bounded, recorded, untrusted snapshot when claimed.
 | `activity.create` | New Activity metadata |
 | `activity.list` | Owner-scoped Activity metadata list |
 | `activity.get` | Metadata plus related jobs and session references |
+| `activity.attention` | Read-only Job, protected approval, issue, and task-linked notification projection |
 | `activity.update` | Updated metadata; only supplied fields change |
 | `activity.transition` | Updated explicit lifecycle state |
 | `activity.run` | An ordinary submitted Agent job associated with the Activity |

@@ -10,7 +10,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | Module | Ownership |
 | --- | --- |
 | `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
-| `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
+| `src/activities.rs` | Activity list/detail and shared attention widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
 | `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
 | `src/activities/capability_policy.rs` | Fixed typed capability rule/scope controls, owner-scoped snapshots and CAS-bound edits/toggles; no grants, approval decisions or resource resolution |
@@ -37,6 +37,14 @@ stream. Job results cannot change goal state locally; explicit completion
 requires the user's confirmation note. Pending approvals link to associated
 sessions and remain decisions for the existing Approval Gate. Resource
 references are displayed as inert text, and boundaries grant no capabilities.
+
+The fixed attention section renders the same broker-owned projection used by
+terminal and Agent Web clients: retained Job counts, exact decision records,
+prioritized issues, and task-linked notifications. Approved/denied entries are
+historical consent evidence rather than current authority or execution proof;
+notification acknowledgement never decides a permission. The desktop bridge
+fetches and validates this projection with Activity detail and owns no parallel
+attention store.
 
 The reducer keeps at most one request for the current generation. Navigation
 invalidates stale responses without cancelling backend work. Visible views

@@ -12,6 +12,8 @@ fn activity_v1_additions_have_defaults_and_ignore_future_fields() {
     assert!(detail.sessions.is_empty());
     assert!(detail.pending_approvals.is_empty());
     assert!(detail.approvals_error.is_none());
+    assert!(detail.attention.is_none());
+    assert!(detail.attention_error.is_none());
     assert!(detail.activity.completion_criteria.is_empty());
     assert!(detail.activity.resources.is_empty());
     assert!(detail.activity.completion_note.is_none());
@@ -32,6 +34,76 @@ fn activity_v1_additions_have_defaults_and_ignore_future_fields() {
     }))
     .unwrap();
     assert_eq!(resource.reference, "notes.txt");
+}
+
+fn attention_value() -> serde_json::Value {
+    json!({
+        "schema": 1,
+        "activity_id": "activity-1",
+        "activity_state": "active",
+        "limit": 50,
+        "counts": {
+            "queued": 0, "running": 0, "waiting": 1, "completed": 0,
+            "failed": 0, "cancelled": 0, "indeterminate": 0,
+            "pending_decisions": 1, "unavailable_decisions": 0,
+            "unread_notifications": 1
+        },
+        "decisions": [{
+            "id": "review-1", "job_id": "job-1", "session_id": "session-1",
+            "status": "pending", "requested_at": 42, "verb": "network.connect",
+            "scope": {"kind": "host", "value": "example.com"},
+            "risk": "high", "reason": "Publish the release",
+            "review_id": "review-1", "error": null
+        }],
+        "issues": [{
+            "job_id": "job-1", "session_id": "session-1",
+            "kind": "waiting_approval", "status": "waiting",
+            "execution_phase": "waiting_approval", "title": "Publish",
+            "created_at": "2026-09-10T12:00:00Z", "finished_at": null,
+            "message": "Waiting for review"
+        }],
+        "notifications": [{
+            "id": "notification-1", "source": "job", "kind": "attention",
+            "severity": "error", "title": "Review needed", "body": "Publish",
+            "task_id": "job-1", "state": "unread", "updated_at_ms": 42
+        }],
+        "totals": {"decisions": 1, "issues": 1, "notifications": 1},
+        "has_more": {"decisions": false, "issues": false, "notifications": false}
+    })
+}
+
+#[test]
+fn attention_contract_matches_identity_and_closes_unavailable_decisions() {
+    let attention: ActivityAttentionResponse = serde_json::from_value(attention_value()).unwrap();
+    assert!(attention.matches_activity("activity-1", ActivityState::Active));
+    assert!(!attention.matches_activity("other", ActivityState::Active));
+
+    let mut unavailable = attention_value();
+    unavailable["decisions"][0] = json!({
+        "id": "review-1", "job_id": "job-1", "session_id": "session-1",
+        "status": "unavailable", "requested_at": null, "verb": null,
+        "scope": null, "risk": null, "reason": null, "review_id": null,
+        "error": "Details unavailable"
+    });
+    let unavailable: ActivityAttentionResponse = serde_json::from_value(unavailable).unwrap();
+    assert!(unavailable.matches_activity("activity-1", ActivityState::Active));
+
+    let mut leaking = unavailable.clone();
+    leaking.decisions[0].verb = Some("network.connect".into());
+    assert!(!leaking.matches_activity("activity-1", ActivityState::Active));
+}
+
+#[test]
+fn attention_contract_rejects_inconsistent_collection_metadata() {
+    let mut value = attention_value();
+    value["totals"]["notifications"] = json!(0);
+    let attention: ActivityAttentionResponse = serde_json::from_value(value).unwrap();
+    assert!(!attention.matches_activity("activity-1", ActivityState::Active));
+
+    let mut value = attention_value();
+    value["has_more"]["issues"] = json!(true);
+    let attention: ActivityAttentionResponse = serde_json::from_value(value).unwrap();
+    assert!(!attention.matches_activity("activity-1", ActivityState::Active));
 }
 
 #[test]

@@ -58,7 +58,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
-| Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
+| Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session/attention projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/clawd/activity_attention.rs`, `core/src/activity.rs` |
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
 | Activity object state | Bounded caller-reported observations, receipt links, planning relations and immutable correction/retraction history | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs` |
 | Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
@@ -1101,6 +1101,7 @@ cos activity / Agent Web / native desktop Agent
        |
        +-- activity.run -> ordinary task.submit -> claw-agentd
        +-- activity.get -> associated job/session projection
+       +-- activity.attention -> Job + protected approval + NotificationService projection
 ```
 
 `core/src/activities/` owns the definition and SQLite provider. Neither depends
@@ -1121,6 +1122,15 @@ Activity mutations retain the broker's normal authorization, bounded decoding,
 audit projection and journal bracketing. Related job results are projections
 from the existing task store, not a second copy of its state. See
 [`docs/activities.md`](docs/activities.md) for commands and the initial scope.
+
+`activity.attention` is a read-only, owner-scoped projection over the same
+associated Jobs, protected approval records, and task-linked Notification
+Service rows. Counts cover the full retained scope before each bounded detail
+list is truncated. Pending and recorded decisions are display evidence only:
+an approval does not prove current authority, resumed execution, successful
+effects, or Activity completion. Missing or mismatched approval details fail
+closed without exposing capability metadata. Notification state, text, and
+acknowledgement never become consent or execution authority.
 
 ### Activity execution limits
 

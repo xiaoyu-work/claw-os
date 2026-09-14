@@ -995,6 +995,15 @@ fn activity_schemas() -> Vec<CommandSchema> {
             example: "cos activity show 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
+            command: "attention",
+            description: "Read pending decisions, unknown or failed attempts, and task-linked notifications without granting authority",
+            params: vec![
+                id(),
+                Param::flag("--limit", "integer", false, "Maximum items in each list, 1-100 (default 50); counts cover the full retained scope"),
+            ],
+            example: "cos activity attention 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
             command: "update",
             description: "Change supplied fields of an active or paused Activity",
             params: update,

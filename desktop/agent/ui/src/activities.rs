@@ -10,10 +10,11 @@ pub use execution_limits::Message as ExecutionLimitsMessage;
 pub use object_state::Message as ObjectStateMessage;
 
 use cos_agent_protocol::{
-    ActivityJobView, ActivityObjectStatus, ActivityReceiptOutcome, ActivityReceiptSource,
-    ActivityReceiptReport, ActivityReceiptView, ActivityResource, AppDeclaredEffect, AppEffectKind,
-    AppEffectRecovery, AppEffectTargetKind, AppEffectTargetState, AppObjectDescription,
-    ReceiptDeclaredEffect, ReceiptResultKind,
+    ActivityAttentionDecision, ActivityAttentionIssue, ActivityAttentionNotification,
+    ActivityDecisionStatus, ActivityJobView, ActivityObjectStatus, ActivityReceiptOutcome,
+    ActivityReceiptSource, ActivityReceiptReport, ActivityReceiptView, ActivityResource,
+    AppDeclaredEffect, AppEffectKind, AppEffectRecovery, AppEffectTargetKind, AppEffectTargetState,
+    AppObjectDescription, ReceiptDeclaredEffect, ReceiptResultKind,
 };
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{Column, Row, button, container, scrollable, text};
@@ -1177,26 +1178,8 @@ impl Activities {
             content = content.push(text(fl!("activity-work-inactive")).size(12.0));
         }
         content = content
-            .push(text(fl!("activity-approvals")).size(18.0))
-            .push(text(fl!("activity-approvals-hint")).size(12.0));
-        if let Some(error) = &detail.approvals_error {
-            content = content.push(error_card(error));
-        } else if detail.pending_approvals.is_empty() {
-            content = content.push(text(fl!("activity-no-approvals")).size(12.0));
-        }
-        for approval in &detail.pending_approvals {
-            content = content.push(
-                Column::new()
-                    .spacing(4)
-                    .push(text(&approval.label).size(14.0))
-                    .push(text(&approval.reason).size(12.0))
-                    .push(
-                        button::text(fl!("activity-open-session"))
-                            .on_press(AppMessage::OpenActivitySession(approval.session_id.clone())),
-                    ),
-            );
-        }
-        content = content.push(text(fl!("activity-jobs")).size(18.0));
+            .push(attention_view(detail))
+            .push(text(fl!("activity-jobs")).size(18.0));
         if detail.jobs.is_empty() {
             content = content.push(text(fl!("activity-no-jobs")).size(12.0));
         }
@@ -1739,6 +1722,153 @@ fn error_card(error: &str) -> Element<'_, AppMessage> {
         .padding(12)
         .class(theme::Container::custom(styles::tool_error_card))
         .into()
+}
+
+fn attention_view(detail: &ActivityDetailResponse) -> Element<'_, AppMessage> {
+    let mut content = Column::new()
+        .spacing(8)
+        .push(text(fl!("activity-attention")).size(18.0))
+        .push(text(fl!("activity-attention-hint")).size(12.0));
+    let Some(attention) = &detail.attention else {
+        return content
+            .push(match &detail.attention_error {
+                Some(error) => error_card(error),
+                None => text(fl!("activity-attention-unavailable")).size(12.0).into(),
+            })
+            .into();
+    };
+    let counts = &attention.counts;
+    content = content.push(
+        text(fl!(
+            "activity-attention-counts",
+            queued = counts.queued,
+            running = counts.running,
+            waiting = counts.waiting,
+            completed = counts.completed,
+            failed = counts.failed,
+            cancelled = counts.cancelled,
+            indeterminate = counts.indeterminate
+        ))
+        .size(12.0),
+    );
+    content = content
+        .push(text(fl!("activity-attention-decisions")).size(15.0))
+        .push(text(fl!("activity-attention-decisions-hint")).size(11.0));
+    if attention.decisions.is_empty() {
+        content = content.push(text(fl!("activity-attention-no-decisions")).size(12.0));
+    }
+    for decision in &attention.decisions {
+        content = content.push(attention_decision_view(decision));
+    }
+    content = content.push(text(fl!("activity-attention-issues")).size(15.0));
+    if attention.issues.is_empty() {
+        content = content.push(text(fl!("activity-attention-no-issues")).size(12.0));
+    }
+    for issue in &attention.issues {
+        content = content.push(attention_issue_view(issue));
+    }
+    content = content
+        .push(text(fl!("activity-attention-notifications")).size(15.0))
+        .push(text(fl!("activity-attention-notifications-hint")).size(11.0));
+    if attention.notifications.is_empty() {
+        content = content.push(text(fl!("activity-attention-no-notifications")).size(12.0));
+    }
+    for notification in &attention.notifications {
+        content = content.push(attention_notification_view(notification));
+    }
+    if attention.has_more.decisions
+        || attention.has_more.issues
+        || attention.has_more.notifications
+    {
+        content = content.push(
+            text(fl!(
+                "activity-attention-truncated",
+                decisions = attention.totals.decisions,
+                issues = attention.totals.issues,
+                notifications = attention.totals.notifications
+            ))
+            .size(11.0),
+        );
+    }
+    content.into()
+}
+
+fn attention_decision_view(decision: &ActivityAttentionDecision) -> Element<'_, AppMessage> {
+    let status = match decision.status {
+        ActivityDecisionStatus::Pending => fl!("activity-attention-decision-pending"),
+        ActivityDecisionStatus::Approved => fl!("activity-attention-decision-approved"),
+        ActivityDecisionStatus::Denied => fl!("activity-attention-decision-denied"),
+        ActivityDecisionStatus::Unavailable => fl!("activity-attention-decision-unavailable"),
+    };
+    let title = decision
+        .verb
+        .as_deref()
+        .unwrap_or_else(|| decision.error.as_deref().unwrap_or(&decision.id));
+    let mut content = Column::new()
+        .spacing(4)
+        .push(text(format!("{status} · {title}")).size(13.0))
+        .push(text(format!("{} · {}", decision.job_id, decision.id)).size(11.0));
+    if let Some(reason) = &decision.reason {
+        content = content.push(text(reason).size(12.0));
+    }
+    if let Some(session) = &decision.session_id {
+        content = content.push(
+            button::text(fl!("activity-open-session"))
+                .on_press(AppMessage::OpenActivitySession(session.clone())),
+        );
+    }
+    container(content)
+        .padding(10)
+        .width(Length::Fill)
+        .class(theme::Container::custom(styles::tool_card))
+        .into()
+}
+
+fn attention_issue_view(issue: &ActivityAttentionIssue) -> Element<'_, AppMessage> {
+    let mut content = Column::new()
+        .spacing(4)
+        .push(text(&issue.title).size(13.0))
+        .push(
+            text(format!(
+                "{} · {} · {}",
+                issue.job_id, issue.status, issue.execution_phase
+            ))
+            .size(11.0),
+        )
+        .push(text(&issue.message).size(12.0));
+    if let Some(session) = &issue.session_id {
+        content = content.push(
+            button::text(fl!("activity-open-session"))
+                .on_press(AppMessage::OpenActivitySession(session.clone())),
+        );
+    }
+    container(content)
+        .padding(10)
+        .width(Length::Fill)
+        .class(theme::Container::custom(styles::tool_card))
+        .into()
+}
+
+fn attention_notification_view(
+    notification: &ActivityAttentionNotification,
+) -> Element<'_, AppMessage> {
+    container(
+        Column::new()
+            .spacing(4)
+            .push(text(&notification.title).size(13.0))
+            .push(
+                text(format!(
+                    "{} · {:?} · {:?}",
+                    notification.source, notification.severity, notification.state
+                ))
+                .size(11.0),
+            )
+            .push(text(&notification.body).size(12.0)),
+    )
+    .padding(10)
+    .width(Length::Fill)
+    .class(theme::Container::custom(styles::tool_card))
+    .into()
 }
 
 fn job_view(job: &ActivityJobView, available: bool, can_retry: bool) -> Element<'_, AppMessage> {

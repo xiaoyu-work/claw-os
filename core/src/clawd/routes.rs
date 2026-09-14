@@ -39,13 +39,13 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, activities, activity_object_state, activity_objects, activity_receipts,
-    app_services, app_sessions, audio, backup, bluetooth, browser, camera, clipboard,
-    config_editor, containers, context, context_events, crash, credentials, desktop, display,
-    event_center, file_changes, firewall, hardware, journal as journal_ops, location, memory,
-    network, network_diagnostics, notifications, operation_previews, packages, permissions, power,
-    printer, scheduler, security, snapshots, storage, system_journal, systemd, tasks, transactions,
-    usage, usb_guard, users,
+    accessibility, activities, activity_attention, activity_object_state, activity_objects,
+    activity_receipts, app_services, app_sessions, audio, backup, bluetooth, browser, camera,
+    clipboard, config_editor, containers, context, context_events, crash, credentials, desktop,
+    display, event_center, file_changes, firewall, hardware, journal as journal_ops, location,
+    memory, network, network_diagnostics, notifications, operation_previews, packages, permissions,
+    power, printer, scheduler, security, snapshots, storage, system_journal, systemd, tasks,
+    transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -517,6 +517,16 @@ routes! {
         body: body::ActivityGet,
         audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
         run: |c| activities::get(c.params, c.client),
+    }
+    ActivityAttention {
+        name: "activity.attention",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityGet,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activity_attention::get(c.params, c.client),
     }
     ActivityUpdate {
         name: "activity.update",

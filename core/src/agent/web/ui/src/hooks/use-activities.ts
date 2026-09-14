@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { executionLimitsApi } from "@/lib/execution-limits";
 import { capabilityPolicyApi } from "@/lib/capability-policy";
+import { activityAttentionApi } from "@/lib/activity-attention";
 
 import {
   activityApi,
@@ -84,6 +85,11 @@ export function useActivities(state?: ActivityState) {
 export function useActivity(id: string) {
   const read = useCallback((signal: AbortSignal) => activityApi.get(id, signal), [id]);
   return useActivityView(read, detailInterval);
+}
+
+export function useActivityAttention(id: string) {
+  const read = useCallback((signal: AbortSignal) => activityAttentionApi.get(id, signal), [id]);
+  return useActivityView(read, listInterval);
 }
 
 export function useActivityObjects(id: string) {

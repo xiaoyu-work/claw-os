@@ -2,10 +2,11 @@
 //! Activity state is inferred from job status or approval outcomes.
 
 use cos_agent_protocol::{
-    ActivityApprovalView, ActivityDetailResponse, ActivityJobView, ActivityListResponse,
-    ActivityObjectResourceView, ActivityObjectStatus, ActivityObjectsResponse,
-    ActivityObjectStateResponse, ActivityOperationPreview, ActivityReceiptsResponse,
-    ActivityResource, ActivityState, ActivityView, ActivityWorkResponse, ObjectStateEntry,
+    ActivityApprovalView, ActivityAttentionResponse, ActivityDetailResponse, ActivityJobView,
+    ActivityListResponse, ActivityObjectResourceView, ActivityObjectStateResponse,
+    ActivityObjectStatus, ActivityObjectsResponse, ActivityOperationPreview,
+    ActivityReceiptsResponse, ActivityResource, ActivityState, ActivityView, ActivityWorkResponse,
+    ObjectStateEntry,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -134,7 +135,13 @@ pub fn receipts(value: Value) -> Result<ActivityReceiptsResponse, String> {
     if !response.matches_activity(&response.activity_id) {
         return Err("activity.receipts returned an invalid schema or Activity identity".into());
     }
+
     Ok(response)
+}
+
+pub fn attention(value: Value) -> Result<ActivityAttentionResponse, String> {
+    serde_json::from_value(value)
+        .map_err(|error| format!("invalid activity.attention result: {error}"))
 }
 
 pub fn object_state(value: Value) -> Result<ActivityObjectStateResponse, String> {
@@ -153,7 +160,9 @@ pub fn object_state_entry(value: Value) -> Result<ObjectStateEntry, String> {
     let entry: ObjectStateEntry = serde_json::from_value(value)
         .map_err(|error| format!("invalid activity.object_state.record result: {error}"))?;
     if !entry.matches_activity(&entry.activity_id) {
-        return Err("activity.object_state.record returned an invalid entry or Activity identity".into());
+        return Err(
+            "activity.object_state.record returned an invalid entry or Activity identity".into(),
+        );
     }
     Ok(entry)
 }
@@ -213,6 +222,8 @@ pub fn detail(value: Value) -> Result<ActivityDetailResponse, String> {
         sessions: envelope.sessions,
         pending_approvals: Vec::new(),
         approvals_error: None,
+        attention: None,
+        attention_error: None,
     })
 }
 

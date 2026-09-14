@@ -37,6 +37,34 @@ fn object_state_value() -> Value {
 }
 
 #[test]
+fn activity_attention_translation_keeps_the_shared_read_only_contract() {
+    let response = attention(json!({
+        "schema": 1,
+        "activity_id": "activity-1",
+        "activity_state": "active",
+        "limit": 50,
+        "counts": {
+            "queued": 0, "running": 0, "waiting": 0, "completed": 0,
+            "failed": 0, "cancelled": 0, "indeterminate": 0,
+            "pending_decisions": 0, "unavailable_decisions": 0,
+            "unread_notifications": 0
+        },
+        "decisions": [],
+        "issues": [],
+        "notifications": [],
+        "totals": {"decisions": 0, "issues": 0, "notifications": 0},
+        "has_more": {"decisions": false, "issues": false, "notifications": false},
+        "owner_uid": 0,
+        "authority": {"grant": true}
+    }))
+    .unwrap();
+    assert!(response.matches_activity("activity-1", ActivityState::Active));
+    let encoded = serde_json::to_value(response).unwrap();
+    assert!(encoded.get("owner_uid").is_none());
+    assert!(encoded.get("authority").is_none());
+}
+
+#[test]
 fn activity_object_state_translation_keeps_all_classifications_without_truth_claims() {
     use cos_agent_protocol::{ObjectStateContent, ObjectStateSource};
     for content in [
@@ -57,8 +85,12 @@ fn activity_object_state_translation_keeps_all_classifications_without_truth_cla
         value["entries"][0]["verified"] = json!(true);
         value["entries"][0]["app_data"] = json!("never forwarded");
         let response = object_state(value).unwrap();
-        assert_eq!(response.entries[0].source, ObjectStateSource::CallerReported);
-        let entry = object_state_entry(serde_json::to_value(&response.entries[0]).unwrap()).unwrap();
+        assert_eq!(
+            response.entries[0].source,
+            ObjectStateSource::CallerReported
+        );
+        let entry =
+            object_state_entry(serde_json::to_value(&response.entries[0]).unwrap()).unwrap();
         assert!(entry.matches_activity(&response.activity_id));
         if matches!(entry.draft.content, ObjectStateContent::Retracted { .. }) {
             assert!(entry.draft.supersedes.is_some());
@@ -90,10 +122,17 @@ fn activity_object_state_translation_reuses_bounded_receipt_report_without_repla
     let report = response.entries[0].receipt.as_ref().unwrap();
     assert_eq!(report.outcome, ActivityReceiptOutcome::Indeterminate);
     assert!(report.result.as_ref().unwrap().preview_truncated);
-    assert_eq!(report.result.as_ref().unwrap().preview, "{\"verified\":true}");
+    assert_eq!(
+        report.result.as_ref().unwrap().preview,
+        "{\"verified\":true}"
+    );
     assert_eq!(report.error.as_deref(), Some("Reported uncertainty"));
     let encoded = serde_json::to_value(&response).unwrap();
-    assert!(encoded["entries"][0]["receipt"].get("raw_app_data").is_none());
+    assert!(
+        encoded["entries"][0]["receipt"]
+            .get("raw_app_data")
+            .is_none()
+    );
     value["entries"][0]["receipt"]["outcome"] = json!("os_confirmed");
     assert!(object_state(value).is_err());
 }
@@ -108,7 +147,10 @@ fn activity_object_state_translation_rejects_schema_identity_shape_and_claim_mis
         ("recorded_at", json!("")),
         ("validity", json!("fresh")),
         ("validity", json!("expired")),
-        ("superseded_by", json!("22222222-2222-4222-8222-222222222222")),
+        (
+            "superseded_by",
+            json!("22222222-2222-4222-8222-222222222222"),
+        ),
     ] {
         let mut value = object_state_value();
         value["entries"][0][field] = replacement;

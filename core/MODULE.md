@@ -39,7 +39,7 @@ persistence, and structured primitive dispatch.
 | `src/extension_host/` | Isolated App/MCP process host, task-bound control channel, route-filtered broker proxy, cleanup |
 | `src/agent_extensions/` | Verified manifest registry, event fanout, capability references, and proposed-action mediation |
 | `src/provenance/` | Compiled-root signature verification and immutable package snapshots |
-| `src/activities/`, `src/clawd/activities.rs`, `src/activity.rs` | Shared Activity service/provider, owner-scoped broker, and terminal presentation; also consumed by Web/native desktop |
+| `src/activities/`, `src/clawd/activities.rs`, `src/clawd/activity_attention.rs`, `src/activity.rs` | Shared Activity service/provider, owner-scoped lifecycle and attention projections, and terminal presentation; also consumed by Web/native desktop |
 | `src/caps/activity_boundary.rs`, `src/clawd/activity_capability_policy.rs` | Live Activity capability constraints, root-held policy bindings and owner-scoped controls |
 | `src/triggers.rs`, `src/clawd/scheduler.rs` | Deterministic event-driven work, existing scheduler authority and bounded Activity task/session associations |
 | `src/objects/`, `src/router/object_commands.rs` | Verified App object catalogue and explicit resolution through ordinary App dispatch |

@@ -35,6 +35,10 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route("/api/activities/{id}", get(routes::activities::get))
         .route(
+            "/api/activities/{id}/attention",
+            get(routes::activities::attention),
+        )
+        .route(
             "/api/activities/{id}/update",
             post(routes::activities::update),
         )

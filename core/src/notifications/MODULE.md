@@ -12,6 +12,8 @@ user interfaces consume them without relying on model behavior.
 - Persist notifications and per-channel delivery state in SQLite.
 - Enforce owner isolation, deduplication, retention, acknowledgement, DND, and
   retry leases.
+- Provide transactional owner/task projections with full retained and unread
+  counts before bounded detail limits.
 - Provide channel-neutral delivery claims and the ntfy adapter.
 
 Native `cosmic-notifications` submits bounded intent through
@@ -46,7 +48,9 @@ the worker's automatic legacy-state move no longer selects it.
 
 Producers and `clawd` depend on the `NotificationService` definition. They do
 not reach into SQLite tables or delivery adapters directly. The desktop and Web
-surfaces consume owner-scoped broker routes.
+surfaces consume owner-scoped broker routes. Activity attention filters by
+authenticated owner and associated task IDs; notification acknowledgement is
+presentation state, never an approval decision.
 
 ## Tests
 

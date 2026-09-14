@@ -1,6 +1,7 @@
 pub mod a11y_wayland;
 pub mod accessibility;
 pub mod activities;
+pub mod activity_attention;
 pub mod activity_capability_policy;
 pub mod activity_execution_limits;
 pub mod activity_object_state;

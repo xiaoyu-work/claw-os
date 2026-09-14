@@ -263,6 +263,7 @@ async function fixture(req, res) {
     for (const job of jobs.values()) {
       if (job.waiting_on.includes(id)) Object.assign(job, {
         status: "ok", waiting_on: [], finished_at: timestamp(), response: "Release draft reviewed.",
+        approved: true,
       });
     }
     return reply(req, res, { approved: true });
@@ -371,11 +372,60 @@ async function fixture(req, res) {
     executionLimitRecords.set(item.id, policy);
     return reply(req, res, policy);
   }
-  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts|object-state))?$/.exec(url.pathname);
+  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts|object-state|attention))?$/.exec(url.pathname);
   if (match) {
     const item = activities.get(decodeURIComponent(match[1]));
     assert.ok(item, "the requested Activity exists");
     const action = match[2];
+    if (action === "attention") {
+      assert.equal(req.method, "GET");
+      assert.equal(url.searchParams.get("limit"), "50");
+      const activityJobs = [...jobs.values()].filter((job) => job.activity_id === item.id);
+      const pending = activityJobs.flatMap((job) => job.waiting_on.map((id) => ({
+        id, job_id: job.id, session_id: job.session_id, status: "pending",
+        requested_at: 42, verb: "fs.read", scope: { kind: "path", value: "/release/notes" },
+        risk: "medium", reason: "Review the release notes", review_id: id, error: null,
+      })));
+      const approved = activityJobs.filter((job) => job.approved).map((job) => ({
+        id: `approved-${job.id}`, job_id: job.id, session_id: job.session_id, status: "approved",
+        requested_at: 41, verb: "fs.read", scope: { kind: "path", value: "/release/notes" },
+        risk: "medium", reason: "Review the release notes",
+        review_id: `approved-${job.id}`, error: null,
+      }));
+      const unavailable = activityJobs.length ? [{
+        id: "unavailable-decision", job_id: activityJobs[0].id,
+        session_id: activityJobs[0].session_id, status: "unavailable",
+        requested_at: null, verb: null, scope: null, risk: null, reason: null,
+        review_id: null, error: "Decision details unavailable.",
+      }] : [];
+      const decisions = [...pending, ...unavailable, ...approved];
+      const issues = activityJobs.filter((job) => ["waiting_approval", "error"].includes(job.status)).map((job) => ({
+        job_id: job.id, session_id: job.session_id,
+        kind: job.status === "waiting_approval" ? "waiting_approval" : "failed",
+        status: job.status, execution_phase: job.status === "waiting_approval" ? "waiting_approval" : "failed",
+        title: job.title, created_at: job.created_at, finished_at: job.finished_at,
+        message: job.status === "waiting_approval" ? "Waiting for a decision." : "Work failed.",
+      }));
+      const notifications = activityJobs.length ? [{
+        id: "acknowledged-task-notification", source: "task", kind: "status",
+        severity: "error", title: "Task notification acknowledged", body: "Acknowledgement did not decide permission.",
+        task_id: activityJobs[0].id, state: "acknowledged", updated_at_ms: 42,
+      }] : [];
+      const count = (status) => activityJobs.filter((job) => job.status === status).length;
+      return reply(req, res, {
+        schema: 1, activity_id: item.id, activity_state: item.state, limit: 50,
+        counts: {
+          queued: count("queued"), running: count("running"),
+          waiting: count("waiting_approval"), completed: count("ok"),
+          failed: count("error"), cancelled: count("cancelled"), indeterminate: 0,
+          pending_decisions: pending.length, unavailable_decisions: unavailable.length,
+          unread_notifications: 0,
+        },
+        decisions, issues, notifications,
+        totals: { decisions: decisions.length, issues: issues.length, notifications: notifications.length },
+        has_more: { decisions: false, issues: false, notifications: false },
+      });
+    }
     if (action === "object-state") {
       const entries = objectStateRecords.get(item.id) || [];
       if (req.method === "GET") {
@@ -930,6 +980,8 @@ try {
   await expectDetail("Running");
   Object.assign(firstJob, { status: "waiting_approval", waiting_on: ["approval-1"] });
   await expectDetail("Waiting for your approval decision.");
+  await expectDetail("Decision details unavailable.");
+  await expectDetail("Task notification acknowledged");
   await clickText("Open Approvals");
   await wait("location.hash === '#/approvals' && document.body.innerText.includes('Review the release notes')", "existing approvals page");
   await clickText("Approve");
@@ -939,6 +991,8 @@ try {
   await clickText("Activities");
   await open("Release preparation");
   await expectDetail("Release draft reviewed.");
+  await expectDetail("Historical consent only; current authority and execution outcome are checked separately.");
+  await expectDetail("Reading or acknowledging a notification is not consent.");
   await clickText("Open session");
   await wait("location.hash === '#/chat/session-1' && document.body.innerText.includes('Saved Activity session')", "existing session history");
   await clickText("Activities");
@@ -1457,6 +1511,7 @@ try {
   assert.equal(activities.get("activity-1").state, "cancelled");
   assert.equal(await evaluate(`(${buttonExpression("Enable capability policy")}).matches(':disabled')`), true);
   assert.equal(await evaluate(`(${buttonExpression("Edit capability policy")}).matches(':disabled')`), true);
+  await expectDetail("Task notification acknowledged");
   console.log("PASS paused policy edits and terminal-state reads/disabling without new work, permissions or implicit goal changes");
 
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);

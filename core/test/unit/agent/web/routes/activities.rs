@@ -34,6 +34,12 @@ fn activity_url_and_shared_request_contract_are_preserved() {
             "use_memory": false,
         })
     );
+    let attention = with_id::<ActivityGet>("activity-1".into(), json!({ "limit": 12 })).unwrap();
+    assert_eq!(
+        serde_json::to_value(attention).unwrap(),
+        json!({ "id": "activity-1", "limit": 12 })
+    );
+    assert!(with_id::<ActivityGet>("activity-1".into(), json!({ "owner_uid": 0 })).is_err());
 }
 
 #[test]
@@ -133,6 +139,7 @@ async fn activity_http_routes_require_authentication() {
         ("GET", "/api/activities"),
         ("POST", "/api/activities"),
         ("GET", "/api/activities/activity-1"),
+        ("GET", "/api/activities/activity-1/attention"),
         ("POST", "/api/activities/activity-1/update"),
         ("POST", "/api/activities/activity-1/transition"),
         ("POST", "/api/activities/activity-1/run"),

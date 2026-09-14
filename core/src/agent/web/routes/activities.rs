@@ -9,13 +9,13 @@ use serde_json::{json, Value};
 
 use crate::clawd::routes::Command;
 use crate::clawd::wire::requests::{
+    ActivityCapabilityPolicyEnabled, ActivityCapabilityPolicyGet, ActivityCapabilityPolicySet,
+    ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
+};
+use crate::clawd::wire::requests::{
     ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjectState,
     ActivityObjectStateRecord, ActivityObjects, ActivityOperationPreview, ActivityReceipts,
     ActivityRun, ActivityTransition, ActivityUpdate, NoBody,
-};
-use crate::clawd::wire::requests::{
-    ActivityCapabilityPolicyEnabled, ActivityCapabilityPolicyGet, ActivityCapabilityPolicySet,
-    ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
 };
 
 use super::clawd::ApiError;
@@ -51,8 +51,26 @@ pub async fn get(
     query: Result<Query<DetailQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Query(query) = query.map_err(|error| bad_request(error.body_text()))?;
+    if query.limit.is_some_and(|limit| !(1..=100).contains(&limit)) {
+        return Err(bad_request("limit must be between 1 and 100"));
+    }
     request(
         Command::ActivityGet,
+        with_id::<ActivityGet>(id, json!({ "limit": query.limit }))?,
+    )
+    .await
+}
+
+pub async fn attention(
+    Path(id): Path<String>,
+    query: Result<Query<DetailQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Query(query) = query.map_err(|error| bad_request(error.body_text()))?;
+    if query.limit.is_some_and(|limit| !(1..=100).contains(&limit)) {
+        return Err(bad_request("limit must be between 1 and 100"));
+    }
+    request(
+        Command::ActivityAttention,
         with_id::<ActivityGet>(id, json!({ "limit": query.limit }))?,
     )
     .await

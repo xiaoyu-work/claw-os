@@ -59,6 +59,7 @@ ownership, and work submission. The authenticated adapters are:
 | `GET /api/activities?state=active&limit=100` | `activity.list` |
 | `POST /api/activities` | `activity.create` |
 | `GET /api/activities/{id}?limit=100` | `activity.get` |
+| `GET /api/activities/{id}/attention?limit=50` | `activity.attention` |
 | `POST /api/activities/{id}/update` | `activity.update` |
 | `POST /api/activities/{id}/transition` | `activity.transition` |
 | `POST /api/activities/{id}/run` | `activity.run` |
@@ -78,7 +79,10 @@ ownership, and work submission. The authenticated adapters are:
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
-progress/result previews, and associated sessions. Submit work in a new session
+progress/result previews, associated sessions, and the shared Activity attention
+projection. Attention combines retained job counts, pending and historical
+decision records, prioritized execution issues, and task-linked notifications;
+it adds no browser-owned state or authority. Submit work in a new session
 or explicitly continue an associated session. Tasks, approval decisions, and
 conversation history open the existing `#/tasks`, `#/approvals`, and
 `#/chat/:id` views; Activities introduce no new approval authority.
@@ -86,6 +90,11 @@ Protected App reviews remain separate from that capability-approval page:
 use `cos review` or the native OS review presenter. Activities do not bypass
 owner review, enable an unreviewed App service, or turn planning data into
 trusted model policy.
+
+Pending attention decisions navigate to the existing Approval page. Approved
+and denied entries are historical consent records only; they do not prove
+current authority, execution, effects, or goal completion. Notification read or
+acknowledgement state never decides a permission.
 
 Completion requires a user-written confirmation note. Successful jobs do not
 complete goals automatically. Pausing or cancelling gates subsequent work,
@@ -283,7 +292,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/capability-policy.test.ts test/capability-policy-views.test.tsx
+bun test test/activities.test.ts test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/capability-policy.test.ts test/capability-policy-views.test.tsx
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```

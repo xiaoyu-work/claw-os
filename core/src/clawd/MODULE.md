@@ -16,8 +16,8 @@ and agent tasks.
   action-bound authorizations for calls relayed by authenticated task Hosts.
 - Own task ownership/lease, durable approval waits, retry, and task
   lifecycle RPC.
-- Expose one owner-scoped Activity lifecycle and task/session projection for
-  terminal-only, Web, and native desktop clients.
+- Expose one owner-scoped Activity lifecycle, task/session view, and read-only
+  attention projection for terminal-only, Web, and native desktop clients.
 - Expose owner-scoped approval views used by the Agent Web control center;
   permission decisions still cross the polkit helper.
 - Expose owner-scoped notification publication, subscription, state, and
@@ -42,6 +42,7 @@ and agent tasks.
 | `ai.rs` | Authenticated App single-shot AI gate; owner configuration, current transient capabilities, bounded concurrency/deadline, no App-local provider execution |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
+| `activity_attention.rs` | Shared read-only Job issue/count, protected approval, and task-linked notification projection; never consent or authority |
 | `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |
 | `activity_capability_policy.rs` | Owner-scoped rule/CAS controls shared by terminal, Web and native desktop; never permission decisions or grant issuance |
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |

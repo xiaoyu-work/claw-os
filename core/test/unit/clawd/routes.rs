@@ -10,6 +10,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "activity.create",
     "activity.list",
     "activity.get",
+    "activity.attention",
     "activity.update",
     "activity.transition",
     "activity.run",
@@ -447,6 +448,7 @@ fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
         Command::ActivityCreate,
         Command::ActivityList,
         Command::ActivityGet,
+        Command::ActivityAttention,
         Command::ActivityUpdate,
         Command::ActivityTransition,
         Command::ActivityRun,
@@ -515,6 +517,7 @@ fn read_only_routes_are_classified_as_queries() {
     for name in [
         "activity.list",
         "activity.get",
+        "activity.attention",
         "activity.objects",
         "operation.preview",
         "activity.operation.preview",
