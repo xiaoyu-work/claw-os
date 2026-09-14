@@ -77,6 +77,14 @@ fn conversation_create_is_empty_durable_and_uses_the_system_agent_baseline() {
     assert_eq!(value["conversation"]["messages"], json!([]));
     assert_eq!(value["conversation"]["message_count"], 0);
     assert_eq!(value["conversation"]["messages_truncated"], false);
+    assert_eq!(value["conversation"]["jobs"], json!([]));
+    assert_eq!(value["conversation"]["job_count"], 0);
+    assert_eq!(value["conversation"]["jobs_truncated"], false);
+    assert_eq!(value["conversation"]["task_bindings_complete"], false);
+    assert_eq!(
+        value["conversation"]["task_bindings_error"],
+        jobs::UNVERIFIED_BINDINGS
+    );
     assert_eq!(value["conversation"]["title"], DEFAULT_TITLE);
     assert!(
         uuid::Uuid::parse_str(value["conversation"]["presentation_id"].as_str().unwrap()).is_ok()

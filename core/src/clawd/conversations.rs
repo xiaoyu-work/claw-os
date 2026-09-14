@@ -4,6 +4,7 @@
 //! Constraints: presentation UUIDs never authorize work; mutation accepts only canonical session IDs.
 
 mod dto;
+mod jobs;
 mod owner_memory;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -71,6 +72,7 @@ pub(super) fn create(params: Value, client: &ClientIdentity) -> Result<Value, St
                     metadata: Default::default(),
                     history: Default::default(),
                 },
+                owner_uid,
             )?;
             write_presentation(sid, &presentation)?;
             Ok(value)
@@ -166,7 +168,7 @@ pub(super) fn update(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
     presentation.updated_at = Some(Utc::now().to_rfc3339());
     let view = owner_memory::read_view(owner_uid, meta.id.to_string(), DEFAULT_HISTORY_LIMIT)?;
-    let value = conversation_response(&meta, presentation.clone(), view)?;
+    let value = conversation_response(&meta, presentation.clone(), view, owner_uid)?;
     write_presentation(&meta.id, &presentation)?;
     Ok(value)
 }
@@ -175,19 +177,22 @@ fn get_for_id(id: &ConversationId, owner_uid: u32, limit: usize) -> Result<Value
     let meta = owned_meta(id, owner_uid)?;
     let presentation = read_presentation(&meta.id)?;
     let view = owner_memory::read_view(owner_uid, meta.id.to_string(), limit)?;
-    conversation_response(&meta, presentation, view)
+    conversation_response(&meta, presentation, view, owner_uid)
 }
 
 fn conversation_response(
     meta: &session::SessionMeta,
     presentation: Presentation,
     view: OwnerMemoryView,
+    owner_uid: u32,
 ) -> Result<Value, String> {
     let metadata = presentation_metadata(meta, presentation, view.metadata)?;
+    let execution = jobs::load(&meta.id, owner_uid)?;
     response(ConversationResponse {
         conversation: Conversation {
             metadata,
             history: view.history,
+            execution,
         },
     })
 }

@@ -122,6 +122,8 @@ pub(super) struct Conversation {
     pub(super) metadata: ConversationMetadata,
     #[serde(flatten)]
     pub(super) history: ConversationHistoryPage,
+    #[serde(flatten)]
+    pub(super) execution: super::jobs::ConversationJobs,
 }
 
 #[derive(Debug, Serialize)]

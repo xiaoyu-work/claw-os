@@ -41,7 +41,7 @@ and agent tasks.
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `ai.rs` | Authenticated App single-shot AI gate; owner configuration, current transient capabilities, bounded concurrency/deadline, no App-local provider execution |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
-| `conversations.rs`, `conversations/` | Owner-scoped Agent conversation create/get/list/update, stable frontend UUID projection, presentation metadata, and owner-identity memory reads; no task execution or authority |
+| `conversations.rs`, `conversations/` | Owner-scoped Agent conversation create/get/list/update, stable frontend UUID projection, presentation metadata, bounded actual Job metadata, and owner-identity memory reads; no task execution or authority |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `activity_attention.rs` | Shared read-only Job issue/count, protected approval, and task-linked notification projection; never consent or authority |
 | `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |

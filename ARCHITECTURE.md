@@ -1571,8 +1571,10 @@ privilege to read that database. The Agent worker carries its canonical Job id
 into the runtime, which transactionally records every task prompt and resulting
 assistant/tool row with one explicit outer user-message binding. Binding
 evidence survives ordinary transcript purge; it is never inferred from message
-text or timestamps. Branch/revert operations remain unavailable until retained
-membership and owner-scoped Job lineage are verified against those bindings.
+text or timestamps. Conversation detail also includes a bounded owner/session
+projection of actual Job records, but marks their message bindings incomplete
+until retained membership and owner-scoped Job lineage are verified.
+Branch/revert operations remain unavailable until that verification exists.
 
 ### Proactive notification
 
