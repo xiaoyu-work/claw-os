@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 // no browser download, additional dependency, or live agent credentials.
 const dist = path.resolve(process.env.ACTIVITY_UI_DIST || ".activity-validation/dist");
 const profile = path.resolve(".activity-validation", `browser-${randomUUID()}`);
+const downloads = path.join(profile, "downloads");
 const bootstrap = "0".repeat(64);
 const accessToken = "activity-browser-regression";
 const activities = new Map();
@@ -21,6 +22,7 @@ const executionLimitRecords = new Map();
 const monetaryBudgetRecords = new Map();
 const schedulingPriorityRecords = new Map();
 const capabilityPolicyRecords = new Map();
+const continuityImports = new Set();
 const requests = [];
 const fixtureErrors = [];
 const browserErrors = [];
@@ -163,6 +165,94 @@ function checkedMonetaryDraft(draft) {
   return clone(draft);
 }
 
+function continuityJson(document, includeSnapshot = true) {
+  const lineage = `{"id":${JSON.stringify(document.lineage.id)},"revision":${document.lineage.revision}}`;
+  const intent = `{"title":${JSON.stringify(document.intent.title)},"goal":${JSON.stringify(document.intent.goal)},`
+    + `"completion_criteria":${JSON.stringify(document.intent.completion_criteria)},`
+    + `"boundaries":${JSON.stringify(document.intent.boundaries)}}`;
+  const references = `[${document.references.map((reference) =>
+    `{"label":${JSON.stringify(reference.label)},"reference":${JSON.stringify(reference.reference)}}`).join(",")}]`;
+  const limits = document.rules.execution_limits;
+  const scheduling = document.rules.scheduling;
+  const rules = `{"execution_limits":${limits === null ? "null"
+    : `{"enabled":${limits.enabled},"max_attempts":${limits.max_attempts},`
+      + `"max_turns_per_attempt":${limits.max_turns_per_attempt},`
+      + `"expires_at":${JSON.stringify(limits.expires_at)}}`},`
+    + `"scheduling":${scheduling === null ? "null"
+      : `{"priority":${JSON.stringify(scheduling.priority)}}`}}`;
+  return `{"kind":"claw_os.activity_continuity","schema_version":1,"lineage":${lineage},`
+    + `${includeSnapshot ? `"snapshot":${JSON.stringify(document.snapshot)},` : ""}`
+    + `"intent":${intent},"references":${references},"rules":${rules}}`;
+}
+
+function portableDocument({
+  id = "00000000-0000-4000-8000-000000000123",
+  revision = "9007199254740993",
+  title = "Release preparation",
+  goal = "Prepare a reviewed release draft",
+  completion_criteria = "I verified the release draft",
+  boundaries = "Do not publish without approval",
+  references = [],
+  execution_limits = null,
+  scheduling = null,
+} = {}) {
+  const document = {
+    kind: "claw_os.activity_continuity", schema_version: 1,
+    lineage: { id, revision }, snapshot: "",
+    intent: { title, goal, completion_criteria, boundaries },
+    references: clone(references),
+    rules: { execution_limits: clone(execution_limits), scheduling: clone(scheduling) },
+  };
+  document.snapshot = `sha256:${createHash("sha256")
+    .update(continuityJson(document, false)).digest("hex")}`;
+  return document;
+}
+
+function checkedContinuityDocument(document) {
+  assert.deepEqual(Object.keys(document), [
+    "kind", "schema_version", "lineage", "snapshot", "intent", "references", "rules",
+  ]);
+  assert.equal(document.kind, "claw_os.activity_continuity");
+  assert.equal(document.schema_version, 1);
+  assert.deepEqual(Object.keys(document.lineage), ["id", "revision"]);
+  assert.match(document.lineage.id, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+  assert.match(document.lineage.revision, /^[1-9][0-9]*$/);
+  assert.deepEqual(Object.keys(document.intent), [
+    "title", "goal", "completion_criteria", "boundaries",
+  ]);
+  assert.ok(Array.isArray(document.references) && document.references.length <= 32);
+  for (const reference of document.references) {
+    assert.deepEqual(Object.keys(reference), ["label", "reference"]);
+    assert.match(reference.reference, /^app:\/\//);
+  }
+  assert.deepEqual(Object.keys(document.rules), ["execution_limits", "scheduling"]);
+  assert.equal(
+    document.snapshot,
+    `sha256:${createHash("sha256").update(continuityJson(document, false)).digest("hex")}`,
+  );
+  assert.ok(Buffer.byteLength(continuityJson(document)) <= 192 * 1024);
+  return clone(document);
+}
+
+function exportedContinuity(item) {
+  const limits = executionLimitRecords.get(item.id);
+  const scheduling = schedulingPriorityRecords.get(item.id);
+  return portableDocument({
+    title: item.title,
+    goal: item.goal,
+    completion_criteria: item.completion_criteria,
+    boundaries: item.boundaries,
+    references: item.resources.filter((resource) => resource.reference.startsWith("app://")),
+    execution_limits: limits ? {
+      enabled: limits.enabled,
+      max_attempts: limits.limits.max_attempts,
+      max_turns_per_attempt: limits.limits.max_turns_per_attempt,
+      expires_at: new Date(limits.limits.expires_at).toISOString().replace("Z", "000000Z"),
+    } : null,
+    scheduling: scheduling ? { priority: scheduling.priority } : null,
+  });
+}
+
 function receiptRecord(id, outcome = "returned") {
   return {
     id, activity_id: "activity-1", owner_uid: 1000,
@@ -289,6 +379,41 @@ async function fixture(req, res) {
       });
     }
     return reply(req, res, { approved: true });
+  }
+  const continuityExport = /^\/api\/activities\/([^/]+)\/continuity\/export$/.exec(url.pathname);
+  if (continuityExport) {
+    assert.equal(req.method, "GET");
+    assert.deepEqual(body, {});
+    assert.deepEqual([...url.searchParams], []);
+    const item = activities.get(decodeURIComponent(continuityExport[1]));
+    assert.ok(item, "continuity export belongs to an existing owner-scoped Activity");
+    return reply(req, res, checkedContinuityDocument(exportedContinuity(item)));
+  }
+  if (url.pathname === "/api/activities/continuity/import") {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(Object.keys(body), ["placement", "document"]);
+    assert.equal(body.placement, "local");
+    const document = checkedContinuityDocument(body.document);
+    if (continuityImports.has(document.lineage.id)) {
+      expectedHttpErrors.push({ method: req.method, path: url.pathname, status: 400 });
+      return reply(req, res, { error: "Activity continuity identity already exists" }, 400);
+    }
+    continuityImports.add(document.lineage.id);
+    const number = ++activityNumber;
+    const item = {
+      id: `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`, owner_uid: 1000,
+      title: document.intent.title, goal: document.intent.goal,
+      completion_criteria: document.intent.completion_criteria,
+      boundaries: document.intent.boundaries, resources: clone(document.references),
+      state: "paused", completion_note: null, created_at: timestamp(), updated_at: timestamp(),
+    };
+    activities.set(item.id, item);
+    return reply(req, res, {
+      activity: item,
+      continuity_id: document.lineage.id,
+      continuity_revision: document.lineage.revision,
+      placement: "local",
+    });
   }
   if (url.pathname === "/api/activities") {
     if (req.method === "GET") {
@@ -746,6 +871,7 @@ async function connect(endpoint) {
 try {
   await access(path.join(dist, "index.html"));
   await mkdir(path.join(profile, "runtime"), { recursive: true });
+  await mkdir(downloads, { recursive: true });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   assert.equal((await fetch(origin)).status, 200, "the isolated build is served");
@@ -771,6 +897,7 @@ try {
     });
   });
   cdp = await connect(endpoint);
+  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloads });
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const send = (method, params) => cdp.send(method, params, sessionId);
@@ -843,6 +970,38 @@ try {
       el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', {bubbles: true}));
     })()`);
   };
+  const uploadContinuity = async (source, name = "activity-continuity.json") => {
+    await evaluate(`(() => {
+      const input = document.querySelector('[aria-label="Continuity JSON file"]');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([${JSON.stringify(source)}], ${JSON.stringify(name)}, {type: 'application/json'}));
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', {bubbles: true}));
+    })()`);
+  };
+  const uploadContinuityBytes = async (size) => {
+    await evaluate(`(() => {
+      const input = document.querySelector('[aria-label="Continuity JSON file"]');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([new Uint8Array(${size})], 'oversized.json', {type: 'application/json'}));
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', {bubbles: true}));
+    })()`);
+  };
+  const downloaded = async (name) => {
+    const file = path.join(downloads, name);
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+      try {
+        const content = await readFile(file, "utf8");
+        if (content.length) return content;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      await delay(100);
+    }
+    throw new Error(`Download did not complete: ${name}`);
+  };
   const detailText = `document.querySelector('[aria-label="Activity detail"]')?.innerText || ''`;
   const expectDetail = (text) => wait(`(${detailText}).includes(${JSON.stringify(text)})`, text);
   const objectPanel = `document.querySelector('[aria-label="App object references"]')`;
@@ -851,6 +1010,8 @@ try {
   const objectStatePanel = `document.querySelector('[aria-label="Object state and history"]')`;
   const expectObjectState = (text) => wait(`(${objectStatePanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   const expectReceipts = (text) => wait(`(${receiptsPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const continuityPanel = `document.querySelector('[aria-label="Activity continuity"]')`;
+  const expectContinuity = (text) => wait(`(${continuityPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   const receiptsInState = async (state) => {
     assert.equal(activities.get("activity-1").state, state);
     const savedActivity = clone(activities.get("activity-1"));
@@ -1724,6 +1885,101 @@ try {
   await expectDetail("Task notification acknowledged");
   console.log("PASS paused policy edits and terminal-state reads/disabling without new work, permissions or implicit goal changes");
 
+  const sourceBeforeContinuity = clone(activities.get("activity-1"));
+  const workBeforeContinuity = clone([...jobs.values()]);
+  const exported = checkedContinuityDocument(exportedContinuity(sourceBeforeContinuity));
+  await expectContinuity("not live sync or backup/restore");
+  await clickText("Export selected Activity");
+  await expectContinuity(`Exported continuity v1 revision ${exported.lineage.revision}.`);
+  const exportName = `claw-os-activity-${exported.lineage.id}.json`;
+  assert.equal(await downloaded(exportName), `${continuityJson(exported)}\n`);
+  assert.deepEqual(activities.get("activity-1"), sourceBeforeContinuity);
+  assert.deepEqual([...jobs.values()], workBeforeContinuity);
+
+  const importRequestsBeforeValidation = requests.filter((request) =>
+    request.path === "/api/activities/continuity/import").length;
+  await uploadContinuityBytes(192 * 1024 + 1);
+  await expectContinuity("exceeds 196608 bytes");
+  const maliciousTitle = '<img src="https://continuity.invalid/import" onerror="window.continuityExecuted=true">';
+  const portable = portableDocument({
+    id: "00000000-0000-4000-8000-000000000456",
+    revision: "9007199254740997",
+    title: maliciousTitle,
+    goal: "<script>window.continuityExecuted=true</script> Review imported intent",
+    completion_criteria: "Owner inspects and explicitly resumes",
+    boundaries: "Planning only; no authority",
+    references: [{ label: "<img src=x onerror=window.continuityExecuted=true>", reference: objectDescription.reference }],
+    execution_limits: {
+      enabled: false, max_attempts: 3, max_turns_per_attempt: 2,
+      expires_at: "2099-01-01T00:00:00.000000000Z",
+    },
+    scheduling: { priority: "background" },
+  });
+  const portableJson = continuityJson(portable);
+  await uploadContinuity(portableJson.replace(
+    '"kind":"claw_os.activity_continuity"',
+    '"kind":"claw_os.activity_continuity","kind":"claw_os.activity_continuity"',
+  ), "duplicate.json");
+  await expectContinuity("Duplicate Activity continuity JSON key");
+  await uploadContinuity(portableJson.replace('"schema_version":1', '"schema_version":2'), "v2.json");
+  await expectContinuity("Unsupported Activity continuity schema version");
+  await uploadContinuity(portableJson.replace(/}$/, ',"owner_uid":1000}'), "authority.json");
+  await expectContinuity("missing or unknown fields");
+  assert.equal(requests.filter((request) =>
+    request.path === "/api/activities/continuity/import").length, importRequestsBeforeValidation);
+
+  await uploadContinuity(portableJson, "portable.json");
+  await expectContinuity("Continuity v1 document validated.");
+  await expectContinuity(maliciousTitle);
+  assert.equal(await evaluate(`${continuityPanel}.querySelectorAll('img,script,a').length`), 0);
+  assert.equal(await evaluate("window.continuityExecuted"), undefined);
+  assert.equal(await evaluate(`(${buttonExpression("Import paused Activity")}).matches(':disabled')`), true);
+  assert.equal(await evaluate(`${fieldExpression("Execution placement")}.value`), "");
+  await fill("Execution placement", "local");
+  assert.equal(await evaluate(`(${buttonExpression("Import paused Activity")}).matches(':disabled')`), true);
+  await click(`${continuityPanel}.querySelector('input[type="checkbox"]')`);
+  await clickText("Import paused Activity");
+  const importedId = "00000000-0000-4000-8000-000000000004";
+  await wait(`location.hash === '#/activities/${importedId}'`, "exact import selects the new Activity");
+  await expectDetail(maliciousTitle);
+  await expectDetail("Resume activity");
+  assert.equal(activities.get(importedId).state, "paused");
+  assert.equal(await evaluate(`document.querySelector('[aria-label="Activity detail"]').querySelectorAll('img,script,a').length`), 0);
+  assert.equal(await evaluate("window.continuityExecuted"), undefined);
+  assert.deepEqual(activities.get("activity-1"), sourceBeforeContinuity);
+  assert.deepEqual([...jobs.values()], workBeforeContinuity);
+
+  await uploadContinuity(portableJson, "portable-again.json");
+  await expectContinuity("Continuity v1 document validated.");
+  await fill("Execution placement", "local");
+  await click(`${continuityPanel}.querySelector('input[type="checkbox"]')`);
+  await clickText("Import paused Activity");
+  await expectContinuity("Activity continuity identity already exists");
+  assert.equal(await evaluate("location.hash"), `#/activities/${importedId}`);
+
+  const latePortable = portableDocument({
+    id: "00000000-0000-4000-8000-000000000457",
+    revision: "8",
+    title: "Late portable Activity",
+    goal: "Do not replace a newer selection",
+  });
+  await uploadContinuity(continuityJson(latePortable), "late.json");
+  await expectContinuity("Continuity v1 document validated.");
+  await fill("Execution placement", "local");
+  await click(`${continuityPanel}.querySelector('input[type="checkbox"]')`);
+  const lateImport = holdRequest("POST", "/api/activities/continuity/import");
+  await clickText("Import paused Activity");
+  await lateImport.seen;
+  await open("Release preparation");
+  lateImport.release();
+  await delay(300);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
+  assert.equal(await evaluate(`(${detailText}).includes('Late portable Activity')`), false);
+  assert.equal(activities.get("00000000-0000-4000-8000-000000000005").state, "paused");
+  assert.deepEqual(activities.get("activity-1"), sourceBeforeContinuity);
+  assert.deepEqual([...jobs.values()], workBeforeContinuity);
+  console.log("PASS deterministic continuity export Blob, bounded explicit local import, inert paused result, conflicts and late-selection safety");
+
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);
@@ -1735,8 +1991,9 @@ try {
     [
       "/api/activities/activity-1/capability-policy",
       "/api/activities/activity-1/scheduling-priority",
+      "/api/activities/continuity/import",
     ],
-    "both stale-write regressions exercise actual HTTP errors, not 200-only proxies",
+    "stale writes and duplicate continuity exercise actual HTTP errors, not 200-only proxies",
   );
   for (const entry of networkErrors) {
     assert.ok(failedResponses.some((response) =>

@@ -8,13 +8,18 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::activities::{
-    ActivityMonetaryBudget, ActivitySchedulingPolicy, ActivitySchedulingPriority,
-    MonetaryBudgetDraft, MAX_RATE_MICROUSD_PER_MILLION_TOKENS, MAX_TOTAL_MICROUSD,
+    Activity, ActivityContinuityDocument, ActivityContinuityImport, ActivityContinuityLineage,
+    ActivityDraft, ActivityExecutionPlacement, ActivityMonetaryBudget, ActivityResource,
+    ActivitySchedulingPolicy, ActivitySchedulingPriority, ActivityState, MonetaryBudgetDraft,
+    PortableActivityIntent, PortableActivityReference, PortableActivityRules,
+    PortableExecutionLimits, PortableSchedulingPreference, MAX_RATE_MICROUSD_PER_MILLION_TOKENS,
+    MAX_TOTAL_MICROUSD,
 };
 use crate::agent::web::auth::AuthenticatedToken;
 use crate::clawd::routes::Command;
 use crate::clawd::wire::requests::{
     ActivityCapabilityPolicyEnabled, ActivityCapabilityPolicyGet, ActivityCapabilityPolicySet,
+    ActivityContinuityExport, ActivityContinuityImport as ActivityContinuityImportRequest,
     ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
     ActivityMonetaryBudgetEnabled, ActivityMonetaryBudgetGet, ActivityMonetaryBudgetSet,
     ActivitySchedulingPolicyGet, ActivitySchedulingPolicySet,
@@ -168,6 +173,178 @@ struct BrokerSchedulingPriorityView {
     activity_id: String,
     #[serde(deserialize_with = "required_nullable")]
     scheduling_policy: Option<ActivitySchedulingPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityLineageHttp {
+    id: String,
+    revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityIntentHttp {
+    title: String,
+    goal: String,
+    completion_criteria: String,
+    boundaries: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityReferenceHttp {
+    label: String,
+    reference: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityExecutionLimitsHttp {
+    enabled: bool,
+    max_attempts: u32,
+    max_turns_per_attempt: u32,
+    expires_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuitySchedulingHttp {
+    priority: ActivitySchedulingPriority,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityRulesHttp {
+    #[serde(deserialize_with = "required_nullable")]
+    execution_limits: Option<ContinuityExecutionLimitsHttp>,
+    #[serde(deserialize_with = "required_nullable")]
+    scheduling: Option<ContinuitySchedulingHttp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityDocumentHttp {
+    kind: String,
+    schema_version: u32,
+    lineage: ContinuityLineageHttp,
+    snapshot: String,
+    intent: ContinuityIntentHttp,
+    references: Vec<ContinuityReferenceHttp>,
+    rules: ContinuityRulesHttp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityImportHttp {
+    placement: ActivityExecutionPlacement,
+    document: ContinuityDocumentHttp,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinuityImportHttpView {
+    activity: Activity,
+    continuity_id: String,
+    continuity_revision: String,
+    placement: ActivityExecutionPlacement,
+}
+
+impl ContinuityDocumentHttp {
+    fn from_core(document: ActivityContinuityDocument) -> Result<Self, ApiError> {
+        document
+            .to_json()
+            .map_err(|error| bad_gateway(format!("invalid continuity document: {error}")))?;
+        Ok(Self {
+            kind: document.kind,
+            schema_version: document.schema_version,
+            lineage: ContinuityLineageHttp {
+                id: document.lineage.id,
+                revision: document.lineage.revision.to_string(),
+            },
+            snapshot: document.snapshot,
+            intent: ContinuityIntentHttp {
+                title: document.intent.title,
+                goal: document.intent.goal,
+                completion_criteria: document.intent.completion_criteria,
+                boundaries: document.intent.boundaries,
+            },
+            references: document
+                .references
+                .into_iter()
+                .map(|reference| ContinuityReferenceHttp {
+                    label: reference.label,
+                    reference: reference.reference,
+                })
+                .collect(),
+            rules: ContinuityRulesHttp {
+                execution_limits: document.rules.execution_limits.map(|limits| {
+                    ContinuityExecutionLimitsHttp {
+                        enabled: limits.enabled,
+                        max_attempts: limits.max_attempts,
+                        max_turns_per_attempt: limits.max_turns_per_attempt,
+                        expires_at: limits.expires_at,
+                    }
+                }),
+                scheduling: document
+                    .rules
+                    .scheduling
+                    .map(|scheduling| ContinuitySchedulingHttp {
+                        priority: scheduling.priority,
+                    }),
+            },
+        })
+    }
+
+    fn into_core(self) -> Result<ActivityContinuityDocument, ApiError> {
+        let document = ActivityContinuityDocument {
+            kind: self.kind,
+            schema_version: self.schema_version,
+            lineage: ActivityContinuityLineage {
+                id: self.lineage.id,
+                revision: decimal_u64(
+                    "continuity lineage revision",
+                    &self.lineage.revision,
+                    i64::MAX as u64,
+                )?,
+            },
+            snapshot: self.snapshot,
+            intent: PortableActivityIntent {
+                title: self.intent.title,
+                goal: self.intent.goal,
+                completion_criteria: self.intent.completion_criteria,
+                boundaries: self.intent.boundaries,
+            },
+            references: self
+                .references
+                .into_iter()
+                .map(|reference| PortableActivityReference {
+                    label: reference.label,
+                    reference: reference.reference,
+                })
+                .collect(),
+            rules: PortableActivityRules {
+                execution_limits: self.rules.execution_limits.map(|limits| {
+                    PortableExecutionLimits {
+                        enabled: limits.enabled,
+                        max_attempts: limits.max_attempts,
+                        max_turns_per_attempt: limits.max_turns_per_attempt,
+                        expires_at: limits.expires_at,
+                    }
+                }),
+                scheduling: self
+                    .rules
+                    .scheduling
+                    .map(|scheduling| PortableSchedulingPreference {
+                        priority: scheduling.priority,
+                    }),
+            },
+        };
+        document
+            .to_json()
+            .map_err(|error| bad_request(error.to_string()))?;
+        Ok(document)
+    }
 }
 
 pub async fn list(
@@ -518,6 +695,47 @@ pub async fn set_scheduling_priority(
     validate_scheduling_policy(policy, &id, authenticated.uid).map(Json)
 }
 
+pub async fn export_continuity(
+    Path(id): Path<String>,
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<ContinuityDocumentHttp>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    let Json(value) = request(
+        Command::ActivityContinuityExport,
+        with_id::<ActivityContinuityExport>(id, json!({}))?,
+    )
+    .await?;
+    let data = serde_json::to_vec(&value)
+        .map_err(|error| bad_gateway(format!("encode continuity response: {error}")))?;
+    let document = ActivityContinuityDocument::from_json(&data)
+        .map_err(|error| bad_gateway(format!("invalid continuity response: {error}")))?;
+    ContinuityDocumentHttp::from_core(document).map(Json)
+}
+
+pub async fn import_continuity(
+    Extension(authenticated): Extension<AuthenticatedToken>,
+    body: Result<Json<ContinuityImportHttp>, JsonRejection>,
+) -> Result<Json<ContinuityImportHttpView>, ApiError> {
+    let body = json_body(body)?;
+    let placement = body.placement;
+    let document = body.document.into_core()?;
+    let canonical = String::from_utf8(
+        document
+            .to_json()
+            .map_err(|error| bad_request(error.to_string()))?,
+    )
+    .expect("serialized Activity continuity JSON is UTF-8");
+    let broker_request: ActivityContinuityImportRequest = serde_json::from_value(json!({
+        "placement": placement,
+        "document": canonical,
+    }))
+    .map_err(|error| bad_request(error.to_string()))?;
+    let Json(value) = request(Command::ActivityContinuityImport, broker_request).await?;
+    let imported: ActivityContinuityImport = serde_json::from_value(value)
+        .map_err(|error| bad_gateway(format!("invalid continuity acknowledgement: {error}")))?;
+    validate_import_acknowledgement(imported, &document, placement, authenticated.uid).map(Json)
+}
+
 pub async fn capability_policy_catalog(
     query: Result<Query<NoBody>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
@@ -655,6 +873,75 @@ fn validate_scheduling_policy(
         created_at: policy.created_at,
         updated_at: policy.updated_at,
     })
+}
+
+fn validate_import_acknowledgement(
+    imported: ActivityContinuityImport,
+    document: &ActivityContinuityDocument,
+    placement: ActivityExecutionPlacement,
+    owner_uid: u32,
+) -> Result<ContinuityImportHttpView, ApiError> {
+    if imported.placement != ActivityExecutionPlacement::Local
+        || imported.placement != placement
+        || imported.continuity_id != document.lineage.id
+        || imported.continuity_revision != document.lineage.revision
+    {
+        return Err(bad_gateway(
+            "continuity acknowledgement did not match the submitted lineage or local placement",
+        ));
+    }
+    validate_imported_activity(&imported.activity, document, owner_uid)?;
+    Ok(ContinuityImportHttpView {
+        activity: imported.activity,
+        continuity_id: imported.continuity_id,
+        continuity_revision: imported.continuity_revision.to_string(),
+        placement: imported.placement,
+    })
+}
+
+fn validate_imported_activity(
+    activity: &Activity,
+    document: &ActivityContinuityDocument,
+    owner_uid: u32,
+) -> Result<(), ApiError> {
+    let canonical_id = uuid::Uuid::parse_str(&activity.id)
+        .map_err(|_| bad_gateway("continuity acknowledgement returned an invalid Activity ID"))?
+        .to_string();
+    let expected_resources: Vec<ActivityResource> = document
+        .references
+        .iter()
+        .map(|reference| ActivityResource {
+            label: reference.label.clone(),
+            reference: reference.reference.clone(),
+        })
+        .collect();
+    let draft = ActivityDraft {
+        title: activity.title.clone(),
+        goal: activity.goal.clone(),
+        completion_criteria: activity.completion_criteria.clone(),
+        boundaries: activity.boundaries.clone(),
+        resources: activity.resources.clone(),
+    };
+    draft
+        .validate()
+        .map_err(|error| bad_gateway(format!("invalid imported Activity: {error}")))?;
+    if canonical_id != activity.id
+        || activity.owner_uid != owner_uid
+        || activity.state != ActivityState::Paused
+        || activity.completion_note.is_some()
+        || activity.title != document.intent.title
+        || activity.goal != document.intent.goal
+        || activity.completion_criteria != document.intent.completion_criteria
+        || activity.boundaries != document.intent.boundaries
+        || activity.resources != expected_resources
+        || chrono::DateTime::parse_from_rfc3339(&activity.created_at).is_err()
+        || chrono::DateTime::parse_from_rfc3339(&activity.updated_at).is_err()
+    {
+        return Err(bad_gateway(
+            "continuity acknowledgement did not contain the exact new paused Activity",
+        ));
+    }
+    Ok(())
 }
 
 fn decimal_u64(field: &str, value: &str, maximum: u64) -> Result<u64, ApiError> {

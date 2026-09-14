@@ -60,6 +60,18 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Receipts(id) => bridge::fetch_activity_receipts(endpoint, &id)
                     .await
                     .map(ActivityResponse::Receipts),
+                ActivityAction::ExportContinuity(id) => {
+                    bridge::export_activity_continuity(endpoint, &id)
+                        .await
+                        .map(|document| ActivityResponse::ContinuityDocument(Box::new(document)))
+                }
+                ActivityAction::ImportContinuity { request, .. } => {
+                    bridge::import_activity_continuity(endpoint, request)
+                        .await
+                        .map(|acknowledgement| {
+                            ActivityResponse::ContinuityImported(Box::new(acknowledgement))
+                        })
+                }
                 ActivityAction::GetCapabilityPolicy(id) => {
                     bridge::fetch_activity_capability_policy(endpoint, &id)
                         .await

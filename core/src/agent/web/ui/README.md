@@ -75,6 +75,8 @@ ownership, and work submission. The authenticated adapters are:
 | `GET /api/activities/{id}/capability-policy` | `activity.capability_policy.get` |
 | `POST /api/activities/{id}/capability-policy` | `activity.capability_policy.set` |
 | `POST /api/activities/{id}/capability-policy/enabled` | `activity.capability_policy.enabled` |
+| `GET /api/activities/{id}/continuity/export` | `activity.continuity.export` |
+| `POST /api/activities/continuity/import` | `activity.continuity.import` |
 | `GET /api/activities/capability-policy-catalog` | Static `caps::CATALOG` metadata only; no broker operation or App discovery |
 
 Creation saves a goal without starting work. The detail view shows goal,
@@ -262,6 +264,35 @@ consent or budget check, does not start, preempt or cancel work, and provides no
 latency or provider-QoS guarantee. Failed/stale writes retain the selected draft
 without automatic rebasing; explicit refresh and review are required.
 
+### Portable continuity
+
+The fixed **Portable Activity continuity** card exports only the currently
+selected Activity. The authenticated server obtains a broker-revalidated
+continuity-v1 document, converts the lineage `u64` revision to a decimal string,
+and the browser revalidates the exact closed shape and SHA-256 snapshot before
+creating a deterministic `claw-os-activity-<continuity-id>.json` Blob. Export
+does not mutate the source Activity or its Jobs.
+
+Import reads one browser-selected JSON file of at most 196608 bytes; no path is
+sent to the server. Its parser rejects duplicate or unknown keys, wrong
+kind/version, noncanonical IDs/references/timestamps, excessive nesting or
+container/string/document bounds, and owner/authority/history/money fields
+before presenting or forwarding the document. The owner must explicitly choose
+`local` placement and check the paused-import confirmation; there is no default.
+The server forwards only `placement` and the canonical document through
+`activity.continuity.import`, then requires an exact new paused Activity,
+matching lineage ID/revision, authenticated owner, and local placement.
+
+Continuity carries intent, canonical semantic references, configured finite
+execution limits, and scheduling preference only. It is not synchronization,
+backup/restore, authority or consent portability, completion, result, proof,
+or execution migration. Destination capability, approval, budget, provenance,
+and worker controls remain authoritative. Uploaded and imported strings are
+rendered only as inert text. Duplicate imports and validation failures stay
+visible; stale selections and late responses cannot trigger a download or
+replace a newer Activity selection. See
+[portable continuity](../../../../../docs/activities.md#portable-continuity).
+
 ### Capability policies
 
 The fixed **Capability policy** card lists saved Normal, Ask and Deny rows and
@@ -312,7 +343,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/monetary-budget.test.ts test/scheduling-priority.test.tsx test/capability-policy.test.ts test/capability-policy-views.test.tsx
+bun test test/activities.test.ts test/activity-continuity.test.tsx test/activity-attention.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts test/monetary-budget.test.ts test/scheduling-priority.test.tsx test/capability-policy.test.ts test/capability-policy-views.test.tsx
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
@@ -343,6 +374,12 @@ expected error. It neither contacts a model nor uses real credentials.
 Browser profiles stay under `.activity-validation/` and are removed after the
 test; the build never touches `dist/`. Set `ACTIVITY_BROWSER` to an installed
 browser executable or `ACTIVITY_UI_DIST` to another prebuilt output if needed.
+
+Continuity cases inspect the real downloaded Blob bytes and canonical document,
+exercise bounded file upload, duplicate/version/authority/bounds failures,
+explicit local placement and confirmation, exact paused selection, duplicate
+conflict, inert imported strings, unchanged source work, and late import
+responses after a newer selection.
 
 Object-state cases exercise actual completed form submissions, correction and
 retraction history, expired/unknown window labels, inert statement/receipt

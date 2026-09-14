@@ -70,6 +70,7 @@ pub enum Message {
     Activities(activities::Message),
     OpenActivitySession(String),
     CopyActivityObjectOperation(String),
+    CopyActivityContinuity,
     EditorAction(text_editor::Action),
     SetPrompt(String),
     Submit,
@@ -204,6 +205,15 @@ impl Application for App {
                 }
                 match self.activities.object_operation_text(&reference) {
                     Some(description) => cosmic::iced::clipboard::write(description),
+                    None => Task::none(),
+                }
+            }
+            Message::CopyActivityContinuity => {
+                if self.flags.overlay || !self.activities.is_visible() {
+                    return Task::none();
+                }
+                match self.activities.continuity_copy_text() {
+                    Some(document) => cosmic::iced::clipboard::write(document),
                     None => Task::none(),
                 }
             }
@@ -553,9 +563,7 @@ impl Application for App {
                 cosmic::iced::time::every(Duration::from_millis(100)).map(|_| Message::VoiceTick),
             );
         }
-        if !self.flags.overlay
-            && self.bridge.endpoint().is_some()
-            && self.activities.should_poll()
+        if !self.flags.overlay && self.bridge.endpoint().is_some() && self.activities.should_poll()
         {
             subscriptions.push(
                 cosmic::iced::time::every(Duration::from_secs(5))
@@ -591,7 +599,10 @@ impl App {
             return Task::none();
         }
         let endpoint = self.bridge.endpoint().cloned();
-        match (self.activities.update(message, endpoint.is_some()), endpoint) {
+        match (
+            self.activities.update(message, endpoint.is_some()),
+            endpoint,
+        ) {
             (Some(request), Some(endpoint)) => effects::activity_task(endpoint, request),
             _ => Task::none(),
         }

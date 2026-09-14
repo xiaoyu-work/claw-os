@@ -11,6 +11,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | --- | --- |
 | `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
 | `src/activities.rs` | Activity list/detail and shared attention widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
+| `src/activities/continuity.rs` | Exact bounded continuity-v1 export/import presentation, broker-revalidated copy, paste validation and explicit local-placement confirmation; no filesystem, persistence, sync, authority or proof restoration |
 | `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
 | `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
 | `src/activities/monetary_budget.rs` | Fixed configured-accounting card, exact-CAS create/update/toggles, and spent/reserved/remaining presentation; no pricing, invoice, ledger or policy authority |
@@ -172,6 +173,26 @@ guarantee, and that `fs.delete` denial is not protection from equivalent
 effects via other allowed verbs. There is no grant/approval-decision endpoint
 or local policy persistence, and other Activity forms exclude this editor.
 
+Portable continuity is another fixed Activity surface over
+`activity.continuity.export/import`. Desktop-owned closed DTOs validate the
+complete version-1 document independently of core models, including digest,
+UUID, canonical App references, exact `u64` revision and every size/count/depth
+bound. Unknown or duplicate fields and owner/authority selectors fail visibly.
+The bridge derives the process owner and forwards only the canonical validated
+document plus explicit `local` placement.
+
+There is no vetted continuity file dialog in this component. The UI therefore
+uses bounded JSON copy/paste, clearly discloses the contents and non-goals, and
+never touches the filesystem. Copy serializes only a broker-returned document.
+Import needs a separate local-placement confirmation, creates a new paused
+Activity, and accepts only an acknowledgement matching the new UUID,
+lineage/revision, portable intent/references and local placement. It does not
+persist UI state, access the database, change the source Activity, start work,
+live-sync, or restore owner, capabilities, approvals, credentials, monetary
+state, execution state, authority or proof. Generations reject navigation-late
+responses; conflicts and validation failures keep the exact bounded draft
+visible.
+
 ## Dependencies
 
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
@@ -212,6 +233,7 @@ cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-bridge notifica
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui activation -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-protocol -p cos-agent-bridge -p cos-agent-ui execution_limits -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-protocol -p cos-agent-bridge -p cos-agent-ui capability_policy -- --test-threads=1
+cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-protocol -p cos-agent-bridge -p cos-agent-ui continuity -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui
 cargo clippy --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui -- -D warnings
 ```

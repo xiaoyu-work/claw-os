@@ -141,6 +141,65 @@ fn activity_object_transport_uses_the_versioned_endpoint_and_typed_components() 
 }
 
 #[test]
+fn activity_continuity_transport_is_authenticated_versioned_and_owner_free() {
+    let endpoint = endpoint(1, 1);
+    let (export, selected) =
+        continuity_export_request(&endpoint, "activity/id?not-query").unwrap();
+    let export = export.build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(export.method(), reqwest::Method::GET);
+    assert!(export.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(export.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(export.url().path_segments().unwrap().count(), 5);
+    assert!(export.url().path().ends_with("/continuity/export"));
+    assert!(export.url().query().is_none());
+    assert!(export.body().is_none());
+
+    let document: ActivityContinuityDocument = serde_json::from_value(serde_json::json!({
+        "kind": "claw_os.activity_continuity",
+        "schema_version": 1,
+        "lineage": {"id": "00000000-0000-4000-8000-000000000123", "revision": 7},
+        "snapshot": "sha256:6d8c822b0519a02e7ab1ebeab48392cb83756fa9cc8b6d39e94b01ab1682882b",
+        "intent": {
+            "title": "Release", "goal": "Publish the release",
+            "completion_criteria": "Reviewed and available",
+            "boundaries": "Ask before publishing"
+        },
+        "references": [{
+            "label": "Status",
+            "reference": "app://kv/entry?id=release.status&revision=v1"
+        }],
+        "rules": {
+            "execution_limits": {
+                "enabled": false, "max_attempts": 10, "max_turns_per_attempt": 5,
+                "expires_at": "2030-01-01T00:00:00.000000000Z"
+            },
+            "scheduling": {"priority": "foreground"}
+        }
+    }))
+    .unwrap();
+    let body = ActivityContinuityImportRequest {
+        placement: cos_agent_protocol::ActivityExecutionPlacement::Local,
+        document: document.to_json().unwrap(),
+    };
+    let (import, selected) = continuity_import_request(&endpoint, &body).unwrap();
+    let import = import.build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(import.method(), reqwest::Method::POST);
+    assert_eq!(import.url().path(), "/api/activities/continuity/import");
+    assert!(import.url().query().is_none());
+    assert!(import.headers().contains_key(reqwest::header::AUTHORIZATION));
+    let sent: serde_json::Value =
+        serde_json::from_slice(import.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(sent.as_object().unwrap().len(), 2);
+    assert_eq!(sent["placement"], "local");
+    assert_eq!(sent["document"], body.document);
+    for field in ["owner_uid", "authority", "path", "restore", "live_sync"] {
+        assert!(sent.get(field).is_none(), "{field}");
+    }
+}
+
+#[test]
 fn activity_operation_preview_transport_is_authenticated_versioned_and_typed() {
     let endpoint = endpoint(1, 1);
     let body = ActivityOperationPreviewRequest {

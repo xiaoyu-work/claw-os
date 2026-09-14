@@ -412,6 +412,35 @@ The independent `crates/clawd-client` inventory includes all three routes in
 its enum, Serde names, `ALL` and `as_str`; core route additions alone are not
 sufficient to wire a desktop consumer.
 
+### Portable Activity continuity
+
+The native UI presents the published `activity.continuity.export/import`
+service through closed desktop-owned DTOs. The protocol crate duplicates the
+version-1 wire shape rather than importing core models. It validates the exact
+kind/version, canonical UUID and SHA-256 snapshot, full required shape, `u64`
+revision, canonical App references, execution/scheduling rules, and bounded
+document, nesting, container, string, text and reference counts. Duplicate
+keys, unknown fields, owner selectors and authority/proof fields fail closed.
+
+Export revalidates the broker response before offering copy. The UI has no
+vetted file-dialog integration for this surface, so it uses bounded JSON
+copy/paste and performs no filesystem access. Copy always serializes the
+broker-returned validated document, never pasted input. Import requires a
+separate explicit **local placement** confirmation and creates a new paused
+Activity. The acknowledgement must identify the authenticated owner, a new
+canonical Activity UUID, the exact lineage/revision and local placement, and
+the unchanged portable intent/references.
+
+Continuity carries title, goal, completion criteria, planning boundaries,
+canonical App object references, optional execution limits and scheduling
+priority. It does not carry or restore owners, capabilities, approvals,
+credentials, monetary/ledger state, jobs, sessions, receipts, object-state
+observations, notifications, audit history, execution results, authority or
+proof. The UI owns no persistence or database access, starts no work, restores
+no authority, and provides no live sync. Navigation generations reject late
+exports/imports, conflicts and validation failures remain visible, and import
+does not mutate the source Activity.
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -459,6 +488,8 @@ the prior non-disruptive `start` behavior.
 | `GET /api/activities?state=…&limit=…` | `ActivityListQuery` → `ActivityListResponse`; `activity.list` |
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
+| `GET /api/activities/:id/continuity/export` | Exact bounded `ActivityContinuityDocument`; `activity.continuity.export` |
+| `POST /api/activities/continuity/import` | `ActivityContinuityImportRequest` → validated paused `ActivityContinuityImportAcknowledgement`; `activity.continuity.import` |
 | `GET /api/activities/:id/receipts?limit=…` | `ActivityReceiptsQuery` → schema-1 `ActivityReceiptsResponse`; read-only `activity.receipts` |
 | `GET /api/activities/:id/capability-policy` | Required-nullable schema-1 `ActivityCapabilityPolicyResponse`; `activity.capability_policy.get` |
 | `POST /api/activities/:id/capability-policy` | `ActivityCapabilityPolicySetRequest` → `ActivityCapabilityPolicy`; CAS `activity.capability_policy.set` |
@@ -501,8 +532,9 @@ translation module validates the broker's Activity schema and removes private
 job fields before emitting presentation DTOs. Object-state entries retain the
 contract's typed server-supplied `owner_uid`; it is never a caller selector.
 Execution-limit and capability-policy replies also retain it and are checked against the same
-process-identity helper used for private bridge discovery. Other Activity views omit owner internals. Additive
-job/session/approval fields have defaults within presentation protocol v1.
+process-identity helper used for private bridge discovery. Other Activity views omit owner internals. Additive job/session/approval fields
+have defaults within presentation protocol v1. Continuity is intentionally
+non-additive inside v1: its complete shape is exact and unknown fields fail.
 
 ## License
 

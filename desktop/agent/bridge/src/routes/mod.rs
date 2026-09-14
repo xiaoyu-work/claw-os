@@ -22,6 +22,7 @@ mod voice;
 /// Voice uploads carry raw audio (e.g. `audio/webm`); a few minutes of speech
 /// easily exceeds axum's 2 MiB default body limit, so raise it on this route.
 const VOICE_MAX_BYTES: usize = 25 * 1024 * 1024;
+const CONTINUITY_IMPORT_MAX_HTTP_BYTES: usize = 512 * 1024;
 
 pub fn api() -> Router<AppState> {
     Router::new()
@@ -35,6 +36,15 @@ pub fn api() -> Router<AppState> {
         .route(
             "/activities/:id",
             get(activities::get).patch(activities::update),
+        )
+        .route(
+            "/activities/:id/continuity/export",
+            get(activities::continuity::export),
+        )
+        .route(
+            "/activities/continuity/import",
+            post(activities::continuity::import)
+                .layer(DefaultBodyLimit::max(CONTINUITY_IMPORT_MAX_HTTP_BYTES)),
         )
         .route("/activities/:id/receipts", get(activities::receipts))
         .route(

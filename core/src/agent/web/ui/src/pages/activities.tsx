@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Plus, Target } from "lucide-react";
 
 import { ActivityDetailPanel, ActivityStateBadge } from "@/components/activity-detail";
+import { ActivityContinuityPanel } from "@/components/activity-continuity";
 import { ActivityForm } from "@/components/activity-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,6 +25,7 @@ export function ActivitiesPage() {
     ? route.slice("/activities/".length) : null;
   const [filter, setFilter] = useState<ActivityState>();
   const list = useActivities(filter);
+  const existingIds = new Set(list.data?.map((activity) => activity.id) ?? []);
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
@@ -39,6 +41,9 @@ export function ActivitiesPage() {
             <Plus className="mr-1 h-3.5 w-3.5" /> New activity
           </Button>
         </div>
+        <ActivityContinuityPanel selectedId={selectedId} existingIds={existingIds}
+          onImported={list.refresh}
+          onSelectImported={(id) => navigate(`/activities/${encodeURIComponent(id)}`)} />
         <div className="grid items-start gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
           <section aria-label="Activity list" className="grid min-w-0 gap-3">
             <div className="flex items-center gap-2">

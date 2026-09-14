@@ -2,6 +2,7 @@
 //! Unlike chat SSE, a work submission has no cancel-on-disconnect guard.
 
 pub(super) mod capability_policy;
+pub(super) mod continuity;
 pub(super) mod execution_limits;
 pub(super) mod monetary_budget;
 pub(super) mod scheduling_priority;

@@ -29,6 +29,10 @@ pub enum Command {
     ActivityTransition,
     #[serde(rename = "activity.run")]
     ActivityRun,
+    #[serde(rename = "activity.continuity.export")]
+    ActivityContinuityExport,
+    #[serde(rename = "activity.continuity.import")]
+    ActivityContinuityImport,
     #[serde(rename = "activity.execution_limits.get")]
     ActivityExecutionLimitsGet,
     #[serde(rename = "activity.execution_limits.set")]
@@ -121,7 +125,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 48] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -129,6 +133,8 @@ impl Command {
         Self::ActivityUpdate,
         Self::ActivityTransition,
         Self::ActivityRun,
+        Self::ActivityContinuityExport,
+        Self::ActivityContinuityImport,
         Self::ActivityExecutionLimitsGet,
         Self::ActivityExecutionLimitsSet,
         Self::ActivityExecutionLimitsEnabled,
@@ -179,6 +185,8 @@ impl Command {
             Self::ActivityUpdate => "activity.update",
             Self::ActivityTransition => "activity.transition",
             Self::ActivityRun => "activity.run",
+            Self::ActivityContinuityExport => "activity.continuity.export",
+            Self::ActivityContinuityImport => "activity.continuity.import",
             Self::ActivityExecutionLimitsGet => "activity.execution_limits.get",
             Self::ActivityExecutionLimitsSet => "activity.execution_limits.set",
             Self::ActivityExecutionLimitsEnabled => "activity.execution_limits.enabled",

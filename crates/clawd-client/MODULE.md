@@ -14,6 +14,12 @@ The inventory also includes `activity.monetary_budget.get/set/enabled` and
 only expose existing broker services; the client owns neither Activity identity
 nor monetary/scheduling policy state.
 
+It also includes `activity.continuity.export/import`. The command enum only
+names the broker routes; exact portable-document validation and native
+presentation live in `desktop/agent/protocol` and `desktop/agent/ui`. The
+client supplies no owner selector, placement default, filesystem access,
+authority restoration, persistence or live synchronization.
+
 ## System review contract
 
 [`src/system_review.rs`](src/system_review.rs) defines the closed version-1

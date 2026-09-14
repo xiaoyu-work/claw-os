@@ -11,8 +11,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
     ActivityCapabilityPolicy, ActivityCapabilityPolicyEnabledRequest,
-    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest, ActivityCreateRequest,
-    ActivityDetailResponse, ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
+    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest,
+    ActivityContinuityDocument, ActivityContinuityImportAcknowledgement,
+    ActivityContinuityImportRequest, ActivityCreateRequest, ActivityDetailResponse,
+    ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
     ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest, ActivityListQuery,
     ActivityListResponse, ActivityMonetaryBudget, ActivityMonetaryBudgetEnabledRequest,
     ActivityMonetaryBudgetResponse, ActivityMonetaryBudgetSetRequest, ActivityObjectAttachRequest,
@@ -428,6 +430,45 @@ pub async fn fetch_activities(
 pub async fn fetch_activity(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityDetailResponse> {
     let (request, selected) =
         activity_request(&endpoint, reqwest::Method::GET, &["activities", id])?;
+    activity_response(request, selected).await
+}
+
+fn continuity_export_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(
+        endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "continuity", "export"],
+    )
+}
+
+pub async fn export_activity_continuity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityContinuityDocument> {
+    let (request, selected) = continuity_export_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn continuity_import_request(
+    endpoint: &BridgeEndpoint,
+    body: &ActivityContinuityImportRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint,
+        reqwest::Method::POST,
+        &["activities", "continuity", "import"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn import_activity_continuity(
+    endpoint: BridgeEndpoint,
+    body: ActivityContinuityImportRequest,
+) -> Result<ActivityContinuityImportAcknowledgement> {
+    let (request, selected) = continuity_import_request(&endpoint, &body)?;
     activity_response(request, selected).await
 }
 

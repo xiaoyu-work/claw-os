@@ -11,6 +11,8 @@ web UI.
 - Map HTTP routes to agent/session/setup operations.
 - Present the shared Activity broker's goals, planning metadata, explicit state
   changes, and associated job/session views without a Web-owned store or lifecycle.
+- Export and import the broker's closed portable Activity continuity document
+  with owner identity derived from authentication and explicit local placement.
 - Attach typed App object references and display the broker's authenticated
   declaration metadata and diagnostics, without URI parsing or App execution.
 - Preview App-declared effects on explicit request, keeping requested targets,
@@ -41,6 +43,7 @@ web UI.
 | `ui/src/components/activity-object-state.tsx`, `ui/src/lib/object-state.ts` | Shared object-state forms/history, source/validity caveats and selection-safe correction/retraction |
 | `ui/src/components/activity-execution-limits.tsx`, `ui/src/lib/execution-limits.ts` | Revision-checked finite execution controls with backend-owned counters; no permission or goal-state authority |
 | `ui/src/components/activity-monetary-budget.tsx`, `ui/src/lib/monetary-budget.ts` | Exact-revision configured-accounting controls with decimal-string micro-USD values; no pricing, invoice, ledger or policy authority |
+| `ui/src/components/activity-continuity.tsx`, `ui/src/lib/activity-continuity.ts` | Strict continuity-v1 parsing, deterministic selected-Activity download, and bounded explicit local import that creates a paused Activity |
 | `ui/src/components/activity-capability-policy.tsx`, `ui/src/lib/capability-policy.ts` | Fixed typed Normal/Ask/Deny rules, strict owner/revision/scope acknowledgements and retained stale drafts; no local capability authority |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
@@ -68,6 +71,16 @@ terminal and native clients. The Web DTO uses decimal strings for revisions and
 micro-USD values that may exceed JavaScript's safe integer range, and labels
 rates/totals as configured accounting rather than provider billing. See
 [`docs/activity-monetary-budgets.md`](../../../../docs/activity-monetary-budgets.md).
+Activity continuity routes forward only `activity.continuity.export/import`.
+The server revalidates the complete broker document and import acknowledgement,
+projects lineage revisions as decimal strings, accepts no owner or machine
+selector, and permits only explicit `local` placement. The browser performs a
+bounded duplicate-aware parse before presentation or forwarding, downloads a
+deterministic canonical JSON Blob, and selects the imported Activity only after
+an exact paused/new/local acknowledgement. Continuity carries intent, semantic
+references, finite safe rules, and scheduling preference only; it is not sync,
+backup, authority, consent, completion, result, or execution proof. See
+[`docs/activities.md`](../../../../docs/activities.md#portable-continuity).
 Object attachments use `activity.object.attach`, not a client-side replacement
 of the resource list. `activity.objects` supplies descriptions only after App
 verification; `declared` does not prove data existence, freshness, or permission.
@@ -104,7 +117,7 @@ cargo test -p cos agent::web::routes::activities::tests -- --test-threads=1
 
 Activity adapter tests cover authentication, bounded/closed request decoding,
 explicit confirmation forwarding, typed object attachment, broker transport,
-and visible failures.
+continuity document/acknowledgement revalidation, and visible failures.
 [`ui/README.md`](ui/README.md) documents focused UI tests and a real Chromium
 workflow over a mocked authenticated API, including stale selection responses,
 canonical object attachments, declaration failures, non-execution, unknown

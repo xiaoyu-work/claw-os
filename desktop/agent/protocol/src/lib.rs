@@ -6,6 +6,7 @@
 
 mod activities;
 mod capability_policy;
+mod continuity;
 mod execution_limits;
 mod http;
 mod monetary_budget;
@@ -16,6 +17,7 @@ mod version;
 
 pub use activities::*;
 pub use capability_policy::*;
+pub use continuity::*;
 pub use execution_limits::*;
 pub use http::*;
 pub use monetary_budget::*;

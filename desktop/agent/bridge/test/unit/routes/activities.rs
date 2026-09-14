@@ -30,6 +30,8 @@ async fn every_activity_surface_requires_authentication_and_version() {
         (Method::GET, "/activities"),
         (Method::POST, "/activities"),
         (Method::GET, "/activities/a"),
+        (Method::GET, "/activities/a/continuity/export"),
+        (Method::POST, "/activities/continuity/import"),
         (Method::GET, "/activities/a/receipts"),
         (Method::GET, "/activities/a/object-state"),
         (Method::POST, "/activities/a/object-state"),

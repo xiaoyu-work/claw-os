@@ -1,5 +1,6 @@
 //! Axum router construction.
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
@@ -9,6 +10,8 @@ use crate::agent::web::assets;
 use crate::agent::web::auth::require_token;
 use crate::agent::web::routes;
 use crate::agent::web::state::AppState;
+
+const CONTINUITY_IMPORT_MAX_HTTP_BYTES: usize = 256 * 1024;
 
 pub fn build_app(state: AppState) -> Router {
     let cors = CorsLayer::new()
@@ -84,6 +87,15 @@ pub fn build_app(state: AppState) -> Router {
             "/api/activities/{id}/scheduling-priority",
             get(routes::activities::scheduling_priority)
                 .post(routes::activities::set_scheduling_priority),
+        )
+        .route(
+            "/api/activities/{id}/continuity/export",
+            get(routes::activities::export_continuity),
+        )
+        .route(
+            "/api/activities/continuity/import",
+            post(routes::activities::import_continuity)
+                .layer(DefaultBodyLimit::max(CONTINUITY_IMPORT_MAX_HTTP_BYTES)),
         )
         .route(
             "/api/activities/capability-policy-catalog",

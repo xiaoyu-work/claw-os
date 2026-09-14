@@ -13,6 +13,14 @@ fn activity_commands_have_stable_names_and_round_trip() {
         (Command::ActivityTransition, "activity.transition"),
         (Command::ActivityRun, "activity.run"),
         (
+            Command::ActivityContinuityExport,
+            "activity.continuity.export",
+        ),
+        (
+            Command::ActivityContinuityImport,
+            "activity.continuity.import",
+        ),
+        (
             Command::ActivityExecutionLimitsGet,
             "activity.execution_limits.get",
         ),
@@ -170,6 +178,43 @@ fn scheduling_policy_commands_are_closed_unique_and_never_root_exempt() {
 }
 
 #[test]
+fn continuity_commands_are_closed_unique_and_never_root_exempt() {
+    for (command, name) in [
+        (
+            Command::ActivityContinuityExport,
+            "activity.continuity.export",
+        ),
+        (
+            Command::ActivityContinuityImport,
+            "activity.continuity.import",
+        ),
+    ] {
+        assert_eq!(command.as_str(), name);
+        assert_eq!(command.to_string(), name);
+        assert_eq!(
+            Command::ALL
+                .iter()
+                .filter(|entry| **entry == command)
+                .count(),
+            1
+        );
+        assert!(!command.requires_root_peer());
+        assert_eq!(serde_json::to_value(command).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Command>(json!(name)).unwrap(),
+            command
+        );
+    }
+    for invalid in [
+        "activity.continuity.restore",
+        "activity.continuity.sync",
+        "activity.continuity.import_authority",
+    ] {
+        assert!(serde_json::from_value::<Command>(json!(invalid)).is_err());
+    }
+}
+
+#[test]
 fn main_routes_survive_activity_inventory_merge() {
     let main_routes = [
         (
@@ -205,7 +250,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 46);
+    assert_eq!(Command::ALL.len(), 48);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

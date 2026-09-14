@@ -2,12 +2,14 @@
 //! owns Activity lifecycle and durable work; leaving this view cancels nothing.
 
 mod capability_policy;
+mod continuity;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
 mod scheduling_priority;
 
 pub use capability_policy::Message as CapabilityPolicyMessage;
+pub use continuity::Message as ContinuityMessage;
 pub use execution_limits::Message as ExecutionLimitsMessage;
 pub use monetary_budget::Message as MonetaryBudgetMessage;
 pub use object_state::Message as ObjectStateMessage;
@@ -66,6 +68,7 @@ pub enum Message {
     Refresh,
     RefreshReceipts,
     CapabilityPolicy(CapabilityPolicyMessage),
+    Continuity(ContinuityMessage),
     ExecutionLimits(ExecutionLimitsMessage),
     MonetaryBudget(MonetaryBudgetMessage),
     SchedulingPriority(SchedulingPriorityMessage),
@@ -104,6 +107,11 @@ pub(crate) enum Action {
     List(Option<ActivityState>),
     Get(String),
     Receipts(String),
+    ExportContinuity(String),
+    ImportContinuity {
+        request: cos_agent_protocol::ActivityContinuityImportRequest,
+        document: Box<cos_agent_protocol::ActivityContinuityDocument>,
+    },
     GetCapabilityPolicy(String),
     SetCapabilityPolicy {
         activity_id: String,
@@ -177,6 +185,8 @@ pub enum Response {
     List(ActivityListResponse),
     Detail(Box<ActivityDetailResponse>),
     Receipts(ActivityReceiptsResponse),
+    ContinuityDocument(Box<cos_agent_protocol::ActivityContinuityDocument>),
+    ContinuityImported(Box<cos_agent_protocol::ActivityContinuityImportAcknowledgement>),
     CapabilityPolicy(ActivityCapabilityPolicyResponse),
     CapabilityPolicySaved(Box<ActivityCapabilityPolicy>),
     ExecutionLimits(ActivityExecutionLimitsResponse),
@@ -204,6 +214,7 @@ pub(crate) struct Activities {
     selected: Option<String>,
     detail: Option<ActivityDetailResponse>,
     receipts: Option<ActivityReceiptsResponse>,
+    continuity: continuity::State,
     capability_policy: capability_policy::State,
     execution_limits: execution_limits::State,
     monetary_budget: monetary_budget::State,
@@ -237,6 +248,7 @@ impl Activities {
         self.visible
             && self.pending.is_none()
             && self.form.is_none()
+            && !self.continuity.is_editing()
             && self.object_form.is_none()
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
@@ -251,6 +263,7 @@ impl Activities {
     pub(crate) fn hide(&mut self) {
         self.visible = false;
         self.receipts = None;
+        self.continuity = continuity::State::default();
         self.execution_limits.response = None;
         self.monetary_budget.response = None;
         self.scheduling_priority.response = None;
@@ -276,6 +289,7 @@ impl Activities {
                 Action::List(_)
                     | Action::Get(_)
                     | Action::Receipts(_)
+                    | Action::ExportContinuity(_)
                     | Action::GetExecutionLimits(_)
                     | Action::GetMonetaryBudget(_)
                     | Action::GetSchedulingPriority(_)
@@ -423,6 +437,7 @@ impl Activities {
         self.selected = None;
         self.detail = None;
         self.receipts = None;
+        self.continuity = continuity::State::default();
         self.object_state = object_state::State::default();
         self.execution_limits = execution_limits::State::default();
         self.monetary_budget = monetary_budget::State::default();
@@ -470,6 +485,9 @@ impl Activities {
             Message::Refresh => return self.refresh(connected),
             Message::PreviewObjectOperation(reference) => {
                 return self.begin_operation_preview(reference, connected);
+            }
+            Message::Continuity(message) => {
+                return self.update_continuity(message, connected);
             }
             Message::CapabilityPolicy(message) => {
                 return self.update_capability_policy(message, connected);
@@ -788,6 +806,15 @@ impl Activities {
         };
         match (pending, response) {
             (Action::List(_), Response::List(response)) => self.list = response.activities,
+            (Action::ExportContinuity(id), Response::ContinuityDocument(document)) => {
+                self.continuity_exported(&id, *document);
+            }
+            (
+                Action::ImportContinuity { request, document },
+                Response::ContinuityImported(acknowledgement),
+            ) => {
+                return self.continuity_imported(&request, &document, *acknowledgement, connected);
+            }
             (Action::GetCapabilityPolicy(id), Response::CapabilityPolicy(response)) => {
                 self.capability_policy_loaded(&id, response);
             }
@@ -1121,7 +1148,8 @@ impl Activities {
         let mut list = Column::new()
             .spacing(12)
             .push(text(fl!("activities-hint")).size(13.0))
-            .push(filters);
+            .push(filters)
+            .push(self.continuity_import_view(available));
         if self.list.is_empty() && self.pending.is_none() {
             list = list.push(text(fl!("activities-empty")));
         }
@@ -1228,6 +1256,12 @@ impl Activities {
             && self.execution_limits.form.is_none()
             && self.monetary_budget.form.is_none()
             && self.scheduling_priority.form.is_none();
+        let continuity_available = available
+            && self.object_state.form.is_none()
+            && self.execution_limits.form.is_none()
+            && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none()
+            && self.capability_policy.form.is_none();
         let scheduling_priority_available = available
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
@@ -1335,6 +1369,7 @@ impl Activities {
         }
         content = content
             .push(text(fl!("activity-resources-hint")).size(12.0))
+            .push(self.continuity_export_view(detail, continuity_available))
             .push(self.object_resources_view(editable(activity.state), available))
             .push(self.object_state_view(detail, object_state_available))
             .push(self.execution_limits_view(detail, execution_limits_available))

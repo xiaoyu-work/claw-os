@@ -1,5 +1,36 @@
 use super::*;
 
+fn continuity_document() -> ActivityContinuityDocument {
+    ActivityContinuityDocument::build(
+        ActivityContinuityLineage {
+            id: "00000000-0000-4000-8000-000000000123".into(),
+            revision: 9_007_199_254_740_993,
+        },
+        PortableActivityIntent {
+            title: "Release".into(),
+            goal: "Publish the release".into(),
+            completion_criteria: "Reviewed and available".into(),
+            boundaries: "Ask before publishing".into(),
+        },
+        vec![PortableActivityReference {
+            label: "Status".into(),
+            reference: "app://kv/entry?id=release.status&revision=v1".into(),
+        }],
+        PortableActivityRules {
+            execution_limits: Some(PortableExecutionLimits {
+                enabled: false,
+                max_attempts: 10,
+                max_turns_per_attempt: 5,
+                expires_at: "2030-01-01T00:00:00.000000000Z".into(),
+            }),
+            scheduling: Some(PortableSchedulingPreference {
+                priority: ActivitySchedulingPriority::Foreground,
+            }),
+        },
+    )
+    .unwrap()
+}
+
 #[test]
 fn activity_url_and_shared_request_contract_are_preserved() {
     let update = with_id::<ActivityUpdate>(
@@ -157,16 +188,18 @@ async fn activity_http_routes_require_authentication() {
         ),
         ("GET", "/api/activities/activity-1/monetary-budget"),
         ("POST", "/api/activities/activity-1/monetary-budget"),
-        (
-            "POST",
-            "/api/activities/activity-1/monetary-budget/enabled",
-        ),
+        ("POST", "/api/activities/activity-1/monetary-budget/enabled"),
         ("GET", "/api/activities/activity-1/scheduling-priority"),
         ("POST", "/api/activities/activity-1/scheduling-priority"),
+        ("GET", "/api/activities/activity-1/continuity/export"),
+        ("POST", "/api/activities/continuity/import"),
         ("GET", "/api/activities/capability-policy-catalog"),
         ("GET", "/api/activities/activity-1/capability-policy"),
         ("POST", "/api/activities/activity-1/capability-policy"),
-        ("POST", "/api/activities/activity-1/capability-policy/enabled"),
+        (
+            "POST",
+            "/api/activities/activity-1/capability-policy/enabled",
+        ),
     ];
     for local_only in [true, false] {
         let state = crate::agent::web::state::AppState::new_with_locality(
@@ -192,6 +225,113 @@ async fn activity_http_routes_require_authentication() {
                 "{method} {path}; local_only={local_only}"
             );
         }
+    }
+}
+
+#[test]
+fn activity_continuity_http_dto_is_closed_bounded_and_precision_safe() {
+    let document = continuity_document();
+    let projected = ContinuityDocumentHttp::from_core(document.clone()).unwrap();
+    assert_eq!(projected.lineage.revision, "9007199254740993");
+    assert_eq!(projected.clone().into_core().unwrap(), document);
+
+    let mut value = serde_json::to_value(projected.clone()).unwrap();
+    value["owner_uid"] = json!(1000);
+    assert!(serde_json::from_value::<ContinuityDocumentHttp>(value).is_err());
+    let mut value = serde_json::to_value(projected.clone()).unwrap();
+    value["rules"]["authority"] = json!({"grant":"all"});
+    assert!(serde_json::from_value::<ContinuityDocumentHttp>(value).is_err());
+    let mut value = serde_json::to_value(projected.clone()).unwrap();
+    value["lineage"]["revision"] = json!(9_007_199_254_740_993_u64);
+    assert!(serde_json::from_value::<ContinuityDocumentHttp>(value).is_err());
+    assert!(serde_json::from_value::<ContinuityImportHttp>(json!({
+        "placement": "local",
+        "document": projected,
+        "server_path": "/home/user/activity.json",
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<ContinuityImportHttp>(json!({
+        "placement": "remote",
+        "document": ContinuityDocumentHttp::from_core(continuity_document()).unwrap(),
+    }))
+    .is_err());
+}
+
+#[test]
+fn activity_continuity_import_ack_is_exact_paused_local_and_owner_scoped() {
+    let document = continuity_document();
+    let activity = Activity {
+        id: "00000000-0000-4000-8000-000000000999".into(),
+        owner_uid: 1000,
+        title: document.intent.title.clone(),
+        goal: document.intent.goal.clone(),
+        completion_criteria: document.intent.completion_criteria.clone(),
+        boundaries: document.intent.boundaries.clone(),
+        resources: document
+            .references
+            .iter()
+            .map(|reference| ActivityResource {
+                label: reference.label.clone(),
+                reference: reference.reference.clone(),
+            })
+            .collect(),
+        state: ActivityState::Paused,
+        completion_note: None,
+        created_at: "2026-09-14T00:00:00Z".into(),
+        updated_at: "2026-09-14T00:00:00Z".into(),
+    };
+    let imported = ActivityContinuityImport {
+        activity: activity.clone(),
+        continuity_id: document.lineage.id.clone(),
+        continuity_revision: document.lineage.revision,
+        placement: ActivityExecutionPlacement::Local,
+    };
+    let view = validate_import_acknowledgement(
+        imported.clone(),
+        &document,
+        ActivityExecutionPlacement::Local,
+        1000,
+    )
+    .unwrap();
+    assert_eq!(view.continuity_revision, "9007199254740993");
+    for invalid in [
+        ActivityContinuityImport {
+            continuity_id: "00000000-0000-4000-8000-000000000124".into(),
+            ..imported.clone()
+        },
+        ActivityContinuityImport {
+            continuity_revision: document.lineage.revision + 1,
+            ..imported.clone()
+        },
+        ActivityContinuityImport {
+            activity: Activity {
+                state: ActivityState::Active,
+                ..activity.clone()
+            },
+            ..imported.clone()
+        },
+        ActivityContinuityImport {
+            activity: Activity {
+                owner_uid: 1001,
+                ..activity.clone()
+            },
+            ..imported.clone()
+        },
+        ActivityContinuityImport {
+            activity: Activity {
+                goal: "Changed acknowledgement".into(),
+                ..activity.clone()
+            },
+            ..imported.clone()
+        },
+    ] {
+        assert!(validate_import_acknowledgement(
+            invalid,
+            &document,
+            ActivityExecutionPlacement::Local,
+            1000,
+        )
+        .is_err());
     }
 }
 
@@ -252,12 +392,10 @@ fn activity_monetary_budget_http_dto_is_closed_bounded_and_precision_safe() {
             Err(_) => {}
         }
     }
-    assert!(
-        serde_json::from_value::<MonetaryBudgetHttpEnabled>(json!({
-            "expected_revision": "7", "enabled": false, "spent_microusd": "0"
-        }))
-        .is_err()
-    );
+    assert!(serde_json::from_value::<MonetaryBudgetHttpEnabled>(json!({
+        "expected_revision": "7", "enabled": false, "spent_microusd": "0"
+    }))
+    .is_err());
 }
 
 #[test]
@@ -302,12 +440,9 @@ fn activity_scheduling_priority_validates_owner_identity_revision_and_timestamps
         created_at: "2026-09-13T00:00:00Z".into(),
         updated_at: "2026-09-13T01:00:00Z".into(),
     };
-    let view = validate_scheduling_policy(
-        policy.clone(),
-        "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
-        1000,
-    )
-    .unwrap();
+    let view =
+        validate_scheduling_policy(policy.clone(), "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", 1000)
+            .unwrap();
     assert_eq!(view.revision, u64::MAX.to_string());
     assert_eq!(view.priority, ActivitySchedulingPriority::Foreground);
 
@@ -330,12 +465,8 @@ fn activity_scheduling_priority_validates_owner_identity_revision_and_timestamps
         },
     ] {
         assert!(
-            validate_scheduling_policy(
-                invalid,
-                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-                1000,
-            )
-            .is_err()
+            validate_scheduling_policy(invalid, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", 1000,)
+                .is_err()
         );
     }
 }
@@ -359,12 +490,8 @@ fn activity_monetary_budget_http_projection_preserves_u64_amounts_as_decimal_str
         created_at: "2026-09-13T00:00:00Z".into(),
         updated_at: "2026-09-13T01:00:00Z".into(),
     };
-    let projected = validate_monetary_policy(
-        policy,
-        "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
-        1000,
-    )
-    .unwrap();
+    let projected =
+        validate_monetary_policy(policy, "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", 1000).unwrap();
     let value = serde_json::to_value(projected).unwrap();
     assert_eq!(value["revision"], "9007199254740993");
     assert_eq!(value["spent_microusd"], "9007199254740993");
@@ -378,16 +505,21 @@ fn activity_monetary_budget_http_projection_preserves_u64_amounts_as_decimal_str
 fn activity_capability_policy_requests_preserve_cas_and_reject_authority_fields() {
     let policy = json!({"rules": [{"verb": "fs.delete", "mode": "deny", "scopes": []}]});
     let body = json!({"expected_revision": 2, "policy": policy});
-    let request = with_id::<ActivityCapabilityPolicySet>("activity-1".into(), body.clone()).unwrap();
+    let request =
+        with_id::<ActivityCapabilityPolicySet>("activity-1".into(), body.clone()).unwrap();
     assert_eq!(
         serde_json::to_value(request).unwrap(),
         json!({"id": "activity-1", "expected_revision": 2, "policy": policy})
     );
     let enabled = with_id::<ActivityCapabilityPolicyEnabled>(
-        "activity-1".into(), json!({"expected_revision": 2, "enabled": false}),
-    ).unwrap();
-    assert_eq!(serde_json::to_value(enabled).unwrap(),
-        json!({"id": "activity-1", "expected_revision": 2, "enabled": false}));
+        "activity-1".into(),
+        json!({"expected_revision": 2, "enabled": false}),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(enabled).unwrap(),
+        json!({"id": "activity-1", "expected_revision": 2, "enabled": false})
+    );
     for (field, value) in [
         ("id", json!("another")),
         ("owner_uid", json!(0)),
@@ -396,37 +528,52 @@ fn activity_capability_policy_requests_preserve_cas_and_reject_authority_fields(
         ("grant", json!("forged")),
         ("expected_revision", json!(-1)),
         ("policy", json!({"rules": [], "enabled": false})),
-        ("policy", json!({"rules": [{
-            "verb": "fs.read", "mode": "normal", "scopes": [{"kind": "wild"}],
-        }]})),
-        ("policy", json!({"rules": [{
-            "verb": "fs.read", "mode": "normal",
-            "scopes": [{"kind": "path", "value": "x".repeat(16 * 1024)}],
-        }]})),
+        (
+            "policy",
+            json!({"rules": [{
+                "verb": "fs.read", "mode": "normal", "scopes": [{"kind": "wild"}],
+            }]}),
+        ),
+        (
+            "policy",
+            json!({"rules": [{
+                "verb": "fs.read", "mode": "normal",
+                "scopes": [{"kind": "path", "value": "x".repeat(16 * 1024)}],
+            }]}),
+        ),
     ] {
         let mut invalid = body.clone();
         invalid[field] = value;
         assert!(with_id::<ActivityCapabilityPolicySet>("activity-1".into(), invalid).is_err());
     }
     assert!(with_id::<ActivityCapabilityPolicyEnabled>(
-        "activity-1".into(), json!({"enabled": false}),
-    ).is_err());
+        "activity-1".into(),
+        json!({"enabled": false}),
+    )
+    .is_err());
     assert!(with_id::<ActivityCapabilityPolicyEnabled>(
-        "activity-1".into(), json!({"expected_revision": 1, "enabled": "false"}),
-    ).is_err());
+        "activity-1".into(),
+        json!({"expected_revision": 1, "enabled": "false"}),
+    )
+    .is_err());
 }
 
 #[tokio::test]
 async fn capability_policy_catalog_is_static_core_metadata_not_app_or_owner_data() {
-    let Json(catalog) = capability_policy_catalog(Ok(Query(NoBody::default()))).await.unwrap();
+    let Json(catalog) = capability_policy_catalog(Ok(Query(NoBody::default())))
+        .await
+        .unwrap();
     assert_eq!(catalog["schema"], 1);
     let verbs = catalog["verbs"].as_array().unwrap();
     assert_eq!(verbs.len(), crate::caps::CATALOG.len());
     for (value, entry) in verbs.iter().zip(crate::caps::CATALOG) {
-        assert_eq!(value, &json!({
-            "verb": entry.verb, "scope_kind": entry.scope_kind,
-            "label": entry.label.current(), "description": entry.blurb.current(),
-        }));
+        assert_eq!(
+            value,
+            &json!({
+                "verb": entry.verb, "scope_kind": entry.scope_kind,
+                "label": entry.label.current(), "description": entry.blurb.current(),
+            })
+        );
     }
     assert!(catalog.get("owner_uid").is_none());
     assert!(catalog.get("capabilities").is_none());
@@ -545,12 +692,18 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
 
     let _lock = crate::test_env::lock_env();
     let directory = tempfile::tempdir().expect("create socket fixture on the native filesystem");
-    let socket = directory.path().join("clawd.sock");
+    let current_directory = std::env::current_dir().expect("resolve test working directory");
+    let runtime_directory = directory
+        .path()
+        .strip_prefix(&current_directory)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|_| directory.path().to_path_buf());
+    let socket = runtime_directory.join("clawd.sock");
     let _runtime = RuntimeDirectory {
         previous: std::env::var_os("COS_RUNTIME_DIR"),
         directory,
     };
-    std::env::set_var("COS_RUNTIME_DIR", _runtime.directory.path());
+    std::env::set_var("COS_RUNTIME_DIR", runtime_directory);
     let listener = UnixListener::bind(socket).unwrap();
     let job = json!({
         "id": "job-1", "status": "pending",
@@ -602,6 +755,36 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
     });
     let policy_response = policy_result.clone();
     let forwarded_draft = policy_draft.clone();
+    let continuity = continuity_document();
+    let continuity_response = serde_json::to_value(&continuity).unwrap();
+    let imported_activity = Activity {
+        id: "00000000-0000-4000-8000-000000000999".into(),
+        owner_uid: 1000,
+        title: continuity.intent.title.clone(),
+        goal: continuity.intent.goal.clone(),
+        completion_criteria: continuity.intent.completion_criteria.clone(),
+        boundaries: continuity.intent.boundaries.clone(),
+        resources: continuity
+            .references
+            .iter()
+            .map(|reference| ActivityResource {
+                label: reference.label.clone(),
+                reference: reference.reference.clone(),
+            })
+            .collect(),
+        state: ActivityState::Paused,
+        completion_note: None,
+        created_at: "2026-09-14T00:00:00Z".into(),
+        updated_at: "2026-09-14T00:00:00Z".into(),
+    };
+    let import_response = serde_json::to_value(ActivityContinuityImport {
+        activity: imported_activity.clone(),
+        continuity_id: continuity.lineage.id.clone(),
+        continuity_revision: continuity.lineage.revision,
+        placement: ActivityExecutionPlacement::Local,
+    })
+    .unwrap();
+    let forwarded_continuity = continuity.clone();
     let broker = tokio::spawn(async move {
         let mut preview_count = 0;
         let mut receipt_count = 0;
@@ -621,6 +804,8 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             Command::ActivityCapabilityPolicyEnabled,
             Command::ActivityCapabilityPolicySet,
             Command::ActivityCapabilityPolicyGet,
+            Command::ActivityContinuityExport,
+            Command::ActivityContinuityImport,
         ] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut header = [0; HEADER_BYTES];
@@ -630,7 +815,11 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             socket.read_exact(&mut body).await.unwrap();
             let request: Request = serde_json::from_slice(&body).unwrap();
             assert_eq!(request.command, command);
-            assert_eq!(request.params["id"], "activity-1");
+            if command == Command::ActivityContinuityImport {
+                assert!(request.params.get("id").is_none());
+            } else {
+                assert_eq!(request.params["id"], "activity-1");
+            }
             assert!(request.params.get("owner_uid").is_none());
             let response = match command {
                 Command::ActivityRun => {
@@ -684,9 +873,12 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
                     assert_eq!(request.params, json!({"id": "activity-1"}));
                     policy_reads += 1;
                     if policy_reads == 1 {
-                        Response::ok(request.id, json!({
-                            "schema": 1, "activity_id": "activity-1", "capability_policy": null,
-                        }))
+                        Response::ok(
+                            request.id,
+                            json!({
+                                "schema": 1, "activity_id": "activity-1", "capability_policy": null,
+                            }),
+                        )
                     } else {
                         Response::error(request.id, "unavailable", "Capability policy unavailable")
                     }
@@ -694,25 +886,53 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
                 Command::ActivityCapabilityPolicySet => {
                     policy_writes += 1;
                     if policy_writes == 1 {
-                        assert_eq!(request.params, json!({
-                            "id": "activity-1", "policy": forwarded_draft,
-                        }));
+                        assert_eq!(
+                            request.params,
+                            json!({
+                                "id": "activity-1", "policy": forwarded_draft,
+                            })
+                        );
                         Response::ok(request.id, policy_response.clone())
                     } else {
-                        assert_eq!(request.params, json!({
-                            "id": "activity-1", "expected_revision": 1, "policy": forwarded_draft,
-                        }));
-                        Response::error(request.id, "execution_failed", "Capability policy revision conflict")
+                        assert_eq!(
+                            request.params,
+                            json!({
+                                "id": "activity-1", "expected_revision": 1, "policy": forwarded_draft,
+                            })
+                        );
+                        Response::error(
+                            request.id,
+                            "execution_failed",
+                            "Capability policy revision conflict",
+                        )
                     }
                 }
                 Command::ActivityCapabilityPolicyEnabled => {
-                    assert_eq!(request.params, json!({
-                        "id": "activity-1", "expected_revision": 1, "enabled": false,
-                    }));
+                    assert_eq!(
+                        request.params,
+                        json!({
+                            "id": "activity-1", "expected_revision": 1, "enabled": false,
+                        })
+                    );
                     let mut disabled = policy_response.clone();
                     disabled["revision"] = json!(2);
                     disabled["enabled"] = json!(false);
                     Response::ok(request.id, disabled)
+                }
+                Command::ActivityContinuityExport => {
+                    assert_eq!(request.params, json!({"id":"activity-1"}));
+                    Response::ok(request.id, continuity_response.clone())
+                }
+                Command::ActivityContinuityImport => {
+                    assert_eq!(request.params["placement"], "local");
+                    assert!(request.params.get("owner_uid").is_none());
+                    assert!(request.params.get("server_path").is_none());
+                    let document = ActivityContinuityDocument::from_json(
+                        request.params["document"].as_str().unwrap().as_bytes(),
+                    )
+                    .unwrap();
+                    assert_eq!(document, forwarded_continuity);
+                    Response::ok(request.id, import_response.clone())
                 }
                 _ => unreachable!(),
             };
@@ -815,40 +1035,95 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
     let Json(absent) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         capability_policy(Path("activity-1".into()), Ok(Query(NoBody::default()))),
-    ).await.unwrap().unwrap();
-    assert_eq!(absent, json!({
-        "schema": 1, "activity_id": "activity-1", "capability_policy": null,
-    }));
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        absent,
+        json!({
+            "schema": 1, "activity_id": "activity-1", "capability_policy": null,
+        })
+    );
     let Json(saved) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        set_capability_policy(Path("activity-1".into()), Ok(Json(json!({
-            "expected_revision": null, "policy": policy_draft,
-        })))),
-    ).await.unwrap().unwrap();
+        set_capability_policy(
+            Path("activity-1".into()),
+            Ok(Json(json!({
+                "expected_revision": null, "policy": policy_draft,
+            }))),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(saved, policy_result);
     let Json(disabled) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        enable_capability_policy(Path("activity-1".into()), Ok(Json(json!({
-            "expected_revision": 1, "enabled": false,
-        })))),
-    ).await.unwrap().unwrap();
+        enable_capability_policy(
+            Path("activity-1".into()),
+            Ok(Json(json!({
+                "expected_revision": 1, "enabled": false,
+            }))),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(disabled["revision"], 2);
     assert_eq!(disabled["enabled"], false);
     assert_eq!(disabled["rules"], policy_result["rules"]);
     let (status, Json(error)) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        set_capability_policy(Path("activity-1".into()), Ok(Json(json!({
-            "expected_revision": 1, "policy": policy_draft,
-        })))),
-    ).await.unwrap().unwrap_err();
+        set_capability_policy(
+            Path("activity-1".into()),
+            Ok(Json(json!({
+                "expected_revision": 1, "policy": policy_draft,
+            }))),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error"], "Capability policy revision conflict");
     let (status, Json(error)) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         capability_policy(Path("activity-1".into()), Ok(Query(NoBody::default()))),
-    ).await.unwrap().unwrap_err();
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error"], "Capability policy unavailable");
+    let Json(exported) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        export_continuity(Path("activity-1".into()), Ok(Query(NoBody::default()))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(exported.lineage.revision, "9007199254740993");
+    let Json(imported) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        import_continuity(
+            Extension(AuthenticatedToken {
+                uid: 1000,
+                token_id: "test-token".into(),
+                expires_at: u64::MAX,
+            }),
+            Ok(Json(ContinuityImportHttp {
+                placement: ActivityExecutionPlacement::Local,
+                document: ContinuityDocumentHttp::from_core(continuity).unwrap(),
+            })),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(imported.activity, imported_activity);
+    assert_eq!(imported.continuity_revision, "9007199254740993");
+    assert_eq!(imported.placement, ActivityExecutionPlacement::Local);
     broker.await.unwrap();
     let unavailable = list(Ok(Query(ActivityList {
         state: None,
@@ -878,10 +1153,29 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
             post(operation_preview),
         )
         .route("/activities/{id}/receipts", http_get(receipts))
-        .route("/activities/capability-policy-catalog", http_get(capability_policy_catalog))
-        .route("/activities/{id}/capability-policy", http_get(capability_policy).post(set_capability_policy))
-        .route("/activities/{id}/capability-policy/enabled", post(enable_capability_policy))
-        .route("/activities/{id}/update", post(update));
+        .route(
+            "/activities/{id}/continuity/export",
+            http_get(export_continuity),
+        )
+        .route("/activities/continuity/import", post(import_continuity))
+        .route(
+            "/activities/capability-policy-catalog",
+            http_get(capability_policy_catalog),
+        )
+        .route(
+            "/activities/{id}/capability-policy",
+            http_get(capability_policy).post(set_capability_policy),
+        )
+        .route(
+            "/activities/{id}/capability-policy/enabled",
+            post(enable_capability_policy),
+        )
+        .route("/activities/{id}/update", post(update))
+        .layer(Extension(AuthenticatedToken {
+            uid: 1000,
+            token_id: "decode-test".into(),
+            expires_at: u64::MAX,
+        }));
     for (method, path, body) in [
         (
             "POST",
@@ -899,19 +1193,87 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
             "",
         ),
         ("GET", "/activities/activity-1/receipts?limit=-1", ""),
-        ("GET", "/activities/capability-policy-catalog?owner_uid=0", ""),
-        ("GET", "/activities/activity-1/capability-policy?owner_uid=0", ""),
-        ("GET", "/activities/activity-1/capability-policy?expected_revision=1", ""),
-        ("POST", "/activities/activity-1/capability-policy", r#"{"id":"other","policy":{"rules":[]}}"#),
-        ("POST", "/activities/activity-1/capability-policy", r#"{"owner_uid":0,"policy":{"rules":[]}}"#),
-        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":{"rules":[]},"enabled":true}"#),
-        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}],"grant":"forged"}}"#),
-        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":{"rules":[{"verb":"not.known","mode":"deny","scopes":[]}]}}"#),
-        ("POST", "/activities/activity-1/capability-policy", r#"{"policy":"rules"}"#),
+        (
+            "POST",
+            "/activities/continuity/import",
+            r#"{"placement":"local","document":{"kind":"claw_os.activity_continuity","schema_version":1,"lineage":{"id":"00000000-0000-4000-8000-000000000123","revision":"7"},"snapshot":"sha256:invalid","intent":{"title":"Release","goal":"Publish","completion_criteria":"","boundaries":""},"references":[],"rules":{"execution_limits":null,"scheduling":null}},"owner_uid":0}"#,
+        ),
+        (
+            "POST",
+            "/activities/continuity/import",
+            r#"{"placement":"local","placement":"local","document":{}}"#,
+        ),
+        (
+            "POST",
+            "/activities/continuity/import",
+            r#"{"placement":"remote","document":{}}"#,
+        ),
+        (
+            "GET",
+            "/activities/activity-1/continuity/export?owner_uid=0",
+            "",
+        ),
+        (
+            "GET",
+            "/activities/capability-policy-catalog?owner_uid=0",
+            "",
+        ),
+        (
+            "GET",
+            "/activities/activity-1/capability-policy?owner_uid=0",
+            "",
+        ),
+        (
+            "GET",
+            "/activities/activity-1/capability-policy?expected_revision=1",
+            "",
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy",
+            r#"{"id":"other","policy":{"rules":[]}}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy",
+            r#"{"owner_uid":0,"policy":{"rules":[]}}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy",
+            r#"{"policy":{"rules":[]},"enabled":true}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy",
+            r#"{"policy":{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}],"grant":"forged"}}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy",
+            r#"{"policy":{"rules":[{"verb":"not.known","mode":"deny","scopes":[]}]}}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy",
+            r#"{"policy":"rules"}"#,
+        ),
         ("POST", "/activities/activity-1/capability-policy", "{"),
-        ("POST", "/activities/activity-1/capability-policy/enabled", r#"{"enabled":false}"#),
-        ("POST", "/activities/activity-1/capability-policy/enabled", r#"{"expected_revision":1,"enabled":false,"id":"other"}"#),
-        ("POST", "/activities/activity-1/capability-policy/enabled", r#"{"expected_revision":1,"enabled":false,"owner_uid":0}"#),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy/enabled",
+            r#"{"enabled":false}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy/enabled",
+            r#"{"expected_revision":1,"enabled":false,"id":"other"}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/capability-policy/enabled",
+            r#"{"expected_revision":1,"enabled":false,"owner_uid":0}"#,
+        ),
         (
             "POST",
             "/activities/activity-1/operation-preview",
