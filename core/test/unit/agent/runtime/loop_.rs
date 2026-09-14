@@ -837,6 +837,43 @@ async fn buffered_and_streaming_compression_produce_identical_final_state() {
     );
 }
 
+#[tokio::test]
+async fn runtime_records_the_explicit_task_identity() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let cfg = cfg();
+    let tools = builtin_only_registry();
+    let provider = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    provider.push_response(MockResponse::Text("task answer".into()));
+    let deps = RuntimeDeps::compatibility(true);
+
+    run_with_deps(
+        &deps,
+        RuntimeRequest::buffered(provider, &cfg, "task prompt", &tools)
+            .with_memory(&db, "session")
+            .with_task_id("actual-job-id"),
+    )
+    .await
+    .unwrap();
+
+    let conn = db.lock_conn().unwrap();
+    let rows = conn
+        .query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT task_id), SUM(is_user_prompt)
+             FROM conversation_message_tasks
+             WHERE task_id = 'actual-job-id'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(rows, (2, 1, 1));
+}
+
 fn cfg() -> AgentConfig {
     AgentConfig {
         provider: "mock".into(),

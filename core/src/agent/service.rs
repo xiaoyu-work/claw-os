@@ -3849,6 +3849,7 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
     )
     .with_exposure(&exposure)
     .with_transient_context(job.context.as_deref())
+    .with_task_id(&job.id)
     .with_interrupt_scope(&job.id);
     let request = if job.use_memory {
         match (job.session_id.as_deref(), registry_deps.memory.as_ref()) {

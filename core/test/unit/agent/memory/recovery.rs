@@ -67,6 +67,39 @@ fn clean_database_reports_separate_health_checks() {
     assert_eq!(report.stats.expect("stats").total_messages, 1);
 }
 
+#[test]
+fn recovery_preserves_task_bindings_after_message_purge() {
+    let source = MemoryDb::open_in_memory().unwrap();
+    source
+        .record_task_user_message(
+            "session",
+            "task",
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::UserMessage,
+                "",
+            ),
+            "prompt",
+        )
+        .unwrap();
+    source.clear_session("session").unwrap();
+
+    let mut target = Connection::open_in_memory().unwrap();
+    initialize_connection(&target).unwrap();
+    let source_conn = source.lock_conn().unwrap();
+    assert_eq!(recover_task_bindings(&source_conn, &mut target).unwrap(), 1);
+    assert_eq!(
+        target
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_message_tasks
+                 WHERE session_id = 'session' AND task_id = 'task'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
 fn complete_test_compaction(db: &MemoryDb, session_id: &str) {
     use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
 

@@ -9,6 +9,8 @@ results, and curates durable notes from completed work.
 
 - Store sessions, messages, prompt injections, searchable text, and in-flight
   tool invocation state.
+- Atomically bind rows recorded by durable Agent tasks to their canonical task
+  and outer user-message identities.
 - Freeze content-addressed canonical system prompts per session.
 - Provide FTS and semantic recall behind stable interfaces.
 - Provide paged model reads with stable source IDs; the model chooses which
@@ -22,6 +24,7 @@ results, and curates durable notes from completed work.
 | Path | Role |
 | --- | --- |
 | `sqlite_fts.rs` | SQLite/WAL/FTS persistence plus pending/completed tool invocations |
+| `conversation_bindings.rs` | Durable task/message membership recorded with each task-owned row |
 | `semantic.rs` | Vector/semantic recall integration |
 | `curator.rs` | Automatic memory curation |
 | `notes.rs` | Durable notes, pinned profile entries and model-invoked literal search |
@@ -35,6 +38,10 @@ Runtime records through memory interfaces; tools query those interfaces rather
 than opening concrete databases. Model-visible memory must be traced and
 redacted consistently. Schema and recovery changes require migration/regression
 coverage.
+
+Task bindings are canonical execution evidence, not presentation metadata.
+Their rows intentionally survive ordinary message purge so missing transcript
+rows cannot later be mistaken for a complete retained task.
 
 `USER.md` and `[always]` entries enter the bounded request profile, not the
 frozen system prompt. Other notes are read deliberately through `cos_memory`.

@@ -8,6 +8,7 @@
 
 pub mod app_memory;
 pub mod compaction;
+pub mod conversation_bindings;
 pub mod conversations;
 pub mod curator;
 pub mod history;

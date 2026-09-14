@@ -24,6 +24,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use super::compaction::COMPACTION_SCHEMA;
+use super::conversation_bindings::SCHEMA as CONVERSATION_BINDING_SCHEMA;
 use super::recovery::{self, MemoryLifecycleLock};
 
 pub(crate) const INJECTED_ROLE: &str = "injected";
@@ -50,6 +51,9 @@ pub enum MemoryError {
 
     #[error("memory repair failed: {0}")]
     Repair(String),
+
+    #[error("invalid conversation recording: {0}")]
+    InvalidRecording(String),
 }
 
 impl MemoryError {
@@ -70,7 +74,7 @@ impl MemoryError {
                     || message.contains("not a database")
                     || message.contains("database corruption")
             }
-            Self::Io(_) | Self::Poisoned(_) | Self::Repair(_) => false,
+            Self::Io(_) | Self::Poisoned(_) | Self::Repair(_) | Self::InvalidRecording(_) => false,
         }
     }
 }
@@ -374,6 +378,12 @@ impl MemoryDb {
                     "durable compaction schema migration failed: {error}"
                 ))
             })?;
+            conn.execute_batch(CONVERSATION_BINDING_SCHEMA)
+                .map_err(|error| {
+                    MemoryError::Integrity(format!(
+                        "conversation task-binding schema migration failed: {error}"
+                    ))
+                })?;
             migrate_provenance_columns(&conn)?;
         }
         let issues = recovery::runtime_schema_issues(&conn)?;
@@ -501,21 +511,9 @@ impl MemoryDb {
         segment: &crate::agent::trust::LabeledSegment,
         content: &str,
     ) -> Result<i64, MemoryError> {
-        let lineage = segment
-            .lineage()
-            .iter()
-            .map(|kind| kind.tag())
-            .collect::<Vec<_>>()
-            .join(",");
-        self.record_message_labeled_at(
-            session_id,
-            role,
-            content,
-            current_ts_ms(),
-            Some(segment.class().wire_tag()),
-            Some(segment.kind().tag()),
-            Some(&lineage),
-        )
+        let conn = self.lock_conn()?;
+        insert_labeled_message_at(&conn, session_id, role, segment, content, current_ts_ms())
+            .map_err(Into::into)
     }
 
     /// Record a message with an explicit timestamp. Surfaces the
@@ -543,37 +541,18 @@ impl MemoryDb {
         trust_source: Option<&str>,
         trust_lineage: Option<&str>,
     ) -> Result<i64, MemoryError> {
-        // Cap stored message bodies. A run-away tool that streams a
-        // multi-MB blob into the conversation log would otherwise
-        // bloat the FTS index for every full-text search forever.
-        // Truncate at a character boundary so multi-byte UTF-8 is
-        // preserved.
-        const MAX_CONTENT_CHARS: usize = 64 * 1024;
-        // Injected context has its own composition budget and must remain
-        // reconstructable byte-for-byte, including its provenance envelope.
-        let stored: std::borrow::Cow<'_, str> =
-            if role != INJECTED_ROLE && content.chars().count() > MAX_CONTENT_CHARS {
-                let truncated: String = content.chars().take(MAX_CONTENT_CHARS).collect();
-                std::borrow::Cow::Owned(truncated + "\n…[truncated]")
-            } else {
-                std::borrow::Cow::Borrowed(content)
-            };
         let conn = self.lock_conn()?;
-        conn.execute(
-            "INSERT INTO messages
-                 (session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![
-                session_id,
-                role,
-                &*stored,
-                ts_ms,
-                trust_class,
-                trust_source,
-                trust_lineage
-            ],
-        )?;
-        Ok(conn.last_insert_rowid())
+        insert_message_at(
+            &conn,
+            session_id,
+            role,
+            content,
+            ts_ms,
+            trust_class,
+            trust_source,
+            trust_lineage,
+        )
+        .map_err(Into::into)
     }
 
     /// Record an auto-injected request-context segment as its own row
@@ -1471,6 +1450,7 @@ pub(super) fn initialize_connection(conn: &Connection) -> Result<(), MemoryError
     conn.execute_batch(CONNECTION_PRAGMAS)?;
     conn.execute_batch(BASE_SCHEMA)?;
     conn.execute_batch(COMPACTION_SCHEMA)?;
+    conn.execute_batch(CONVERSATION_BINDING_SCHEMA)?;
     conn.execute_batch(FTS_SCHEMA)?;
     migrate_provenance_columns(conn)?;
     Ok(())
@@ -1525,11 +1505,73 @@ fn is_busy(error: &rusqlite::Error) -> bool {
     )
 }
 
-fn current_ts_ms() -> i64 {
+pub(super) fn current_ts_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+pub(super) fn insert_labeled_message_at(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    segment: &crate::agent::trust::LabeledSegment,
+    content: &str,
+    ts_ms: i64,
+) -> rusqlite::Result<i64> {
+    let lineage = segment
+        .lineage()
+        .iter()
+        .map(|kind| kind.tag())
+        .collect::<Vec<_>>()
+        .join(",");
+    insert_message_at(
+        conn,
+        session_id,
+        role,
+        content,
+        ts_ms,
+        Some(segment.class().wire_tag()),
+        Some(segment.kind().tag()),
+        Some(&lineage),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_message_at(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    ts_ms: i64,
+    trust_class: Option<&str>,
+    trust_source: Option<&str>,
+    trust_lineage: Option<&str>,
+) -> rusqlite::Result<i64> {
+    const MAX_CONTENT_CHARS: usize = 64 * 1024;
+    let stored: std::borrow::Cow<'_, str> =
+        if role != INJECTED_ROLE && content.chars().count() > MAX_CONTENT_CHARS {
+            let truncated: String = content.chars().take(MAX_CONTENT_CHARS).collect();
+            std::borrow::Cow::Owned(truncated + "\n…[truncated]")
+        } else {
+            std::borrow::Cow::Borrowed(content)
+        };
+    conn.execute(
+        "INSERT INTO messages
+             (session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![
+            session_id,
+            role,
+            &*stored,
+            ts_ms,
+            trust_class,
+            trust_source,
+            trust_lineage
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {

@@ -38,6 +38,9 @@ through model turns, tools, hooks, progress, and final records.
   parallel scheduling while preserving provider call ids.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
+- Carry the durable Job id into persistence so every task-owned prompt,
+  assistant response, and tool-result row is transactionally bound to the same
+  canonical execution attempt.
 
 ## Key Files
 

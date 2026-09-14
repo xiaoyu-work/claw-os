@@ -153,6 +153,7 @@ pub struct RuntimeRequest<'a> {
     output: LifecycleOutput,
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
+    task_id: Option<&'a str>,
     compress: bool,
     delegated: bool,
 }
@@ -176,6 +177,7 @@ impl<'a> RuntimeRequest<'a> {
             output: LifecycleOutput::Buffered,
             progress: progress::null_progress(),
             interrupt_scope: None,
+            task_id: None,
             compress: false,
             delegated: false,
         }
@@ -223,6 +225,11 @@ impl<'a> RuntimeRequest<'a> {
 
     pub fn with_interrupt_scope(mut self, scope: &'a str) -> Self {
         self.interrupt_scope = Some(scope);
+        self
+    }
+
+    pub(crate) fn with_task_id(mut self, task_id: &'a str) -> Self {
+        self.task_id = Some(task_id);
         self
     }
 
@@ -275,6 +282,7 @@ pub async fn run_with_deps(
         output: request.output,
         progress: request.progress,
         interrupt_scope: request.interrupt_scope,
+        task_id: request.task_id,
         delegated: request.delegated,
     })
     .await
@@ -305,6 +313,7 @@ pub async fn ask_with(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        task_id: None,
         delegated: false,
     })
     .await
@@ -336,6 +345,7 @@ pub async fn ask_with_memory(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        task_id: None,
         delegated: false,
     })
     .await
@@ -370,6 +380,7 @@ pub async fn ask_with_memory_continuation(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        task_id: None,
         delegated: false,
     })
     .await
@@ -402,6 +413,7 @@ pub async fn ask_with_compressor(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        task_id: None,
         delegated: false,
     })
     .await
@@ -1933,6 +1945,7 @@ struct LifecycleRequest<'a> {
     output: LifecycleOutput,
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
+    task_id: Option<&'a str>,
     delegated: bool,
 }
 
@@ -1961,6 +1974,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         output,
         progress,
         interrupt_scope,
+        task_id,
         delegated,
     } = request;
     let fallback_exposure = ToolExposureContext::isolated(tools.guardrails().clone());
@@ -2003,13 +2017,24 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     });
 
     let mut user_origin = MessageOrigin::Ephemeral;
+    let mut recorded_task_turn = None;
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
             .map(|r| r.redact(user_prompt))
             .unwrap_or_else(|| user_prompt.to_string());
         let segment = trust::LabeledSegment::of(trust::SourceKind::UserMessage, "");
-        match db.record_labeled_message(sid, "user", &segment, &to_record) {
+        let recorded = match task_id {
+            Some(task_id) => db
+                .record_task_user_message(sid, task_id, &segment, &to_record)
+                .map(|turn| {
+                    let message_id = turn.user_message_id();
+                    recorded_task_turn = Some(turn);
+                    message_id
+                }),
+            None => db.record_labeled_message(sid, "user", &segment, &to_record),
+        };
+        match recorded {
             Ok(msg_id) => {
                 if let Some(replay) =
                     replay_persisted_content("user", &to_record, segment.kind(), segment.class())
@@ -2390,7 +2415,16 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                 // turn is model output, and a turn carrying tool results
                 // takes the least-trusted class across its blocks.
                 let segment = message_provenance(new_msg);
-                match db.record_labeled_message(sid, role, &segment, &to_record) {
+                let recorded = match (task_id, recorded_task_turn.as_ref()) {
+                    (Some(_), Some(turn)) => {
+                        db.record_task_message(turn, role, &segment, &to_record)
+                    }
+                    (Some(_), None) => Err(sqlite_fts::MemoryError::InvalidRecording(
+                        "task user message was not recorded".to_string(),
+                    )),
+                    (None, _) => db.record_labeled_message(sid, role, &segment, &to_record),
+                };
+                match recorded {
                     Ok(msg_id) => {
                         let origin = replay_persisted_content(
                             role,
@@ -2501,6 +2535,7 @@ async fn ask_inner_streaming(
         output: LifecycleOutput::Streaming { sink },
         progress,
         interrupt_scope,
+        task_id: None,
         delegated: false,
     })
     .await
@@ -2552,6 +2587,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
+                task_id: None,
                 delegated: false,
             })
             .await
@@ -2571,6 +2607,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
+                task_id: None,
                 delegated: false,
             })
             .await

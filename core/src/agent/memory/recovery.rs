@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::compaction::{self, COMPACTION_SCHEMA};
+use super::conversation_bindings::SCHEMA as CONVERSATION_BINDING_SCHEMA;
 use super::sqlite_fts::{
     initialize_connection, system_prompt_hash, MemoryError, BASE_SCHEMA, CONNECTION_PRAGMAS,
     FTS_SCHEMA,
@@ -42,6 +43,20 @@ const EXPECTED_TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 const EXPECTED_INDEXES: &[&str] = &["messages_session_ts", "messages_ts"];
+const EXPECTED_BINDING_TABLES: &[(&str, &[&str])] = &[(
+    "conversation_message_tasks",
+    &[
+        "message_id",
+        "session_id",
+        "task_id",
+        "user_message_id",
+        "source_session_id",
+        "source_message_id",
+        "source_user_message_id",
+        "is_user_prompt",
+    ],
+)];
+const EXPECTED_BINDING_INDEXES: &[&str] = &["conversation_message_tasks_session"];
 const EXPECTED_COMPACTION_TABLES: &[(&str, &[&str])] = &[
     ("compaction_summaries", &["hash", "summary"]),
     (
@@ -193,6 +208,8 @@ pub struct RecoveredRecords {
     pub compactions: u64,
     #[serde(default)]
     pub skipped_compactions: u64,
+    #[serde(default)]
+    pub task_bindings: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1278,6 +1295,37 @@ fn inspect_schema(conn: &Connection) -> Result<SchemaInspection, MemoryError> {
             inspection.missing.push(format!("missing index {index}"));
         }
     }
+    for (table, columns) in EXPECTED_BINDING_TABLES {
+        match schema_object_type(conn, table)? {
+            None => inspection.missing.push(format!("missing table {table}")),
+            Some(kind) if kind != "table" => {
+                inspection.authoritative_incompatible = true;
+                inspection
+                    .incompatible
+                    .push(format!("{table} is {kind}, expected table"));
+            }
+            Some(_) => {
+                let actual = table_columns(conn, table)?;
+                let absent: Vec<_> = columns
+                    .iter()
+                    .filter(|column| !actual.iter().any(|actual| actual == **column))
+                    .copied()
+                    .collect();
+                if !absent.is_empty() {
+                    inspection.authoritative_incompatible = true;
+                    inspection.incompatible.push(format!(
+                        "table {table} is missing column(s): {}",
+                        absent.join(", ")
+                    ));
+                }
+            }
+        }
+    }
+    for index in EXPECTED_BINDING_INDEXES {
+        if schema_object_type(conn, index)?.as_deref() != Some("index") {
+            inspection.missing.push(format!("missing index {index}"));
+        }
+    }
     for (table, columns) in EXPECTED_COMPACTION_TABLES {
         match schema_object_type(conn, table)? {
             None => inspection.missing.push(format!("missing table {table}")),
@@ -2282,6 +2330,7 @@ fn perform_in_place_repair(
     }
     tx.execute_batch(BASE_SCHEMA)?;
     tx.execute_batch(COMPACTION_SCHEMA)?;
+    tx.execute_batch(CONVERSATION_BINDING_SCHEMA)?;
     validate_prompt_integrity(&tx)?;
 
     tx.execute(
@@ -2634,6 +2683,12 @@ fn recover_from_standalone_main(
         }
         Err(error) => warnings.push(format!("session compactions were not recovered: {error}")),
     }
+    match recover_task_bindings(&source, target) {
+        Ok(count) => recovered.task_bindings = count,
+        Err(error) => warnings.push(format!(
+            "conversation task bindings were not recovered: {error}"
+        )),
+    }
 
     Ok(StandaloneRecoveryResult {
         recovered,
@@ -2722,6 +2777,7 @@ fn write_replacement_marker(
              skipped_prompt_refs       INTEGER NOT NULL,
              recovered_compactions     INTEGER NOT NULL DEFAULT 0,
              skipped_compactions       INTEGER NOT NULL DEFAULT 0,
+             recovered_task_bindings   INTEGER NOT NULL DEFAULT 0,
              recovery_warning          TEXT
          );",
     )?;
@@ -2745,13 +2801,23 @@ fn write_replacement_marker(
              ADD COLUMN skipped_compactions INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
+    let marker_columns = table_columns(conn, REPLACEMENT_MARKER_TABLE)?;
+    if !marker_columns
+        .iter()
+        .any(|column| column == "recovered_task_bindings")
+    {
+        conn.execute_batch(
+            "ALTER TABLE memory_repair_install
+             ADD COLUMN recovered_task_bindings INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
     conn.execute(
         "INSERT INTO memory_repair_install(
              singleton, attempt_id, quarantine_path, source_main_sha256,
              complete, salvage_succeeded, recovered_messages, recovered_titles,
              recovered_prompt_refs, skipped_prompt_refs, recovered_compactions,
-             skipped_compactions, recovery_warning
-         ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             skipped_compactions, recovered_task_bindings, recovery_warning
+         ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(singleton) DO UPDATE SET
              attempt_id = excluded.attempt_id,
              quarantine_path = excluded.quarantine_path,
@@ -2764,6 +2830,7 @@ fn write_replacement_marker(
              skipped_prompt_refs = excluded.skipped_prompt_refs,
              recovered_compactions = excluded.recovered_compactions,
              skipped_compactions = excluded.skipped_compactions,
+             recovered_task_bindings = excluded.recovered_task_bindings,
              recovery_warning = excluded.recovery_warning",
         params![
             &marker.attempt_id,
@@ -2777,6 +2844,7 @@ fn write_replacement_marker(
             marker.recovered.skipped_prompt_references as i64,
             marker.recovered.compactions as i64,
             marker.recovered.skipped_compactions as i64,
+            marker.recovered.task_bindings as i64,
             marker.recovery_warning.as_deref(),
         ],
     )?;
@@ -2820,12 +2888,22 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
              ADD COLUMN skipped_compactions INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
+    let marker_columns = table_columns(&conn, REPLACEMENT_MARKER_TABLE)?;
+    if !marker_columns
+        .iter()
+        .any(|column| column == "recovered_task_bindings")
+    {
+        conn.execute_batch(
+            "ALTER TABLE memory_repair_install
+             ADD COLUMN recovered_task_bindings INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
     let marker = conn
         .query_row(
             "SELECT attempt_id, quarantine_path, source_main_sha256, complete,
                 salvage_succeeded, recovered_messages, recovered_titles,
                 recovered_prompt_refs, skipped_prompt_refs, recovered_compactions,
-                skipped_compactions, recovery_warning
+                skipped_compactions, recovered_task_bindings, recovery_warning
          FROM memory_repair_install
          WHERE singleton = 1",
             [],
@@ -2843,8 +2921,9 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
                         skipped_prompt_references: row.get::<_, i64>(8)? as u64,
                         compactions: row.get::<_, i64>(9)? as u64,
                         skipped_compactions: row.get::<_, i64>(10)? as u64,
+                        task_bindings: row.get::<_, i64>(11)? as u64,
                     },
-                    recovery_warning: row.get(11)?,
+                    recovery_warning: row.get(12)?,
                 })
             },
         )
@@ -2865,10 +2944,20 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
             [],
             |row| row.get::<_, i64>(0),
         )? as u64;
+        let task_bindings = if schema_object_type(&conn, "conversation_message_tasks")?.is_some() {
+            conn.query_row(
+                "SELECT COUNT(*) FROM conversation_message_tasks",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as u64
+        } else {
+            0
+        };
         if messages < marker.recovered.messages
             || titles < marker.recovered.titles
             || prompt_references < marker.recovered.prompt_references
             || compactions < marker.recovered.compactions
+            || task_bindings < marker.recovered.task_bindings
         {
             return Err(MemoryError::Integrity(format!(
                 "replacement {} does not contain the rows recorded by its repair marker",
@@ -3009,6 +3098,52 @@ fn recover_authoritative_messages(
     }
     tx.commit()?;
     Ok((recovered, sessions))
+}
+
+fn recover_task_bindings(source: &Connection, target: &mut Connection) -> Result<u64, MemoryError> {
+    if schema_object_type(source, "conversation_message_tasks")?.is_none() {
+        return Ok(0);
+    }
+    if !table_has_columns(
+        source,
+        "conversation_message_tasks",
+        EXPECTED_BINDING_TABLES[0].1,
+    )? {
+        return Err(MemoryError::Integrity(
+            "conversation_message_tasks table is incompatible".to_string(),
+        ));
+    }
+
+    let tx = target.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut statement = source.prepare(
+        "SELECT message_id, session_id, task_id, user_message_id, source_session_id,
+                source_message_id, source_user_message_id, is_user_prompt
+         FROM conversation_message_tasks
+         ORDER BY message_id",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut recovered = 0_u64;
+    while let Some(row) = rows.next()? {
+        tx.execute(
+            "INSERT INTO conversation_message_tasks(
+                 message_id, session_id, task_id, user_message_id, source_session_id,
+                 source_message_id, source_user_message_id, is_user_prompt
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, bool>(7)?,
+            ],
+        )?;
+        recovered += 1;
+    }
+    tx.commit()?;
+    Ok(recovered)
 }
 
 fn recover_titles_projection(

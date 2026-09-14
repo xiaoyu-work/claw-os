@@ -1567,8 +1567,12 @@ root-owned UUID projection exists only for frontend compatibility and grants no
 authority. Presentation state (title, archive, soft delete) is root-owned
 session metadata. History stays in the owner's memory partition and is opened
 only from a disposable owner-identity thread; root `clawd` does not use its
-privilege to read that database. Branch/revert operations remain unavailable
-until exact task/message bindings can define their history boundary.
+privilege to read that database. The Agent worker carries its canonical Job id
+into the runtime, which transactionally records every task prompt and resulting
+assistant/tool row with one explicit outer user-message binding. Binding
+evidence survives ordinary transcript purge; it is never inferred from message
+text or timestamps. Branch/revert operations remain unavailable until retained
+membership and owner-scoped Job lineage are verified against those bindings.
 
 ### Proactive notification
 
