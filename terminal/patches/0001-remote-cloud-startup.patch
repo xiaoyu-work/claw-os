@@ -1,0 +1,61 @@
+Subject: [PATCH] Keep explicit remote frontend cloud startup server-owned
+Upstream: OpenAI Codex a592c38c16cdd7623dacc9168926ebccedfb67d3
+License: Apache-2.0
+
+Claw OS supplies the app server and owns provider credentials/configuration.
+An explicit remote frontend must not bootstrap local cloud auth/config or
+preload a public announcement. Preserve nonremote startup and user-triggered
+UI features. This is not a general network sandbox.
+
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -1,3 +1,4 @@
++// Claw OS modification: explicit remote frontends skip local cloud startup work.
+ // Forbid accidental stdout/stderr writes in the *library* portion of the TUI.
+ // The standalone `codex-tui` binary prints a short help message before the
+ // alternate‑screen mode starts; that file opts‑out locally via `allow`.
+@@ -961,6 +962,9 @@
+     bootstrap_config: &ConfigTomlLoadResult,
+     codex_home: &Path,
+ ) -> std::io::Result<CloudConfigBundleLoader> {
++    if app_server_target.uses_remote_workspace() {
++        return Ok(CloudConfigBundleLoader::default());
++    }
+     cloud_config_bundle_loader_for_storage(
+         app_server_target
+             .auth_config_for_cloud_loader(bootstrap_auth_config(codex_home, bootstrap_config)?),
+@@ -1059,7 +1063,9 @@
+     let workload_identity_selected = is_workload_identity_selected();
+     color_eyre::install()?;
+ 
+-    tooltips::announcement::prewarm(initial_config.http_client_factory());
++    if !uses_remote_workspace {
++        tooltips::announcement::prewarm(initial_config.http_client_factory());
++    }
+ 
+     // Forward panic reports through tracing so they appear in the UI status
+     // line, but do not swallow the default/color-eyre panic handler.
+diff --git a/codex-rs/tui/src/startup_orchestration.rs b/codex-rs/tui/src/startup_orchestration.rs
+--- a/codex-rs/tui/src/startup_orchestration.rs
++++ b/codex-rs/tui/src/startup_orchestration.rs
+@@ -2,6 +2,8 @@
+ //!
+ //! Lightweight validation runs before acquiring the terminal. Once the draft is visible, slow
+ //! configuration and app-server initialization remain responsive to safe local editing.
++//!
++//! Claw OS modification: remote frontends skip local cloud auth/config loading.
+ 
+ use super::*;
+ use codex_terminal_detection::Multiplexer;
+@@ -374,7 +376,9 @@
+         .await?;
+     startup_draft.apply_config(&config);
+ 
+-    let mut cloud_config_bundle = if workload_identity_selected {
++    let mut cloud_config_bundle = if app_server_target.uses_remote_workspace() {
++        CloudConfigBundleLoader::default()
++    } else if workload_identity_selected {
+         cloud_config_bundle
+     } else {
+         startup_draft

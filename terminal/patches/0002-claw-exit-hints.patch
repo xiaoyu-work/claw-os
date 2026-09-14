@@ -1,0 +1,208 @@
+Subject: [PATCH] Print durable Claw conversation commands for Claw frontend exits
+Upstream: OpenAI Codex a592c38c16cdd7623dacc9168926ebccedfb67d3
+License: Apache-2.0
+
+COS_TUI_FRONTEND=1 is presentation-only. It does not select a backend or
+change authority. A Claw-owned adapter socket dies with its launcher, so
+exit guidance must resume the durable conversation through cos instead
+of reconnecting to the retired private socket. Other frontends keep the
+original commands and stop guidance.
+
+diff --git a/codex-rs/tui/src/app/exit_summary.rs b/codex-rs/tui/src/app/exit_summary.rs
+--- a/codex-rs/tui/src/app/exit_summary.rs
++++ b/codex-rs/tui/src/app/exit_summary.rs
+@@ -1,7 +1,12 @@
+ //! Exit output distinguishes a disconnected client from a stopped embedded server.
+ //! Persisted sessions offer a direct UUID command and an optional named picker hint.
++//!
++//! Claw OS modification: COS_TUI_FRONTEND only changes conversation exit hints.
+ 
++mod frontend;
++use frontend::ExitFrontend;
++
+ use super::*;
+ use crate::RemoteAppServerEndpoint;
+ use crate::exec_command::escape_command;
+ use crate::status::remote_connection::sanitized_websocket_url;
+@@ -80,6 +85,7 @@
+ impl AppExitInfo {
+     /// Format the terminal summary for both the CLI and standalone TUI binaries.
+     pub fn format_exit_messages(self, color_enabled: bool) -> Vec<String> {
++        let frontend = ExitFrontend::from_marker(std::env::var("COS_TUI_FRONTEND").ok().as_deref());
+         let color_command = |command: String| {
+             if color_enabled {
+                 format!("\u{1b}[36m{command}\u{1b}[39m")
+@@ -108,18 +114,16 @@
+             lines.push(message.to_string());
+-            let mut resume_command = disconnect.command.clone();
+-            resume_command.extend(["resume".to_string(), thread_id.to_string()]);
+-            lines.push(format!(
+-                "Reconnect: {}",
+-                color_command(escape_command(&resume_command)),
+-            ));
++            let resume_command =
++                frontend.reconnect_command(disconnect.command.clone(), &thread_id.to_string());
++            let resume = color_command(escape_command(&resume_command));
++            lines.push(format!("Reconnect: {resume}"));
+             if !turn_interrupted {
+                 let mut agents_command = disconnect.command;
+                 agents_command.push("agents".to_string());
+-                lines.push(format!(
+-                    "Stop the current turn: run {}, select this task, and {}.",
+-                    color_command(escape_command(&agents_command)),
+-                    disconnect.stop_hint,
++                lines.push(frontend.stop_message(
++                    &resume,
++                    &color_command(escape_command(&agents_command)),
++                    &disconnect.stop_hint,
+                 ));
+             }
+             if !self.token_usage.is_zero() {
+                 let usage = self.token_usage.to_string();
+@@ -139,9 +143,14 @@
+             lines.push(format!(
+                 "  {}",
+-                color_command(format!("codex resume {}", thread.thread_id)),
++                color_command(escape_command(&frontend.reconnect_command(
++                    vec!["codex".to_string()],
++                    &thread.thread_id.to_string(),
++                ))),
+             ));
+-            if let Some(thread_name) = thread.thread_name.filter(|name| !name.is_empty()) {
++            if frontend == ExitFrontend::Codex
++                && let Some(thread_name) = thread.thread_name.filter(|name| !name.is_empty())
++            {
+                 lines.push(format!(
+                     "Or run {} and select {}.",
+                     color_command("codex resume".to_string()),
+                     color_command(thread_name),
+diff --git a/codex-rs/tui/src/app/exit_summary/frontend.rs b/codex-rs/tui/src/app/exit_summary/frontend.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/tui/src/app/exit_summary/frontend.rs
+@@ -0,0 +1,50 @@
++//! Claw OS presentation policy for exit hints; never backend or authority selection.
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum ExitFrontend {
++    Codex,
++    Claw,
++}
++
++impl ExitFrontend {
++    pub(crate) fn from_marker(marker: Option<&str>) -> Self {
++        match marker {
++            Some("1") => Self::Claw,
++            _ => Self::Codex,
++        }
++    }
++
++    pub(crate) fn reconnect_command(
++        self,
++        mut upstream: Vec<String>,
++        thread_id: &str,
++    ) -> Vec<String> {
++        match self {
++            Self::Codex => {
++                upstream.extend(["resume".to_string(), thread_id.to_string()]);
++                upstream
++            }
++            Self::Claw => ["cos", "agent", "chat", "--session", thread_id]
++                .into_iter()
++                .map(str::to_string)
++                .collect(),
++        }
++    }
++
++    pub(crate) fn stop_message(self, resume: &str, agents: &str, shortcut: &str) -> String {
++        match self {
++            Self::Codex => {
++                format!("Stop the current turn: run {agents}, select this task, and {shortcut}.")
++            }
++            Self::Claw => {
++                format!(
++                    "Stop the current turn: resume this conversation with {resume}, then press Esc."
++                )
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++#[path = "frontend_tests.rs"]
++mod tests;
+diff --git a/codex-rs/tui/src/app/exit_summary/frontend_tests.rs b/codex-rs/tui/src/app/exit_summary/frontend_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/codex-rs/tui/src/app/exit_summary/frontend_tests.rs
+@@ -0,0 +1,70 @@
++use super::ExitFrontend;
++
++const THREAD_ID: &str = "12345678-1234-8123-8123-123456789abc";
++
++fn upstream_command() -> Vec<String> {
++    ["codex", "--remote", "unix:///run/cos-ui/retired.sock"]
++        .into_iter()
++        .map(str::to_string)
++        .collect()
++}
++
++#[test]
++fn claw_hint_resumes_conversation_without_the_private_endpoint() {
++    let frontend = ExitFrontend::from_marker(Some("1"));
++    assert_eq!(
++        frontend.reconnect_command(upstream_command(), THREAD_ID),
++        ["cos", "agent", "chat", "--session", THREAD_ID].map(str::to_string),
++    );
++}
++
++#[test]
++fn absent_or_other_marker_preserves_upstream_remote_command() {
++    for marker in [None, Some("0"), Some("true"), Some(" 1")] {
++        let frontend = ExitFrontend::from_marker(marker);
++        assert_eq!(
++            frontend.reconnect_command(upstream_command(), THREAD_ID),
++            [
++                "codex",
++                "--remote",
++                "unix:///run/cos-ui/retired.sock",
++                "resume",
++                THREAD_ID
++            ]
++            .map(str::to_string),
++        );
++    }
++}
++
++#[test]
++fn plain_session_hints_keep_codex_unless_explicitly_marked() {
++    let base = vec!["codex".to_string()];
++    assert_eq!(
++        ExitFrontend::Codex.reconnect_command(base.clone(), THREAD_ID),
++        ["codex", "resume", THREAD_ID].map(str::to_string),
++    );
++    assert_eq!(
++        ExitFrontend::Claw.reconnect_command(base, THREAD_ID),
++        ["cos", "agent", "chat", "--session", THREAD_ID].map(str::to_string),
++    );
++}
++
++#[test]
++fn claw_stop_hint_uses_resume_then_escape() {
++    assert_eq!(
++        ExitFrontend::Claw.stop_message("cos agent chat --session ID", "retired socket", "press X"),
++        "Stop the current turn: resume this conversation with cos agent chat --session ID, then press Esc.",
++    );
++}
++
++#[test]
++fn unflagged_stop_hint_preserves_formatted_command_and_keymap() {
++    assert_eq!(
++        ExitFrontend::Codex.stop_message(
++            "unused",
++            "\u{1b}[36mcodex agents\u{1b}[39m",
++            "press Ctrl+X"
++        ),
++        "Stop the current turn: run \u{1b}[36mcodex agents\u{1b}[39m, select this task, and press Ctrl+X.",
++    );
++}
