@@ -109,6 +109,20 @@ struct RuntimeToolAudit {
     error: Option<TextDigest>,
 }
 
+#[derive(Debug, Serialize)]
+struct ActivityContinuityAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    action: &'static str,
+    continuity_id: &'a str,
+    schema_version: u32,
+    reference_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    placement: Option<&'a str>,
+    result: &'static str,
+    client: &'a ClientIdentity,
+}
+
 /// Append the broker's record of a dispatched request.
 ///
 /// Both this log and [`super::system_journal`] are handed the same
@@ -147,6 +161,31 @@ pub fn record_protocol_failure(
         client,
     };
     append_jsonl(&audit)
+}
+
+pub fn record_activity_continuity(
+    action: &'static str,
+    continuity_id: &str,
+    schema_version: u32,
+    reference_count: usize,
+    placement: Option<&str>,
+    result: &'static str,
+    client: &ClientIdentity,
+) {
+    let record = ActivityContinuityAudit {
+        ts: Utc::now(),
+        event: "clawd.activity.continuity",
+        action,
+        continuity_id,
+        schema_version,
+        reference_count,
+        placement,
+        result,
+        client,
+    };
+    if let Err(error) = append_jsonl(&record) {
+        tracing::error!(%error, "failed to write Activity continuity audit record");
+    }
 }
 
 pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) {

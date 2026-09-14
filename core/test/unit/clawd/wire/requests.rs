@@ -413,6 +413,34 @@ fn activity_requests_are_closed_bounded_and_never_choose_an_owner() {
         json!({"id": "activity-1", "priority": "foreground"}),
     )
     .is_err());
+    assert!(serde_json::from_value::<ActivityContinuityExport>(json!({"id":"activity-1"})).is_ok());
+    assert!(serde_json::from_value::<ActivityContinuityExport>(
+        json!({"id":"activity-1","owner_uid":1000})
+    )
+    .is_err());
+    assert!(serde_json::from_value::<ActivityContinuityImport>(json!({
+        "placement":"local",
+        "document":"{}"
+    }))
+    .is_ok());
+    for placement in ["remote", "provider", "device-1"] {
+        assert!(serde_json::from_value::<ActivityContinuityImport>(json!({
+            "placement":placement,
+            "document":"{}"
+        }))
+        .is_err());
+    }
+    assert!(serde_json::from_value::<ActivityContinuityImport>(json!({
+        "placement":"local",
+        "document":"{}",
+        "owner_uid":1000
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<ActivityContinuityImport>(json!({
+        "placement":"local",
+        "document":"x".repeat(crate::activities::MAX_CONTINUITY_DOCUMENT_BYTES + 1)
+    }))
+    .is_err());
 }
 
 #[test]

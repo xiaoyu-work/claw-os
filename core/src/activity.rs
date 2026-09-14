@@ -6,12 +6,16 @@ use crate::activities::{ActivityDraft, ActivityPatch};
 use crate::clawd::{client, config, protocol::Request, routes::Command};
 
 mod capability_policy;
+mod continuity;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
 mod scheduling_policy;
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    if matches!(command, "export" | "import") {
+        return continuity::run(command, args);
+    }
     if command == "record-object-state" {
         return object_state::from_stdin(args);
     }

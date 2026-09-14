@@ -1,4 +1,5 @@
 mod capability_policy;
+mod continuity;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
@@ -15,7 +16,8 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
-    Activity, ActivityCapabilityPolicy, ActivityDraft, ActivityError, ActivityExecutionLimits,
+    Activity, ActivityCapabilityPolicy, ActivityContinuityDocument, ActivityContinuityImport,
+    ActivityDraft, ActivityError, ActivityExecutionLimits, ActivityExecutionPlacement,
     ActivityMonetaryBudget, ActivityPatch, ActivityReceipt, ActivityResource,
     ActivitySchedulingPolicy, ActivitySchedulingPriority, ActivityService, ActivityState,
     CapabilityPolicyDraft, ExecutionLimitsDraft, ExecutionReservation, MonetaryBudgetDraft,
@@ -161,6 +163,10 @@ impl SqliteActivityService {
             tx.execute_batch(scheduling_policy::MIGRATE_TO_V7)?;
         }
         scheduling_policy::validate_schema(&tx)?;
+        if version < 8 {
+            continuity::migrate(&tx)?;
+        }
+        continuity::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -236,6 +242,7 @@ impl ActivityService for SqliteActivityService {
                 activity.created_at,
             ],
         )?;
+        continuity::insert_new(&tx, owner_uid, &activity.id)?;
         tx.commit()?;
         Ok(activity)
     }
@@ -285,7 +292,9 @@ impl ActivityService for SqliteActivityService {
                 "reopen a terminal activity before editing its planning fields".to_string(),
             ));
         }
+        let before = activity.clone();
         patch.apply(&mut activity);
+        let continuity_changed = continuity::portable_fields_changed(&before, &activity)?;
         activity.updated_at = timestamp().max(activity.updated_at);
         let resources_json = serde_json::to_string(&activity.resources)?;
         tx.execute(
@@ -303,6 +312,7 @@ impl ActivityService for SqliteActivityService {
                 id,
             ],
         )?;
+        continuity::bump_if_changed(&tx, owner_uid, &id, continuity_changed)?;
         tx.commit()?;
         Ok(activity)
     }
@@ -327,6 +337,7 @@ impl ActivityService for SqliteActivityService {
                 "reopen a terminal activity before attaching resources".to_string(),
             ));
         }
+        let before = activity.clone();
         if let Some(existing) = activity
             .resources
             .iter_mut()
@@ -337,6 +348,7 @@ impl ActivityService for SqliteActivityService {
             activity.resources.push(resource);
         }
         validate_resources(&activity.resources)?;
+        let continuity_changed = continuity::portable_fields_changed(&before, &activity)?;
         activity.updated_at = timestamp().max(activity.updated_at);
         tx.execute(
             "UPDATE activities SET resources_json = ?1, updated_at = ?2
@@ -348,6 +360,7 @@ impl ActivityService for SqliteActivityService {
                 id,
             ],
         )?;
+        continuity::bump_if_changed(&tx, owner_uid, &id, continuity_changed)?;
         tx.commit()?;
         Ok(activity)
     }
@@ -653,6 +666,23 @@ impl ActivityService for SqliteActivityService {
     ) -> Result<ActivitySchedulingPolicy, ActivityError> {
         scheduling_policy::set(self, owner_uid, activity_id, expected_revision, priority)
     }
+
+    fn export_continuity(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<ActivityContinuityDocument, ActivityError> {
+        continuity::export(self, owner_uid, activity_id)
+    }
+
+    fn import_continuity(
+        &self,
+        owner_uid: u32,
+        placement: ActivityExecutionPlacement,
+        document: ActivityContinuityDocument,
+    ) -> Result<ActivityContinuityImport, ActivityError> {
+        continuity::import(self, owner_uid, placement, document)
+    }
 }
 
 fn list_limit(limit: usize) -> Result<i64, ActivityError> {
@@ -681,7 +711,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1..=6 => {}
+        1..=7 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

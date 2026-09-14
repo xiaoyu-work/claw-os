@@ -815,8 +815,15 @@ fn schema_four_database(path: &Path) -> Vec<Activity> {
         assert!(rows(&service.lock().unwrap(), "activity_capability_policies").is_empty());
     }
     let conn = Connection::open(path).unwrap();
-    conn.execute_batch("DROP TABLE activity_capability_policies; PRAGMA user_version = 4;")
-        .unwrap();
+    conn.execute_batch(
+        "DROP TABLE activity_continuity;
+         DROP TABLE activity_scheduling_policies;
+         DROP TABLE activity_monetary_ledger;
+         DROP TABLE activity_monetary_budgets;
+         DROP TABLE activity_capability_policies;
+         PRAGMA user_version = 4;",
+    )
+    .unwrap();
     activities
 }
 
@@ -834,13 +841,13 @@ fn schema_four_migration_preserves_all_activity_history_and_execution_accounting
     };
     let service = SqliteActivityService::open(&path).unwrap();
     assert_eq!(SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 5);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 8);
     {
         let conn = service.lock().unwrap();
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            i64::from(DATABASE_SCHEMA_VERSION)
         );
         validate_schema(&conn).unwrap();
         for (table, original) in LEGACY_TABLES.iter().zip(&before) {

@@ -87,13 +87,16 @@ pub(super) fn set(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let activity = load_activity(&tx, owner_uid, &activity_id)?;
     let existing = load_state(&tx, &activity)?;
+    let previous_portable = existing
+        .as_ref()
+        .map(|state| (state.policy.enabled, state.policy.limits.clone()));
     require_configurable(&activity)?;
     let now = timestamp();
     require_future(&draft, parse_timestamp(&now)?)?;
     let expected = match (existing, expected_revision) {
         (None, None) => StoredState {
             policy: ActivityExecutionLimits {
-                activity_id,
+                activity_id: activity_id.clone(),
                 owner_uid,
                 revision: 1,
                 enabled: true,
@@ -142,6 +145,12 @@ pub(super) fn set(
         )?
     };
     verify_write(&tx, &activity, &expected, changed)?;
+    super::continuity::bump_if_changed(
+        &tx,
+        owner_uid,
+        &activity_id,
+        previous_portable != Some((expected.policy.enabled, expected.policy.limits.clone())),
+    )?;
     tx.commit()?;
     Ok(expected.policy)
 }
@@ -159,6 +168,7 @@ pub(super) fn set_enabled(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let activity = load_activity(&tx, owner_uid, &activity_id)?;
     let mut expected = load_state(&tx, &activity)?.ok_or(ActivityError::NotFound)?;
+    let previous_enabled = expected.policy.enabled;
     require_revision(&expected.policy, expected_revision)?;
     let now = timestamp();
     if enabled {
@@ -170,6 +180,12 @@ pub(super) fn set_enabled(
     expected.policy.updated_at = now.max(expected.policy.updated_at);
     let changed = update_policy(&tx, &expected.policy, expected_revision)?;
     verify_write(&tx, &activity, &expected, changed)?;
+    super::continuity::bump_if_changed(
+        &tx,
+        owner_uid,
+        &activity_id,
+        previous_enabled != expected.policy.enabled,
+    )?;
     tx.commit()?;
     Ok(expected.policy)
 }
@@ -410,6 +426,7 @@ fn load_state(
         if count != 0 {
             return Err(corrupt("execution reservations exist without their policy"));
         }
+
         return Ok(None);
     };
     let policy = row.into_policy(activity)?;
@@ -464,6 +481,13 @@ fn load_state(
         policy,
         reservations,
     }))
+}
+
+pub(super) fn portable(
+    conn: &Connection,
+    activity: &Activity,
+) -> Result<Option<(bool, ExecutionLimitsDraft)>, ActivityError> {
+    Ok(load_state(conn, activity)?.map(|state| (state.policy.enabled, state.policy.limits)))
 }
 
 struct PolicyRow {

@@ -58,7 +58,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
-| Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session/attention projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/clawd/activity_attention.rs`, `core/src/activity.rs` |
+| Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, owner-scoped task/session/attention projections, and closed portable continuity of intent without authority or execution state | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/clawd/activity_attention.rs`, `core/src/clawd/activity_continuity.rs`, `core/src/activity.rs` |
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
 | Activity object state | Bounded caller-reported observations, receipt links, planning relations and immutable correction/retraction history | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs` |
 | Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
@@ -1103,6 +1103,7 @@ cos activity / Agent Web / native desktop Agent
        +-- activity.get -> associated job/session projection
        +-- activity.attention -> Job + protected approval + NotificationService projection
        +-- activity.scheduling_policy.* -> pending shared-queue admission metadata
+       +-- activity.continuity.* -> portable intent/references/safe rules only
 ```
 
 `core/src/activities/` owns the definition and SQLite provider. Neither depends
@@ -1123,6 +1124,19 @@ Activity mutations retain the broker's normal authorization, bounded decoding,
 audit projection and journal bracketing. Related job results are projections
 from the existing task store, not a second copy of its state. See
 [`docs/activities.md`](docs/activities.md) for commands and the initial scope.
+
+Activity database schema 8 adds a stable owner-scoped continuity UUID and
+portable-snapshot revision separate from the local Activity ID. Export is a
+read-only deterministic projection of planning intent, canonical App object
+references, configured finite execution bounds and scheduling preference.
+Import requires the closed `local` placement, rejects duplicate identities,
+and atomically creates a new paused Activity plus only those safe rules.
+Credentials, owner identity, capability/approval/consent state, monetary
+policy/accounting, Jobs, Sessions, execution reservations or proof, receipts,
+effects/results, notifications, journals, object-state history and local paths
+never cross this boundary. This is neither live sync nor database
+backup/restore, execution migration, authority portability or proof
+portability.
 
 Owner-selected Activity scheduling policy is stored in the same owner-scoped
 database with exact revision/CAS updates. `Store::claim_one` reads current

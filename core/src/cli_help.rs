@@ -834,6 +834,26 @@ fn activity_schemas() -> Vec<CommandSchema> {
     ));
     let mut schemas = vec![
         CommandSchema {
+            command: "export",
+            description: "Export portable Activity intent, semantic App references, and safe declarative rules; never authority, execution proof, or backup state",
+            params: vec![
+                id(),
+                Param::flag("--output", "path", false, "Write bounded canonical JSON to a new file instead of stdout"),
+                Param::flag("--overwrite", "bool", false, "Explicitly replace --output; existing files are preserved by default"),
+            ],
+            example: "cos activity export 00000000-0000-4000-8000-000000000001 --output activity.json",
+        },
+        CommandSchema {
+            command: "import",
+            description: "Create a new paused Activity from a bounded continuity document; no authority, jobs, sessions, money, history, or completion crosses the boundary",
+            params: vec![
+                Param::flag("--placement", "enum:local", true, "Explicit execution placement; continuity v1 supports only local"),
+                Param::flag("--file", "path", false, "Read a regular non-symlink JSON file; mutually exclusive with --stdin"),
+                Param::flag("--stdin", "bool", false, "Read bounded JSON from redirected stdin; mutually exclusive with --file"),
+            ],
+            example: "cos activity import --placement local --file activity.json",
+        },
+        CommandSchema {
             command: "capability-policy",
             description: "Read shared Activity capability constraints; missing rules mean ordinary permission checks",
             params: vec![id()],

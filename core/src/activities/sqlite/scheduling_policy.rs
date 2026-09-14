@@ -54,10 +54,11 @@ pub(super) fn set(
     let activity = load_activity(&tx, owner_uid, &activity_id)?;
     require_configurable(&activity)?;
     let existing = load_policy(&tx, &activity)?;
+    let previous_priority = existing.as_ref().map(|policy| policy.priority);
     let now = timestamp();
     let policy = match (existing, expected_revision) {
         (None, None) => ActivitySchedulingPolicy {
-            activity_id,
+            activity_id: activity_id.clone(),
             owner_uid,
             revision: 1,
             priority,
@@ -110,6 +111,12 @@ pub(super) fn set(
         )?
     };
     verify_write(&tx, &activity, &policy, changed)?;
+    super::continuity::bump_if_changed(
+        &tx,
+        owner_uid,
+        &activity_id,
+        previous_priority != Some(policy.priority),
+    )?;
     tx.commit()?;
     Ok(policy)
 }
@@ -199,6 +206,13 @@ fn load_policy(
     .optional()?
     .map(|row| row.into_policy(activity))
     .transpose()
+}
+
+pub(super) fn portable(
+    conn: &Connection,
+    activity: &Activity,
+) -> Result<Option<ActivitySchedulingPolicy>, ActivityError> {
+    load_policy(conn, activity)
 }
 
 struct PolicyRow {

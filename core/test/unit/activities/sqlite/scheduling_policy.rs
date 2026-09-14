@@ -142,7 +142,8 @@ fn schema_six_migrates_to_seven_without_changing_activity_rows() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE activity_scheduling_policies;
+            "DROP TABLE activity_continuity;
+             DROP TABLE activity_scheduling_policies;
              PRAGMA user_version = 6;",
         )
         .unwrap();
@@ -201,7 +202,8 @@ fn corrupt_policy_values_and_missing_schema_fail_explicitly() {
         drop(service);
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE activity_scheduling_policies;
+            "DROP TABLE activity_continuity;
+             DROP TABLE activity_scheduling_policies;
              PRAGMA user_version = 7;",
         )
         .unwrap();

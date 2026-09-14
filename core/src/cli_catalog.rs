@@ -43,6 +43,8 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("resume", "Resume or explicitly reopen an Activity"),
                 ("complete", "Confirm goal achievement with an explicit note"),
                 ("cancel", "End an Activity without claiming its goal was achieved"),
+                ("export", "Export portable Activity intent and safe declarative rules"),
+                ("import", "Import portable intent as a new paused local Activity"),
                 ("objects", "Inspect authenticated App object declarations for attached references"),
                 ("attach-object", "Attach a declared App object without reading its data"),
                 ("receipts", "Read immutable caller-reported operation results"),

@@ -5,6 +5,7 @@
 //! completion from an execution result.
 
 mod capability_policy;
+mod continuity;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
@@ -18,6 +19,12 @@ pub(crate) use capability_policy::capability_scope_covers;
 pub use capability_policy::{
     ActivityCapabilityPolicy, ActivityCapabilityRule, CapabilityBoundaryDecision,
     CapabilityPolicyDraft, CapabilityRuleMode,
+};
+pub use continuity::{
+    ActivityContinuityDocument, ActivityContinuityImport, ActivityContinuityLineage,
+    ActivityExecutionPlacement, PortableActivityIntent, PortableActivityReference,
+    PortableActivityRules, PortableExecutionLimits, PortableSchedulingPreference, CONTINUITY_KIND,
+    CONTINUITY_SCHEMA_VERSION, MAX_CONTINUITY_DOCUMENT_BYTES,
 };
 pub use execution_limits::{
     ActivityExecutionLimits, ExecutionBlockedReason, ExecutionLimitsDraft, ExecutionReservation,
@@ -41,7 +48,7 @@ pub use sqlite::SqliteActivityService;
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 7;
+pub const DATABASE_SCHEMA_VERSION: u32 = 8;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -476,6 +483,32 @@ pub trait ActivityService: Send + Sync {
     ) -> Result<ActivitySchedulingPolicy, ActivityError> {
         Err(ActivityError::Invalid(
             "Activity scheduling policies are unsupported by this service".into(),
+        ))
+    }
+
+    /// Export only portable intent, semantic references, and closed
+    /// non-authoritative rules. No execution, authority, money, or history
+    /// state is part of this document.
+    fn export_continuity(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+    ) -> Result<ActivityContinuityDocument, ActivityError> {
+        Err(ActivityError::Invalid(
+            "Activity continuity export is unsupported by this service".into(),
+        ))
+    }
+
+    /// Create a new paused local Activity from a validated continuity
+    /// document. Placement is explicit and never carries authority.
+    fn import_continuity(
+        &self,
+        _owner_uid: u32,
+        _placement: ActivityExecutionPlacement,
+        _document: ActivityContinuityDocument,
+    ) -> Result<ActivityContinuityImport, ActivityError> {
+        Err(ActivityError::Invalid(
+            "Activity continuity import is unsupported by this service".into(),
         ))
     }
 }

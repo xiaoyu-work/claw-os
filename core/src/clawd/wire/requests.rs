@@ -147,6 +147,19 @@ pub struct ActivityRun {
     pub use_memory: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityContinuityExport {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityContinuityImport {
+    pub placement: crate::activities::ActivityExecutionPlacement,
+    pub document: Text<{ crate::activities::MAX_CONTINUITY_DOCUMENT_BYTES }>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub struct BoundedObjectRef(pub crate::objects::ObjectRef);

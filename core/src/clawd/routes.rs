@@ -28,6 +28,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::activity_capability_policy;
+use super::activity_continuity;
 use super::activity_execution_limits;
 use super::activity_monetary_budget;
 use super::activity_scheduling_policy;
@@ -564,6 +565,29 @@ routes! {
             ("prompt", FieldRule::Size),
         ],
         run: |c| activities::run(c.params, c.client).await,
+    }
+    ActivityContinuityExport {
+        name: "activity.continuity.export",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityContinuityExport,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_continuity::export(c.params, c.client),
+    }
+    ActivityContinuityImport {
+        name: "activity.continuity.import",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityContinuityImport,
+        audit: &[
+            ("placement", FieldRule::Enum(&["local"])),
+            ("document", FieldRule::Size),
+        ],
+        run: |c| activity_continuity::import(c.params, c.client),
     }
     ActivityExecutionLimitsGet {
         name: "activity.execution_limits.get",

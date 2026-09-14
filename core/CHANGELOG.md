@@ -2,6 +2,15 @@
 
 ## 0.2.0
 
+### Activity continuity
+
+- Added strict `claw_os.activity_continuity` schema 1 export/import through
+  the owner-scoped shared Activity backend and terminal.
+- Activity database schema 8 stores a stable continuity UUID and portable
+  snapshot revision. Import requires explicit local placement and creates a
+  paused Activity without carrying authority, execution, monetary or history
+  state.
+
 ### Runtime dependency API
 
 - Added `config::current_snapshot() -> Arc<CosConfig>` and

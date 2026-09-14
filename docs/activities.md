@@ -43,6 +43,20 @@ cos activity create "Release v2" \
 cos activity list --state active
 ```
 
+Portable continuity is an explicit operation, not an automatic sync:
+
+```bash
+cos activity export "$activity_id"
+cos activity export "$activity_id" --output release-activity.json
+cos activity import --placement local --file release-activity.json
+# or: cos activity import --placement local --stdin < release-activity.json
+```
+
+Export refuses to replace an existing file unless `--overwrite` is supplied.
+Import requires exactly one of `--file` or redirected `--stdin`, is bounded,
+and requires the closed placement selector `--placement local`; v1 has no
+remote, provider, or device selector.
+
 Use the returned `id` in later commands:
 
 ```bash
@@ -192,7 +206,47 @@ unreviewed service, or grant the permissions the App requested.
 App-owned object references can now be attached and described through the same
 backend; see [App-owned objects](app-objects.md). Declaration inspection does
 not fetch object data. Activity-linked triggers provide the event-driven path
-below; cross-device continuation remains separate work.
+below.
+
+## Portable continuity
+
+Activity continuity v1 is a small deterministic JSON document with the exact
+kind `claw_os.activity_continuity`, schema version 1, a stable continuity UUID,
+a positive snapshot revision, and a SHA-256 snapshot digest. It carries:
+
+- title, goal, completion criteria, and free-text planning boundaries;
+- only canonical `app://` semantic object references from the public
+  [object-reference contract](object-references.md), retaining labels and order;
+- configured finite attempt/turn/expiry limits, including whether that
+  constraining rule is enabled; and
+- an optional foreground, standard, or background scheduling preference.
+
+The document is closed and bounded. Unknown or duplicate JSON fields, unknown
+versions or kinds, noncanonical references/timestamps/UUIDs, oversized text or
+collections, and excessive nesting are rejected. The digest covers the
+canonical semantic document. Consumed attempt counts, policy database
+revisions, update timestamps, and other local history do not affect an export.
+
+The shared backend owns a stable continuity identity and revision separately
+from the local Activity ID. Database schema 8 gives existing Activities
+deterministic identities without changing their lifecycle or planning data.
+Portable planning/reference/rule edits advance the continuity revision;
+execution reservations, lifecycle transitions, accounting, and other
+machine-local changes do not. Import preserves the identity and revision but
+creates a new local Activity ID in `paused` state. Safe rules and the Activity
+are inserted in one transaction, and importing the same continuity identity
+twice for one owner is an explicit conflict rather than a merge.
+
+Continuity is **not** live sync, database replication, backup/restore,
+execution migration, Job or Session migration, authority portability, consent
+or capability portability, monetary-policy portability, effect/result
+portability, completion portability, or execution-proof portability. It never
+contains credentials, grants, approvals, owner UIDs, monetary ledgers or rates,
+Jobs, Sessions, calls, turns, workers, notifications, journals, object-state
+history, receipts, effects, results, reservations, or local paths. Import never
+starts work; the owner must inspect the paused Activity and explicitly resume
+it under the destination machine's ordinary capability, approval, budget, and
+worker controls.
 
 ## Event-driven work
 
@@ -282,6 +336,8 @@ receive a bounded, recorded, untrusted snapshot when claimed.
 | `activity.update` | Updated metadata; only supplied fields change |
 | `activity.transition` | Updated explicit lifecycle state |
 | `activity.run` | An ordinary submitted Agent job associated with the Activity |
+| `activity.continuity.export` | Deterministic portable intent/reference/safe-rule document; read-only and never proof or authority |
+| `activity.continuity.import` | Explicit local placement; atomically creates a new paused Activity and safe rules |
 | `activity.execution_limits.get` | Owner-scoped finite execution policy and usage |
 | `activity.execution_limits.set` | Version-checked limits update without resetting usage or granting authority |
 | `activity.execution_limits.enabled` | Explicit enable/disable, not policy deletion or unlimited execution |

@@ -14,6 +14,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "activity.update",
     "activity.transition",
     "activity.run",
+    "activity.continuity.export",
+    "activity.continuity.import",
     "activity.execution_limits.get",
     "activity.execution_limits.set",
     "activity.execution_limits.enabled",
@@ -461,6 +463,8 @@ fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
         Command::ActivityUpdate,
         Command::ActivityTransition,
         Command::ActivityRun,
+        Command::ActivityContinuityExport,
+        Command::ActivityContinuityImport,
         Command::ActivityObjects,
         Command::ActivityObjectAttach,
     ] {
@@ -479,6 +483,7 @@ fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
                 "prompt": private_text,
                 "resources": [{"label": private_text, "reference": private_text}],
                 "object": {"app_id":"demo","object_type":"entry","object_id":private_text},
+                "document": private_text,
             }),
         );
         let recorded = serde_json::to_string(&facts).unwrap();
@@ -527,6 +532,7 @@ fn read_only_routes_are_classified_as_queries() {
         "activity.list",
         "activity.get",
         "activity.attention",
+        "activity.continuity.export",
         "activity.objects",
         "operation.preview",
         "activity.operation.preview",
@@ -560,6 +566,7 @@ fn state_changing_routes_are_classified_as_mutations() {
         "activity.update",
         "activity.transition",
         "activity.run",
+        "activity.continuity.import",
         "activity.object.attach",
         "activity.receipt.record",
         "task.submit",

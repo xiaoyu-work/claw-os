@@ -1408,7 +1408,7 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 #[test]
 fn schema_one_and_two_migrate_sequentially_to_three_without_rewriting_any_legacy_fields() {
     assert_eq!(SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 5);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 8);
     for version in [1, 2] {
         let directory = TestDirectory::new();
         let path = directory.database();

@@ -296,6 +296,15 @@ the Activity goal was achieved. Preserve explicit completion confirmation and
 the existing capability, approval, task-cancellation and audit boundaries.
 Update [`docs/activities.md`](docs/activities.md) with user-facing changes.
 
+Portable continuity changes must keep one shared backend and a closed,
+versioned, bounded document. Carry only semantic intent/references and rules
+proven non-authoritative; never serialize Activity database rows, owner
+identity, capabilities/approvals/consent, monetary state, Jobs/Sessions,
+execution evidence, receipts/effects/results, journals/notifications,
+object-state history or local paths. Imports require an explicit closed
+placement, create paused Activities, preserve stable continuity lineage, and
+apply safe rules atomically without starting work.
+
 Monetary budgets remain separate from execution limits and authority. Reserve
 before every Activity model dispatch, bind the durable UUID to Root-derived
 owner/Activity/Job/session/turn identity, clamp outgoing output, and settle
