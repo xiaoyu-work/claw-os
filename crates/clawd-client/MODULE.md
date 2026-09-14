@@ -5,9 +5,9 @@ correlation, deadlines and socket-peer checks, not authorization, capabilities,
 provider implementation, desktop state or a durable approval store.
 
 Its closed command inventory includes owner-scoped
-`agent.conversation.create/get/list/update`. Conversation UUIDs are presentation
-identifiers only; canonical session identity and all ownership checks remain in
-`clawd`.
+`agent.conversation.create/get/list/update/fork`. Conversation UUIDs are
+presentation identifiers only; canonical session identity, verified fork
+boundaries and all ownership checks remain in `clawd`.
 
 The inventory also includes `activity.monetary_budget.get/set/enabled` and
 `activity.scheduling_policy.get/set` for the native Agent bridge. These names

@@ -51,6 +51,18 @@ impl Fixture {
     fn db(&self) -> MemoryDb {
         MemoryDb::open(crate::paths::clawd_user_memory_db_path(self.uid())).unwrap()
     }
+
+    fn finish(&self, task_id: &str) {
+        let store = Store::open_default().unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        assert_eq!(claimed.id, task_id);
+        store
+            .finish(
+                claimed,
+                crate::agent::service::FinishOutcome::Error("test worker ended".to_string()),
+            )
+            .unwrap();
+    }
 }
 
 #[test]
@@ -212,6 +224,172 @@ fn conversation_binding_verification_fails_closed() {
         .contains("partial task history"));
     assert!(partial_view["messages"][0].get("task_id").is_none());
 }
+
+#[test]
+fn conversation_fork_copies_a_verified_prefix_without_copying_jobs_or_authority() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let parent = create(json!({"title": "Parent title"}), &fixture.client).unwrap()["conversation"]
+        ["id"]
+        .as_str()
+        .unwrap()
+        .parse::<SessionId>()
+        .unwrap();
+    let db = fixture.db();
+    db.freeze_system_prompt(parent.as_str(), "frozen policy", 7)
+        .unwrap();
+    let store = Store::open_default().unwrap();
+
+    let first = store
+        .submit(
+            "first prompt".to_string(),
+            Some(parent.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    let first_turn = db
+        .record_task_user_message(
+            parent.as_str(),
+            &first.id,
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::UserMessage,
+                "",
+            ),
+            "first prompt",
+        )
+        .unwrap();
+    db.record_task_message(
+        &first_turn,
+        "assistant",
+        &crate::agent::trust::LabeledSegment::of(
+            crate::agent::trust::SourceKind::ModelResponse,
+            "",
+        ),
+        "first answer",
+    )
+    .unwrap();
+    fixture.finish(&first.id);
+
+    let second = store
+        .submit(
+            "second prompt".to_string(),
+            Some(parent.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    let second_turn = db
+        .record_task_user_message(
+            parent.as_str(),
+            &second.id,
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::UserMessage,
+                "",
+            ),
+            "second prompt",
+        )
+        .unwrap();
+    db.record_task_message(
+        &second_turn,
+        "assistant",
+        &crate::agent::trust::LabeledSegment::of(
+            crate::agent::trust::SourceKind::ModelResponse,
+            "",
+        ),
+        "second answer",
+    )
+    .unwrap();
+    fixture.finish(&second.id);
+
+    assert_eq!(
+        get(json!({"id": parent}), &fixture.client).unwrap()["conversation"]["job_count"],
+        2
+    );
+    let forked = fork(
+        json!({"id": parent, "before_user_turn": 1}),
+        &fixture.client,
+    )
+    .unwrap()["conversation"]
+        .clone();
+    let child: SessionId = forked["id"].as_str().unwrap().parse().unwrap();
+    assert_ne!(child, parent);
+    assert_eq!(forked["parent_id"], parent.as_str());
+    assert_eq!(forked["title"], "Parent title");
+    assert_eq!(forked["message_count"], 2);
+    assert_eq!(forked["job_count"], 1);
+    assert_eq!(forked["jobs"][0]["id"], first.id);
+    assert_eq!(forked["jobs"][0]["session_id"], parent.as_str());
+    assert_eq!(forked["messages"][0]["task_id"], first.id);
+    assert_eq!(forked["messages"][0]["source_session_id"], parent.as_str());
+    assert_eq!(forked["task_bindings_complete"], true);
+    assert_eq!(
+        db.system_prompt_for(child.as_str(), 7).unwrap().as_deref(),
+        Some("frozen policy")
+    );
+    assert_eq!(jobs::load(&child, fixture.uid()).unwrap().job_count, 0);
+
+    let child_meta = session::get_meta(&child).unwrap();
+    let home = super::super::system_caps::verified_owner_home(fixture.uid()).unwrap();
+    let expected = super::super::system_caps::system_agent_caps(fixture.uid(), &home);
+    let caps = session::get_caps(&child).unwrap();
+    assert!(caps.covers_all(&expected));
+    assert!(expected.covers_all(&caps));
+    assert_eq!(child_meta.owner_uid, Some(fixture.uid()));
+
+    let grandchild = fork(json!({"id": child}), &fixture.client).unwrap()["conversation"].clone();
+    assert_eq!(grandchild["parent_id"], child.as_str());
+    assert_eq!(grandchild["job_count"], 1);
+    assert_eq!(grandchild["jobs"][0]["id"], first.id);
+    assert_eq!(
+        grandchild["messages"][0]["source_session_id"],
+        parent.as_str()
+    );
+}
+
+#[test]
+fn conversation_fork_rejects_active_deleted_and_unverified_sources_before_creation() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let active = fixture.create();
+    Store::open_default()
+        .unwrap()
+        .submit(
+            "still running".to_string(),
+            Some(active.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    assert!(fork(json!({"id": active}), &fixture.client)
+        .unwrap_err()
+        .contains("active task"));
+
+    let deleted = fixture.create();
+    update(json!({"id": deleted, "deleted": true}), &fixture.client).unwrap();
+    assert!(fork(json!({"id": deleted}), &fixture.client)
+        .unwrap_err()
+        .contains("soft-deleted"));
+
+    let legacy = fixture.create();
+    fixture
+        .db()
+        .record_message(legacy.as_str(), "user", "legacy prompt")
+        .unwrap();
+    let before = session::list().unwrap().len();
+    assert!(fork(json!({"id": legacy}), &fixture.client)
+        .unwrap_err()
+        .contains("cannot fork task history"));
+    assert_eq!(session::list().unwrap().len(), before);
+}
+
 #[test]
 fn conversation_owner_boundary_and_inputs_fail_before_side_effects() {
     let _lock = lock_env();
@@ -235,6 +413,16 @@ fn conversation_owner_boundary_and_inputs_fail_before_side_effects() {
         format!("conversation not found: {id}")
     );
     assert!(update(json!({"id": id, "title": "foreign"}), &foreign).is_err());
+    assert_eq!(
+        fork(json!({"id": id}), &foreign).unwrap_err(),
+        format!("conversation not found: {id}")
+    );
+    assert!(fork(
+        json!({"id": derive_presentation_id(&id).as_str()}),
+        &fixture.client
+    )
+    .unwrap_err()
+    .contains("invalid conversation id"));
     let mut root = fixture.client.clone();
     root.uid = Some(0);
     for result in [
@@ -242,6 +430,7 @@ fn conversation_owner_boundary_and_inputs_fail_before_side_effects() {
         get(json!({"id": id}), &root),
         list(json!({}), &root),
         update(json!({"id": id, "deleted": true}), &root),
+        fork(json!({"id": id}), &root),
     ] {
         assert_eq!(result.unwrap_err(), ROOT_OWNER_REFUSAL);
     }

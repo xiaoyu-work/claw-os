@@ -39,6 +39,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "agent.conversation.get",
     "agent.conversation.list",
     "agent.conversation.update",
+    "agent.conversation.fork",
     "task.submit",
     "task.list",
     "task.get",

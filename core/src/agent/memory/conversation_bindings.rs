@@ -37,7 +37,7 @@ pub(crate) struct MessageTaskBinding {
     pub(crate) is_user_prompt: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct BindingState {
     pub(crate) members: Vec<MessageTaskBinding>,
     pub(crate) originals: Vec<MessageTaskBinding>,
@@ -259,6 +259,29 @@ fn insert_binding(
             message_id,
             user_message_id,
             is_user_prompt
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn insert_copied_binding(
+    conn: &Connection,
+    binding: &MessageTaskBinding,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO conversation_message_tasks(
+             message_id, session_id, task_id, user_message_id, source_session_id,
+             source_message_id, source_user_message_id, is_user_prompt
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            binding.message_id,
+            binding.session_id,
+            binding.task_id,
+            binding.user_message_id,
+            binding.source_session_id,
+            binding.source_message_id,
+            binding.source_user_message_id,
+            binding.is_user_prompt
         ],
     )?;
     Ok(())

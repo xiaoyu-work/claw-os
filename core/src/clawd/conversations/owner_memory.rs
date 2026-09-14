@@ -6,7 +6,9 @@
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use crate::agent::memory::conversations::{ConversationHistoryPage, ConversationMetadata};
+use crate::agent::memory::conversations::{
+    ConversationHistoryPage, ConversationMetadata, ConversationSnapshot,
+};
 use crate::agent::memory::sqlite_fts::MemoryDb;
 use crate::agentd::spawn::ROOT_OWNER_REFUSAL;
 use crate::clawd::client_identity::FsIdentityGuard;
@@ -66,6 +68,53 @@ pub(super) fn read_summaries(
                     .map_err(|err| err.to_string())
             })
             .collect()
+    })
+}
+
+pub(super) fn read_snapshot(
+    owner_uid: u32,
+    session_id: String,
+    before_user_turn: Option<u32>,
+) -> Result<(ConversationMetadata, ConversationSnapshot), String> {
+    run_as_owner(owner_uid, move |path| {
+        let Some(db) = open_read_only_if_present(path)? else {
+            if let Some(requested) = before_user_turn.filter(|requested| *requested > 0) {
+                return Err(format!(
+                    "requested {requested} user turns, but the conversation has 0"
+                ));
+            }
+            return Ok((
+                ConversationMetadata::default(),
+                ConversationSnapshot::default(),
+            ));
+        };
+        Ok((
+            db.conversation_metadata(&session_id)
+                .map_err(|err| err.to_string())?,
+            db.conversation_snapshot(&session_id, before_user_turn)
+                .map_err(|err| err.to_string())?,
+        ))
+    })
+}
+
+pub(super) fn install_snapshot(
+    owner_uid: u32,
+    session_id: String,
+    snapshot: ConversationSnapshot,
+    limit: usize,
+) -> Result<OwnerMemoryView, String> {
+    run_as_owner(owner_uid, move |path| {
+        let db = MemoryDb::open(&path).map_err(|err| err.to_string())?;
+        db.install_conversation_snapshot(&session_id, &snapshot)
+            .map_err(|err| err.to_string())?;
+        Ok(OwnerMemoryView {
+            metadata: db
+                .conversation_metadata(&session_id)
+                .map_err(|err| err.to_string())?,
+            history: db
+                .conversation_history_page(&session_id, limit)
+                .map_err(|err| err.to_string())?,
+        })
     })
 }
 

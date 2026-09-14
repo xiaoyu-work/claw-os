@@ -29,7 +29,7 @@ results, and curates durable notes from completed work.
 | `curator.rs` | Automatic memory curation |
 | `notes.rs` | Durable notes, pinned profile entries and model-invoked literal search |
 | `history.rs` | Conversation history queries and versioned UTF-8-safe read windows |
-| `conversations.rs` | Bounded owner-facing conversation history and title/recency projection |
+| `conversations.rs` | Bounded owner-facing history plus atomic, provenance-preserving conversation snapshots |
 | `app_memory.rs` | App-scoped memory definition |
 
 ## Dependencies

@@ -153,3 +153,90 @@ fn conversation_read_only_view_supports_legacy_message_columns_without_migrating
         0
     );
 }
+
+#[test]
+fn conversation_snapshot_copies_one_whole_task_with_provenance_and_prompt() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let user =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::UserMessage, "");
+    let model =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::ModelResponse, "");
+    let first = db
+        .record_task_user_message("source", "task-one", &user, "first prompt")
+        .unwrap();
+    db.record_task_message(&first, "assistant", &model, "first answer")
+        .unwrap();
+    let second = db
+        .record_task_user_message("source", "task-two", &user, "second prompt")
+        .unwrap();
+    db.record_task_message(&second, "assistant", &model, "second answer")
+        .unwrap();
+    db.record_injected("source", "context_packet", "private context")
+        .unwrap();
+    db.record_message_at("source", "system", "private system row", 999)
+        .unwrap();
+    db.set_title("source", "Source title").unwrap();
+    db.freeze_system_prompt("source", "frozen policy", 7)
+        .unwrap();
+
+    let snapshot = db.conversation_snapshot("source", Some(1)).unwrap();
+    assert_eq!(snapshot.visible_count(), 2);
+    assert_eq!(snapshot.bindings.members.len(), 2);
+    db.install_conversation_snapshot("child", &snapshot)
+        .unwrap();
+
+    let child = db.recent("child", 10).unwrap();
+    assert_eq!(child.len(), 2);
+    assert_eq!(child[0].content, "first prompt");
+    assert_eq!(
+        child[0].trust_source,
+        Some(
+            crate::agent::trust::SourceKind::UserMessage
+                .tag()
+                .to_string()
+        )
+    );
+    assert_eq!(child[1].content, "first answer");
+    assert_eq!(
+        child[1].trust_source,
+        Some(
+            crate::agent::trust::SourceKind::ModelResponse
+                .tag()
+                .to_string()
+        )
+    );
+    assert_eq!(
+        db.system_prompt_for("child", 7).unwrap().as_deref(),
+        Some("frozen policy")
+    );
+    assert!(db.conversation_metadata("child").unwrap().title.is_none());
+
+    let page = db.conversation_history_page("child", 10).unwrap();
+    assert_eq!(page.message_count, 2);
+    assert!(page
+        .bindings
+        .members
+        .iter()
+        .all(|binding| binding.session_id == "child" && binding.source_session_id == "source"));
+    assert!(matches!(
+        db.install_conversation_snapshot("child", &snapshot),
+        Err(ConversationMemoryError::DestinationExists)
+    ));
+}
+
+#[test]
+fn conversation_snapshot_rejects_unknown_user_turn_boundaries() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let user =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::UserMessage, "");
+    db.record_task_user_message("source", "task-one", &user, "first prompt")
+        .unwrap();
+
+    assert!(matches!(
+        db.conversation_snapshot("source", Some(2)),
+        Err(ConversationMemoryError::InvalidUserTurns {
+            requested: 2,
+            available: 1
+        })
+    ));
+}

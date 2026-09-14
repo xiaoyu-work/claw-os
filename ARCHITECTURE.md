@@ -1559,9 +1559,11 @@ the durable task. The Chat Stop control uses the task id returned at submission
 and calls `task.cancel` explicitly; completion remains observable through Tasks,
 session history, and notifications after a reconnect.
 
-The owner-scoped `agent.conversation.create/get/list/update` broker routes
+The owner-scoped `agent.conversation.create/get/list/update/fork` broker routes
 create empty system-Agent sessions without queuing work and expose the same
 durable conversation inventory to terminal, Web, and native presentations.
+Terminal Job completion updates execution status without removing its durable
+conversation from that inventory.
 Canonical `ses_*` identity remains the execution and ownership key; a stable
 root-owned UUID projection exists only for frontend compatibility and grants no
 authority. Presentation state (title, archive, soft delete) is root-owned
@@ -1576,8 +1578,14 @@ projection of actual Job records. It annotates rows and marks task bindings
 complete only when every visible row has explicit membership, every retained
 task is whole and non-interleaved, and the exact Job set belongs to that owner
 and session; otherwise it returns unannotated history with an explicit
-incomplete reason. Branch/revert operations remain unavailable until that
-verified boundary is used by their mutation logic.
+incomplete reason. Fork creates a fresh canonical Session from a bounded,
+verified retained task boundary. It copies the stored transcript bytes, trust
+provenance, frozen prompt reference and explicit source lineage inside one
+owner-database transaction, but never copies Jobs, tool invocation state,
+injections, capabilities or execution proof. The child receives a newly
+derived system-Agent capability baseline; inherited rows continue to resolve
+their owner-scoped source Jobs through the bounded parent chain. Revert remains
+unavailable until the same verified boundary governs replay mutation.
 
 ### Proactive notification
 

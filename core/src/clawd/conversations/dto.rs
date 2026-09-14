@@ -103,6 +103,14 @@ pub(super) struct UpdateRequest {
     pub(super) deleted: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ForkRequest {
+    pub(super) id: String,
+    #[serde(default)]
+    pub(super) before_user_turn: Option<u32>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct ConversationMetadata {
     pub(super) id: String,

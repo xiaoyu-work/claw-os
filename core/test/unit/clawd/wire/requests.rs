@@ -493,6 +493,14 @@ fn conversation_wire_is_closed_and_bounded() {
         json!({"id": "ses_0000000000001_000000000001", "grant": "forged"})
     )
     .is_err());
+    assert!(serde_json::from_value::<AgentConversationFork>(
+        json!({"id": "ses_0000000000001_000000000001", "before_user_turn": 2})
+    )
+    .is_ok());
+    assert!(serde_json::from_value::<AgentConversationFork>(
+        json!({"id": "ses_0000000000001_000000000001", "copy_jobs": true})
+    )
+    .is_err());
 }
 
 #[test]

@@ -123,6 +123,7 @@ fn bounded_projection(jobs: Vec<Job>, sid: &SessionId) -> Result<ConversationJob
             for timestamp in [&job.started_at, &job.finished_at].into_iter().flatten() {
                 super::timestamp(timestamp)?;
             }
+
             Ok((created, job))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -178,6 +179,60 @@ fn bounded_projection(jobs: Vec<Job>, sid: &SessionId) -> Result<ConversationJob
         job_count,
         jobs,
         ..ConversationJobs::default()
+    })
+}
+
+pub(super) fn project_retained(jobs: Vec<Job>) -> Result<ConversationJobs, String> {
+    if jobs.len() > MAX_JOBS {
+        return Err("retained task history exceeds the bounded job projection".to_string());
+    }
+    let job_count =
+        u64::try_from(jobs.len()).map_err(|_| "conversation job count is invalid".to_string())?;
+    let mut projected_jobs = Vec::with_capacity(jobs.len());
+    let mut ids = std::collections::BTreeSet::new();
+    let mut response_bytes = 2usize;
+    for job in jobs {
+        if !ids.insert(job.id.clone()) {
+            return Err("conversation job projection contains duplicate task ids".to_string());
+        }
+        super::timestamp(&job.created_at)?;
+        for timestamp in [&job.started_at, &job.finished_at].into_iter().flatten() {
+            super::timestamp(timestamp)?;
+        }
+        let projected = ConversationJob {
+            id: job.id,
+            status: job.status,
+            prompt: job.prompt,
+            created_at: job.created_at,
+            started_at: job.started_at,
+            finished_at: job.finished_at,
+            session_id: job
+                .session_id
+                .ok_or_else(|| "bound task has no source session".to_string())?,
+            error: job.error,
+        };
+        let separator = usize::from(!projected_jobs.is_empty());
+        let job_bytes = serde_json::to_vec(&projected)
+            .map_err(|error| format!("encode conversation job: {error}"))?
+            .len();
+        if response_bytes
+            .saturating_add(separator)
+            .saturating_add(job_bytes)
+            > MAX_JOB_BYTES
+        {
+            return Err("retained task history exceeds the bounded job projection".to_string());
+        }
+        response_bytes = response_bytes
+            .saturating_add(separator)
+            .saturating_add(job_bytes);
+        projected_jobs.push(projected);
+    }
+    Ok(ConversationJobs {
+        jobs: projected_jobs,
+        job_count,
+        jobs_truncated: false,
+        task_bindings_complete: true,
+        task_bindings_error: None,
     })
 }
 

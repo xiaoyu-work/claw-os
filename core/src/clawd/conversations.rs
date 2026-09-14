@@ -20,7 +20,8 @@ use crate::session::{self, SessionId, SessionOrigin};
 
 use self::dto::{
     Conversation, ConversationId, ConversationLookup, ConversationMetadata, ConversationResponse,
-    CreateRequest, GetRequest, ListRequest, ListResponse, PresentationId, UpdateRequest,
+    CreateRequest, ForkRequest, GetRequest, ListRequest, ListResponse, PresentationId,
+    UpdateRequest,
 };
 use self::owner_memory::OwnerMemoryView;
 use super::client_identity::ClientIdentity;
@@ -45,6 +46,8 @@ struct Presentation {
     deleted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    inherited_tasks: Vec<bindings::TaskMembership>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     updated_at: Option<String>,
 }
@@ -174,6 +177,67 @@ pub(super) fn update(params: Value, client: &ClientIdentity) -> Result<Value, St
     Ok(value)
 }
 
+pub(super) fn fork(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let request: ForkRequest = serde_json::from_value(params)
+        .map_err(|err| format!("invalid conversation fork: {err}"))?;
+    let owner_uid = owner_uid(client)?;
+    let id = ConversationId::parse(&request.id)?;
+    owned_meta(&id, owner_uid)?;
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let _guard = store
+        .lock_idle_session(id.session_id().as_str())
+        .map_err(|err| err.to_string())?;
+    let parent = owned_meta(&id, owner_uid)?;
+    let parent_presentation = read_presentation(&parent.id)?;
+    if parent_presentation.deleted {
+        return Err("restore the soft-deleted conversation before forking it".to_string());
+    }
+    let (memory, snapshot) =
+        owner_memory::read_snapshot(owner_uid, parent.id.to_string(), request.before_user_turn)?;
+    let inherited = bindings::verify_retained(
+        &parent,
+        &parent_presentation,
+        &snapshot.bindings,
+        snapshot.visible_count(),
+        owner_uid,
+    )
+    .map_err(|error| format!("cannot fork task history: {error}"))?;
+    let title = presentation_metadata(&parent, parent_presentation, memory)?.title;
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let parent_id = parent.id.to_string();
+    let (_, value) = super::tasks::create_agent_session_with(
+        "Agent conversation".to_string(),
+        owner_uid,
+        &owner_home,
+        |sid| {
+            let presentation = Presentation {
+                presentation_id: Some(derive_presentation_id(sid)),
+                title: Some(title),
+                parent_id: Some(parent_id),
+                inherited_tasks: inherited.memberships,
+                ..Presentation::default()
+            };
+            write_presentation(sid, &presentation)?;
+            let view = if snapshot.is_empty() {
+                OwnerMemoryView {
+                    metadata: Default::default(),
+                    history: Default::default(),
+                }
+            } else {
+                owner_memory::install_snapshot(
+                    owner_uid,
+                    sid.to_string(),
+                    snapshot,
+                    DEFAULT_HISTORY_LIMIT,
+                )?
+            };
+            let meta = session::get_meta(sid).map_err(|err| err.to_string())?;
+            conversation_response(&meta, presentation, view, owner_uid)
+        },
+    )?;
+    Ok(value)
+}
+
 fn get_for_id(id: &ConversationId, owner_uid: u32, limit: usize) -> Result<Value, String> {
     let meta = owned_meta(id, owner_uid)?;
     let presentation = read_presentation(&meta.id)?;
@@ -187,18 +251,25 @@ fn conversation_response(
     view: OwnerMemoryView,
     owner_uid: u32,
 ) -> Result<Value, String> {
-    let metadata = presentation_metadata(meta, presentation, view.metadata)?;
     let mut history = view.history;
-    let mut execution = jobs::load(&meta.id, owner_uid)?;
-    match bindings::verify(
-        &meta.id,
+    let execution = match bindings::verify(
+        meta,
+        &presentation,
         &history.bindings,
         history.message_count,
-        &mut execution,
+        owner_uid,
     ) {
-        Ok(()) => bindings::annotate(&mut history),
-        Err(error) => execution.mark_unverified(error),
-    }
+        Ok(verified) => {
+            bindings::annotate(&mut history);
+            verified.jobs
+        }
+        Err(error) => {
+            let mut execution = jobs::load(&meta.id, owner_uid)?;
+            execution.mark_unverified(error);
+            execution
+        }
+    };
+    let metadata = presentation_metadata(meta, presentation, view.metadata)?;
     response(ConversationResponse {
         conversation: Conversation {
             metadata,
@@ -258,7 +329,6 @@ fn is_conversation(meta: &session::SessionMeta, owner_uid: u32) -> bool {
         && meta.creator_runtime.as_deref() == Some("clawd")
         && meta.role == Some(Role::Observer)
         && meta.origin == Some(SessionOrigin::SystemAgentTask)
-        && meta.status.is_active()
 }
 
 fn presentation_metadata(

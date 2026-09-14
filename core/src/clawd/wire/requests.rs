@@ -438,6 +438,14 @@ pub struct AgentConversationUpdate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentConversationFork {
+    pub id: Token<128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_user_turn: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskSubmit {
     pub prompt: Text<PROMPT_BYTES>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
