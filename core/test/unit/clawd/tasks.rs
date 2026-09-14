@@ -72,6 +72,81 @@ fn task_list_summary_omits_heavy_and_private_fields() {
     }
 }
 
+#[tokio::test]
+async fn requested_model_is_validated_before_any_session_or_queue_side_effects() {
+    let owner_uid = unsafe { libc::geteuid() } as u32;
+    if owner_uid == 0 {
+        return;
+    }
+    let _lock = lock_env();
+    let root = activity_task_root();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());
+    let client = activity_task_client(owner_uid);
+    let too_long = "m".repeat(257);
+    for model in [
+        "",
+        " ",
+        "invalid model",
+        "invalid\nmodel",
+        "model\tname",
+        too_long.as_str(),
+    ] {
+        let error = submit(json!({"prompt": "never queued", "model": model}), &client)
+            .await
+            .unwrap_err();
+        assert!(error.contains("model"), "{error}");
+        assert!(!session::sessions_root().exists());
+        assert!(!crate::paths::agent_jobs_dir().exists());
+        assert!(!crate::paths::clawd_user_agent_state_dir(owner_uid).exists());
+    }
+}
+
+#[tokio::test]
+async fn requested_model_is_persisted_with_existing_activity_and_session_contracts() {
+    let owner_uid = unsafe { libc::geteuid() } as u32;
+    if owner_uid == 0 {
+        return;
+    }
+    let _lock = lock_env();
+    let root = activity_task_root();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());
+    let client = activity_task_client(owner_uid);
+    let activity = activity_task_fixture(owner_uid);
+    let submitted = submit(
+        json!({
+            "prompt": "  keep the existing normalization  ",
+            "context": "  retained context  ",
+            "branch_context": "  retained branch  ",
+            "activity_id": activity.id,
+            "max_turns": 4,
+            "use_memory": false,
+            "model": "chosen-model",
+        }),
+        &client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(submitted["requested_model"], "chosen-model");
+    assert_eq!(submitted["prompt"], "keep the existing normalization");
+    assert_eq!(submitted["context"], "retained context");
+    assert_eq!(submitted["branch_context"], "retained branch");
+    assert_eq!(submitted["max_turns"], 4);
+    assert_eq!(submitted["use_memory"], false);
+    assert_eq!(submitted["activity_id"], activity.id);
+    let sid = submitted["session_id"].as_str().unwrap();
+    let meta = session::get_meta(&sid.parse().unwrap()).unwrap();
+    assert_eq!(meta.owner_uid, Some(owner_uid));
+    assert_eq!(meta.activity_id.as_deref(), Some(activity.id.as_str()));
+    assert_eq!(meta.origin, Some(SessionOrigin::SystemAgentTask));
+    let store = Store::open_default().unwrap();
+    let saved = store
+        .locate(submitted["id"].as_str().unwrap())
+        .unwrap()
+        .unwrap()
+        .1;
+    assert_eq!(saved.requested_model.as_deref(), Some("chosen-model"));
+}
+
 #[test]
 fn task_session_reuse_requires_owner_and_refreshes_caps() {
     let _lock = lock_env();

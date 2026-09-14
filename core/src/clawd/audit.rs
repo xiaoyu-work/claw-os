@@ -64,6 +64,8 @@ struct TaskAudit<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    requested_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<TextDigest>,
@@ -167,6 +169,10 @@ pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) 
         worker_pid: job.worker_pid,
         worker_start_time_ticks: job.worker_start_time_ticks,
         provider: job.provider.as_deref().map(audit_policy::safe_identity),
+        requested_model: job
+            .requested_model
+            .as_deref()
+            .map(audit_policy::safe_identity),
         model: job.model.as_deref().map(audit_policy::safe_identity),
         error: audit_policy::optional_text_digest(job.error.as_deref()),
     };

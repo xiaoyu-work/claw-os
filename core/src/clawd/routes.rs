@@ -707,6 +707,7 @@ routes! {
             ("session_id", FieldRule::Token),
             ("activity_id", FieldRule::Token),
             ("max_turns", FieldRule::Count),
+            ("model", FieldRule::Identifier),
             ("prompt", FieldRule::Size),
         ],
         run: |c| tasks::submit(c.params, c.client).await.map_err(BrokerError::from),

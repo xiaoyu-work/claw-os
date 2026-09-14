@@ -161,6 +161,8 @@ pub struct Job {
     pub execution_reservation: Option<crate::activities::ExecutionReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_model: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub use_memory: bool,
     pub status: JobStatus,
@@ -290,6 +292,7 @@ impl Job {
             activity_id: None,
             execution_reservation: None,
             max_turns,
+            requested_model: None,
             use_memory: true,
             status: JobStatus::Pending,
             created_at: now_iso(),
@@ -336,6 +339,20 @@ impl Job {
             (None, requested) => requested,
         }
     }
+}
+
+pub(crate) fn validate_requested_model(model: Option<&str>) -> Result<(), String> {
+    if let Some(model) = model {
+        if model.is_empty()
+            || model.len() > 256
+            || model
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err("model must be a non-empty identifier of at most 256 bytes".into());
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +638,8 @@ impl Store {
     }
 
     pub(crate) fn publish(&self, mut job: Job) -> io::Result<Job> {
+        validate_requested_model(job.requested_model.as_deref())
+            .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
         let _session_lock = job
             .session_id
             .as_deref()
@@ -3429,6 +3448,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.effective_max_turns(),
+            requested_model: job.requested_model.clone(),
             use_memory: job.use_memory,
             presence: None,
         },
@@ -3486,8 +3506,24 @@ pub struct JobExecution {
     pub branch_context: Option<String>,
     pub session_id: Option<String>,
     pub max_turns: Option<u32>,
+    pub requested_model: Option<String>,
     pub use_memory: bool,
     pub presence: Option<crate::session::SessionPresence>,
+}
+
+fn job_config(
+    configured: &crate::config::AgentConfig,
+    job: &JobExecution,
+) -> Result<crate::config::AgentConfig, String> {
+    validate_requested_model(job.requested_model.as_deref())?;
+    let mut config = configured.clone();
+    if let Some(max_turns) = job.max_turns {
+        config.max_turns = max_turns;
+    }
+    if let Some(model) = &job.requested_model {
+        config.model = model.clone();
+    }
+    Ok(config)
 }
 
 fn standalone_runtime_hooks() -> crate::agent::runtime::hooks::HookRegistry {
@@ -3522,11 +3558,10 @@ pub async fn execute_job_with_hooks(
     }
 
     let current_config = crate::config::current_snapshot();
-    let base = current_config.agent.clone();
-    let mut cfg = base;
-    if let Some(n) = job.max_turns {
-        cfg.max_turns = n;
-    }
+    let cfg = match job_config(&current_config.agent, &job) {
+        Ok(config) => config,
+        Err(error) => return FinishOutcome::Error(error),
+    };
     let guardrails = loop_::guardrails_from_cfg(&cfg);
     let mut exposure =
         match crate::agent::tools::exposure::ToolExposureContext::from_current_session_with_presence(

@@ -181,10 +181,14 @@ rechecks the live revision independently of heartbeat renewal. Disabled,
 changed or newly introduced policies stop old attempts through normal
 cancellation and exact-child cleanup; admitted effects are not undone.
 
-Worker protocol v11 adds a `Boundary` question to the consent seam. It carries
-only verb/scope, never Activity, owner or policy selectors. Its typed reply is
-a constraint, not an approval, and cannot satisfy a consent waiter. Up to
-4096 boundary checks have their own counter, separate from 128 consent asks.
+Worker protocol v12 carries the optional request-scoped model selection in the
+broker-authored assignment. The worker applies it only to its cloned Agent
+configuration; provider selection, credentials, fallback policy and
+capabilities remain unchanged. Protocol v11 added a `Boundary` question to the
+consent seam. It carries only verb/scope, never Activity, owner or policy
+selectors. Its typed reply is a constraint, not an approval, and cannot satisfy
+a consent waiter. Up to 4096 boundary checks have their own counter, separate
+from 128 consent asks.
 Root also rechecks the boundary when a worker directly requests or consumes
 consent: deny cannot escalate, and required confirmation retires an exact
 scope grant once rather than borrowing a broader reusable approval.

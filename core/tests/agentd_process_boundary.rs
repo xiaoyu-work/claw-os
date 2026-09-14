@@ -308,6 +308,7 @@ fn assignment(
             branch_context: None,
             session_id: None,
             max_turns: Some(1),
+            requested_model: None,
             use_memory: true,
             record_activity_receipts: false,
             activity_capability_checks: false,

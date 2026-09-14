@@ -350,6 +350,8 @@ pub struct TaskSubmit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<Text<256>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_memory: Option<bool>,
 }
 

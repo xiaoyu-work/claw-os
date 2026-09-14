@@ -93,6 +93,19 @@ fn summary_ai_wire_is_bounded_and_cannot_carry_provider_or_owner_authority() {
 }
 
 #[test]
+fn requested_model_wire_is_optional_bounded_and_cannot_select_a_provider() {
+    let request = json!({"prompt": "hello", "model": "provider/model-v2"});
+    let parsed = serde_json::from_value::<TaskSubmit>(request.clone());
+    assert!(parsed.is_ok(), "{parsed:?}");
+    let mut oversized = request.clone();
+    oversized["model"] = json!("m".repeat(257));
+    assert!(serde_json::from_value::<TaskSubmit>(oversized).is_err());
+    let mut forged = request;
+    forged["provider"] = json!("other-provider");
+    assert!(serde_json::from_value::<TaskSubmit>(forged).is_err());
+}
+
+#[test]
 fn activity_policy_wire_is_closed_bounded_and_cannot_supply_authority() {
     let valid = json!({"id":"00000000-0000-4000-8000-000000000001","policy":{"rules":[
         {"verb":"fs.delete","mode":"deny","scopes":[]}

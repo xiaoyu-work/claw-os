@@ -1047,6 +1047,7 @@ async fn execute(
         branch_context: job.branch_context,
         session_id: job.session_id,
         max_turns: job.max_turns,
+        requested_model: job.requested_model,
         use_memory: job.use_memory,
         presence: assignment.presence,
     };

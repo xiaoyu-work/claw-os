@@ -235,6 +235,7 @@ fn task_event_record(event: &'static str, job: &Job) -> Value {
         "worker_pid": job.worker_pid,
         "worker_start_time_ticks": job.worker_start_time_ticks,
         "provider": job.provider.as_deref().map(audit_policy::safe_identity),
+        "requested_model": job.requested_model.as_deref().map(audit_policy::safe_identity),
         "model": job.model.as_deref().map(audit_policy::safe_identity),
         // Worker failures quote provider responses and prompt text.
         "error": audit_policy::optional_text_digest(job.error.as_deref()),

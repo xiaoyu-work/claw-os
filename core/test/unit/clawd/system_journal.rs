@@ -204,6 +204,7 @@ fn worker_failures_are_journalled_as_metadata() {
         "created_at": "2026-01-01T00:00:00Z",
         "session_id": "sess-1",
         "provider": "anthropic",
+        "requested_model": "claude-sonnet",
         "model": "claude",
         "error": error,
         "owner_uid": 1000,
@@ -214,6 +215,7 @@ fn worker_failures_are_journalled_as_metadata() {
     assert_clean(&rendered);
     assert_eq!(record["job_id"], json!("job-1"));
     assert_eq!(record["provider"], json!("anthropic"));
+    assert_eq!(record["requested_model"], json!("claude-sonnet"));
     assert_eq!(record["error"]["bytes"], json!(error.len()));
     assert_eq!(record["client_source"], json!("unknown"));
     assert_eq!(record["attended"], json!(false));

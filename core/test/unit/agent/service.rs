@@ -13,6 +13,94 @@ fn fresh_root() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+fn pending_with_model(model: Option<&str>) -> Job {
+    let mut job = Job::new_pending(
+        "model selection".into(),
+        None,
+        None,
+        None,
+        Some(4),
+        None,
+        None,
+    );
+    job.use_memory = false;
+    job.requested_model = model.map(str::to_string);
+    job
+}
+
+#[test]
+fn requested_model_is_durable_before_a_job_can_be_claimed() {
+    let root = fresh_root();
+    let store = Store::with_root(root.path().to_path_buf()).unwrap();
+    let submitted = store
+        .publish(pending_with_model(Some("provider/model-v2")))
+        .unwrap();
+    assert!(submitted.model.is_none());
+    let reopened = Store::with_root(root.path().to_path_buf()).unwrap();
+    let claimed = reopened.claim_one().unwrap().unwrap();
+    assert_eq!(claimed.id, submitted.id);
+    assert_eq!(
+        claimed.requested_model.as_deref(),
+        Some("provider/model-v2")
+    );
+}
+
+#[test]
+fn invalid_requested_models_never_publish_jobs() {
+    let root = fresh_root();
+    let store = Store::with_root(root.path().to_path_buf()).unwrap();
+    for model in ["", " model", "two words", "model\nother", &"m".repeat(257)] {
+        let error = store.publish(pending_with_model(Some(model))).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    }
+    assert!(store.claim_one().unwrap().is_none());
+}
+
+#[test]
+fn requested_model_does_not_change_provider_policy_or_other_jobs() {
+    let configured = crate::config::AgentConfig {
+        provider: "mock".into(),
+        model: "original".into(),
+        max_turns: 7,
+        tool_deny: vec!["dangerous".into()],
+        ..Default::default()
+    };
+    let job = JobExecution {
+        id: "job-1".into(),
+        prompt: "hello".into(),
+        context: None,
+        branch_context: None,
+        session_id: None,
+        max_turns: Some(3),
+        requested_model: Some("selected".into()),
+        use_memory: false,
+        presence: None,
+    };
+    let effective = job_config(&configured, &job).unwrap();
+    assert_eq!(effective.model, "selected");
+    assert_eq!(effective.max_turns, 3);
+    assert_eq!(effective.provider, configured.provider);
+    assert_eq!(effective.tool_deny, configured.tool_deny);
+    assert_eq!(configured.model, "original");
+    assert_eq!(configured.max_turns, 7);
+    let legacy = JobExecution {
+        requested_model: None,
+        ..job
+    };
+    assert_eq!(job_config(&configured, &legacy).unwrap().model, "original");
+}
+
+#[test]
+fn legacy_jobs_have_no_requested_model_override() {
+    let job = pending_with_model(None);
+    let mut stored = serde_json::to_value(job).unwrap();
+    stored.as_object_mut().unwrap().remove("requested_model");
+    assert!(serde_json::from_value::<Job>(stored)
+        .unwrap()
+        .requested_model
+        .is_none());
+}
+
 fn fresh_activity_root() -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix(".activity-jobs-test-")

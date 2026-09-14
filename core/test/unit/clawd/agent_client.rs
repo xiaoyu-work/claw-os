@@ -42,6 +42,21 @@ fn activity_submit_flag_preserves_legacy_options_and_broker_parameters() {
 }
 
 #[test]
+fn requested_model_cli_is_explicit_and_validated() {
+    let args = ["work", "--model", "provider/model-v2"].map(str::to_string);
+    assert_eq!(
+        service_submit_params(&args).unwrap(),
+        json!({"prompt": "work", "model": "provider/model-v2"})
+    );
+    for model in ["", "a b", "a\nb"] {
+        let args = ["work", "--model", model].map(str::to_string);
+        assert!(service_submit_params(&args).is_err());
+    }
+    let args = ["work", "--model"].map(str::to_string);
+    assert!(service_submit_params(&args).is_err());
+}
+
+#[test]
 fn activity_list_flag_preserves_status_limit_and_all_options() {
     let args = ["--activity", "activity-id", "--status", "error", "--limit", "2"]
         .map(str::to_string);

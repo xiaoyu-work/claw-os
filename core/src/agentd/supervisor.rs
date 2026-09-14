@@ -1189,6 +1189,7 @@ async fn pump(
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.effective_max_turns(),
+            requested_model: job.requested_model.clone(),
             use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),

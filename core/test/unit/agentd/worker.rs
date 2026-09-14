@@ -81,6 +81,7 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
             branch_context: None,
             session_id: None,
             max_turns: None,
+            requested_model: None,
             use_memory: false,
             owner_uid: 1000,
             owner_home: "/home/test".to_string(),

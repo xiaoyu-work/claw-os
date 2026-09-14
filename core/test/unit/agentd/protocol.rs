@@ -50,9 +50,34 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_RECEIPT,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 11);
+    assert_eq!(PROTOCOL_VERSION, 12);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
+}
+
+#[test]
+fn requested_model_round_trips_in_the_worker_assignment() {
+    let spec = JobSpec {
+        id: "task-a".to_string(),
+        prompt: "test".to_string(),
+        context: None,
+        branch_context: None,
+        session_id: Some("session-a".to_string()),
+        max_turns: Some(3),
+        requested_model: Some("provider/model-v2".to_string()),
+        use_memory: true,
+        owner_uid: 1000,
+        owner_home: "/home/test".to_string(),
+        record_activity_receipts: false,
+        activity_capability_checks: false,
+    };
+    let document = serde_json::to_value(spec).unwrap();
+    assert_eq!(document["requested_model"], "provider/model-v2");
+    let decoded = serde_json::from_value::<JobSpec>(document).unwrap();
+    assert_eq!(
+        decoded.requested_model.as_deref(),
+        Some("provider/model-v2")
+    );
 }
 
 #[test]

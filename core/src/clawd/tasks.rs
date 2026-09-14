@@ -36,6 +36,11 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
     }
     let prompt = required_string(&params, "prompt")?;
+    let requested_model = params
+        .get("model")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    crate::agent::service::validate_requested_model(requested_model.as_deref())?;
     let context = params
         .get("context")
         .and_then(Value::as_str)
@@ -107,6 +112,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     );
     job.use_memory = use_memory;
     job.activity_id = activity_id;
+    job.requested_model = requested_model;
     let task_id = job.id.clone();
     let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
         .map_err(|err| err.to_string())?;
@@ -457,6 +463,8 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
             original.status.as_str()
         ));
     }
+    crate::agent::service::validate_requested_model(original.requested_model.as_deref())?;
+    let requested_model = original.requested_model.clone();
     let owner_uid = original
         .owner_uid
         .ok_or_else(|| "task has no recorded owner and cannot be retried".to_string())?;
@@ -490,6 +498,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     );
     retried.use_memory = original.use_memory;
     retried.activity_id = activity_id;
+    retried.requested_model = requested_model;
     let task_id = retried.id.clone();
     let retried =
         with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(retried))
