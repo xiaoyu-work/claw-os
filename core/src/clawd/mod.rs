@@ -30,6 +30,7 @@ pub mod config_editor;
 pub mod containers;
 pub mod context;
 pub mod context_events;
+pub mod conversations;
 pub mod crash;
 pub mod credentials;
 pub mod desktop;

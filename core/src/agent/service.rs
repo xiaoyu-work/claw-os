@@ -696,6 +696,27 @@ impl Store {
         Ok(job)
     }
 
+    pub(crate) fn lock_idle_session(&self, session_id: &str) -> io::Result<JobLock> {
+        let guard = self.lock_for_session(session_id)?;
+        for status in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::WaitingApproval,
+        ] {
+            if let Some(active) = self
+                .list_bucket(status, None)?
+                .into_iter()
+                .find(|job| job.session_id.as_deref() == Some(session_id))
+            {
+                return Err(io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("session {session_id} already has active task {}", active.id),
+                ));
+            }
+        }
+        Ok(guard)
+    }
+
     /// List jobs in a given bucket, newest-first by mtime, optionally
     /// limited.
     pub fn list_bucket(&self, bucket: JobStatus, limit: Option<usize>) -> io::Result<Vec<Job>> {
@@ -2527,7 +2548,7 @@ fn validate_execution_binding(
 }
 
 /// RAII guard for per-job flock taken by `Store::lock_for_id`.
-struct JobLock {
+pub(crate) struct JobLock {
     file: fs::File,
 }
 

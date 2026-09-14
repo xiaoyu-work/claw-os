@@ -139,9 +139,46 @@ fn create_task_session_with_client(
     client: SessionClient,
 ) -> Result<String, String> {
     let purpose = format!("agent task: {}", preview(prompt, 80));
+    create_agent_session_with_client(purpose, owner_uid, owner_home, client, |_| Ok(()))
+        .map(|(id, ())| id)
+}
+
+/// Issue an empty system-agent session without submitting or executing a job.
+pub(super) fn create_agent_session_with<T>(
+    purpose: String,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    initialize: impl FnOnce(&session::SessionId) -> Result<T, String>,
+) -> Result<(String, T), String> {
+    create_agent_session_with_client(
+        purpose,
+        owner_uid,
+        owner_home,
+        SessionClient::new(SessionSource::BrokerTask, false, true),
+        initialize,
+    )
+}
+
+fn create_agent_session_with_client<T>(
+    purpose: String,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    client: SessionClient,
+    initialize: impl FnOnce(&session::SessionId) -> Result<T, String>,
+) -> Result<(String, T), String> {
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
-    configure_task_session(&sid, owner_uid, owner_home, client)?;
-    Ok(sid.into_string())
+    let prepared = initialize(&sid).and_then(|value| {
+        configure_task_session(&sid, owner_uid, owner_home, client)?;
+        Ok(value)
+    });
+    match prepared {
+        Ok(value) => Ok((sid.into_string(), value)),
+        Err(error) => {
+            session::end(&sid, session::Status::Failed)
+                .map_err(|cleanup| format!("initialize agent session {sid}: {error}; {cleanup}"))?;
+            Err(format!("initialize agent session {sid}: {error}"))
+        }
+    }
 }
 
 fn configure_task_session(

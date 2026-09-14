@@ -399,6 +399,41 @@ fn activity_linkage_is_additive_to_legacy_task_requests() {
 }
 
 #[test]
+fn conversation_wire_is_closed_and_bounded() {
+    assert!(serde_json::from_value::<AgentConversationCreate>(json!({})).is_ok());
+    assert!(serde_json::from_value::<AgentConversationCreate>(
+        json!({"title": "Release planning"})
+    )
+    .is_ok());
+    assert!(
+        serde_json::from_value::<AgentConversationCreate>(json!({"title": "x".repeat(513)}))
+            .is_err()
+    );
+    assert!(serde_json::from_value::<AgentConversationCreate>(json!({"owner_uid": 1000})).is_err());
+
+    for value in [
+        json!({"id": "ses_0000000000001_000000000001"}),
+        json!({"id": "078ed458-0e17-882b-b0aa-ca1088683b25", "limit": 100}),
+    ] {
+        assert!(serde_json::from_value::<AgentConversationGet>(value).is_ok());
+    }
+    assert!(serde_json::from_value::<AgentConversationGet>(json!({"id": "../foreign"})).is_err());
+    assert!(serde_json::from_value::<AgentConversationList>(
+        json!({"archived": true, "limit": 50})
+    )
+    .is_ok());
+    assert!(serde_json::from_value::<AgentConversationList>(json!({"deleted": true})).is_err());
+    assert!(serde_json::from_value::<AgentConversationUpdate>(
+        json!({"id": "ses_0000000000001_000000000001", "archived": true})
+    )
+    .is_ok());
+    assert!(serde_json::from_value::<AgentConversationUpdate>(
+        json!({"id": "ses_0000000000001_000000000001", "grant": "forged"})
+    )
+    .is_err());
+}
+
+#[test]
 fn a_task_submission_is_closed_and_bounded() {
     let ok = json!({
         "prompt": "summarise the journal",

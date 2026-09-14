@@ -4,6 +4,11 @@
 correlation, deadlines and socket-peer checks, not authorization, capabilities,
 provider implementation, desktop state or a durable approval store.
 
+Its closed command inventory includes owner-scoped
+`agent.conversation.create/get/list/update`. Conversation UUIDs are presentation
+identifiers only; canonical session identity and all ownership checks remain in
+`clawd`.
+
 ## System review contract
 
 [`src/system_review.rs`](src/system_review.rs) defines the closed version-1

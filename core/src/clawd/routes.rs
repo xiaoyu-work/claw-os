@@ -41,11 +41,11 @@ use super::wire::{Fault, RequestId};
 use super::{
     accessibility, activities, activity_attention, activity_object_state, activity_objects,
     activity_receipts, app_services, app_sessions, audio, backup, bluetooth, browser, camera,
-    clipboard, config_editor, containers, context, context_events, crash, credentials, desktop,
-    display, event_center, file_changes, firewall, hardware, journal as journal_ops, location,
-    memory, network, network_diagnostics, notifications, operation_previews, packages, permissions,
-    power, printer, scheduler, security, snapshots, storage, system_journal, systemd, tasks,
-    transactions, usage, usb_guard, users,
+    clipboard, config_editor, containers, context, context_events, conversations, crash,
+    credentials, desktop, display, event_center, file_changes, firewall, hardware,
+    journal as journal_ops, location, memory, network, network_diagnostics, notifications,
+    operation_previews, packages, permissions, power, printer, scheduler, security, snapshots,
+    storage, system_journal, systemd, tasks, transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -704,8 +704,53 @@ routes! {
         run: |c| activity_receipts::record(c.params, c.client),
     }
     // -----------------------------------------------------------------
-    // Agent tasks
+    // Agent conversations and tasks
     // -----------------------------------------------------------------
+    AgentConversationCreate {
+        name: "agent.conversation.create",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::AgentConversationCreate,
+        audit: &[("title", FieldRule::Size)],
+        run: |c| conversations::create(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentConversationGet {
+        name: "agent.conversation.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::AgentConversationGet,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| conversations::get(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentConversationList {
+        name: "agent.conversation.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::AgentConversationList,
+        audit: &[("archived", FieldRule::Flag), ("limit", FieldRule::Count)],
+        run: |c| conversations::list(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentConversationUpdate {
+        name: "agent.conversation.update",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::AgentConversationUpdate,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("title", FieldRule::Size),
+            ("archived", FieldRule::Flag),
+            ("deleted", FieldRule::Flag),
+        ],
+        run: |c| conversations::update(c.params, c.client).map_err(BrokerError::from),
+    }
     TaskSubmit {
         name: "task.submit",
         access: Access::User,

@@ -1503,9 +1503,16 @@ the durable task. The Chat Stop control uses the task id returned at submission
 and calls `task.cancel` explicitly; completion remains observable through Tasks,
 session history, and notifications after a reconnect.
 
-Pre-queue Web conversations remain readable from their user-owned memory
-database, while new durable conversations use the owner task partition. Root
-`clawd` never opens the user-home compatibility database.
+The owner-scoped `agent.conversation.create/get/list/update` broker routes
+create empty system-Agent sessions without queuing work and expose the same
+durable conversation inventory to terminal, Web, and native presentations.
+Canonical `ses_*` identity remains the execution and ownership key; a stable
+root-owned UUID projection exists only for frontend compatibility and grants no
+authority. Presentation state (title, archive, soft delete) is root-owned
+session metadata. History stays in the owner's memory partition and is opened
+only from a disposable owner-identity thread; root `clawd` does not use its
+privilege to read that database. Branch/revert operations remain unavailable
+until exact task/message bindings can define their history boundary.
 
 ### Proactive notification
 

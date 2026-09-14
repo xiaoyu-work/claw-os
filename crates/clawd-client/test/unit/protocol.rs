@@ -51,6 +51,16 @@ fn activity_commands_have_stable_names_and_round_trip() {
             "activity.operation.preview",
         ),
         (Command::ActivityReceipts, "activity.receipts"),
+        (
+            Command::AgentConversationCreate,
+            "agent.conversation.create",
+        ),
+        (Command::AgentConversationGet, "agent.conversation.get"),
+        (Command::AgentConversationList, "agent.conversation.list"),
+        (
+            Command::AgentConversationUpdate,
+            "agent.conversation.update",
+        ),
         (Command::TaskGet, "task.get"),
         (Command::TaskRetry, "task.retry"),
     ] {
@@ -104,6 +114,16 @@ fn capability_policy_commands_have_stable_names_and_unique_inventory_entries() {
 #[test]
 fn main_routes_survive_activity_inventory_merge() {
     let main_routes = [
+        (
+            Command::AgentConversationCreate,
+            "agent.conversation.create",
+        ),
+        (Command::AgentConversationGet, "agent.conversation.get"),
+        (Command::AgentConversationList, "agent.conversation.list"),
+        (
+            Command::AgentConversationUpdate,
+            "agent.conversation.update",
+        ),
         (Command::TaskSubmit, "task.submit"),
         (Command::TaskStream, "task.stream"),
         (Command::TaskCancel, "task.cancel"),
@@ -127,7 +147,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 37);
+    assert_eq!(Command::ALL.len(), 41);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");
