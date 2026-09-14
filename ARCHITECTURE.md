@@ -1961,6 +1961,22 @@ verb, and scope; the caller waits on `permission.status` and retries over the
 same connection. A stored job never carries more than its creator could prove,
 bounded by the same home-scoped ceiling the executor applies before it runs.
 
+Activity-linked trigger rules reuse this scheduler and the existing context
+event stream. The association is owner-scoped metadata, not a new delegation
+mechanism. The broker preflights the Activity before scheduler consent, and
+dispatch rechecks lifecycle and configured finite limits before creating an
+unattended Job/Session pair. Ordinary Activity claim and execution guards still
+own charging, live policy checks and the actual turn ceiling. Idle scans do
+not invoke a model; all existing Activity presentations consume the associated
+jobs and reports from the same backend. Activity deliveries persist a
+Root-created correlation before Job publication and recover an existing
+matching Job without re-execution. Ambiguous publication disables the rule
+for inspection rather than replaying work. Blocked observed events are
+consumed, and re-arming advances the rule generation; neither resuming a goal
+nor replacing a rule silently replays its old backlog. Cursor initialization
+and its persistent Activity marker precede rule publication; missing progress
+after initialization fails closed even after the last Activity rule is removed.
+
 ### Worker isolation
 
 Every process Claw OS did not write — an App operation, a GUI App

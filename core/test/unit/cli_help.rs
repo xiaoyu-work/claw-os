@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn activity_trigger_options_are_discoverable_without_model_or_owner_authority() {
+    for command in cli_catalog::command_names("triggers").unwrap() {
+        let schema = command_schema_value("triggers", command).unwrap();
+        assert_eq!(schema["schema_available"], true, "{command}");
+        assert_eq!(schema["model_callable"], false, "{command}");
+        assert!(schema["model_tool"].is_null());
+    }
+    for command in ["add", "list"] {
+        let schema = command_schema_value("triggers", command).unwrap();
+        let fields = schema["parameters"].as_array().unwrap();
+        let activity = fields
+            .iter()
+            .find(|field| field["name"] == "--activity")
+            .unwrap();
+        assert_eq!(activity["type"], "uuid");
+        assert_eq!(activity["kind"], "flag");
+        assert_eq!(activity["required"], false);
+        assert!(fields
+            .iter()
+            .all(|field| field["name"] != "--owner" && field["name"] != "--caps"));
+    }
+    let add = command_schema_value("triggers", "add").unwrap();
+    let fields = add["parameters"].as_array().unwrap();
+    let required: Vec<_> = fields
+        .iter()
+        .filter(|field| field["required"] == true)
+        .map(|field| field["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(required, vec!["--id", "--prompt"]);
+    assert!(add["parameters"]
+        .to_string()
+        .contains("finite execution limits"));
+}
+
+#[test]
 fn merged_help_preserves_main_reviews_stdio_and_all_activity_commands() {
     for namespace in ["review", "activity", "object", "operation"] {
         for command in cli_catalog::command_names(namespace).unwrap() {
@@ -14,10 +49,7 @@ fn merged_help_preserves_main_reviews_stdio_and_all_activity_commands() {
     assert_eq!(stdio["model_callable"], false);
     assert_eq!(stdio["stdin"], true);
     assert_eq!(stdio["output_format"], "opaque");
-    assert_eq!(
-        stdio["description"],
-        cli_catalog::APP_STDIO_DESCRIPTION
-    );
+    assert_eq!(stdio["description"], cli_catalog::APP_STDIO_DESCRIPTION);
 }
 
 #[test]

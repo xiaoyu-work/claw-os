@@ -58,7 +58,7 @@ pub async fn run(params: Value, client: &ClientIdentity) -> Result<Value, Broker
     let home = super::system_caps::verified_owner_home(uid)?;
     let request = SchedulerCommand::parse(&params)?;
     let authority = authenticate_caller(client, uid, &home).await?;
-    let caps = authorize(&request, &authority)?;
+    let caps = authorize_command(&request, &authority)?;
     let session = trusted_session(&request, &authority, caps, &home);
 
     let permit = scheduler_slots()
@@ -556,6 +556,20 @@ fn scheduled_ceiling(home: &Path) -> CapSet {
 // ---------------------------------------------------------------------------
 // Authorization
 // ---------------------------------------------------------------------------
+
+fn authorize_command(
+    request: &SchedulerCommand,
+    authority: &CallerAuthority,
+) -> Result<CapSet, BrokerError> {
+    if request.subsystem == Subsystem::Triggers {
+        crate::triggers::preflight_activity_command(
+            authority.uid,
+            &request.command,
+            &request.args,
+        )?;
+    }
+    authorize(request, authority)
+}
 
 /// Settle one scheduler operation against the peer's authority.
 ///

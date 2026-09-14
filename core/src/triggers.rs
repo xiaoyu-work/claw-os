@@ -29,6 +29,12 @@ use crate::caps::{Cap, CapSet, Role, Scope, Verb};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod activity;
+mod delivery;
+
+pub(crate) use activity::validate_activity_trigger;
+pub use activity::{TriggerDeliveryDiagnostic, TriggerDeliveryStatus};
+
 /// One trigger rule: a match condition plus the prompt to run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerRule {
@@ -52,6 +58,13 @@ pub struct TriggerRule {
     /// Optional cap on agent turns for the fired job.
     #[serde(default)]
     pub max_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
+    /// Root-generated incarnation, changed when the owner re-arms a rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_delivery: Option<TriggerDeliveryDiagnostic>,
     /// Epoch-ms of the last time this rule fired (diagnostics only).
     #[serde(default)]
     pub last_fired_ms: Option<u64>,
@@ -110,6 +123,9 @@ fn ensure_seeded() -> Result<(), String> {
             contains: None,
             prompt: LOW_MEMORY_PROMPT.into(),
             max_turns: Some(8),
+            activity_id: None,
+            generation: None,
+            last_delivery: None,
             last_fired_ms: None,
             owner_uid: None,
             owner_home: None,
@@ -126,6 +142,9 @@ fn ensure_seeded() -> Result<(), String> {
             contains: None,
             prompt: HIGH_LOAD_PROMPT.into(),
             max_turns: Some(8),
+            activity_id: None,
+            generation: None,
+            last_delivery: None,
             last_fired_ms: None,
             owner_uid: None,
             owner_home: None,
@@ -218,6 +237,7 @@ fn is_claimable_seed(rule: &TriggerRule) -> bool {
         return true;
     }
     rule.source.as_deref() == Some(SOURCE_HEARTBEAT)
+        && rule.activity_id.is_none()
         && matches!(
             (rule.id.as_str(), rule.event_type.as_deref()),
             ("diagnose-low-memory", Some("memory_low.critical"))
@@ -233,6 +253,13 @@ fn is_claimable_seed(rule: &TriggerRule) -> bool {
         }
 }
 
+fn is_unclaimed_seed(rule: &TriggerRule) -> bool {
+    !rule.enabled
+        && rule.owner_caps.is_none()
+        && rule.activity_id.is_none()
+        && is_claimable_seed(rule)
+}
+
 /// Extract `--name value` from an argument list.
 fn flag(args: &[String], name: &str) -> Option<String> {
     let key = format!("--{name}");
@@ -242,28 +269,163 @@ fn flag(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+fn activity_flag(args: &[String]) -> Result<Option<String>, String> {
+    flag(args, "activity")
+        .map(|id| activity::canonical_id(&id).map_err(|error| format!("--activity: {error}")))
+        .transpose()
+}
+
 /// First positional (non-flag) arg, or `--id <v>` as a fallback.
 fn positional_or_id(args: &[String]) -> Option<String> {
-    args.iter()
-        .find(|a| !a.starts_with("--"))
-        .cloned()
-        .or_else(|| flag(args, "id"))
+    flag(args, "id").or_else(|| args.first().filter(|arg| !arg.starts_with("--")).cloned())
+}
+
+fn validate_arguments(command: &str, args: &[String]) -> Result<(), String> {
+    let allowed: &[&str] = match command {
+        "add" => &[
+            "id",
+            "prompt",
+            "source",
+            "event-type",
+            "contains",
+            "max-turns",
+            "activity",
+        ],
+        "list" => &["activity"],
+        "remove" | "rm" | "enable" | "disable" | "run" => &["id"],
+        "tick" => &[],
+        other => {
+            return Err(format!(
+                "unknown command '{other}'. valid: add | list | remove | enable | disable | run | tick"
+            ));
+        }
+    };
+    let accepts_id = matches!(command, "remove" | "rm" | "enable" | "disable" | "run");
+    let mut seen = BTreeSet::new();
+    let mut positional = None;
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if let Some(name) = arg.strip_prefix("--") {
+            if !allowed.contains(&name) || !seen.insert(name) {
+                return Err(format!("unknown or repeated trigger flag '{arg}'"));
+            }
+            let value = args
+                .get(index + 1)
+                .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                .ok_or_else(|| format!("{arg} requires a value"))?;
+            match name {
+                "activity" => {
+                    activity::canonical_id(value)
+                        .map_err(|error| format!("--activity: {error}"))?;
+                }
+                "id" => {
+                    sanitize_id(value).ok_or_else(|| format!("invalid id '{value}'"))?;
+                }
+                "max-turns" => {
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|turns| *turns > 0)
+                        .ok_or_else(|| "--max-turns must be a positive integer".to_string())?;
+                }
+                "prompt" if value.trim().is_empty() => {
+                    return Err("--prompt must not be empty".to_string());
+                }
+                _ => {}
+            }
+            index += 2;
+        } else if accepts_id && positional.is_none() {
+            sanitize_id(arg).ok_or_else(|| format!("invalid id '{arg}'"))?;
+            positional = Some(arg);
+            index += 1;
+        } else {
+            return Err(format!("unexpected trigger argument '{arg}'"));
+        }
+    }
+    if positional.is_some() && seen.contains("id") {
+        return Err("supply a positional trigger id or --id, not both".to_string());
+    }
+    if command == "add" && (!seen.contains("id") || !seen.contains("prompt")) {
+        return Err("usage: cos triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]".to_string());
+    }
+    if accepts_id && positional.is_none() && !seen.contains("id") {
+        return Err(format!("usage: cos triggers {command} <id>"));
+    }
+    Ok(())
+}
+
+fn with_trigger_lock<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    crate::agent::util::ensure_durable_private_dir(&triggers_dir())
+        .map_err(|error| format!("create triggers dir: {error}"))?;
+    crate::filelock::with_exclusive_path_lock(&triggers_dir().join(".dispatch"), || {
+        ensure_seeded()?;
+        operation()
+    })
+}
+
+/// Scheduler checks before consent. Never seed, persist diagnostics, or create
+/// work here. Listing validates its filter without imposing admission limits.
+pub(crate) fn preflight_activity_command(
+    owner_uid: u32,
+    command: &str,
+    args: &[String],
+) -> Result<(), String> {
+    validate_arguments(command, args)?;
+    if matches!(command, "add" | "list") {
+        if let Some(activity_id) = activity_flag(args)? {
+            if command == "add" {
+                validate_activity_trigger(owner_uid, &activity_id)?;
+                delivery::check_activity_progress()?;
+            }
+        }
+    } else if matches!(command, "enable" | "run") {
+        let id = positional_or_id(args).ok_or_else(|| "trigger id is required".to_string())?;
+        let rule = match load_rule(&id) {
+            Ok(rule) => rule,
+            Err(error) => match fs::symlink_metadata(rule_path(&id)) {
+                // Preserve explicit claiming of a built-in example on first
+                // use without creating it during consent preflight.
+                Err(io_error)
+                    if io_error.kind() == std::io::ErrorKind::NotFound
+                        && command == "enable"
+                        && matches!(id.as_str(), "diagnose-low-memory" | "diagnose-high-load")
+                        && !seeded_sentinel_path().exists() =>
+                {
+                    return Ok(());
+                }
+                _ => return Err(error),
+            },
+        };
+        if command != "enable" || !is_unclaimed_seed(&rule) {
+            require_rule_owner(&rule, owner_uid)?;
+        }
+        if command == "run" {
+            activity::require_not_held(&rule)?;
+        }
+        if let Some(activity_id) = rule.activity_id.as_deref() {
+            validate_activity_trigger(owner_uid, activity_id)?;
+            delivery::check_activity_progress()?;
+        }
+    }
+    Ok(())
 }
 
 /// CLI entry — dispatched from the router under `cos triggers`.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
-    ensure_seeded()?;
+    validate_arguments(command, args)?;
     match command {
         "add" => cmd_add(args),
-        "list" => cmd_list(),
+        "list" => cmd_list(args),
         "remove" | "rm" => cmd_remove(args),
         "enable" => cmd_set_enabled(args, true),
         "disable" => cmd_set_enabled(args, false),
         "run" => cmd_run(args),
-        "tick" => cmd_tick(),
-        other => Err(format!(
-            "unknown command '{other}'. valid: add | list | remove | enable | disable | run | tick"
-        )),
+        "tick" => {
+            crate::caps::require(Verb::SYS_KERNEL, Scope::Wild)
+                .map_err(|denial| denial.summary())?;
+            with_trigger_lock(delivery::tick)
+        }
+        _ => unreachable!("validated trigger command"),
     }
 }
 
@@ -340,51 +502,6 @@ fn load_rules() -> Vec<TriggerRule> {
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
-}
-
-#[derive(Default, Serialize, Deserialize)]
-struct TriggerCursor {
-    next_line: usize,
-    #[serde(default)]
-    delivered_rules: BTreeSet<String>,
-    #[serde(default)]
-    pending: Vec<PendingDelivery>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct PendingDelivery {
-    line_index: usize,
-    rule_id: String,
-    raw_event: String,
-    #[serde(default)]
-    attempts: u32,
-    #[serde(default)]
-    last_error: Option<String>,
-}
-
-fn read_cursor() -> Result<TriggerCursor, String> {
-    let Some(raw) = crate::filelock::read_locked(&cursor_path())? else {
-        return Ok(TriggerCursor::default());
-    };
-    if let Ok(cursor) = serde_json::from_str(&raw) {
-        return Ok(cursor);
-    }
-    raw.trim()
-        .parse::<usize>()
-        .map(|next_line| TriggerCursor {
-            next_line,
-            delivered_rules: BTreeSet::new(),
-            pending: Vec::new(),
-        })
-        .map_err(|error| format!("invalid trigger cursor: {error}"))
-}
-
-fn write_cursor(cursor: &TriggerCursor) -> Result<(), String> {
-    crate::storage::ensure_private_dir(&triggers_dir())
-        .map_err(|error| format!("create triggers dir: {error}"))?;
-    let data = serde_json::to_string(cursor)
-        .map_err(|error| format!("serialize trigger cursor: {error}"))?;
-    crate::filelock::write_locked(&cursor_path(), &data)
 }
 
 /// Does `rule` match the parsed `ev` (with `raw` its source line)?
@@ -484,8 +601,13 @@ fn execution_owner(rule: &TriggerRule) -> Result<TriggerExecutionOwner, String> 
     })
 }
 
-fn submit_job(rule: &TriggerRule, prompt: String) -> Result<String, String> {
+fn prepare_job(rule: &TriggerRule, prompt: String) -> Result<crate::agent::service::Job, String> {
     let owner = execution_owner(rule)?;
+    let activity_id = rule
+        .activity_id
+        .as_deref()
+        .map(|id| validate_activity_trigger(owner.uid, id))
+        .transpose()?;
     let session = crate::session::create(format!("trigger: {}", rule.id))
         .map_err(|error| format!("create trigger session: {error}"))?;
     if let Err(error) = crate::session::update_meta(&session, |meta| {
@@ -498,6 +620,7 @@ fn submit_job(rule: &TriggerRule, prompt: String) -> Result<String, String> {
         // this, so recording the daemon's own uid here would derive
         // the wrong account's policy.
         meta.owner_uid = Some(owner.uid);
+        meta.client = trigger_client();
         // Provenance for the execution-time clamp: this snapshot is
         // authority the owner proved (or had approved) when the rule
         // was created, so the worker may keep its `agent.spawn` and
@@ -512,25 +635,55 @@ fn submit_job(rule: &TriggerRule, prompt: String) -> Result<String, String> {
         let _ = crate::session::end(&session, crate::session::Status::Failed);
         return Err(format!("set trigger session caps: {error}"));
     }
-    let store = match crate::agent::service::Store::open_default() {
-        Ok(store) => store,
-        Err(error) => {
-            let _ = crate::session::end(&session, crate::session::Status::Failed);
-            return Err(format!("open agent job store: {error}"));
-        }
-    };
-    let job = match store.submit(
+    let mut job = crate::agent::service::Job::new_pending_with_client(
         prompt,
+        None,
+        None,
         Some(session.as_str().to_string()),
         rule.max_turns,
         Some(owner.uid),
         Some(owner.home.to_string_lossy().into_owned()),
-    ) {
+        trigger_client(),
+    );
+    job.activity_id = activity_id;
+    Ok(job)
+}
+
+fn trigger_client() -> crate::session::SessionClient {
+    crate::session::SessionClient::new(crate::session::SessionSource::ScheduledTrigger, false, true)
+}
+
+fn end_unpublished_session(job: &crate::agent::service::Job) {
+    if let Some(session) = job
+        .session_id
+        .as_deref()
+        .and_then(|id| id.parse::<crate::session::SessionId>().ok())
+    {
+        let _ = crate::session::end(&session, crate::session::Status::Failed);
+    }
+}
+
+fn submit_job(rule: &TriggerRule, prompt: String) -> Result<crate::agent::service::Job, String> {
+    if rule.activity_id.is_some() {
+        return Err("Activity triggers require durable delivery correlation".to_string());
+    }
+    let store = crate::agent::service::Store::open_default()
+        .map_err(|error| format!("open agent job store: {error}"))?;
+    let pending = prepare_job(rule, prompt)?;
+    let job = match store.publish(pending.clone()) {
         Ok(job) => job,
         Err(error) => {
-            let _ = crate::session::end(&session, crate::session::Status::Failed);
+            end_unpublished_session(&pending);
             return Err(format!("submit job: {error}"));
         }
+    };
+    publish_trigger_success(rule, &job);
+    Ok(job)
+}
+
+fn publish_trigger_success(rule: &TriggerRule, job: &crate::agent::service::Job) {
+    let Some(owner_uid) = job.owner_uid else {
+        return;
     };
     let mut draft = crate::notifications::NotificationDraft::new(
         "trigger",
@@ -542,18 +695,17 @@ fn submit_job(rule: &TriggerRule, prompt: String) -> Result<String, String> {
     .activity()
     .dedupe(format!("trigger:{}:task:{}", rule.id, job.id));
     draft.task_id = Some(job.id.clone());
-    draft.session_id = Some(session.as_str().to_string());
+    draft.session_id = job.session_id.clone();
     draft.job_id = Some(rule.id.clone());
-    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner.uid, draft) {
+    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
         tracing::warn!(
             trigger_id = %rule.id,
             task_id = %job.id,
-            owner_uid = owner.uid,
+            owner_uid,
             %error,
             "failed to publish trigger notification"
         );
     }
-    Ok(job.id)
 }
 
 fn record_fired(rule_id: &str) {
@@ -615,9 +767,8 @@ fn quarantine_invalid_rule(rule_id: &str, error: &str) {
 }
 
 fn cmd_add(args: &[String]) -> Result<Value, String> {
-    crate::caps::require(Verb::TIME_CRON, Scope::Wild).map_err(|denial| denial.summary())?;
     let id = flag(args, "id").ok_or_else(|| {
-        "usage: cos triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N]"
+        "usage: cos triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]"
             .to_string()
     })?;
     let id = sanitize_id(&id)
@@ -625,6 +776,13 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
     let prompt = flag(args, "prompt").ok_or_else(|| "--prompt is required".to_string())?;
     let max_turns = flag(args, "max-turns").and_then(|s| s.parse::<u32>().ok());
     let owner = current_owner()?;
+    let activity_id = activity_flag(args)?
+        .map(|id| validate_activity_trigger(owner.uid, &id))
+        .transpose()?;
+    if activity_id.is_some() {
+        delivery::check_activity_progress()?;
+    }
+    crate::caps::require(Verb::TIME_CRON, Scope::Wild).map_err(|denial| denial.summary())?;
     if !owner.caps.covers(&Cap::new(Verb::AGENT_SPAWN, Scope::Wild)) {
         return Err("trigger owner lacks agent.spawn:*".to_string());
     }
@@ -637,6 +795,9 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         contains: flag(args, "contains"),
         prompt,
         max_turns,
+        activity_id,
+        generation: Some(uuid::Uuid::new_v4().to_string()),
+        last_delivery: None,
         last_fired_ms: None,
         owner_uid: Some(owner.uid),
         owner_home: Some(owner.home),
@@ -644,36 +805,50 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         owner_role: owner.role,
         owner_tier: owner.tier,
     };
-    create_rule(&rule)?;
-    Ok(json!({ "ok": true, "id": id, "rule": rule }))
+    with_trigger_lock(|| {
+        if let Some(activity_id) = rule.activity_id.as_deref() {
+            validate_activity_trigger(owner.uid, activity_id)?;
+            delivery::initialize_activity_progress()?;
+        }
+        create_rule(&rule)?;
+        Ok(json!({ "ok": true, "id": id, "rule": rule }))
+    })
 }
 
-fn cmd_list() -> Result<Value, String> {
+fn cmd_list(args: &[String]) -> Result<Value, String> {
+    let activity_id = activity_flag(args)?;
     crate::caps::require(Verb::TIME_CRON, Scope::Wild).map_err(|denial| denial.summary())?;
     let owner_uid = current_owner()?.uid;
-    let all_rules = load_rules();
-    let available_seeds: Vec<_> = all_rules
-        .iter()
-        .filter(|rule| !rule.enabled && rule.owner_caps.is_none() && is_claimable_seed(rule))
-        .map(|rule| rule.id.clone())
-        .collect();
-    let legacy_unowned = all_rules
-        .iter()
-        .filter(|rule| rule.owner_uid.is_none() && !is_claimable_seed(rule))
-        .count();
-    let rules: Vec<_> = all_rules
-        .into_iter()
-        .filter(|rule| rule.owner_uid == Some(owner_uid))
-        .collect();
-    Ok(json!({
-        "count": rules.len(),
-        "triggers": rules,
-        "available_seeds": available_seeds,
-        "legacy_unowned": legacy_unowned,
-        "migration": (legacy_unowned > 0).then_some(
-            "legacy ownerless triggers are quarantined; recreate them to bind a trusted owner"
-        ),
-    }))
+    with_trigger_lock(|| {
+        let all_rules = load_rules();
+        let available_seeds: Vec<_> = all_rules
+            .iter()
+            .filter(|rule| activity_id.is_none() && is_unclaimed_seed(rule))
+            .map(|rule| rule.id.clone())
+            .collect();
+        let legacy_unowned = all_rules
+            .iter()
+            .filter(|rule| rule.owner_uid.is_none() && !is_claimable_seed(rule))
+            .count();
+        let rules: Vec<_> = all_rules
+            .into_iter()
+            .filter(|rule| {
+                rule.owner_uid == Some(owner_uid)
+                    && activity_id
+                        .as_ref()
+                        .is_none_or(|id| rule.activity_id.as_ref() == Some(id))
+            })
+            .collect();
+        Ok(json!({
+            "count": rules.len(),
+            "triggers": rules,
+            "available_seeds": available_seeds,
+            "legacy_unowned": legacy_unowned,
+            "migration": (legacy_unowned > 0).then_some(
+                "legacy ownerless triggers are quarantined; recreate them to bind a trusted owner"
+            ),
+        }))
+    })
 }
 
 fn cmd_remove(args: &[String]) -> Result<Value, String> {
@@ -681,248 +856,101 @@ fn cmd_remove(args: &[String]) -> Result<Value, String> {
     let id = positional_or_id(args).ok_or_else(|| "usage: cos triggers remove <id>".to_string())?;
     let id = sanitize_id(&id).ok_or_else(|| format!("invalid id '{id}'"))?;
     let owner_uid = current_owner()?.uid;
-    let rule = load_rule(&id)?;
-    require_rule_owner(&rule, owner_uid)?;
-    match fs::remove_file(rule_path(&id)) {
-        Ok(()) => Ok(json!({ "ok": true, "removed": id })),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err(format!("no such trigger '{id}'"))
+    with_trigger_lock(|| {
+        let rule = load_rule(&id)?;
+        require_rule_owner(&rule, owner_uid)?;
+        if rule.activity_id.is_some() {
+            delivery::remember_activity_progress()?;
         }
-        Err(e) => Err(format!("remove trigger '{id}': {e}")),
-    }
+        match fs::remove_file(rule_path(&id)) {
+            Ok(()) => Ok(json!({ "ok": true, "removed": id })),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(format!("no such trigger '{id}'"))
+            }
+            Err(e) => Err(format!("remove trigger '{id}': {e}")),
+        }
+    })
 }
 
 fn cmd_set_enabled(args: &[String], enabled: bool) -> Result<Value, String> {
-    crate::caps::require(Verb::TIME_CRON, Scope::Wild).map_err(|denial| denial.summary())?;
     let verb = if enabled { "enable" } else { "disable" };
     let id = positional_or_id(args).ok_or_else(|| format!("usage: cos triggers {verb} <id>"))?;
     let owner = current_owner()?;
+    if enabled {
+        preflight_activity_command(owner.uid, "enable", args)?;
+    }
+    crate::caps::require(Verb::TIME_CRON, Scope::Wild).map_err(|denial| denial.summary())?;
     if enabled && !owner.caps.covers(&Cap::new(Verb::AGENT_SPAWN, Scope::Wild)) {
         return Err("trigger owner lacks agent.spawn:*".to_string());
     }
-    let rule = update_rule(&id, |mut rule| {
-        let unclaimed = !rule.enabled && rule.owner_caps.is_none() && is_claimable_seed(&rule);
-        if !unclaimed {
-            require_rule_owner(&rule, owner.uid)?;
-        }
-        if enabled {
-            rule.owner_uid = Some(owner.uid);
-            rule.owner_home = Some(owner.home);
-            rule.owner_caps = Some(owner.caps);
-            rule.owner_role = owner.role;
-            rule.owner_tier = owner.tier;
-            rule.seeded = false;
-        }
-        rule.enabled = enabled;
-        Ok(rule)
-    })?;
-    Ok(json!({ "ok": true, "id": rule.id, "enabled": enabled }))
+    with_trigger_lock(|| {
+        let rule = update_rule(&id, |mut rule| {
+            let unclaimed = is_unclaimed_seed(&rule);
+            if !unclaimed {
+                require_rule_owner(&rule, owner.uid)?;
+            }
+            if enabled {
+                if let Some(id) = rule.activity_id.as_deref() {
+                    rule.activity_id = Some(validate_activity_trigger(owner.uid, id)?);
+                    delivery::initialize_activity_progress()?;
+                }
+                rule.owner_uid = Some(owner.uid);
+                rule.owner_home = Some(owner.home);
+                rule.owner_caps = Some(owner.caps);
+                rule.owner_role = owner.role;
+                rule.owner_tier = owner.tier;
+                rule.seeded = false;
+                rule.generation = Some(uuid::Uuid::new_v4().to_string());
+                rule.last_delivery = None;
+            } else if rule.activity_id.is_some() {
+                delivery::remember_activity_progress()?;
+            }
+            rule.enabled = enabled;
+            Ok(rule)
+        })?;
+        Ok(json!({ "ok": true, "id": rule.id, "enabled": enabled }))
+    })
 }
 
 fn cmd_run(args: &[String]) -> Result<Value, String> {
-    crate::caps::require(Verb::AGENT_SPAWN, Scope::Wild).map_err(|denial| denial.summary())?;
     let id = positional_or_id(args).ok_or_else(|| "usage: cos triggers run <id>".to_string())?;
     let owner_uid = current_owner()?.uid;
-    let rule = load_rule(&id)?;
-    require_rule_owner(&rule, owner_uid)?;
-    let job_id = match submit_job(&rule, rule.prompt.clone()) {
-        Ok(job_id) => job_id,
-        Err(error) => {
-            publish_trigger_failure(&rule);
-            return Err(error);
+    with_trigger_lock(|| {
+        let rule = load_rule(&id)?;
+        require_rule_owner(&rule, owner_uid)?;
+        activity::require_not_held(&rule)?;
+        if let Some(activity_id) = rule.activity_id.as_deref() {
+            if let Err(error) = validate_activity_trigger(owner_uid, activity_id) {
+                activity::record(&rule, TriggerDeliveryStatus::Blocked, None, None, &error)?;
+                return Err(error);
+            }
+            delivery::check_activity_progress()?;
         }
-    };
-    let fired_at = now_ms();
-    let metadata_error = update_rule(&id, |mut current| {
-        require_rule_owner(&current, owner_uid)?;
-        current.last_fired_ms = Some(fired_at);
-        Ok(current)
+        crate::caps::require(Verb::AGENT_SPAWN, Scope::Wild).map_err(|denial| denial.summary())?;
+        if rule.activity_id.is_some() {
+            return delivery::manual(&rule);
+        }
+        let job = match submit_job(&rule, rule.prompt.clone()) {
+            Ok(job) => job,
+            Err(error) => {
+                publish_trigger_failure(&rule);
+                return Err(error);
+            }
+        };
+        let metadata_error = update_rule(&id, |mut current| {
+            require_rule_owner(&current, owner_uid)?;
+            current.last_fired_ms = Some(now_ms());
+            Ok(current)
+        })
+        .err();
+        Ok(json!({
+            "ok": true,
+            "id": rule.id,
+            "job_id": job.id,
+            "session_id": job.session_id,
+            "metadata_error": metadata_error,
+        }))
     })
-    .err();
-    Ok(json!({
-        "ok": true,
-        "id": rule.id,
-        "job_id": job_id,
-        "metadata_error": metadata_error,
-    }))
-}
-
-/// Scan `context.event` records newer than the cursor and fire every
-/// enabled matching rule. Returns what fired. Intended to be invoked
-/// once per minute by an external scheduler (like `cron tick`).
-fn cmd_tick() -> Result<Value, String> {
-    crate::caps::require(Verb::SYS_KERNEL, Scope::Wild).map_err(|denial| denial.summary())?;
-    let rules = load_rules();
-    let content = match fs::read_to_string(crate::paths::context_events_log_path()) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(format!("read context event log: {error}")),
-    };
-    let lines: Vec<&str> = content.lines().collect();
-    let mut cursor = read_cursor()?;
-    if cursor.next_line > lines.len() {
-        cursor.next_line = lines.len();
-        cursor.delivered_rules.clear();
-        write_cursor(&cursor)?;
-    }
-    let started_at = cursor.next_line;
-
-    let mut fired: Vec<Value> = Vec::new();
-    let mut quarantined_rules = BTreeSet::new();
-    let mut retrying = Vec::new();
-    for mut delivery in std::mem::take(&mut cursor.pending) {
-        let Some(rule) = rules
-            .iter()
-            .find(|rule| rule.enabled && rule.id == delivery.rule_id)
-        else {
-            continue;
-        };
-        let ev: Value = match serde_json::from_str(&delivery.raw_event) {
-            Ok(event) => event,
-            Err(error) => {
-                tracing::error!(
-                    trigger_id = %delivery.rule_id,
-                    error = %error,
-                    "discarding corrupt pending trigger delivery"
-                );
-                continue;
-            }
-        };
-        if let Err(error) = execution_owner(rule) {
-            quarantine_invalid_rule(&rule.id, &error);
-            quarantined_rules.insert(rule.id.clone());
-            continue;
-        }
-        match submit_job(rule, fired_prompt(rule, &ev)) {
-            Ok(job_id) => {
-                if delivery.line_index == cursor.next_line {
-                    cursor.delivered_rules.insert(rule.id.clone());
-                }
-                record_fired(&rule.id);
-                fired.push(json!({
-                    "rule": rule.id,
-                    "job_id": job_id,
-                    "source": ev.get("source"),
-                    "event_type": ev.get("event_type"),
-                    "retried": true,
-                }));
-            }
-            Err(error) => {
-                publish_trigger_failure(rule);
-                delivery.attempts = delivery.attempts.saturating_add(1);
-                delivery.last_error = Some(error.clone());
-                tracing::warn!(
-                    trigger_id = %delivery.rule_id,
-                    attempts = delivery.attempts,
-                    error = %error,
-                    "trigger delivery remains pending"
-                );
-                retrying.push(delivery);
-            }
-        }
-    }
-    cursor.pending = retrying;
-    write_cursor(&cursor)?;
-
-    for (line_index, raw) in lines.iter().enumerate().skip(cursor.next_line) {
-        if raw.trim().is_empty() {
-            cursor.next_line = line_index + 1;
-            cursor.delivered_rules.clear();
-            write_cursor(&cursor)?;
-            continue;
-        }
-        let ev: Value = match serde_json::from_str(raw) {
-            Ok(v) => v,
-            Err(error) => {
-                tracing::warn!(
-                    line = line_index,
-                    error = %error,
-                    "skipping malformed context event"
-                );
-                cursor.next_line = line_index + 1;
-                cursor.delivered_rules.clear();
-                write_cursor(&cursor)?;
-                continue;
-            }
-        };
-        for rule in rules.iter().filter(|r| r.enabled) {
-            if quarantined_rules.contains(&rule.id) {
-                continue;
-            }
-            if cursor.delivered_rules.contains(&rule.id) {
-                continue;
-            }
-            if cursor
-                .pending
-                .iter()
-                .any(|delivery| delivery.line_index == line_index && delivery.rule_id == rule.id)
-            {
-                continue;
-            }
-            let Some(owner_uid) = rule.owner_uid else {
-                continue;
-            };
-            if !crate::clawd::context_events::event_visible_to(
-                &ev,
-                (owner_uid != 0).then_some(owner_uid),
-            ) {
-                continue;
-            }
-            if !rule_matches(rule, &ev, raw) {
-                continue;
-            }
-            if let Err(error) = execution_owner(rule) {
-                quarantine_invalid_rule(&rule.id, &error);
-                quarantined_rules.insert(rule.id.clone());
-                continue;
-            }
-            match submit_job(rule, fired_prompt(rule, &ev)) {
-                Ok(job_id) => {
-                    cursor.delivered_rules.insert(rule.id.clone());
-                    write_cursor(&cursor)?;
-                    record_fired(&rule.id);
-                    fired.push(json!({
-                        "rule": rule.id,
-                        "job_id": job_id,
-                        "source": ev.get("source"),
-                        "event_type": ev.get("event_type"),
-                    }));
-                }
-                Err(error) => {
-                    publish_trigger_failure(rule);
-                    cursor.pending.push(PendingDelivery {
-                        line_index,
-                        rule_id: rule.id.clone(),
-                        raw_event: (*raw).to_string(),
-                        attempts: 1,
-                        last_error: Some(error.clone()),
-                    });
-                    write_cursor(&cursor)?;
-                    tracing::warn!(
-                        trigger_id = %rule.id,
-                        line = line_index,
-                        error = %error,
-                        "queued trigger delivery for retry"
-                    );
-                    fired.push(json!({
-                        "rule": rule.id,
-                        "pending": true,
-                        "error": error,
-                    }));
-                }
-            }
-        }
-        cursor.next_line = line_index + 1;
-        cursor.delivered_rules.clear();
-        write_cursor(&cursor)?;
-    }
-
-    Ok(json!({
-        "processed": cursor.next_line.saturating_sub(started_at),
-        "cursor": cursor.next_line,
-        "fired": fired,
-        "pending": cursor.pending.len(),
-    }))
 }
 
 #[cfg(test)]

@@ -110,3 +110,9 @@ database, preserving goals, receipts and object-state history. Private file
 modes, transactional migration, integrity and ownership checks remain in
 force. Unsupported/corrupt state is an error, never a reset or unlimited
 fallback. See [updating](updating.md).
+
+Activity-linked event triggers require an enabled, unexpired finite policy
+before scheduling autonomous work. Manual `cos triggers run` retains that
+requirement. Trigger creation does not reserve or refund an attempt: the normal
+Root claim still owns accounting and the actual execution ceiling.
+See [event-driven Activities](activities.md#event-driven-work).

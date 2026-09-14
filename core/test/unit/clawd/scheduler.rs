@@ -648,3 +648,252 @@ fn request_fields_cannot_widen_authority() {
     assert_eq!(session.tier, Some(Role::Worker.credential_tier()));
     assert_eq!(session.role.as_deref(), Some(Role::Worker.name()));
 }
+
+mod activity_preflight {
+    use super::*;
+    use crate::activities::{
+        Activity, ActivityDraft, ActivityService, ActivityState, ExecutionLimitsDraft,
+        SqliteActivityService,
+    };
+
+    struct Sandbox {
+        _approvals: ApprovalSandbox,
+        previous_data_dir: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            match self.previous_data_dir.take() {
+                Some(value) => std::env::set_var("COS_DATA_DIR", value),
+                None => std::env::remove_var("COS_DATA_DIR"),
+            }
+        }
+    }
+
+    fn sandbox() -> Sandbox {
+        let approvals = approval_sandbox();
+        let previous_data_dir = std::env::var_os("COS_DATA_DIR");
+        std::env::set_var("COS_DATA_DIR", approvals._tmp.path().join("data"));
+        Sandbox {
+            _approvals: approvals,
+            previous_data_dir,
+        }
+    }
+
+    fn activity(service: &SqliteActivityService, owner_uid: u32, bounded: bool) -> Activity {
+        let activity = service
+            .create(
+                owner_uid,
+                ActivityDraft {
+                    title: "Event-driven work".into(),
+                    goal: "Review a changed artifact".into(),
+                    completion_criteria: String::new(),
+                    boundaries: String::new(),
+                    resources: Vec::new(),
+                },
+            )
+            .unwrap();
+        if bounded {
+            service
+                .set_execution_limits(
+                    owner_uid,
+                    &activity.id,
+                    None,
+                    ExecutionLimitsDraft {
+                        max_attempts: 1,
+                        max_turns_per_attempt: 4,
+                        expires_at: (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+                    },
+                )
+                .unwrap();
+        }
+        activity
+    }
+
+    fn add(activity_id: &str) -> SchedulerCommand {
+        request(
+            "triggers",
+            "add",
+            &[
+                "--id",
+                "artifact-changed",
+                "--prompt",
+                "Review the change",
+                "--activity",
+                activity_id,
+            ],
+        )
+    }
+
+    fn assert_no_consent(error: &BrokerError) {
+        assert_ne!(error.audit_class, Some("approval_required"), "{error}");
+        assert!(error.data.is_none(), "{error}");
+        assert!(crate::approvals::list_pending_for_owner(Some(OWNER_UID)).is_empty());
+        assert!(!crate::paths::data_dir().join("triggers").exists());
+    }
+
+    #[test]
+    fn malformed_activity_is_rejected_before_storage_or_consent() {
+        let _sandbox = sandbox();
+        let authority = unregistered_authority(OWNER_UID, 99, 7);
+        let error = authorize_command(&add("not-a-uuid"), &authority).unwrap_err();
+        assert!(error.message.contains("UUID"), "{error}");
+        assert_no_consent(&error);
+        assert!(!crate::paths::data_dir().exists());
+    }
+
+    #[test]
+    fn foreign_and_missing_activities_are_indistinguishable_before_consent() {
+        let _sandbox = sandbox();
+        let service = crate::activities::open_default().unwrap();
+        let foreign = activity(&service, OWNER_UID + 1, true);
+        let authority = unregistered_authority(OWNER_UID, 99, 7);
+
+        let error = authorize_command(&add(&foreign.id), &authority).unwrap_err();
+        let missing =
+            authorize_command(&add(&uuid::Uuid::new_v4().to_string()), &authority).unwrap_err();
+        assert_eq!(error.message, missing.message);
+        assert!(error.message.contains("not found"), "{error}");
+        assert_no_consent(&error);
+    }
+
+    #[test]
+    fn inactive_activity_cannot_start_scheduler_consent() {
+        let _sandbox = sandbox();
+        let service = crate::activities::open_default().unwrap();
+        let authority = unregistered_authority(OWNER_UID, 99, 7);
+        for state in [
+            ActivityState::Paused,
+            ActivityState::Completed,
+            ActivityState::Cancelled,
+        ] {
+            let activity = activity(&service, OWNER_UID, true);
+            service
+                .transition(
+                    OWNER_UID,
+                    &activity.id,
+                    state,
+                    (state == ActivityState::Completed).then(|| "Owner confirmed".into()),
+                )
+                .unwrap();
+            let error = authorize_command(&add(&activity.id), &authority).unwrap_err();
+            assert!(
+                error.message.contains(state.as_str()) && error.message.contains("blocked"),
+                "{error}"
+            );
+            assert_no_consent(&error);
+        }
+    }
+
+    #[test]
+    fn missing_disabled_and_exhausted_limits_cannot_start_scheduler_consent() {
+        let _sandbox = sandbox();
+        let service = crate::activities::open_default().unwrap();
+        let authority = unregistered_authority(OWNER_UID, 99, 7);
+        let unbounded = activity(&service, OWNER_UID, false);
+        let disabled = activity(&service, OWNER_UID, true);
+        let exhausted = activity(&service, OWNER_UID, true);
+        let limits = service
+            .execution_limits(OWNER_UID, &disabled.id)
+            .unwrap()
+            .unwrap();
+        service
+            .set_execution_limits_enabled(OWNER_UID, &disabled.id, limits.revision, false)
+            .unwrap();
+        service
+            .reserve_execution(
+                OWNER_UID,
+                &exhausted.id,
+                &uuid::Uuid::new_v4().to_string(),
+                "already-charged",
+                Some(1),
+            )
+            .unwrap()
+            .expect("finite attempt was charged");
+
+        for activity in [unbounded, disabled, exhausted] {
+            let error = authorize_command(&add(&activity.id), &authority).unwrap_err();
+            assert!(
+                error.message.to_ascii_lowercase().contains("limit"),
+                "{error}"
+            );
+            assert_no_consent(&error);
+        }
+    }
+
+    #[test]
+    fn a_pause_preserves_the_approved_one_shot_grant_until_valid_retry() {
+        let _sandbox = sandbox();
+        let service = crate::activities::open_default().unwrap();
+        let activity = activity(&service, OWNER_UID, true);
+        let command = add(&activity.id);
+        let authority = unregistered_authority(OWNER_UID, 99, 7);
+        let spawn = Cap::new(Verb::AGENT_SPAWN, Scope::Wild);
+
+        let error = authorize_command(&command, &authority).unwrap_err();
+        assert_eq!(approval_requests(&error).len(), 1);
+        approve_pending(OWNER_UID);
+        service
+            .transition(OWNER_UID, &activity.id, ActivityState::Paused, None)
+            .unwrap();
+        let error = authorize_command(&command, &authority).unwrap_err();
+        assert_no_consent(&error);
+        assert!(crate::approvals::has_approved_grant_for_owner(
+            &authority.grant_session,
+            &spawn,
+            Some(OWNER_UID),
+        )
+        .unwrap());
+
+        service
+            .transition(OWNER_UID, &activity.id, ActivityState::Active, None)
+            .unwrap();
+        let caps = authorize_command(&command, &authority).unwrap();
+        assert!(caps.covers(&spawn));
+        assert!(!crate::approvals::has_approved_grant_for_owner(
+            &authority.grant_session,
+            &spawn,
+            Some(OWNER_UID),
+        )
+        .unwrap());
+        assert_eq!(
+            service
+                .execution_limits(OWNER_UID, &activity.id)
+                .unwrap()
+                .unwrap()
+                .used_attempts,
+            0,
+            "scheduler consent must not reserve a worker attempt"
+        );
+        assert!(!crate::paths::data_dir().join("triggers").exists());
+    }
+
+    #[test]
+    fn unassociated_trigger_keeps_normal_consent_without_opening_activity_storage() {
+        let _sandbox = sandbox();
+        let authority = unregistered_authority(OWNER_UID, 99, 7);
+        let database = crate::paths::data_dir().join("activities.db");
+        std::fs::create_dir_all(crate::paths::data_dir()).unwrap();
+        std::fs::write(&database, b"unavailable Activity database").unwrap();
+        let command = request(
+            "triggers",
+            "add",
+            &["--id", "legacy", "--prompt", "Existing scheduled work"],
+        );
+        let error = authorize_command(&command, &authority).unwrap_err();
+        assert_eq!(approval_requests(&error).len(), 1);
+        assert_eq!(
+            std::fs::read(&database).unwrap(),
+            b"unavailable Activity database"
+        );
+        approve_pending(OWNER_UID);
+        assert!(authorize_command(&command, &authority)
+            .unwrap()
+            .covers(&Cap::new(Verb::AGENT_SPAWN, Scope::Wild)));
+        assert_eq!(
+            std::fs::read(&database).unwrap(),
+            b"unavailable Activity database"
+        );
+        assert!(!crate::paths::data_dir().join("triggers").exists());
+    }
+}

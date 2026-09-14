@@ -41,6 +41,7 @@ persistence, and structured primitive dispatch.
 | `src/provenance/` | Compiled-root signature verification and immutable package snapshots |
 | `src/activities/`, `src/clawd/activities.rs`, `src/activity.rs` | Shared Activity service/provider, owner-scoped broker, and terminal presentation; also consumed by Web/native desktop |
 | `src/caps/activity_boundary.rs`, `src/clawd/activity_capability_policy.rs` | Live Activity capability constraints, root-held policy bindings and owner-scoped controls |
+| `src/triggers.rs`, `src/clawd/scheduler.rs` | Deterministic event-driven work, existing scheduler authority and bounded Activity task/session associations |
 | `src/objects/`, `src/router/object_commands.rs` | Verified App object catalogue and explicit resolution through ordinary App dispatch |
 | `src/operations/`, `src/clawd/operation_previews.rs` | Shared, non-executing previews of App-declared effects and requested targets |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |

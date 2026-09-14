@@ -125,8 +125,79 @@ unreviewed service, or grant the permissions the App requested.
 
 App-owned object references can now be attached and described through the same
 backend; see [App-owned objects](app-objects.md). Declaration inspection does
-not fetch object data. Automatic event-driven progression and cross-device
-continuation remain later steps.
+not fetch object data. Activity-linked triggers provide the event-driven path
+below; cross-device continuation remains separate work.
+
+## Event-driven work
+
+An owner can create an event trigger associated with an Activity. Configure
+enabled, unexpired [execution limits](activity-execution-limits.md) first, then
+select an actual context-event producer and event type:
+
+```bash
+cos triggers add --id release-changed \
+  --activity "$activity_id" \
+  --source project-watcher --event-type artifact.changed \
+  --prompt "Refresh the release draft; ask before publishing anything"
+
+cos triggers list --activity "$activity_id"
+cos triggers disable release-changed
+cos triggers enable release-changed
+cos triggers run release-changed
+cos triggers remove release-changed
+```
+
+`project-watcher` and `artifact.changed` are illustrative producer names.
+Attaching a resource does not install a filesystem watcher or make an App
+publish events. Use events your installed producer actually emits.
+
+Creation and re-enabling still cross the existing scheduler capability and
+approval boundary. An Activity identifier grants no scheduler or App authority.
+The broker checks the Activity association before spending scheduler consent;
+dispatch rechecks its current owner, lifecycle and finite limits before
+creating work. Event-triggered jobs are unattended and remain subject to the
+same capability policy, exact consent rules, queue admission and worker limits
+as other Activity attempts. A trigger cannot make a paused or ended Activity
+runnable or turn its result into goal completion.
+
+Matching events observed while an Activity is paused, ended, or out of its
+configured limits are consumed with a `blocked` diagnostic. The rule stays
+enabled; resuming the Activity does not replay those old events. A definite
+failure before publication is reported as `failed` and also consumes that
+delivery. Explicit `run` requests return an error when admission is refused.
+
+Activity delivery records a Root-created correlation UUID durably before
+publishing its Job. After interruption, a matching existing owner/Activity
+Job is reported as `recovered`, never republished or reset, even if the
+Activity has since paused. Missing or conflicting publication evidence is
+`indeterminate`: the affected rule is disabled and the work is not
+automatically retried. Inspect any reported Job and its outcome before
+re-enabling a rule or requesting new work; enabling is not permission to
+replay an uncertain operation.
+
+`cos triggers list --activity "$activity_id"` includes each rule's
+`last_delivery`: `status`, `at_ms`, `message`, and available `job_id` and
+`session_id`. The heartbeat's `tick` result reports blocked and failed
+deliveries in `skipped` with an `error`; user broker requests cannot invoke
+`tick`. Re-enabling or replacing a rule advances its generation and retires
+old undelivered work as `skipped`, without cancelling already-published Jobs.
+These are dispatch outcomes, not proof of App effects or goal achievement.
+
+Missing or corrupt cursor state is an error, not permission to start scanning
+the retained event log from the beginning. Activity rule creation durably
+initializes progress and its persistent marker before publishing the rule.
+The marker survives rule removal, so removal and recreation cannot bypass
+missing-progress protection. Listing, disabling and removal remain available
+for inspection; restore the original matching cursor from backup rather than
+deleting or resetting progress to make a rule run.
+
+The deterministic heartbeat scans events without consulting an LLM. Idle or
+nonmatching scans create no model work. Trigger configuration currently uses
+`cos triggers`; associated jobs, results and receipts appear in the existing
+terminal, Web and native Activity views through the same backend. There is no
+frontend-owned scheduler or second Activity store.
+
+## Object-state annotations
 
 [Object-state annotations](object-state.md) distinguish reported user
 statements, Agent inferences, linked App receipts, planning relationships and

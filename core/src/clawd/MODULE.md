@@ -697,6 +697,11 @@ call, so it needs capabilities the peer holds or one-shot grants approved by the
 privileged helper for that exact peer, verb and scope. What a job stores is
 bounded by the same home-scoped ceiling its executor applies.
 
+Activity-linked triggers add an owner/lifecycle/finite-limit preflight before
+this consent settlement. The trigger engine repeats it at dispatch and uses
+the existing unattended task queue; an Activity ID never supplies a grant.
+Terminal and graphical Activity views retain their shared job/result projection.
+
 ## Tests
 
 ```bash

@@ -358,11 +358,13 @@ async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend
     let bound = bind();
     let data = tempfile::tempdir().unwrap();
     let _data = EnvGuard::set("COS_DATA_DIR", data.path());
+    let _caps = EnvGuard::set("COS_CAPS_DATA_DIR", data.path().join("permissions"));
     let _socket = EnvGuard::set("CLAWD_SOCKET", &bound.path);
+    let scheduler_socket = bound.path.clone();
     let desktop = clawd_client::Client::new(bound.path.clone());
     let state = DaemonState::new().unwrap();
     let server = tokio::spawn(async move {
-        for _ in 0..4 {
+        for _ in 0..5 {
             let (stream, _) = bound.listener.accept().await.unwrap();
             let mut stream = PeerStream::new(stream).unwrap();
             let ReadOutcome::Frame(frame) = stream.read_request(MAX_REQUEST_BYTES).await.unwrap()
@@ -372,7 +374,7 @@ async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend
             let peer = ClientIdentity::from_peer(peer::verify(frame.credentials).unwrap());
             let request: InboundRequest = serde_json::from_slice(&frame.body).unwrap();
             let route = Command::parse(request.command.as_str()).unwrap().route();
-            assert!(route.name.starts_with("activity."));
+            assert!(route.name.starts_with("activity.") || route.name == "scheduler.run");
             route.authorize(&peer).unwrap();
             let params = (route.decode)(request.params).unwrap();
             let result = (route.handler)(RouteCall {
@@ -421,6 +423,31 @@ async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend
         )
         .await
         .unwrap();
+    let request = Request::build(
+        Command::SchedulerRun,
+        json!({
+            "subsystem": "triggers",
+            "command": "add",
+            "args": [
+                "--id", "paused-activity",
+                "--activity", id,
+                "--prompt", "Review the changed artifact",
+            ],
+        }),
+    );
+    let refused = tokio::task::spawn_blocking(move || {
+        cos::clawd::client::request_blocking(&scheduler_socket, request)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!refused.ok, "desktop pause must also block trigger creation");
+    let error = refused.error.unwrap();
+    assert!(error.message.contains("is paused; trigger work is blocked"));
+    assert!(error.data.is_none(), "a paused Activity cannot queue consent");
+    assert!(cos::approvals::list_pending_for_owner(Some(unsafe { libc::getuid() })).is_empty());
+    assert!(!data.path().join("triggers").exists());
+
     let shown = tokio::task::spawn_blocking(move || cos::activity::run("show", &[id]))
         .await
         .unwrap()

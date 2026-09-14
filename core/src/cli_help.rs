@@ -203,6 +203,11 @@ impl Param {
 pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
     vec![
         (
+            "triggers",
+            "Owner-authorized event-driven Agent work, optionally linked to an Activity",
+            trigger_schemas(),
+        ),
+        (
             "app",
             "App management and declared host transports",
             vec![CommandSchema {
@@ -642,6 +647,72 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
             }],
         ),
     ]
+}
+
+fn trigger_schemas() -> Vec<CommandSchema> {
+    let mut schemas = vec![
+        CommandSchema {
+            command: "add",
+            description: "Create an event trigger through the existing scheduler authority",
+            params: vec![
+                Param::flag("--id", "string", true, "Unique trigger identifier"),
+                Param::flag("--prompt", "string", true, "Owner-authored work request"),
+                Param::flag("--source", "string", false, "Exact context-event source"),
+                Param::flag("--event-type", "string", false, "Exact context-event type"),
+                Param::flag("--contains", "string", false, "Required substring in event data"),
+                Param::flag("--max-turns", "integer", false, "Positive task turn ceiling; Activity limits still apply"),
+                Param::flag("--activity", "uuid", false, "Owned active Activity UUID with enabled finite execution limits; never a permission grant"),
+            ],
+            example: "cos triggers add --id release-changed --source project-watcher --event-type artifact.changed --activity 00000000-0000-4000-8000-000000000001 --prompt \"Refresh the release draft\"",
+        },
+        CommandSchema {
+            command: "list",
+            description: "Inspect the owner's trigger rules and Activity associations",
+            params: vec![Param::flag("--activity", "uuid", false, "Filter by an owned Activity UUID")],
+            example: "cos triggers list --activity 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "tick",
+            description: "Kernel-heartbeat event scan; not available through user scheduler requests",
+            params: Vec::new(),
+            example: "cos triggers tick",
+        },
+    ];
+    for (command, description, example) in [
+        (
+            "enable",
+            "Re-enable an owned trigger using current scheduler authority",
+            "cos triggers enable release-changed",
+        ),
+        (
+            "disable",
+            "Stop an owned trigger from scheduling future work",
+            "cos triggers disable release-changed",
+        ),
+        (
+            "remove",
+            "Remove an owned trigger without undoing admitted effects",
+            "cos triggers remove release-changed",
+        ),
+        (
+            "run",
+            "Request one trigger execution; Activity constraints remain authoritative",
+            "cos triggers run release-changed",
+        ),
+    ] {
+        schemas.push(CommandSchema {
+            command,
+            description,
+            params: vec![Param::positional(
+                "id",
+                "string",
+                true,
+                "Owned trigger identifier",
+            )],
+            example,
+        });
+    }
+    schemas
 }
 
 fn activity_schemas() -> Vec<CommandSchema> {
