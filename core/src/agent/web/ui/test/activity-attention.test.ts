@@ -47,12 +47,28 @@ describe("Activity attention contract", () => {
       notifications: [{
         id: "note-1", source: "agent.task", kind: "waiting", severity: "error",
         title: "Review", body: "Open the task", task_id: "job-1", session_id: null,
-        state: "acknowledged", updated_at_ms: 1,
+        state: "acknowledged", occurrences: 3, updated_at_ms: 1,
       }],
       totals: { ...empty.totals, notifications: 1 },
     }, id);
     expect(view.notifications[0].state).toBe("acknowledged");
+    expect(view.notifications[0].occurrences).toBe(3);
     expect(view.decisions).toEqual([]);
+  });
+
+  test("rejects missing or zero notification occurrence counts", () => {
+    const notification = {
+      id: "note-1", source: "agent", kind: "agent.completed", severity: "info",
+      title: "Complete", body: "Done", task_id: "job-1", state: "unread",
+      occurrences: 1, updated_at_ms: 1,
+    };
+    for (const occurrences of [undefined, 0]) {
+      expect(() => readActivityAttention({
+        ...empty,
+        notifications: [{ ...notification, occurrences }],
+        totals: { ...empty.totals, notifications: 1 },
+      }, id)).toThrow();
+    }
   });
 
   test("rejects every detail collection above the declared limit", () => {
@@ -70,7 +86,7 @@ describe("Activity attention contract", () => {
       notifications: {
         id: "note-1", source: "agent.task", kind: "failed", severity: "error",
         title: "Failed", body: "Inspect the task", task_id: "job-1",
-        state: "unread", updated_at_ms: 1,
+        state: "unread", occurrences: 1, updated_at_ms: 1,
       },
     };
     for (const [field, fixture] of Object.entries(fixtures)) {

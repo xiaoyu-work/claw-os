@@ -141,7 +141,7 @@ fn delivery_claims_are_leased_and_retryable() {
 }
 
 #[test]
-fn activity_notifications_do_not_interrupt_desktop_or_ntfy() {
+fn activity_notifications_are_durable_without_interrupting_any_channel() {
     let service = SqliteNotificationService::open_in_memory().unwrap();
     let preferences = NotificationPreferences {
         ntfy_enabled: true,
@@ -153,8 +153,18 @@ fn activity_notifications_do_not_interrupt_desktop_or_ntfy() {
     let created = service
         .publish(12, draft("cron.started").activity())
         .unwrap();
-    assert_eq!(created.deliveries.len(), 1);
-    assert_eq!(created.deliveries[0].channel, DeliveryChannel::Web);
+    assert!(created.deliveries.is_empty());
+    assert_eq!(service.list(12, false, 10).unwrap(), vec![created]);
+    for channel in [
+        DeliveryChannel::Web,
+        DeliveryChannel::Desktop,
+        DeliveryChannel::Ntfy,
+    ] {
+        assert!(service
+            .claim_deliveries(Some(12), channel, 10, 5_000)
+            .unwrap()
+            .is_empty());
+    }
 }
 
 #[test]

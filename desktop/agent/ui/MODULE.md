@@ -40,11 +40,12 @@ references are displayed as inert text, and boundaries grant no capabilities.
 
 The fixed attention section renders the same broker-owned projection used by
 terminal and Agent Web clients: retained Job counts, exact decision records,
-prioritized issues, and task-linked notifications. Approved/denied entries are
-historical consent evidence rather than current authority or execution proof;
-notification acknowledgement never decides a permission. The desktop bridge
-fetches and validates this projection with Activity detail and owns no parallel
-attention store.
+prioritized issues, and task-linked notifications with durable grouped
+occurrence counts. Approved/denied entries are historical consent evidence
+rather than current authority or execution proof; notification acknowledgement
+never decides a permission. The desktop bridge fetches and validates this
+projection with Activity detail and owns no parallel attention store or
+delivery queue.
 
 The reducer keeps at most one request for the current generation. Navigation
 invalidates stale responses without cancelling backend work. Visible views

@@ -1863,6 +1863,13 @@ fn attention_notification_view(
                 ))
                 .size(11.0),
             )
+            .push(
+                text(fl!(
+                    "activity-attention-notification-updates",
+                    count = notification.occurrences
+                ))
+                .size(11.0),
+            )
             .push(text(&notification.body).size(12.0)),
     )
     .padding(10)

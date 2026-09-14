@@ -1528,6 +1528,13 @@ remains an automation input and `system-operations.jsonl` remains immutable
 audit evidence; notification read, acknowledgement, dismissal, retry, and DND
 state live independently in `notifications.db`.
 
+Activity-linked Agent lifecycle events, including approval waits, use the
+existing owner/source/Activity deduplication partition. The latest bounded
+record retains an occurrence count and task/session link for the shared
+Activity attention projection. Its Activity delivery policy persists the
+record without queueing browser, desktop, or ntfy interruption; standalone Job
+delivery and critical immediate DND-bypass policy remain independent.
+
 The system daemon never opens a user's session D-Bus. The user-session Agent
 bridge claims desktop deliveries from `clawd`, posts them through
 `org.freedesktop.Notifications`, and reports success or retryable failure.

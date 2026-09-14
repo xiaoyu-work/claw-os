@@ -24,6 +24,12 @@ preference; the wire notification schema remains backwards-compatible v1.
 Owner and source are immutable and jointly partition deduplication.
 Acknowledgement/dismissal suppress pending deliveries; a stale receipt cannot
 requeue terminal records. Delivery success never implies user acknowledgement.
+The `Activity` delivery policy is durable-only and never queues Web, desktop,
+or ntfy interruption. Activity-linked Agent lifecycle updates use one
+owner/source/Activity dedupe key during the normal deduplication window, so
+`occurrences` exposes each bounded batch while the latest linked Job and
+session remain inspectable. Standalone Jobs retain their phase-specific
+delivery behavior, and critical immediate delivery remains a separate policy.
 
 The existing Agent desktop bridge remains the sole desktop delivery consumer.
 Its connection-local numeric handles are not durable IDs or an alias store.

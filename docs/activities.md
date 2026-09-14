@@ -99,6 +99,12 @@ terminal-only and desktop installations. It combines associated Job counts,
 pending or recorded permission decisions, prioritized execution issues, and
 retained task-linked notifications. Counts and totals cover the full retained
 scope; the 1-100 limit applies independently to each returned detail list.
+Non-critical Agent lifecycle updates associated with an Activity are durable
+but silent: they do not queue browser, desktop, or ntfy interruptions. Updates
+from the same producer are grouped by Activity during the notification
+deduplication window, with `occurrences` reporting the batch size and the
+latest task/session link remaining available. Approval waits join this summary
+instead of interrupting the user; standalone Job delivery remains unchanged.
 
 The view is informational and does not mutate the Activity, Jobs, approvals,
 or notifications. Pending decisions link to the existing protected OS review

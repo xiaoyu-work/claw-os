@@ -82,10 +82,12 @@ completion criteria, planning boundaries, inert resource references, job
 progress/result previews, associated sessions, and the shared Activity attention
 projection. Attention combines retained job counts, pending and historical
 decision records, prioritized execution issues, and task-linked notifications;
-it adds no browser-owned state or authority. Submit work in a new session
-or explicitly continue an associated session. Tasks, approval decisions, and
-conversation history open the existing `#/tasks`, `#/approvals`, and
-`#/chat/:id` views; Activities introduce no new approval authority.
+grouped lifecycle records show their durable occurrence count without creating
+browser delivery work. It adds no browser-owned state or authority. Submit work
+in a new session or explicitly continue an associated session. Tasks, approval
+decisions, and conversation history open the existing `#/tasks`,
+`#/approvals`, and `#/chat/:id` views; Activities introduce no new approval
+authority.
 Protected App reviews remain separate from that capability-approval page:
 use `cos review` or the native OS review presenter. Activities do not bypass
 owner review, enable an unreviewed App service, or turn planning data into

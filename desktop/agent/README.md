@@ -81,7 +81,9 @@ version is independent of the desktop HTTP/SSE presentation protocol v1.
 The additive Activity routes leave both versions unchanged. Activity detail
 also carries the shared `activity.attention` projection; the bridge validates
 its Activity identity and derives the legacy pending-approval presentation only
-from exact pending decisions in that projection.
+from exact pending decisions in that projection. Grouped notification
+occurrence counts are presentation data from the same projection, not a local
+desktop batch or delivery queue.
 
 The shared client inventory also retains mainline's protected
 [`system.review.*` contract](../../crates/clawd-client/MODULE.md), including

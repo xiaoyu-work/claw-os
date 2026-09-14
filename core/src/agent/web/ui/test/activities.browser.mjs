@@ -409,7 +409,7 @@ async function fixture(req, res) {
       const notifications = activityJobs.length ? [{
         id: "acknowledged-task-notification", source: "task", kind: "status",
         severity: "error", title: "Task notification acknowledged", body: "Acknowledgement did not decide permission.",
-        task_id: activityJobs[0].id, state: "acknowledged", updated_at_ms: 42,
+        task_id: activityJobs[0].id, state: "acknowledged", occurrences: 4, updated_at_ms: 42,
       }] : [];
       const count = (status) => activityJobs.filter((job) => job.status === status).length;
       return reply(req, res, {
@@ -982,6 +982,7 @@ try {
   await expectDetail("Waiting for your approval decision.");
   await expectDetail("Decision details unavailable.");
   await expectDetail("Task notification acknowledged");
+  await expectDetail("4 grouped updates");
   await clickText("Open Approvals");
   await wait("location.hash === '#/approvals' && document.body.innerText.includes('Review the release notes')", "existing approvals page");
   await clickText("Approve");

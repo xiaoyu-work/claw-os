@@ -101,6 +101,68 @@ fn legacy_jobs_have_no_requested_model_override() {
         .is_none());
 }
 
+#[test]
+fn activity_task_notifications_group_every_phase_without_interrupting() {
+    let mut first = pending_with_model(None);
+    first.owner_uid = Some(7);
+    first.activity_id = Some("00000000-0000-4000-8000-000000000001".into());
+    first.session_id = Some("session-1".into());
+    let mut second = pending_with_model(None);
+    second.owner_uid = Some(7);
+    second.activity_id = first.activity_id.clone();
+    second.session_id = Some("session-2".into());
+
+    let (_, submitted) = task_notification_draft(&first, "submitted").unwrap();
+    let (_, waiting) = task_notification_draft(&second, "waiting").unwrap();
+    let (_, completed) = task_notification_draft(&second, "completed").unwrap();
+
+    assert_eq!(
+        submitted.dedupe_key.as_deref(),
+        Some("activity:00000000-0000-4000-8000-000000000001:tasks")
+    );
+    assert_eq!(waiting.dedupe_key, submitted.dedupe_key);
+    assert_eq!(completed.dedupe_key, submitted.dedupe_key);
+    assert_eq!(
+        waiting.delivery_policy,
+        crate::notifications::DeliveryPolicy::Activity
+    );
+    assert_eq!(
+        completed.delivery_policy,
+        crate::notifications::DeliveryPolicy::Activity
+    );
+    assert_eq!(waiting.severity, crate::notifications::Severity::Warning);
+    assert_eq!(waiting.task_id.as_deref(), Some(second.id.as_str()));
+    assert_eq!(waiting.session_id.as_deref(), Some("session-2"));
+}
+
+#[test]
+fn standalone_task_notifications_keep_phase_specific_delivery() {
+    let mut job = pending_with_model(None);
+    job.owner_uid = Some(7);
+
+    let (_, submitted) = task_notification_draft(&job, "submitted").unwrap();
+    let (_, completed) = task_notification_draft(&job, "completed").unwrap();
+
+    assert_eq!(
+        submitted.delivery_policy,
+        crate::notifications::DeliveryPolicy::Activity
+    );
+    assert_eq!(
+        completed.delivery_policy,
+        crate::notifications::DeliveryPolicy::Immediate
+    );
+    let submitted_key = format!("task:{}:submitted", job.id);
+    let completed_key = format!("task:{}:completed", job.id);
+    assert_eq!(
+        submitted.dedupe_key.as_deref(),
+        Some(submitted_key.as_str())
+    );
+    assert_eq!(
+        completed.dedupe_key.as_deref(),
+        Some(completed_key.as_str())
+    );
+}
+
 fn fresh_activity_root() -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix(".activity-jobs-test-")

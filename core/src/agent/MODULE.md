@@ -19,7 +19,9 @@ surfaces.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Publish deterministic task and approval lifecycle notifications after durable
-  state transitions.
+  state transitions. Activity-linked phases, including approval waits,
+  coalesce into quiet Activity attention batches; standalone delivery remains
+  phase-specific.
 - Attach built-in, app, and MCP tools to one guarded registry.
 - Delegate dynamic App and MCP execution to the task-owned extension host when
   running inside `claw-agentd`.

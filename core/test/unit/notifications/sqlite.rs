@@ -95,6 +95,48 @@ fn task_page_never_interprets_an_empty_scope_as_all_owner_notifications() {
 }
 
 #[test]
+fn activity_policy_groups_updates_without_queueing_interruptions() {
+    let service = SqliteNotificationService::open_in_memory().unwrap();
+    let mut first = draft("agent.submitted")
+        .dedupe("activity:activity-1:tasks")
+        .activity();
+    first.task_id = Some("task-1".into());
+    first.session_id = Some("session-1".into());
+    let created = service.publish(7, first).unwrap();
+
+    let mut next = draft("agent.waiting")
+        .dedupe("activity:activity-1:tasks")
+        .activity();
+    next.title = "Agent task needs approval".into();
+    next.body = "Waiting for a permission decision.".into();
+    next.task_id = Some("task-2".into());
+    next.session_id = Some("session-2".into());
+    let grouped = service.publish(7, next).unwrap();
+
+    assert_eq!(grouped.id, created.id);
+    assert_eq!(grouped.occurrences, 2);
+    assert_eq!(grouped.kind, "agent.waiting");
+    assert_eq!(grouped.task_id.as_deref(), Some("task-2"));
+    assert_eq!(grouped.session_id.as_deref(), Some("session-2"));
+    assert!(grouped.deliveries.is_empty());
+    for channel in [
+        DeliveryChannel::Web,
+        DeliveryChannel::Desktop,
+        DeliveryChannel::Ntfy,
+    ] {
+        assert!(service
+            .claim_deliveries(Some(7), channel, 10, 5_000)
+            .unwrap()
+            .is_empty());
+    }
+    let page = service
+        .list_tasks(7, &["task-1".into(), "task-2".into()], 10)
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.notifications, vec![grouped]);
+}
+
+#[test]
 fn task_page_uses_latest_update_order_and_survives_reopening() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notifications.db");

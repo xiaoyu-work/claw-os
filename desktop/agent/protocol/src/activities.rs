@@ -453,6 +453,7 @@ pub struct ActivityAttentionNotification {
     pub task_id: Option<String>,
     pub session_id: Option<String>,
     pub state: ActivityNotificationState,
+    pub occurrences: u32,
     pub updated_at_ms: i64,
 }
 
@@ -504,6 +505,7 @@ impl ActivityAttentionResponse {
             })
             && self.notifications.iter().all(|notification| {
                 !notification.id.is_empty()
+                    && notification.occurrences > 0
                     && notification
                         .task_id
                         .as_ref()

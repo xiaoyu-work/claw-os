@@ -52,6 +52,7 @@ export type ActivityAttentionNotification = {
   task_id: string;
   session_id?: string | null;
   state: "unread" | "read" | "acknowledged" | "dismissed";
+  occurrences: number;
   updated_at_ms: number;
 };
 
@@ -130,6 +131,8 @@ function isNotification(value: unknown): value is ActivityAttentionNotification 
     && typeof value.task_id === "string"
     && (value.session_id === undefined || nullableString(value.session_id))
     && ["unread", "read", "acknowledged", "dismissed"].includes(String(value.state))
+    && natural(value.occurrences)
+    && value.occurrences > 0
     && natural(value.updated_at_ms);
 }
 

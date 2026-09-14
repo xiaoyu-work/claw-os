@@ -65,7 +65,8 @@ fn attention_value() -> serde_json::Value {
         "notifications": [{
             "id": "notification-1", "source": "job", "kind": "attention",
             "severity": "error", "title": "Review needed", "body": "Publish",
-            "task_id": "job-1", "state": "unread", "updated_at_ms": 42
+            "task_id": "job-1", "state": "unread", "occurrences": 3,
+            "updated_at_ms": 42
         }],
         "totals": {"decisions": 1, "issues": 1, "notifications": 1},
         "has_more": {"decisions": false, "issues": false, "notifications": false}
@@ -76,6 +77,7 @@ fn attention_value() -> serde_json::Value {
 fn attention_contract_matches_identity_and_closes_unavailable_decisions() {
     let attention: ActivityAttentionResponse = serde_json::from_value(attention_value()).unwrap();
     assert!(attention.matches_activity("activity-1", ActivityState::Active));
+    assert_eq!(attention.notifications[0].occurrences, 3);
     assert!(!attention.matches_activity("other", ActivityState::Active));
 
     let mut unavailable = attention_value();
@@ -97,6 +99,11 @@ fn attention_contract_matches_identity_and_closes_unavailable_decisions() {
 fn attention_contract_rejects_inconsistent_collection_metadata() {
     let mut value = attention_value();
     value["totals"]["notifications"] = json!(0);
+    let attention: ActivityAttentionResponse = serde_json::from_value(value).unwrap();
+    assert!(!attention.matches_activity("activity-1", ActivityState::Active));
+
+    let mut value = attention_value();
+    value["notifications"][0]["occurrences"] = json!(0);
     let attention: ActivityAttentionResponse = serde_json::from_value(value).unwrap();
     assert!(!attention.matches_activity("activity-1", ActivityState::Active));
 

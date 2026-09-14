@@ -121,6 +121,7 @@ activity-attention-issues = Issues
 activity-attention-no-issues = No prioritized execution issues.
 activity-attention-notifications = Notifications
 activity-attention-notifications-hint = Reading or acknowledging a notification never grants or denies a permission.
+activity-attention-notification-updates = { $count } grouped updates
 activity-attention-no-notifications = No retained task notifications.
 activity-attention-truncated = Some details are not shown: { $decisions } decisions, { $issues } issues, { $notifications } notifications retained.
 activity-jobs = Jobs

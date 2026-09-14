@@ -84,6 +84,9 @@ export function ActivityAttentionPanel({ view }: { view: View }) {
                   <span className="font-medium">{notification.title}</span>
                   <span>{notification.state}</span>
                 </div>
+                {notification.occurrences > 1 && (
+                  <p className="text-muted-foreground">{notification.occurrences} grouped updates</p>
+                )}
                 <p className="break-words text-muted-foreground">{notification.body}</p>
               </div>
             ))}

@@ -859,7 +859,9 @@ fn route_deliveries_tx(
     let candidates = [
         (
             DeliveryChannel::Web,
-            preferences.web_enabled && draft.severity >= preferences.web_min_severity,
+            preferences.web_enabled
+                && draft.delivery_policy == DeliveryPolicy::Immediate
+                && draft.severity >= preferences.web_min_severity,
             false,
         ),
         (

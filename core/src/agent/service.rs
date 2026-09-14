@@ -1682,6 +1682,9 @@ impl Store {
                 );
             }
             crate::clawd::audit::record_task_event("clawd.task.waiting-approval", &job);
+            if job.activity_id.is_some() {
+                self.notify(&job, "waiting");
+            }
         } else {
             finish_durable_session(&job)?;
             if revoke_after_pending_cleanup {
@@ -2745,9 +2748,25 @@ fn revoke_job_session(job: &Job) {
 }
 
 fn publish_task_notification(job: &Job, phase: &str) {
-    let Some(owner_uid) = job.owner_uid.filter(|uid| *uid != 0) else {
+    let Some((owner_uid, draft)) = task_notification_draft(job, phase) else {
         return;
     };
+    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
+        tracing::warn!(
+            task = %job.id,
+            owner_uid,
+            phase,
+            %error,
+            "failed to publish Agent task notification"
+        );
+    }
+}
+
+fn task_notification_draft(
+    job: &Job,
+    phase: &str,
+) -> Option<(u32, crate::notifications::NotificationDraft)> {
+    let owner_uid = job.owner_uid.filter(|uid| *uid != 0)?;
     let trigger = job
         .session_id
         .as_deref()
@@ -2760,7 +2779,7 @@ fn publish_task_notification(job: &Job, phase: &str) {
     } else {
         format!("agent.{phase}")
     };
-    let (severity, title, body, activity) = match phase {
+    let (severity, title, body, quiet_by_phase) = match phase {
         "submitted" => (
             crate::notifications::Severity::Info,
             "Agent task queued",
@@ -2785,6 +2804,12 @@ fn publish_task_notification(job: &Job, phase: &str) {
             "A background Agent task resumed after approval.",
             true,
         ),
+        "waiting" => (
+            crate::notifications::Severity::Warning,
+            "Agent task needs approval",
+            "A background Agent task is waiting for a permission decision.",
+            false,
+        ),
         "completed" => (
             crate::notifications::Severity::Info,
             "Agent task completed",
@@ -2804,10 +2829,15 @@ fn publish_task_notification(job: &Job, phase: &str) {
             false,
         ),
     };
+    let dedupe_key = job
+        .activity_id
+        .as_deref()
+        .map(|id| format!("activity:{id}:tasks"))
+        .unwrap_or_else(|| format!("task:{}:{phase}", job.id));
     let mut draft =
         crate::notifications::NotificationDraft::new(source, kind, severity, title, body)
-            .dedupe(format!("task:{}:{phase}", job.id));
-    if activity {
+            .dedupe(dedupe_key);
+    if job.activity_id.is_some() || quiet_by_phase {
         draft = draft.activity();
     }
     draft.task_id = Some(job.id.clone());
@@ -2821,15 +2851,7 @@ fn publish_task_notification(job: &Job, phase: &str) {
                 uri: format!("clawos://agent/session/{session_id}"),
             });
     }
-    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
-        tracing::warn!(
-            task = %job.id,
-            owner_uid,
-            phase,
-            %error,
-            "failed to publish Agent task notification"
-        );
-    }
+    Some((owner_uid, draft))
 }
 
 fn now_iso() -> String {
