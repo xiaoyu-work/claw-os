@@ -50,6 +50,8 @@ activity_id="00000000-0000-4000-8000-000000000001" # replace with the returned I
 
 cos activity show "$activity_id"
 cos activity attention "$activity_id"
+cos activity priority "$activity_id"
+cos activity set-priority "$activity_id" --priority foreground
 cos activity run "$activity_id" "Prepare a release draft"
 cos activity pause "$activity_id"
 cos activity update "$activity_id" --criteria "Reviewed, published, and announced"
@@ -91,6 +93,35 @@ or re-enabling them requires reopening.
 Ordinary conversations and jobs without an Activity remain supported.
 Associated session continuations retain their Activity; a session already
 assigned to one Activity cannot silently be moved to another.
+
+## Pending execution priority
+
+Each owner can optionally set an Activity's pending admission class:
+`foreground`, `standard`, or `background`. Read it with
+`cos activity priority ID`; create or revise it with
+`cos activity set-priority ID --priority CLASS`, supplying
+`--expected-revision N` for every update after initial creation. Active and
+paused Activities can be configured. Reopen a completed or cancelled Activity
+before changing its policy.
+
+The shared Job scheduler reads the current policy each time it claims pending
+work, so changing a policy reprioritizes Jobs that are already queued. Priority
+is not accepted by `activity.run`, `task.submit`, or a durable Job field, and an
+LLM does not choose it. Activities without a policy and standalone Jobs use the
+legacy standard FIFO behavior.
+
+Normally foreground Jobs are admitted before standard Jobs, which are admitted
+before background Jobs; each class is FIFO. Starvation is bounded: a pending
+Job that has waited at least 30 minutes runs before every non-aged Job, and aged
+Jobs are FIFO regardless of class. Unreadable or future queue timestamps are
+treated conservatively as aged rather than silently demoted.
+
+This is admission metadata only. It grants no capabilities or consent, changes
+no execution or monetary budget, proves no execution or completion, and does
+not preempt, reorder, or cancel running or approval-waiting work. Existing
+capability, approval, budget and lifecycle checks still run at their original
+boundaries. If the Activity database cannot supply policy for linked pending
+work, claiming fails explicitly instead of inventing standard priority.
 
 ## Attention and decisions
 
@@ -257,6 +288,8 @@ receive a bounded, recorded, untrusted snapshot when claimed.
 | `activity.capability_policy.get` | Owner-scoped capability policy or explicit absence |
 | `activity.capability_policy.set` | Revision-checked Normal/Ask/Deny rules without granting authority or changing enabled state |
 | `activity.capability_policy.enabled` | Explicit enable/disable; disabled blocks controlled checks and preserves the rules |
+| `activity.scheduling_policy.get` | Owner-scoped pending admission policy or explicit absence |
+| `activity.scheduling_policy.set` | Revision-checked foreground/standard/background metadata; no authority or preemption |
 | `activity.objects` | Authenticated declaration metadata or explicit diagnostics for App references |
 | `activity.object.attach` | Atomically attached reference; no App execution or new authority |
 | `activity.operation.preview` | App-declared expected effects; no execution, authorization, or confirmed changes |

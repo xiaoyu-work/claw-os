@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::activities::{Activity, ActivityService, ActivityState};
+use crate::activities::{Activity, ActivitySchedulingPriority, ActivityService, ActivityState};
 use crate::paths::agent_jobs_dir;
 
 mod activity_context;
@@ -64,6 +64,9 @@ const JOB_SCHEMA_VERSION: u32 = 2;
 const APPROVAL_WAIT_TIMEOUT_SECS: i64 = 8 * 60 * 60;
 const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
 const ACTIVITY_CONTEXT_MAX_CHARS: usize = 16 * 1024;
+/// A pending Job that has waited this long outranks every non-aged Job,
+/// regardless of Activity priority. Aged Jobs remain FIFO.
+const ACTIVITY_SCHEDULING_MAX_WAIT_SECS: u64 = 30 * 60;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -367,6 +370,114 @@ pub(crate) fn validate_requested_model(model: Option<&str>) -> Result<(), String
 pub struct Store {
     root: PathBuf,
     publish_notifications: bool,
+}
+
+#[derive(Debug)]
+struct PendingCandidate {
+    queued_at: std::time::SystemTime,
+    sequence: usize,
+    path: PathBuf,
+    priority: ActivitySchedulingPriority,
+}
+
+fn pending_priority(
+    path: &Path,
+    activity_service: &mut Option<crate::activities::SqliteActivityService>,
+    priorities: &mut BTreeMap<(u32, String), ActivitySchedulingPriority>,
+) -> io::Result<ActivitySchedulingPriority> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(ActivitySchedulingPriority::Standard);
+        }
+        Err(error) => return Err(error),
+    };
+    let job: Job = match serde_json::from_str(&raw) {
+        Ok(job) => job,
+        Err(_) => return Ok(ActivitySchedulingPriority::Standard),
+    };
+    let id_matches = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .is_some_and(|id| id == job.id);
+    if !id_matches
+        || job.schema_version != JOB_SCHEMA_VERSION
+        || job.status != JobStatus::Pending
+        || job.execution_phase != ExecutionPhase::Unprepared
+    {
+        return Ok(ActivitySchedulingPriority::Standard);
+    }
+    let Some(activity_id) = job.activity_id else {
+        return Ok(ActivitySchedulingPriority::Standard);
+    };
+    let owner_uid = job.owner_uid.ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::PermissionDenied,
+            "Activity task has no recorded owner",
+        )
+    })?;
+    let key = (owner_uid, activity_id);
+    if let Some(priority) = priorities.get(&key) {
+        return Ok(*priority);
+    }
+    if activity_service.is_none() {
+        *activity_service = Some(crate::activities::open_default().map_err(|error| {
+            io::Error::other(format!(
+                "read Activity scheduling policy for pending admission: {error}"
+            ))
+        })?);
+    }
+    let service = activity_service.as_ref().ok_or_else(|| {
+        io::Error::other("Activity scheduling policy service was not initialized")
+    })?;
+    let priority = current_scheduling_priority(service, owner_uid, &key.1)?;
+    priorities.insert(key, priority);
+    Ok(priority)
+}
+
+fn current_scheduling_priority(
+    service: &dyn ActivityService,
+    owner_uid: u32,
+    activity_id: &str,
+) -> io::Result<ActivitySchedulingPriority> {
+    service
+        .scheduling_policy(owner_uid, activity_id)
+        .map_err(|error| {
+            io::Error::other(format!(
+                "read Activity scheduling policy for pending admission: {error}"
+            ))
+        })
+        .map(|policy| {
+            policy
+                .map(|policy| policy.priority)
+                .unwrap_or(ActivitySchedulingPriority::Standard)
+        })
+}
+
+fn sort_pending_candidates(candidates: &mut [PendingCandidate], now: std::time::SystemTime) {
+    let max_wait = Duration::from_secs(ACTIVITY_SCHEDULING_MAX_WAIT_SECS);
+    candidates.sort_by(|left, right| {
+        let left_aged = now
+            .duration_since(left.queued_at)
+            .map_or(true, |age| age >= max_wait);
+        let right_aged = now
+            .duration_since(right.queued_at)
+            .map_or(true, |age| age >= max_wait);
+        match (left_aged, right_aged) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => left
+                .queued_at
+                .cmp(&right.queued_at)
+                .then_with(|| left.sequence.cmp(&right.sequence)),
+            (false, false) => left
+                .priority
+                .admission_rank()
+                .cmp(&right.priority.admission_rank())
+                .then_with(|| left.queued_at.cmp(&right.queued_at))
+                .then_with(|| left.sequence.cmp(&right.sequence)),
+        }
+    });
 }
 
 impl Store {
@@ -816,17 +927,34 @@ impl Store {
 
     /// Atomically claim one pending job: rename pending/<id>.json →
     /// running/<id>.json, then rewrite the file with `status =
-    /// Running` + `started_at` + worker PID/start-time identity. Returns Ok(None) when
-    /// no pending jobs exist or every candidate was lost to another
-    /// worker.
+    /// Running` + `started_at` + worker PID/start-time identity. Pending
+    /// Activity policy is read at claim time; aged candidates precede
+    /// non-aged work, then foreground/standard/background order applies with
+    /// FIFO within each class. Running and approval-waiting jobs are untouched.
+    /// Returns Ok(None) when no pending jobs exist or every candidate was lost
+    /// to another worker.
     pub fn claim_one(&self) -> io::Result<Option<Job>> {
+        self.claim_one_with_clock(std::time::SystemTime::now)
+    }
+
+    #[cfg(test)]
+    fn claim_one_at(&self, now: std::time::SystemTime) -> io::Result<Option<Job>> {
+        self.claim_one_with_clock(|| now)
+    }
+
+    fn claim_one_with_clock(
+        &self,
+        clock: impl FnOnce() -> std::time::SystemTime,
+    ) -> io::Result<Option<Job>> {
         self.reconcile_duplicate_job_ids()?;
         let pending = self.bucket_dir(JobStatus::Pending);
         // Iterate all current pending entries. If a rename fails with
         // NotFound (another worker beat us) try the next; any other
         // error propagates.
-        let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-        for e in fs::read_dir(&pending)? {
+        let mut candidates = Vec::new();
+        let mut activity_service = None;
+        let mut priorities = BTreeMap::new();
+        for (sequence, e) in fs::read_dir(&pending)?.enumerate() {
             let e = e?;
             let path = e.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -836,12 +964,20 @@ impl Store {
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            candidates.push((mtime, path));
+            let priority = pending_priority(&path, &mut activity_service, &mut priorities)?;
+            candidates.push(PendingCandidate {
+                queued_at: mtime,
+                sequence,
+                path,
+                priority,
+            });
         }
-        // Oldest first — FIFO by submission time.
-        candidates.sort_by_key(|a| a.0);
+        // Read the aging cutoff after enumeration so a normal concurrent
+        // submission cannot look future-dated relative to a pre-scan clock.
+        sort_pending_candidates(&mut candidates, clock());
 
-        for (_, src) in candidates {
+        for candidate in candidates {
+            let src = candidate.path;
             let id = match src.file_stem().and_then(|s| s.to_str()) {
                 Some(s) => s.to_string(),
                 None => continue,

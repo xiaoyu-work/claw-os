@@ -109,6 +109,7 @@ fn invalid_cli_requests_fail_before_connecting() {
         ("update", args(&[ID, "--resource", "not-a-reference"])),
         ("pause", args(&[ID, "--approve", "true"])),
         ("run", args(&[ID, "--max-turns", "0"])),
+        ("run", args(&[ID, "--priority", "foreground"])),
     ] {
         assert!(parse(command, &values).is_err(), "{command}: {values:?}");
     }

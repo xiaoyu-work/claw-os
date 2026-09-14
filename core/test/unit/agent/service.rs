@@ -1579,7 +1579,10 @@ fn recover_is_noop_with_empty_running_bucket() {
 fn claim_one_returns_none_when_no_pending() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    assert!(store.claim_one().unwrap().is_none());
+    assert!(store
+        .claim_one_at(std::time::UNIX_EPOCH)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -1597,6 +1600,278 @@ fn claim_one_picks_oldest_first() {
         .unwrap();
     let claimed = store.claim_one().unwrap().unwrap();
     assert_eq!(claimed.id, first.id);
+}
+
+fn candidate(
+    name: &str,
+    queued_at: std::time::SystemTime,
+    priority: ActivitySchedulingPriority,
+) -> PendingCandidate {
+    PendingCandidate {
+        queued_at,
+        sequence: 0,
+        path: PathBuf::from(format!("{name}.json")),
+        priority,
+    }
+}
+
+#[test]
+fn priority_order_is_fifo_within_class_and_absent_standard_behavior() {
+    let now = std::time::UNIX_EPOCH + Duration::from_secs(10_000);
+    let mut candidates = vec![
+        candidate(
+            "background-new",
+            now - Duration::from_secs(10),
+            ActivitySchedulingPriority::Background,
+        ),
+        candidate(
+            "standard-new",
+            now - Duration::from_secs(20),
+            ActivitySchedulingPriority::Standard,
+        ),
+        candidate(
+            "foreground-new",
+            now - Duration::from_secs(30),
+            ActivitySchedulingPriority::Foreground,
+        ),
+        candidate(
+            "foreground-old",
+            now - Duration::from_secs(40),
+            ActivitySchedulingPriority::Foreground,
+        ),
+        candidate(
+            "standard-old",
+            now - Duration::from_secs(50),
+            ActivitySchedulingPriority::Standard,
+        ),
+    ];
+    sort_pending_candidates(&mut candidates, now);
+    let names: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.path.file_stem().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "foreground-old",
+            "foreground-new",
+            "standard-old",
+            "standard-new",
+            "background-new",
+        ]
+    );
+
+    let mut standard = vec![
+        candidate(
+            "later",
+            now - Duration::from_secs(1),
+            ActivitySchedulingPriority::Standard,
+        ),
+        candidate(
+            "earlier",
+            now - Duration::from_secs(2),
+            ActivitySchedulingPriority::Standard,
+        ),
+    ];
+    sort_pending_candidates(&mut standard, now);
+    assert_eq!(standard[0].path, PathBuf::from("earlier.json"));
+}
+
+#[test]
+fn post_scan_cutoff_does_not_age_a_concurrent_normal_submission() {
+    let initial_scan_snapshot = std::time::UNIX_EPOCH + Duration::from_secs(10_000);
+    let mut candidates = vec![
+        candidate(
+            "concurrent-background",
+            initial_scan_snapshot + Duration::from_secs(1),
+            ActivitySchedulingPriority::Background,
+        ),
+        candidate(
+            "existing-foreground",
+            initial_scan_snapshot,
+            ActivitySchedulingPriority::Foreground,
+        ),
+    ];
+
+    let production_equivalent_cutoff = initial_scan_snapshot + Duration::from_secs(2);
+    sort_pending_candidates(&mut candidates, production_equivalent_cutoff);
+
+    assert_eq!(
+        candidates[0].path,
+        PathBuf::from("existing-foreground.json"),
+        "a normal submission newer than an initial scan snapshot must not be spuriously aged"
+    );
+}
+
+#[test]
+fn bounded_aging_runs_old_work_before_new_foreground_work() {
+    let now = std::time::UNIX_EPOCH
+        + Duration::from_secs(ACTIVITY_SCHEDULING_MAX_WAIT_SECS + 10_000);
+    let mut candidates = vec![
+        candidate(
+            "new-foreground",
+            now - Duration::from_secs(1),
+            ActivitySchedulingPriority::Foreground,
+        ),
+        candidate(
+            "aged-background",
+            now - Duration::from_secs(ACTIVITY_SCHEDULING_MAX_WAIT_SECS),
+            ActivitySchedulingPriority::Background,
+        ),
+        candidate(
+            "older-aged-standard",
+            now - Duration::from_secs(ACTIVITY_SCHEDULING_MAX_WAIT_SECS + 10),
+            ActivitySchedulingPriority::Standard,
+        ),
+    ];
+    sort_pending_candidates(&mut candidates, now);
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![
+            Path::new("older-aged-standard.json"),
+            Path::new("aged-background.json"),
+            Path::new("new-foreground.json"),
+        ]
+    );
+
+    let mut clock_error = vec![
+        candidate(
+            "future-background",
+            now + Duration::from_secs(1),
+            ActivitySchedulingPriority::Background,
+        ),
+        candidate(
+            "new-foreground",
+            now - Duration::from_secs(1),
+            ActivitySchedulingPriority::Foreground,
+        ),
+    ];
+    sort_pending_candidates(&mut clock_error, now);
+    assert_eq!(
+        clock_error[0].path,
+        PathBuf::from("future-background.json"),
+        "an untrustworthy future queue timestamp is treated as aged, not silently demoted"
+    );
+}
+
+#[test]
+fn queued_activity_jobs_use_current_policy_without_persisting_priority_in_jobs() {
+    let _lock = crate::test_env::lock_env();
+    let data = fresh_root();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let service = crate::activities::open_default().unwrap();
+    let standard = service
+        .create(
+            1000,
+            crate::activities::ActivityDraft {
+                title: "Standard".into(),
+                goal: "standard work".into(),
+                completion_criteria: String::new(),
+                boundaries: String::new(),
+                resources: Vec::new(),
+            },
+        )
+        .unwrap();
+    let reprioritized = service
+        .create(
+            1000,
+            crate::activities::ActivityDraft {
+                title: "Reprioritized".into(),
+                goal: "reprioritized work".into(),
+                completion_criteria: String::new(),
+                boundaries: String::new(),
+                resources: Vec::new(),
+            },
+        )
+        .unwrap();
+    service
+        .set_scheduling_policy(
+            1000,
+            &reprioritized.id,
+            None,
+            ActivitySchedulingPriority::Background,
+        )
+        .unwrap();
+    let store = Store::open_default().unwrap();
+    let mut first = Job::new_pending(
+        "standard".into(),
+        None,
+        None,
+        None,
+        None,
+        Some(1000),
+        None,
+    );
+    first.activity_id = Some(standard.id.clone());
+    let mut second = Job::new_pending(
+        "reprioritized".into(),
+        None,
+        None,
+        None,
+        None,
+        Some(1000),
+        None,
+    );
+    second.activity_id = Some(reprioritized.id.clone());
+    write_json_atomic(&store.path_for(JobStatus::Pending, &first.id), &first).unwrap();
+    write_json_atomic(&store.path_for(JobStatus::Pending, &second.id), &second).unwrap();
+    assert!(serde_json::to_value(&first).unwrap().get("priority").is_none());
+    assert!(serde_json::to_value(&second).unwrap().get("priority").is_none());
+
+    service
+        .set_scheduling_policy(
+            1000,
+            &reprioritized.id,
+            Some(1),
+            ActivitySchedulingPriority::Foreground,
+        )
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    assert_eq!(claimed.id, second.id);
+    assert_eq!(claimed.activity_id.as_deref(), Some(reprioritized.id.as_str()));
+    assert!(store
+        .path_for(JobStatus::Pending, &first.id)
+        .is_file());
+}
+
+#[test]
+fn activity_policy_storage_failure_blocks_activity_claim_but_not_standalone_fifo() {
+    let _lock = crate::test_env::lock_env();
+    let data = fresh_root();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let store = Store::open_default().unwrap();
+    let standalone = store
+        .submit("standalone".into(), None, None, None, None)
+        .unwrap();
+    fs::write(crate::paths::data_dir().join("activities.db"), b"not sqlite").unwrap();
+    assert_eq!(store.claim_one().unwrap().unwrap().id, standalone.id);
+
+    let mut activity_job = Job::new_pending(
+        "activity".into(),
+        None,
+        None,
+        None,
+        None,
+        Some(1000),
+        None,
+    );
+    activity_job.activity_id = Some("00000000-0000-4000-8000-000000000001".into());
+    let pending = store.path_for(JobStatus::Pending, &activity_job.id);
+    write_json_atomic(&pending, &activity_job).unwrap();
+    let error = store.claim_one().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("read Activity scheduling policy for pending admission"),
+        "{error}"
+    );
+    assert!(pending.is_file());
+    assert!(!store
+        .path_for(JobStatus::Running, &activity_job.id)
+        .exists());
 }
 
 #[test]

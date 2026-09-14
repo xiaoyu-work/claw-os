@@ -9,6 +9,7 @@ mod capability_policy;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
+mod scheduling_policy;
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     if command == "record-object-state" {
@@ -69,6 +70,9 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             | "disable-monetary-budget"
     ) {
         return monetary_budget::parse(command, args);
+    }
+    if matches!(command, "priority" | "set-priority") {
+        return scheduling_policy::parse(command, args);
     }
     if command == "attach-object" {
         return parse_object_attachment(args);

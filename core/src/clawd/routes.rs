@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 use super::activity_capability_policy;
 use super::activity_execution_limits;
 use super::activity_monetary_budget;
+use super::activity_scheduling_policy;
 use crate::audit_policy::FieldRule;
 
 use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
@@ -653,6 +654,30 @@ routes! {
         body: body::ActivityCapabilityPolicyEnabled,
         audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
         run: |c| activity_capability_policy::enabled(c.params, c.client),
+    }
+    ActivitySchedulingPolicyGet {
+        name: "activity.scheduling_policy.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivitySchedulingPolicyGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_scheduling_policy::get(c.params, c.client),
+    }
+    ActivitySchedulingPolicySet {
+        name: "activity.scheduling_policy.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivitySchedulingPolicySet,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("expected_revision", FieldRule::Count),
+            ("priority", FieldRule::Token),
+        ],
+        run: |c| activity_scheduling_policy::set(c.params, c.client),
     }
     ActivityObjects {
         name: "activity.objects",

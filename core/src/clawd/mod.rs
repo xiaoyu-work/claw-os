@@ -8,6 +8,7 @@ pub mod activity_monetary_budget;
 pub mod activity_object_state;
 pub mod activity_objects;
 pub mod activity_receipts;
+pub mod activity_scheduling_policy;
 pub mod agent_client;
 pub mod ai;
 pub mod app_notifications;

@@ -9,6 +9,7 @@ mod execution_limits;
 mod monetary_budget;
 mod object_state;
 mod receipts;
+mod scheduling_policy;
 mod sqlite;
 
 use serde::{Deserialize, Serialize};
@@ -34,12 +35,13 @@ pub use receipts::{
     ActivityReceipt, ReceiptDeclaration, ReceiptEffect, ReceiptOutcome, ReceiptReport,
     ReceiptSource, ResultKind, ResultSummary,
 };
+pub use scheduling_policy::{ActivitySchedulingPolicy, ActivitySchedulingPriority};
 pub use sqlite::SqliteActivityService;
 
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 6;
+pub const DATABASE_SCHEMA_VERSION: u32 = 7;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -452,6 +454,30 @@ pub trait ActivityService: Send + Sync {
         expected_revision: u64,
         enabled: bool,
     ) -> Result<ActivityCapabilityPolicy, ActivityError>;
+
+    /// Read optional owner-selected pending admission priority. Absence is
+    /// standard FIFO behavior; the policy never grants authority.
+    fn scheduling_policy(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+    ) -> Result<Option<ActivitySchedulingPolicy>, ActivityError> {
+        Ok(None)
+    }
+
+    /// Create only when absent or replace the exact expected revision.
+    /// This changes pending admission order only and never preempts work.
+    fn set_scheduling_policy(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _expected_revision: Option<u64>,
+        _priority: ActivitySchedulingPriority,
+    ) -> Result<ActivitySchedulingPolicy, ActivityError> {
+        Err(ActivityError::Invalid(
+            "Activity scheduling policies are unsupported by this service".into(),
+        ))
+    }
 }
 
 /// Daemon composition only. Direct clients use owner-scoped broker routes.

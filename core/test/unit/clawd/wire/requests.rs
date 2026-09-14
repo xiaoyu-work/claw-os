@@ -141,6 +141,36 @@ fn activity_policy_wire_is_closed_bounded_and_cannot_supply_authority() {
     .is_err());
 }
 
+#[test]
+fn activity_scheduling_wire_is_closed_and_only_selects_pending_admission_class() {
+    let valid = json!({
+        "id":"00000000-0000-4000-8000-000000000001",
+        "expected_revision":2,
+        "priority":"foreground",
+    });
+    assert!(serde_json::from_value::<ActivitySchedulingPolicySet>(valid.clone()).is_ok());
+    for field in [
+        "owner_uid",
+        "caps",
+        "grant",
+        "consent",
+        "budget",
+        "preempt",
+        "cancel_running",
+        "completed",
+    ] {
+        let mut forged = valid.clone();
+        forged[field] = json!(true);
+        assert!(
+            serde_json::from_value::<ActivitySchedulingPolicySet>(forged).is_err(),
+            "{field}"
+        );
+    }
+    let mut invalid = valid;
+    invalid["priority"] = json!("urgent");
+    assert!(serde_json::from_value::<ActivitySchedulingPolicySet>(invalid).is_err());
+}
+
 fn file_replace_body() -> serde_json::Value {
     json!({
         "session":"session-1",
@@ -379,6 +409,10 @@ fn activity_requests_are_closed_bounded_and_never_choose_an_owner() {
         json!({"id": "activity-1", "grant": "unexpected"}),
     )
     .is_err());
+    assert!(serde_json::from_value::<ActivityRun>(
+        json!({"id": "activity-1", "priority": "foreground"}),
+    )
+    .is_err());
 }
 
 #[test]
@@ -449,6 +483,8 @@ fn a_task_submission_is_closed_and_bounded() {
         json!({"prompt": "hi", "source": "local-cli"}),
         json!({"prompt": "hi", "attended": true}),
         json!({"prompt": "hi", "local": true}),
+        json!({"prompt": "hi", "priority": "foreground"}),
+        json!({"prompt": "hi", "scheduling_priority": "background"}),
     ] {
         assert!(serde_json::from_value::<TaskSubmit>(field).is_err());
     }

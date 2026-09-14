@@ -1102,6 +1102,7 @@ cos activity / Agent Web / native desktop Agent
        +-- activity.run -> ordinary task.submit -> claw-agentd
        +-- activity.get -> associated job/session projection
        +-- activity.attention -> Job + protected approval + NotificationService projection
+       +-- activity.scheduling_policy.* -> pending shared-queue admission metadata
 ```
 
 `core/src/activities/` owns the definition and SQLite provider. Neither depends
@@ -1122,6 +1123,22 @@ Activity mutations retain the broker's normal authorization, bounded decoding,
 audit projection and journal bracketing. Related job results are projections
 from the existing task store, not a second copy of its state. See
 [`docs/activities.md`](docs/activities.md) for commands and the initial scope.
+
+Owner-selected Activity scheduling policy is stored in the same owner-scoped
+database with exact revision/CAS updates. `Store::claim_one` reads current
+policy when ordering pending records; no public submission body or durable Job
+field carries priority. Non-Activity work and Activities without a policy keep
+standard FIFO admission. Normally foreground precedes standard, which precedes
+background, with FIFO inside each class. A pending record at least 30 minutes
+old precedes every non-aged record, and aged records are FIFO; unreadable or
+future filesystem times are treated conservatively as aged. This changes only
+which pending Job is admitted next. Running and approval-waiting work is not
+preempted, reordered or cancelled, and all capability, consent, execution-limit
+and monetary-budget checks remain in their existing seams. Activity storage
+failure while resolving a linked pending Job is an explicit claim failure.
+Activity database schema 7 adds this policy table without rewriting existing
+Activities, Jobs, execution-limit accounting, capability rules, or monetary
+budget ledgers.
 
 `activity.attention` is a read-only, owner-scoped projection over the same
 associated Jobs, protected approval records, and task-linked Notification

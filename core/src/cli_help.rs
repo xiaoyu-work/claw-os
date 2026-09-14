@@ -862,6 +862,22 @@ fn activity_schemas() -> Vec<CommandSchema> {
             example: "cos activity disable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
         },
         CommandSchema {
+            command: "priority",
+            description: "Read owner-selected pending admission priority; absence preserves standard FIFO behavior",
+            params: vec![id()],
+            example: "cos activity priority 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-priority",
+            description: "Set pending admission priority without granting authority, preempting running work, or bypassing consent and budgets",
+            params: vec![
+                id(),
+                Param::flag("--priority", "enum:foreground|standard|background", true, "Pending admission class; FIFO is retained within a class"),
+                Param::flag("--expected-revision", "integer", false, "Positive current revision when updating; omit only for initial creation"),
+            ],
+            example: "cos activity set-priority 00000000-0000-4000-8000-000000000001 --priority foreground",
+        },
+        CommandSchema {
             command: "execution-limits",
             description: "Read Activity attempt/turn/expiry controls; no capabilities are granted",
             params: vec![id()],

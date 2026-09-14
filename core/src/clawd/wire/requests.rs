@@ -289,6 +289,21 @@ pub struct ActivityCapabilityPolicyEnabled {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivitySchedulingPolicyGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivitySchedulingPolicySet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub priority: crate::activities::ActivitySchedulingPriority,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub struct BoundedObjectStateDraft(pub crate::activities::ObjectStateDraft);

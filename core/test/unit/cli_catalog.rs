@@ -51,6 +51,8 @@ fn activity_commands_are_discoverable_without_model_authority() {
             "disable-monetary-budget", "capability-policy", "set-capability-policy",
             "enable-capability-policy",
             "disable-capability-policy",
+            "priority",
+            "set-priority",
         ]
     );
     for command in command_names("activity").unwrap() {

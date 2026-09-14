@@ -2,6 +2,7 @@ mod capability_policy;
 mod execution_limits;
 mod monetary_budget;
 mod object_state;
+mod scheduling_policy;
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -15,11 +16,12 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
     Activity, ActivityCapabilityPolicy, ActivityDraft, ActivityError, ActivityExecutionLimits,
-    ActivityMonetaryBudget, ActivityPatch, ActivityReceipt, ActivityResource, ActivityService,
-    ActivityState, CapabilityPolicyDraft, ExecutionLimitsDraft, ExecutionReservation,
-    MonetaryBudgetDraft, MonetaryReservation, MonetaryReservationRequest, MonetarySettlement,
-    ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration, ReceiptReport, ReceiptSource,
-    DATABASE_SCHEMA_VERSION, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
+    ActivityMonetaryBudget, ActivityPatch, ActivityReceipt, ActivityResource,
+    ActivitySchedulingPolicy, ActivitySchedulingPriority, ActivityService, ActivityState,
+    CapabilityPolicyDraft, ExecutionLimitsDraft, ExecutionReservation, MonetaryBudgetDraft,
+    MonetaryReservation, MonetaryReservationRequest, MonetarySettlement, ObjectStateDraft,
+    ObjectStateEntry, ReceiptDeclaration, ReceiptReport, ReceiptSource, DATABASE_SCHEMA_VERSION,
+    DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
 };
 
 const MAX_RECEIPTS_PER_ACTIVITY: i64 = 1000;
@@ -155,6 +157,10 @@ impl SqliteActivityService {
             tx.execute_batch(monetary_budget::MIGRATE_TO_V6)?;
         }
         monetary_budget::validate_schema(&tx)?;
+        if version < 7 {
+            tx.execute_batch(scheduling_policy::MIGRATE_TO_V7)?;
+        }
+        scheduling_policy::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -629,6 +635,24 @@ impl ActivityService for SqliteActivityService {
             settlement,
         )
     }
+
+    fn scheduling_policy(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<Option<ActivitySchedulingPolicy>, ActivityError> {
+        scheduling_policy::get(self, owner_uid, activity_id)
+    }
+
+    fn set_scheduling_policy(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: Option<u64>,
+        priority: ActivitySchedulingPriority,
+    ) -> Result<ActivitySchedulingPolicy, ActivityError> {
+        scheduling_policy::set(self, owner_uid, activity_id, expected_revision, priority)
+    }
 }
 
 fn list_limit(limit: usize) -> Result<i64, ActivityError> {
@@ -657,7 +681,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1..=5 => {}
+        1..=6 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

@@ -64,6 +64,8 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("set-capability-policy", "Create or revise normal, ask and deny capability rules"),
                 ("enable-capability-policy", "Explicitly enable an Activity capability policy at its current revision"),
                 ("disable-capability-policy", "Block all controlled capability checks without deleting the policy"),
+                ("priority", "Read owner-selected pending Activity admission priority"),
+                ("set-priority", "Set foreground, standard, or background pending admission priority"),
             ],
         ),
         (

@@ -103,6 +103,7 @@ fn activity_monetary_budget_help_is_explicit_and_non_model_callable() {
         assert!(help["model_tool"].is_null());
         assert!(!help["parameters"].to_string().contains("--owner"));
     }
+
     let set = command_schema_value("activity", "set-monetary-budget").unwrap();
     let parameters = set["parameters"].to_string();
     for flag in [
@@ -114,4 +115,26 @@ fn activity_monetary_budget_help_is_explicit_and_non_model_callable() {
         assert!(parameters.contains(flag), "{flag}");
     }
     assert!(set["description"].as_str().unwrap().contains("preserving"));
+}
+
+#[test]
+fn activity_priority_help_is_explicit_bounded_and_non_model_callable() {
+    for command in ["priority", "set-priority"] {
+        let help = command_schema_value("activity", command).unwrap();
+        assert_eq!(help["schema_available"], true);
+        assert_eq!(help["model_callable"], false);
+        assert!(help["model_tool"].is_null());
+        assert!(!help["parameters"].to_string().contains("--owner"));
+        assert!(!help["parameters"].to_string().contains("--preempt"));
+    }
+    let set = command_schema_value("activity", "set-priority").unwrap();
+    let parameters = set["parameters"].to_string();
+    assert!(parameters.contains("foreground"));
+    assert!(parameters.contains("standard"));
+    assert!(parameters.contains("background"));
+    assert!(parameters.contains("--expected-revision"));
+    assert!(set["description"]
+        .as_str()
+        .unwrap()
+        .contains("without granting authority"));
 }

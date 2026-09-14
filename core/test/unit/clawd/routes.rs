@@ -23,6 +23,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "activity.capability_policy.get",
     "activity.capability_policy.set",
     "activity.capability_policy.enabled",
+    "activity.scheduling_policy.get",
+    "activity.scheduling_policy.set",
     "activity.objects",
     "activity.object.attach",
     "activity.object_state.list",
