@@ -3,8 +3,11 @@
 //! Key dependencies: the canonical SQLite message store and shared history parser.
 //! Constraints: filter private rows before limits and never return a partial serialized row.
 
+use std::collections::BTreeMap;
+
 use rusqlite::{params, OptionalExtension};
 
+use super::conversation_bindings::{self, BindingState};
 use super::history::{parse_stored_content, sanitize_stored_content, HistoryMessage};
 use super::sqlite_fts::{row_to_message, MemoryDb, MemoryError, INJECTED_ROLE};
 
@@ -32,9 +35,28 @@ pub struct ConversationMetadata {
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct ConversationHistoryPage {
-    pub messages: Vec<HistoryMessage>,
+    pub messages: Vec<ConversationMessage>,
     pub message_count: u64,
     pub messages_truncated: bool,
+    #[serde(skip)]
+    pub(crate) bindings: BindingState,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ConversationMessage {
+    pub id: i64,
+    #[serde(flatten)]
+    pub message: HistoryMessage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_message_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_user_message_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_user_prompt: Option<bool>,
 }
 
 impl MemoryDb {
@@ -55,6 +77,12 @@ impl MemoryDb {
         )?;
         let message_count = u64::try_from(message_count)
             .map_err(|_| ConversationMemoryError::InvalidMessageCount)?;
+        let bindings = conversation_bindings::state(&tx, session_id)?;
+        let binding_sizes = bindings
+            .members
+            .iter()
+            .map(|binding| Ok((binding.message_id, serde_json::to_vec(binding)?.len())))
+            .collect::<Result<BTreeMap<_, _>, serde_json::Error>>()?;
         let limit =
             i64::try_from(limit).map_err(|_| ConversationMemoryError::InvalidMessageCount)?;
         let mut stmt = tx.prepare(
@@ -70,16 +98,26 @@ impl MemoryDb {
             let row = row?;
             let content = sanitize_stored_content(&row.role, &row.content);
             let parsed = parse_stored_content(&row.role, &content);
-            let message = HistoryMessage {
-                role: row.role,
-                content,
-                text: parsed.text,
-                tool_calls: parsed.tool_calls,
-                tool_results: parsed.tool_results,
-                ts_ms: row.ts_ms,
+            let message = ConversationMessage {
+                id: row.id,
+                message: HistoryMessage {
+                    role: row.role,
+                    content,
+                    text: parsed.text,
+                    tool_calls: parsed.tool_calls,
+                    tool_results: parsed.tool_results,
+                    ts_ms: row.ts_ms,
+                },
+                task_id: None,
+                source_session_id: None,
+                source_message_id: None,
+                source_user_message_id: None,
+                is_user_prompt: None,
             };
             let separator = usize::from(!messages.is_empty());
-            let message_bytes = serde_json::to_vec(&message)?.len();
+            let message_bytes = serde_json::to_vec(&message)?
+                .len()
+                .saturating_add(binding_sizes.get(&message.id).copied().unwrap_or(0));
             if response_bytes
                 .saturating_add(separator)
                 .saturating_add(message_bytes)
@@ -102,6 +140,7 @@ impl MemoryDb {
             messages_truncated: message_count > messages.len() as u64,
             message_count,
             messages,
+            bindings,
         })
     }
 

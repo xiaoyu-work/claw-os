@@ -3,6 +3,7 @@
 //! Key dependencies: root-owned SessionMeta/state, the task session baseline, and owner memory reads.
 //! Constraints: presentation UUIDs never authorize work; mutation accepts only canonical session IDs.
 
+mod bindings;
 mod dto;
 mod jobs;
 mod owner_memory;
@@ -187,11 +188,21 @@ fn conversation_response(
     owner_uid: u32,
 ) -> Result<Value, String> {
     let metadata = presentation_metadata(meta, presentation, view.metadata)?;
-    let execution = jobs::load(&meta.id, owner_uid)?;
+    let mut history = view.history;
+    let mut execution = jobs::load(&meta.id, owner_uid)?;
+    match bindings::verify(
+        &meta.id,
+        &history.bindings,
+        history.message_count,
+        &mut execution,
+    ) {
+        Ok(()) => bindings::annotate(&mut history),
+        Err(error) => execution.mark_unverified(error),
+    }
     response(ConversationResponse {
         conversation: Conversation {
             metadata,
-            history: view.history,
+            history,
             execution,
         },
     })

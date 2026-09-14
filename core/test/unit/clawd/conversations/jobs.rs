@@ -43,7 +43,10 @@ fn conversation_jobs_are_owner_and_session_scoped_actual_records() {
     assert_eq!(projection.job_count, 1);
     assert!(!projection.jobs_truncated);
     assert!(!projection.task_bindings_complete);
-    assert_eq!(projection.task_bindings_error, UNVERIFIED_BINDINGS);
+    assert_eq!(
+        projection.task_bindings_error.as_deref(),
+        Some(UNVERIFIED_BINDINGS)
+    );
     assert_eq!(projection.jobs[0].id, "owned");
     assert_eq!(projection.jobs[0].status, JobStatus::Error);
     assert_eq!(projection.jobs[0].session_id, sid.as_str());

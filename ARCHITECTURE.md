@@ -1572,9 +1572,12 @@ into the runtime, which transactionally records every task prompt and resulting
 assistant/tool row with one explicit outer user-message binding. Binding
 evidence survives ordinary transcript purge; it is never inferred from message
 text or timestamps. Conversation detail also includes a bounded owner/session
-projection of actual Job records, but marks their message bindings incomplete
-until retained membership and owner-scoped Job lineage are verified.
-Branch/revert operations remain unavailable until that verification exists.
+projection of actual Job records. It annotates rows and marks task bindings
+complete only when every visible row has explicit membership, every retained
+task is whole and non-interleaved, and the exact Job set belongs to that owner
+and session; otherwise it returns unannotated history with an explicit
+incomplete reason. Branch/revert operations remain unavailable until that
+verified boundary is used by their mutation logic.
 
 ### Proactive notification
 

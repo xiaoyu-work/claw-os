@@ -29,8 +29,8 @@ fn conversation_history_filters_private_rows_before_applying_the_limit() {
 
     let history = db.conversation_history_page("session", 2).unwrap().messages;
     assert_eq!(history.len(), 2);
-    assert_eq!(history[0].text, "second prompt");
-    assert_eq!(history[1].text, "second answer");
+    assert_eq!(history[0].message.text, "second prompt");
+    assert_eq!(history[1].message.text, "second answer");
 }
 
 #[test]
@@ -43,12 +43,12 @@ fn conversation_history_preserves_structured_tool_rows() {
         .unwrap()
         .messages;
     assert_eq!(history.len(), 6);
-    assert_eq!(history[1].tool_calls[0]["name"], "cos_app_fs");
+    assert_eq!(history[1].message.tool_calls[0]["name"], "cos_app_fs");
     assert_eq!(
-        history[2].tool_results[0]["text"],
+        history[2].message.tool_results[0]["text"],
         "first result\nsecond line"
     );
-    assert_eq!(history[3].text, "first answer");
+    assert_eq!(history[3].message.text, "first answer");
 }
 
 #[test]
@@ -63,7 +63,13 @@ fn conversation_history_byte_bound_keeps_latest_complete_rows() {
     let page = db.conversation_history_page("session", 300).unwrap();
     assert!(!page.messages.is_empty());
     assert!(page.messages.len() < 300);
-    assert!(page.messages.last().unwrap().text.starts_with("299: "));
+    assert!(page
+        .messages
+        .last()
+        .unwrap()
+        .message
+        .text
+        .starts_with("299: "));
     assert_eq!(page.message_count, 300);
     assert!(page.messages_truncated);
     assert!(serde_json::to_vec(&page.messages).unwrap().len() <= MAX_HISTORY_BYTES);
@@ -128,7 +134,7 @@ fn conversation_read_only_view_supports_legacy_message_columns_without_migrating
 
     let db = MemoryDb::open_read_only(&path).unwrap();
     let page = db.conversation_history_page("legacy", 10).unwrap();
-    assert_eq!(page.messages[0].text, "retained answer");
+    assert_eq!(page.messages[0].message.text, "retained answer");
     assert_eq!(page.message_count, 1);
     assert_eq!(
         db.conversation_metadata("legacy").unwrap().title.as_deref(),

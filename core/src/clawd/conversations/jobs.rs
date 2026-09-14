@@ -32,7 +32,8 @@ pub(super) struct ConversationJobs {
     pub(super) job_count: u64,
     pub(super) jobs_truncated: bool,
     pub(super) task_bindings_complete: bool,
-    pub(super) task_bindings_error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_bindings_error: Option<String>,
 }
 
 impl Default for ConversationJobs {
@@ -42,8 +43,42 @@ impl Default for ConversationJobs {
             job_count: 0,
             jobs_truncated: false,
             task_bindings_complete: false,
-            task_bindings_error: UNVERIFIED_BINDINGS.to_string(),
+            task_bindings_error: Some(UNVERIFIED_BINDINGS.to_string()),
         }
+    }
+}
+
+impl ConversationJobs {
+    pub(super) fn mark_unverified(&mut self, error: String) {
+        self.task_bindings_complete = false;
+        self.task_bindings_error = Some(error);
+    }
+
+    pub(super) fn mark_verified(&mut self, task_order: &[String]) -> Result<(), String> {
+        if self.jobs_truncated || self.job_count != task_order.len() as u64 {
+            return Err("retained task bindings do not match the conversation job set".to_string());
+        }
+        let mut by_id = std::mem::take(&mut self.jobs)
+            .into_iter()
+            .map(|job| (job.id.clone(), job))
+            .collect::<BTreeMap<_, _>>();
+        if by_id.len() as u64 != self.job_count {
+            return Err("conversation job projection contains duplicate task ids".to_string());
+        }
+        let mut ordered = Vec::with_capacity(task_order.len());
+        for task_id in task_order {
+            let job = by_id
+                .remove(task_id)
+                .ok_or_else(|| "bound task evidence is unavailable for this owner".to_string())?;
+            ordered.push(job);
+        }
+        if !by_id.is_empty() {
+            return Err("conversation job has no retained message binding".to_string());
+        }
+        self.jobs = ordered;
+        self.task_bindings_complete = true;
+        self.task_bindings_error = None;
+        Ok(())
     }
 }
 

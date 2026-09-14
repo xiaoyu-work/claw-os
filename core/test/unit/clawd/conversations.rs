@@ -80,11 +80,8 @@ fn conversation_create_is_empty_durable_and_uses_the_system_agent_baseline() {
     assert_eq!(value["conversation"]["jobs"], json!([]));
     assert_eq!(value["conversation"]["job_count"], 0);
     assert_eq!(value["conversation"]["jobs_truncated"], false);
-    assert_eq!(value["conversation"]["task_bindings_complete"], false);
-    assert_eq!(
-        value["conversation"]["task_bindings_error"],
-        jobs::UNVERIFIED_BINDINGS
-    );
+    assert_eq!(value["conversation"]["task_bindings_complete"], true);
+    assert!(value["conversation"].get("task_bindings_error").is_none());
     assert_eq!(value["conversation"]["title"], DEFAULT_TITLE);
     assert!(
         uuid::Uuid::parse_str(value["conversation"]["presentation_id"].as_str().unwrap()).is_ok()
@@ -94,6 +91,127 @@ fn conversation_create_is_empty_durable_and_uses_the_system_agent_baseline() {
     assert_eq!(listed["conversations"][0]["id"], id.as_str());
 }
 
+#[test]
+fn conversation_verifies_and_annotates_canonical_task_history() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let id = fixture.create();
+    let job = Store::open_default()
+        .unwrap()
+        .submit(
+            "bound prompt".to_string(),
+            Some(id.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    let db = fixture.db();
+    let turn = db
+        .record_task_user_message(
+            id.as_str(),
+            &job.id,
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::UserMessage,
+                "",
+            ),
+            "bound prompt",
+        )
+        .unwrap();
+    let answer_id = db
+        .record_task_message(
+            &turn,
+            "assistant",
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::ModelResponse,
+                "",
+            ),
+            "bound answer",
+        )
+        .unwrap();
+
+    let value = get(json!({"id": id}), &fixture.client).unwrap()["conversation"].clone();
+    assert_eq!(value["task_bindings_complete"], true);
+    assert!(value.get("task_bindings_error").is_none());
+    assert_eq!(value["job_count"], 1);
+    assert_eq!(value["jobs"][0]["id"], job.id);
+    assert_eq!(value["messages"][0]["id"], turn.user_message_id());
+    assert_eq!(value["messages"][0]["task_id"], job.id);
+    assert_eq!(value["messages"][0]["is_user_prompt"], true);
+    assert_eq!(value["messages"][1]["id"], answer_id);
+    assert_eq!(value["messages"][1]["task_id"], job.id);
+    assert_eq!(value["messages"][1]["is_user_prompt"], false);
+}
+
+#[test]
+fn conversation_binding_verification_fails_closed() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let legacy = fixture.create();
+    let db = fixture.db();
+    db.record_message(legacy.as_str(), "user", "legacy prompt")
+        .unwrap();
+    let legacy_view = get(json!({"id": legacy}), &fixture.client).unwrap()["conversation"].clone();
+    assert_eq!(legacy_view["task_bindings_complete"], false);
+    assert!(legacy_view["task_bindings_error"]
+        .as_str()
+        .unwrap()
+        .contains("legacy or unbound"));
+    assert!(legacy_view["messages"][0].get("task_id").is_none());
+
+    let partial = fixture.create();
+    let job = Store::open_default()
+        .unwrap()
+        .submit(
+            "partial prompt".to_string(),
+            Some(partial.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    let turn = db
+        .record_task_user_message(
+            partial.as_str(),
+            &job.id,
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::UserMessage,
+                "",
+            ),
+            "partial prompt",
+        )
+        .unwrap();
+    db.record_task_message(
+        &turn,
+        "assistant",
+        &crate::agent::trust::LabeledSegment::of(
+            crate::agent::trust::SourceKind::ModelResponse,
+            "",
+        ),
+        "purged answer",
+    )
+    .unwrap();
+    db.lock_conn()
+        .unwrap()
+        .execute(
+            "DELETE FROM messages
+             WHERE session_id = ? AND role = 'assistant'",
+            [partial.as_str()],
+        )
+        .unwrap();
+    let partial_view =
+        get(json!({"id": partial}), &fixture.client).unwrap()["conversation"].clone();
+    assert_eq!(partial_view["task_bindings_complete"], false);
+    assert!(partial_view["task_bindings_error"]
+        .as_str()
+        .unwrap()
+        .contains("partial task history"));
+    assert!(partial_view["messages"][0].get("task_id").is_none());
+}
 #[test]
 fn conversation_owner_boundary_and_inputs_fail_before_side_effects() {
     let _lock = lock_env();

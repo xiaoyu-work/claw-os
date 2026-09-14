@@ -4,6 +4,7 @@
 //! Constraints: task membership survives ordinary message purges and never derives from text.
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 
 use super::sqlite_fts::{current_ts_ms, insert_labeled_message_at, MemoryDb, MemoryError};
 
@@ -22,6 +23,27 @@ CREATE INDEX IF NOT EXISTS conversation_message_tasks_session
     ON conversation_message_tasks(session_id, task_id, message_id);
 "#;
 
+pub(crate) const MAX_BINDING_ROWS: usize = 20_000;
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MessageTaskBinding {
+    pub(crate) message_id: i64,
+    pub(crate) session_id: String,
+    pub(crate) task_id: String,
+    pub(crate) user_message_id: i64,
+    pub(crate) source_session_id: String,
+    pub(crate) source_message_id: i64,
+    pub(crate) source_user_message_id: i64,
+    pub(crate) is_user_prompt: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct BindingState {
+    pub(crate) members: Vec<MessageTaskBinding>,
+    pub(crate) originals: Vec<MessageTaskBinding>,
+    pub(crate) oversized: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RecordedTaskTurn {
     session_id: String,
@@ -33,17 +55,6 @@ impl RecordedTaskTurn {
     pub(crate) fn user_message_id(&self) -> i64 {
         self.user_message_id
     }
-}
-
-#[derive(Debug)]
-struct StoredTaskBinding {
-    session_id: String,
-    task_id: String,
-    user_message_id: i64,
-    source_session_id: String,
-    source_message_id: i64,
-    source_user_message_id: i64,
-    is_user_prompt: bool,
 }
 
 impl MemoryDb {
@@ -126,7 +137,7 @@ fn validate_session_id(value: &str) -> Result<(), MemoryError> {
     Ok(())
 }
 
-fn validate_task_id(value: &str) -> Result<(), MemoryError> {
+pub(crate) fn validate_task_id(value: &str) -> Result<(), MemoryError> {
     if value.is_empty()
         || value.len() > 128
         || !value
@@ -140,28 +151,90 @@ fn validate_task_id(value: &str) -> Result<(), MemoryError> {
     Ok(())
 }
 
-fn binding(conn: &Connection, message_id: i64) -> rusqlite::Result<Option<StoredTaskBinding>> {
+pub(crate) fn state(conn: &Connection, session_id: &str) -> rusqlite::Result<BindingState> {
+    if !table_exists(conn)? {
+        return Ok(BindingState::default());
+    }
+    let mut statement = conn.prepare(&format!(
+        "SELECT binding.message_id, binding.session_id, binding.task_id,
+                binding.user_message_id, binding.source_session_id,
+                binding.source_message_id, binding.source_user_message_id,
+                binding.is_user_prompt
+         FROM messages
+         JOIN conversation_message_tasks AS binding ON binding.message_id = messages.id
+         WHERE messages.session_id = ? AND messages.role <> 'injected'
+           AND messages.role <> 'system'
+         ORDER BY messages.ts_ms, messages.id
+         LIMIT {}",
+        MAX_BINDING_ROWS + 1
+    ))?;
+    let members = statement
+        .query_map([session_id], decode)?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT message_id, session_id, task_id, user_message_id, source_session_id,
+                source_message_id, source_user_message_id, is_user_prompt
+         FROM conversation_message_tasks
+         WHERE session_id = ?1 AND source_session_id = ?1
+           AND task_id IN (
+               SELECT binding.task_id
+               FROM messages
+               JOIN conversation_message_tasks AS binding
+                 ON binding.message_id = messages.id
+               WHERE messages.session_id = ?1 AND messages.role <> 'injected'
+                 AND messages.role <> 'system'
+           )
+         ORDER BY message_id
+         LIMIT {}",
+        MAX_BINDING_ROWS + 1
+    ))?;
+    let originals = statement
+        .query_map([session_id], decode)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(BindingState {
+        oversized: members.len() > MAX_BINDING_ROWS || originals.len() > MAX_BINDING_ROWS,
+        members,
+        originals,
+    })
+}
+
+fn table_exists(conn: &Connection) -> rusqlite::Result<bool> {
     conn.query_row(
-        "SELECT binding.session_id, binding.task_id, binding.user_message_id,
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_schema
+             WHERE type = 'table' AND name = 'conversation_message_tasks'
+         )",
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn binding(conn: &Connection, message_id: i64) -> rusqlite::Result<Option<MessageTaskBinding>> {
+    conn.query_row(
+        "SELECT binding.message_id, binding.session_id, binding.task_id,
+                binding.user_message_id,
                 binding.source_session_id, binding.source_message_id,
                 binding.source_user_message_id, binding.is_user_prompt
          FROM conversation_message_tasks AS binding
          JOIN messages ON messages.id = binding.message_id
          WHERE binding.message_id = ? AND messages.session_id = binding.session_id",
         [message_id],
-        |row| {
-            Ok(StoredTaskBinding {
-                session_id: row.get(0)?,
-                task_id: row.get(1)?,
-                user_message_id: row.get(2)?,
-                source_session_id: row.get(3)?,
-                source_message_id: row.get(4)?,
-                source_user_message_id: row.get(5)?,
-                is_user_prompt: row.get(6)?,
-            })
-        },
+        decode,
     )
     .optional()
+}
+
+fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageTaskBinding> {
+    Ok(MessageTaskBinding {
+        message_id: row.get(0)?,
+        session_id: row.get(1)?,
+        task_id: row.get(2)?,
+        user_message_id: row.get(3)?,
+        source_session_id: row.get(4)?,
+        source_message_id: row.get(5)?,
+        source_user_message_id: row.get(6)?,
+        is_user_prompt: row.get(7)?,
+    })
 }
 
 fn insert_binding(
