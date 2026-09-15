@@ -5,10 +5,7 @@ fn semantic_json(result: &ToolResult) -> Value {
     let parsed = crate::agent::trust::envelope::parse(&result.content)
         .expect("semantic recall output has typed provenance");
     assert_eq!(parsed.source.kind(), SourceKind::RecalledMemory);
-    assert!(
-        !parsed.truncated,
-        "a bounded semantic result must remain valid JSON"
-    );
+    assert!(!parsed.truncated, "a bounded semantic result must remain valid JSON");
     serde_json::from_str(&parsed.payload).unwrap()
 }
 
@@ -22,13 +19,10 @@ async fn semantic_search_exposes_bounded_versioned_reads_and_original_sources() 
     let key = format!("user-{message_id}");
     store.index("session/one", &key, &text).await.unwrap();
     let tool = CosRecallSemanticTool::new(store.clone(), memory);
-    let searched = exec(
-        &tool,
-        json!({
+    let searched = exec(&tool, json!({
             "command": "search", "query": text, "namespace": "session/one", "limit": 1,
-        }),
-    )
-    .await;
+        }))
+        .await;
     assert!(!searched.is_error, "{}", searched.content);
     let value = semantic_json(&searched);
     let hit = &value["hits"][0];
@@ -40,9 +34,7 @@ async fn semantic_search_exposes_bounded_versioned_reads_and_original_sources() 
     assert_eq!(value["score_kind"], "cosine_similarity_not_confidence");
     assert_eq!(hit["provenance"]["class"], "legacy-unknown");
     assert_eq!(
-        crate::agent::trust::envelope::parse(&searched.content)
-            .unwrap()
-            .class,
+        crate::agent::trust::envelope::parse(&searched.content).unwrap().class,
         TrustClass::LegacyUnknown,
     );
     let mut read = hit["read"].clone();
@@ -72,23 +64,17 @@ async fn namespace_filters_and_missing_sources_are_explicit() {
         .await
         .unwrap();
     let tool = CosRecallSemanticTool::new(store, MemoryDb::open_in_memory().unwrap());
-    let result = exec(
-        &tool,
-        json!({
+    let result = exec(&tool, json!({
             "command": "search", "query": "event", "namespace": "app/calendar",
-        }),
-    )
-    .await;
+        }))
+        .await;
     let value = semantic_json(&result);
     assert_eq!(value["hits"].as_array().unwrap().len(), 1);
     assert_eq!(value["hits"][0]["original_source"]["source"], "calendar");
     assert!(
-        exec(
-            &tool,
-            json!({"command":"count", "namespace":"x", "session_id":"y"})
-        )
-        .await
-        .is_error
+        exec(&tool, json!({"command":"count", "namespace":"x", "session_id":"y"}))
+            .await
+            .is_error
     );
     assert!(
         exec(&tool, json!({"command":"count", "session_id":null}))
@@ -96,12 +82,9 @@ async fn namespace_filters_and_missing_sources_are_explicit() {
             .is_error
     );
     assert!(
-        exec(
-            &tool,
-            json!({"command":"read", "namespace":"app/calendar", "key":"missing"})
-        )
-        .await
-        .is_error
+        exec(&tool, json!({"command":"read", "namespace":"app/calendar", "key":"missing"}))
+            .await
+            .is_error
     );
 }
 
@@ -146,10 +129,8 @@ async fn reverted_session_rows_are_hidden_from_semantic_search_and_read() {
     )
     .await;
     assert!(!search.is_error, "{}", search.content);
-    assert!(semantic_json(&search)["hits"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(semantic_json(&search)["hits"].as_array().unwrap().is_empty());
+
     let read = exec(
         &tool,
         json!({"command": "read", "namespace": "session/one", "key": key}),
@@ -250,7 +231,8 @@ async fn session_scoped_grant_cannot_count_another_or_all_namespaces() {
     let _lock = crate::test_env::lock_env();
     let caps_dir = tempfile::tempdir().unwrap();
     let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
-    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
+    let _caps =
+        crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
     let mut registry = crate::agent::tools::registry::ToolRegistry::new();
     registry.register(Arc::new(tool_no_embedder()));
     let session = memory_read_session(crate::caps::Scope::self_ref("alpha"));
@@ -263,65 +245,58 @@ async fn session_scoped_grant_cannot_count_another_or_all_namespaces() {
         crate::agent::tools::guardrails::Guardrails::permissive(),
     );
 
-    assert!(registry.get_for(&context, "cos_recall_semantic").is_some());
-    let (own, other, global, other_read, app_read) =
-        crate::proc::with_trusted_session_override(session, async {
-            let own = registry
-                .execute(
-                    &context,
-                    "cos_recall_semantic",
-                    json!({"command": "count", "session_id": "alpha"}),
-                    "test",
-                )
-                .await;
-            let other = registry
-                .execute(
-                    &context,
-                    "cos_recall_semantic",
-                    json!({"command": "count", "session_id": "bravo"}),
-                    "test",
-                )
-                .await;
-            let global = registry
-                .execute(
-                    &context,
-                    "cos_recall_semantic",
-                    json!({"command": "count"}),
-                    "test",
-                )
-                .await;
-            let other_read = registry
-                .execute(
-                    &context,
-                    "cos_recall_semantic",
-                    json!({"command":"read", "namespace":"session/bravo", "key":"user-1"}),
-                    "test",
-                )
-                .await;
-            let app_read = registry
-                .execute(
-                    &context,
-                    "cos_recall_semantic",
-                    json!({"command":"read", "namespace":"app/calendar", "key":"1"}),
-                    "test",
-                )
-                .await;
-            (own, other, global, other_read, app_read)
-        })
-        .await;
+    assert!(registry
+        .get_for(&context, "cos_recall_semantic")
+        .is_some());
+    let (own, other, global, other_read, app_read) = crate::proc::with_trusted_session_override(session, async {
+        let own = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command": "count", "session_id": "alpha"}),
+                "test",
+            )
+            .await;
+        let other = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command": "count", "session_id": "bravo"}),
+                "test",
+            )
+            .await;
+        let global = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command": "count"}),
+                "test",
+            )
+            .await;
+        let other_read = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command":"read", "namespace":"session/bravo", "key":"user-1"}),
+                "test",
+            )
+            .await;
+        let app_read = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command":"read", "namespace":"app/calendar", "key":"1"}),
+                "test",
+            )
+            .await;
+        (own, other, global, other_read, app_read)
+    })
+    .await;
     assert!(!own.is_error, "{}", own.content);
     assert!(other.is_error);
     assert!(global.is_error);
     assert!(other_read.is_error);
-    assert!(
-        other_read.content.contains("memory.read"),
-        "{}",
-        other_read.content
-    );
+    assert!(other_read.content.contains("memory.read"), "{}", other_read.content);
     assert!(app_read.is_error);
-    assert!(
-        app_read.content.contains("memory.read"),
-        "{}",
-        app_read.content
-    );
+    assert!(app_read.content.contains("memory.read"), "{}", app_read.content);
 }
