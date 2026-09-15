@@ -90,6 +90,10 @@ fn activity_commands_have_stable_names_and_round_trip() {
             "agent.conversation.update",
         ),
         (Command::AgentConversationFork, "agent.conversation.fork"),
+        (
+            Command::AgentConversationRevert,
+            "agent.conversation.revert",
+        ),
         (Command::TaskGet, "task.get"),
         (Command::TaskRetry, "task.retry"),
     ] {
@@ -229,6 +233,10 @@ fn main_routes_survive_activity_inventory_merge() {
             "agent.conversation.update",
         ),
         (Command::AgentConversationFork, "agent.conversation.fork"),
+        (
+            Command::AgentConversationRevert,
+            "agent.conversation.revert",
+        ),
         (Command::TaskSubmit, "task.submit"),
         (Command::TaskStream, "task.stream"),
         (Command::TaskCancel, "task.cancel"),
@@ -252,7 +260,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 49);
+    assert_eq!(Command::ALL.len(), 50);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

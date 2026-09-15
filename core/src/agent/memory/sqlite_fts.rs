@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use super::compaction::COMPACTION_SCHEMA;
 use super::conversation_bindings::SCHEMA as CONVERSATION_BINDING_SCHEMA;
+use super::conversations::SCHEMA as CONVERSATION_REPLAY_SCHEMA;
 use super::recovery::{self, MemoryLifecycleLock};
 
 pub(crate) const INJECTED_ROLE: &str = "injected";
@@ -847,17 +848,18 @@ impl MemoryDb {
         limit: usize,
     ) -> Result<Vec<MessageRow>, MemoryError> {
         let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(
+        let filter = super::conversations::active_replay_filter(&conn)?;
+        let mut stmt = conn.prepare(&format!(
             "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
              FROM (
                  SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
                  FROM messages
-                 WHERE session_id = ? AND role <> ?
+                 WHERE session_id = ? AND role <> ? {filter}
                  ORDER BY ts_ms DESC, id DESC
                  LIMIT ?
              )
-             ORDER BY ts_ms ASC, id ASC",
-        )?;
+             ORDER BY ts_ms ASC, id ASC"
+        ))?;
         let rows = stmt
             .query_map(
                 params![session_id, INJECTED_ROLE, limit as i64],
@@ -917,7 +919,19 @@ impl MemoryDb {
             return Ok(Vec::new());
         }
         let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(
+        let replay_filter = if matches!(rows, SearchRows::History)
+            && super::conversations::has_replay_exclusions(&conn)?
+        {
+            "AND NOT EXISTS (
+                 SELECT 1
+                 FROM conversation_replay_exclusions AS replay_exclusion
+                 WHERE replay_exclusion.message_id = m.id
+                   AND replay_exclusion.session_id = m.session_id
+             )"
+        } else {
+            ""
+        };
+        let mut stmt = conn.prepare(&format!(
             "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, m.trust_class, m.trust_source, m.trust_lineage, bm25(messages_fts) AS rank
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
@@ -925,9 +939,10 @@ impl MemoryDb {
                AND (?2 IS NULL OR m.session_id = ?2)
                AND (NOT ?3 OR m.role <> ?4)
                AND (NOT ?5 OR (m.role = 'app' AND m.session_id LIKE 'app:%'))
+               {replay_filter}
              ORDER BY rank, m.id
-             LIMIT ?6",
-        )?;
+             LIMIT ?6"
+        ))?;
         let hits = stmt
             .query_map(
                 params![
@@ -955,6 +970,23 @@ impl MemoryDb {
             .query_row(
                 "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
                  FROM messages WHERE id = ?",
+                params![id],
+                row_to_message,
+            )
+            .optional()?)
+    }
+
+    pub fn replayable_message(&self, id: i64) -> Result<Option<MessageRow>, MemoryError> {
+        let conn = self.lock_conn()?;
+        let filter = super::conversations::active_replay_filter(&conn)?;
+        Ok(conn
+            .query_row(
+                &format!(
+                    "SELECT id, session_id, role, content, ts_ms,
+                            trust_class, trust_source, trust_lineage
+                     FROM messages
+                     WHERE id = ? {filter}"
+                ),
                 params![id],
                 row_to_message,
             )
@@ -1451,6 +1483,7 @@ pub(super) fn initialize_connection(conn: &Connection) -> Result<(), MemoryError
     conn.execute_batch(BASE_SCHEMA)?;
     conn.execute_batch(COMPACTION_SCHEMA)?;
     conn.execute_batch(CONVERSATION_BINDING_SCHEMA)?;
+    conn.execute_batch(CONVERSATION_REPLAY_SCHEMA)?;
     conn.execute_batch(FTS_SCHEMA)?;
     migrate_provenance_columns(conn)?;
     Ok(())

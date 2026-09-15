@@ -5,8 +5,8 @@ correlation, deadlines and socket-peer checks, not authorization, capabilities,
 provider implementation, desktop state or a durable approval store.
 
 Its closed command inventory includes owner-scoped
-`agent.conversation.create/get/list/update/fork`. Conversation UUIDs are
-presentation identifiers only; canonical session identity, verified fork
+`agent.conversation.create/get/list/update/fork/revert`. Conversation UUIDs are
+presentation identifiers only; canonical session identity, verified replay
 boundaries and all ownership checks remain in `clawd`.
 
 The inventory also includes `activity.monetary_budget.get/set/enabled` and

@@ -76,10 +76,12 @@ fn verify_with_scope(
     if by_id.len() != state.members.len() {
         return Err("duplicate canonical message membership".to_string());
     }
+    let active_keys = state.members.iter().map(key).collect::<BTreeSet<_>>();
 
     let ancestors = if state
         .members
         .iter()
+        .chain(&state.excluded)
         .any(|binding| binding.source_session_id != meta.id.as_str())
         || !presentation.inherited_tasks.is_empty()
     {
@@ -91,6 +93,9 @@ fn verify_with_scope(
     let mut expected = BTreeMap::<(String, String), BTreeSet<i64>>::new();
     for binding in &state.originals {
         validate_original(&meta.id, binding)?;
+        if !require_exact_current_jobs && !active_keys.contains(&key(binding)) {
+            continue;
+        }
         if !expected
             .entry(key(binding))
             .or_default()
@@ -103,6 +108,13 @@ fn verify_with_scope(
     let mut inherited_rows = 0usize;
     for inherited in &presentation.inherited_tasks {
         validate_task_id(&inherited.task_id).map_err(|error| error.to_string())?;
+        let inherited_key = (
+            inherited.source_session_id.clone(),
+            inherited.task_id.clone(),
+        );
+        if !require_exact_current_jobs && !active_keys.contains(&inherited_key) {
+            continue;
+        }
         let source = ConversationId::parse(&inherited.source_session_id)?;
         if source.session_id() == &meta.id
             || !ancestors.contains(inherited.source_session_id.as_str())
@@ -125,13 +137,7 @@ fn verify_with_scope(
             return Err("invalid inherited task message identity".to_string());
         }
         if expected
-            .insert(
-                (
-                    inherited.source_session_id.clone(),
-                    inherited.task_id.clone(),
-                ),
-                ids,
-            )
+            .insert(inherited_key, ids)
             .is_some()
         {
             return Err("duplicate inherited task membership".to_string());
@@ -178,15 +184,70 @@ fn verify_with_scope(
             return Err("duplicate inherited message identity".to_string());
         }
     }
-    if expected != groups {
+
+    let excluded_by_id = state
+        .excluded
+        .iter()
+        .map(|binding| (binding.message_id, binding))
+        .collect::<BTreeMap<_, _>>();
+    if excluded_by_id.len() != state.excluded.len()
+        || excluded_by_id.keys().any(|id| by_id.contains_key(id))
+    {
+        return Err("duplicate canonical message membership".to_string());
+    }
+    let mut excluded_groups = BTreeMap::<(String, String), BTreeSet<i64>>::new();
+    let mut excluded_prompts = BTreeMap::<(String, String), usize>::new();
+    for binding in &state.excluded {
+        validate_member(&meta.id, &ancestors, binding)?;
+        if !require_exact_current_jobs && !active_keys.contains(&key(binding)) {
+            continue;
+        }
+        let outer = excluded_by_id
+            .get(&binding.user_message_id)
+            .ok_or_else(|| "excluded task has no retained outer user message".to_string())?;
+        if !outer.is_user_prompt
+            || key(outer) != key(binding)
+            || outer.source_message_id != binding.source_user_message_id
+            || outer.source_user_message_id != binding.source_user_message_id
+            || outer.message_id != outer.user_message_id
+        {
+            return Err("excluded task membership does not match its outer user message".to_string());
+        }
+        if !excluded_groups
+            .entry(key(binding))
+            .or_default()
+            .insert(binding.source_message_id)
+        {
+            return Err("duplicate excluded message identity".to_string());
+        }
+        if binding.is_user_prompt {
+            *excluded_prompts.entry(key(binding)).or_default() += 1;
+        }
+    }
+    for (key, excluded) in &excluded_groups {
+        if excluded_prompts.get(key) != Some(&1) {
+            return Err("excluded task membership has an invalid user-message boundary".to_string());
+        }
+        if groups.contains_key(key) {
+            return Err("replay exclusion splits a retained task".to_string());
+        }
+        if expected.get(key) != Some(excluded) {
+            return Err("excluded task history is incomplete".to_string());
+        }
+    }
+    let mut accounted = groups.clone();
+    for (key, excluded) in &excluded_groups {
+        accounted.insert(key.clone(), excluded.clone());
+    }
+    if expected != accounted {
         return Err(
             "partial task history: retained rows do not contain each complete task".to_string(),
         );
     }
 
     if require_exact_current_jobs {
-        let current_order = task_order
-            .iter()
+        let current_order = expected
+            .keys()
             .filter(|(source, _)| source == meta.id.as_str())
             .map(|(_, task_id)| task_id.clone())
             .collect::<Vec<_>>();

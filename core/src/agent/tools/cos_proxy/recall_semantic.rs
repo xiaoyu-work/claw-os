@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::memory::semantic::{SemanticHit, SemanticStore};
+use crate::agent::memory::sqlite_fts::MemoryDb;
 use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 use crate::agent::trust::{LabeledSegment, SourceKind, TrustClass};
@@ -31,11 +32,12 @@ const MAX_LIMIT: usize = 50;
 
 pub struct CosRecallSemanticTool {
     store: Arc<SemanticStore>,
+    memory: MemoryDb,
 }
 
 impl CosRecallSemanticTool {
-    pub fn new(store: Arc<SemanticStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<SemanticStore>, memory: MemoryDb) -> Self {
+        Self { store, memory }
     }
 }
 
@@ -234,7 +236,20 @@ impl Tool for CosRecallSemanticTool {
             "search" => {
                 let ns = namespace.as_deref();
                 match self.store.search(ns, &query, limit + 1).await {
-                    Ok(mut hits) => {
+                    Ok(hits) => {
+                        let mut replayable = Vec::with_capacity(hits.len());
+                        for hit in hits {
+                            match semantic_hit_is_replayable(&self.memory, &hit) {
+                                Ok(true) => replayable.push(hit),
+                                Ok(false) => {}
+                                Err(error) => {
+                                    return ToolResult::err(format!(
+                                        "cos_recall_semantic replay check: {error}"
+                                    ))
+                                }
+                            }
+                        }
+                        let mut hits = replayable;
                         let has_more = hits.len() > limit;
                         hits.truncate(limit);
                         let max_chars = (crate::agent::memory::history::DEFAULT_READ_CHARS
@@ -263,6 +278,17 @@ impl Tool for CosRecallSemanticTool {
             "read" => {
                 let namespace = namespace.as_deref().expect("validated above");
                 let key = key.expect("validated above");
+                match semantic_source_is_replayable(&self.memory, namespace, key) {
+                    Ok(true) => {}
+                    Ok(false) => return ToolResult::err(
+                        "indexed source no longer exists; search again or use its original source",
+                    ),
+                    Err(error) => {
+                        return ToolResult::err(format!(
+                            "cos_recall_semantic replay check: {error}"
+                        ))
+                    }
+                }
                 match self.store.get(namespace, key) {
                     Ok(Some(row)) => {
                         let page = match window.page(&row.text) {
@@ -304,6 +330,31 @@ impl Tool for CosRecallSemanticTool {
             other => ToolResult::err(format!("unexpected validated command '{other}'")),
         }
     }
+}
+
+fn semantic_hit_is_replayable(
+    memory: &MemoryDb,
+    hit: &SemanticHit,
+) -> Result<bool, crate::agent::memory::sqlite_fts::MemoryError> {
+    semantic_source_is_replayable(memory, &hit.namespace, &hit.key)
+}
+
+fn semantic_source_is_replayable(
+    memory: &MemoryDb,
+    namespace: &str,
+    key: &str,
+) -> Result<bool, crate::agent::memory::sqlite_fts::MemoryError> {
+    let Some(session_id) = namespace.strip_prefix("session/") else {
+        return Ok(true);
+    };
+    let Some((role, message_id)) = key.rsplit_once('-') else {
+        return Ok(false);
+    };
+    let Ok(message_id) = message_id.parse::<i64>() else {
+        return Ok(false);
+    };
+    let row = memory.replayable_message(message_id)?;
+    Ok(row.is_some_and(|row| row.session_id == session_id && row.role == role))
 }
 
 fn normalise_namespace(s: &str) -> String {

@@ -11,6 +11,7 @@ results, and curates durable notes from completed work.
   tool invocation state.
 - Atomically bind rows recorded by durable Agent tasks to their canonical task
   and outer user-message identities.
+- Retain canonical rows while applying checked, whole-task replay exclusions.
 - Freeze content-addressed canonical system prompts per session.
 - Provide FTS and semantic recall behind stable interfaces.
 - Provide paged model reads with stable source IDs; the model chooses which
@@ -41,7 +42,11 @@ coverage.
 
 Task bindings are canonical execution evidence, not presentation metadata.
 Their rows intentionally survive ordinary message purge so missing transcript
-rows cannot later be mistaken for a complete retained task.
+rows cannot later be mistaken for a complete retained task. Revert records only
+exclude rows from active replay; raw rows, bindings, Jobs and audit evidence
+remain available to diagnostic and recovery paths. Model-visible exact and
+semantic recall honor replay exclusions, while canonical diagnostic reads and
+FTS projections retain the underlying evidence.
 
 `USER.md` and `[always]` entries enter the bounded request profile, not the
 frozen system prompt. Other notes are read deliberately through `cos_memory`.

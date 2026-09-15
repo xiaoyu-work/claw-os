@@ -152,6 +152,16 @@ fn conversation_read_only_view_supports_legacy_message_columns_without_migrating
         .unwrap(),
         0
     );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE type = 'table' AND name = 'conversation_replay_exclusions'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -239,4 +249,141 @@ fn conversation_snapshot_rejects_unknown_user_turn_boundaries() {
             available: 1
         })
     ));
+}
+
+#[test]
+fn conversation_revert_excludes_replay_without_deleting_canonical_evidence() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let user =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::UserMessage, "");
+    let model =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::ModelResponse, "");
+    let first = db
+        .record_task_user_message("session", "task-one", &user, "first prompt")
+        .unwrap();
+    db.record_task_message(&first, "assistant", &model, "first answer")
+        .unwrap();
+    let branch_context_id = db
+        .record_message("session", "system", "retry branch context")
+        .unwrap();
+    let second = db
+        .record_task_user_message("session", "task-two", &user, "second prompt")
+        .unwrap();
+    db.record_task_message(&second, "assistant", &model, "second answer")
+        .unwrap();
+
+    let current = db.conversation_snapshot("session", None).unwrap();
+    let retained = db.conversation_revert_snapshot("session", 1).unwrap();
+    assert_eq!(retained.visible_count(), 2);
+    db.revert_conversation_checked("session", 1, 1_234, &current.revision)
+        .unwrap();
+
+    let page = db.conversation_history_page("session", 10).unwrap();
+    assert_eq!(page.message_count, 2);
+    assert_eq!(page.messages[0].message.text, "first prompt");
+    assert_eq!(page.messages[1].message.text, "first answer");
+    assert_eq!(page.bindings.members.len(), 2);
+    assert_eq!(page.bindings.excluded.len(), 2);
+    assert!(db.replayable_message(branch_context_id).unwrap().is_none());
+    assert!(db
+        .replayable_message(second.user_message_id())
+        .unwrap()
+        .is_none());
+    assert!(db.message(second.user_message_id()).unwrap().is_some());
+    assert!(db
+        .search_history("second", Some("session"), 10)
+        .unwrap()
+        .is_empty());
+    assert_eq!(db.search_session("session", "second", 10).unwrap().len(), 2);
+    assert_eq!(
+        db.recent_replayable("session", 10)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.content)
+            .collect::<Vec<_>>(),
+        ["first prompt", "first answer"]
+    );
+    let conn = db.lock_conn().unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE session_id = 'session'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        5
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM conversation_message_tasks
+             WHERE session_id = 'session'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        4
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM conversation_replay_exclusions
+             WHERE session_id = 'session'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        3
+    );
+    drop(conn);
+    assert!(matches!(
+        db.revert_conversation_checked("session", 1, 2_345, &current.revision),
+        Err(ConversationMemoryError::Changed)
+    ));
+
+    let next = db.conversation_snapshot("session", None).unwrap();
+    db.lock_conn()
+        .unwrap()
+        .execute(
+            "UPDATE conversation_message_tasks
+             SET task_id = 'changed-excluded-task'
+             WHERE message_id = ?",
+            [second.user_message_id()],
+        )
+        .unwrap();
+    assert!(matches!(
+        db.revert_conversation_checked("session", 1, 3_456, &next.revision),
+        Err(ConversationMemoryError::Changed)
+    ));
+    db.lock_conn()
+        .unwrap()
+        .execute(
+            "UPDATE conversation_message_tasks
+             SET task_id = 'task-two'
+             WHERE message_id = ?",
+            [second.user_message_id()],
+        )
+        .unwrap();
+    let next = db.conversation_snapshot("session", None).unwrap();
+    db.revert_conversation_checked("session", 1, 3_456, &next.revision)
+        .unwrap();
+    let page = db.conversation_history_page("session", 10).unwrap();
+    assert_eq!(page.message_count, 0);
+    assert!(page.messages.is_empty());
+    assert!(page.bindings.members.is_empty());
+    assert_eq!(page.bindings.excluded.len(), 4);
+    assert_eq!(page.bindings.originals.len(), 4);
+    assert!(db.recent_replayable("session", 10).unwrap().is_empty());
+    assert_eq!(db.recent("session", 10).unwrap().len(), 5);
+    assert_eq!(db.search_session("session", "second", 10).unwrap().len(), 2);
+    assert_eq!(
+        db.lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_replay_exclusions
+                 WHERE session_id = 'session'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        5
+    );
 }

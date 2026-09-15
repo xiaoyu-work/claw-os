@@ -93,6 +93,67 @@ fn completed_compaction_projects_summary_and_uncompacted_tail() {
 }
 
 #[test]
+fn reverted_rows_invalidate_old_summaries_and_do_not_block_new_compaction() {
+    let db = db();
+    let user =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::UserMessage, "");
+    let model =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::ModelResponse, "");
+    let mut ids = Vec::new();
+    for (task, prompt, answer) in [
+        ("task-one", "first prompt", "first answer"),
+        ("task-two", "second prompt", "second answer"),
+        ("task-three", "third prompt", "third answer"),
+    ] {
+        let turn = db
+            .record_task_user_message("session", task, &user, prompt)
+            .unwrap();
+        ids.push(turn.user_message_id());
+        ids.push(
+            db.record_task_message(&turn, "assistant", &model, answer)
+                .unwrap(),
+        );
+    }
+    let attempt = match db
+        .begin_compaction("session", spec(&ids[..2], ids[2]))
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected started attempt, got {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nold summary")
+        .unwrap();
+
+    let current = db.conversation_snapshot("session", None).unwrap();
+    db.revert_conversation_checked("session", 2, 1_234, &current.revision)
+        .unwrap();
+    let projection = db.continuation_projection("session", 100, true).unwrap();
+    assert!(projection.summary.is_none());
+    assert_eq!(projection.rejected_invalid, 1);
+    assert_eq!(
+        projection.tail.iter().map(|row| row.id).collect::<Vec<_>>(),
+        ids[..2]
+    );
+
+    let replacement = db
+        .record_task_user_message("session", "task-replacement", &user, "replacement prompt")
+        .unwrap();
+    db.record_task_message(&replacement, "assistant", &model, "replacement answer")
+        .unwrap();
+    let attempt = match db
+        .begin_compaction("session", spec(&ids[..2], replacement.user_message_id()))
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected replacement attempt, got {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nreplacement summary")
+        .unwrap();
+}
+
+#[test]
 fn completed_source_range_is_not_started_again() {
     let db = db();
     let ids = seed_rows(&db, "session", 4);

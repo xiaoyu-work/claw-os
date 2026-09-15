@@ -100,6 +100,120 @@ fn recovery_preserves_task_bindings_after_message_purge() {
     );
 }
 
+#[test]
+fn quarantine_recovery_preserves_only_session_bound_replay_exclusions() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).unwrap();
+    let user =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::UserMessage, "");
+    let model =
+        crate::agent::trust::LabeledSegment::of(crate::agent::trust::SourceKind::ModelResponse, "");
+    let first = db
+        .record_task_user_message("session", "task-one", &user, "first prompt")
+        .unwrap();
+    db.record_task_message(&first, "assistant", &model, "first answer")
+        .unwrap();
+    db.record_message("session", "system", "retry branch context")
+        .unwrap();
+    let second = db
+        .record_task_user_message("session", "task-two", &user, "second prompt")
+        .unwrap();
+    db.record_task_message(&second, "assistant", &model, "second answer")
+        .unwrap();
+    let current = db.conversation_snapshot("session", None).unwrap();
+    db.revert_conversation_checked("session", 1, 1_234, &current.revision)
+        .unwrap();
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "INSERT INTO conversation_replay_exclusions(
+                 message_id, session_id, reverted_at_ms
+             ) VALUES (?, 'wrong-session', 1)",
+            [first.user_message_id()],
+        )
+        .unwrap();
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .unwrap();
+    }
+    drop(db);
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(report.recovered.task_bindings, 4);
+    assert_eq!(report.recovered.replay_exclusions, 3);
+    let repaired = MemoryDb::open(&path).unwrap();
+    assert_eq!(
+        repaired
+            .recent_replayable("session", 10)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.content)
+            .collect::<Vec<_>>(),
+        ["first prompt", "first answer"]
+    );
+    assert_eq!(repaired.recent("session", 10).unwrap().len(), 5);
+    assert_eq!(
+        repaired
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_replay_exclusions
+                 WHERE session_id = 'session'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        3
+    );
+}
+
+#[test]
+fn legacy_replacement_marker_defaults_replay_exclusions_to_zero() {
+    let (_directory, path) = database_path();
+    create_message_database(&path, "legacy marker row");
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memory_repair_install (
+                 singleton             INTEGER PRIMARY KEY CHECK(singleton = 1),
+                 attempt_id            TEXT NOT NULL,
+                 quarantine_path       TEXT NOT NULL,
+                 source_main_sha256    TEXT,
+                 complete              INTEGER NOT NULL,
+                 salvage_succeeded     INTEGER NOT NULL,
+                 recovered_messages    INTEGER NOT NULL,
+                 recovered_titles      INTEGER NOT NULL,
+                 recovered_prompt_refs INTEGER NOT NULL,
+                 skipped_prompt_refs   INTEGER NOT NULL,
+                 recovery_warning      TEXT
+             );
+             INSERT INTO memory_repair_install(
+                 singleton, attempt_id, quarantine_path, source_main_sha256,
+                 complete, salvage_succeeded, recovered_messages,
+                 recovered_titles, recovered_prompt_refs, skipped_prompt_refs,
+                 recovery_warning
+             ) VALUES(
+                 1, 'legacy-attempt', '/tmp/legacy-quarantine', NULL,
+                 1, 1, 1, 0, 0, 0, NULL
+             );",
+        )
+        .unwrap();
+    }
+
+    let marker = read_replacement_marker(&path).unwrap().unwrap();
+    assert_eq!(marker.attempt_id, "legacy-attempt");
+    assert_eq!(marker.recovered.messages, 1);
+    assert_eq!(marker.recovered.replay_exclusions, 0);
+}
+
 fn complete_test_compaction(db: &MemoryDb, session_id: &str) {
     use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
 
@@ -525,6 +639,48 @@ fn missing_trigger_requires_explicit_repair_and_is_restored() {
         .record_message("session", "user", "second searchable row")
         .expect("record after repair");
     assert_eq!(repaired.search("second", 10).expect("search").len(), 1);
+}
+
+#[test]
+fn missing_replay_schema_requires_explicit_repair_and_is_restored() {
+    let (_directory, path) = database_path();
+    create_message_database(&path, "replay schema row");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP INDEX conversation_replay_exclusions_session;
+         DROP TABLE conversation_replay_exclusions;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let health = diagnose(&path).unwrap();
+    assert_eq!(health.schema.status, "fail");
+    assert!(!health.requires_quarantine);
+    assert!(health
+        .schema
+        .issues
+        .iter()
+        .any(|issue| issue.contains("conversation_replay_exclusions")));
+    assert!(health
+        .planned_repairs
+        .iter()
+        .any(|action| action == "restore_schema_objects"));
+    assert!(MemoryDb::open(&path).unwrap_err().is_integrity_failure());
+
+    repair(&path, RepairOptions::default()).unwrap();
+    let repaired = Connection::open(&path).unwrap();
+    assert_eq!(
+        schema_object_type(&repaired, "conversation_replay_exclusions")
+            .unwrap()
+            .as_deref(),
+        Some("table")
+    );
+    assert_eq!(
+        schema_object_type(&repaired, "conversation_replay_exclusions_session")
+            .unwrap()
+            .as_deref(),
+        Some("index")
+    );
 }
 
 #[test]

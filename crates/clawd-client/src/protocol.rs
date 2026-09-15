@@ -77,6 +77,8 @@ pub enum Command {
     AgentConversationUpdate,
     #[serde(rename = "agent.conversation.fork")]
     AgentConversationFork,
+    #[serde(rename = "agent.conversation.revert")]
+    AgentConversationRevert,
     #[serde(rename = "task.submit")]
     TaskSubmit,
     #[serde(rename = "task.get")]
@@ -127,7 +129,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 50] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -159,6 +161,7 @@ impl Command {
         Self::AgentConversationList,
         Self::AgentConversationUpdate,
         Self::AgentConversationFork,
+        Self::AgentConversationRevert,
         Self::TaskSubmit,
         Self::TaskGet,
         Self::TaskRetry,
@@ -212,6 +215,7 @@ impl Command {
             Self::AgentConversationList => "agent.conversation.list",
             Self::AgentConversationUpdate => "agent.conversation.update",
             Self::AgentConversationFork => "agent.conversation.fork",
+            Self::AgentConversationRevert => "agent.conversation.revert",
             Self::TaskSubmit => "task.submit",
             Self::TaskGet => "task.get",
             Self::TaskRetry => "task.retry",

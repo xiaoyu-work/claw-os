@@ -1032,8 +1032,8 @@ pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
         super::cos_proxy::register_recall(&mut r, db.clone());
         super::cos_proxy::register_app_memory(&mut r, db.clone());
     }
-    if let Some(store) = &deps.semantic {
-        super::cos_proxy::register_recall_semantic(&mut r, Arc::clone(store));
+    if let (Some(store), Some(db)) = (&deps.semantic, &deps.memory) {
+        super::cos_proxy::register_recall_semantic(&mut r, Arc::clone(store), db.clone());
     }
     r
 }

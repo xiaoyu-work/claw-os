@@ -391,6 +391,193 @@ fn conversation_fork_rejects_active_deleted_and_unverified_sources_before_creati
 }
 
 #[test]
+fn conversation_revert_hides_whole_tasks_but_retains_jobs_and_evidence() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let id = fixture.create();
+    let db = fixture.db();
+    let store = Store::open_default().unwrap();
+    let mut task_ids = Vec::new();
+    for (prompt, answer) in [
+        ("first prompt", "first answer"),
+        ("second prompt", "second answer"),
+        ("third prompt", "third answer"),
+    ] {
+        let job = store
+            .submit(
+                prompt.to_string(),
+                Some(id.to_string()),
+                None,
+                Some(fixture.uid()),
+                None,
+            )
+            .unwrap();
+        let turn = db
+            .record_task_user_message(
+                id.as_str(),
+                &job.id,
+                &crate::agent::trust::LabeledSegment::of(
+                    crate::agent::trust::SourceKind::UserMessage,
+                    "",
+                ),
+                prompt,
+            )
+            .unwrap();
+        db.record_task_message(
+            &turn,
+            "assistant",
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::ModelResponse,
+                "",
+            ),
+            answer,
+        )
+        .unwrap();
+        fixture.finish(&job.id);
+        task_ids.push(job.id);
+    }
+
+    let reverted = revert(json!({"id": id, "user_turns": 2}), &fixture.client).unwrap()
+        ["conversation"]
+        .clone();
+    assert_eq!(reverted["message_count"], 2);
+    assert_eq!(reverted["messages"][0]["text"], "first prompt");
+    assert_eq!(reverted["messages"][1]["text"], "first answer");
+    assert_eq!(reverted["job_count"], 1);
+    assert_eq!(reverted["jobs"][0]["id"], task_ids[0]);
+    assert_eq!(reverted["task_bindings_complete"], true);
+
+    let raw = db.recent(id.as_str(), 10).unwrap();
+    assert_eq!(raw.len(), 6);
+    assert_eq!(
+        Store::open_default()
+            .unwrap()
+            .list_bucket_for_owner(
+                crate::agent::service::JobStatus::Ok,
+                None,
+                Some(fixture.uid())
+            )
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        db.lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_replay_exclusions
+                 WHERE session_id = ?",
+                [id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        4
+    );
+
+    let next = store
+        .submit(
+            "replacement prompt".to_string(),
+            Some(id.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    let next_turn = db
+        .record_task_user_message(
+            id.as_str(),
+            &next.id,
+            &crate::agent::trust::LabeledSegment::of(
+                crate::agent::trust::SourceKind::UserMessage,
+                "",
+            ),
+            "replacement prompt",
+        )
+        .unwrap();
+    db.record_task_message(
+        &next_turn,
+        "assistant",
+        &crate::agent::trust::LabeledSegment::of(
+            crate::agent::trust::SourceKind::ModelResponse,
+            "",
+        ),
+        "replacement answer",
+    )
+    .unwrap();
+    fixture.finish(&next.id);
+    let continued = get(json!({"id": id}), &fixture.client).unwrap()["conversation"].clone();
+    assert_eq!(continued["message_count"], 4);
+    assert_eq!(continued["messages"][2]["text"], "replacement prompt");
+    assert_eq!(continued["job_count"], 2);
+    assert_eq!(continued["jobs"][1]["id"], next.id);
+}
+
+#[test]
+fn conversation_revert_rejects_active_deleted_invalid_and_unverified_sources() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let active = fixture.create();
+    Store::open_default()
+        .unwrap()
+        .submit(
+            "still running".to_string(),
+            Some(active.to_string()),
+            None,
+            Some(fixture.uid()),
+            None,
+        )
+        .unwrap();
+    assert!(
+        revert(json!({"id": active, "user_turns": 1}), &fixture.client)
+            .unwrap_err()
+            .contains("active task")
+    );
+
+    let deleted = fixture.create();
+    update(json!({"id": deleted, "deleted": true}), &fixture.client).unwrap();
+    assert!(
+        revert(json!({"id": deleted, "user_turns": 1}), &fixture.client)
+            .unwrap_err()
+            .contains("soft-deleted")
+    );
+
+    let legacy = fixture.create();
+    fixture
+        .db()
+        .record_message(legacy.as_str(), "user", "legacy prompt")
+        .unwrap();
+    let legacy_error = revert(json!({"id": legacy, "user_turns": 1}), &fixture.client).unwrap_err();
+    assert!(
+        legacy_error.contains("conversation has 0"),
+        "{legacy_error}"
+    );
+    assert_eq!(
+        fixture
+            .db()
+            .lock_conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_replay_exclusions
+                 WHERE session_id = ?",
+                [legacy.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert!(
+        revert(json!({"id": legacy, "user_turns": 0}), &fixture.client)
+            .unwrap_err()
+            .contains("greater than zero")
+    );
+    assert!(revert(json!({"id": legacy, "user_turns": 2}), &fixture.client).is_err());
+}
+
+#[test]
 fn conversation_owner_boundary_and_inputs_fail_before_side_effects() {
     let _lock = lock_env();
     let Some(fixture) = Fixture::new() else {
@@ -431,6 +618,7 @@ fn conversation_owner_boundary_and_inputs_fail_before_side_effects() {
         list(json!({}), &root),
         update(json!({"id": id, "deleted": true}), &root),
         fork(json!({"id": id}), &root),
+        revert(json!({"id": id, "user_turns": 1}), &root),
     ] {
         assert_eq!(result.unwrap_err(), ROOT_OWNER_REFUSAL);
     }

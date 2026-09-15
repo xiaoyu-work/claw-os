@@ -40,6 +40,7 @@ pub(crate) struct MessageTaskBinding {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BindingState {
     pub(crate) members: Vec<MessageTaskBinding>,
+    pub(crate) excluded: Vec<MessageTaskBinding>,
     pub(crate) originals: Vec<MessageTaskBinding>,
     pub(crate) oversized: bool,
 }
@@ -155,6 +156,7 @@ pub(crate) fn state(conn: &Connection, session_id: &str) -> rusqlite::Result<Bin
     if !table_exists(conn)? {
         return Ok(BindingState::default());
     }
+    let filter = super::conversations::active_replay_filter(conn)?;
     let mut statement = conn.prepare(&format!(
         "SELECT binding.message_id, binding.session_id, binding.task_id,
                 binding.user_message_id, binding.source_session_id,
@@ -164,6 +166,7 @@ pub(crate) fn state(conn: &Connection, session_id: &str) -> rusqlite::Result<Bin
          JOIN conversation_message_tasks AS binding ON binding.message_id = messages.id
          WHERE messages.session_id = ? AND messages.role <> 'injected'
            AND messages.role <> 'system'
+           {filter}
          ORDER BY messages.ts_ms, messages.id
          LIMIT {}",
         MAX_BINDING_ROWS + 1
@@ -176,14 +179,6 @@ pub(crate) fn state(conn: &Connection, session_id: &str) -> rusqlite::Result<Bin
                 source_message_id, source_user_message_id, is_user_prompt
          FROM conversation_message_tasks
          WHERE session_id = ?1 AND source_session_id = ?1
-           AND task_id IN (
-               SELECT binding.task_id
-               FROM messages
-               JOIN conversation_message_tasks AS binding
-                 ON binding.message_id = messages.id
-               WHERE messages.session_id = ?1 AND messages.role <> 'injected'
-                 AND messages.role <> 'system'
-           )
          ORDER BY message_id
          LIMIT {}",
         MAX_BINDING_ROWS + 1
@@ -191,9 +186,34 @@ pub(crate) fn state(conn: &Connection, session_id: &str) -> rusqlite::Result<Bin
     let originals = statement
         .query_map([session_id], decode)?
         .collect::<Result<Vec<_>, _>>()?;
+    let excluded = if super::conversations::has_replay_exclusions(conn)? {
+        let mut statement = conn.prepare(&format!(
+            "SELECT binding.message_id, binding.session_id, binding.task_id,
+                    binding.user_message_id, binding.source_session_id,
+                    binding.source_message_id, binding.source_user_message_id,
+                    binding.is_user_prompt
+             FROM conversation_replay_exclusions AS exclusion
+             JOIN messages ON messages.id = exclusion.message_id
+             JOIN conversation_message_tasks AS binding
+               ON binding.message_id = messages.id
+             WHERE exclusion.session_id = ? AND messages.session_id = ?
+             ORDER BY messages.ts_ms, messages.id
+             LIMIT {}",
+            MAX_BINDING_ROWS + 1
+        ))?;
+        let rows = statement
+            .query_map(params![session_id, session_id], decode)?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    } else {
+        Vec::new()
+    };
     Ok(BindingState {
-        oversized: members.len() > MAX_BINDING_ROWS || originals.len() > MAX_BINDING_ROWS,
+        oversized: members.len() > MAX_BINDING_ROWS
+            || excluded.len() > MAX_BINDING_ROWS
+            || originals.len() > MAX_BINDING_ROWS,
         members,
+        excluded,
         originals,
     })
 }

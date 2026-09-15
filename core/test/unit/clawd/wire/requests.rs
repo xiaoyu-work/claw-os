@@ -501,6 +501,14 @@ fn conversation_wire_is_closed_and_bounded() {
         json!({"id": "ses_0000000000001_000000000001", "copy_jobs": true})
     )
     .is_err());
+    assert!(serde_json::from_value::<AgentConversationRevert>(
+        json!({"id": "ses_0000000000001_000000000001", "user_turns": 2})
+    )
+    .is_ok());
+    assert!(serde_json::from_value::<AgentConversationRevert>(
+        json!({"id": "ses_0000000000001_000000000001", "delete_jobs": true})
+    )
+    .is_err());
 }
 
 #[test]

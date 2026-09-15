@@ -5,7 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use sha2::{Digest, Sha256};
 
 use super::conversation_bindings::{self, BindingState};
 use super::history::{parse_stored_content, sanitize_stored_content, HistoryMessage};
@@ -13,6 +14,16 @@ use super::sqlite_fts::{row_to_message, MemoryDb, MemoryError, MessageRow, INJEC
 
 pub const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS conversation_replay_exclusions (
+    message_id      INTEGER PRIMARY KEY,
+    session_id      TEXT NOT NULL,
+    reverted_at_ms  INTEGER NOT NULL,
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS conversation_replay_exclusions_session
+    ON conversation_replay_exclusions(session_id, reverted_at_ms);
+"#;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConversationMemoryError {
@@ -34,6 +45,8 @@ pub enum ConversationMemoryError {
     DestinationExists,
     #[error("conversation snapshot membership changed")]
     SnapshotChanged,
+    #[error("conversation replay changed before the checked mutation")]
+    Changed,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,6 +93,7 @@ pub(crate) struct ConversationSnapshot {
     rows: Vec<MessageRow>,
     prompt: Option<FrozenPrompt>,
     pub(crate) bindings: BindingState,
+    pub(crate) revision: String,
 }
 
 impl ConversationSnapshot {
@@ -102,9 +116,12 @@ impl MemoryDb {
     ) -> Result<ConversationHistoryPage, ConversationMemoryError> {
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction()?;
+        let filter = active_replay_filter(&tx)?;
         let message_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM messages
-             WHERE session_id = ? AND role <> ? AND role <> 'system'",
+            &format!(
+                "SELECT COUNT(*) FROM messages
+                 WHERE session_id = ? AND role <> ? AND role <> 'system' {filter}"
+            ),
             params![session_id, INJECTED_ROLE],
             |row| row.get(0),
         )?;
@@ -118,13 +135,14 @@ impl MemoryDb {
             .collect::<Result<BTreeMap<_, _>, serde_json::Error>>()?;
         let limit =
             i64::try_from(limit).map_err(|_| ConversationMemoryError::InvalidMessageCount)?;
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare(&format!(
             "SELECT id, session_id, role, content, ts_ms
              FROM messages
              WHERE session_id = ? AND role <> ? AND role <> 'system'
+               {filter}
              ORDER BY ts_ms DESC, id DESC
-             LIMIT ?",
-        )?;
+             LIMIT ?"
+        ))?;
         let mut messages = Vec::new();
         let mut response_bytes = 2usize;
         for row in stmt.query_map(params![session_id, INJECTED_ROLE, limit], row_to_message)? {
@@ -194,10 +212,21 @@ impl MemoryDb {
             params![session_id],
             |row| row.get(0),
         )?;
+        let replay_updated_at: Option<i64> = if has_replay_exclusions(&conn)? {
+            conn.query_row(
+                "SELECT MAX(reverted_at_ms) FROM conversation_replay_exclusions
+                 WHERE session_id = ?",
+                params![session_id],
+                |row| row.get(0),
+            )?
+        } else {
+            None
+        };
         Ok(ConversationMetadata {
             updated_at_ms: [
                 title.as_ref().map(|(_, timestamp)| *timestamp),
                 message_updated_at,
+                replay_updated_at,
             ]
             .into_iter()
             .flatten()
@@ -217,27 +246,9 @@ impl MemoryDb {
         if bindings.oversized {
             return Err(ConversationMemoryError::SnapshotTooLarge);
         }
-
-        let mut statement = tx.prepare(&format!(
-            "SELECT id, session_id, role, content, ts_ms,
-                    trust_class, trust_source, trust_lineage
-             FROM messages
-             WHERE session_id = ? AND role <> ? AND role <> 'system'
-             ORDER BY ts_ms, id
-             LIMIT {}",
-            conversation_bindings::MAX_BINDING_ROWS + 1
-        ))?;
-        let mut rows = Vec::new();
-        let mut bytes = 0usize;
-        for row in statement.query_map(params![session_id, INJECTED_ROLE], row_to_message)? {
-            let row = row?;
-            bytes = bytes.saturating_add(serde_json::to_vec(&row)?.len());
-            if rows.len() == conversation_bindings::MAX_BINDING_ROWS || bytes > MAX_SNAPSHOT_BYTES {
-                return Err(ConversationMemoryError::SnapshotTooLarge);
-            }
-            rows.push(row);
-        }
-        drop(statement);
+        let mut rows = read_active_rows(&tx, session_id, false)?;
+        let replay_rows = read_active_rows(&tx, session_id, true)?;
+        let revision = replay_revision(&replay_rows, &bindings)?;
 
         if let Some(requested) = before_user_turn {
             let prompt_ids = bindings
@@ -271,14 +282,6 @@ impl MemoryDb {
         bindings
             .members
             .retain(|binding| retained_ids.contains(&binding.message_id));
-        let retained_tasks = bindings
-            .members
-            .iter()
-            .map(|binding| (binding.source_session_id.clone(), binding.task_id.clone()))
-            .collect::<BTreeSet<_>>();
-        bindings.originals.retain(|binding| {
-            retained_tasks.contains(&(binding.source_session_id.clone(), binding.task_id.clone()))
-        });
         let prompt = tx
             .query_row(
                 "SELECT prompt_hash, prompt_version, ts_ms
@@ -299,6 +302,7 @@ impl MemoryDb {
             rows,
             prompt,
             bindings,
+            revision,
         })
     }
 
@@ -369,6 +373,174 @@ impl MemoryDb {
         tx.commit()?;
         Ok(())
     }
+
+    pub(crate) fn conversation_revert_snapshot(
+        &self,
+        session_id: &str,
+        user_turns: u32,
+    ) -> Result<ConversationSnapshot, ConversationMemoryError> {
+        let mut snapshot = self.conversation_snapshot(session_id, None)?;
+        let start = revert_start(&snapshot.rows, user_turns, &snapshot.bindings)?;
+        snapshot.rows.truncate(start);
+        let retained_ids = snapshot
+            .rows
+            .iter()
+            .map(|row| row.id)
+            .collect::<BTreeSet<_>>();
+        snapshot
+            .bindings
+            .members
+            .retain(|binding| retained_ids.contains(&binding.message_id));
+        Ok(snapshot)
+    }
+
+    pub(crate) fn revert_conversation_checked(
+        &self,
+        session_id: &str,
+        user_turns: u32,
+        reverted_at_ms: i64,
+        expected_revision: &str,
+    ) -> Result<(), ConversationMemoryError> {
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let rows = read_active_rows(&tx, session_id, false)?;
+        let replay_rows = read_active_rows(&tx, session_id, true)?;
+        let bindings = conversation_bindings::state(&tx, session_id)?;
+        if replay_revision(&replay_rows, &bindings)? != expected_revision {
+            return Err(ConversationMemoryError::Changed);
+        }
+        let start = revert_start(&rows, user_turns, &bindings)?;
+        let retained_end = start
+            .checked_sub(1)
+            .map(|index| (rows[index].ts_ms, rows[index].id));
+        {
+            let mut exclude = tx.prepare(
+                "INSERT INTO conversation_replay_exclusions(
+                     message_id, session_id, reverted_at_ms
+                 ) VALUES (?, ?, ?)",
+            )?;
+            for row in replay_rows
+                .iter()
+                .filter(|row| retained_end.is_none_or(|end| (row.ts_ms, row.id) > end))
+            {
+                exclude.execute(params![row.id, session_id, reverted_at_ms])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+pub(crate) fn has_replay_exclusions(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_schema
+             WHERE type = 'table' AND name = 'conversation_replay_exclusions'
+         )",
+        [],
+        |row| row.get(0),
+    )
+}
+
+pub(crate) fn active_replay_filter(conn: &Connection) -> rusqlite::Result<&'static str> {
+    if has_replay_exclusions(conn)? {
+        Ok("AND NOT EXISTS (
+            SELECT 1 FROM conversation_replay_exclusions AS replay_exclusion
+            WHERE replay_exclusion.message_id = messages.id
+              AND replay_exclusion.session_id = messages.session_id
+        )")
+    } else {
+        Ok("")
+    }
+}
+
+fn read_active_rows(
+    conn: &Connection,
+    session_id: &str,
+    include_system: bool,
+) -> Result<Vec<MessageRow>, ConversationMemoryError> {
+    let filter = active_replay_filter(conn)?;
+    let system_filter = if include_system {
+        ""
+    } else {
+        "AND role <> 'system'"
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, session_id, role, content, ts_ms,
+                trust_class, trust_source, trust_lineage
+         FROM messages
+         WHERE session_id = ? AND role <> ? {system_filter} {filter}
+         ORDER BY ts_ms, id
+         LIMIT {}",
+        conversation_bindings::MAX_BINDING_ROWS + 1
+    ))?;
+    let rows = statement
+        .query_map(params![session_id, INJECTED_ROLE], row_to_message)?
+        .collect::<Result<Vec<_>, _>>()?;
+    if rows.len() > conversation_bindings::MAX_BINDING_ROWS
+        || rows
+            .iter()
+            .map(|row| serde_json::to_vec(row).map(|bytes| bytes.len()))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .fold(0usize, usize::saturating_add)
+            > MAX_SNAPSHOT_BYTES
+    {
+        return Err(ConversationMemoryError::SnapshotTooLarge);
+    }
+    Ok(rows)
+}
+
+fn revert_start(
+    rows: &[MessageRow],
+    user_turns: u32,
+    bindings: &BindingState,
+) -> Result<usize, ConversationMemoryError> {
+    let prompts = bindings
+        .members
+        .iter()
+        .filter(|binding| binding.is_user_prompt)
+        .map(|binding| binding.message_id)
+        .collect::<BTreeSet<_>>();
+    let starts = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| prompts.contains(&row.id).then_some(index))
+        .collect::<Vec<_>>();
+    if user_turns == 0 || user_turns as usize > starts.len() {
+        return Err(ConversationMemoryError::InvalidUserTurns {
+            requested: user_turns,
+            available: starts.len(),
+        });
+    }
+    let retained = starts.len() - user_turns as usize;
+    Ok(if retained == 0 { 0 } else { starts[retained] })
+}
+
+fn replay_revision(
+    rows: &[MessageRow],
+    bindings: &BindingState,
+) -> Result<String, ConversationMemoryError> {
+    let mut digest = Sha256::new();
+    digest.update(b"conversation-replay-v1\0");
+    for row in rows {
+        digest.update(serde_json::to_vec(row)?);
+        digest.update([0]);
+    }
+    for (label, group) in [
+        (b"active".as_slice(), bindings.members.as_slice()),
+        (b"excluded".as_slice(), bindings.excluded.as_slice()),
+        (b"original".as_slice(), bindings.originals.as_slice()),
+    ] {
+        digest.update(label);
+        digest.update([0]);
+        for binding in group {
+            digest.update(serde_json::to_vec(binding)?);
+            digest.update([0]);
+        }
+    }
+    digest.update([u8::from(bindings.oversized)]);
+    Ok(hex::encode(digest.finalize()))
 }
 
 #[cfg(test)]

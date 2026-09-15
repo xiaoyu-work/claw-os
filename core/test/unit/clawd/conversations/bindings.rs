@@ -100,6 +100,7 @@ fn complete_membership_verifies_and_orders_actual_jobs() {
     let state = BindingState {
         originals: members.clone(),
         members,
+        excluded: Vec::new(),
         oversized: false,
     };
     let meta = crate::session::get_meta(&session_id).unwrap();
@@ -108,6 +109,49 @@ fn complete_membership_verifies_and_orders_actual_jobs() {
     assert!(verified.jobs.task_bindings_complete);
     assert_eq!(verified.jobs.jobs[0].id, first.id);
     assert_eq!(verified.jobs.jobs[1].id, second.id);
+}
+
+#[test]
+fn excluded_membership_must_cover_complete_tasks_and_keeps_jobs_as_evidence() {
+    let _lock = lock_env();
+    let Some(fixture) = Fixture::new() else {
+        return;
+    };
+    let session_id = fixture.create();
+    let first = fixture.submit(&session_id, "first");
+    let second = fixture.submit(&session_id, "second");
+    let first_rows = vec![
+        binding(&session_id, &session_id, 1, 1, 1, 1, &first.id),
+        binding(&session_id, &session_id, 2, 2, 1, 1, &first.id),
+    ];
+    let second_rows = vec![
+        binding(&session_id, &session_id, 3, 3, 3, 3, &second.id),
+        binding(&session_id, &session_id, 4, 4, 3, 3, &second.id),
+    ];
+    let state = BindingState {
+        members: first_rows.clone(),
+        excluded: second_rows.clone(),
+        originals: first_rows.iter().chain(&second_rows).cloned().collect(),
+        oversized: false,
+    };
+    let meta = crate::session::get_meta(&session_id).unwrap();
+
+    let verified = verify(&meta, &Presentation::default(), &state, 2, fixture.uid()).unwrap();
+    assert!(verified.jobs.task_bindings_complete);
+    assert_eq!(verified.jobs.jobs.len(), 1);
+    assert_eq!(verified.jobs.jobs[0].id, first.id);
+
+    let mut incomplete = state;
+    incomplete.excluded.pop();
+    assert!(verify(
+        &meta,
+        &Presentation::default(),
+        &incomplete,
+        2,
+        fixture.uid()
+    )
+    .unwrap_err()
+    .contains("incomplete"));
 }
 
 #[test]
@@ -134,6 +178,7 @@ fn legacy_partial_and_missing_job_sets_fail_closed() {
             binding(&session_id, &session_id, 1, 1, 1, 1, &job.id),
             binding(&session_id, &session_id, 2, 2, 1, 1, &job.id),
         ],
+        excluded: Vec::new(),
         oversized: false,
     };
     assert!(
@@ -147,6 +192,7 @@ fn legacy_partial_and_missing_job_sets_fail_closed() {
     let complete = BindingState {
         members: vec![binding(&missing, &missing, 1, 1, 1, 1, "missing-task")],
         originals: vec![binding(&missing, &missing, 1, 1, 1, 1, "missing-task")],
+        excluded: Vec::new(),
         oversized: false,
     };
     assert!(verify(
@@ -186,6 +232,7 @@ fn inherited_membership_requires_an_owned_ancestor_and_source_job() {
     let state = BindingState {
         members,
         originals: Vec::new(),
+        excluded: Vec::new(),
         oversized: false,
     };
 
@@ -193,6 +240,16 @@ fn inherited_membership_requires_an_owned_ancestor_and_source_job() {
     assert_eq!(verified.jobs.jobs[0].id, source_job.id);
     assert_eq!(verified.jobs.jobs[0].session_id, parent.as_str());
     assert_eq!(verified.memberships[0].source_session_id, parent.as_str());
+
+    let excluded = BindingState {
+        members: Vec::new(),
+        excluded: state.members.clone(),
+        originals: Vec::new(),
+        oversized: false,
+    };
+    let verified = verify(&child_meta, &presentation, &excluded, 0, fixture.uid()).unwrap();
+    assert!(verified.jobs.task_bindings_complete);
+    assert!(verified.jobs.jobs.is_empty());
 
     let mut outside_lineage = presentation;
     outside_lineage.parent_id = None;

@@ -1559,7 +1559,8 @@ the durable task. The Chat Stop control uses the task id returned at submission
 and calls `task.cancel` explicitly; completion remains observable through Tasks,
 session history, and notifications after a reconnect.
 
-The owner-scoped `agent.conversation.create/get/list/update/fork` broker routes
+The owner-scoped
+`agent.conversation.create/get/list/update/fork/revert` broker routes
 create empty system-Agent sessions without queuing work and expose the same
 durable conversation inventory to terminal, Web, and native presentations.
 Terminal Job completion updates execution status without removing its durable
@@ -1584,8 +1585,12 @@ provenance, frozen prompt reference and explicit source lineage inside one
 owner-database transaction, but never copies Jobs, tool invocation state,
 injections, capabilities or execution proof. The child receives a newly
 derived system-Agent capability baseline; inherited rows continue to resolve
-their owner-scoped source Jobs through the bounded parent chain. Revert remains
-unavailable until the same verified boundary governs replay mutation.
+their owner-scoped source Jobs through the bounded parent chain. Revert uses
+the same verified whole-task boundary and writes only active-replay
+exclusions. Canonical messages, provenance, task bindings, Jobs and audit
+evidence remain intact. Runtime continuation and compaction validation exclude
+the reverted suffix, including replay-only system rows, so hidden content
+cannot re-enter through an old summary or model-visible exact/semantic recall.
 
 ### Proactive notification
 

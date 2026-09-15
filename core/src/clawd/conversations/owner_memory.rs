@@ -118,6 +118,52 @@ pub(super) fn install_snapshot(
     })
 }
 
+pub(super) fn read_revert_plan(
+    owner_uid: u32,
+    session_id: String,
+    user_turns: u32,
+) -> Result<(ConversationSnapshot, ConversationSnapshot), String> {
+    run_as_owner(owner_uid, move |path| {
+        let db = open_read_only_if_present(path)?
+            .ok_or_else(|| "the active conversation has no user turns".to_string())?;
+        let current = db
+            .conversation_snapshot(&session_id, None)
+            .map_err(|err| err.to_string())?;
+        let retained = db
+            .conversation_revert_snapshot(&session_id, user_turns)
+            .map_err(|err| err.to_string())?;
+        Ok((current, retained))
+    })
+}
+
+pub(super) fn apply_revert(
+    owner_uid: u32,
+    session_id: String,
+    user_turns: u32,
+    reverted_at_ms: i64,
+    expected_revision: String,
+    limit: usize,
+) -> Result<OwnerMemoryView, String> {
+    run_as_owner(owner_uid, move |path| {
+        let db = MemoryDb::open(&path).map_err(|err| err.to_string())?;
+        db.revert_conversation_checked(
+            &session_id,
+            user_turns,
+            reverted_at_ms,
+            &expected_revision,
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(OwnerMemoryView {
+            metadata: db
+                .conversation_metadata(&session_id)
+                .map_err(|err| err.to_string())?,
+            history: db
+                .conversation_history_page(&session_id, limit)
+                .map_err(|err| err.to_string())?,
+        })
+    })
+}
+
 fn open_read_only_if_present(path: PathBuf) -> Result<Option<MemoryDb>, String> {
     if !path.exists() {
         return Ok(None);

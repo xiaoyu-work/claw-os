@@ -111,6 +111,13 @@ pub(super) struct ForkRequest {
     pub(super) before_user_turn: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RevertRequest {
+    pub(super) id: String,
+    pub(super) user_turns: u32,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct ConversationMetadata {
     pub(super) id: String,

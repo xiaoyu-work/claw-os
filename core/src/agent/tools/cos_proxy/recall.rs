@@ -195,7 +195,7 @@ impl Tool for CosRecallTool {
                     let id = message_id
                         .ok_or_else(|| "'show' requires a positive 'message_id'".to_string())?;
                     let row = db
-                        .message(id)
+                        .replayable_message(id)
                         .map_err(|error| error.to_string())?
                         .filter(|row| {
                             row.role != crate::agent::memory::sqlite_fts::INJECTED_ROLE

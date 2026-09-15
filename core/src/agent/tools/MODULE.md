@@ -68,6 +68,9 @@ results retain the source's trust label and disclose partial coverage; scores
 are retrieval relevance, not truth. The model chooses whether to refine a
 query, expand a source or inspect current authorized App/OS state, and reports
 unresolved gaps at the existing execution limits.
+Exact and semantic session recall both check the canonical active-replay
+projection; an excluded or missing source row is never returned through a
+stale FTS or embedding hit.
 
 Runtime dispatch depends on the registry plus one trusted
 `ToolExposureContext`, never on concrete tools directly. Composition resolves

@@ -663,13 +663,14 @@ fn replayable_after_locked(
     session_id: &str,
     after_id: i64,
 ) -> Result<Vec<MessageRow>, MemoryError> {
-    let mut statement = conn.prepare(
+    let filter = super::conversations::active_replay_filter(conn)?;
+    let mut statement = conn.prepare(&format!(
         "SELECT id, session_id, role, content, ts_ms,
                 trust_class, trust_source, trust_lineage
          FROM messages
-         WHERE session_id = ? AND role <> ? AND id > ?
-         ORDER BY id",
-    )?;
+         WHERE session_id = ? AND role <> ? AND id > ? {filter}
+         ORDER BY id"
+    ))?;
     let rows = statement
         .query_map(
             params![session_id, INJECTED_ROLE, after_id],
@@ -1020,13 +1021,16 @@ fn next_replayable_after(
     session_id: &str,
     id: i64,
 ) -> Result<Option<MessageRow>, MemoryError> {
+    let filter = super::conversations::active_replay_filter(conn)?;
     conn.query_row(
-        "SELECT id, session_id, role, content, ts_ms,
-                trust_class, trust_source, trust_lineage
-         FROM messages
-         WHERE session_id = ? AND role <> ? AND id > ?
-         ORDER BY id
-         LIMIT 1",
+        &format!(
+            "SELECT id, session_id, role, content, ts_ms,
+                    trust_class, trust_source, trust_lineage
+             FROM messages
+             WHERE session_id = ? AND role <> ? AND id > ? {filter}
+             ORDER BY id
+             LIMIT 1"
+        ),
         params![session_id, INJECTED_ROLE, id],
         super::sqlite_fts::row_to_message,
     )
@@ -1035,8 +1039,12 @@ fn next_replayable_after(
 }
 
 fn earliest_replayable_id(conn: &Connection, session_id: &str) -> Result<Option<i64>, MemoryError> {
+    let filter = super::conversations::active_replay_filter(conn)?;
     conn.query_row(
-        "SELECT MIN(id) FROM messages WHERE session_id = ? AND role <> ?",
+        &format!(
+            "SELECT MIN(id) FROM messages
+             WHERE session_id = ? AND role <> ? {filter}"
+        ),
         params![session_id, INJECTED_ROLE],
         |row| row.get(0),
     )
@@ -1048,11 +1056,14 @@ fn message_row_by_id(
     session_id: &str,
     id: i64,
 ) -> Result<Option<MessageRow>, MemoryError> {
+    let filter = super::conversations::active_replay_filter(conn)?;
     conn.query_row(
-        "SELECT id, session_id, role, content, ts_ms,
-                trust_class, trust_source, trust_lineage
-         FROM messages
-         WHERE id = ? AND session_id = ? AND role <> ?",
+        &format!(
+            "SELECT id, session_id, role, content, ts_ms,
+                    trust_class, trust_source, trust_lineage
+             FROM messages
+             WHERE id = ? AND session_id = ? AND role <> ? {filter}"
+        ),
         params![id, session_id, INJECTED_ROLE],
         super::sqlite_fts::row_to_message,
     )
@@ -1095,13 +1106,14 @@ fn source_rows_for_range(
             "invalid compaction source range".to_string(),
         ));
     }
-    let mut statement = conn.prepare(
+    let filter = super::conversations::active_replay_filter(conn)?;
+    let mut statement = conn.prepare(&format!(
         "SELECT id, session_id, role, content, ts_ms,
                 trust_class, trust_source, trust_lineage
          FROM messages
-         WHERE session_id = ? AND role <> ? AND id BETWEEN ? AND ?
-         ORDER BY id",
-    )?;
+         WHERE session_id = ? AND role <> ? AND id BETWEEN ? AND ? {filter}
+         ORDER BY id"
+    ))?;
     let rows = statement
         .query_map(
             params![session_id, INJECTED_ROLE, start_id, end_id],

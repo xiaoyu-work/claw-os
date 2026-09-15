@@ -844,6 +844,19 @@ routes! {
         ],
         run: |c| conversations::fork(c.params, c.client).map_err(BrokerError::from),
     }
+    AgentConversationRevert {
+        name: "agent.conversation.revert",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::AgentConversationRevert,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("user_turns", FieldRule::Count),
+        ],
+        run: |c| conversations::revert(c.params, c.client).map_err(BrokerError::from),
+    }
     TaskSubmit {
         name: "task.submit",
         access: Access::User,

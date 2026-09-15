@@ -21,7 +21,7 @@ use crate::session::{self, SessionId, SessionOrigin};
 use self::dto::{
     Conversation, ConversationId, ConversationLookup, ConversationMetadata, ConversationResponse,
     CreateRequest, ForkRequest, GetRequest, ListRequest, ListResponse, PresentationId,
-    UpdateRequest,
+    RevertRequest, UpdateRequest,
 };
 use self::owner_memory::OwnerMemoryView;
 use super::client_identity::ClientIdentity;
@@ -236,6 +236,56 @@ pub(super) fn fork(params: Value, client: &ClientIdentity) -> Result<Value, Stri
         },
     )?;
     Ok(value)
+}
+
+pub(super) fn revert(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let request: RevertRequest = serde_json::from_value(params)
+        .map_err(|err| format!("invalid conversation revert: {err}"))?;
+    if request.user_turns == 0 {
+        return Err("conversation revert user_turns must be greater than zero".to_string());
+    }
+    let owner_uid = owner_uid(client)?;
+    let id = ConversationId::parse(&request.id)?;
+    owned_meta(&id, owner_uid)?;
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let _guard = store
+        .lock_idle_session(id.session_id().as_str())
+        .map_err(|err| err.to_string())?;
+    let meta = owned_meta(&id, owner_uid)?;
+    let presentation = read_presentation(&meta.id)?;
+    if presentation.deleted {
+        return Err("restore the soft-deleted conversation before reverting it".to_string());
+    }
+    let (current, retained) =
+        owner_memory::read_revert_plan(owner_uid, meta.id.to_string(), request.user_turns)?;
+    if current.revision != retained.revision {
+        return Err("conversation history changed before revert validation".to_string());
+    }
+    bindings::verify(
+        &meta,
+        &presentation,
+        &current.bindings,
+        current.visible_count(),
+        owner_uid,
+    )
+    .map_err(|error| format!("cannot revert task history: {error}"))?;
+    bindings::verify_retained(
+        &meta,
+        &presentation,
+        &retained.bindings,
+        retained.visible_count(),
+        owner_uid,
+    )
+    .map_err(|error| format!("cannot split retained task history: {error}"))?;
+    let view = owner_memory::apply_revert(
+        owner_uid,
+        meta.id.to_string(),
+        request.user_turns,
+        Utc::now().timestamp_millis(),
+        current.revision,
+        DEFAULT_HISTORY_LIMIT,
+    )?;
+    conversation_response(&meta, presentation, view, owner_uid)
 }
 
 fn get_for_id(id: &ConversationId, owner_uid: u32, limit: usize) -> Result<Value, String> {
