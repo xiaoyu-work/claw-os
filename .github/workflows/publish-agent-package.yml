@@ -25,7 +25,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             rust_targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
             musl_target: x86_64-unknown-linux-musl
             gnu_target: x86_64-unknown-linux-gnu
@@ -50,7 +50,12 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools dpkg-dev fakeroot libpam0g-dev
+          sudo apt-get install -y \
+            musl-tools dpkg-dev fakeroot libpam0g-dev pkg-config \
+            libssl-dev liblzma-dev libbz2-dev
+
+      - name: Install pinned terminal compiler
+        run: rustup toolchain install 1.98.0 --profile minimal
 
       # Release-security metadata is signed by the same publisher
       # identity that signs the repository. It has to be signed here,
@@ -91,7 +96,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-agent-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+            build/agent-tui/cargo-home
+            build/agent-tui/cargo-target
+          key: ${{ runner.os }}-${{ runner.arch }}-agent-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'terminal/source.json', 'terminal/*.py', 'terminal/*.sh', 'terminal/patches/**') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-agent-
             ${{ runner.os }}-${{ runner.arch }}-cargo-build-
@@ -107,10 +114,29 @@ jobs:
           cargo build --release -p cos-browser --target ${{ matrix.gnu_target }}
           cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
 
+      - name: Build and verify the pinned terminal frontend
+        run: |
+          bash terminal/build.sh --target ${{ matrix.gnu_target }}
+          python3 -B terminal/build.py --verify-artifact --target ${{ matrix.gnu_target }}
+          python3 -B -m unittest discover -s terminal -p 'test_*.py'
+
       - name: Build Agent package
         env:
           GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
         run: ARCH="$ARCH" ./packaging/deb/build-debs.sh agent
+
+      - name: Exercise the real terminal frontend with the Claw adapter
+        run: |
+          original_namespace="$(readlink /proc/self/ns/mnt)"
+          for scenario in complete cancel plain; do
+            unshare --user --map-current-user --keep-caps --mount --net \
+              python3 -B core/tests/agent_tui_pty.py \
+              --cos target/${{ matrix.musl_target }}/release/cos \
+              --frontend build/agent-tui/bin/codex-tui \
+              --case "$scenario" \
+              --original-mount-namespace "$original_namespace" \
+              --transcript "$RUNNER_TEMP/agent-tui-$scenario.log"
+          done
 
       - name: Verify Agent package
         run: |
@@ -120,6 +146,10 @@ jobs:
           dpkg-deb -c "$agent_deb" > "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/cos$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/clawd$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/tui/bin/codex-tui$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/tui/share/codex-tui/LICENSE$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/tui/share/codex-tui/NOTICE$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/tui/share/codex-tui/build-info.json$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-agentd$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-extension-host$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/lib/cos/bin/claw-calendar-reader$' "$RUNNER_TEMP/claw-os-agent.files"
@@ -142,6 +172,9 @@ jobs:
           skill_extract="$RUNNER_TEMP/claw-os-agent-skill-permissions"
           mkdir -p "$skill_extract"
           dpkg-deb -x "$agent_deb" "$skill_extract"
+          python3 -B terminal/build.py --verify-artifact \
+            --target ${{ matrix.gnu_target }} \
+            --artifact-root "$skill_extract/usr/lib/cos/tui"
           test "$(stat -c '%a' "$skill_extract/usr/lib/cos/skills/claw-os")" = "755"
           test "$(stat -c '%a' "$skill_extract/usr/lib/cos/skills/claw-os/SKILL.md")" = "644"
           ! grep -q './etc/cos/oauth.conf$' "$RUNNER_TEMP/claw-os-agent.files"

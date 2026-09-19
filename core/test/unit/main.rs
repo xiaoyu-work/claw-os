@@ -43,6 +43,37 @@ fn extract_format_strips_plain_flag() {
 }
 
 #[test]
+fn extract_format_preserves_the_agent_chat_plain_interface_flag() {
+    let (args, fmt) = extract_format(
+        [
+            "--pretty",
+            "agent",
+            "chat",
+            "--session",
+            "session-id",
+            "--plain",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    );
+    assert_eq!(
+        args,
+        ["agent", "chat", "--session", "session-id", "--plain"]
+    );
+    assert!(matches!(fmt, OutputFormat::Pretty));
+
+    let (args, fmt) = extract_format(
+        ["--plain", "agent", "chat"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    );
+    assert_eq!(args, ["agent", "chat"]);
+    assert!(matches!(fmt, OutputFormat::Compact));
+}
+
+#[test]
 fn extract_format_recognises_pretty_alias() {
     let (_, fmt) = extract_format(vec!["agent".into(), "--pretty".into()]);
     assert!(matches!(fmt, OutputFormat::Pretty));

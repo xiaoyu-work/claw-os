@@ -52,7 +52,8 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `claw-extension-host` | Purpose-bound isolated-UID process: a task Host runs dynamic App/MCP code and signed Agent extension observers behind independently bounded canonical, event, and priority control lanes and relays authenticated App calls, while an owner/App service Host runs persistent App MCP code behind broker-owned private sockets; only App/MCP children receive the route-filtered broker proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/`, `core/src/clawd/app_services.rs` |
 | Agent extension ABI | Explicit authenticated-package registry, provider-attempt/tool observation FIFO, absolute event deadlines, independently acknowledged detach with supervisor containment escalation, per-extension capability references, and default-deny exact-action mediation | `core/src/agent_extensions/`, `core/src/provenance/`, `core/src/extension_host/abi.rs` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
-| Terminal frontend source pipeline | Pinned upstream Codex UI sources, isolated build, recorded patches, artifact verification and attributions; runtime adapter wiring is separate | `terminal/` |
+| Agent terminal frontend | Owner-private launcher and app-server compatibility adapter for the pinned Codex TUI; canonical conversations, tasks, models, tools, approvals and audit stay Claw-owned | `core/src/agent/terminal.rs`, `core/src/agent/tui_backend/`, `core/src/clawd/conversations.rs` |
+| Terminal frontend source pipeline | Pinned upstream Codex UI sources, isolated build, recorded patches, artifact verification and attributions | `terminal/` |
 | Model-input trust | Closed trust lattice, model-input source registry, labelled segments, and the bounded data fence for non-policy content | `core/src/agent/trust/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
@@ -1417,6 +1418,25 @@ CLI / web UI / bridge
   -> stream/progress/audit/result frames back to clawd over the job channel
   -> clawd persists usage/session/audit records and finishes the task
 ```
+
+Interactive `cos agent chat` adds only a presentation path in front of this
+same task flow:
+
+```text
+cos agent chat
+  -> owner-private pinned Codex TUI child
+  -> owner-private WebSocket-over-Unix compatibility adapter in cos
+  -> agent.conversation.* plus existing task/approval broker routes
+  -> claw-agentd and the shared guarded Agent runtime above
+```
+
+The frontend never runs the Codex Agent backend or owns providers, tools,
+capabilities, approvals, audit, tasks, or canonical history. Its UUID thread
+identity is a root-owned presentation alias for the canonical `ses_*` session.
+Verified message/task bindings allow retained history, fork, and revert
+presentation without cloning grants or rolling back effects. Noninteractive
+input and explicit `--plain` retain the line interface. See
+[`docs/agent-terminal.md`](docs/agent-terminal.md).
 
 The `clawd` task record snapshots broker-derived source and locality, but never
 durable attendance. A short, in-memory presence lease binds an attended

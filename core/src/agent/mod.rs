@@ -49,7 +49,9 @@ mod safety_commands;
 mod session_commands;
 mod skills_commands;
 mod task_commands;
+mod terminal;
 mod text_commands;
+pub(crate) mod tui_backend;
 mod vision_commands;
 
 use serde_json::Value;

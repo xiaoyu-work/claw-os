@@ -204,7 +204,7 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
             vec![
                 ("setup", "Configure text, speech, image, and embedding providers"),
                 ("ask", "Run one prompt through the full tool and memory loop"),
-                ("chat", "Open the interactive Agent REPL"),
+                ("chat", "Open the Agent TUI (--plain for the line interface)"),
                 ("serve", "Run the authenticated local Agent web UI"),
                 ("budget", "Inspect App and per-user AI budget units"),
                 ("override", "Inspect per-user App AI overrides"),

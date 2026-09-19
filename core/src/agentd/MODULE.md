@@ -181,7 +181,10 @@ rechecks the live revision independently of heartbeat renewal. Disabled,
 changed or newly introduced policies stop old attempts through normal
 cancellation and exact-child cleanup; admitted effects are not undone.
 
-Worker protocol v12 carries the optional request-scoped model selection in the
+Worker protocol v13 adds a separately bounded monetary-budget exchange and an
+assignment hint; Root still derives the Activity, owner, pricing policy,
+reservation and settlement authority from its retained Job. Worker protocol
+v12 carries the optional request-scoped model selection in the
 broker-authored assignment. The worker applies it only to its cloned Agent
 configuration; provider selection, credentials, fallback policy and
 capabilities remain unchanged. Protocol v11 added a `Boundary` question to the

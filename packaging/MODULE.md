@@ -22,6 +22,7 @@ Debian packages and a signed multi-architecture APT repository.
 | Path | Role |
 | --- | --- |
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
+| `../terminal/` | Pinned upstream TUI source/build and byte-exact, architecture-checked bundle verification |
 | `apps.lock.json` | App main branch selection, distinct product/capability groups and exact App payload |
 | `../scripts/app_sources.py` | Resolve main once per build, retain its immutable source lock and stage explicitly kinded payloads |
 | `../scripts/app_sources.py --stage-shared <root>` | Invoke App-owned common support staging once into `usr/lib/cos/python`, separately from SDK/runtime and product payloads |
@@ -70,6 +71,12 @@ without forcing synchronized versions or publication schedules.
 Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
+
+The Agent package retains the verified terminal bundle under
+`/usr/lib/cos/tui/{bin,share}`. Its artifact receipt and licenses are checked
+before and after staging; the executable is never stripped after verification.
+The installed frontend is also a critical release-security component measured
+before use.
 
 Agent also builds/installs the independent `claw-calendar-reader` from the
 OS-owned GPL Applet service library, with its original license. Its

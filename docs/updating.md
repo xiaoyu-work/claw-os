@@ -405,9 +405,11 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   against a half-upgraded pair. The broker additionally measures the installed
   worker and `claw-extension-host` binaries against the security floor before
   spawning them, so either component being replaced on disk is refused before
-  it becomes a process. Agentd worker protocol v11 adds Activity boundary and
-  receipt messages while retaining grant format v9 and its owner-qualified
-  Agent-extension package receipts. A v10 worker frame or v8 grant is rejected explicitly.
+  it becomes a process. Agentd worker protocol v13 includes Activity boundary
+  and receipt messages, request-scoped model selection, and the separately
+  bounded monetary-budget exchange while retaining grant format v9 and its
+  owner-qualified Agent-extension package receipts. An older worker frame or
+  v8 grant is rejected explicitly.
   Extension-host control protocol v9 remains the independently floored host
   channel, and the child Agent-extension ABI remains v2.
 - If the worker binary is missing or the daemon is started with
@@ -418,10 +420,20 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   lesser account to drop to. On a single-account image, create an ordinary user
   and submit as that user.
 
+The Agent terminal frontend is delivered in `claw-os-agent` at
+`/usr/lib/cos/tui/bin/codex-tui`. Upgrade it with `cos` and `clawd`, then reopen
+running terminals to use the paired protocol adapter. The frontend does not
+self-update independently or fall back to a Codex Agent. Existing Claw
+credentials and canonical conversations remain in their original stores; only
+frontend preferences and drafts use the user-data `terminal/` directory. The
+explicit `cos agent chat --plain` interface remains available. The installed
+frontend is recorded as a critical release component and remeasured before
+launch; replacement outside the signed package is refused.
+
 Confirm both binaries and the running daemon after an upgrade:
 
 ```bash
-dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd|claw-extension-host)$'
+dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd|claw-extension-host|codex-tui)$'
 getent group cos-extension
 sudo systemctl status clawd
 cos agent service list --status pending

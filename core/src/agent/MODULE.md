@@ -51,7 +51,9 @@ surfaces.
 | --- | --- |
 | `mod.rs` | Agent module composition and top-level `cos agent` routing |
 | `command_catalog.rs` | Recursive-discovery metadata for the internal `agent dev` namespace |
-| `conversation_commands.rs` | `ask`/`chat`, streaming terminal presentation, and interactive session UI |
+| `conversation_commands.rs` | `ask`/`chat` routing and the compatible plain-text conversation interface |
+| `terminal.rs` | Interactive frontend selection, private socket and upstream child lifecycle |
+| `tui_backend/` | Codex app-server protocol compatibility over Claw's task/conversation/approval services |
 | `session_commands.rs` | Conversation recall, session listing, titles, counts, purge, and statistics |
 | `memory_commands.rs` | App memory, notes, semantic memory, and memory-learning commands |
 | `skills_commands.rs` | Installed Skill inspection, provenance guards, usage, and hub operations |
@@ -160,6 +162,12 @@ pool/fallback classification.
 - `conversation_commands.rs` with `runtime/loop_.rs`,
   `runtime/presentation.rs`, and `memory/` when chat streaming or continuation
   semantics change.
+- `terminal.rs`, `tui_backend/`, the pinned `terminal/` build, and
+  `clawd/conversations.rs` when the terminal protocol or interaction changes.
+  The frontend never owns canonical conversation, task, or permission state.
+- `service::Submission`, worker assignment/execution, and the typed task
+  broker body when per-task options change. Model selection never rewrites
+  provider credentials, capability policy, or another request's configuration.
 - `trust/source.rs` with the ingestion adapter and an adversarial test when a
   new model-visible source is added.
 - `mcp_commands.rs` with `tools/mcp/` and worker launch policy when MCP process

@@ -59,6 +59,14 @@ fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
             kept.push(a);
             continue;
         }
+        if options
+            && a == "--plain"
+            && kept.first().map(String::as_str) == Some("agent")
+            && kept.get(1).map(String::as_str) == Some("chat")
+        {
+            kept.push(a);
+            continue;
+        }
         match (options, a.as_str()) {
             (true, "--plain" | "--compact" | "--json") => explicit = Some(OutputFormat::Compact),
             (true, "--pretty") => explicit = Some(OutputFormat::Pretty),

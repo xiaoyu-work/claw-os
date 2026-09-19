@@ -307,95 +307,21 @@ async fn stream_cmd_async(
     }))
 }
 
-/// `cos agent chat [--session <id>] [--no-stream] [--no-memory]
-/// [--show-tools] [--max-turns N]` — interactive multi-turn REPL.
-///
-/// Reads prompts from stdin one line at a time and routes each
-/// through the same agent runtime as `cos agent live`. With memory
-/// enabled, the session-id is preserved across turns so:
-///   1. Every prompt and assistant turn is recorded under the
-///      same FTS-searchable conversation;
-///   2. The session title is generated once on the first turn
-///      (matches `ask`/`live` semantics);
-///   3. Recent turns are replayed directly into each model request,
-///      so short follow-ups such as "1" retain conversational context;
-///   4. `cos_recall` invocations from inside the model can search
-///      the running conversation as it grows.
-///
-/// **Slash commands** (recognised at the start of a non-empty
-/// prompt; whitespace-trimmed):
-///   - `/quit` / `/exit` / `/q` — leave the REPL.
-///   - `/help` / `/?` — print the slash-command list.
-///   - `/session` — print current session id and turn count.
-///   - `/clear` — drop the current session and start a fresh one.
-///   - `/history [N]` — show the last N (default 10) recorded
-///     messages from the current session.
-///   - `/tools` — list permitted tool names.
-/// Any line that doesn't start with `/` is treated as a prompt.
-///
-/// Streaming behaviour mirrors `live`: tokens flow live to stderr;
-/// the assistant's final text plus a one-line summary go to
-/// stdout after each turn. Pass `--no-stream` to use the equivalent
-/// non-streaming continuation path (useful for non-TTY use).
-///
-/// Stdin EOF (Ctrl+D / closed pipe) exits cleanly.
-///
-/// ## What this is **not**
-///
-/// `cos agent chat` is the kernel Agent's own REPL — it is *not*
-/// an App entry point. Installed Apps that want a one-shot LLM call
-/// must use `cos ai chat --app <id>` instead. Passing `--app` to
-/// `cos agent chat` is rejected; the App-gated path lives under
-/// `cos ai chat` so the kernel Agent's CLI surface (memory, skills,
-/// hooks, sessions, recall, …) is never exposed to third-party Apps.
+/// Select the full terminal frontend or the compatible line interface.
+/// App-gated requests remain exclusively under `cos ai chat --app`.
 pub(super) fn chat_cmd(args: &[String]) -> Result<Value, String> {
-    if args.iter().any(|a| a == "--app") {
-        return Err(
-            "`cos agent chat` is the kernel Agent's REPL and does not accept --app. \
-             For one-shot App-gated calls use `cos ai chat --app <id> …` instead."
-                .to_string(),
-        );
+    let options = super::terminal::ChatOptions::parse(args)?;
+    if options.use_tui(
+        super::terminal::interactive_terminal(),
+        super::terminal::dumb_terminal(),
+    )? {
+        return super::terminal::run(options);
     }
+    chat_plain_cmd(options)
+}
 
-    let mut explicit_session: Option<String> = None;
-    let mut streaming = true;
-    let mut use_memory = true;
-    let mut show_tools = false;
-    let mut max_turns_override: Option<u32> = None;
-
-    let mut i = 0usize;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--session" => {
-                let v = args
-                    .get(i + 1)
-                    .ok_or_else(|| "--session needs <id>".to_string())?;
-                explicit_session = Some(v.clone());
-                i += 2;
-            }
-            "--no-stream" => {
-                streaming = false;
-                i += 1;
-            }
-            "--no-memory" => {
-                use_memory = false;
-                i += 1;
-            }
-            "--show-tools" => {
-                show_tools = true;
-                i += 1;
-            }
-            "--max-turns" => {
-                let v = args
-                    .get(i + 1)
-                    .ok_or_else(|| "--max-turns needs <n>".to_string())?;
-                max_turns_override = Some(v.parse().map_err(|e| format!("--max-turns: {e}"))?);
-                i += 2;
-            }
-            other => return Err(format!("unknown flag for `chat`: {other}")),
-        }
-    }
-
+/// Preserve the existing session-aware REPL and its stdout/stderr contract.
+fn chat_plain_cmd(options: super::terminal::ChatOptions) -> Result<Value, String> {
     let config = crate::config::current_snapshot();
     let cfg = &config.agent;
     setup::is_ready(cfg)?;
@@ -413,11 +339,11 @@ pub(super) fn chat_cmd(args: &[String]) -> Result<Value, String> {
         let outcome = chat_cmd_async(
             provider,
             cfg,
-            explicit_session,
-            streaming,
-            use_memory,
-            show_tools,
-            max_turns_override,
+            options.session_id,
+            !options.no_stream,
+            !options.no_memory,
+            options.show_tools,
+            options.max_turns,
         )
         .await;
         runtime::background::drain(timeout).await;

@@ -33,9 +33,10 @@ python3 -B -m unittest discover -s terminal -p 'test_*.py'
 ```
 
 See [`terminal/README.md`](terminal/README.md) for prerequisites, the source pin,
-maintained patches and artifact verification. Building this frontend does not
-change `cos agent chat` routing or select the Codex Agent backend; the Claw
-protocol adapter and installed-package wiring are separate integration work.
+maintained patches and artifact verification. `cos agent chat` launches this
+frontend through the in-core Claw protocol adapter. Building the frontend never
+selects the Codex Agent backend or transfers model, tool, conversation, or
+permission authority out of Claw OS.
 
 ### Build the OS display runtime
 

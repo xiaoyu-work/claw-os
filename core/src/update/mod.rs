@@ -192,6 +192,12 @@ pub const COMPONENTS: &[Component] = &[
         critical: true,
     },
     Component {
+        name: "codex-tui",
+        path: "/usr/lib/cos/tui/bin/codex-tui",
+        package: "claw-os-agent",
+        critical: true,
+    },
+    Component {
         name: "cos-init",
         path: "/usr/local/bin/cos-init",
         package: "claw-os-base",
