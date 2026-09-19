@@ -5,8 +5,8 @@
  * SidebarFooter (status pill). The visual language is verbatim — we
  * keep the same shadcn Sidebar primitive and class names; only the
  * concepts being displayed are remapped to cos (no repos / branches /
- * GitHub OAuth — instead chat / tasks / approvals / inbox / system /
- * settings, plus a date-grouped session list from `/api/sessions`).
+ * GitHub OAuth — instead chat / tasks / approvals / inbox / settings,
+ * plus a date-grouped session list from `/api/sessions`).
  */
 
 import {
@@ -15,7 +15,6 @@ import {
   Inbox,
   ListTodo,
   MessageSquare,
-  Monitor,
   Moon,
   Plus,
   ShieldCheck,
@@ -66,7 +65,6 @@ const NAV_ITEMS: Array<{
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "inbox", label: "Inbox", icon: Inbox, href: "/inbox" },
   { key: "events", label: "System Events", icon: Activity, href: "/events" },
-  { key: "system", label: "System", icon: Monitor, href: "/system" },
   { key: "settings", label: "Settings", icon: Settings, href: "/settings" },
 ];
 

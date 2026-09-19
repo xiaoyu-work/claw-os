@@ -276,7 +276,13 @@ function receiptRecord(id, outcome = "returned") {
 function holdRequest(method, pathname) {
   let entered;
   let release;
-  const seen = new Promise((resolve) => { entered = resolve; });
+  const observed = new Promise((resolve) => { entered = resolve; });
+  const seen = Promise.race([
+    observed,
+    delay(12_000).then(() => {
+      throw new Error(`Held request was not observed: ${method} ${pathname}`);
+    }),
+  ]);
   const gate = new Promise((resolve) => { release = resolve; });
   holds.push({ method, pathname, entered, gate });
   return { seen, release };
@@ -1050,6 +1056,12 @@ try {
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
+  const navigationButtons = await evaluate(
+    "Array.from(document.querySelectorAll('button')).map((button) => button.textContent.trim())",
+  );
+  assert.ok(navigationButtons.includes("System Events"), "System Events remains in navigation");
+  assert.ok(!navigationButtons.includes("System"), "System is absent from navigation");
+  console.log("PASS sidebar omits System while retaining System Events");
   await clickText("New activity");
   await fill("Title", "Release preparation");
   await fill("Goal", "Prepare a reviewed release draft");
