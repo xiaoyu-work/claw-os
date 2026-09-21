@@ -36,6 +36,9 @@ audit.
 - Approval browsing combines only owner-scoped pending and recent records.
   Historical records are read-only; pending decisions still pass through the
   same protected helper and post-decision status verification.
+- Notification Inbox consumes only owner-scoped durable notification routes.
+  Read, acknowledge, dismiss, channel and DND changes are explicit broker
+  mutations; opening a notification is presentation only.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::backend::{
-    ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job, TaskSummary,
+    ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job, NotificationItem,
+    NotificationPage, NotificationPreferences, TaskSummary,
 };
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
@@ -55,6 +56,7 @@ pub(super) enum PickerKind {
     Sessions,
     Tasks,
     Approvals,
+    Notifications,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +81,15 @@ pub(super) enum PickerSelection {
     Session(String),
     Task(String),
     Approval(ApprovalRequest),
+    Notification(NotificationItem),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NotificationPreferenceAction {
+    ToggleWeb,
+    ToggleDesktop,
+    ToggleNtfy,
+    ToggleDnd,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +126,10 @@ pub(super) struct App {
     pub task_detail_scroll: u16,
     pub approval_detail: Option<ApprovalRequest>,
     pub approval_detail_scroll: u16,
+    pub notification_detail: Option<NotificationItem>,
+    pub notification_detail_scroll: u16,
+    pub notification_preferences: Option<NotificationPreferences>,
+    pub notification_preferences_scroll: u16,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -126,6 +141,7 @@ pub(super) struct App {
     provider_had_text: bool,
     tool_entries: HashMap<String, usize>,
     approval_catalog: HashMap<String, ApprovalRequest>,
+    notification_catalog: HashMap<String, NotificationItem>,
     seen_approvals: HashSet<String>,
     transcript_bytes: usize,
 }
@@ -154,6 +170,10 @@ impl App {
             task_detail_scroll: 0,
             approval_detail: None,
             approval_detail_scroll: 0,
+            notification_detail: None,
+            notification_detail_scroll: 0,
+            notification_preferences: None,
+            notification_preferences_scroll: 0,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -165,6 +185,7 @@ impl App {
             provider_had_text: false,
             tool_entries: HashMap::new(),
             approval_catalog: HashMap::new(),
+            notification_catalog: HashMap::new(),
             seen_approvals: HashSet::new(),
             transcript_bytes: 0,
         };
@@ -191,6 +212,11 @@ impl App {
         self.approval_detail = None;
         self.approval_detail_scroll = 0;
         self.approval_catalog.clear();
+        self.notification_detail = None;
+        self.notification_detail_scroll = 0;
+        self.notification_preferences = None;
+        self.notification_preferences_scroll = 0;
+        self.notification_catalog.clear();
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -366,6 +392,8 @@ impl App {
             self.picker = None;
             self.task_detail = None;
             self.approval_detail = None;
+            self.notification_detail = None;
+            self.notification_preferences = None;
         }
     }
 
@@ -738,6 +766,84 @@ impl App {
         self.approval_detail_scroll = 0;
     }
 
+    pub fn open_notification_picker(&mut self, page: NotificationPage) {
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.notification_catalog = page
+            .notifications
+            .iter()
+            .map(|notification| (notification.id.clone(), notification.clone()))
+            .collect();
+        self.push_system(&format!(
+            "Notification Inbox: {} unread in this bounded view.",
+            page.unread
+        ));
+        self.picker = Some(Picker {
+            kind: PickerKind::Notifications,
+            title: "Notification Inbox",
+            items: page
+                .notifications
+                .into_iter()
+                .map(|notification| PickerItem {
+                    label: format!(
+                        "{} {} {}",
+                        notification.state.to_uppercase(),
+                        notification.severity.to_uppercase(),
+                        bounded_clean_text(&notification.title, 120).replace('\n', " ")
+                    ),
+                    detail: format!(
+                        "{} | {} | {} | x{}",
+                        notification.source,
+                        notification.kind,
+                        notification.updated_at_ms,
+                        notification.occurrences
+                    ),
+                    value: notification.id,
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn open_notification_detail(&mut self, mut notification: NotificationItem) {
+        notification.title = bounded_clean_text(&notification.title, 512).replace('\n', " ");
+        notification.body = bounded_clean_text(&notification.body, 16_384);
+        notification.source = bounded_clean_text(&notification.source, 256).replace('\n', " ");
+        notification.kind = bounded_clean_text(&notification.kind, 256).replace('\n', " ");
+        for action in &mut notification.actions {
+            action.label = bounded_clean_text(&action.label, 256).replace('\n', " ");
+            action.uri = bounded_clean_text(&action.uri, 2_048).replace('\n', " ");
+        }
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_preferences = None;
+        self.notification_detail = Some(notification);
+        self.notification_detail_scroll = 0;
+    }
+
+    pub fn close_notification_detail(&mut self) {
+        self.notification_detail = None;
+        self.notification_detail_scroll = 0;
+    }
+
+    pub fn open_notification_preferences(&mut self, preferences: NotificationPreferences) {
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = Some(preferences);
+        self.notification_preferences_scroll = 0;
+    }
+
+    pub fn close_notification_preferences(&mut self) {
+        self.notification_preferences = None;
+        self.notification_preferences_scroll = 0;
+    }
+
     pub fn picker_insert(&mut self, value: char) {
         if let Some(picker) = &mut self.picker {
             if !value.is_control() && picker.query.len() < 256 {
@@ -832,6 +938,9 @@ impl App {
             PickerKind::Tasks => PickerSelection::Task(item.value.clone()),
             PickerKind::Approvals => {
                 PickerSelection::Approval(self.approval_catalog.get(&item.value)?.clone())
+            }
+            PickerKind::Notifications => {
+                PickerSelection::Notification(self.notification_catalog.get(&item.value)?.clone())
             }
         })
     }

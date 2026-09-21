@@ -1,11 +1,13 @@
 use super::*;
 use crate::agent::terminal::backend::{
     ApprovalRequest, BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job,
-    TaskSummary,
+    NotificationAction, NotificationDelivery, NotificationItem, NotificationPage,
+    NotificationPreferences, TaskSummary,
 };
-use crate::agent::terminal::commands::{parse as parse_command, Command};
+use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
-    clean_text, App, ApprovalStatus, ConfirmationAction, EntryKind, PickerSelection, ToolStatus,
+    clean_text, App, ApprovalStatus, ConfirmationAction, EntryKind, NotificationPreferenceAction,
+    PickerSelection, ToolStatus,
 };
 use ratatui::backend::TestBackend;
 use serde_json::json;
@@ -125,6 +127,22 @@ fn claw_commands_are_closed_and_semantic() {
         parse_command("/approval approval-1"),
         Some(Command::Approval("approval-1".into()))
     );
+    assert_eq!(
+        parse_command("/notify-channel desktop off"),
+        Some(Command::NotifyChannel(NotificationChannel::Desktop, false))
+    );
+    assert_eq!(
+        parse_command("/notify-severity ntfy critical"),
+        Some(Command::NotifySeverity(
+            NotificationChannel::Ntfy,
+            "critical".into()
+        ))
+    );
+    assert_eq!(
+        parse_command("/dnd 22:30-06:15"),
+        Some(Command::Dnd(Some((1_350, 375))))
+    );
+    assert_eq!(parse_command("/dnd off"), Some(Command::Dnd(None)));
     assert_eq!(parse_command("/resume"), Some(Command::Sessions));
     assert_eq!(
         parse_command("/rewind 0"),
@@ -604,5 +622,84 @@ fn approval_center_keeps_history_read_only_and_pending_decisions_exact() {
             ),
         ),
         InputAction::None
+    );
+}
+
+#[test]
+fn notification_inbox_uses_durable_mutations_and_preferences() {
+    let notification = NotificationItem {
+        id: "notification-1".into(),
+        source: "agent".into(),
+        kind: "task.completed".into(),
+        severity: "info".into(),
+        title: "Task completed".into(),
+        body: "The durable Agent task completed.".into(),
+        delivery_policy: "immediate".into(),
+        state: "unread".into(),
+        occurrences: 1,
+        created_at_ms: 1_767_225_600_000,
+        updated_at_ms: 1_767_225_600_000,
+        task_id: Some("task-1".into()),
+        session_id: Some("ses_001953abcdef0_123456789abc".into()),
+        job_id: None,
+        actions: vec![NotificationAction {
+            label: "Open task".into(),
+            uri: "clawos://task/task-1".into(),
+        }],
+        deliveries: vec![NotificationDelivery {
+            channel: "web".into(),
+            state: "delivered".into(),
+            attempts: 1,
+            last_error_code: None,
+        }],
+    };
+    let mut app = app();
+    app.open_notification_picker(NotificationPage {
+        notifications: vec![notification.clone()],
+        unread: 1,
+    });
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::Notification(notification.clone()))
+    );
+    app.open_notification_detail(notification);
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('m'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::MutateNotification(
+            "notification-1".into(),
+            crate::agent::terminal::backend::NotificationMutation::Read
+        )
+    );
+
+    app.open_notification_preferences(NotificationPreferences {
+        web_enabled: true,
+        desktop_enabled: true,
+        ntfy_enabled: false,
+        web_min_severity: "info".into(),
+        desktop_min_severity: "info".into(),
+        ntfy_min_severity: "warning".into(),
+        muted_kinds: Vec::new(),
+        dnd_start_minute_utc: None,
+        dnd_end_minute_utc: None,
+        critical_bypasses_dnd: true,
+        retention_days: 30,
+        ntfy_server: "https://ntfy.sh".into(),
+        ntfy_topic: None,
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('w'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::NotificationPreference(NotificationPreferenceAction::ToggleWeb)
     );
 }

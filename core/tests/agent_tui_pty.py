@@ -46,6 +46,22 @@ class FixtureBroker:
         self.history_failed_id = "task-history-failed"
         self.history_retry_id = "task-history-retry"
         self.history_cancelled = False
+        self.notification_state = "unread"
+        self.notification_preferences = {
+            "web_enabled": True,
+            "desktop_enabled": True,
+            "ntfy_enabled": False,
+            "web_min_severity": "info",
+            "desktop_min_severity": "info",
+            "ntfy_min_severity": "warning",
+            "muted_kinds": [],
+            "dnd_start_minute_utc": None,
+            "dnd_end_minute_utc": None,
+            "critical_bypasses_dnd": True,
+            "retention_days": 30,
+            "ntfy_server": "https://ntfy.sh",
+            "ntfy_topic": None,
+        }
         self.cursor = 0
         self.requested_model = None
         self.session_id = SESSION_ID
@@ -119,6 +135,36 @@ class FixtureBroker:
             "error": "fixture failure" if status == "error" else None,
             "waiting_on": [],
             "cancel_requested": False,
+        }
+
+    def notification(self):
+        return {
+            "schema": 1,
+            "sequence": 1,
+            "id": "notification-inbox-fixture",
+            "owner_uid": os.geteuid(),
+            "source": "agent",
+            "kind": "task.completed",
+            "severity": "info",
+            "title": "Fixture task completed",
+            "body": "The durable fixture task completed.",
+            "delivery_policy": "immediate",
+            "task_id": self.history_failed_id,
+            "session_id": self.session_id,
+            "state": self.notification_state,
+            "occurrences": 1,
+            "created_at_ms": 1767225600000,
+            "updated_at_ms": 1767225600000,
+            "actions": [{
+                "id": "open-task",
+                "label": "Open task",
+                "uri": f"clawos://task/{self.history_failed_id}",
+            }],
+            "deliveries": [{
+                "channel": "web",
+                "state": "delivered",
+                "attempts": 1,
+            }],
         }
 
     def dispatch(self, method, params):
@@ -202,6 +248,31 @@ class FixtureBroker:
                             else "consumed"
                         ),
                     }
+        if method == "notification.list":
+                    return {
+                        "schema": 1,
+                        "cursor": 1,
+                        "unread": 1 if self.notification_state == "unread" else 0,
+                        "notifications": [self.notification()],
+                    }
+        if method in (
+                    "notification.read",
+                    "notification.acknowledge",
+                    "notification.dismiss",
+        ):
+                    if params["id"] != "notification-inbox-fixture":
+                        raise AssertionError("notification mutation addressed another record")
+                    self.notification_state = {
+                        "notification.read": "read",
+                        "notification.acknowledge": "acknowledged",
+                        "notification.dismiss": "dismissed",
+                    }[method]
+                    return self.notification()
+        if method == "notification.preferences.get":
+                    return self.notification_preferences
+        if method == "notification.preferences.set":
+                    self.notification_preferences = dict(params)
+                    return self.notification_preferences
                     for approval_id in params["ids"]
                 ]
             }
@@ -284,6 +355,7 @@ class FixtureBroker:
                     "confirmations",
                     "multiline",
                     "approval-center",
+                    "notification-inbox",
                     "task-center",
                 ):
                     events.extend([
@@ -308,6 +380,7 @@ class FixtureBroker:
                 "confirmations",
                 "multiline",
                 "approval-center",
+                "notification-inbox",
                 "task-center",
             ) or self.cancelled.is_set()
             if not terminal:
@@ -692,6 +765,69 @@ def run(cos, case, transcript, original_namespace, trace):
                 os.write(master, b"a")
                 time.sleep(0.2)
                 os.write(master, b"\x1b")
+            if case == "notification-inbox":
+                send_prompt(master, output, "/inbox")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "notification.list"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\r")
+                time.sleep(0.2)
+                for key, command in [
+                    (b"m", "notification.read"),
+                    (b"a", "notification.acknowledge"),
+                    (b"d", "notification.dismiss"),
+                ]:
+                    os.write(master, key)
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data, expected=command: any(
+                            request["command"] == expected
+                            for request in broker.requests
+                        ),
+                    )
+                os.write(master, b"\x1b")
+                send_prompt(master, output, "/notify-settings")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "notification.preferences.get"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"w")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "notification.preferences.set"
+                        and request["params"].get("web_enabled") is False
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"q")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "notification.preferences.set"
+                        and request["params"].get("dnd_start_minute_utc") == 0
+                        and request["params"].get("dnd_end_minute_utc") == 0
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b")
                 send_prompt(master, output, "/tasks")
                 read_terminal(
                     master,
@@ -804,6 +940,7 @@ if __name__ == "__main__":
             "confirmations",
             "multiline",
             "approval-center",
+            "notification-inbox",
             "plain",
             "resume",
             "task-center",

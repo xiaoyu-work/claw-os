@@ -23,6 +23,12 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/task", "open a durable task by id"),
     ("/approvals", "browse pending and recent approvals"),
     ("/approval", "open an approval by id"),
+    ("/inbox", "browse durable notifications"),
+    ("/notification", "open a notification by id"),
+    ("/notify-settings", "show delivery and DND settings"),
+    ("/notify-channel", "enable or disable a delivery channel"),
+    ("/notify-severity", "set a channel minimum severity"),
+    ("/dnd", "set or disable the UTC DND window"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -47,11 +53,24 @@ pub(super) enum Command {
     Task(String),
     Approvals,
     Approval(String),
+    Notifications(bool),
+    Notification(String),
+    NotificationSettings,
+    NotifyChannel(NotificationChannel, bool),
+    NotifySeverity(NotificationChannel, String),
+    Dnd(Option<(u16, u16)>),
     Session,
     Clear,
     Cancel,
     Quit,
     Unknown(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NotificationChannel {
+    Web,
+    Desktop,
+    Ntfy,
 }
 
 pub(super) fn parse(value: &str) -> Option<Command> {
@@ -84,6 +103,24 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "approvals" => Command::Approvals,
         "approval" if rest.is_empty() => Command::Approvals,
         "approval" => Command::Approval(rest.to_string()),
+        "inbox" | "notifications" if rest.is_empty() => Command::Notifications(false),
+        "inbox" | "notifications" if rest.eq_ignore_ascii_case("all") => {
+            Command::Notifications(true)
+        }
+        "notification" if rest.is_empty() => Command::Notifications(false),
+        "notification" => Command::Notification(rest.to_string()),
+        "notify-settings" if rest.is_empty() => Command::NotificationSettings,
+        "notify-channel" => parse_channel_toggle(rest).map_or_else(
+            || Command::Unknown(value.to_string()),
+            |(channel, enabled)| Command::NotifyChannel(channel, enabled),
+        ),
+        "notify-severity" => parse_channel_severity(rest).map_or_else(
+            || Command::Unknown(value.to_string()),
+            |(channel, severity)| Command::NotifySeverity(channel, severity),
+        ),
+        "dnd" => parse_dnd(rest)
+            .map(Command::Dnd)
+            .unwrap_or_else(|| Command::Unknown(value.to_string())),
         "session" => Command::Session,
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
@@ -116,7 +153,17 @@ pub(super) fn completion(input: &str, selected: usize) -> Option<String> {
 fn takes_argument(command: &str) -> bool {
     matches!(
         command,
-        "/resume" | "/rename" | "/rewind" | "/model" | "/task" | "/approval"
+        "/resume"
+            | "/rename"
+            | "/rewind"
+            | "/model"
+            | "/task"
+            | "/approval"
+            | "/inbox"
+            | "/notification"
+            | "/notify-channel"
+            | "/notify-severity"
+            | "/dnd"
     )
 }
 
@@ -133,6 +180,12 @@ pub(super) async fn execute(
                 | Command::Task(_)
                 | Command::Approvals
                 | Command::Approval(_)
+                | Command::Notifications(_)
+                | Command::Notification(_)
+                | Command::NotificationSettings
+                | Command::NotifyChannel(_, _)
+                | Command::NotifySeverity(_, _)
+                | Command::Dnd(_)
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -145,7 +198,10 @@ pub(super) async fn execute(
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
              /fork  /rewind N  /models  /model ID  /skills\n\
-             /tasks  /task ID  /approvals  /approval ID  /session\n\
+             /tasks  /task ID  /approvals  /approval ID\n\
+             /inbox [all]  /notification ID  /notify-settings\n\
+             /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
+             /dnd off|HH:MM-HH:MM  /session\n\
              /clear  /cancel  /quit\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
@@ -253,6 +309,59 @@ pub(super) async fn execute(
                 .ok_or_else(|| format!("Approval {id} is not pending or recent."))?;
             app.open_approval_detail(approval);
         }
+        Command::Notifications(include_dismissed) => {
+            let page = backend.list_notifications(include_dismissed).await?;
+            if page.notifications.is_empty() {
+                app.push_system("Notification Inbox is empty.");
+            } else {
+                app.open_notification_picker(page);
+            }
+        }
+        Command::Notification(id) => {
+            let notification = backend
+                .list_notifications(true)
+                .await?
+                .notifications
+                .into_iter()
+                .find(|notification| notification.id == id)
+                .ok_or_else(|| format!("Notification {id} is not retained."))?;
+            app.open_notification_detail(notification);
+        }
+        Command::NotificationSettings => {
+            let preferences = backend.notification_preferences().await?;
+            app.open_notification_preferences(preferences);
+        }
+        Command::NotifyChannel(channel, enabled) => {
+            let mut preferences = backend.notification_preferences().await?;
+            match channel {
+                NotificationChannel::Web => preferences.web_enabled = enabled,
+                NotificationChannel::Desktop => preferences.desktop_enabled = enabled,
+                NotificationChannel::Ntfy => preferences.ntfy_enabled = enabled,
+            }
+            let preferences = backend.set_notification_preferences(&preferences).await?;
+            app.open_notification_preferences(preferences);
+        }
+        Command::NotifySeverity(channel, severity) => {
+            let mut preferences = backend.notification_preferences().await?;
+            match channel {
+                NotificationChannel::Web => preferences.web_min_severity = severity,
+                NotificationChannel::Desktop => preferences.desktop_min_severity = severity,
+                NotificationChannel::Ntfy => preferences.ntfy_min_severity = severity,
+            }
+            let preferences = backend.set_notification_preferences(&preferences).await?;
+            app.open_notification_preferences(preferences);
+        }
+        Command::Dnd(window) => {
+            let mut preferences = backend.notification_preferences().await?;
+            (
+                preferences.dnd_start_minute_utc,
+                preferences.dnd_end_minute_utc,
+            ) = window
+                .map(|(start, end)| (Some(start), Some(end)))
+                .unwrap_or((None, None));
+            let preferences = backend.set_notification_preferences(&preferences).await?;
+            app.open_notification_preferences(preferences);
+        }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}",
             app.conversation.id, app.selected_model, app.info.provider
@@ -275,6 +384,57 @@ pub(super) async fn execute(
         }
     }
     Ok(())
+}
+
+fn parse_channel(value: &str) -> Option<NotificationChannel> {
+    match value {
+        "web" => Some(NotificationChannel::Web),
+        "desktop" => Some(NotificationChannel::Desktop),
+        "ntfy" => Some(NotificationChannel::Ntfy),
+        _ => None,
+    }
+}
+
+fn parse_channel_toggle(value: &str) -> Option<(NotificationChannel, bool)> {
+    let mut parts = value.split_whitespace();
+    let channel = parse_channel(parts.next()?)?;
+    let enabled = match parts.next()? {
+        "on" | "enable" | "enabled" => true,
+        "off" | "disable" | "disabled" => false,
+        _ => return None,
+    };
+    parts.next().is_none().then_some((channel, enabled))
+}
+
+fn parse_channel_severity(value: &str) -> Option<(NotificationChannel, String)> {
+    let mut parts = value.split_whitespace();
+    let channel = parse_channel(parts.next()?)?;
+    let severity = match parts.next()? {
+        "info" => "info",
+        "warning" | "warn" => "warning",
+        "error" => "error",
+        "critical" => "critical",
+        _ => return None,
+    };
+    parts
+        .next()
+        .is_none()
+        .then_some((channel, severity.to_string()))
+}
+
+fn parse_dnd(value: &str) -> Option<Option<(u16, u16)>> {
+    if value == "off" {
+        return Some(None);
+    }
+    let (start, end) = value.split_once('-')?;
+    Some(Some((parse_utc_minute(start)?, parse_utc_minute(end)?)))
+}
+
+fn parse_utc_minute(value: &str) -> Option<u16> {
+    let (hour, minute) = value.split_once(':')?;
+    let hour = hour.parse::<u16>().ok()?;
+    let minute = minute.parse::<u16>().ok()?;
+    (hour < 24 && minute < 60).then_some(hour * 60 + minute)
 }
 
 pub(super) async fn confirm(

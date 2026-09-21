@@ -30,7 +30,267 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_picker(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
+    render_notification_detail(frame, area, app);
+    render_notification_preferences(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_notification_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(notification) = &app.notification_detail else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(96);
+    let height = screen.height.saturating_sub(4).min(30);
+    if width < 36 || height < 12 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let severity_color = match notification.severity.as_str() {
+        "critical" => Color::Red,
+        "error" => Color::LightRed,
+        "warning" => Color::Yellow,
+        _ => Color::Cyan,
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                notification.severity.to_uppercase(),
+                Style::default()
+                    .fg(severity_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                notification.state.to_uppercase(),
+                Style::default().fg(Color::White),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                notification.id.clone(),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::raw(format!(
+            "source: {} | kind: {} | policy: {}",
+            notification.source, notification.kind, notification.delivery_policy
+        )),
+        Line::raw(format!(
+            "created: {} | updated: {} | occurrences: {}",
+            notification.created_at_ms, notification.updated_at_ms, notification.occurrences
+        )),
+    ];
+    for (label, value) in [
+        ("task", notification.task_id.as_deref()),
+        ("session", notification.session_id.as_deref()),
+        ("job", notification.job_id.as_deref()),
+    ] {
+        if let Some(value) = value {
+            lines.push(Line::raw(format!("{label}: {value}")));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        notification.title.clone(),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    lines.extend(markdown_lines(&notification.body));
+    if !notification.actions.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Actions (display only)",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(
+            notification
+                .actions
+                .iter()
+                .map(|action| Line::raw(format!("- {}: {}", action.label, action.uri))),
+        );
+    }
+    if !notification.deliveries.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Delivery",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(notification.deliveries.iter().map(|delivery| {
+            Line::raw(format!(
+                "- {}: {} (attempts: {}){}",
+                delivery.channel,
+                delivery.state,
+                delivery.attempts,
+                delivery
+                    .last_error_code
+                    .as_deref()
+                    .map(|error| format!(" [{error}]"))
+                    .unwrap_or_default()
+            ))
+        }));
+    }
+    let mut actions = Vec::new();
+    if notification.state == "unread" {
+        actions.push("[m] Read");
+    }
+    if matches!(notification.state.as_str(), "unread" | "read") {
+        actions.push("[a] Acknowledge");
+    }
+    if notification.state != "dismissed" {
+        actions.push("[d] Dismiss");
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.notification_detail_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(severity_color))
+                    .title(" Notification Inbox ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(actions.join("  "), Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
+}
+
+fn render_notification_preferences(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(preferences) = &app.notification_preferences else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(88);
+    let height = screen.height.saturating_sub(4).min(25);
+    if width < 36 || height < 12 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let enabled = |value| if value { "enabled" } else { "disabled" };
+    let dnd = match (
+        preferences.dnd_start_minute_utc,
+        preferences.dnd_end_minute_utc,
+    ) {
+        (Some(start), Some(end)) => format!(
+            "{}-{} UTC",
+            format_utc_minute(start),
+            format_utc_minute(end)
+        ),
+        _ => "off".into(),
+    };
+    let mut lines = vec![
+        Line::styled(
+            "Delivery channels",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(format!(
+            "web: {} | minimum: {}",
+            enabled(preferences.web_enabled),
+            preferences.web_min_severity
+        )),
+        Line::raw(format!(
+            "desktop: {} | minimum: {}",
+            enabled(preferences.desktop_enabled),
+            preferences.desktop_min_severity
+        )),
+        Line::raw(format!(
+            "ntfy: {} | minimum: {}",
+            enabled(preferences.ntfy_enabled),
+            preferences.ntfy_min_severity
+        )),
+        Line::raw(""),
+        Line::styled(
+            "Do Not Disturb",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(format!("window: {dnd}")),
+        Line::raw(format!(
+            "critical bypass: {}",
+            enabled(preferences.critical_bypasses_dnd)
+        )),
+        Line::raw(""),
+        Line::raw(format!("retention: {} days", preferences.retention_days)),
+        Line::raw(format!("ntfy server: {}", preferences.ntfy_server)),
+        Line::raw(format!(
+            "ntfy topic: {}",
+            preferences
+                .ntfy_topic
+                .as_deref()
+                .unwrap_or("not configured")
+        )),
+        Line::raw(format!(
+            "muted kinds: {}",
+            if preferences.muted_kinds.is_empty() {
+                "none".into()
+            } else {
+                preferences.muted_kinds.join(", ")
+            }
+        )),
+        Line::raw(""),
+        Line::styled(
+            "Use /notify-severity CHANNEL LEVEL for thresholds.",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Line::styled(
+            "Use /dnd HH:MM-HH:MM for an exact UTC window.",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    if preferences.ntfy_enabled && preferences.ntfy_topic.is_none() {
+        lines.push(Line::styled(
+            "ntfy is enabled without a topic; the backend will reject this state.",
+            Style::default().fg(Color::Red),
+        ));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.notification_preferences_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Notification delivery settings ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(
+                            "[w] Web  [e] Desktop  [n] ntfy  [q] DND all-day/off",
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Span::raw("  "),
+                        Span::styled("Esc close", Style::default().fg(Color::DarkGray)),
+                    ])),
+            ),
+        area,
+    );
+}
+
+fn format_utc_minute(value: u16) -> String {
+    format!("{:02}:{:02}", value / 60, value % 60)
 }
 
 fn render_approval_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -424,6 +684,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         PickerKind::Sessions => format!(" {} - session ", picker.title),
         PickerKind::Tasks => format!(" {} - task ", picker.title),
         PickerKind::Approvals => format!(" {} - approval ", picker.title),
+        PickerKind::Notifications => format!(" {} - notification ", picker.title),
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

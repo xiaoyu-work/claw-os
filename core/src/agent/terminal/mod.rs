@@ -26,8 +26,10 @@ use ratatui::Terminal;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use self::backend::{Backend, BrokerBackend, ReviewDecision};
-use self::state::{App, ConfirmationAction, PickerSelection, RunStatus};
+use self::backend::{Backend, BrokerBackend, NotificationMutation, ReviewDecision};
+use self::state::{
+    App, ConfirmationAction, NotificationPreferenceAction, PickerSelection, RunStatus,
+};
 use self::stream::RuntimeEvent;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -167,6 +169,8 @@ enum InputAction {
     TaskCancel(String),
     TaskRetry(String),
     ApprovalReview(String, ReviewDecision),
+    MutateNotification(String, NotificationMutation),
+    NotificationPreference(NotificationPreferenceAction),
     Quit,
 }
 
@@ -211,6 +215,8 @@ async fn run_with_backend(
                             && app.confirmation.is_none()
                             && app.task_detail.is_none()
                             && app.approval_detail.is_none()
+                            && app.notification_detail.is_none()
+                            && app.notification_preferences.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -314,6 +320,67 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Char('d') | KeyCode::Char('D') if pending => {
                 InputAction::ApprovalReview(approval_id, ReviewDecision::Deny)
+            }
+            _ => InputAction::None,
+        };
+    }
+    if app.notification_preferences.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_notification_preferences();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.notification_preferences_scroll =
+                    app.notification_preferences_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.notification_preferences_scroll =
+                    app.notification_preferences_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('w') | KeyCode::Char('W') => {
+                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleWeb)
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleDesktop)
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleNtfy)
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleDnd)
+            }
+            _ => InputAction::None,
+        };
+    }
+    if let Some(notification) = &app.notification_detail {
+        let id = notification.id.clone();
+        let state = notification.state.clone();
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_notification_detail();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.notification_detail_scroll = app.notification_detail_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.notification_detail_scroll = app.notification_detail_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') if state == "unread" => {
+                InputAction::MutateNotification(id, NotificationMutation::Read)
+            }
+            KeyCode::Char('a') | KeyCode::Char('A')
+                if matches!(state.as_str(), "unread" | "read") =>
+            {
+                InputAction::MutateNotification(id, NotificationMutation::Acknowledge)
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') if state != "dismissed" => {
+                InputAction::MutateNotification(id, NotificationMutation::Dismiss)
             }
             _ => InputAction::None,
         };
@@ -538,6 +605,9 @@ async fn apply_input_action(
                 Err(error) => app.push_error(&error),
             },
             PickerSelection::Approval(approval) => app.open_approval_detail(approval),
+            PickerSelection::Notification(notification) => {
+                app.open_notification_detail(notification)
+            }
         },
         InputAction::Confirm(action) => {
             if let Err(error) = commands::confirm(app, backend, action).await {
@@ -584,6 +654,43 @@ async fn apply_input_action(
                         "Approval denied through the protected OS helper."
                     });
                 }
+                Err(error) => app.push_error(&error),
+            }
+        }
+        InputAction::MutateNotification(id, mutation) => {
+            match backend.mutate_notification(&id, mutation).await {
+                Ok(notification) => app.open_notification_detail(notification),
+                Err(error) => app.push_error(&error),
+            }
+        }
+        InputAction::NotificationPreference(action) => {
+            let Some(mut preferences) = app.notification_preferences.clone() else {
+                return;
+            };
+            match action {
+                NotificationPreferenceAction::ToggleWeb => {
+                    preferences.web_enabled = !preferences.web_enabled
+                }
+                NotificationPreferenceAction::ToggleDesktop => {
+                    preferences.desktop_enabled = !preferences.desktop_enabled
+                }
+                NotificationPreferenceAction::ToggleNtfy => {
+                    preferences.ntfy_enabled = !preferences.ntfy_enabled
+                }
+                NotificationPreferenceAction::ToggleDnd => {
+                    if preferences.dnd_start_minute_utc.is_some()
+                        && preferences.dnd_end_minute_utc.is_some()
+                    {
+                        preferences.dnd_start_minute_utc = None;
+                        preferences.dnd_end_minute_utc = None;
+                    } else {
+                        preferences.dnd_start_minute_utc = Some(0);
+                        preferences.dnd_end_minute_utc = Some(0);
+                    }
+                }
+            }
+            match backend.set_notification_preferences(&preferences).await {
+                Ok(preferences) => app.open_notification_preferences(preferences),
                 Err(error) => app.push_error(&error),
             }
         }

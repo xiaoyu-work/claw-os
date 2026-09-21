@@ -75,6 +75,10 @@ Controls:
 - In Approval Center, `a` requests one-time approval and `d` requests denial
   only while the selected request is still pending. Recent decisions are
   read-only.
+- In Notification Inbox, `m` marks an unread record read, `a` acknowledges it
+  and `d` dismisses it. Opening a detail does not mutate durable state.
+- In notification settings, `w`, `e`, `n` toggle Web, desktop and ntfy
+  delivery; `q` toggles all-day DND. Exact UTC windows use `/dnd`.
 
 Text entered while a task is active is queued locally and submitted after that
 task reaches a terminal state. Exiting does not silently cancel durable work.
@@ -100,6 +104,12 @@ The command set names Claw concepts only:
 /task [task-id]
 /approvals
 /approval [approval-id]
+/inbox [all]
+/notification [notification-id]
+/notify-settings
+/notify-channel <web|desktop|ntfy> <on|off>
+/notify-severity <web|desktop|ntfy> <info|warning|error|critical>
+/dnd <off|HH:MM-HH:MM>
 /session
 /clear
 /cancel
@@ -134,6 +144,18 @@ approved, consumed or denied record cannot be decided again. Pending decisions
 use the installed privileged helper, verify pending state before authorization,
 and verify the resulting root-owned state afterward.
 
+`/inbox` opens the newest 100 retained, non-dismissed owner notifications;
+`/inbox all` also includes dismissed records. Details show durable state,
+source, severity, links to tasks/sessions, occurrence count, display-only
+actions and per-channel delivery status. The TUI never executes a notification
+action URI as authority.
+
+`/notify-settings` shows the complete persisted delivery policy. Channel
+toggles and `/notify-severity` preserve every unrelated preference.
+`/dnd HH:MM-HH:MM` sets the exact UTC quiet window and `/dnd off` removes it.
+The full preference document is validated and stored by the existing
+Notification Service; the TUI does not own a parallel settings file.
+
 ## Backend ownership
 
 ```text
@@ -141,6 +163,7 @@ Claw ratatui renderer
   -> canonical agent.conversation.* broker routes
   -> durable task submit/stream/list/get/cancel/retry routes
   -> protected pending/recent approval reads and root-owned decisions
+  -> owner-scoped notification state and delivery preferences
   -> claw-agentd and the shared guarded Agent runtime
 ```
 
@@ -167,7 +190,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations task-center approval-center multiline resume plain; do
+for scenario in complete cancel commands confirmations task-center approval-center notification-inbox multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -185,4 +208,6 @@ multiline paste, requires archive/rewind confirmation and confirms plain mode
 never contacts the broker. The task-center scenario browses owner-scoped tasks,
 cancels one exact running task and retries one exact terminal task. The
 approval-center scenario browses pending and recent owner-scoped decisions and
-keeps historical records read-only.
+keeps historical records read-only. The notification scenario performs exact
+read, acknowledge and dismiss mutations and updates durable delivery/DND
+preferences without a desktop dependency.

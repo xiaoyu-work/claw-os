@@ -85,6 +85,70 @@ pub(super) struct TaskSummary {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationAction {
+    pub label: String,
+    pub uri: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationDelivery {
+    pub channel: String,
+    pub state: String,
+    pub attempts: u32,
+    pub last_error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationItem {
+    pub id: String,
+    pub source: String,
+    pub kind: String,
+    pub severity: String,
+    pub title: String,
+    pub body: String,
+    pub delivery_policy: String,
+    pub state: String,
+    pub occurrences: u32,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub task_id: Option<String>,
+    pub session_id: Option<String>,
+    pub job_id: Option<String>,
+    pub actions: Vec<NotificationAction>,
+    pub deliveries: Vec<NotificationDelivery>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationPage {
+    pub notifications: Vec<NotificationItem>,
+    pub unread: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NotificationPreferences {
+    pub web_enabled: bool,
+    pub desktop_enabled: bool,
+    pub ntfy_enabled: bool,
+    pub web_min_severity: String,
+    pub desktop_min_severity: String,
+    pub ntfy_min_severity: String,
+    pub muted_kinds: Vec<String>,
+    pub dnd_start_minute_utc: Option<u16>,
+    pub dnd_end_minute_utc: Option<u16>,
+    pub critical_bypasses_dnd: bool,
+    pub retention_days: u16,
+    pub ntfy_server: String,
+    pub ntfy_topic: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NotificationMutation {
+    Read,
+    Acknowledge,
+    Dismiss,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct StreamFrame {
     pub cursor: u64,
@@ -150,6 +214,18 @@ pub(super) trait Backend: Send + Sync {
     async fn list_tasks(&self) -> Result<Vec<TaskSummary>, String>;
     async fn get_task(&self, task_id: &str) -> Result<Job, String>;
     async fn retry_task(&self, task_id: &str) -> Result<Job, String>;
+    async fn list_notifications(&self, include_dismissed: bool)
+        -> Result<NotificationPage, String>;
+    async fn mutate_notification(
+        &self,
+        id: &str,
+        mutation: NotificationMutation,
+    ) -> Result<NotificationItem, String>;
+    async fn notification_preferences(&self) -> Result<NotificationPreferences, String>;
+    async fn set_notification_preferences(
+        &self,
+        preferences: &NotificationPreferences,
+    ) -> Result<NotificationPreferences, String>;
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
@@ -375,6 +451,89 @@ impl Backend for BrokerBackend {
             return Err("Claw returned an invalid retry task".into());
         }
         Ok(job)
+    }
+
+    async fn list_notifications(
+        &self,
+        include_dismissed: bool,
+    ) -> Result<NotificationPage, String> {
+        let value = self
+            .call(
+                Command::NotificationList,
+                json!({ "include_dismissed": include_dismissed, "limit": 100 }),
+            )
+            .await?;
+        let values = value
+            .get("notifications")
+            .and_then(Value::as_array)
+            .ok_or("Claw notification list omitted notifications")?;
+        if values.len() > 100 {
+            return Err("Claw notification list exceeded its terminal bound".into());
+        }
+        Ok(NotificationPage {
+            notifications: values
+                .iter()
+                .map(parse_notification)
+                .collect::<Result<_, _>>()?,
+            unread: value
+                .get("unread")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or("Claw notification list omitted unread count")?,
+        })
+    }
+
+    async fn mutate_notification(
+        &self,
+        id: &str,
+        mutation: NotificationMutation,
+    ) -> Result<NotificationItem, String> {
+        validate_token(id, "notification id")?;
+        let command = match mutation {
+            NotificationMutation::Read => Command::NotificationRead,
+            NotificationMutation::Acknowledge => Command::NotificationAcknowledge,
+            NotificationMutation::Dismiss => Command::NotificationDismiss,
+        };
+        let notification = parse_notification(&self.call(command, json!({ "id": id })).await?)?;
+        if notification.id != id {
+            return Err("Claw mutated a different notification".into());
+        }
+        Ok(notification)
+    }
+
+    async fn notification_preferences(&self) -> Result<NotificationPreferences, String> {
+        parse_notification_preferences(
+            &self
+                .call(Command::NotificationPreferencesGet, json!({}))
+                .await?,
+        )
+    }
+
+    async fn set_notification_preferences(
+        &self,
+        preferences: &NotificationPreferences,
+    ) -> Result<NotificationPreferences, String> {
+        let value = self
+            .call(
+                Command::NotificationPreferencesSet,
+                json!({
+                    "web_enabled": preferences.web_enabled,
+                    "desktop_enabled": preferences.desktop_enabled,
+                    "ntfy_enabled": preferences.ntfy_enabled,
+                    "web_min_severity": preferences.web_min_severity,
+                    "desktop_min_severity": preferences.desktop_min_severity,
+                    "ntfy_min_severity": preferences.ntfy_min_severity,
+                    "muted_kinds": preferences.muted_kinds,
+                    "dnd_start_minute_utc": preferences.dnd_start_minute_utc,
+                    "dnd_end_minute_utc": preferences.dnd_end_minute_utc,
+                    "critical_bypasses_dnd": preferences.critical_bypasses_dnd,
+                    "retention_days": preferences.retention_days,
+                    "ntfy_server": preferences.ntfy_server,
+                    "ntfy_topic": preferences.ntfy_topic,
+                }),
+            )
+            .await?;
+        parse_notification_preferences(&value)
     }
 
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String> {
@@ -712,6 +871,87 @@ fn parse_approval(value: &Value, status: &str) -> Result<ApprovalRequest, String
     })
 }
 
+fn parse_notification(value: &Value) -> Result<NotificationItem, String> {
+    let actions = value
+        .get("actions")
+        .and_then(Value::as_array)
+        .ok_or("notification omitted actions")?
+        .iter()
+        .map(|action| {
+            Ok(NotificationAction {
+                label: required_string(action, "label")?,
+                uri: required_string(action, "uri")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let deliveries = value
+        .get("deliveries")
+        .and_then(Value::as_array)
+        .ok_or("notification omitted deliveries")?
+        .iter()
+        .map(|delivery| {
+            Ok(NotificationDelivery {
+                channel: required_string(delivery, "channel")?,
+                state: required_string(delivery, "state")?,
+                attempts: required_u32(delivery, "attempts")?,
+                last_error_code: optional_string(delivery, "last_error_code"),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(NotificationItem {
+        id: required_string(value, "id")?,
+        source: required_string(value, "source")?,
+        kind: required_string(value, "kind")?,
+        severity: required_string(value, "severity")?,
+        title: required_string(value, "title")?,
+        body: required_string(value, "body")?,
+        delivery_policy: required_string(value, "delivery_policy")?,
+        state: required_string(value, "state")?,
+        occurrences: required_u32(value, "occurrences")?,
+        created_at_ms: value
+            .get("created_at_ms")
+            .and_then(Value::as_i64)
+            .ok_or("notification omitted created_at_ms")?,
+        updated_at_ms: value
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .ok_or("notification omitted updated_at_ms")?,
+        task_id: optional_string(value, "task_id"),
+        session_id: optional_string(value, "session_id"),
+        job_id: optional_string(value, "job_id"),
+        actions,
+        deliveries,
+    })
+}
+
+fn parse_notification_preferences(value: &Value) -> Result<NotificationPreferences, String> {
+    Ok(NotificationPreferences {
+        web_enabled: required_bool(value, "web_enabled")?,
+        desktop_enabled: required_bool(value, "desktop_enabled")?,
+        ntfy_enabled: required_bool(value, "ntfy_enabled")?,
+        web_min_severity: required_string(value, "web_min_severity")?,
+        desktop_min_severity: required_string(value, "desktop_min_severity")?,
+        ntfy_min_severity: required_string(value, "ntfy_min_severity")?,
+        muted_kinds: value
+            .get("muted_kinds")
+            .and_then(Value::as_array)
+            .ok_or("notification preferences omitted muted_kinds")?
+            .iter()
+            .map(|kind| {
+                kind.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "notification muted kind is not a string".to_string())
+            })
+            .collect::<Result<_, _>>()?,
+        dnd_start_minute_utc: optional_u16(value, "dnd_start_minute_utc")?,
+        dnd_end_minute_utc: optional_u16(value, "dnd_end_minute_utc")?,
+        critical_bypasses_dnd: required_bool(value, "critical_bypasses_dnd")?,
+        retention_days: required_u16(value, "retention_days")?,
+        ntfy_server: required_string(value, "ntfy_server")?,
+        ntfy_topic: optional_string(value, "ntfy_topic"),
+    })
+}
+
 fn required_string(value: &Value, key: &str) -> Result<String, String> {
     value
         .get(key)
@@ -722,6 +962,41 @@ fn required_string(value: &Value, key: &str) -> Result<String, String> {
 
 fn optional_string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn required_bool(value: &Value, key: &str) -> Result<bool, String> {
+    value
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("Claw response omitted {key}"))
+}
+
+fn required_u32(value: &Value, key: &str) -> Result<u32, String> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("Claw response omitted {key}"))
+        .and_then(|value| {
+            u32::try_from(value).map_err(|_| format!("Claw response {key} is too large"))
+        })
+}
+
+fn required_u16(value: &Value, key: &str) -> Result<u16, String> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("Claw response omitted {key}"))
+        .and_then(|value| {
+            u16::try_from(value).map_err(|_| format!("Claw response {key} is too large"))
+        })
+}
+
+fn optional_u16(value: &Value, key: &str) -> Result<Option<u16>, String> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| u16::try_from(value).map_err(|_| format!("Claw response {key} is too large")))
+        .transpose()
 }
 
 fn validate_token(value: &str, field: &str) -> Result<(), String> {
