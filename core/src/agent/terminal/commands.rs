@@ -19,6 +19,8 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/models", "list configured-provider models"),
     ("/model", "select the model for future tasks"),
     ("/skills", "list enabled Claw Skills"),
+    ("/tasks", "browse durable Agent tasks"),
+    ("/task", "open a durable task by id"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -39,6 +41,8 @@ pub(super) enum Command {
     Models,
     Model(String),
     Skills,
+    Tasks,
+    Task(String),
     Session,
     Clear,
     Cancel,
@@ -70,6 +74,9 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "model" if rest.is_empty() => Command::Models,
         "model" => Command::Model(rest.to_string()),
         "skills" => Command::Skills,
+        "tasks" => Command::Tasks,
+        "task" if rest.is_empty() => Command::Tasks,
+        "task" => Command::Task(rest.to_string()),
         "session" => Command::Session,
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
@@ -100,7 +107,10 @@ pub(super) fn completion(input: &str, selected: usize) -> Option<String> {
 }
 
 fn takes_argument(command: &str) -> bool {
-    matches!(command, "/resume" | "/rename" | "/rewind" | "/model")
+    matches!(
+        command,
+        "/resume" | "/rename" | "/rewind" | "/model" | "/task"
+    )
 }
 
 pub(super) async fn execute(
@@ -111,7 +121,12 @@ pub(super) async fn execute(
     if app.active_task.is_some()
         && !matches!(
             command,
-            Command::Help | Command::Session | Command::Cancel | Command::Quit
+            Command::Help
+                | Command::Tasks
+                | Command::Task(_)
+                | Command::Session
+                | Command::Cancel
+                | Command::Quit
         )
     {
         app.push_system("That command requires the current task to finish. Use /cancel first.");
@@ -120,7 +135,8 @@ pub(super) async fn execute(
     match command {
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
-             /fork  /rewind N  /models  /model ID  /skills  /session\n\
+             /fork  /rewind N  /models  /model ID  /skills\n\
+             /tasks  /task ID  /session\n\
              /clear  /cancel  /quit\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
@@ -199,6 +215,18 @@ pub(super) async fn execute(
             ),
             Err(error) => app.push_error(&error),
         },
+        Command::Tasks => {
+            let tasks = backend.list_tasks().await?;
+            if tasks.is_empty() {
+                app.push_system("No durable Agent tasks.");
+            } else {
+                app.open_task_picker(tasks);
+            }
+        }
+        Command::Task(id) => {
+            let task = backend.get_task(&id).await?;
+            app.open_task_detail(task);
+        }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}",
             app.conversation.id, app.selected_model, app.info.provider

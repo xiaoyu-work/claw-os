@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::terminal::backend::{
     ApprovalRequest, BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job,
+    TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command};
 use crate::agent::terminal::state::{
@@ -44,11 +45,18 @@ fn job(status: &str) -> Job {
     Job {
         id: "task-1".into(),
         session_id: "ses_001953abcdef0_123456789abc".into(),
+        activity_id: None,
         prompt: "Run the terminal test".into(),
         status: status.into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        started_at: Some("2026-01-01T00:00:01Z".into()),
+        finished_at: None,
         response: None,
         error: None,
         requested_model: Some("claw-model".into()),
+        provider: Some("ollama".into()),
+        model: Some("claw-model".into()),
+        turns_used: None,
     }
 }
 
@@ -107,6 +115,11 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/rewind 3"), Some(Command::Rewind(3)));
     assert_eq!(parse_command("/unarchive"), Some(Command::Unarchive));
     assert_eq!(parse_command("/model"), Some(Command::Models));
+    assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
+    assert_eq!(
+        parse_command("/task task-1"),
+        Some(Command::Task("task-1".into()))
+    );
     assert_eq!(parse_command("/resume"), Some(Command::Sessions));
     assert_eq!(
         parse_command("/rewind 0"),
@@ -459,5 +472,65 @@ fn destructive_history_actions_require_explicit_confirmation() {
             ),
         ),
         InputAction::Confirm(ConfirmationAction::Archive)
+    );
+}
+
+#[test]
+fn durable_task_picker_opens_redacted_details_and_exact_actions() {
+    let mut app = app();
+    app.open_task_picker(vec![TaskSummary {
+        id: "task-1".into(),
+        title: "Inspect durable result".into(),
+        status: "error".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        session_id: Some("ses_001953abcdef0_123456789abc".into()),
+        activity_id: None,
+        waiting_on: 0,
+        cancel_requested: false,
+        error: Some("failed".into()),
+    }]);
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::Task("task-1".into()))
+    );
+
+    let mut failed = job("error");
+    failed.error = Some("token=******".into());
+    failed.finished_at = Some("2026-01-01T00:00:02Z".into());
+    app.open_task_detail(failed);
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Durable task"));
+    assert!(output.contains("[r] Retry"));
+    assert!(!output.contains("******"));
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('r'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::TaskRetry("task-1".into())
+    );
+
+    app.open_task_detail(job("running"));
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::TaskCancel("task-1".into())
     );
 }

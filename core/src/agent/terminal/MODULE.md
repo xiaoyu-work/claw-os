@@ -4,8 +4,9 @@
 
 Own the in-process terminal presentation for the shared Claw Agent backend.
 This module renders UI and translates human input into existing canonical
-conversation, task, model, Skill and approval operations. It does not own
-execution, persistence, provider credentials, capabilities, consent or audit.
+conversation, durable task, model, Skill and approval operations. It does not
+own execution, persistence, provider credentials, capabilities, consent or
+audit.
 
 ## Key files
 
@@ -26,7 +27,8 @@ execution, persistence, provider credentials, capabilities, consent or audit.
 
 - Use canonical `ses_*` conversation IDs and ordinary broker routes directly.
 - Keep durable tasks running when the UI disconnects unless the user explicitly
-  cancels.
+  cancels. Task browsing, cancellation and retry must use the owner-scoped
+  broker contract rather than terminal-local task records.
 - Display only shared redacted presentation data. Never expose tool arguments,
   successful result bodies, opaque reasoning state or credentials.
 - Approval keys call the installed OS helper for one exact pending request;

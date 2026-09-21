@@ -40,6 +40,10 @@ class FixtureBroker:
         self.cancelled = threading.Event()
         self.stopped = threading.Event()
         self.task_id = str(uuid.uuid4())
+        self.history_running_id = "task-history-running"
+        self.history_failed_id = "task-history-failed"
+        self.history_retry_id = "task-history-retry"
+        self.history_cancelled = False
         self.cursor = 0
         self.requested_model = None
         self.session_id = SESSION_ID
@@ -91,6 +95,30 @@ class FixtureBroker:
             "waiting_on": [],
         }
 
+    def history_job(self, task_id, status):
+        return {
+            "id": task_id,
+            "session_id": self.session_id,
+            "prompt": f"Historical {status} task",
+            "title": f"Historical {status} task",
+            "status": status,
+            "created_at": "2025-12-31T23:59:00Z",
+            "started_at": "2025-12-31T23:59:01Z",
+            "finished_at": (
+                None
+                if status in ("pending", "running", "waiting_approval")
+                else "2025-12-31T23:59:02Z"
+            ),
+            "provider": "ollama",
+            "model": "tui-fixture",
+            "requested_model": "tui-fixture",
+            "turns_used": 1,
+            "response": None,
+            "error": "fixture failure" if status == "error" else None,
+            "waiting_on": [],
+            "cancel_requested": False,
+        }
+
     def dispatch(self, method, params):
         if method == "daemon.status":
             return {"daemon": "clawd", "status": "running"}
@@ -131,6 +159,16 @@ class FixtureBroker:
         if method in ("permission.pending", "permission.recent"):
             return {"requests": []}
         if method == "task.list":
+            if self.case == "task-center":
+                return {
+                    "jobs": [
+                        self.history_job(
+                            self.history_running_id,
+                            "cancelled" if self.history_cancelled else "running",
+                        ),
+                        self.history_job(self.history_failed_id, "error"),
+                    ]
+                }
             return {"jobs": []}
         if method == "task.submit":
             if params.get("session_id") != self.session_id:
@@ -145,12 +183,32 @@ class FixtureBroker:
             self.requested_model = params.get("model")
             return self.job("running")
         if method == "task.cancel":
-            if params["id"] != self.task_id:
-                raise AssertionError("cancellation addressed the wrong task")
-            self.cancelled.set()
-            return self.job("cancelled")
+            if params["id"] == self.history_running_id:
+                self.history_cancelled = True
+                value = self.history_job(self.history_running_id, "cancelled")
+                value["cancelled"] = True
+                return value
+            if params["id"] == self.task_id:
+                self.cancelled.set()
+                value = self.job("cancelled")
+                value["cancelled"] = True
+                return value
+            raise AssertionError("cancellation addressed the wrong task")
         if method in ("task.get", "task.status"):
+            if params["id"] == self.history_running_id:
+                return self.history_job(
+                    self.history_running_id,
+                    "cancelled" if self.history_cancelled else "running",
+                )
+            if params["id"] == self.history_failed_id:
+                return self.history_job(self.history_failed_id, "error")
+            if params["id"] == self.history_retry_id:
+                return self.history_job(self.history_retry_id, "pending")
             return self.job("cancelled" if self.cancelled.is_set() else "running")
+        if method == "task.retry":
+            if params["id"] != self.history_failed_id:
+                raise AssertionError("retry addressed the wrong task")
+            return self.history_job(self.history_retry_id, "pending")
         if method == "task.stream":
             if params["id"] != self.task_id:
                 raise AssertionError("stream addressed the wrong task")
@@ -178,6 +236,7 @@ class FixtureBroker:
                     "commands",
                     "confirmations",
                     "multiline",
+                    "task-center",
                 ):
                     events.extend([
                         {"progress": {
@@ -200,6 +259,7 @@ class FixtureBroker:
                 "commands",
                 "confirmations",
                 "multiline",
+                "task-center",
             ) or self.cancelled.is_set()
             if not terminal:
                 time.sleep(0.05)
@@ -514,6 +574,76 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+            if case == "task-center":
+                send_prompt(master, output, "/tasks")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.list"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.get"
+                        and request["params"].get("id") == broker.history_running_id
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"c")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.cancel"
+                        and request["params"].get("id") == broker.history_running_id
+                        for request in broker.requests
+                    ),
+                )
+                time.sleep(0.2)
+                os.write(master, b"\x1b")
+                send_prompt(master, output, "/tasks")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: sum(
+                        request["command"] == "task.list"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"\x1b[B\r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.get"
+                        and request["params"].get("id") == broker.history_failed_id
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.retry"
+                        and request["params"].get("id") == broker.history_failed_id
+                        for request in broker.requests
+                    ),
+                )
+                time.sleep(0.2)
+                os.write(master, b"\x1b")
             if case == "multiline":
                 os.write(master, b"\x1b[200~First line\nSecond line\x1b[201~")
                 settled = time.monotonic() + 0.4
@@ -592,6 +722,7 @@ if __name__ == "__main__":
             "multiline",
             "plain",
             "resume",
+            "task-center",
         ),
         default="complete",
     )

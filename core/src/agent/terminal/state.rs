@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use super::backend::{ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job};
+use super::backend::{
+    ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job, TaskSummary,
+};
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
 const MAX_TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
@@ -51,6 +53,7 @@ pub(super) enum RunStatus {
 pub(super) enum PickerKind {
     Models,
     Sessions,
+    Tasks,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +76,7 @@ pub(super) struct Picker {
 pub(super) enum PickerSelection {
     Model(String),
     Session(String),
+    Task(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,6 +109,8 @@ pub(super) struct App {
     pub command_selection: usize,
     pub picker: Option<Picker>,
     pub confirmation: Option<Confirmation>,
+    pub task_detail: Option<Job>,
+    pub task_detail_scroll: u16,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -139,6 +145,8 @@ impl App {
             command_selection: 0,
             picker: None,
             confirmation: None,
+            task_detail: None,
+            task_detail_scroll: 0,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -170,6 +178,8 @@ impl App {
         self.command_selection = 0;
         self.picker = None;
         self.confirmation = None;
+        self.task_detail = None;
+        self.task_detail_scroll = 0;
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -242,6 +252,13 @@ impl App {
             }
         }
         self.pending_approvals.clear();
+        if self
+            .task_detail
+            .as_ref()
+            .is_some_and(|task| task.id == job.id)
+        {
+            self.open_task_detail(job.clone());
+        }
     }
 
     pub fn push_assistant_delta(&mut self, text: &str) {
@@ -583,6 +600,70 @@ impl App {
         });
     }
 
+    pub fn open_task_picker(&mut self, tasks: Vec<TaskSummary>) {
+        self.task_detail = None;
+        self.picker = Some(Picker {
+            kind: PickerKind::Tasks,
+            title: "Durable tasks",
+            items: tasks
+                .into_iter()
+                .map(|task| {
+                    let mut flags = Vec::new();
+                    if task.waiting_on > 0 {
+                        flags.push(format!("waiting:{}", task.waiting_on));
+                    }
+                    if task.cancel_requested {
+                        flags.push("cancel requested".into());
+                    }
+                    if task.activity_id.is_some() {
+                        flags.push("activity".into());
+                    }
+                    if task.error.is_some() {
+                        flags.push("error".into());
+                    }
+                    let flags = if flags.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" | {}", flags.join(", "))
+                    };
+                    PickerItem {
+                        label: bounded_clean_text(&task.title, 120).replace('\n', " "),
+                        detail: format!(
+                            "{} | {} | {}{}",
+                            task.status,
+                            task.created_at,
+                            task.session_id.as_deref().unwrap_or("no session"),
+                            flags
+                        ),
+                        value: task.id,
+                    }
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn open_task_detail(&mut self, mut job: Job) {
+        job.prompt = bounded_clean_text(&job.prompt, 8_192);
+        job.response = job
+            .response
+            .as_deref()
+            .map(|value| bounded_clean_text(value, 32_768));
+        job.error = job
+            .error
+            .as_deref()
+            .map(|value| bounded_clean_text(value, 8_192));
+        self.picker = None;
+        self.task_detail = Some(job);
+        self.task_detail_scroll = 0;
+    }
+
+    pub fn close_task_detail(&mut self) {
+        self.task_detail = None;
+        self.task_detail_scroll = 0;
+    }
+
     pub fn picker_insert(&mut self, value: char) {
         if let Some(picker) = &mut self.picker {
             if !value.is_control() && picker.query.len() < 256 {
@@ -674,6 +755,7 @@ impl App {
         Some(match picker.kind {
             PickerKind::Models => PickerSelection::Model(item.value.clone()),
             PickerKind::Sessions => PickerSelection::Session(item.value.clone()),
+            PickerKind::Tasks => PickerSelection::Task(item.value.clone()),
         })
     }
 
@@ -723,6 +805,18 @@ pub(super) fn clean_text(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn bounded_clean_text(value: &str, max_chars: usize) -> String {
+    let value = clean_text(value);
+    if value.chars().count() <= max_chars {
+        value
+    } else {
+        format!(
+            "{}\n[terminal view truncated]",
+            value.chars().take(max_chars).collect::<String>()
+        )
+    }
 }
 
 fn byte_index(value: &str, character_index: usize) -> usize {

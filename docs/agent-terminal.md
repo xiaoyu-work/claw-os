@@ -69,6 +69,9 @@ Controls:
 - During an approval, `a` requests one exact authorization and `d` requests
   denial through the installed OS helper. The frontend response itself grants
   nothing.
+- In a durable task detail, `c` cancels a non-terminal task, `r` retries a
+  terminal task as a new durable task, and `Up` / `Down` scroll its bounded
+  redacted result.
 
 Text entered while a task is active is queued locally and submitted after that
 task reaches a terminal state. Exiting does not silently cancel durable work.
@@ -90,6 +93,8 @@ The command set names Claw concepts only:
 /models
 /model [model-id]
 /skills
+/tasks
+/task [task-id]
 /session
 /clear
 /cancel
@@ -110,12 +115,19 @@ without an ID opens a searchable bounded conversation picker. These lists are
 presentation only; selecting an item still uses the normal broker operation and
 canonical identity checks.
 
+`/tasks` (or `/task` without an ID) opens the newest 100 owner-scoped durable
+tasks. Selecting one fetches its current canonical detail, including status,
+session, Activity association, timing, model, result or error. Cancellation
+acts on that exact task. Retry is available only for terminal tasks and creates
+the new pending task through `task.retry`; the TUI does not manufacture or
+rewrite task state.
+
 ## Backend ownership
 
 ```text
 Claw ratatui renderer
   -> canonical agent.conversation.* broker routes
-  -> durable task submit/stream/cancel routes
+  -> durable task submit/stream/list/get/cancel/retry routes
   -> protected approval reads and root-owned decisions
   -> claw-agentd and the shared guarded Agent runtime
 ```
@@ -143,7 +155,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations multiline resume plain; do
+for scenario in complete cancel commands confirmations task-center multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -158,4 +170,5 @@ requires an actual canonical task submission, observes streamed output,
 cancels the matching task with `Esc`, resumes by presentation ID through the
 canonical service, verifies rename/fork command routing, preserves bracketed
 multiline paste, requires archive/rewind confirmation and confirms plain mode
-never contacts the broker.
+never contacts the broker. The task-center scenario browses owner-scoped tasks,
+cancels one exact running task and retries one exact terminal task.

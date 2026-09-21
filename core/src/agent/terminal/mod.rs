@@ -164,6 +164,8 @@ enum InputAction {
     Review(ReviewDecision),
     Picker(PickerSelection),
     Confirm(ConfirmationAction),
+    TaskCancel(String),
+    TaskRetry(String),
     Quit,
 }
 
@@ -204,7 +206,13 @@ async fn run_with_backend(
                         ).await;
                     }
                     Event::Paste(value) => {
-                        app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
+                        if app.current_approval().is_none()
+                            && app.confirmation.is_none()
+                            && app.task_detail.is_none()
+                            && app.picker.is_none()
+                        {
+                            app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
+                        }
                     }
                     Event::Resize(_, _) | Event::FocusGained | Event::FocusLost | Event::Mouse(_) => {}
                     Event::Key(_) => {}
@@ -280,6 +288,29 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.close_confirmation();
                 InputAction::None
             }
+            _ => InputAction::None,
+        };
+    }
+    if let Some(task) = &app.task_detail {
+        let task_id = task.id.clone();
+        let terminal = task.is_terminal();
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_task_detail();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.task_detail_scroll = app.task_detail_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.task_detail_scroll = app.task_detail_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') if !terminal => {
+                InputAction::TaskCancel(task_id)
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') if terminal => InputAction::TaskRetry(task_id),
             _ => InputAction::None,
         };
     }
@@ -475,12 +506,36 @@ async fn apply_input_action(
                 Ok(conversation) => app.replace_conversation(conversation),
                 Err(error) => app.push_error(&error),
             },
+            PickerSelection::Task(id) => match backend.get_task(&id).await {
+                Ok(task) => app.open_task_detail(task),
+                Err(error) => app.push_error(&error),
+            },
         },
         InputAction::Confirm(action) => {
             if let Err(error) = commands::confirm(app, backend, action).await {
                 app.push_error(&error);
             }
         }
+        InputAction::TaskCancel(task_id) => match backend.cancel(&task_id).await {
+            Ok(()) => {
+                if app.active_task.as_deref() == Some(task_id.as_str()) {
+                    app.status = RunStatus::Cancelling;
+                }
+                match backend.get_task(&task_id).await {
+                    Ok(task) => app.open_task_detail(task),
+                    Err(error) => app.push_error(&error),
+                }
+            }
+            Err(error) => app.push_error(&error),
+        },
+        InputAction::TaskRetry(task_id) => match backend.retry_task(&task_id).await {
+            Ok(task) => {
+                let new_id = task.id.clone();
+                app.open_task_detail(task);
+                app.push_system(&format!("Retried as durable task {new_id}."));
+            }
+            Err(error) => app.push_error(&error),
+        },
         InputAction::Submit(input) => {
             if let Some(command) = commands::parse(&input) {
                 if let Err(error) = commands::execute(app, backend, command).await {

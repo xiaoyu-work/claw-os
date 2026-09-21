@@ -26,7 +26,121 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_footer(frame, chunks[3], app);
     render_command_palette(frame, chunks[1], app);
     render_picker(frame, area, app);
+    render_task_detail(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(task) = &app.task_detail else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(96);
+    let height = screen.height.saturating_sub(4).min(28);
+    if width < 36 || height < 12 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let status_color = match task.status.as_str() {
+        "ok" => Color::Green,
+        "error" => Color::Red,
+        "cancelled" => Color::DarkGray,
+        "waiting_approval" => Color::Magenta,
+        "pending" => Color::Yellow,
+        _ => Color::Cyan,
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                task.status.to_uppercase(),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(task.id.clone(), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::raw(format!("session: {}", task.session_id)),
+    ];
+    if let Some(activity_id) = &task.activity_id {
+        lines.push(Line::raw(format!("activity: {activity_id}")));
+    }
+    lines.push(Line::raw(format!("created: {}", task.created_at)));
+    if let Some(started_at) = &task.started_at {
+        lines.push(Line::raw(format!("started: {started_at}")));
+    }
+    if let Some(finished_at) = &task.finished_at {
+        lines.push(Line::raw(format!("finished: {finished_at}")));
+    }
+    if let Some(model) = task.model.as_ref().or(task.requested_model.as_ref()) {
+        lines.push(Line::raw(format!(
+            "model: {}{}",
+            model,
+            task.provider
+                .as_deref()
+                .map(|provider| format!(" ({provider})"))
+                .unwrap_or_default()
+        )));
+    }
+    if let Some(turns) = task.turns_used {
+        lines.push(Line::raw(format!("turns: {turns}")));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Prompt",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    lines.extend(markdown_lines(&task.prompt));
+    if let Some(response) = &task.response {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Result",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(markdown_lines(response));
+    }
+    if let Some(error) = &task.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Error",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(error.lines().map(|line| Line::raw(line.to_string())));
+    }
+    let action = if task.is_terminal() {
+        "[r] Retry"
+    } else {
+        "[c] Cancel"
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.task_detail_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(status_color))
+                    .title(" Durable task ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(action, Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
 }
 
 fn render_confirmation(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -198,6 +312,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     let title = match picker.kind {
         PickerKind::Models => format!(" {} - model ", picker.title),
         PickerKind::Sessions => format!(" {} - session ", picker.title),
+        PickerKind::Tasks => format!(" {} - task ", picker.title),
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

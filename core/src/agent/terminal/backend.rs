@@ -51,11 +51,37 @@ pub(super) struct ConversationList {
 pub(super) struct Job {
     pub id: String,
     pub session_id: String,
+    pub activity_id: Option<String>,
     pub prompt: String,
     pub status: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
     pub response: Option<String>,
     pub error: Option<String>,
     pub requested_model: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub turns_used: Option<u32>,
+}
+
+impl Job {
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.status.as_str(), "ok" | "error" | "cancelled")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TaskSummary {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub session_id: Option<String>,
+    pub activity_id: Option<String>,
+    pub waiting_on: usize,
+    pub cancel_requested: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +138,9 @@ pub(super) trait Backend: Send + Sync {
     ) -> Result<Job, String>;
     async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, String>;
     async fn cancel(&self, task_id: &str) -> Result<(), String>;
+    async fn list_tasks(&self) -> Result<Vec<TaskSummary>, String>;
+    async fn get_task(&self, task_id: &str) -> Result<Job, String>;
+    async fn retry_task(&self, task_id: &str) -> Result<Job, String>;
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
     async fn skills(&self) -> Result<Vec<SkillSummary>, String>;
@@ -298,6 +327,44 @@ impl Backend for BrokerBackend {
             return Err("The task was already terminal before cancellation".into());
         }
         Ok(())
+    }
+
+    async fn list_tasks(&self) -> Result<Vec<TaskSummary>, String> {
+        let value = self
+            .call(Command::TaskList, json!({ "limit": 100, "summary": true }))
+            .await?;
+        let values = value
+            .get("jobs")
+            .and_then(Value::as_array)
+            .ok_or("Claw task list omitted jobs")?;
+        if values.len() > 100 {
+            return Err("Claw task list exceeded its terminal bound".into());
+        }
+        values.iter().map(parse_task_summary).collect()
+    }
+
+    async fn get_task(&self, task_id: &str) -> Result<Job, String> {
+        validate_token(task_id, "task id")?;
+        let job = parse_job(
+            self.call(Command::TaskGet, json!({ "id": task_id }))
+                .await?,
+        )?;
+        if job.id != task_id {
+            return Err("Claw returned a different task".into());
+        }
+        Ok(job)
+    }
+
+    async fn retry_task(&self, task_id: &str) -> Result<Job, String> {
+        validate_token(task_id, "task id")?;
+        let job = parse_job(
+            self.call(Command::TaskRetry, json!({ "id": task_id }))
+                .await?,
+        )?;
+        if job.id == task_id || job.status != "pending" {
+            return Err("Claw returned an invalid retry task".into());
+        }
+        Ok(job)
     }
 
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String> {
@@ -515,20 +582,44 @@ fn parse_job(value: Value) -> Result<Job, String> {
     Ok(Job {
         id: required_string(&value, "id")?,
         session_id: required_string(&value, "session_id")?,
+        activity_id: optional_string(&value, "activity_id"),
         prompt: required_string(&value, "prompt")?,
         status: required_string(&value, "status")?,
-        response: value
-            .get("response")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        error: value
-            .get("error")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        requested_model: value
-            .get("requested_model")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        created_at: required_string(&value, "created_at")?,
+        started_at: optional_string(&value, "started_at"),
+        finished_at: optional_string(&value, "finished_at"),
+        response: optional_string(&value, "response"),
+        error: optional_string(&value, "error"),
+        requested_model: optional_string(&value, "requested_model"),
+        provider: optional_string(&value, "provider"),
+        model: optional_string(&value, "model"),
+        turns_used: value
+            .get("turns_used")
+            .and_then(Value::as_u64)
+            .map(|turns| {
+                u32::try_from(turns).map_err(|_| "Claw task turn count is too large".to_string())
+            })
+            .transpose()?,
+    })
+}
+
+fn parse_task_summary(value: &Value) -> Result<TaskSummary, String> {
+    Ok(TaskSummary {
+        id: required_string(value, "id")?,
+        title: required_string(value, "title")?,
+        status: required_string(value, "status")?,
+        created_at: required_string(value, "created_at")?,
+        session_id: optional_string(value, "session_id"),
+        activity_id: optional_string(value, "activity_id"),
+        waiting_on: value
+            .get("waiting_on")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
+        cancel_requested: value
+            .get("cancel_requested")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        error: optional_string(value, "error"),
     })
 }
 
@@ -538,6 +629,10 @@ fn required_string(value: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| format!("Claw response omitted {key}"))
+}
+
+fn optional_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 fn validate_token(value: &str, field: &str) -> Result<(), String> {
