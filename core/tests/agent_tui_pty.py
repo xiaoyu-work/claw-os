@@ -29,6 +29,8 @@ FORK_SESSION_ID = "ses_001953abcdef1_abcdef123456"
 PRESENTATION_ID = "01234567-89ab-8cde-8123-456789abcdef"
 ANSWER = "CLAW_TUI_PTY_COMPLETED_9F43"
 RUNNING = "CLAW_TUI_PTY_RUNNING_3A91"
+PENDING_APPROVAL_ID = "approval-center-pending"
+RECENT_APPROVAL_ID = "approval-center-recent"
 
 
 class FixtureBroker:
@@ -156,8 +158,53 @@ class FixtureBroker:
             return {"n": 0, "sessions": []}
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
+        if method == "permission.pending" and self.case == "approval-center":
+            return {
+                "requests": [{
+                    "id": PENDING_APPROVAL_ID,
+                    "verb": "fs.write",
+                    "scope": {"kind": "path", "value": "/home/claw/report.md"},
+                    "session": self.session_id,
+                    "reason": "Write the requested report",
+                    "requested_at": 1767225600,
+                    "risk": "high",
+                    "requester": "Claw Agent",
+                }]
+            }
+        if method == "permission.recent" and self.case == "approval-center":
+            return {
+                "requests": [{
+                    "id": RECENT_APPROVAL_ID,
+                    "verb": "net.dial",
+                    "scope": {"kind": "host", "value": "example.com"},
+                    "session": self.session_id,
+                    "reason": "Fetch public release metadata",
+                    "requested_at": 1767225500,
+                    "risk": "medium",
+                    "requester": "Claw Agent",
+                    "decision": {
+                        "outcome": "approved",
+                        "decided_at": 1767225550,
+                        "duration": "once",
+                    },
+                }]
+            }
         if method in ("permission.pending", "permission.recent"):
             return {"requests": []}
+        if method == "permission.status":
+            return {
+                "statuses": [
+                    {
+                        "id": approval_id,
+                        "status": (
+                            "pending"
+                            if approval_id == PENDING_APPROVAL_ID
+                            else "consumed"
+                        ),
+                    }
+                    for approval_id in params["ids"]
+                ]
+            }
         if method == "task.list":
             if self.case == "task-center":
                 return {
@@ -236,6 +283,7 @@ class FixtureBroker:
                     "commands",
                     "confirmations",
                     "multiline",
+                    "approval-center",
                     "task-center",
                 ):
                     events.extend([
@@ -259,6 +307,7 @@ class FixtureBroker:
                 "commands",
                 "confirmations",
                 "multiline",
+                "approval-center",
                 "task-center",
             ) or self.cancelled.is_set()
             if not terminal:
@@ -609,6 +658,40 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 time.sleep(0.2)
                 os.write(master, b"\x1b")
+            if case == "approval-center":
+                send_prompt(master, output, "/approvals")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: all(
+                        any(request["command"] == command for request in broker.requests)
+                        for command in (
+                            "permission.pending",
+                            "permission.recent",
+                            "permission.status",
+                        )
+                    ),
+                )
+                os.write(master, b"\r")
+                time.sleep(0.2)
+                os.write(master, b"\x1b")
+                send_prompt(master, output, "/approvals")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: sum(
+                        request["command"] == "permission.recent"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"\x1b[B\r")
+                time.sleep(0.2)
+                os.write(master, b"a")
+                time.sleep(0.2)
+                os.write(master, b"\x1b")
                 send_prompt(master, output, "/tasks")
                 read_terminal(
                     master,
@@ -720,6 +803,7 @@ if __name__ == "__main__":
             "commands",
             "confirmations",
             "multiline",
+            "approval-center",
             "plain",
             "resume",
             "task-center",

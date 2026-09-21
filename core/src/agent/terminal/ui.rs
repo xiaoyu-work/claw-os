@@ -6,7 +6,9 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::commands::suggestions;
-use super::state::{App, ApprovalStatus, Entry, EntryKind, PickerKind, RunStatus, ToolStatus};
+use super::state::{
+    clean_text, App, ApprovalStatus, Entry, EntryKind, PickerKind, RunStatus, ToolStatus,
+};
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
@@ -27,7 +29,115 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_command_palette(frame, chunks[1], app);
     render_picker(frame, area, app);
     render_task_detail(frame, area, app);
+    render_approval_detail(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_approval_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(approval) = &app.approval_detail else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(96);
+    let height = screen.height.saturating_sub(4).min(28);
+    if width < 36 || height < 12 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let status_color = match approval.status.as_str() {
+        "pending" => Color::Yellow,
+        "approved" => Color::Green,
+        "denied" => Color::Red,
+        "consumed" => Color::Blue,
+        _ => Color::DarkGray,
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                approval.status.to_uppercase(),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(approval.id.clone(), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::raw(format!("capability: {}", approval.verb)),
+        Line::raw(format!(
+            "risk: {}",
+            approval.risk.as_deref().unwrap_or("unclassified")
+        )),
+        Line::raw(format!("session: {}", approval.session)),
+        Line::raw(format!("requested: {}", approval.requested_at)),
+    ];
+    if let Some(requester) = &approval.requester {
+        lines.push(Line::raw(format!("requester: {requester}")));
+    }
+    if let Some(decided_at) = approval.decided_at {
+        lines.push(Line::raw(format!("decided: {decided_at}")));
+    }
+    if let Some(duration) = &approval.duration {
+        lines.push(Line::raw(format!("duration: {duration}")));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Scope",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    let scope = serde_json::to_string_pretty(&approval.scope)
+        .map(|value| clean_text(&value))
+        .unwrap_or_else(|_| "[scope unavailable]".into());
+    lines.extend(scope.lines().map(|line| Line::raw(line.to_string())));
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Reason",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    lines.extend(markdown_lines(&approval.reason));
+    if let Some(note) = &approval.note {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Decision note",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(markdown_lines(note));
+    }
+    let action = if approval.status == "pending" {
+        "[a] Approve once  [d] Deny"
+    } else {
+        "Historical decision - read only"
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.approval_detail_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(status_color))
+                    .title(" Approval center ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(action, Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
 }
 
 fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -313,6 +423,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         PickerKind::Models => format!(" {} - model ", picker.title),
         PickerKind::Sessions => format!(" {} - session ", picker.title),
         PickerKind::Tasks => format!(" {} - task ", picker.title),
+        PickerKind::Approvals => format!(" {} - approval ", picker.title),
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

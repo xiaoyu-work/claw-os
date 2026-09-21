@@ -54,6 +54,7 @@ pub(super) enum PickerKind {
     Models,
     Sessions,
     Tasks,
+    Approvals,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,6 +78,7 @@ pub(super) enum PickerSelection {
     Model(String),
     Session(String),
     Task(String),
+    Approval(ApprovalRequest),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,6 +113,8 @@ pub(super) struct App {
     pub confirmation: Option<Confirmation>,
     pub task_detail: Option<Job>,
     pub task_detail_scroll: u16,
+    pub approval_detail: Option<ApprovalRequest>,
+    pub approval_detail_scroll: u16,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -121,6 +125,7 @@ pub(super) struct App {
     active_assistant: Option<usize>,
     provider_had_text: bool,
     tool_entries: HashMap<String, usize>,
+    approval_catalog: HashMap<String, ApprovalRequest>,
     seen_approvals: HashSet<String>,
     transcript_bytes: usize,
 }
@@ -147,6 +152,8 @@ impl App {
             confirmation: None,
             task_detail: None,
             task_detail_scroll: 0,
+            approval_detail: None,
+            approval_detail_scroll: 0,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -157,6 +164,7 @@ impl App {
             active_assistant: None,
             provider_had_text: false,
             tool_entries: HashMap::new(),
+            approval_catalog: HashMap::new(),
             seen_approvals: HashSet::new(),
             transcript_bytes: 0,
         };
@@ -180,6 +188,9 @@ impl App {
         self.confirmation = None;
         self.task_detail = None;
         self.task_detail_scroll = 0;
+        self.approval_detail = None;
+        self.approval_detail_scroll = 0;
+        self.approval_catalog.clear();
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -353,6 +364,8 @@ impl App {
         if !self.pending_approvals.is_empty() {
             self.status = RunStatus::WaitingApproval;
             self.picker = None;
+            self.task_detail = None;
+            self.approval_detail = None;
         }
     }
 
@@ -664,6 +677,67 @@ impl App {
         self.task_detail_scroll = 0;
     }
 
+    pub fn open_approval_picker(&mut self, approvals: Vec<ApprovalRequest>) {
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.approval_catalog = approvals
+            .iter()
+            .map(|approval| (approval.id.clone(), approval.clone()))
+            .collect();
+        self.picker = Some(Picker {
+            kind: PickerKind::Approvals,
+            title: "Approval center",
+            items: approvals
+                .into_iter()
+                .map(|approval| {
+                    let subject = approval
+                        .requester
+                        .as_deref()
+                        .unwrap_or(approval.session.as_str());
+                    PickerItem {
+                        label: format!(
+                            "{} {}",
+                            approval.status.to_uppercase(),
+                            bounded_clean_text(&approval.verb, 80)
+                        ),
+                        detail: format!(
+                            "{} | {} | {}",
+                            approval.risk.as_deref().unwrap_or("unclassified"),
+                            approval.requested_at,
+                            bounded_clean_text(subject, 120).replace('\n', " ")
+                        ),
+                        value: approval.id,
+                    }
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn open_approval_detail(&mut self, mut approval: ApprovalRequest) {
+        approval.verb = bounded_clean_text(&approval.verb, 256).replace('\n', " ");
+        approval.reason = bounded_clean_text(&approval.reason, 8_192);
+        approval.session = bounded_clean_text(&approval.session, 512).replace('\n', " ");
+        approval.requester = approval
+            .requester
+            .as_deref()
+            .map(|value| bounded_clean_text(value, 512).replace('\n', " "));
+        approval.note = approval
+            .note
+            .as_deref()
+            .map(|value| bounded_clean_text(value, 2_048));
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = Some(approval);
+        self.approval_detail_scroll = 0;
+    }
+
+    pub fn close_approval_detail(&mut self) {
+        self.approval_detail = None;
+        self.approval_detail_scroll = 0;
+    }
+
     pub fn picker_insert(&mut self, value: char) {
         if let Some(picker) = &mut self.picker {
             if !value.is_control() && picker.query.len() < 256 {
@@ -756,6 +830,9 @@ impl App {
             PickerKind::Models => PickerSelection::Model(item.value.clone()),
             PickerKind::Sessions => PickerSelection::Session(item.value.clone()),
             PickerKind::Tasks => PickerSelection::Task(item.value.clone()),
+            PickerKind::Approvals => {
+                PickerSelection::Approval(self.approval_catalog.get(&item.value)?.clone())
+            }
         })
     }
 

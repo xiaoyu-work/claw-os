@@ -166,6 +166,7 @@ enum InputAction {
     Confirm(ConfirmationAction),
     TaskCancel(String),
     TaskRetry(String),
+    ApprovalReview(String, ReviewDecision),
     Quit,
 }
 
@@ -209,6 +210,7 @@ async fn run_with_backend(
                         if app.current_approval().is_none()
                             && app.confirmation.is_none()
                             && app.task_detail.is_none()
+                            && app.approval_detail.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -287,6 +289,31 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.close_confirmation();
                 InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if let Some(approval) = &app.approval_detail {
+        let approval_id = approval.id.clone();
+        let pending = approval.status == "pending";
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_approval_detail();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.approval_detail_scroll = app.approval_detail_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.approval_detail_scroll = app.approval_detail_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') if pending => {
+                InputAction::ApprovalReview(approval_id, ReviewDecision::ApproveOnce)
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') if pending => {
+                InputAction::ApprovalReview(approval_id, ReviewDecision::Deny)
             }
             _ => InputAction::None,
         };
@@ -510,6 +537,7 @@ async fn apply_input_action(
                 Ok(task) => app.open_task_detail(task),
                 Err(error) => app.push_error(&error),
             },
+            PickerSelection::Approval(approval) => app.open_approval_detail(approval),
         },
         InputAction::Confirm(action) => {
             if let Err(error) = commands::confirm(app, backend, action).await {
@@ -536,6 +564,29 @@ async fn apply_input_action(
             }
             Err(error) => app.push_error(&error),
         },
+        InputAction::ApprovalReview(approval_id, decision) => {
+            match backend.review(&approval_id, decision).await {
+                Ok(()) => {
+                    let approved = decision == ReviewDecision::ApproveOnce;
+                    app.resolve_approval(&approval_id, approved);
+                    if let Some(approval) = &mut app.approval_detail {
+                        if approval.id == approval_id {
+                            approval.status = if approved {
+                                "approved".into()
+                            } else {
+                                "denied".into()
+                            };
+                        }
+                    }
+                    app.push_system(if approved {
+                        "Approval granted once through the protected OS helper."
+                    } else {
+                        "Approval denied through the protected OS helper."
+                    });
+                }
+                Err(error) => app.push_error(&error),
+            }
+        }
         InputAction::Submit(input) => {
             if let Some(command) = commands::parse(&input) {
                 if let Err(error) = commands::execute(app, backend, command).await {

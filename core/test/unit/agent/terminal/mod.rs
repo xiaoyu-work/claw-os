@@ -120,6 +120,11 @@ fn claw_commands_are_closed_and_semantic() {
         parse_command("/task task-1"),
         Some(Command::Task("task-1".into()))
     );
+    assert_eq!(parse_command("/approvals"), Some(Command::Approvals));
+    assert_eq!(
+        parse_command("/approval approval-1"),
+        Some(Command::Approval("approval-1".into()))
+    );
     assert_eq!(parse_command("/resume"), Some(Command::Sessions));
     assert_eq!(
         parse_command("/rewind 0"),
@@ -330,6 +335,14 @@ fn approvals_have_one_explicit_terminal_decision() {
         verb: "fs.write".into(),
         scope: json!({"path": "/home/claw/output"}),
         reason: "Write requested output".into(),
+        status: "pending".into(),
+        session: "ses_001953abcdef0_123456789abc".into(),
+        requested_at: 1_767_225_600,
+        requester: Some("Claw Agent".into()),
+        risk: Some("high".into()),
+        decided_at: None,
+        duration: None,
+        note: None,
     }]);
     assert_eq!(app.current_approval().unwrap().id, "approval-1");
     app.resolve_approval("approval-1", true);
@@ -532,5 +545,64 @@ fn durable_task_picker_opens_redacted_details_and_exact_actions() {
             ),
         ),
         InputAction::TaskCancel("task-1".into())
+    );
+}
+
+#[test]
+fn approval_center_keeps_history_read_only_and_pending_decisions_exact() {
+    let pending = ApprovalRequest {
+        id: "approval-center-1".into(),
+        verb: "fs.write".into(),
+        scope: json!({"kind": "path", "value": "/home/claw/output"}),
+        reason: "Write the requested output".into(),
+        status: "pending".into(),
+        session: "ses_001953abcdef0_123456789abc".into(),
+        requested_at: 1_767_225_600,
+        requester: Some("Claw Agent".into()),
+        risk: Some("high".into()),
+        decided_at: None,
+        duration: None,
+        note: None,
+    };
+    let mut app = app();
+    app.open_approval_picker(vec![pending.clone()]);
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::Approval(pending.clone()))
+    );
+    app.open_approval_detail(pending);
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Approval center"));
+    assert!(output.contains("[a] Approve once"));
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('d'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::ApprovalReview("approval-center-1".into(), ReviewDecision::Deny)
+    );
+
+    app.approval_detail.as_mut().unwrap().status = "approved".into();
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
     );
 }

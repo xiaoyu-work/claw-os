@@ -33,6 +33,9 @@ audit.
   successful result bodies, opaque reasoning state or credentials.
 - Approval keys call the installed OS helper for one exact pending request;
   no UI object or key press is permission.
+- Approval browsing combines only owner-scoped pending and recent records.
+  Historical records are read-only; pending decisions still pass through the
+  same protected helper and post-decision status verification.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

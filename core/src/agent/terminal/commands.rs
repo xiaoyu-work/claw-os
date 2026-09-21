@@ -21,6 +21,8 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
+    ("/approvals", "browse pending and recent approvals"),
+    ("/approval", "open an approval by id"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -43,6 +45,8 @@ pub(super) enum Command {
     Skills,
     Tasks,
     Task(String),
+    Approvals,
+    Approval(String),
     Session,
     Clear,
     Cancel,
@@ -77,6 +81,9 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
         "task" => Command::Task(rest.to_string()),
+        "approvals" => Command::Approvals,
+        "approval" if rest.is_empty() => Command::Approvals,
+        "approval" => Command::Approval(rest.to_string()),
         "session" => Command::Session,
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
@@ -109,7 +116,7 @@ pub(super) fn completion(input: &str, selected: usize) -> Option<String> {
 fn takes_argument(command: &str) -> bool {
     matches!(
         command,
-        "/resume" | "/rename" | "/rewind" | "/model" | "/task"
+        "/resume" | "/rename" | "/rewind" | "/model" | "/task" | "/approval"
     )
 }
 
@@ -124,6 +131,8 @@ pub(super) async fn execute(
             Command::Help
                 | Command::Tasks
                 | Command::Task(_)
+                | Command::Approvals
+                | Command::Approval(_)
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -136,7 +145,7 @@ pub(super) async fn execute(
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
              /fork  /rewind N  /models  /model ID  /skills\n\
-             /tasks  /task ID  /session\n\
+             /tasks  /task ID  /approvals  /approval ID  /session\n\
              /clear  /cancel  /quit\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
@@ -226,6 +235,23 @@ pub(super) async fn execute(
         Command::Task(id) => {
             let task = backend.get_task(&id).await?;
             app.open_task_detail(task);
+        }
+        Command::Approvals => {
+            let approvals = backend.list_approvals().await?;
+            if approvals.is_empty() {
+                app.push_system("No pending or recent approvals.");
+            } else {
+                app.open_approval_picker(approvals);
+            }
+        }
+        Command::Approval(id) => {
+            let approval = backend
+                .list_approvals()
+                .await?
+                .into_iter()
+                .find(|approval| approval.id == id)
+                .ok_or_else(|| format!("Approval {id} is not pending or recent."))?;
+            app.open_approval_detail(approval);
         }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}",

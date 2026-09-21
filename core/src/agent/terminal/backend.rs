@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -92,12 +93,20 @@ pub(super) struct StreamFrame {
     pub job: Job,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ApprovalRequest {
     pub id: String,
     pub verb: String,
     pub scope: Value,
     pub reason: String,
+    pub status: String,
+    pub session: String,
+    pub requested_at: u64,
+    pub requester: Option<String>,
+    pub risk: Option<String>,
+    pub decided_at: Option<u64>,
+    pub duration: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -142,6 +151,7 @@ pub(super) trait Backend: Send + Sync {
     async fn get_task(&self, task_id: &str) -> Result<Job, String>;
     async fn retry_task(&self, task_id: &str) -> Result<Job, String>;
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
+    async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
     async fn skills(&self) -> Result<Vec<SkillSummary>, String>;
 }
@@ -381,17 +391,70 @@ impl Backend for BrokerBackend {
                     .iter()
                     .find(|request| request.get("id").and_then(Value::as_str) == Some(id))
                     .ok_or_else(|| format!("approval {id} is no longer pending"))?;
-                Ok(ApprovalRequest {
-                    id: id.clone(),
-                    verb: required_string(request, "verb")?,
-                    scope: request
-                        .get("scope")
-                        .cloned()
-                        .ok_or("approval request omitted scope")?,
-                    reason: required_string(request, "reason")?,
-                })
+                parse_approval(request, "pending")
             })
             .collect()
+    }
+
+    async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String> {
+        let pending = self
+            .call(Command::PermissionPending, json!({ "limit": 32 }))
+            .await?;
+        let recent = self
+            .call(Command::PermissionRecent, json!({ "limit": 32 }))
+            .await?;
+        let pending = pending
+            .get("requests")
+            .and_then(Value::as_array)
+            .ok_or("Claw pending approval list omitted requests")?;
+        let recent = recent
+            .get("requests")
+            .and_then(Value::as_array)
+            .ok_or("Claw recent approval list omitted requests")?;
+        if pending.len() > 32 || recent.len() > 32 {
+            return Err("Claw approval list exceeded its terminal bound".into());
+        }
+        let mut approvals = pending
+            .iter()
+            .map(|request| parse_approval(request, "pending"))
+            .chain(recent.iter().map(|request| {
+                let status = request
+                    .get("decision")
+                    .and_then(|decision| decision.get("outcome"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                parse_approval(request, status)
+            }))
+            .collect::<Result<Vec<_>, _>>()?;
+        if approvals.is_empty() {
+            return Ok(approvals);
+        }
+        let ids = approvals
+            .iter()
+            .map(|approval| approval.id.as_str())
+            .collect::<Vec<_>>();
+        let value = self
+            .call(Command::PermissionStatus, json!({ "ids": ids }))
+            .await?;
+        let statuses = value
+            .get("statuses")
+            .and_then(Value::as_array)
+            .ok_or("Claw approval status list omitted statuses")?
+            .iter()
+            .map(|status| {
+                Ok((
+                    required_string(status, "id")?,
+                    required_string(status, "status")?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>, String>>()?;
+        for approval in &mut approvals {
+            approval.status = statuses
+                .get(&approval.id)
+                .cloned()
+                .ok_or_else(|| format!("Claw omitted status for approval {}", approval.id))?;
+        }
+        Ok(approvals)
     }
 
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String> {
@@ -620,6 +683,32 @@ fn parse_task_summary(value: &Value) -> Result<TaskSummary, String> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         error: optional_string(value, "error"),
+    })
+}
+
+fn parse_approval(value: &Value, status: &str) -> Result<ApprovalRequest, String> {
+    let decision = value.get("decision").filter(|value| value.is_object());
+    Ok(ApprovalRequest {
+        id: required_string(value, "id")?,
+        verb: required_string(value, "verb")?,
+        scope: value
+            .get("scope")
+            .cloned()
+            .ok_or("approval request omitted scope")?,
+        reason: required_string(value, "reason")?,
+        status: status.to_string(),
+        session: required_string(value, "session")?,
+        requested_at: value
+            .get("requested_at")
+            .and_then(Value::as_u64)
+            .ok_or("approval request omitted requested_at")?,
+        requester: optional_string(value, "requester"),
+        risk: optional_string(value, "risk"),
+        decided_at: decision
+            .and_then(|decision| decision.get("decided_at"))
+            .and_then(Value::as_u64),
+        duration: decision.and_then(|decision| optional_string(decision, "duration")),
+        note: decision.and_then(|decision| optional_string(decision, "note")),
     })
 }
 
