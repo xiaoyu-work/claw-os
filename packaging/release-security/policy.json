@@ -50,12 +50,6 @@
       "path": "/usr/local/bin/cos"
     },
     {
-      "critical": true,
-      "name": "codex-tui",
-      "package": "claw-os-agent",
-      "path": "/usr/lib/cos/tui/bin/codex-tui"
-    },
-    {
       "critical": false,
       "name": "cos-init",
       "package": "claw-os-base",

@@ -1,4 +1,0 @@
-*.sh text eol=lf
-*.py text eol=lf
-*.json text eol=lf
-*.patch text eol=lf whitespace=-blank-at-eol

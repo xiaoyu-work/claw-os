@@ -36,7 +36,7 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-agent` | `cos`, `clawd`, `claw-agentd`, pinned terminal frontend, browser/semantic binaries, headless apps, skills, SDKs, extension-provenance trust roots, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
+| `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, headless apps, skills, SDKs, extension-provenance trust roots, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
 | `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
 
@@ -403,7 +403,6 @@ to avoid reusing a stale commit-derived package filename.
 # Build binaries for the host architecture (amd64 shown here).
 cargo build --release -p cos --target x86_64-unknown-linux-musl
 cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
-bash terminal/build.sh --target x86_64-unknown-linux-gnu
 
 # Build only the reusable Agent
 ./packaging/deb/build-debs.sh agent
@@ -438,20 +437,9 @@ enforce its control-directory permissions:
 COS_DEB_STAGE_DIR=/tmp/claw-os-deb-staging ./packaging/deb/build-debs.sh
 ```
 
-The terminal bundle is installed unchanged under `/usr/lib/cos/tui/`,
-preserving its `bin/` and `share/codex-tui/` layout, source pin, build receipt,
-licenses, and third-party notices. Assembly verifies both the source bundle
-and the copied staging bundle against the checked-in pin and explicit
-architecture. A missing bundle is built through `terminal/build.sh`; stale or
-invalid output fails instead of selecting another `codex` from `PATH`. There
-is no post-verification stripping. See the
-[terminal packaging API](../terminal/README.md#packaging-api).
-
-The GNU frontend targets the Ubuntu 24.04 / glibc 2.39 baseline. The Agent
-package declares that minimum plus the frontend's direct OpenSSL, compression,
-and GCC runtime dependencies. Publication uses explicit Ubuntu 24.04 native
-amd64 and arm64 runners so a newer host cannot silently raise the baseline.
-The frontend compiler and source revision are pinned independently of core.
+The terminal renderer is part of the musl-built `cos` binary. Packaging has no
+separate TUI source acquisition, executable, runtime dependency or update
+channel.
 
 ## Independent publication
 

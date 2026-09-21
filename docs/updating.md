@@ -420,20 +420,22 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   lesser account to drop to. On a single-account image, create an ordinary user
   and submit as that user.
 
-The Agent terminal frontend is delivered in `claw-os-agent` at
-`/usr/lib/cos/tui/bin/codex-tui`. Upgrade it with `cos` and `clawd`, then reopen
-running terminals to use the paired protocol adapter. The frontend does not
-self-update independently or fall back to a Codex Agent. Existing Claw
-credentials and canonical conversations remain in their original stores; only
-frontend preferences and drafts use the user-data `terminal/` directory. The
-explicit `cos agent chat --plain` interface remains available. The installed
-frontend is recorded as a critical release component and remeasured before
-launch; replacement outside the signed package is refused.
+The Claw Agent terminal renderer is compiled into `cos`, so upgrading
+`claw-os-agent` replaces the terminal and line interfaces together. It has no
+separate frontend binary, self-updater or compatibility protocol. Canonical
+conversations, credentials and task state remain in their existing stores.
+Reopen running terminals after upgrade; `cos agent chat --plain` remains
+available.
+
+An upgrade from the temporary external-frontend package removes its
+package-owned `/usr/lib/cos/tui` bundle. The package does not delete
+owner-controlled terminal preference/cache directories; they are no longer
+read by the Claw-owned renderer and may be removed manually after inspection.
 
 Confirm both binaries and the running daemon after an upgrade:
 
 ```bash
-dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd|claw-extension-host|codex-tui)$'
+dpkg-query -L claw-os-agent | grep -E '/(cos|clawd|claw-agentd|claw-extension-host)$'
 getent group cos-extension
 sudo systemctl status clawd
 cos agent service list --status pending

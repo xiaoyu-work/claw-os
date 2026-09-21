@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use crate::config::AgentConfig;
 
-use super::protocol::{safe_text, RpcError};
-
 pub(super) async fn catalog(config: Arc<AgentConfig>, ready: bool) -> Result<Vec<String>, String> {
     let mut models = static_catalog(&config);
     if config.provider == "copilot" && ready {
@@ -46,7 +44,7 @@ pub(super) async fn catalog(config: Arc<AgentConfig>, ready: bool) -> Result<Vec
                 .map(|model| model.id.clone()),
         );
     }
-    validate_catalog(models, &config.model).map_err(|error| error.message)
+    validate_catalog(models, &config.model)
 }
 
 fn static_catalog(config: &AgentConfig) -> Vec<String> {
@@ -54,8 +52,6 @@ fn static_catalog(config: &AgentConfig) -> Vec<String> {
     if !config.model.is_empty() {
         models.push(config.model.clone());
     }
-    // A custom endpoint may expose a different catalogue from its wire-protocol
-    // provider. Only its explicitly configured model is known without discovery.
     if uses_native_catalogue_endpoint(config) {
         models.extend(
             crate::agent::llm::metadata::list_for_provider(&config.provider)
@@ -85,18 +81,15 @@ fn uses_native_catalogue_endpoint(config: &AgentConfig) -> bool {
     native.is_some_and(|native| url.trim_end_matches('/') == native.trim_end_matches('/'))
 }
 
-fn validate_catalog(mut models: Vec<String>, primary: &str) -> Result<Vec<String>, RpcError> {
-    if models.len() > 1000 {
-        return Err(RpcError::capacity());
+fn validate_catalog(mut models: Vec<String>, primary: &str) -> Result<Vec<String>, String> {
+    if models.len() > 1_000 {
+        return Err("Claw model catalogue exceeds its terminal bound".into());
     }
+    let redactor = crate::agent::safety::redact::Redactor::default_set();
     for model in &models {
-        crate::agent::service::validate_requested_model(Some(model)).map_err(|_| {
-            RpcError::backend("Claw model catalogue contains an invalid identifier")
-        })?;
-        if safe_text(model) != *model {
-            return Err(RpcError::backend(
-                "Claw model catalogue contains a sensitive identifier",
-            ));
+        crate::agent::service::validate_requested_model(Some(model))?;
+        if redactor.redact(model) != *model {
+            return Err("Claw model catalogue contains a sensitive identifier".into());
         }
     }
     models.sort();
@@ -106,12 +99,4 @@ fn validate_catalog(mut models: Vec<String>, primary: &str) -> Result<Vec<String
         models.insert(0, primary);
     }
     Ok(models)
-}
-
-#[cfg(test)]
-mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/agent/tui_backend/models.rs"
-    ));
 }

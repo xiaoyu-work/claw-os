@@ -70,6 +70,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "1"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+unicode-width = "0.2"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 base64 = "0.22.1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64", "bzip2", "zstd"] }

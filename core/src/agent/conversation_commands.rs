@@ -307,7 +307,7 @@ async fn stream_cmd_async(
     }))
 }
 
-/// Select the full terminal frontend or the compatible line interface.
+/// Select the Claw-owned full-screen terminal or the compatible line interface.
 /// App-gated requests remain exclusively under `cos ai chat --app`.
 pub(super) fn chat_cmd(args: &[String]) -> Result<Value, String> {
     let options = super::terminal::ChatOptions::parse(args)?;

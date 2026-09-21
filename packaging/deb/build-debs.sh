@@ -13,7 +13,6 @@
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
 #   target/<RUST_TARGET:gnu>/release/cos-browser  (glibc — V8 needs it)
-#   build/agent-tui/{bin,share}/              (verified pinned TUI bundle)
 #   packaging/apps.lock.json                  (App main selection and owned payloads)
 #   skills/                                               (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
@@ -379,8 +378,6 @@ mkdir -p \
     "$AGENT_STAGE/usr/lib/cos/python" \
     "$AGENT_STAGE/usr/lib/cos/release-security" \
     "$AGENT_STAGE/usr/lib/cos/skills" \
-    "$AGENT_STAGE/usr/lib/cos/tui/bin" \
-    "$AGENT_STAGE/usr/lib/cos/tui/share/codex-tui" \
     "$AGENT_STAGE/usr/lib/cos/trust/publishers.d" \
     "$AGENT_STAGE/usr/lib/systemd/system" \
     "$AGENT_STAGE/usr/lib/systemd/user" \
@@ -505,21 +502,6 @@ install -m 755 "$SCRIPT_DIR/common/security-floor-hook" \
     "$AGENT_STAGE/usr/lib/cos/apt/security-floor-hook"
 install -m 644 "$SCRIPT_DIR/common/50claw-os-security-floor" \
     "$AGENT_STAGE/etc/apt/apt.conf.d/50claw-os-security-floor"
-
-TUI_TARGET="${RUST_TARGET/-musl/-gnu}"
-if [ ! -f "$PROJECT_DIR/build/agent-tui/bin/codex-tui" ]; then
-    bash "$PROJECT_DIR/terminal/build.sh" --target "$TUI_TARGET"
-fi
-TUI_RECEIPT="$STAGE_DIR/agent-tui-source.json"
-python3 -B "$PROJECT_DIR/terminal/build.py" --verify-artifact --target "$TUI_TARGET" \
-    > "$TUI_RECEIPT"
-TUI_BIN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["binary"])' "$TUI_RECEIPT")"
-TUI_ASSETS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["assets_directory"])' "$TUI_RECEIPT")"
-echo "  :: pinned Codex TUI       <- $TUI_BIN"
-install -m 755 "$TUI_BIN" "$AGENT_STAGE/usr/lib/cos/tui/bin/codex-tui"
-cp -R "$TUI_ASSETS/." "$AGENT_STAGE/usr/lib/cos/tui/share/codex-tui/"
-python3 -B "$PROJECT_DIR/terminal/build.py" --verify-artifact --target "$TUI_TARGET" \
-    --artifact-root "$AGENT_STAGE/usr/lib/cos/tui" > "$STAGE_DIR/agent-tui-staged.json"
 
 install -m 644 \
     "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \

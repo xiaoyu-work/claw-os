@@ -1,9 +1,10 @@
-# Agent terminal
+# Claw Agent terminal
 
-The terminal frontend uses the pinned upstream Codex TUI, not a separate
-lookalike renderer. Claw OS supplies its Agent backend through a private local
-app-server protocol adapter. Provider calls, tools, capabilities, approval
-decisions, tasks, and canonical conversation history remain Claw OS services.
+`cos agent chat` provides a Claw-owned full-screen terminal UI. Its renderer,
+state machine, key handling, broker client and stream projection live under
+`core/src/agent/terminal/` and compile into `cos`. There is no downloaded or
+separately packaged TUI executable, compatibility app server, or second Agent
+backend.
 
 ## Launch
 
@@ -13,145 +14,130 @@ Run as the ordinary account that configured the Claw Agent:
 cos agent chat
 cos agent chat --session <session-id>
 cos agent chat --no-memory --max-turns 8
-cos agent chat -- --no-alt-screen
 ```
 
-The TUI is selected only when stdin, stdout, and stderr are terminals and
-`TERM` is not `dumb`. `--tui` explicitly requires that environment. Root cannot
-submit an Agent task on behalf of another account.
+The full-screen UI is selected only when stdin, stdout and stderr are terminals
+and `TERM` is not `dumb`. `--tui` requires that environment explicitly. Root
+cannot submit Agent work on behalf of another account.
 
-The existing line interface remains available:
+The compatible line interface remains available:
 
 ```bash
 cos agent chat --plain
 printf 'Explain the current task\n/quit\n' | cos agent chat
 ```
 
-`--no-stream` and `--show-tools` retain their existing line-interface behavior.
-They cannot be combined with `--tui`. Frontend arguments follow `--` and
-cannot replace Claw's `--remote`, transport, or authentication settings.
+`--no-stream` and `--show-tools` retain their line-interface behavior. They
+cannot be combined with `--tui`. The Claw UI does not accept another
+frontend's flags after `--`.
 
-The current task backend executes from the account's verified home directory.
-The frontend's actual working directory and displayed workspace are aligned
-with that directory; selecting another workspace requires a backend contract,
-not an ignored `--cd` option.
+## Presentation
 
-A missing frontend binary is an actionable error, not permission to start a
-Codex Agent or silently downgrade an explicitly requested TUI.
+The UI has four stable regions:
 
-## Source and build
+1. A Claw header with canonical conversation title, model, session and task
+   state.
+2. A scrollable transcript with separate user, assistant, reasoning, tool,
+   approval, system and error entries.
+3. A bounded composer with Unicode-safe editing and prompt history.
+4. A status line with controls, queued-input count and token usage.
 
-See the [terminal module](../terminal/README.md) for the pinned source,
-reproducible build, upstream licensing, and frontend artifact. The frontend
-has an isolated dependency graph; the core Cargo workspace does not acquire
-the Codex execution engine as its Agent provider.
+Model text is control-character sanitized and passed through the shared secret
+redactor before rendering. Tool inputs, successful result bodies, encrypted
+reasoning, thought signatures and raw provider payloads never enter the
+terminal. Tool identity and success/failure remain visible.
 
-Build the core from the repository root:
+Controls:
 
-```bash
-cargo build -p cos
-```
+- `Enter` submits the composer.
+- `Esc` cancels the exact current task.
+- `PageUp` / `PageDown` scroll the transcript.
+- `Up` / `Down` traverse local prompt history.
+- Typing `/` opens the supported Claw command palette; `Tab` completes its
+  first match.
+- `Ctrl-C` cancels active work, or exits while idle.
+- `Ctrl-D` exits while idle.
+- During an approval, `a` requests one exact authorization and `d` requests
+  denial through the installed OS helper. The frontend response itself grants
+  nothing.
 
-The launcher discovers the installed private frontend at
-`/usr/lib/cos/tui/bin/codex-tui`, then the repository's
-`build/agent-tui/bin/codex-tui` development artifact. An explicit
-`COS_AGENT_TUI_BIN` override must be an absolute executable path. It is a local
-operator setting, not a model-visible tool or a way to select another backend.
-Before launching an installed frontend, `cos` reuses the release-security
-runtime projection to measure the complete critical component set, including
-the TUI binary. A replaced installed frontend is refused rather than trusted as
-an owner task client.
+Text entered while a task is active is queued locally and submitted after that
+task reaches a terminal state. Exiting does not silently cancel durable work.
 
-## Backend and state ownership
+## Commands
+
+The command set names Claw concepts only:
 
 ```text
-cos agent chat
-  -> private upstream TUI child
-  -> private app-server protocol adapter in cos
-  -> authenticated clawd task/conversation/approval services
-  -> claw-agentd and the existing guarded Agent runtime
+/help
+/new
+/sessions
+/resume <session-id>
+/rename <title>
+/archive
+/unarchive
+/fork
+/rewind <user-turn-count>
+/models
+/model <model-id>
+/skills
+/session
+/clear
+/cancel
+/quit
 ```
 
-The listener lives in a fresh owner-private temporary directory and has mode
-`0600`. The frontend and adapter are supervised together. Losing the frontend
-does not invent a successful task result or undo admitted effects. Explicit
-interruption uses the normal task cancellation path.
+`/rewind` changes retained conversation replay only. It does not roll back
+files, processes or other admitted effects. `/clear` clears the current
+terminal view without deleting canonical history. The terminal deliberately
+does not present a permanent-delete action unless the backend can provide that
+exact contract.
 
-The frontend receives a dedicated `CODEX_HOME` under the Claw user-data
-directory's `terminal/` subdirectory. It holds frontend preferences and drafts,
-not a second authoritative Agent conversation store. Claw provider credentials
-are not copied into Codex configuration.
+## Backend ownership
 
-The launcher forces ephemeral frontend authentication, disabled upstream
-updates/telemetry, and disabled Codex-native web search. It removes upstream
-credentials and executor/telemetry routing variables only from the frontend
-child, leaving Claw's backend configuration untouched. Conflicting frontend
-overrides are errors. Claw's normal guarded web tools remain available.
-Codex project configuration is explicitly untrusted: the Claw backend does not
-load Codex folder hooks or accept a frontend trust write as execution authority.
-
-The `agent.conversation.*` broker surface owns conversation creation and
-presentation metadata. It uses actual Claw sessions and owner memory.
-Branching conversation history does not clone capability grants. Changes to
-the displayed transcript do not erase the audit trail or roll back filesystem
-and other system effects.
-
-Per-task model selection stays with the configured Claw provider:
-
-```bash
-cos agent service submit "Summarize this work" --model <model-id>
+```text
+Claw ratatui renderer
+  -> canonical agent.conversation.* broker routes
+  -> durable task submit/stream/cancel routes
+  -> protected approval reads and root-owned decisions
+  -> claw-agentd and the shared guarded Agent runtime
 ```
 
-The requested model is persisted before queue publication and carried in the
-worker assignment. It changes a per-request configuration clone, not the
-owner's provider, credentials, policies, or another task's configuration.
+The renderer owns only transient display state, the current composer, local
+prompt history and queued text. `clawd` owns conversation identity and
+mutation; `claw-agentd` owns model/tool execution; the existing capability,
+approval, audit and Activity boundaries remain authoritative.
 
-## Presentation contract
+Conversation creation and resume use canonical `ses_*` IDs directly. History
+is the bounded owner-scoped view returned by the conversation service. Fork
+and rewind reuse its verified task/message bindings and fail closed for active,
+legacy, partial or clipped history.
 
-Frontend code being present is not evidence that its backend operation is
-supported. The [adapter module](../core/src/agent/tui_backend/MODULE.md)
-documents the implemented protocol and its compatibility limits.
+Per-task model selection is constrained to the configured Claw provider's
+catalogue. It does not rewrite provider choice, credentials, fallback policy,
+capabilities or another task's configuration.
 
-The adapter must preserve actual thread, turn, and item identities. A
-provider response ending is not the end of an Agent turn when tool work
-continues. A successful task is not proof that an Activity goal is complete.
+## Validation
 
-Tool inputs and successful result bodies remain behind the shared
-`runtime::presentation` projection. Rich operation previews and diffs require
-explicit, safe backend data; they must not be reconstructed as authoritative
-effects from model prose. Reasoning summaries may be presented, but encrypted
-reasoning state, thought signatures, credentials, and raw internal payloads
-must not enter the terminal.
-
-Approval controls are presentations of existing protected requests. Neither a
-frontend choice nor a protocol response grants permission independently of
-Claw's approval authority.
-
-## Terminal integration fixture
-
-The Linux PTY fixture launches the real `cos` and pinned frontend against a
-deterministic native broker fixture. It requires the task to be submitted,
-render its result, and exit; the cancellation case sends the TUI's actual Esc
-action and observes cancellation of the matching native task. No model
-generation or installed daemon is used.
-
-Run from the repository root after both binaries are built:
+From the repository root in Linux/WSL:
 
 ```bash
+cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
+
+cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-unshare --user --map-current-user --keep-caps --mount --net \
-  python3 -B core/tests/agent_tui_pty.py \
-  --cos target/debug/cos \
-  --frontend build/agent-tui/bin/codex-tui \
-  --case complete \
-  --original-mount-namespace "$original_namespace"
+for scenario in complete cancel commands resume plain; do
+  unshare --user --map-current-user --keep-caps --mount --net \
+    python3 -B core/tests/agent_tui_pty.py \
+    --cos target/debug/cos \
+    --case "$scenario" \
+    --original-mount-namespace "$original_namespace"
+done
 ```
 
-Repeat with `--case cancel` and `--case plain`. The plain case deliberately
-selects a nonexistent frontend binary and requires the legacy REPL to exit
-without a broker task, covering the executable's global-flag routing too.
-The fixture requires private mount and network
-namespaces and overlays an empty home only inside that namespace, so it cannot
-read, trust, or modify the account's real frontend configuration. It must not
-be run as root. This is a frontend/adapter integration fixture, not proof of
-all backend features or live provider behavior.
+Unit tests cover input parsing/editing, redaction, stream projection, approval
+state and ratatui rendering. The PTY fixture drives the real `cos` binary,
+requires an actual canonical task submission, observes streamed output,
+cancels the matching task with `Esc`, resumes by presentation ID through the
+canonical service, verifies rename/fork command routing and confirms plain mode
+never contacts the broker.

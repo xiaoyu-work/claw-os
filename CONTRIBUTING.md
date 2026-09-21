@@ -22,21 +22,8 @@ cd core
 cargo build --release
 ```
 
-### Build the pinned terminal frontend
-
-The terminal source/build component is isolated from the core Cargo workspace.
-From the repository root:
-
-```bash
-bash terminal/build.sh --target x86_64-unknown-linux-gnu
-python3 -B -m unittest discover -s terminal -p 'test_*.py'
-```
-
-See [`terminal/README.md`](terminal/README.md) for prerequisites, the source pin,
-maintained patches and artifact verification. `cos agent chat` launches this
-frontend through the in-core Claw protocol adapter. Building the frontend never
-selects the Codex Agent backend or transfers model, tool, conversation, or
-permission authority out of Claw OS.
+The Claw-owned terminal UI is compiled into `cos` by the ordinary core build.
+It has no separately fetched frontend source or runtime binary.
 
 ### Build the OS display runtime
 

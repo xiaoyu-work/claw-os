@@ -174,14 +174,3 @@ fn the_helper_itself_is_a_critical_component() {
         "a replaced verifier must be detected like any other security component"
     );
 }
-
-#[test]
-fn the_agent_terminal_frontend_is_a_critical_component() {
-    let frontend = component("codex-tui").expect("terminal frontend is tracked");
-    assert_eq!(frontend.path, "/usr/lib/cos/tui/bin/codex-tui");
-    assert_eq!(frontend.package, "claw-os-agent");
-    assert!(
-        frontend.critical,
-        "a replaced owner-facing task client must be detected before launch"
-    );
-}

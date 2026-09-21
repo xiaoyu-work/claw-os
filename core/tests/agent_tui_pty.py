@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the actual pinned frontend and Claw adapter through a Linux PTY."""
+"""Exercise the Claw-owned Agent TUI through a Linux PTY."""
 
 import argparse
 import contextlib
@@ -25,6 +25,7 @@ import uuid
 
 
 SESSION_ID = "ses_001953abcdef0_123456789abc"
+FORK_SESSION_ID = "ses_001953abcdef1_abcdef123456"
 PRESENTATION_ID = "01234567-89ab-8cde-8123-456789abcdef"
 ANSWER = "CLAW_TUI_PTY_COMPLETED_9F43"
 RUNNING = "CLAW_TUI_PTY_RUNNING_3A91"
@@ -41,6 +42,8 @@ class FixtureBroker:
         self.task_id = str(uuid.uuid4())
         self.cursor = 0
         self.requested_model = None
+        self.session_id = SESSION_ID
+        self.title = "Terminal integration fixture"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
         self.listener.listen(8)
@@ -49,10 +52,9 @@ class FixtureBroker:
 
     def conversation(self):
         return {
-            "id": SESSION_ID,
+            "id": self.session_id,
             "presentation_id": PRESENTATION_ID,
-            "frontend_id": PRESENTATION_ID,
-            "title": "Terminal integration fixture",
+            "title": self.title,
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
             "archived": False,
@@ -69,7 +71,7 @@ class FixtureBroker:
     def job(self, status):
         return {
             "id": self.task_id,
-            "session_id": SESSION_ID,
+            "session_id": self.session_id,
             "prompt": "Run the terminal integration fixture",
             "status": status,
             "created_at": "2026-01-01T00:00:00Z",
@@ -90,8 +92,8 @@ class FixtureBroker:
         if method == "agent.conversation.create":
             return {"conversation": self.conversation()}
         if method == "agent.conversation.get":
-            if params["id"] not in (SESSION_ID, PRESENTATION_ID):
-                raise AssertionError("adapter did not preserve the native session identity")
+            if params["id"] not in (self.session_id, PRESENTATION_ID):
+                raise AssertionError("terminal did not preserve the native session identity")
             return {"conversation": self.conversation()}
         if method == "agent.conversation.list":
             return {
@@ -99,6 +101,18 @@ class FixtureBroker:
                 "conversation_count": 1,
                 "conversations_truncated": False,
             }
+        if method == "agent.conversation.update":
+            if params["id"] != self.session_id:
+                raise AssertionError("conversation update addressed another session")
+            if "title" in params:
+                self.title = params["title"]
+            return {"conversation": self.conversation()}
+        if method == "agent.conversation.fork":
+            if params["id"] != self.session_id:
+                raise AssertionError("conversation fork addressed another session")
+            self.session_id = FORK_SESSION_ID
+            self.title = "Forked terminal fixture"
+            return {"conversation": self.conversation()}
         if method == "memory.sessions":
             return {"n": 0, "sessions": []}
         if method == "memory.history":
@@ -108,7 +122,7 @@ class FixtureBroker:
         if method == "task.list":
             return {"jobs": []}
         if method == "task.submit":
-            if params.get("session_id") != SESSION_ID:
+            if params.get("session_id") != self.session_id:
                 raise AssertionError("task was not submitted under the canonical conversation")
             if params.get("prompt") != "Run the terminal integration fixture":
                 raise AssertionError("terminal input was changed or dropped")
@@ -142,7 +156,7 @@ class FixtureBroker:
                     }},
                     {"progress": {"kind": "tool_start", "id": "tool-1", "name": "cos_sysinfo"}},
                 ]
-                if self.case == "complete":
+                if self.case in ("complete", "resume", "commands"):
                     events.extend([
                         {"progress": {
                             "kind": "tool_result", "id": "tool-1", "name": "cos_sysinfo",
@@ -158,7 +172,7 @@ class FixtureBroker:
                         }},
                     ])
                 self.cursor = len(events)
-            terminal = self.case == "complete" or self.cancelled.is_set()
+            terminal = self.case in ("complete", "resume", "commands") or self.cancelled.is_set()
             if not terminal:
                 time.sleep(0.05)
             status = "cancelled" if self.cancelled.is_set() else "ok" if terminal else "running"
@@ -293,7 +307,7 @@ def process_diagnostics(pid):
     return records
 
 
-def run(cos, frontend, case, transcript, original_namespace, trace):
+def run(cos, case, transcript, original_namespace, trace):
     if os.geteuid() == 0:
         raise RuntimeError("run this fixture as a non-root account, like ordinary Agent chat")
     output = bytearray()
@@ -326,12 +340,12 @@ def run(cos, frontend, case, transcript, original_namespace, trace):
             "COS_CONFIG_PATH": str(config),
             "COS_DATA_DIR": str(root / "data"),
             "COS_USER_DATA_DIR": str(home / ".local" / "share" / "cos"),
-            "COS_AGENT_TUI_BIN": str(frontend),
         }
         command = [str(cos), "agent", "chat", "--tui"]
         if case == "plain":
             command = [str(cos), "agent", "chat", "--plain", "--no-memory"]
-            environment["COS_AGENT_TUI_BIN"] = str(root / "must-not-run-tui")
+        elif case == "resume":
+            command.extend(["--session", PRESENTATION_ID])
         if trace:
             command = ["strace", "-f", "-tt", "-o", str(trace), *command]
         process = subprocess.Popen(
@@ -361,11 +375,14 @@ def run(cos, frontend, case, transcript, original_namespace, trace):
 
             def ready(data):
                 nonlocal ready_at
-                created = any(
-                    request["command"] == "agent.conversation.create"
+                opened = any(
+                    request["command"] in (
+                        "agent.conversation.create",
+                        "agent.conversation.get",
+                    )
                     for request in broker.requests
                 )
-                if created and b"Terminal integration fixture" in data:
+                if opened and b"CLAW" in data:
                     if ready_at is None:
                         ready_at = time.monotonic()
                     return time.monotonic() - ready_at >= 0.5
@@ -375,6 +392,28 @@ def run(cos, frontend, case, transcript, original_namespace, trace):
                 master, output, time.monotonic() + 45,
                 ready,
             )
+            if case == "commands":
+                send_prompt(master, output, "/rename Command fixture")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.update"
+                        and request["params"].get("title") == "Command fixture"
+                        for request in broker.requests
+                    ),
+                )
+                send_prompt(master, output, "/fork")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.fork"
+                        for request in broker.requests
+                    ),
+                )
             send_prompt(master, output, "Run the terminal integration fixture")
             marker = ANSWER if case == "complete" else RUNNING
             read_terminal(
@@ -400,6 +439,11 @@ def run(cos, frontend, case, transcript, original_namespace, trace):
             submissions = sum(request["command"] == "task.submit" for request in broker.requests)
             if submissions != 1:
                 raise AssertionError(f"expected one actual task submission, got {submissions}")
+            if case == "resume" and any(
+                request["command"] == "agent.conversation.create"
+                for request in broker.requests
+            ):
+                raise AssertionError("resume created a replacement conversation")
             print(json.dumps({"case": case, "task_submissions": submissions, "completed": True}))
         except AssertionError:
             if transcript:
@@ -427,15 +471,17 @@ def run(cos, frontend, case, transcript, original_namespace, trace):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cos", type=Path, required=True)
-    parser.add_argument("--frontend", type=Path, required=True)
-    parser.add_argument("--case", choices=("complete", "cancel", "plain"), default="complete")
+    parser.add_argument(
+        "--case",
+        choices=("complete", "cancel", "commands", "plain", "resume"),
+        default="complete",
+    )
     parser.add_argument("--transcript", type=Path)
     parser.add_argument("--original-mount-namespace", required=True)
     parser.add_argument("--trace", type=Path)
     arguments = parser.parse_args()
     run(
         arguments.cos.resolve(strict=True),
-        arguments.frontend.resolve(strict=True),
         arguments.case,
         arguments.transcript,
         arguments.original_mount_namespace,
