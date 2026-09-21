@@ -39,8 +39,15 @@ The UI has four stable regions:
    state.
 2. A scrollable transcript with separate user, assistant, reasoning, tool,
    approval, system and error entries.
-3. A bounded composer with Unicode-safe editing and prompt history.
-4. A status line with controls, queued-input count and token usage.
+3. A dynamically sized multiline composer with Unicode-safe editing, paste
+   handling and prompt history.
+4. A status line with controls, queued-input count, scroll position and token
+   usage.
+
+Working tasks show an animated status and elapsed time. Tool rows retain their
+identity, outcome and reported duration without exposing arguments or successful
+result bodies. Markdown headings, lists, quotes, fenced code, bold text and
+inline code receive terminal-native styling.
 
 Model text is control-character sanitized and passed through the shared secret
 redactor before rendering. Tool inputs, successful result bodies, encrypted
@@ -50,11 +57,13 @@ terminal. Tool identity and success/failure remain visible.
 Controls:
 
 - `Enter` submits the composer.
+- `Shift-Enter`, `Alt-Enter` or `Ctrl-J` inserts a newline.
 - `Esc` cancels the exact current task.
 - `PageUp` / `PageDown` scroll the transcript.
-- `Up` / `Down` traverse local prompt history.
-- Typing `/` opens the supported Claw command palette; `Tab` completes its
-  first match.
+- `Up` / `Down` navigate multiline input, prompt history, command suggestions
+  or an active picker according to focus.
+- `Ctrl-K` or typing `/` opens the supported Claw command palette; `Tab`
+  completes the selected match.
 - `Ctrl-C` cancels active work, or exits while idle.
 - `Ctrl-D` exits while idle.
 - During an approval, `a` requests one exact authorization and `d` requests
@@ -72,14 +81,14 @@ The command set names Claw concepts only:
 /help
 /new
 /sessions
-/resume <session-id>
+/resume [session-id]
 /rename <title>
 /archive
 /unarchive
 /fork
 /rewind <user-turn-count>
 /models
-/model <model-id>
+/model [model-id]
 /skills
 /session
 /clear
@@ -92,6 +101,11 @@ files, processes or other admitted effects. `/clear` clears the current
 terminal view without deleting canonical history. The terminal deliberately
 does not present a permanent-delete action unless the backend can provide that
 exact contract.
+
+`/model` without an ID opens a searchable configured-provider picker. `/resume`
+without an ID opens a searchable bounded conversation picker. These lists are
+presentation only; selecting an item still uses the normal broker operation and
+canonical identity checks.
 
 ## Backend ownership
 
@@ -126,7 +140,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands resume plain; do
+for scenario in complete cancel commands multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -139,5 +153,5 @@ Unit tests cover input parsing/editing, redaction, stream projection, approval
 state and ratatui rendering. The PTY fixture drives the real `cos` binary,
 requires an actual canonical task submission, observes streamed output,
 cancels the matching task with `Esc`, resumes by presentation ID through the
-canonical service, verifies rename/fork command routing and confirms plain mode
-never contacts the broker.
+canonical service, verifies rename/fork command routing, preserves bracketed
+multiline paste and confirms plain mode never contacts the broker.

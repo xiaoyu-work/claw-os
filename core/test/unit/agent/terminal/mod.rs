@@ -1,9 +1,11 @@
 use super::*;
 use crate::agent::terminal::backend::{
-    ApprovalRequest, BackendInfo, Conversation, ConversationMessage, Job,
+    ApprovalRequest, BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command};
-use crate::agent::terminal::state::{clean_text, App, ApprovalStatus, EntryKind, ToolStatus};
+use crate::agent::terminal::state::{
+    clean_text, App, ApprovalStatus, EntryKind, PickerSelection, ToolStatus,
+};
 use ratatui::backend::TestBackend;
 use serde_json::json;
 
@@ -104,6 +106,8 @@ fn claw_commands_are_closed_and_semantic() {
     );
     assert_eq!(parse_command("/rewind 3"), Some(Command::Rewind(3)));
     assert_eq!(parse_command("/unarchive"), Some(Command::Unarchive));
+    assert_eq!(parse_command("/model"), Some(Command::Models));
+    assert_eq!(parse_command("/resume"), Some(Command::Sessions));
     assert_eq!(
         parse_command("/rewind 0"),
         Some(Command::Unknown("rewind 0".into()))
@@ -116,8 +120,45 @@ fn claw_commands_are_closed_and_semantic() {
 
     let mut app = app();
     app.insert_text("/rew");
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(app.input, "/rewind ");
+    app.input = "/rew".into();
+    app.cursor = app.input.chars().count();
     app.complete_command();
     assert_eq!(app.input, "/rewind ");
+
+    app.input = "/m".into();
+    app.cursor = 2;
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Tab,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(app.input, "/model ");
 }
 
 #[test]
@@ -131,6 +172,54 @@ fn composer_edits_unicode_by_character_not_byte() {
     app.cursor = 0;
     app.delete();
     assert_eq!(app.input, "law 好额");
+
+    app.input.clear();
+    app.cursor = 0;
+    app.insert_text("one\ntwo");
+    app.move_up();
+    assert_eq!(app.cursor, 3);
+    app.move_down();
+    assert_eq!(app.cursor, 7);
+}
+
+#[test]
+fn searchable_pickers_return_typed_claw_selections() {
+    let mut app = app();
+    app.open_model_picker();
+    app.picker_insert('o');
+    app.picker_insert('t');
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::Model("other-model".into()))
+    );
+
+    app.open_model_picker();
+    app.picker_insert('z');
+    app.picker_insert('z');
+    app.picker_insert('z');
+    assert_eq!(app.take_picker_selection(), None);
+    assert!(app.picker.is_some());
+    app.close_picker();
+
+    app.open_session_picker(vec![
+        ConversationSummary {
+            id: "ses_one".into(),
+            title: "First".into(),
+            archived: false,
+        },
+        ConversationSummary {
+            id: "ses_two".into(),
+            title: "Second".into(),
+            archived: true,
+        },
+    ]);
+    app.picker_insert('s');
+    app.picker_insert('e');
+    app.picker_move(true);
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::Session("ses_two".into()))
+    );
 }
 
 #[test]
@@ -174,6 +263,7 @@ fn stream_projection_keeps_private_payloads_out_of_the_transcript() {
                 "id": "tool-1",
                 "name": "cos_fs",
                 "ok": true,
+                "latency_ms": 42,
                 "body": "private result body"
             }
         }),
@@ -206,7 +296,9 @@ fn stream_projection_keeps_private_payloads_out_of_the_transcript() {
         matches!(
             entry.kind,
             EntryKind::Tool {
-                status: ToolStatus::Succeeded,
+                status: ToolStatus::Succeeded {
+                    duration_ms: Some(42)
+                },
                 ..
             }
         )
@@ -287,4 +379,37 @@ fn slash_palette_exposes_only_supported_claw_commands() {
     assert!(output.contains("/model"));
     assert!(!output.contains("/mcp"));
     assert!(!output.contains("/delete"));
+}
+
+#[test]
+fn picker_and_working_header_render_real_claw_state() {
+    let mut app = app();
+    app.open_model_picker();
+    app.picker_insert('o');
+    app.picker_insert('t');
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let picker = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(picker.contains("Select model"));
+    assert!(picker.contains("other-model"));
+    assert!(picker.contains("filter: ot"));
+
+    app.close_picker();
+    app.begin_task(&job("running"));
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let working = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(working.contains("WORKING"));
 }

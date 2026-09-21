@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
 
-use super::backend::{ApprovalRequest, BackendInfo, Conversation, Job};
+use super::backend::{ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job};
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
 const MAX_TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
@@ -20,8 +21,8 @@ pub(super) enum EntryKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ToolStatus {
     Running,
-    Succeeded,
-    Failed,
+    Succeeded { duration_ms: Option<u64> },
+    Failed { duration_ms: Option<u64> },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +47,34 @@ pub(super) enum RunStatus {
     Cancelling,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PickerKind {
+    Models,
+    Sessions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PickerItem {
+    pub label: String,
+    pub detail: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Picker {
+    pub kind: PickerKind,
+    pub title: &'static str,
+    pub items: Vec<PickerItem>,
+    pub query: String,
+    pub selected: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum PickerSelection {
+    Model(String),
+    Session(String),
+}
+
 pub(super) struct App {
     pub info: BackendInfo,
     pub conversation: Conversation,
@@ -59,11 +88,15 @@ pub(super) struct App {
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
+    pub command_selection: usize,
+    pub picker: Option<Picker>,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
     pub usage_cached: u64,
     pub should_quit: bool,
+    pub frame: u64,
+    task_started_at: Option<Instant>,
     active_assistant: Option<usize>,
     provider_had_text: bool,
     tool_entries: HashMap<String, usize>,
@@ -72,7 +105,8 @@ pub(super) struct App {
 }
 
 impl App {
-    pub fn new(info: BackendInfo, conversation: Conversation) -> Self {
+    pub fn new(info: BackendInfo, mut conversation: Conversation) -> Self {
+        conversation.title = clean_text(&conversation.title).replace('\n', " ");
         let selected_model = info.model.clone();
         let mut app = Self {
             info,
@@ -87,11 +121,15 @@ impl App {
             pending_approvals: VecDeque::new(),
             input_history: Vec::new(),
             history_index: None,
+            command_selection: 0,
+            picker: None,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
             usage_cached: 0,
             should_quit: false,
+            frame: 0,
+            task_started_at: None,
             active_assistant: None,
             provider_had_text: false,
             tool_entries: HashMap::new(),
@@ -102,7 +140,8 @@ impl App {
         app
     }
 
-    pub fn replace_conversation(&mut self, conversation: Conversation) {
+    pub fn replace_conversation(&mut self, mut conversation: Conversation) {
+        conversation.title = clean_text(&conversation.title).replace('\n', " ");
         self.conversation = conversation;
         self.entries.clear();
         self.transcript_bytes = 0;
@@ -112,8 +151,11 @@ impl App {
         self.active_assistant = None;
         self.provider_had_text = false;
         self.scroll = 0;
+        self.command_selection = 0;
+        self.picker = None;
         self.status = RunStatus::Ready;
         self.active_task = None;
+        self.task_started_at = None;
         self.queued_prompts.clear();
         self.usage_input = 0;
         self.usage_output = 0;
@@ -143,6 +185,7 @@ impl App {
     pub fn begin_task(&mut self, job: &Job) {
         self.active_task = Some(job.id.clone());
         self.status = RunStatus::Working;
+        self.task_started_at = Some(Instant::now());
         self.active_assistant = None;
         self.provider_had_text = false;
         self.push_entry(EntryKind::User, clean_text(&job.prompt));
@@ -171,6 +214,7 @@ impl App {
         }
         self.active_task = None;
         self.status = RunStatus::Ready;
+        self.task_started_at = None;
         self.active_assistant = None;
         self.provider_had_text = false;
         for entry in &mut self.entries {
@@ -240,14 +284,14 @@ impl App {
         }
     }
 
-    pub fn tool_finished(&mut self, id: &str, name: &str, success: bool) {
+    pub fn tool_finished(&mut self, id: &str, name: &str, success: bool, duration_ms: Option<u64>) {
         self.tool_started(id, name);
         if let Some(index) = self.tool_entries.get(id).copied() {
             if let EntryKind::Tool { status, .. } = &mut self.entries[index].kind {
                 *status = if success {
-                    ToolStatus::Succeeded
+                    ToolStatus::Succeeded { duration_ms }
                 } else {
-                    ToolStatus::Failed
+                    ToolStatus::Failed { duration_ms }
                 };
             }
         }
@@ -274,6 +318,7 @@ impl App {
         }
         if !self.pending_approvals.is_empty() {
             self.status = RunStatus::WaitingApproval;
+            self.picker = None;
         }
     }
 
@@ -328,6 +373,7 @@ impl App {
         self.input.clear();
         self.cursor = 0;
         self.history_index = None;
+        self.command_selection = 0;
         if !input.is_empty() {
             self.input_history.push(input.clone());
             if self.input_history.len() > 100 {
@@ -344,12 +390,13 @@ impl App {
         let index = byte_index(&self.input, self.cursor);
         self.input.insert(index, value);
         self.cursor += 1;
+        self.command_selection = 0;
     }
 
     pub fn insert_text(&mut self, value: &str) {
         for value in value
             .chars()
-            .filter(|value| !value.is_control() || *value == '\t')
+            .filter(|value| !value.is_control() || matches!(*value, '\n' | '\t'))
         {
             self.insert_char(value);
         }
@@ -363,6 +410,7 @@ impl App {
         let end = byte_index(&self.input, self.cursor);
         self.input.replace_range(start..end, "");
         self.cursor -= 1;
+        self.command_selection = 0;
     }
 
     pub fn delete(&mut self) {
@@ -372,6 +420,7 @@ impl App {
         let start = byte_index(&self.input, self.cursor);
         let end = byte_index(&self.input, self.cursor + 1);
         self.input.replace_range(start..end, "");
+        self.command_selection = 0;
     }
 
     pub fn move_left(&mut self) {
@@ -382,7 +431,21 @@ impl App {
         self.cursor = (self.cursor + 1).min(self.input.chars().count());
     }
 
-    pub fn history_previous(&mut self) {
+    pub fn move_up(&mut self) {
+        if move_vertical(&self.input, &mut self.cursor, true) {
+            return;
+        }
+        self.history_previous();
+    }
+
+    pub fn move_down(&mut self) {
+        if move_vertical(&self.input, &mut self.cursor, false) {
+            return;
+        }
+        self.history_next();
+    }
+
+    fn history_previous(&mut self) {
         if self.input_history.is_empty() {
             return;
         }
@@ -396,7 +459,7 @@ impl App {
         self.cursor = self.input.chars().count();
     }
 
-    pub fn history_next(&mut self) {
+    fn history_next(&mut self) {
         let Some(index) = self.history_index else {
             return;
         };
@@ -420,11 +483,161 @@ impl App {
     }
 
     pub fn complete_command(&mut self) {
-        let Some(completion) = super::commands::completion(&self.input) else {
+        let Some(completion) = super::commands::completion(&self.input, self.command_selection)
+        else {
             return;
         };
         self.input = completion;
         self.cursor = self.input.chars().count();
+    }
+
+    pub fn command_palette_active(&self) -> bool {
+        self.picker.is_none() && !super::commands::suggestions(&self.input).is_empty()
+    }
+
+    pub fn move_command_selection(&mut self, down: bool) {
+        let count = super::commands::suggestions(&self.input).len();
+        if count == 0 {
+            self.command_selection = 0;
+        } else if down {
+            self.command_selection = (self.command_selection + 1) % count;
+        } else {
+            self.command_selection = self.command_selection.checked_sub(1).unwrap_or(count - 1);
+        }
+    }
+
+    pub fn open_model_picker(&mut self) {
+        let selected = self
+            .info
+            .models
+            .iter()
+            .position(|model| model == &self.selected_model)
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            kind: PickerKind::Models,
+            title: "Select model",
+            items: self
+                .info
+                .models
+                .iter()
+                .map(|model| PickerItem {
+                    label: model.clone(),
+                    detail: if model == &self.selected_model {
+                        "current".into()
+                    } else {
+                        self.info.provider.clone()
+                    },
+                    value: model.clone(),
+                })
+                .collect(),
+            query: String::new(),
+            selected,
+        });
+    }
+
+    pub fn open_session_picker(&mut self, conversations: Vec<ConversationSummary>) {
+        let current_id = self.conversation.id.clone();
+        self.picker = Some(Picker {
+            kind: PickerKind::Sessions,
+            title: "Resume conversation",
+            items: conversations
+                .into_iter()
+                .map(|conversation| PickerItem {
+                    label: clean_text(&conversation.title),
+                    detail: format!(
+                        "{}{}{}",
+                        conversation.id,
+                        if conversation.id == current_id {
+                            " [current]"
+                        } else {
+                            ""
+                        },
+                        if conversation.archived {
+                            " [archived]"
+                        } else {
+                            ""
+                        }
+                    ),
+                    value: conversation.id,
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn picker_insert(&mut self, value: char) {
+        if let Some(picker) = &mut self.picker {
+            if !value.is_control() && picker.query.len() < 256 {
+                picker.query.push(value);
+                picker.selected = 0;
+            }
+        }
+    }
+
+    pub fn picker_backspace(&mut self) {
+        if let Some(picker) = &mut self.picker {
+            picker.query.pop();
+            picker.selected = 0;
+        }
+    }
+
+    pub fn picker_move(&mut self, down: bool) {
+        let count = self.picker_visible_indices().len();
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        if count == 0 {
+            picker.selected = 0;
+        } else if down {
+            picker.selected = (picker.selected + 1) % count;
+        } else {
+            picker.selected = picker.selected.checked_sub(1).unwrap_or(count - 1);
+        }
+    }
+
+    pub fn close_picker(&mut self) {
+        self.picker = None;
+    }
+
+    pub fn picker_visible_indices(&self) -> Vec<usize> {
+        let Some(picker) = &self.picker else {
+            return Vec::new();
+        };
+        let query = picker.query.to_lowercase();
+        picker
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                query.is_empty()
+                    || item.label.to_lowercase().contains(&query)
+                    || item.detail.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    pub fn take_picker_selection(&mut self) -> Option<PickerSelection> {
+        let indices = self.picker_visible_indices();
+        if indices.is_empty() {
+            return None;
+        }
+        let picker = self.picker.take()?;
+        let index = *indices.get(picker.selected.min(indices.len().saturating_sub(1)))?;
+        let item = picker.items.get(index)?;
+        Some(match picker.kind {
+            PickerKind::Models => PickerSelection::Model(item.value.clone()),
+            PickerKind::Sessions => PickerSelection::Session(item.value.clone()),
+        })
+    }
+
+    pub fn tick(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    pub fn task_elapsed(&self) -> Option<Duration> {
+        self.task_started_at.map(|started| started.elapsed())
     }
 
     fn push_entry(&mut self, kind: EntryKind, text: String) {
@@ -472,4 +685,39 @@ fn byte_index(value: &str, character_index: usize) -> usize {
         .char_indices()
         .nth(character_index)
         .map_or(value.len(), |(index, _)| index)
+}
+
+fn move_vertical(value: &str, cursor: &mut usize, up: bool) -> bool {
+    let characters = value.chars().collect::<Vec<_>>();
+    let cursor_value = (*cursor).min(characters.len());
+    let line_start = characters[..cursor_value]
+        .iter()
+        .rposition(|character| *character == '\n')
+        .map_or(0, |index| index + 1);
+    let column = cursor_value.saturating_sub(line_start);
+    if up {
+        if line_start == 0 {
+            return false;
+        }
+        let previous_end = line_start - 1;
+        let previous_start = characters[..previous_end]
+            .iter()
+            .rposition(|character| *character == '\n')
+            .map_or(0, |index| index + 1);
+        *cursor = previous_start + column.min(previous_end - previous_start);
+        return true;
+    }
+    let Some(current_end_offset) = characters[cursor_value..]
+        .iter()
+        .position(|character| *character == '\n')
+    else {
+        return false;
+    };
+    let next_start = cursor_value + current_end_offset + 1;
+    let next_end = characters[next_start..]
+        .iter()
+        .position(|character| *character == '\n')
+        .map_or(characters.len(), |offset| next_start + offset);
+    *cursor = next_start + column.min(next_end - next_start);
+    true
 }

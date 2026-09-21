@@ -72,7 +72,11 @@ class FixtureBroker:
         return {
             "id": self.task_id,
             "session_id": self.session_id,
-            "prompt": "Run the terminal integration fixture",
+            "prompt": (
+                "First line\nSecond line"
+                if self.case == "multiline"
+                else "Run the terminal integration fixture"
+            ),
             "status": status,
             "created_at": "2026-01-01T00:00:00Z",
             "started_at": "2026-01-01T00:00:00Z",
@@ -124,7 +128,12 @@ class FixtureBroker:
         if method == "task.submit":
             if params.get("session_id") != self.session_id:
                 raise AssertionError("task was not submitted under the canonical conversation")
-            if params.get("prompt") != "Run the terminal integration fixture":
+            expected_prompt = (
+                "First line\nSecond line"
+                if self.case == "multiline"
+                else "Run the terminal integration fixture"
+            )
+            if params.get("prompt") != expected_prompt:
                 raise AssertionError("terminal input was changed or dropped")
             self.requested_model = params.get("model")
             return self.job("running")
@@ -156,7 +165,7 @@ class FixtureBroker:
                     }},
                     {"progress": {"kind": "tool_start", "id": "tool-1", "name": "cos_sysinfo"}},
                 ]
-                if self.case in ("complete", "resume", "commands"):
+                if self.case in ("complete", "resume", "commands", "multiline"):
                     events.extend([
                         {"progress": {
                             "kind": "tool_result", "id": "tool-1", "name": "cos_sysinfo",
@@ -172,7 +181,12 @@ class FixtureBroker:
                         }},
                     ])
                 self.cursor = len(events)
-            terminal = self.case in ("complete", "resume", "commands") or self.cancelled.is_set()
+            terminal = self.case in (
+                "complete",
+                "resume",
+                "commands",
+                "multiline",
+            ) or self.cancelled.is_set()
             if not terminal:
                 time.sleep(0.05)
             status = "cancelled" if self.cancelled.is_set() else "ok" if terminal else "running"
@@ -393,6 +407,26 @@ def run(cos, case, transcript, original_namespace, trace):
                 ready,
             )
             if case == "commands":
+                send_prompt(master, output, "/resume")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.list"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.get"
+                        for request in broker.requests
+                    ),
+                )
                 send_prompt(master, output, "/rename Command fixture")
                 read_terminal(
                     master,
@@ -414,7 +448,18 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
-            send_prompt(master, output, "Run the terminal integration fixture")
+            if case == "multiline":
+                os.write(master, b"\x1b[200~First line\nSecond line\x1b[201~")
+                settled = time.monotonic() + 0.4
+                read_terminal(
+                    master,
+                    output,
+                    settled + 2,
+                    lambda _data: time.monotonic() >= settled,
+                )
+                os.write(master, b"\r")
+            else:
+                send_prompt(master, output, "Run the terminal integration fixture")
             marker = ANSWER if case == "complete" else RUNNING
             read_terminal(
                 master, output, time.monotonic() + 30,
@@ -473,7 +518,7 @@ if __name__ == "__main__":
     parser.add_argument("--cos", type=Path, required=True)
     parser.add_argument(
         "--case",
-        choices=("complete", "cancel", "commands", "plain", "resume"),
+        choices=("complete", "cancel", "commands", "multiline", "plain", "resume"),
         default="complete",
     )
     parser.add_argument("--transcript", type=Path)

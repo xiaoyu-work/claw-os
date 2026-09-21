@@ -26,6 +26,7 @@ pub(super) fn apply_record(app: &mut App, record: &Value) -> Result<RecordOutcom
                     .get("ok")
                     .and_then(Value::as_bool)
                     .ok_or("tool result omitted its outcome")?,
+                progress.get("latency_ms").and_then(Value::as_u64),
             ),
             "waiting_approval" => {
                 let ids = progress

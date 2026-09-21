@@ -55,7 +55,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "help" | "?" => Command::Help,
         "new" => Command::New,
         "sessions" => Command::Sessions,
-        "resume" if !rest.is_empty() => Command::Resume(rest.to_string()),
+        "resume" if rest.is_empty() => Command::Sessions,
+        "resume" => Command::Resume(rest.to_string()),
         "rename" if !rest.is_empty() => Command::Rename(rest.to_string()),
         "archive" => Command::Archive,
         "unarchive" => Command::Unarchive,
@@ -66,7 +67,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
             .filter(|turns| *turns > 0)
             .map_or_else(|| Command::Unknown(value.to_string()), Command::Rewind),
         "models" => Command::Models,
-        "model" if !rest.is_empty() => Command::Model(rest.to_string()),
+        "model" if rest.is_empty() => Command::Models,
+        "model" => Command::Model(rest.to_string()),
         "skills" => Command::Skills,
         "session" => Command::Session,
         "clear" => Command::Clear,
@@ -84,13 +86,12 @@ pub(super) fn suggestions(input: &str) -> Vec<(&'static str, &'static str)> {
         .iter()
         .copied()
         .filter(|(command, _)| command.starts_with(input))
-        .take(7)
         .collect()
 }
 
-pub(super) fn completion(input: &str) -> Option<String> {
+pub(super) fn completion(input: &str, selected: usize) -> Option<String> {
     let suggestions = suggestions(input);
-    let (command, _) = suggestions.first()?;
+    let (command, _) = suggestions.get(selected.min(suggestions.len().saturating_sub(1)))?;
     Some(if takes_argument(command) {
         format!("{command} ")
     } else {
@@ -132,27 +133,10 @@ pub(super) async fn execute(
             if page.conversations.is_empty() {
                 app.push_system("No conversations.");
             } else {
-                let mut rows = page
-                    .conversations
-                    .into_iter()
-                    .map(|conversation| {
-                        format!(
-                            "{}  {}{}",
-                            conversation.id,
-                            conversation.title,
-                            if conversation.archived {
-                                " [archived]"
-                            } else {
-                                ""
-                            }
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
                 if page.truncated {
-                    rows.push_str("\nOnly the newest 100 conversations are shown.");
+                    app.push_system("Session picker shows only the newest 100 conversations.");
                 }
-                app.push_system(&rows);
+                app.open_session_picker(page.conversations);
             }
         }
         Command::Resume(id) => {
@@ -194,12 +178,7 @@ pub(super) async fn execute(
             app.replace_conversation(conversation);
             app.push_system("Conversation replay was rewound; external effects were not undone.");
         }
-        Command::Models => {
-            app.push_system(&format!(
-                "Available models:\n{}",
-                app.info.models.join("\n")
-            ));
-        }
+        Command::Models => app.open_model_picker(),
         Command::Model(model) => {
             if app.info.models.iter().any(|candidate| candidate == &model) {
                 app.selected_model = model.clone();

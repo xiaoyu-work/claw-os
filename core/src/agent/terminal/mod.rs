@@ -27,7 +27,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use self::backend::{Backend, BrokerBackend, ReviewDecision};
-use self::state::{App, RunStatus};
+use self::state::{App, PickerSelection, RunStatus};
 use self::stream::RuntimeEvent;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -156,11 +156,13 @@ pub(super) fn run(_options: ChatOptions) -> Result<Value, String> {
     Err("the Claw Agent TUI requires Linux or WSL".into())
 }
 
+#[derive(Debug, Eq, PartialEq)]
 enum InputAction {
     None,
     Submit(String),
     Cancel,
     Review(ReviewDecision),
+    Picker(PickerSelection),
     Quit,
 }
 
@@ -200,7 +202,9 @@ async fn run_with_backend(
                             &options,
                         ).await;
                     }
-                    Event::Paste(value) => app.insert_text(&value.replace(['\r', '\n'], " ")),
+                    Event::Paste(value) => {
+                        app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
+                    }
                     Event::Resize(_, _) | Event::FocusGained | Event::FocusLost | Event::Mouse(_) => {}
                     Event::Key(_) => {}
                 }
@@ -248,7 +252,7 @@ async fn run_with_backend(
                     .await;
                 }
             }
-            _ = tick.tick() => {}
+            _ = tick.tick() => app.tick(),
         }
     }
     drop(terminal);
@@ -266,6 +270,34 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if app.picker.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_picker();
+                InputAction::None
+            }
+            KeyCode::Up => {
+                app.picker_move(false);
+                InputAction::None
+            }
+            KeyCode::Down => {
+                app.picker_move(true);
+                InputAction::None
+            }
+            KeyCode::Backspace => {
+                app.picker_backspace();
+                InputAction::None
+            }
+            KeyCode::Enter | KeyCode::Tab => app
+                .take_picker_selection()
+                .map_or(InputAction::None, InputAction::Picker),
+            KeyCode::Char(value) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.picker_insert(value);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('c') if app.active_task.is_some() => InputAction::Cancel,
@@ -276,6 +308,24 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Char('e') => {
                 app.cursor = app.input.chars().count();
+                InputAction::None
+            }
+            KeyCode::Char('j') => {
+                app.insert_char('\n');
+                InputAction::None
+            }
+            KeyCode::Char('k') => {
+                app.input = "/".to_string();
+                app.cursor = 1;
+                app.command_selection = 0;
+                InputAction::None
+            }
+            KeyCode::Char('p') => {
+                app.move_up();
+                InputAction::None
+            }
+            KeyCode::Char('n') => {
+                app.move_down();
                 InputAction::None
             }
             _ => InputAction::None,
@@ -311,11 +361,19 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             InputAction::None
         }
         KeyCode::Up => {
-            app.history_previous();
+            if app.command_palette_active() {
+                app.move_command_selection(false);
+            } else {
+                app.move_up();
+            }
             InputAction::None
         }
         KeyCode::Down => {
-            app.history_next();
+            if app.command_palette_active() {
+                app.move_command_selection(true);
+            } else {
+                app.move_down();
+            }
             InputAction::None
         }
         KeyCode::PageUp => {
@@ -336,7 +394,23 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             app.cursor = 0;
             InputAction::None
         }
+        KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::SHIFT)
+                || key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            app.insert_char('\n');
+            InputAction::None
+        }
         KeyCode::Enter => {
+            if app.command_palette_active()
+                && matches!(
+                    commands::parse(&app.input),
+                    None | Some(commands::Command::Unknown(_))
+                )
+            {
+                app.complete_command();
+                return InputAction::None;
+            }
             let input = app.take_input();
             if input.is_empty() {
                 InputAction::None
@@ -379,6 +453,16 @@ async fn apply_input_action(
                 Err(error) => app.push_error(&error),
             }
         }
+        InputAction::Picker(selection) => match selection {
+            PickerSelection::Model(model) => {
+                app.selected_model = model.clone();
+                app.push_system(&format!("Future tasks will use {model}."));
+            }
+            PickerSelection::Session(id) => match backend.get_conversation(&id).await {
+                Ok(conversation) => app.replace_conversation(conversation),
+                Err(error) => app.push_error(&error),
+            },
+        },
         InputAction::Submit(input) => {
             if let Some(command) = commands::parse(&input) {
                 if let Err(error) = commands::execute(app, backend, command).await {

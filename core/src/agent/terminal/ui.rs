@@ -6,16 +6,17 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::commands::suggestions;
-use super::state::{App, ApprovalStatus, Entry, EntryKind, RunStatus, ToolStatus};
+use super::state::{App, ApprovalStatus, Entry, EntryKind, PickerKind, RunStatus, ToolStatus};
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
+    let composer_height = composer_height(area.width, app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
-            Constraint::Length(3),
+            Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
         .split(area);
@@ -24,6 +25,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_composer(frame, chunks[2], app);
     render_footer(frame, chunks[3], app);
     render_command_palette(frame, chunks[1], app);
+    render_picker(frame, area, app);
 }
 
 fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
@@ -32,7 +34,9 @@ fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
         return;
     }
     let width = transcript.width.saturating_sub(4).min(64);
-    let height = (suggestions.len() as u16 + 2).min(transcript.height);
+    let height = (suggestions.len() as u16 + 2)
+        .min(transcript.height)
+        .min(10);
     if width < 20 || height < 3 {
         return;
     }
@@ -42,13 +46,34 @@ fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
         width,
         height,
     );
+    let max_rows = usize::from(height.saturating_sub(2));
+    let selected = app
+        .command_selection
+        .min(suggestions.len().saturating_sub(1));
+    let window_start = selected.saturating_sub(max_rows / 2);
     let lines = suggestions
         .into_iter()
-        .map(|(command, description)| {
+        .skip(window_start)
+        .take(max_rows)
+        .enumerate()
+        .map(|(index, (command, description))| {
+            let selected = window_start + index == selected;
             Line::from(vec![
                 Span::styled(format!("{command:<12}"), Style::default().fg(Color::Cyan)),
-                Span::styled(description, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    description,
+                    Style::default().fg(if selected {
+                        Color::White
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
             ])
+            .style(if selected {
+                Style::default().bg(Color::Rgb(35, 45, 55))
+            } else {
+                Style::default()
+            })
         })
         .collect::<Vec<_>>();
     frame.render_widget(Clear, area);
@@ -63,12 +88,107 @@ fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
     );
 }
 
+fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(picker) = &app.picker else {
+        return;
+    };
+    let indices = app.picker_visible_indices();
+    let width = screen.width.saturating_sub(4).min(78);
+    let max_rows = screen.height.saturating_sub(8).clamp(4, 12);
+    let height = (indices.len() as u16 + 4).max(5).min(max_rows + 4);
+    if width < 28 || height < 5 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let selected = picker.selected.min(indices.len().saturating_sub(1));
+    let window_start = selected.saturating_sub(max_rows as usize / 2);
+    let lines = if indices.is_empty() {
+        vec![Line::styled(
+            "  No matching items",
+            Style::default().fg(Color::DarkGray),
+        )]
+    } else {
+        indices
+            .iter()
+            .skip(window_start)
+            .take(max_rows as usize)
+            .enumerate()
+            .map(|(visible_offset, item_index)| {
+                let visible_index = window_start + visible_offset;
+                let item = &picker.items[*item_index];
+                let selected = visible_index == selected;
+                Line::from(vec![
+                    Span::styled(
+                        if selected { "> " } else { "  " },
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
+                        item.label.clone(),
+                        Style::default().fg(Color::White).add_modifier(if selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(item.detail.clone(), Style::default().fg(Color::DarkGray)),
+                ])
+                .style(if selected {
+                    Style::default().bg(Color::Rgb(35, 45, 55))
+                } else {
+                    Style::default()
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let query = if picker.query.is_empty() {
+        "type to filter".to_string()
+    } else {
+        format!("filter: {}", picker.query)
+    };
+    let title = match picker.kind {
+        PickerKind::Models => format!(" {} - model ", picker.title),
+        PickerKind::Sessions => format!(" {} - session ", picker.title),
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(title)
+                    .title_bottom(Line::from(vec![
+                        Span::styled(query, Style::default().fg(Color::DarkGray)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down select  Enter choose  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            )
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let status = match app.status {
         RunStatus::Ready => Span::styled("READY", Style::default().fg(Color::Green)),
-        RunStatus::Working => Span::styled("WORKING", Style::default().fg(Color::Cyan)),
+        RunStatus::Working => Span::styled(
+            format!("{} WORKING {}", spinner(app.frame), elapsed(app)),
+            Style::default().fg(Color::Cyan),
+        ),
         RunStatus::WaitingApproval => Span::styled("APPROVAL", Style::default().fg(Color::Magenta)),
-        RunStatus::Cancelling => Span::styled("STOPPING", Style::default().fg(Color::Yellow)),
+        RunStatus::Cancelling => Span::styled(
+            format!("{} STOPPING", spinner(app.frame)),
+            Style::default().fg(Color::Yellow),
+        ),
     };
     let short_session = app.conversation.id.chars().take(22).collect::<String>();
     let line = Line::from(vec![
@@ -94,6 +214,16 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
         area,
     );
+}
+
+fn spinner(frame: u64) -> &'static str {
+    ["|", "/", "-", "\\"][(frame as usize) % 4]
+}
+
+fn elapsed(app: &App) -> String {
+    app.task_elapsed()
+        .map(|elapsed| format!("{:.1}s", elapsed.as_secs_f64()))
+        .unwrap_or_default()
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -158,14 +288,20 @@ fn transcript_lines(entries: &[Entry]) -> Vec<Line<'static>> {
                 }
             }
             EntryKind::Tool { status, .. } => {
-                let (mark, color) = match status {
-                    ToolStatus::Running => ("*", Color::Cyan),
-                    ToolStatus::Succeeded => ("+", Color::Green),
-                    ToolStatus::Failed => ("!", Color::Red),
+                let (mark, color, duration) = match status {
+                    ToolStatus::Running => ("*", Color::Cyan, None),
+                    ToolStatus::Succeeded { duration_ms } => ("+", Color::Green, *duration_ms),
+                    ToolStatus::Failed { duration_ms } => ("!", Color::Red, *duration_ms),
                 };
                 lines.push(Line::from(vec![
                     Span::styled(format!("{mark} "), Style::default().fg(color)),
-                    Span::styled(entry.text.clone(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(entry.text.clone(), Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        duration
+                            .map(|duration| format!("  {duration}ms"))
+                            .unwrap_or_default(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]));
             }
             EntryKind::System => {
@@ -237,14 +373,72 @@ fn markdown_lines(value: &str) -> Vec<Line<'static>> {
                 );
             }
             if line.starts_with("- ") || line.starts_with("* ") {
-                return Line::from(vec![
-                    Span::styled("  - ", Style::default().fg(Color::Cyan)),
-                    Span::raw(line[2..].to_string()),
-                ]);
+                let mut spans = vec![Span::styled("  - ", Style::default().fg(Color::Cyan))];
+                spans.extend(inline_spans(&line[2..]));
+                return Line::from(spans);
             }
-            Line::raw(line.to_string())
+            if let Some(quote) = line.strip_prefix("> ") {
+                let mut spans = vec![Span::styled("  | ", Style::default().fg(Color::DarkGray))];
+                spans.extend(
+                    inline_spans(quote).into_iter().map(|span| {
+                        span.patch_style(Style::default().add_modifier(Modifier::ITALIC))
+                    }),
+                );
+                return Line::from(spans);
+            }
+            Line::from(inline_spans(line))
         })
         .collect()
+}
+
+fn inline_spans(value: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = value;
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix("**") {
+            if let Some(end) = after.find("**") {
+                spans.push(Span::styled(
+                    after[..end].to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                rest = &after[end + 2..];
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix('`') {
+            if let Some(end) = after.find('`') {
+                spans.push(Span::styled(
+                    after[..end].to_string(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(35, 35, 35)),
+                ));
+                rest = &after[end + 1..];
+                continue;
+            }
+        }
+        let next = ["**", "`"]
+            .into_iter()
+            .filter_map(|marker| rest.find(marker))
+            .min()
+            .unwrap_or(rest.len());
+        if next == 0 {
+            spans.push(Span::raw(rest[..1].to_string()));
+            rest = &rest[1..];
+        } else {
+            let text = &rest[..next];
+            let style = if text.starts_with("http://") || text.starts_with("https://") {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::UNDERLINED)
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(text.to_string(), style));
+            rest = &rest[next..];
+        }
+    }
+    spans
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -271,13 +465,32 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         return;
     }
 
-    let display = format!("> {}", app.input);
+    let display = app
+        .input
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| format!("{}{}", if index == 0 { "> " } else { "  " }, line))
+        .collect::<Vec<_>>()
+        .join("\n");
     frame.render_widget(Paragraph::new(display).block(block), area);
     let inner_width = area.width.saturating_sub(4).max(1);
     let before = app.input.chars().take(app.cursor).collect::<String>();
-    let width = UnicodeWidthStr::width(before.as_str()) as u16;
-    let x = area.x + 3 + (width % inner_width);
-    let y = area.y + 1 + (width / inner_width).min(area.height.saturating_sub(2));
+    let before_lines = before.split('\n').collect::<Vec<_>>();
+    let current_width =
+        UnicodeWidthStr::width(before_lines.last().copied().unwrap_or_default()) as u16;
+    let previous_rows = before_lines
+        .iter()
+        .take(before_lines.len().saturating_sub(1))
+        .map(|line| {
+            let width = UnicodeWidthStr::width(*line) as u16 + 2;
+            width.max(1).div_ceil(inner_width)
+        })
+        .sum::<u16>();
+    let x = area.x + 3 + (current_width % inner_width);
+    let y = area.y
+        + 1
+        + previous_rows
+        + ((current_width + 2) / inner_width).min(area.height.saturating_sub(2));
     frame.set_cursor_position(Position::new(
         x.min(area.right().saturating_sub(1)),
         y.min(area.bottom().saturating_sub(1)),
@@ -292,16 +505,40 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
     let line = Line::from(vec![
         Span::styled(
-            " Enter send  Esc stop  PgUp/PgDn scroll  /help ",
+            " Enter send  Shift+Enter newline  Esc stop  Ctrl+K commands ",
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
             format!(
-                "tokens {} in / {} out / {} cached{queue}",
-                app.usage_input, app.usage_output, app.usage_cached
+                "tokens {} in / {} out / {} cached{queue}{}",
+                app.usage_input,
+                app.usage_output,
+                app.usage_cached,
+                if app.scroll > 0 {
+                    format!("  scroll +{}", app.scroll)
+                } else {
+                    String::new()
+                }
             ),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
+}
+
+fn composer_height(width: u16, app: &App) -> u16 {
+    if app.current_approval().is_some() {
+        return 3;
+    }
+    let inner = width.saturating_sub(4).max(1);
+    let rows = app
+        .input
+        .split('\n')
+        .map(|line| {
+            let width = UnicodeWidthStr::width(line) as u16 + 2;
+            width.max(1).div_ceil(inner)
+        })
+        .sum::<u16>()
+        .clamp(1, 6);
+    rows + 2
 }
