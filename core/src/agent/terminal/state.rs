@@ -75,6 +75,20 @@ pub(super) enum PickerSelection {
     Session(String),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ConfirmationAction {
+    Archive,
+    Rewind(u32),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Confirmation {
+    pub title: String,
+    pub body: String,
+    pub confirm_label: String,
+    pub action: ConfirmationAction,
+}
+
 pub(super) struct App {
     pub info: BackendInfo,
     pub conversation: Conversation,
@@ -90,6 +104,7 @@ pub(super) struct App {
     pub history_index: Option<usize>,
     pub command_selection: usize,
     pub picker: Option<Picker>,
+    pub confirmation: Option<Confirmation>,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -123,6 +138,7 @@ impl App {
             history_index: None,
             command_selection: 0,
             picker: None,
+            confirmation: None,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -153,6 +169,7 @@ impl App {
         self.scroll = 0;
         self.command_selection = 0;
         self.picker = None;
+        self.confirmation = None;
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -598,6 +615,34 @@ impl App {
 
     pub fn close_picker(&mut self) {
         self.picker = None;
+    }
+
+    pub fn confirm_archive(&mut self) {
+        self.confirmation = Some(Confirmation {
+            title: "Archive conversation?".into(),
+            body: "The conversation will leave the default session list. Canonical history, task evidence and admitted effects remain. It can be restored with /unarchive.".into(),
+            confirm_label: "Archive".into(),
+            action: ConfirmationAction::Archive,
+        });
+    }
+
+    pub fn confirm_rewind(&mut self, user_turns: u32) {
+        self.confirmation = Some(Confirmation {
+            title: format!("Rewind {user_turns} user turn(s)?"),
+            body: "Only retained conversation replay changes. Audit history, task evidence, files, processes and other admitted effects are not rolled back.".into(),
+            confirm_label: "Rewind replay".into(),
+            action: ConfirmationAction::Rewind(user_turns),
+        });
+    }
+
+    pub fn close_confirmation(&mut self) {
+        self.confirmation = None;
+    }
+
+    pub fn take_confirmation(&mut self) -> Option<ConfirmationAction> {
+        self.confirmation
+            .take()
+            .map(|confirmation| confirmation.action)
     }
 
     pub fn picker_visible_indices(&self) -> Vec<usize> {

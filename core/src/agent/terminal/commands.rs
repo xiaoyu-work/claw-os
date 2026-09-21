@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::backend::Backend;
-use super::state::{App, RunStatus};
+use super::state::{App, ConfirmationAction, RunStatus};
 
 pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/help", "show Claw terminal commands"),
@@ -151,13 +151,7 @@ pub(super) async fn execute(
             app.push_system("Conversation renamed.");
         }
         Command::Archive => {
-            backend
-                .update_conversation(&app.conversation.id, None, Some(true))
-                .await?;
-            app.conversation.archived = true;
-            app.push_system(
-                "Conversation archived. Its history remains available through /resume.",
-            );
+            app.confirm_archive();
         }
         Command::Unarchive => {
             let conversation = backend
@@ -172,11 +166,7 @@ pub(super) async fn execute(
             app.push_system("Forked into a new canonical Claw conversation.");
         }
         Command::Rewind(user_turns) => {
-            let conversation = backend
-                .revert_conversation(&app.conversation.id, user_turns)
-                .await?;
-            app.replace_conversation(conversation);
-            app.push_system("Conversation replay was rewound; external effects were not undone.");
+            app.confirm_rewind(user_turns);
         }
         Command::Models => app.open_model_picker(),
         Command::Model(model) => {
@@ -228,6 +218,32 @@ pub(super) async fn execute(
         Command::Quit => app.should_quit = true,
         Command::Unknown(command) => {
             app.push_error(&format!("Unknown command /{command}. Type /help."));
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn confirm(
+    app: &mut App,
+    backend: Arc<dyn Backend>,
+    action: ConfirmationAction,
+) -> Result<(), String> {
+    match action {
+        ConfirmationAction::Archive => {
+            backend
+                .update_conversation(&app.conversation.id, None, Some(true))
+                .await?;
+            app.conversation.archived = true;
+            app.push_system(
+                "Conversation archived. Canonical history and task evidence were retained.",
+            );
+        }
+        ConfirmationAction::Rewind(user_turns) => {
+            let conversation = backend
+                .revert_conversation(&app.conversation.id, user_turns)
+                .await?;
+            app.replace_conversation(conversation);
+            app.push_system("Conversation replay was rewound; external effects were not undone.");
         }
     }
     Ok(())

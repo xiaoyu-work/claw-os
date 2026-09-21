@@ -4,7 +4,7 @@ use crate::agent::terminal::backend::{
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command};
 use crate::agent::terminal::state::{
-    clean_text, App, ApprovalStatus, EntryKind, PickerSelection, ToolStatus,
+    clean_text, App, ApprovalStatus, ConfirmationAction, EntryKind, PickerSelection, ToolStatus,
 };
 use ratatui::backend::TestBackend;
 use serde_json::json;
@@ -412,4 +412,52 @@ fn picker_and_working_header_render_real_claw_state() {
         .map(|cell| cell.symbol())
         .collect::<String>();
     assert!(working.contains("WORKING"));
+}
+
+#[test]
+fn destructive_history_actions_require_explicit_confirmation() {
+    let mut app = app();
+    app.confirm_rewind(2);
+    assert!(app
+        .confirmation
+        .as_ref()
+        .unwrap()
+        .body
+        .contains("admitted effects are not rolled back"));
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Rewind 2 user turn"));
+    assert!(output.contains("Rewind replay"));
+
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert!(app.confirmation.is_none());
+
+    app.confirm_archive();
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('y'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::Confirm(ConfirmationAction::Archive)
+    );
 }

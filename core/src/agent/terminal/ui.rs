@@ -26,6 +26,50 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_footer(frame, chunks[3], app);
     render_command_palette(frame, chunks[1], app);
     render_picker(frame, area, app);
+    render_confirmation(frame, area, app);
+}
+
+fn render_confirmation(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(confirmation) = &app.confirmation else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(72);
+    let height = 9.min(screen.height.saturating_sub(2));
+    if width < 30 || height < 7 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::raw(""),
+            Line::from(inline_spans(&confirmation.body)),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled(
+                    format!("[y] {}", confirmation.confirm_label),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("    "),
+                Span::styled("[n/Esc] Cancel", Style::default().fg(Color::DarkGray)),
+            ]),
+        ])
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(format!(" {} ", confirmation.title)),
+        ),
+        area,
+    );
 }
 
 fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {

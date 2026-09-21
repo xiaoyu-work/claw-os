@@ -27,7 +27,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use self::backend::{Backend, BrokerBackend, ReviewDecision};
-use self::state::{App, PickerSelection, RunStatus};
+use self::state::{App, ConfirmationAction, PickerSelection, RunStatus};
 use self::stream::RuntimeEvent;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -163,6 +163,7 @@ enum InputAction {
     Cancel,
     Review(ReviewDecision),
     Picker(PickerSelection),
+    Confirm(ConfirmationAction),
     Quit,
 }
 
@@ -267,6 +268,18 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Char('d') | KeyCode::Char('D') => InputAction::Review(ReviewDecision::Deny),
             KeyCode::Esc => InputAction::Cancel,
+            _ => InputAction::None,
+        };
+    }
+    if app.confirmation.is_some() {
+        return match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => app
+                .take_confirmation()
+                .map_or(InputAction::None, InputAction::Confirm),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.close_confirmation();
+                InputAction::None
+            }
             _ => InputAction::None,
         };
     }
@@ -463,6 +476,11 @@ async fn apply_input_action(
                 Err(error) => app.push_error(&error),
             },
         },
+        InputAction::Confirm(action) => {
+            if let Err(error) = commands::confirm(app, backend, action).await {
+                app.push_error(&error);
+            }
+        }
         InputAction::Submit(input) => {
             if let Some(command) = commands::parse(&input) {
                 if let Err(error) = commands::execute(app, backend, command).await {

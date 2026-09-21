@@ -102,6 +102,9 @@ terminal view without deleting canonical history. The terminal deliberately
 does not present a permanent-delete action unless the backend can provide that
 exact contract.
 
+`/archive` and `/rewind` open a Claw-owned confirmation panel that states the
+durability and external-effect consequences before any broker mutation.
+
 `/model` without an ID opens a searchable configured-provider picker. `/resume`
 without an ID opens a searchable bounded conversation picker. These lists are
 presentation only; selecting an item still uses the normal broker operation and
@@ -140,7 +143,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands multiline resume plain; do
+for scenario in complete cancel commands confirmations multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -154,4 +157,5 @@ state and ratatui rendering. The PTY fixture drives the real `cos` binary,
 requires an actual canonical task submission, observes streamed output,
 cancels the matching task with `Esc`, resumes by presentation ID through the
 canonical service, verifies rename/fork command routing, preserves bracketed
-multiline paste and confirms plain mode never contacts the broker.
+multiline paste, requires archive/rewind confirmation and confirms plain mode
+never contacts the broker.

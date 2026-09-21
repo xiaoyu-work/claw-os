@@ -44,6 +44,7 @@ class FixtureBroker:
         self.requested_model = None
         self.session_id = SESSION_ID
         self.title = "Terminal integration fixture"
+        self.archived = False
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
         self.listener.listen(8)
@@ -57,7 +58,7 @@ class FixtureBroker:
             "title": self.title,
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
-            "archived": False,
+            "archived": self.archived,
             "deleted": False,
             "parent_id": None,
             "messages": [],
@@ -110,12 +111,18 @@ class FixtureBroker:
                 raise AssertionError("conversation update addressed another session")
             if "title" in params:
                 self.title = params["title"]
+            if "archived" in params:
+                self.archived = params["archived"]
             return {"conversation": self.conversation()}
         if method == "agent.conversation.fork":
             if params["id"] != self.session_id:
                 raise AssertionError("conversation fork addressed another session")
             self.session_id = FORK_SESSION_ID
             self.title = "Forked terminal fixture"
+            return {"conversation": self.conversation()}
+        if method == "agent.conversation.revert":
+            if params["id"] != self.session_id or params.get("user_turns") != 1:
+                raise AssertionError("conversation rewind changed identity or count")
             return {"conversation": self.conversation()}
         if method == "memory.sessions":
             return {"n": 0, "sessions": []}
@@ -165,7 +172,13 @@ class FixtureBroker:
                     }},
                     {"progress": {"kind": "tool_start", "id": "tool-1", "name": "cos_sysinfo"}},
                 ]
-                if self.case in ("complete", "resume", "commands", "multiline"):
+                if self.case in (
+                    "complete",
+                    "resume",
+                    "commands",
+                    "confirmations",
+                    "multiline",
+                ):
                     events.extend([
                         {"progress": {
                             "kind": "tool_result", "id": "tool-1", "name": "cos_sysinfo",
@@ -185,6 +198,7 @@ class FixtureBroker:
                 "complete",
                 "resume",
                 "commands",
+                "confirmations",
                 "multiline",
             ) or self.cancelled.is_set()
             if not terminal:
@@ -448,6 +462,58 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+            if case == "confirmations":
+                send_prompt(master, output, "/archive")
+                settled = time.monotonic() + 0.5
+                read_terminal(
+                    master,
+                    output,
+                    settled + 2,
+                    lambda _data: time.monotonic() >= settled,
+                )
+                if any(
+                    request["command"] == "agent.conversation.update"
+                    for request in broker.requests
+                ):
+                    raise AssertionError("archive mutated before confirmation")
+                os.write(master, b"n")
+                time.sleep(0.2)
+                send_prompt(master, output, "/archive")
+                time.sleep(0.5)
+                os.write(master, b"y")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.update"
+                        and request["params"].get("archived") is True
+                        for request in broker.requests
+                    ),
+                )
+                send_prompt(master, output, "/unarchive")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.update"
+                        and request["params"].get("archived") is False
+                        for request in broker.requests
+                    ),
+                )
+                send_prompt(master, output, "/rewind 1")
+                time.sleep(0.5)
+                os.write(master, b"y")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.revert"
+                        for request in broker.requests
+                    ),
+                )
             if case == "multiline":
                 os.write(master, b"\x1b[200~First line\nSecond line\x1b[201~")
                 settled = time.monotonic() + 0.4
@@ -518,7 +584,15 @@ if __name__ == "__main__":
     parser.add_argument("--cos", type=Path, required=True)
     parser.add_argument(
         "--case",
-        choices=("complete", "cancel", "commands", "multiline", "plain", "resume"),
+        choices=(
+            "complete",
+            "cancel",
+            "commands",
+            "confirmations",
+            "multiline",
+            "plain",
+            "resume",
+        ),
         default="complete",
     )
     parser.add_argument("--transcript", type=Path)
