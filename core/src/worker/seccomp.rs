@@ -80,6 +80,13 @@ const AUDIT_ARCH: u32 = 0xc000_003e;
 #[cfg(target_arch = "aarch64")]
 const AUDIT_ARCH: u32 = 0xc000_00b7;
 
+// libc omits this constant for musl/aarch64 even though the generic
+// Linux syscall ABI reserves 294 for kexec_file_load.
+#[cfg(all(target_arch = "aarch64", target_env = "musl"))]
+const SYS_KEXEC_FILE_LOAD: i64 = 294;
+#[cfg(not(all(target_arch = "aarch64", target_env = "musl")))]
+const SYS_KEXEC_FILE_LOAD: i64 = libc::SYS_kexec_file_load;
+
 /// One classic-BPF instruction, matching `struct sock_filter`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,7 +136,7 @@ fn denied_syscalls(profile: SeccompProfile) -> Vec<i64> {
         libc::SYS_finit_module,
         libc::SYS_delete_module,
         libc::SYS_kexec_load,
-        libc::SYS_kexec_file_load,
+        SYS_KEXEC_FILE_LOAD,
         libc::SYS_reboot,
         libc::SYS_swapon,
         libc::SYS_swapoff,

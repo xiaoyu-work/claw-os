@@ -63,6 +63,7 @@ fn every_escape_syscall_is_denied() {
         libc::SYS_process_vm_readv,
         libc::SYS_pidfd_getfd,
         libc::SYS_init_module,
+        SYS_KEXEC_FILE_LOAD,
         libc::SYS_clock_settime,
     ] {
         assert!(

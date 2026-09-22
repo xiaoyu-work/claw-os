@@ -191,6 +191,10 @@ mod unix {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
     }
 
+    fn nlink_to_u64<T: Into<u64>>(nlink: T) -> u64 {
+        nlink.into()
+    }
+
     fn meta_from_stat(st: &libc::stat) -> NodeMeta {
         let fmt = st.st_mode & libc::S_IFMT;
         NodeMeta {
@@ -201,7 +205,7 @@ mod unix {
             is_file: fmt == libc::S_IFREG,
             is_symlink: fmt == libc::S_IFLNK,
             is_socket: fmt == libc::S_IFSOCK,
-            nlink: st.st_nlink,
+            nlink: nlink_to_u64(st.st_nlink),
             size: st.st_size.max(0) as u64,
             dev: st.st_dev,
             ino: st.st_ino,
