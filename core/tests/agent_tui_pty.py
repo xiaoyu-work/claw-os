@@ -1432,7 +1432,7 @@ def run(cos, case, transcript, original_namespace, trace):
                             "activity.capability_policy.get",
                         )
                     )
-                    and b"Activity evidence" in data,
+                    and b"Activity controls" in data,
                 )
                 time.sleep(0.4)
                 for refresh, key, command in [
