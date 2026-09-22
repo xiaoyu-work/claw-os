@@ -114,6 +114,9 @@ jobs:
 
       - name: Exercise the Claw-owned Agent TUI
         run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
           original_namespace="$(readlink /proc/self/ns/mnt)"
           for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
             unshare --user --map-current-user --keep-caps --mount --net \
