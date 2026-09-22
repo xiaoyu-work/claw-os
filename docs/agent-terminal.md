@@ -81,7 +81,10 @@ Controls:
   delivery; `q` toggles all-day DND. Exact UTC windows use `/dnd`.
 - In an Activity detail, `r` runs the goal, `p` pauses future work, `u`
   resumes or reopens, `c` prepares an explicit completion note, `x` stages
-  cancellation, and `a` opens the read-only attention view.
+  cancellation, `a` opens the read-only attention view, and `o` opens controls.
+- In Activity controls, `l`, `b`, `p`, and `c` prepare revision-bound commands
+  for execution limits, monetary budget, priority, and capability policy.
+  `r` refreshes canonical state; prepared commands do not run until `Enter`.
 
 Text entered while a task is active is queued locally and submitted after that
 task reaches a terminal state. Exiting does not silently cancel durable work.
@@ -122,6 +125,14 @@ The command set names Claw concepts only:
 /activity-complete <activity-id> | <confirmation-note>
 /activity-cancel <activity-id>
 /activity-attention <activity-id>
+/activity-controls <activity-id>
+/activity-limits-set <activity-id> <revision|new> | <draft-json>
+/activity-limits-enable <activity-id> <on|off> <revision>
+/activity-budget-set <activity-id> <revision|new> | <draft-json>
+/activity-budget-enable <activity-id> <on|off> <revision>
+/activity-priority <activity-id> <foreground|standard|background> <revision|new>
+/activity-capability-set <activity-id> <revision|new> | <draft-json>
+/activity-capability-enable <activity-id> <on|off> <revision>
 /session
 /clear
 /cancel
@@ -181,6 +192,17 @@ completes the Activity. Cancellation ends the goal without claiming success
 and does not cancel tasks or undo admitted effects. `/activity-attention`
 renders the shared read-only counts, decisions, issues and notifications.
 
+`/activity-controls` reads all four canonical control records. JSON set
+commands use `new` only for initial creation and an exact positive revision for
+replacement. Enable/disable always requires a revision. A stale CAS is shown
+as an error and is never silently retried against refreshed state.
+
+Execution limits constrain attempts, turns and expiry. Monetary budgets are
+owner-configured micro-USD accounting, not provider billing. Priority affects
+pending admission without preemption. Capability policies constrain existing
+authority and approval escalation but never grant permission; disabling a
+stored capability policy is a stop boundary, not unrestricted access.
+
 ## Backend ownership
 
 ```text
@@ -190,6 +212,7 @@ Claw ratatui renderer
   -> protected pending/recent approval reads and root-owned decisions
   -> owner-scoped notification state and delivery preferences
   -> shared Activity lifecycle, execution and attention routes
+  -> revision-bound Activity control routes
   -> claw-agentd and the shared guarded Agent runtime
 ```
 
@@ -216,7 +239,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle multiline resume plain; do
+for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -238,3 +261,5 @@ keeps historical records read-only. The notification scenario performs exact
 read, acknowledge and dismiss mutations and updates durable delivery/DND
 preferences without a desktop dependency. The Activity scenario exercises the
 shared list/detail/create/run/pause/reopen/complete/cancel/attention lifecycle.
+The controls scenario preserves exact revisions across limits, accounting,
+priority and capability-policy mutations.

@@ -1,8 +1,9 @@
 use super::*;
 use crate::agent::terminal::backend::{
-    Activity, ActivityAttention, ActivityDetail, ActivityResource, ApprovalRequest, BackendInfo,
-    Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
-    NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
+    Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
+    ActivityResource, ApprovalRequest, BackendInfo, Conversation, ConversationMessage,
+    ConversationSummary, Job, NotificationAction, NotificationDelivery, NotificationItem,
+    NotificationPage, NotificationPreferences, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -162,6 +163,38 @@ fn claw_commands_are_closed_and_semantic() {
         Some(Command::ActivityComplete {
             id: "activity-1".into(),
             note: "User reviewed it".into(),
+        })
+    );
+    assert_eq!(
+        parse_command(
+            "/activity-limits-set activity-1 2 | {\"max_attempts\":10,\"max_turns_per_attempt\":5,\"expires_at\":\"2027-01-01T00:00:00Z\"}"
+        ),
+        Some(Command::ActivityControlSet {
+            id: "activity-1".into(),
+            policy: ActivityControlPolicy::ExecutionLimits,
+            expected_revision: Some(2),
+            draft: json!({
+                "max_attempts": 10,
+                "max_turns_per_attempt": 5,
+                "expires_at": "2027-01-01T00:00:00Z",
+            }),
+        })
+    );
+    assert_eq!(
+        parse_command("/activity-capability-enable activity-1 off 4"),
+        Some(Command::ActivityControlEnabled {
+            id: "activity-1".into(),
+            policy: ActivityControlPolicy::CapabilityPolicy,
+            revision: 4,
+            enabled: false,
+        })
+    );
+    assert_eq!(
+        parse_command("/activity-priority activity-1 foreground new"),
+        Some(Command::ActivityPriority {
+            id: "activity-1".into(),
+            priority: "foreground".into(),
+            expected_revision: None,
         })
     );
     assert_eq!(parse_command("/resume"), Some(Command::Sessions));
@@ -804,4 +837,49 @@ fn activity_detail_preserves_explicit_lifecycle_and_completion() {
         .collect::<String>();
     assert!(output.contains("Activity attention"));
     assert!(output.contains("running"));
+}
+
+#[test]
+fn activity_controls_expose_exact_revisions_before_mutation() {
+    let mut app = app();
+    app.open_activity_controls(ActivityControls {
+        activity_id: "00000000-0000-4000-8000-000000000001".into(),
+        execution_limits: Some(json!({
+            "activity_id": "00000000-0000-4000-8000-000000000001",
+            "revision": 3,
+            "enabled": true,
+            "limits": {
+                "max_attempts": 10,
+                "max_turns_per_attempt": 5,
+                "expires_at": "2027-01-01T00:00:00Z",
+            },
+            "used_attempts": 2,
+        })),
+        monetary_budget: None,
+        scheduling_policy: Some(json!({
+            "activity_id": "00000000-0000-4000-8000-000000000001",
+            "revision": 2,
+            "priority": "foreground",
+        })),
+        capability_policy: Some(json!({
+            "activity_id": "00000000-0000-4000-8000-000000000001",
+            "revision": 4,
+            "enabled": false,
+            "rules": [],
+        })),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('l'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(
+        app.input,
+        "/activity-limits-enable 00000000-0000-4000-8000-000000000001 off 3"
+    );
 }

@@ -11,6 +11,11 @@ Terminal, Web and native desktop use one owner-scoped policy in
 task behavior. Disabling a configured policy blocks its work; it does not
 delete the policy or restore unlimited execution.
 
+The full-screen Agent TUI exposes the same record through
+`/activity-controls ID`, `/activity-limits-set ID REVISION|new | JSON`, and
+`/activity-limits-enable ID on|off REVISION`. It carries exact revisions and
+does not retry conflicts.
+
 ## Configure a finite policy
 
 In an installed Linux or WSL environment, use an existing Activity ID:

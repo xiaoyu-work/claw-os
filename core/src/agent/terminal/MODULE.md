@@ -42,6 +42,9 @@ audit.
 - Activity views consume the shared owner-scoped Activity backend. Execution
   results never complete a goal; completion and cancellation use explicit
   confirmation and never imply task cancellation or effect rollback.
+- Activity controls display canonical finite limits, configured monetary
+  accounting, pending priority and capability constraints. Mutations carry an
+  explicit fetched revision (or `new`) and never retry a stale CAS.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

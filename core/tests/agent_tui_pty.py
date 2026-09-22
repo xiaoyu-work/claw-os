@@ -66,6 +66,54 @@ class FixtureBroker:
         self.activity_state = "active"
         self.activity_completion_note = None
         self.activity_task_id = "task-activity-fixture"
+        self.execution_limits = {
+            "activity_id": ACTIVITY_ID,
+            "owner_uid": os.geteuid(),
+            "revision": 1,
+            "enabled": True,
+            "limits": {
+                "max_attempts": 10,
+                "max_turns_per_attempt": 5,
+                "expires_at": "2035-01-01T00:00:00Z",
+            },
+            "used_attempts": 2,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        self.monetary_budget = {
+            "activity_id": ACTIVITY_ID,
+            "owner_uid": os.geteuid(),
+            "revision": 1,
+            "enabled": True,
+            "spent_microusd": 100,
+            "reserved_microusd": 50,
+            "budget": {
+                "currency": "USD",
+                "max_total_microusd": 5000000,
+                "input_microusd_per_million_tokens": 250000,
+                "output_microusd_per_million_tokens": 1000000,
+                "max_output_tokens_per_turn": 4096,
+            },
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        self.scheduling_policy = {
+            "activity_id": ACTIVITY_ID,
+            "owner_uid": os.geteuid(),
+            "revision": 1,
+            "priority": "foreground",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        self.capability_policy = {
+            "activity_id": ACTIVITY_ID,
+            "owner_uid": os.geteuid(),
+            "revision": 1,
+            "enabled": True,
+            "rules": [],
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
         self.cursor = 0
         self.requested_model = None
         self.session_id = SESSION_ID
@@ -358,6 +406,72 @@ class FixtureBroker:
                         },
                         "notifications": [],
                     }
+        if method == "activity.execution_limits.get":
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "execution_limits": self.execution_limits,
+                    }
+        if method == "activity.execution_limits.set":
+                    if params.get("expected_revision") != self.execution_limits["revision"]:
+                        raise AssertionError("execution limit edit revision was not exact")
+                    self.execution_limits["revision"] += 1
+                    self.execution_limits["limits"] = params["limits"]
+                    return self.execution_limits
+        if method == "activity.execution_limits.enabled":
+                    if params["expected_revision"] != self.execution_limits["revision"]:
+                        raise AssertionError("execution limit revision was not exact")
+                    self.execution_limits["revision"] += 1
+                    self.execution_limits["enabled"] = params["enabled"]
+                    return self.execution_limits
+        if method == "activity.monetary_budget.get":
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "monetary_budget": self.monetary_budget,
+                    }
+        if method == "activity.monetary_budget.set":
+                    if params.get("expected_revision") != self.monetary_budget["revision"]:
+                        raise AssertionError("monetary budget edit revision was not exact")
+                    self.monetary_budget["revision"] += 1
+                    self.monetary_budget["budget"] = params["budget"]
+                    return self.monetary_budget
+        if method == "activity.monetary_budget.enabled":
+                    if params["expected_revision"] != self.monetary_budget["revision"]:
+                        raise AssertionError("monetary budget revision was not exact")
+                    self.monetary_budget["revision"] += 1
+                    self.monetary_budget["enabled"] = params["enabled"]
+                    return self.monetary_budget
+        if method == "activity.scheduling_policy.get":
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "scheduling_policy": self.scheduling_policy,
+                    }
+        if method == "activity.scheduling_policy.set":
+                    if params["expected_revision"] != self.scheduling_policy["revision"]:
+                        raise AssertionError("scheduling revision was not exact")
+                    self.scheduling_policy["revision"] += 1
+                    self.scheduling_policy["priority"] = params["priority"]
+                    return self.scheduling_policy
+        if method == "activity.capability_policy.get":
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "capability_policy": self.capability_policy,
+                    }
+        if method == "activity.capability_policy.set":
+                    if params.get("expected_revision") != self.capability_policy["revision"]:
+                        raise AssertionError("capability policy edit revision was not exact")
+                    self.capability_policy["revision"] += 1
+                    self.capability_policy["rules"] = params["policy"]["rules"]
+                    return self.capability_policy
+        if method == "activity.capability_policy.enabled":
+                    if params["expected_revision"] != self.capability_policy["revision"]:
+                        raise AssertionError("capability policy revision was not exact")
+                    self.capability_policy["revision"] += 1
+                    self.capability_policy["enabled"] = params["enabled"]
+                    return self.capability_policy
                     for approval_id in params["ids"]
                 ]
             }
@@ -441,6 +555,7 @@ class FixtureBroker:
                     "multiline",
                     "approval-center",
                     "activity-lifecycle",
+                    "activity-controls",
                     "notification-inbox",
                     "task-center",
                 ):
@@ -467,6 +582,7 @@ class FixtureBroker:
                 "multiline",
                 "approval-center",
                 "activity-lifecycle",
+                "activity-controls",
                 "notification-inbox",
                 "task-center",
             ) or self.cancelled.is_set()
@@ -818,6 +934,41 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 time.sleep(0.2)
                 os.write(master, b"\x1b")
+                send_prompt(master, output, "/tasks")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: sum(
+                        request["command"] == "task.list"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"\x1b[B\r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.get"
+                        and request["params"].get("id") == broker.history_failed_id
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.retry"
+                        and request["params"].get("id") == broker.history_failed_id
+                        for request in broker.requests
+                    ),
+                )
+                time.sleep(0.2)
+                os.write(master, b"\x1b")
             if case == "approval-center":
                 send_prompt(master, output, "/approvals")
                 read_terminal(
@@ -881,146 +1032,6 @@ def run(cos, case, transcript, original_namespace, trace):
                         ),
                     )
                 os.write(master, b"\x1b")
-            if case == "activity-lifecycle":
-                    send_prompt(master, output, "/activities")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.list"
-                            for request in broker.requests
-                        ),
-                    )
-                    os.write(master, b"\r")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.get"
-                            for request in broker.requests
-                        ),
-                    )
-                    os.write(master, b"\x1b")
-                    send_prompt(
-                        master,
-                        output,
-                        "/activity-create Fixture Activity | Complete the fixture goal",
-                    )
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.create"
-                            for request in broker.requests
-                        )
-                        and sum(
-                            request["command"] == "activity.get"
-                            for request in broker.requests
-                        )
-                        >= 2,
-                    )
-                    os.write(master, b"p")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.transition"
-                            and request["params"].get("state") == "paused"
-                            for request in broker.requests
-                        ),
-                    )
-                    os.write(master, b"u")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.transition"
-                            and request["params"].get("state") == "active"
-                            for request in broker.requests
-                        ),
-                    )
-                    os.write(master, b"r")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.run"
-                            for request in broker.requests
-                        ),
-                    )
-                    os.write(master, b"\x1b")
-                    send_prompt(master, output, f"/activity {ACTIVITY_ID}")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: sum(
-                            request["command"] == "activity.get"
-                            for request in broker.requests
-                        )
-                        >= 2,
-                    )
-                    os.write(master, b"a")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.attention"
-                            for request in broker.requests
-                        ),
-                    )
-                    os.write(master, b"\x1b")
-                    send_prompt(
-                        master,
-                        output,
-                        f"/activity-complete {ACTIVITY_ID} | User confirmed completion",
-                    )
-                    time.sleep(0.2)
-                    os.write(master, b"y")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.transition"
-                            and request["params"].get("state") == "completed"
-                            and request["params"].get("completion_note")
-                            == "User confirmed completion"
-                            for request in broker.requests
-                        ),
-                    )
-                    send_prompt(master, output, f"/activity-resume {ACTIVITY_ID}")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: sum(
-                            request["command"] == "activity.transition"
-                            and request["params"].get("state") == "active"
-                            for request in broker.requests
-                        )
-                        >= 2,
-                    )
-                    send_prompt(master, output, f"/activity-cancel {ACTIVITY_ID}")
-                    time.sleep(0.2)
-                    os.write(master, b"y")
-                    read_terminal(
-                        master,
-                        output,
-                        time.monotonic() + 15,
-                        lambda _data: any(
-                            request["command"] == "activity.transition"
-                            and request["params"].get("state") == "cancelled"
-                            for request in broker.requests
-                        ),
-                    )
                 send_prompt(master, output, "/notify-settings")
                 read_terminal(
                     master,
@@ -1055,25 +1066,66 @@ def run(cos, case, transcript, original_namespace, trace):
                     ),
                 )
                 os.write(master, b"\x1b")
-                send_prompt(master, output, "/tasks")
-                read_terminal(
-                    master,
-                    output,
-                    time.monotonic() + 15,
-                    lambda _data: sum(
-                        request["command"] == "task.list"
-                        for request in broker.requests
-                    )
-                    >= 2,
-                )
-                os.write(master, b"\x1b[B\r")
+            if case == "activity-lifecycle":
+                send_prompt(master, output, "/activities")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
                     lambda _data: any(
-                        request["command"] == "task.get"
-                        and request["params"].get("id") == broker.history_failed_id
+                        request["command"] == "activity.list"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.get"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b")
+                send_prompt(
+                    master,
+                    output,
+                    "/activity-create Fixture Activity | Complete the fixture goal",
+                )
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.create"
+                        for request in broker.requests
+                    )
+                    and sum(
+                        request["command"] == "activity.get"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"p")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.transition"
+                        and request["params"].get("state") == "paused"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"u")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.transition"
+                        and request["params"].get("state") == "active"
                         for request in broker.requests
                     ),
                 )
@@ -1083,12 +1135,133 @@ def run(cos, case, transcript, original_namespace, trace):
                     output,
                     time.monotonic() + 15,
                     lambda _data: any(
-                        request["command"] == "task.retry"
-                        and request["params"].get("id") == broker.history_failed_id
+                        request["command"] == "activity.run"
                         for request in broker.requests
                     ),
                 )
+                os.write(master, b"\x1b")
+                send_prompt(master, output, f"/activity {ACTIVITY_ID}")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: sum(
+                        request["command"] == "activity.get"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"a")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.attention"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b")
+                send_prompt(
+                    master,
+                    output,
+                    f"/activity-complete {ACTIVITY_ID} | User confirmed completion",
+                )
                 time.sleep(0.2)
+                os.write(master, b"y")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.transition"
+                        and request["params"].get("state") == "completed"
+                        and request["params"].get("completion_note")
+                        == "User confirmed completion"
+                        for request in broker.requests
+                    ),
+                )
+                send_prompt(master, output, f"/activity-resume {ACTIVITY_ID}")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: sum(
+                        request["command"] == "activity.transition"
+                        and request["params"].get("state") == "active"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                send_prompt(master, output, f"/activity-cancel {ACTIVITY_ID}")
+                time.sleep(0.2)
+                os.write(master, b"y")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.transition"
+                        and request["params"].get("state") == "cancelled"
+                        for request in broker.requests
+                    ),
+                )
+            if case == "activity-controls":
+                send_prompt(master, output, f"/activity-controls {ACTIVITY_ID}")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: all(
+                        any(request["command"] == command for request in broker.requests)
+                        for command in (
+                            "activity.execution_limits.get",
+                            "activity.monetary_budget.get",
+                            "activity.scheduling_policy.get",
+                            "activity.capability_policy.get",
+                        )
+                    ),
+                )
+                for refresh, key, command in [
+                    (2, b"l\r", "activity.execution_limits.enabled"),
+                    (3, b"b\r", "activity.monetary_budget.enabled"),
+                    (4, b"p\r", "activity.scheduling_policy.set"),
+                    (5, b"c\r", "activity.capability_policy.enabled"),
+                ]:
+                    os.write(master, key)
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data, expected=command, count=refresh: any(
+                            request["command"] == expected
+                            for request in broker.requests
+                        )
+                        and sum(
+                            request["command"] == "activity.execution_limits.get"
+                            for request in broker.requests
+                        )
+                        >= count,
+                    )
+                os.write(master, b"\x1b")
+                send_prompt(
+                    master,
+                    output,
+                    (
+                        f"/activity-limits-set {ACTIVITY_ID} 2 | "
+                        '{"max_attempts":12,"max_turns_per_attempt":4,'
+                        '"expires_at":"2036-01-01T00:00:00Z"}'
+                    ),
+                )
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.execution_limits.set"
+                        for request in broker.requests
+                    ),
+                )
                 os.write(master, b"\x1b")
             if case == "multiline":
                 os.write(master, b"\x1b[200~First line\nSecond line\x1b[201~")
@@ -1168,6 +1341,7 @@ if __name__ == "__main__":
             "multiline",
             "approval-center",
             "activity-lifecycle",
+            "activity-controls",
             "notification-inbox",
             "plain",
             "resume",

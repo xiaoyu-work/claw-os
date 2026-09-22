@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::backend::{
-    Activity, ActivityAttention, ActivityDetail, ApprovalRequest, BackendInfo, Conversation,
-    ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
-    TaskSummary,
+    Activity, ActivityAttention, ActivityControls, ActivityDetail, ApprovalRequest, BackendInfo,
+    Conversation, ConversationSummary, Job, NotificationItem, NotificationPage,
+    NotificationPreferences, TaskSummary,
 };
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
@@ -139,6 +139,8 @@ pub(super) struct App {
     pub activity_detail_scroll: u16,
     pub activity_attention: Option<ActivityAttention>,
     pub activity_attention_scroll: u16,
+    pub activity_controls: Option<ActivityControls>,
+    pub activity_controls_scroll: u16,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -187,6 +189,8 @@ impl App {
             activity_detail_scroll: 0,
             activity_attention: None,
             activity_attention_scroll: 0,
+            activity_controls: None,
+            activity_controls_scroll: 0,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -234,6 +238,8 @@ impl App {
         self.activity_detail_scroll = 0;
         self.activity_attention = None;
         self.activity_attention_scroll = 0;
+        self.activity_controls = None;
+        self.activity_controls_scroll = 0;
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -413,6 +419,7 @@ impl App {
             self.notification_preferences = None;
             self.activity_detail = None;
             self.activity_attention = None;
+            self.activity_controls = None;
         }
     }
 
@@ -720,6 +727,7 @@ impl App {
         self.notification_preferences = None;
         self.activity_detail = None;
         self.activity_attention = None;
+        self.activity_controls = None;
         self.task_detail = Some(job);
         self.task_detail_scroll = 0;
     }
@@ -785,6 +793,7 @@ impl App {
         self.notification_preferences = None;
         self.activity_detail = None;
         self.activity_attention = None;
+        self.activity_controls = None;
         self.approval_detail = Some(approval);
         self.approval_detail_scroll = 0;
     }
@@ -851,6 +860,7 @@ impl App {
         self.notification_preferences = None;
         self.activity_detail = None;
         self.activity_attention = None;
+        self.activity_controls = None;
         self.notification_detail = Some(notification);
         self.notification_detail_scroll = 0;
     }
@@ -867,6 +877,7 @@ impl App {
         self.notification_detail = None;
         self.activity_detail = None;
         self.activity_attention = None;
+        self.activity_controls = None;
         self.notification_preferences = Some(preferences);
         self.notification_preferences_scroll = 0;
     }
@@ -879,6 +890,7 @@ impl App {
     pub fn open_activity_picker(&mut self, activities: Vec<Activity>) {
         self.activity_detail = None;
         self.activity_attention = None;
+        self.activity_controls = None;
         self.picker = Some(Picker {
             kind: PickerKind::Activities,
             title: "Activities",
@@ -922,6 +934,7 @@ impl App {
         self.notification_detail = None;
         self.notification_preferences = None;
         self.activity_attention = None;
+        self.activity_controls = None;
         self.activity_detail = Some(detail);
         self.activity_detail_scroll = 0;
     }
@@ -948,6 +961,7 @@ impl App {
         self.notification_detail = None;
         self.notification_preferences = None;
         self.activity_detail = None;
+        self.activity_controls = None;
         self.activity_attention = Some(attention);
         self.activity_attention_scroll = 0;
     }
@@ -955,6 +969,23 @@ impl App {
     pub fn close_activity_attention(&mut self) {
         self.activity_attention = None;
         self.activity_attention_scroll = 0;
+    }
+
+    pub fn open_activity_controls(&mut self, controls: ActivityControls) {
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
+        self.activity_controls = Some(controls);
+        self.activity_controls_scroll = 0;
+    }
+
+    pub fn close_activity_controls(&mut self) {
+        self.activity_controls = None;
+        self.activity_controls_scroll = 0;
     }
 
     pub fn confirm_activity_complete(&mut self, id: String, note: String) {

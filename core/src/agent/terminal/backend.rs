@@ -196,6 +196,59 @@ pub(super) struct ActivityAttention {
     pub presentation: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityControls {
+    pub activity_id: String,
+    pub execution_limits: Option<Value>,
+    pub monetary_budget: Option<Value>,
+    pub scheduling_policy: Option<Value>,
+    pub capability_policy: Option<Value>,
+}
+
+impl ActivityControls {
+    pub fn execution_revision(&self) -> Option<u64> {
+        policy_revision(&self.execution_limits)
+    }
+
+    pub fn execution_enabled(&self) -> Option<bool> {
+        policy_enabled(&self.execution_limits)
+    }
+
+    pub fn monetary_revision(&self) -> Option<u64> {
+        policy_revision(&self.monetary_budget)
+    }
+
+    pub fn monetary_enabled(&self) -> Option<bool> {
+        policy_enabled(&self.monetary_budget)
+    }
+
+    pub fn scheduling_revision(&self) -> Option<u64> {
+        policy_revision(&self.scheduling_policy)
+    }
+
+    pub fn scheduling_priority(&self) -> Option<&str> {
+        self.scheduling_policy
+            .as_ref()
+            .and_then(|policy| policy.get("priority"))
+            .and_then(Value::as_str)
+    }
+
+    pub fn capability_revision(&self) -> Option<u64> {
+        policy_revision(&self.capability_policy)
+    }
+
+    pub fn capability_enabled(&self) -> Option<bool> {
+        policy_enabled(&self.capability_policy)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ActivityControlPolicy {
+    ExecutionLimits,
+    MonetaryBudget,
+    CapabilityPolicy,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct StreamFrame {
     pub cursor: u64,
@@ -284,6 +337,27 @@ pub(super) trait Backend: Send + Sync {
     ) -> Result<Activity, String>;
     async fn run_activity(&self, id: &str, prompt: Option<&str>) -> Result<Job, String>;
     async fn activity_attention(&self, id: &str) -> Result<ActivityAttention, String>;
+    async fn activity_controls(&self, id: &str) -> Result<ActivityControls, String>;
+    async fn set_activity_control(
+        &self,
+        id: &str,
+        policy: ActivityControlPolicy,
+        expected_revision: Option<u64>,
+        draft: Value,
+    ) -> Result<ActivityControls, String>;
+    async fn set_activity_control_enabled(
+        &self,
+        id: &str,
+        policy: ActivityControlPolicy,
+        revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityControls, String>;
+    async fn set_activity_priority(
+        &self,
+        id: &str,
+        expected_revision: Option<u64>,
+        priority: &str,
+    ) -> Result<ActivityControls, String>;
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
@@ -717,6 +791,106 @@ impl Backend for BrokerBackend {
             activity_state,
             presentation,
         })
+    }
+
+    async fn activity_controls(&self, id: &str) -> Result<ActivityControls, String> {
+        validate_token(id, "Activity id")?;
+        let execution = self
+            .call(Command::ActivityExecutionLimitsGet, json!({ "id": id }))
+            .await?;
+        let monetary = self
+            .call(Command::ActivityMonetaryBudgetGet, json!({ "id": id }))
+            .await?;
+        let scheduling = self
+            .call(Command::ActivitySchedulingPolicyGet, json!({ "id": id }))
+            .await?;
+        let capability = self
+            .call(Command::ActivityCapabilityPolicyGet, json!({ "id": id }))
+            .await?;
+        for response in [&execution, &monetary, &scheduling, &capability] {
+            if response.get("activity_id").and_then(Value::as_str) != Some(id) {
+                return Err("Claw returned controls for another Activity".into());
+            }
+        }
+        Ok(ActivityControls {
+            activity_id: id.to_string(),
+            execution_limits: optional_object(&execution, "execution_limits")?,
+            monetary_budget: optional_object(&monetary, "monetary_budget")?,
+            scheduling_policy: optional_object(&scheduling, "scheduling_policy")?,
+            capability_policy: optional_object(&capability, "capability_policy")?,
+        })
+    }
+
+    async fn set_activity_control(
+        &self,
+        id: &str,
+        policy: ActivityControlPolicy,
+        expected_revision: Option<u64>,
+        draft: Value,
+    ) -> Result<ActivityControls, String> {
+        validate_token(id, "Activity id")?;
+        let (command, field) = match policy {
+            ActivityControlPolicy::ExecutionLimits => {
+                (Command::ActivityExecutionLimitsSet, "limits")
+            }
+            ActivityControlPolicy::MonetaryBudget => (Command::ActivityMonetaryBudgetSet, "budget"),
+            ActivityControlPolicy::CapabilityPolicy => {
+                (Command::ActivityCapabilityPolicySet, "policy")
+            }
+        };
+        let mut params = json!({ "id": id });
+        params[field] = draft;
+        if let Some(revision) = expected_revision {
+            params["expected_revision"] = json!(revision);
+        }
+        let value = self.call(command, params).await?;
+        verify_activity_policy_ack(&value, id)?;
+        self.activity_controls(id).await
+    }
+
+    async fn set_activity_control_enabled(
+        &self,
+        id: &str,
+        policy: ActivityControlPolicy,
+        revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityControls, String> {
+        validate_token(id, "Activity id")?;
+        let command = match policy {
+            ActivityControlPolicy::ExecutionLimits => Command::ActivityExecutionLimitsEnabled,
+            ActivityControlPolicy::MonetaryBudget => Command::ActivityMonetaryBudgetEnabled,
+            ActivityControlPolicy::CapabilityPolicy => Command::ActivityCapabilityPolicyEnabled,
+        };
+        let value = self
+            .call(
+                command,
+                json!({
+                    "id": id,
+                    "expected_revision": revision,
+                    "enabled": enabled,
+                }),
+            )
+            .await?;
+        verify_activity_policy_ack(&value, id)?;
+        self.activity_controls(id).await
+    }
+
+    async fn set_activity_priority(
+        &self,
+        id: &str,
+        expected_revision: Option<u64>,
+        priority: &str,
+    ) -> Result<ActivityControls, String> {
+        validate_token(id, "Activity id")?;
+        let mut params = json!({ "id": id, "priority": priority });
+        if let Some(revision) = expected_revision {
+            params["expected_revision"] = json!(revision);
+        }
+        let value = self
+            .call(Command::ActivitySchedulingPolicySet, params)
+            .await?;
+        verify_activity_policy_ack(&value, id)?;
+        self.activity_controls(id).await
     }
 
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String> {
@@ -1227,6 +1401,37 @@ fn optional_u16(value: &Value, key: &str) -> Result<Option<u16>, String> {
         .and_then(Value::as_u64)
         .map(|value| u16::try_from(value).map_err(|_| format!("Claw response {key} is too large")))
         .transpose()
+}
+
+fn optional_object(value: &Value, key: &str) -> Result<Option<Value>, String> {
+    match value.get(key) {
+        Some(Value::Null) | None => Ok(None),
+        Some(value) if value.is_object() => Ok(Some(value.clone())),
+        Some(_) => Err(format!("Claw response {key} is not an object")),
+    }
+}
+
+fn policy_revision(policy: &Option<Value>) -> Option<u64> {
+    policy
+        .as_ref()
+        .and_then(|policy| policy.get("revision"))
+        .and_then(Value::as_u64)
+}
+
+fn policy_enabled(policy: &Option<Value>) -> Option<bool> {
+    policy
+        .as_ref()
+        .and_then(|policy| policy.get("enabled"))
+        .and_then(Value::as_bool)
+}
+
+fn verify_activity_policy_ack(value: &Value, id: &str) -> Result<(), String> {
+    if value.get("activity_id").and_then(Value::as_str) != Some(id)
+        || value.get("revision").and_then(Value::as_u64).is_none()
+    {
+        return Err("Claw returned a mismatched Activity control acknowledgement".into());
+    }
+    Ok(())
 }
 
 fn validate_token(value: &str, field: &str) -> Result<(), String> {

@@ -41,6 +41,11 @@ presentation only. Completion and cancellation show their exact consequences
 before calling `activity.transition`; no TUI state can complete a goal,
 cancel an associated Job, or supply authority.
 
+`/activity-controls ID` opens the same execution-limit, monetary-accounting,
+scheduling-priority and capability-policy records used by Web and native
+clients. The TUI prepares explicit revision-bound commands and never
+automatically rebases a stale edit.
+
 ```bash
 cos activity create "Release v2" \
   --goal "Publish the project next Friday" \

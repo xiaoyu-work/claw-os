@@ -34,7 +34,107 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_notification_preferences(frame, area, app);
     render_activity_detail(frame, area, app);
     render_activity_attention(frame, area, app);
+    render_activity_controls(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_activity_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(controls) = &app.activity_controls else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(104);
+    let height = screen.height.saturating_sub(4).min(34);
+    if width < 44 || height < 14 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![
+        Line::styled(
+            "Constraints and accounting only - never authority or completion",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(format!("Activity: {}", controls.activity_id)),
+    ];
+    append_activity_control(
+        &mut lines,
+        "Execution limits",
+        controls.execution_limits.as_ref(),
+    );
+    append_activity_control(
+        &mut lines,
+        "Monetary budget (configured accounting, not an invoice)",
+        controls.monetary_budget.as_ref(),
+    );
+    append_activity_control(
+        &mut lines,
+        "Pending admission priority (no preemption)",
+        controls.scheduling_policy.as_ref(),
+    );
+    append_activity_control(
+        &mut lines,
+        "Capability policy (constraints, never grants)",
+        controls.capability_policy.as_ref(),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.activity_controls_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Magenta))
+                    .title(" Activity controls ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(
+                            "[l] Limits  [b] Budget  [p] Priority  [c] Capability  [r] Refresh",
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
+}
+
+fn append_activity_control(
+    lines: &mut Vec<Line<'static>>,
+    title: &str,
+    policy: Option<&serde_json::Value>,
+) {
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        title.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    let Some(policy) = policy else {
+        lines.push(Line::styled(
+            "not configured",
+            Style::default().fg(Color::DarkGray),
+        ));
+        return;
+    };
+    let mut policy = policy.clone();
+    if let Some(policy) = policy.as_object_mut() {
+        policy.remove("owner_uid");
+    }
+    let rendered = serde_json::to_string_pretty(&policy)
+        .map(|value| clean_text(&value))
+        .unwrap_or_else(|_| "[control unavailable]".into());
+    lines.extend(rendered.lines().map(|line| Line::raw(line.to_string())));
 }
 
 fn render_activity_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -180,10 +280,10 @@ fn render_activity_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         )));
     }
     let actions = match activity.state.as_str() {
-        "active" => "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention",
-        "paused" => "[u] Resume  [c] Complete  [x] Cancel  [a] Attention",
-        "completed" | "cancelled" => "[u] Reopen  [a] Attention",
-        _ => "[a] Attention",
+        "active" => "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention  [o] Controls",
+        "paused" => "[u] Resume  [c] Complete  [x] Cancel  [a] Attention  [o] Controls",
+        "completed" | "cancelled" => "[u] Reopen  [a] Attention  [o] Controls",
+        _ => "[a] Attention  [o] Controls",
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

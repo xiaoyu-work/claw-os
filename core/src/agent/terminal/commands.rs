@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use super::backend::Backend;
+use serde_json::Value;
+
+use super::backend::{ActivityControlPolicy, Backend};
 use super::state::{App, ConfirmationAction, RunStatus};
 
 pub(super) const COMMANDS: &[(&str, &str)] = &[
@@ -38,6 +40,23 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/activity-complete", "complete ID | CONFIRMATION NOTE"),
     ("/activity-cancel", "cancel an Activity goal"),
     ("/activity-attention", "show Activity attention"),
+    ("/activity-controls", "show Activity execution policies"),
+    ("/activity-limits-set", "set finite execution limits"),
+    (
+        "/activity-limits-enable",
+        "enable or disable execution limits",
+    ),
+    ("/activity-budget-set", "set model-turn accounting budget"),
+    (
+        "/activity-budget-enable",
+        "enable or disable monetary budget",
+    ),
+    ("/activity-priority", "set pending admission priority"),
+    ("/activity-capability-set", "replace capability constraints"),
+    (
+        "/activity-capability-enable",
+        "enable or disable capability policy",
+    ),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -70,13 +89,40 @@ pub(super) enum Command {
     Dnd(Option<(u16, u16)>),
     Activities(Option<String>),
     Activity(String),
-    ActivityCreate { title: String, goal: String },
-    ActivityRun { id: String, prompt: Option<String> },
+    ActivityCreate {
+        title: String,
+        goal: String,
+    },
+    ActivityRun {
+        id: String,
+        prompt: Option<String>,
+    },
     ActivityPause(String),
     ActivityResume(String),
-    ActivityComplete { id: String, note: String },
+    ActivityComplete {
+        id: String,
+        note: String,
+    },
     ActivityCancel(String),
     ActivityAttention(String),
+    ActivityControls(String),
+    ActivityControlSet {
+        id: String,
+        policy: ActivityControlPolicy,
+        expected_revision: Option<u64>,
+        draft: Value,
+    },
+    ActivityControlEnabled {
+        id: String,
+        policy: ActivityControlPolicy,
+        revision: u64,
+        enabled: bool,
+    },
+    ActivityPriority {
+        id: String,
+        priority: String,
+        expected_revision: Option<u64>,
+    },
     Session,
     Clear,
     Cancel,
@@ -160,6 +206,34 @@ pub(super) fn parse(value: &str) -> Option<Command> {
             .unwrap_or_else(|| Command::Unknown(value.to_string())),
         "activity-cancel" if !rest.is_empty() => Command::ActivityCancel(rest.to_string()),
         "activity-attention" if !rest.is_empty() => Command::ActivityAttention(rest.to_string()),
+        "activity-controls" if !rest.is_empty() => Command::ActivityControls(rest.to_string()),
+        "activity-limits-set" => {
+            parse_activity_control_set(rest, ActivityControlPolicy::ExecutionLimits)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
+        "activity-budget-set" => {
+            parse_activity_control_set(rest, ActivityControlPolicy::MonetaryBudget)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
+        "activity-capability-set" => {
+            parse_activity_control_set(rest, ActivityControlPolicy::CapabilityPolicy)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
+        "activity-limits-enable" => {
+            parse_activity_control_enabled(rest, ActivityControlPolicy::ExecutionLimits)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
+        "activity-budget-enable" => {
+            parse_activity_control_enabled(rest, ActivityControlPolicy::MonetaryBudget)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
+        "activity-capability-enable" => {
+            parse_activity_control_enabled(rest, ActivityControlPolicy::CapabilityPolicy)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
+        "activity-priority" => {
+            parse_activity_priority(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
         "session" => Command::Session,
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
@@ -212,6 +286,14 @@ fn takes_argument(command: &str) -> bool {
             | "/activity-complete"
             | "/activity-cancel"
             | "/activity-attention"
+            | "/activity-controls"
+            | "/activity-limits-set"
+            | "/activity-limits-enable"
+            | "/activity-budget-set"
+            | "/activity-budget-enable"
+            | "/activity-priority"
+            | "/activity-capability-set"
+            | "/activity-capability-enable"
     )
 }
 
@@ -243,6 +325,10 @@ pub(super) async fn execute(
                 | Command::ActivityComplete { .. }
                 | Command::ActivityCancel(_)
                 | Command::ActivityAttention(_)
+                | Command::ActivityControls(_)
+                | Command::ActivityControlSet { .. }
+                | Command::ActivityControlEnabled { .. }
+                | Command::ActivityPriority { .. }
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -263,6 +349,13 @@ pub(super) async fn execute(
              /activity-run ID [PROMPT]  /activity-pause ID  /activity-resume ID\n\
              /activity-complete ID | NOTE  /activity-cancel ID\n\
              /activity-attention ID\n\
+             /activity-controls ID  /activity-limits-set ID REV|new | JSON\n\
+             /activity-limits-enable ID on|off REV\n\
+             /activity-budget-set ID REV|new | JSON\n\
+             /activity-budget-enable ID on|off REV\n\
+             /activity-priority ID CLASS REV|new\n\
+             /activity-capability-set ID REV|new | JSON\n\
+             /activity-capability-enable ID on|off REV\n\
              /clear  /cancel  /quit\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
@@ -468,6 +561,42 @@ pub(super) async fn execute(
             let attention = backend.activity_attention(&id).await?;
             app.open_activity_attention(attention);
         }
+        Command::ActivityControls(id) => {
+            let controls = backend.activity_controls(&id).await?;
+            app.open_activity_controls(controls);
+        }
+        Command::ActivityControlSet {
+            id,
+            policy,
+            expected_revision,
+            draft,
+        } => {
+            let controls = backend
+                .set_activity_control(&id, policy, expected_revision, draft)
+                .await?;
+            app.open_activity_controls(controls);
+        }
+        Command::ActivityControlEnabled {
+            id,
+            policy,
+            revision,
+            enabled,
+        } => {
+            let controls = backend
+                .set_activity_control_enabled(&id, policy, revision, enabled)
+                .await?;
+            app.open_activity_controls(controls);
+        }
+        Command::ActivityPriority {
+            id,
+            priority,
+            expected_revision,
+        } => {
+            let controls = backend
+                .set_activity_priority(&id, expected_revision, &priority)
+                .await?;
+            app.open_activity_controls(controls);
+        }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}",
             app.conversation.id, app.selected_model, app.info.provider
@@ -562,6 +691,69 @@ fn parse_id_and_optional_text(value: &str) -> Option<(String, Option<String>)> {
         .filter(|prompt| !prompt.is_empty())
         .map(str::to_string);
     Some((id.to_string(), prompt))
+}
+
+fn parse_activity_control_set(value: &str, policy: ActivityControlPolicy) -> Option<Command> {
+    let (identity, draft) = value.split_once('|')?;
+    if draft.len() > 16 * 1024 {
+        return None;
+    }
+    let mut identity = identity.split_whitespace();
+    let id = identity.next()?.to_string();
+    let expected_revision = parse_revision(identity.next()?)?;
+    if identity.next().is_some() {
+        return None;
+    }
+    let draft = serde_json::from_str::<Value>(draft.trim()).ok()?;
+    draft.is_object().then_some(Command::ActivityControlSet {
+        id,
+        policy,
+        expected_revision,
+        draft,
+    })
+}
+
+fn parse_activity_control_enabled(value: &str, policy: ActivityControlPolicy) -> Option<Command> {
+    let mut parts = value.split_whitespace();
+    let id = parts.next()?.to_string();
+    let enabled = match parts.next()? {
+        "on" | "enable" | "enabled" => true,
+        "off" | "disable" | "disabled" => false,
+        _ => return None,
+    };
+    let revision = parts.next()?.parse::<u64>().ok()?;
+    (revision > 0 && parts.next().is_none()).then_some(Command::ActivityControlEnabled {
+        id,
+        policy,
+        revision,
+        enabled,
+    })
+}
+
+fn parse_activity_priority(value: &str) -> Option<Command> {
+    let mut parts = value.split_whitespace();
+    let id = parts.next()?.to_string();
+    let priority = match parts.next()? {
+        priority @ ("foreground" | "standard" | "background") => priority.to_string(),
+        _ => return None,
+    };
+    let expected_revision = parse_revision(parts.next()?)?;
+    parts.next().is_none().then_some(Command::ActivityPriority {
+        id,
+        priority,
+        expected_revision,
+    })
+}
+
+fn parse_revision(value: &str) -> Option<Option<u64>> {
+    if value == "new" {
+        return Some(None);
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|revision| *revision > 0)
+        .map(Some)
 }
 
 pub(super) async fn confirm(

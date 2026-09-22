@@ -8,6 +8,11 @@ backend. Agent Web and the native desktop Activity view are presentation
 clients of those same owner-scoped broker routes and own no policy, ledger,
 pricing, persistence, identity, or authority.
 
+The full-screen Agent TUI uses `/activity-controls ID`,
+`/activity-budget-set ID REVISION|new | JSON`, and
+`/activity-budget-enable ID on|off REVISION` against these same routes. The
+display labels values as configured accounting and preserves exact revisions.
+
 ## Accounting semantics
 
 The only supported currency is `USD`. Every amount is an integer micro-USD

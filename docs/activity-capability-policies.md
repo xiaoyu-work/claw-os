@@ -77,6 +77,11 @@ Owner, enabled state, revision and timestamps are not draft fields.
 Run from an installed Linux or WSL Claw OS environment with `clawd` available.
 No model or graphical session is needed to read or manage policies.
 
+Inside the full-screen Agent TUI, `/activity-controls ID` displays the saved
+canonical rules. `/activity-capability-set ID REVISION|new | JSON` replaces the
+draft and `/activity-capability-enable ID on|off REVISION` changes the stop
+boundary. The TUI never retries a stale revision or treats a policy as a grant.
+
 ```bash
 activity_id="00000000-0000-4000-8000-000000000001" # replace with your Activity ID
 

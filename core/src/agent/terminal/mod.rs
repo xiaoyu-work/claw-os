@@ -174,6 +174,7 @@ enum InputAction {
     ActivityRun(String),
     ActivityTransition(String, &'static str),
     ActivityAttention(String),
+    ActivityControls(String),
     Quit,
 }
 
@@ -222,6 +223,7 @@ async fn run_with_backend(
                             && app.notification_preferences.is_none()
                             && app.activity_detail.is_none()
                             && app.activity_attention.is_none()
+                            && app.activity_controls.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -407,6 +409,103 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if let Some(controls) = app.activity_controls.clone() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_activity_controls();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.activity_controls_scroll = app.activity_controls_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.activity_controls_scroll = app.activity_controls_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                InputAction::ActivityControls(controls.activity_id)
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                let command = match (
+                    controls.execution_revision(),
+                    controls.execution_enabled(),
+                ) {
+                    (Some(revision), Some(enabled)) => format!(
+                        "/activity-limits-enable {} {} {}",
+                        controls.activity_id,
+                        if enabled { "off" } else { "on" },
+                        revision
+                    ),
+                    _ => format!(
+                        "/activity-limits-set {} new | {{\"max_attempts\":10,\"max_turns_per_attempt\":5,\"expires_at\":\"YYYY-MM-DDTHH:MM:SSZ\"}}",
+                        controls.activity_id
+                    ),
+                };
+                app.close_activity_controls();
+                app.prefill_input(command);
+                InputAction::None
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                let command = match (
+                    controls.monetary_revision(),
+                    controls.monetary_enabled(),
+                ) {
+                    (Some(revision), Some(enabled)) => format!(
+                        "/activity-budget-enable {} {} {}",
+                        controls.activity_id,
+                        if enabled { "off" } else { "on" },
+                        revision
+                    ),
+                    _ => format!(
+                        "/activity-budget-set {} new | {{\"currency\":\"USD\",\"max_total_microusd\":5000000,\"input_microusd_per_million_tokens\":250000,\"output_microusd_per_million_tokens\":1000000,\"max_output_tokens_per_turn\":4096}}",
+                        controls.activity_id
+                    ),
+                };
+                app.close_activity_controls();
+                app.prefill_input(command);
+                InputAction::None
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                let (priority, revision) = match (
+                    controls.scheduling_priority(),
+                    controls.scheduling_revision(),
+                ) {
+                    (Some("foreground"), Some(revision)) => ("standard", revision.to_string()),
+                    (Some("standard"), Some(revision)) => ("background", revision.to_string()),
+                    (Some("background"), Some(revision)) => ("foreground", revision.to_string()),
+                    _ => ("foreground", "new".into()),
+                };
+                app.close_activity_controls();
+                app.prefill_input(format!(
+                    "/activity-priority {} {} {}",
+                    controls.activity_id, priority, revision
+                ));
+                InputAction::None
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                let command = match (
+                    controls.capability_revision(),
+                    controls.capability_enabled(),
+                ) {
+                    (Some(revision), Some(enabled)) => format!(
+                        "/activity-capability-enable {} {} {}",
+                        controls.activity_id,
+                        if enabled { "off" } else { "on" },
+                        revision
+                    ),
+                    _ => format!(
+                        "/activity-capability-set {} new | {{\"rules\":[]}}",
+                        controls.activity_id
+                    ),
+                };
+                app.close_activity_controls();
+                app.prefill_input(command);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if let Some(detail) = &app.activity_detail {
         let id = detail.activity.id.clone();
         let state = detail.activity.state.clone();
@@ -446,6 +545,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 InputAction::None
             }
             KeyCode::Char('a') | KeyCode::Char('A') => InputAction::ActivityAttention(id),
+            KeyCode::Char('o') | KeyCode::Char('O') => InputAction::ActivityControls(id),
             _ => InputAction::None,
         };
     }
@@ -781,6 +881,10 @@ async fn apply_input_action(
                 }
                 InputAction::ActivityAttention(id) => match backend.activity_attention(&id).await {
                     Ok(attention) => app.open_activity_attention(attention),
+                    Err(error) => app.push_error(&error),
+                },
+                InputAction::ActivityControls(id) => match backend.activity_controls(&id).await {
+                    Ok(controls) => app.open_activity_controls(controls),
                     Err(error) => app.push_error(&error),
                 },
             }
