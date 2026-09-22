@@ -34,12 +34,20 @@ fn raw_send(connection: &Connection, bytes: &[u8], fds: &[BorrowedFd<'_>]) {
     if !fds.is_empty() {
         let payload = fds.len() * size_of::<i32>();
         header.msg_control = ancillary.0.as_mut_ptr().cast();
-        header.msg_controllen = unsafe { libc::CMSG_SPACE(payload as u32) } as usize;
+        header.msg_controllen = checked_length(
+            unsafe { libc::CMSG_SPACE(payload as u32) },
+            "ancillary test data fits the platform ABI",
+        )
+        .expect("ancillary test data fits the platform ABI");
         unsafe {
             let cmsg = libc::CMSG_FIRSTHDR(&header);
             (*cmsg).cmsg_level = libc::SOL_SOCKET;
             (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len = libc::CMSG_LEN(payload as u32) as usize;
+            (*cmsg).cmsg_len = checked_length(
+                libc::CMSG_LEN(payload as u32),
+                "ancillary test message fits the platform ABI",
+            )
+            .expect("ancillary test message fits the platform ABI");
             for (index, fd) in fds.iter().enumerate() {
                 libc::CMSG_DATA(cmsg)
                     .cast::<i32>()

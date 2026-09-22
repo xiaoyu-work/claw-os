@@ -47,6 +47,13 @@ impl From<io::Error> for Error {
     }
 }
 
+fn checked_length<T, U>(length: T, message: &'static str) -> Result<U, Error>
+where
+    U: TryFrom<T>,
+{
+    U::try_from(length).map_err(|_| Error::Protocol(message))
+}
+
 pub trait Packet: Serialize + DeserializeOwned {
     fn descriptor_count(&self) -> usize;
     fn validate(&self) -> Result<(), Error> {
@@ -217,12 +224,18 @@ impl Connection {
         if !descriptors.is_empty() {
             let payload = descriptors.len() * size_of::<i32>();
             header.msg_control = ancillary.0.as_mut_ptr().cast();
-            header.msg_controllen = unsafe { libc::CMSG_SPACE(payload as u32) } as usize;
+            header.msg_controllen = checked_length(
+                unsafe { libc::CMSG_SPACE(payload as u32) },
+                "ancillary data length exceeds the platform ABI",
+            )?;
             unsafe {
                 let cmsg = libc::CMSG_FIRSTHDR(&header);
                 (*cmsg).cmsg_level = libc::SOL_SOCKET;
                 (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-                (*cmsg).cmsg_len = libc::CMSG_LEN(payload as u32) as usize;
+                (*cmsg).cmsg_len = checked_length(
+                    libc::CMSG_LEN(payload as u32),
+                    "ancillary message length exceeds the platform ABI",
+                )?;
                 let output = libc::CMSG_DATA(cmsg).cast::<i32>();
                 for (index, fd) in descriptors.iter().enumerate() {
                     output.add(index).write(fd.as_raw_fd());
@@ -285,7 +298,10 @@ impl Connection {
             header.msg_iov = &mut vector;
             header.msg_iovlen = 1;
             header.msg_control = ancillary.0.as_mut_ptr().cast();
-            header.msg_controllen = ancillary.0.len();
+            header.msg_controllen = checked_length(
+                ancillary.0.len(),
+                "ancillary buffer exceeds the platform ABI",
+            )?;
             let read = unsafe {
                 libc::recvmsg(
                     self.fd.as_raw_fd(),
@@ -349,16 +365,19 @@ fn collect_ancillary(header: &libc::msghdr) -> Result<(Option<libc::ucred>, Vec<
     unsafe {
         let mut cmsg = libc::CMSG_FIRSTHDR(header);
         while !cmsg.is_null() {
-            let minimum = libc::CMSG_LEN(0) as usize;
-            let end = (header.msg_control as usize).saturating_add(header.msg_controllen);
+            let minimum = checked_length(libc::CMSG_LEN(0), "invalid ancillary header length")?;
+            let control_len =
+                checked_length(header.msg_controllen, "invalid ancillary buffer length")?;
+            let message_len = checked_length((*cmsg).cmsg_len, "invalid ancillary message length")?;
+            let end = (header.msg_control as usize).saturating_add(control_len);
             if (cmsg as usize).saturating_add(minimum) > end
-                || (*cmsg).cmsg_len < minimum
-                || (cmsg as usize).saturating_add((*cmsg).cmsg_len) > end
+                || message_len < minimum
+                || (cmsg as usize).saturating_add(message_len) > end
             {
                 invalid = true;
                 break;
             }
-            let payload = (*cmsg).cmsg_len - minimum;
+            let payload = message_len - minimum;
             match ((*cmsg).cmsg_level, (*cmsg).cmsg_type) {
                 (libc::SOL_SOCKET, libc::SCM_RIGHTS) => {
                     if !payload.is_multiple_of(size_of::<i32>()) {

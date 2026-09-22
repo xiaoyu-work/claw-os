@@ -10,7 +10,14 @@ use std::time::{Duration, Instant};
 
 use crate::{Error, ProcessIdentity};
 
-const CGROUP2_SUPER_MAGIC: libc::c_long = 0x63677270;
+const CGROUP2_SUPER_MAGIC: u64 = 0x63677270;
+
+fn is_cgroup2_filesystem<T>(filesystem_type: T) -> bool
+where
+    u64: TryFrom<T>,
+{
+    u64::try_from(filesystem_type).ok() == Some(CGROUP2_SUPER_MAGIC)
+}
 
 /// The session cgroup as reported for a kernel-authenticated process.
 #[derive(Clone, Debug)]
@@ -227,7 +234,7 @@ pub fn check_cgroup(fd: BorrowedFd<'_>) -> Result<(), Error> {
     {
         return Err(std::io::Error::last_os_error().into());
     }
-    if filesystem.f_type != CGROUP2_SUPER_MAGIC
+    if !is_cgroup2_filesystem(filesystem.f_type)
         || metadata.st_mode & libc::S_IFMT != libc::S_IFDIR
         || metadata.st_uid != 0
         || metadata.st_mode & 0o022 != 0
