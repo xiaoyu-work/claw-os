@@ -1085,6 +1085,7 @@ fn activity_schemas() -> Vec<CommandSchema> {
                 Param::positional("prompt", "string", false, "Work request (default: Activity goal)"),
                 Param::flag("--session", "string", false, "Continue an associated session"),
                 Param::flag("--max-turns", "integer", false, "Positive per-job model-turn limit"),
+                Param::flag("--workspace", "path", false, "Owner-home-bounded task workspace; grants no capability"),
             ],
             example: "cos activity run 00000000-0000-4000-8000-000000000001 \"Prepare a release draft\"",
         },

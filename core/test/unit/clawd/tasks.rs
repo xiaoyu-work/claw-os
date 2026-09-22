@@ -78,6 +78,33 @@ async fn requested_model_is_validated_before_any_session_or_queue_side_effects()
     if owner_uid == 0 {
         return;
     }
+
+    #[tokio::test]
+    async fn task_workspace_is_owner_scoped_canonical_and_persisted_before_execution() {
+        let owner_uid = unsafe { libc::geteuid() } as u32;
+        if owner_uid == 0 {
+            return;
+        }
+        let _lock = lock_env();
+        let root = activity_task_root();
+        let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());
+        let home = crate::paths::verified_home_for_uid(owner_uid).unwrap();
+        let directory = tempfile::tempdir_in(&home).unwrap();
+        let relative = directory.path().strip_prefix(&home).unwrap();
+        let client = activity_task_client(owner_uid);
+        let resolved = workspace(json!({"path": relative.to_string_lossy()}), &client).unwrap();
+        let expected = directory.path().canonicalize().unwrap();
+        assert_eq!(resolved["workspace"], expected.to_string_lossy().as_ref());
+
+        let submitted = submit(
+            json!({"prompt": "work here", "workspace": relative.to_string_lossy()}),
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(submitted["workspace"], expected.to_string_lossy().as_ref());
+        assert!(workspace(json!({"path": "/"}), &client).is_err());
+    }
     let _lock = lock_env();
     let root = activity_task_root();
     let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());

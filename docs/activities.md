@@ -86,6 +86,7 @@ cos activity attention "$activity_id"
 cos activity priority "$activity_id"
 cos activity set-priority "$activity_id" --priority foreground
 cos activity run "$activity_id" "Prepare a release draft"
+cos activity run "$activity_id" --workspace /home/user/project
 cos activity pause "$activity_id"
 cos activity update "$activity_id" --criteria "Reviewed, published, and announced"
 cos activity resume "$activity_id"

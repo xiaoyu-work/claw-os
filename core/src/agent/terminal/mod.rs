@@ -264,17 +264,19 @@ async fn run_with_backend(
                             "{error}. The durable task may still be running; use /session to retain its conversation id."
                         ));
                         app.active_task = None;
+                        app.active_workspace = None;
                         app.status = RunStatus::Ready;
                     }
                 }
-                if let Some(prompt) = next_prompt {
+                if let Some(queued) = next_prompt {
                     stream::start_prompt(
                         &mut app,
                         backend.clone(),
                         runtime_tx.clone(),
                         !options.no_memory,
                         options.max_turns,
-                        prompt,
+                        queued.prompt,
+                        queued.workspace,
                     )
                     .await;
                 }
@@ -904,47 +906,50 @@ async fn apply_input_action(
                         preferences.dnd_end_minute_utc = Some(0);
                     }
                 }
-                InputAction::ActivityRun(id) => match backend.run_activity(&id, None).await {
-                    Ok(job) => {
-                        let task_id = job.id.clone();
-                        app.open_task_detail(job);
-                        app.push_system(&format!(
-                            "Activity work was submitted as durable task {task_id}."
-                        ));
-                    }
-                    Err(error) => app.push_error(&error),
-                },
-                InputAction::ActivityTransition(id, state) => {
-                    match backend.transition_activity(&id, state, None).await {
-                        Ok(activity) => {
-                            app.update_activity(activity);
-                            app.push_system(if state == "paused" {
-                                "Activity paused. In-flight tasks were not cancelled."
-                            } else {
-                                "Activity is active."
-                            });
-                        }
-                        Err(error) => app.push_error(&error),
-                    }
-                }
-                InputAction::ActivityAttention(id) => match backend.activity_attention(&id).await {
-                    Ok(attention) => app.open_activity_attention(attention),
-                    Err(error) => app.push_error(&error),
-                },
-                InputAction::ActivityControls(id) => match backend.activity_controls(&id).await {
-                    Ok(controls) => app.open_activity_controls(controls),
-                    Err(error) => app.push_error(&error),
-                },
-                InputAction::ActivityEvidence(id) => match backend.activity_evidence(&id).await {
-                    Ok(evidence) => app.open_activity_evidence(evidence),
-                    Err(error) => app.push_error(&error),
-                },
             }
             match backend.set_notification_preferences(&preferences).await {
                 Ok(preferences) => app.open_notification_preferences(preferences),
                 Err(error) => app.push_error(&error),
             }
         }
+        InputAction::ActivityRun(id) => match backend
+            .run_activity(&id, None, &app.selected_workspace)
+            .await
+        {
+            Ok(job) => {
+                let task_id = job.id.clone();
+                app.open_task_detail(job);
+                app.push_system(&format!(
+                    "Activity work was submitted as durable task {task_id}."
+                ));
+            }
+            Err(error) => app.push_error(&error),
+        },
+        InputAction::ActivityTransition(id, state) => {
+            match backend.transition_activity(&id, state, None).await {
+                Ok(activity) => {
+                    app.update_activity(activity);
+                    app.push_system(if state == "paused" {
+                        "Activity paused. In-flight tasks were not cancelled."
+                    } else {
+                        "Activity is active."
+                    });
+                }
+                Err(error) => app.push_error(&error),
+            }
+        }
+        InputAction::ActivityAttention(id) => match backend.activity_attention(&id).await {
+            Ok(attention) => app.open_activity_attention(attention),
+            Err(error) => app.push_error(&error),
+        },
+        InputAction::ActivityControls(id) => match backend.activity_controls(&id).await {
+            Ok(controls) => app.open_activity_controls(controls),
+            Err(error) => app.push_error(&error),
+        },
+        InputAction::ActivityEvidence(id) => match backend.activity_evidence(&id).await {
+            Ok(evidence) => app.open_activity_evidence(evidence),
+            Err(error) => app.push_error(&error),
+        },
         InputAction::Submit(input) => {
             if let Some(command) = commands::parse(&input) {
                 if let Err(error) = commands::execute(app, backend, command).await {
@@ -953,6 +958,7 @@ async fn apply_input_action(
             } else if app.active_task.is_some() {
                 app.queue_prompt(input);
             } else {
+                let workspace = app.selected_workspace.clone();
                 stream::start_prompt(
                     app,
                     backend,
@@ -960,6 +966,7 @@ async fn apply_input_action(
                     !options.no_memory,
                     options.max_turns,
                     input,
+                    workspace,
                 )
                 .await;
             }

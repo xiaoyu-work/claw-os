@@ -860,6 +860,9 @@ fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         ]),
         Line::raw(format!("session: {}", task.session_id)),
     ];
+    if let Some(workspace) = &task.workspace {
+        lines.push(Line::raw(format!("workspace: {workspace}")));
+    }
     if let Some(activity_id) = &task.activity_id {
         lines.push(Line::raw(format!("activity: {activity_id}")));
     }
@@ -1147,6 +1150,15 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
     };
     let short_session = app.conversation.id.chars().take(22).collect::<String>();
+    let workspace_path = app
+        .active_workspace
+        .as_deref()
+        .unwrap_or(&app.selected_workspace);
+    let workspace = std::path::Path::new(workspace_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(workspace_path);
     let line = Line::from(vec![
         Span::styled(
             " CLAW AGENT ",
@@ -1159,6 +1171,11 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         status,
         Span::raw("  "),
         Span::styled(&app.selected_model, Style::default().fg(Color::Blue)),
+        Span::raw("  "),
+        Span::styled(
+            format!("cwd:{workspace}"),
+            Style::default().fg(Color::Magenta),
+        ),
         Span::raw("  "),
         Span::styled(short_session, Style::default().fg(Color::DarkGray)),
     ]);

@@ -111,6 +111,12 @@ pub(super) struct Confirmation {
     pub action: ConfirmationAction,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct QueuedPrompt {
+    pub prompt: String,
+    pub workspace: String,
+}
+
 pub(super) struct App {
     pub info: BackendInfo,
     pub conversation: Conversation,
@@ -119,8 +125,10 @@ pub(super) struct App {
     pub cursor: usize,
     pub status: RunStatus,
     pub active_task: Option<String>,
+    pub active_workspace: Option<String>,
     pub selected_model: String,
-    pub queued_prompts: VecDeque<String>,
+    pub selected_workspace: String,
+    pub queued_prompts: VecDeque<QueuedPrompt>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
@@ -165,6 +173,7 @@ impl App {
     pub fn new(info: BackendInfo, mut conversation: Conversation) -> Self {
         conversation.title = clean_text(&conversation.title).replace('\n', " ");
         let selected_model = info.model.clone();
+        let selected_workspace = info.home.to_string_lossy().into_owned();
         let mut app = Self {
             info,
             conversation,
@@ -173,7 +182,9 @@ impl App {
             cursor: 0,
             status: RunStatus::Ready,
             active_task: None,
+            active_workspace: None,
             selected_model,
+            selected_workspace,
             queued_prompts: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             input_history: Vec::new(),
@@ -254,6 +265,7 @@ impl App {
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
         self.active_task = None;
+        self.active_workspace = None;
         self.task_started_at = None;
         self.queued_prompts.clear();
         self.usage_input = 0;
@@ -283,6 +295,7 @@ impl App {
 
     pub fn begin_task(&mut self, job: &Job) {
         self.active_task = Some(job.id.clone());
+        self.active_workspace = job.workspace.clone();
         self.status = RunStatus::Working;
         self.task_started_at = Some(Instant::now());
         self.active_assistant = None;
@@ -312,6 +325,7 @@ impl App {
             status => self.push_error(&format!("Task ended with unexpected status {status}.")),
         }
         self.active_task = None;
+        self.active_workspace = None;
         self.status = RunStatus::Ready;
         self.task_started_at = None;
         self.active_assistant = None;
@@ -480,7 +494,18 @@ impl App {
             "Queued for the current task: {}",
             clean_text(&prompt)
         ));
-        self.queued_prompts.push_back(prompt);
+        self.queued_prompts.push_back(QueuedPrompt {
+            prompt,
+            workspace: self.selected_workspace.clone(),
+        });
+    }
+
+    pub fn set_workspace(&mut self, workspace: String) {
+        self.selected_workspace = workspace;
+        self.push_system(&format!(
+            "Future tasks will use workspace {}. Workspace selection grants no capability.",
+            self.selected_workspace
+        ));
     }
 
     pub fn take_input(&mut self) -> String {
@@ -698,6 +723,9 @@ impl App {
                     }
                     if task.activity_id.is_some() {
                         flags.push("activity".into());
+                    }
+                    if let Some(workspace) = task.workspace.as_deref() {
+                        flags.push(format!("cwd:{workspace}"));
                     }
                     if task.error.is_some() {
                         flags.push("error".into());

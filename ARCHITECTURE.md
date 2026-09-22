@@ -1577,6 +1577,15 @@ the durable task. The Chat Stop control uses the task id returned at submission
 and calls `task.cancel` explicitly; completion remains observable through Tasks,
 session history, and notifications after a reconnect.
 
+`task.workspace.resolve` is the only presentation-facing workspace resolver.
+`clawd` derives the owner from peer credentials, resolves relative paths under
+the verified passwd home, and accepts only canonical, owner-owned directories
+that remain beneath that home. `task.submit` persists the returned path in the
+Job. The supervisor revalidates it before spawn, starts `claw-agentd` in that
+cwd, carries it in worker protocol v14, and records a task-stream snapshot.
+The runtime projects the path as request-local `ProjectContext`. None of these
+steps creates or widens an `fs.*` capability.
+
 The owner-scoped
 `agent.conversation.create/get/list/update/fork/revert` broker routes
 create empty system-Agent sessions without queuing work and expose the same

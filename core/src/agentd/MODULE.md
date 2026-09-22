@@ -181,7 +181,9 @@ rechecks the live revision independently of heartbeat renewal. Disabled,
 changed or newly introduced policies stop old attempts through normal
 cancellation and exact-child cleanup; admitted effects are not undone.
 
-Worker protocol v13 adds a separately bounded monetary-budget exchange and an
+Worker protocol v14 carries the broker-validated owner-home workspace used as
+the worker process context; it grants no filesystem capability. Worker
+protocol v13 adds a separately bounded monetary-budget exchange and an
 assignment hint; Root still derives the Activity, owner, pricing policy,
 reservation and settlement authority from its retained Job. Worker protocol
 v12 carries the optional request-scoped model selection in the

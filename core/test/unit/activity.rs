@@ -169,12 +169,15 @@ fn run_can_continue_a_session_or_use_the_activity_goal() {
             "session-1",
             "--max-turns",
             "4",
+            "--workspace",
+            "/home/user/project",
         ]),
     )
     .unwrap();
     assert_eq!(params["prompt"], "Prepare a draft");
     assert_eq!(params["session_id"], "session-1");
     assert_eq!(params["max_turns"], 4);
+    assert_eq!(params["workspace"], "/home/user/project");
     assert!(parse("run", &args(&[ID, "one", "two"])).is_err());
 }
 

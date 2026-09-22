@@ -53,6 +53,7 @@ pub(super) struct Job {
     pub id: String,
     pub session_id: String,
     pub activity_id: Option<String>,
+    pub workspace: Option<String>,
     pub prompt: String,
     pub status: String,
     pub created_at: String,
@@ -80,6 +81,7 @@ pub(super) struct TaskSummary {
     pub created_at: String,
     pub session_id: Option<String>,
     pub activity_id: Option<String>,
+    pub workspace: Option<String>,
     pub waiting_on: usize,
     pub cancel_requested: bool,
     pub error: Option<String>,
@@ -317,10 +319,12 @@ pub(super) trait Backend: Send + Sync {
         &self,
         prompt: &str,
         session_id: &str,
+        workspace: &str,
         use_memory: bool,
         max_turns: Option<u32>,
         model: &str,
     ) -> Result<Job, String>;
+    async fn resolve_workspace(&self, path: Option<&str>) -> Result<String, String>;
     async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, String>;
     async fn cancel(&self, task_id: &str) -> Result<(), String>;
     async fn list_tasks(&self) -> Result<Vec<TaskSummary>, String>;
@@ -347,7 +351,12 @@ pub(super) trait Backend: Send + Sync {
         state: &str,
         completion_note: Option<&str>,
     ) -> Result<Activity, String>;
-    async fn run_activity(&self, id: &str, prompt: Option<&str>) -> Result<Job, String>;
+    async fn run_activity(
+        &self,
+        id: &str,
+        prompt: Option<&str>,
+        workspace: &str,
+    ) -> Result<Job, String>;
     async fn activity_attention(&self, id: &str) -> Result<ActivityAttention, String>;
     async fn activity_controls(&self, id: &str) -> Result<ActivityControls, String>;
     async fn set_activity_control(
@@ -496,6 +505,7 @@ impl Backend for BrokerBackend {
         &self,
         prompt: &str,
         session_id: &str,
+        workspace: &str,
         use_memory: bool,
         max_turns: Option<u32>,
         model: &str,
@@ -503,6 +513,7 @@ impl Backend for BrokerBackend {
         let mut params = json!({
             "prompt": prompt,
             "session_id": session_id,
+            "workspace": workspace,
             "use_memory": use_memory,
             "model": model,
         });
@@ -510,6 +521,15 @@ impl Backend for BrokerBackend {
             params["max_turns"] = json!(max_turns);
         }
         parse_job(self.call(Command::TaskSubmit, params).await?)
+    }
+
+    async fn resolve_workspace(&self, path: Option<&str>) -> Result<String, String> {
+        let mut params = json!({});
+        if let Some(path) = path {
+            params["path"] = json!(path);
+        }
+        let value = self.call(Command::TaskWorkspaceResolve, params).await?;
+        required_string(&value, "workspace")
     }
 
     async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, String> {
@@ -775,15 +795,22 @@ impl Backend for BrokerBackend {
         Ok(activity)
     }
 
-    async fn run_activity(&self, id: &str, prompt: Option<&str>) -> Result<Job, String> {
+    async fn run_activity(
+        &self,
+        id: &str,
+        prompt: Option<&str>,
+        workspace: &str,
+    ) -> Result<Job, String> {
         validate_token(id, "Activity id")?;
-        let mut params = json!({ "id": id });
+        let mut params = json!({ "id": id, "workspace": workspace });
         if let Some(prompt) = prompt {
             params["prompt"] = json!(prompt);
         }
         let job = parse_job(self.call(Command::ActivityRun, params).await?)?;
-        if job.activity_id.as_deref() != Some(id) {
-            return Err("Claw returned a task for another Activity".into());
+        if job.activity_id.as_deref() != Some(id)
+            || job.workspace.as_deref() != Some(workspace)
+        {
+            return Err("Claw returned an Activity task with mismatched identity or workspace".into());
         }
         Ok(job)
     }
@@ -1295,6 +1322,7 @@ fn parse_job(value: Value) -> Result<Job, String> {
         id: required_string(&value, "id")?,
         session_id: required_string(&value, "session_id")?,
         activity_id: optional_string(&value, "activity_id"),
+        workspace: optional_string(&value, "workspace"),
         prompt: required_string(&value, "prompt")?,
         status: required_string(&value, "status")?,
         created_at: required_string(&value, "created_at")?,
@@ -1323,6 +1351,7 @@ fn parse_task_summary(value: &Value) -> Result<TaskSummary, String> {
         created_at: required_string(value, "created_at")?,
         session_id: optional_string(value, "session_id"),
         activity_id: optional_string(value, "activity_id"),
+        workspace: optional_string(value, "workspace"),
         waiting_on: value
             .get("waiting_on")
             .and_then(Value::as_array)

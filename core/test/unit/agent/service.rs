@@ -70,6 +70,7 @@ fn requested_model_does_not_change_provider_policy_or_other_jobs() {
         prompt: "hello".into(),
         context: None,
         branch_context: None,
+        workspace: None,
         session_id: None,
         max_turns: Some(3),
         requested_model: Some("selected".into()),

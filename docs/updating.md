@@ -405,9 +405,11 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   against a half-upgraded pair. The broker additionally measures the installed
   worker and `claw-extension-host` binaries against the security floor before
   spawning them, so either component being replaced on disk is refused before
-  it becomes a process. Agentd worker protocol v13 includes Activity boundary
-  and receipt messages, request-scoped model selection, and the separately
-  bounded monetary-budget exchange while retaining grant format v9 and its
+  it becomes a process. Agentd worker protocol v14 adds the broker-validated
+  owner-home workspace used as process context without granting filesystem
+  capability. Protocol v13 includes Activity boundary and receipt messages,
+  request-scoped model selection, and the separately bounded monetary-budget
+  exchange while retaining grant format v9 and its
   owner-qualified Agent-extension package receipts. An older worker frame or
   v8 grant is rejected explicitly.
   Extension-host control protocol v9 remains the independently floored host

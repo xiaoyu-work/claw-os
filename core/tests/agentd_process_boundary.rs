@@ -315,6 +315,7 @@ fn assignment(
             activity_monetary_checks: false,
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
+            workspace: home.to_string_lossy().into_owned(),
         },
         consent_context: cos::caps::ConsentContext::Attended,
         session: None,

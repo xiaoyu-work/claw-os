@@ -163,6 +163,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             ("object-state", "--reference") => "reference",
             ("run", "--session") => "session_id",
             ("run", "--max-turns") => "max_turns",
+            ("run", "--workspace") => "workspace",
             ("complete", "--note") => "completion_note",
             _ => {
                 return Err(format!(

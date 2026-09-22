@@ -85,6 +85,7 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
             use_memory: false,
             owner_uid: 1000,
             owner_home: "/home/test".to_string(),
+            workspace: "/home/test".to_string(),
             record_activity_receipts: false,
             activity_capability_checks: false,
             activity_monetary_checks: false,

@@ -92,7 +92,7 @@ fn service_help() -> Value {
     json!({
         "backend": "clawd",
         "subcommands": [
-            "submit  \"<prompt>\" [--session ID] [--activity ID] [--max-turns N] [--model ID]",
+            "submit  \"<prompt>\" [--session ID] [--activity ID] [--workspace PATH] [--max-turns N] [--model ID]",
             "list    [--status pending|running|ok|error|cancelled] [--activity ID] [--limit N]",
             "status  [<task_id>]",
             "result  <task_id> [--wait-secs N]",
@@ -118,6 +118,7 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
     let mut prompt: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut activity_id: Option<String> = None;
+    let mut workspace: Option<String> = None;
     let mut max_turns: Option<u32> = None;
     let mut model: Option<String> = None;
     let mut i = 0usize;
@@ -133,6 +134,15 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
                     args.get(i + 1)
                         .filter(|value| !value.trim().is_empty())
                         .ok_or("--activity needs a non-empty value")?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--workspace" => {
+                workspace = Some(
+                    args.get(i + 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or("--workspace needs a non-empty path")?
                         .clone(),
                 );
                 i += 2;
@@ -162,13 +172,16 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
 
     let prompt = prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--activity ID] [--max-turns N] [--model ID]")?;
+        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--activity ID] [--workspace PATH] [--max-turns N] [--model ID]")?;
     let mut params = json!({ "prompt": prompt });
     if let Some(session_id) = session_id {
         params["session_id"] = json!(session_id);
     }
     if let Some(activity_id) = activity_id {
         params["activity_id"] = json!(activity_id);
+    }
+    if let Some(workspace) = workspace {
+        params["workspace"] = json!(workspace);
     }
     if let Some(max_turns) = max_turns {
         params["max_turns"] = json!(max_turns);

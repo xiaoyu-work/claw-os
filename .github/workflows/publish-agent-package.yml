@@ -115,7 +115,7 @@ jobs:
       - name: Exercise the Claw-owned Agent TUI
         run: |
           original_namespace="$(readlink /proc/self/ns/mnt)"
-          for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence multiline resume plain; do
+          for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
             unshare --user --map-current-user --keep-caps --mount --net \
               python3 -B core/tests/agent_tui_pty.py \
               --cos target/${{ matrix.musl_target }}/release/cos \

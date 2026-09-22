@@ -33,6 +33,7 @@ pub mod tools;
 pub mod trust;
 pub mod util;
 pub mod web;
+pub mod workspace;
 
 mod app_ai_commands;
 mod command_catalog;

@@ -46,6 +46,14 @@ pub(super) fn apply_record(app: &mut App, record: &Value) -> Result<RecordOutcom
                     .collect::<Result<_, _>>()?;
             }
             "approval_resumed" => outcome.resumed = true,
+            "task_workspace" => {
+                let workspace = required_string(progress, "workspace")?;
+                if app.active_workspace.as_deref() != Some(workspace)
+                    || progress.get("grants_capability").and_then(Value::as_bool) != Some(false)
+                {
+                    return Err("task workspace evidence does not match the submitted task".into());
+                }
+            }
             _ => app.push_system("Claw reported progress this terminal cannot display."),
         }
         return Ok(outcome);

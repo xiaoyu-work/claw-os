@@ -81,6 +81,8 @@ pub enum Command {
     AgentConversationRevert,
     #[serde(rename = "task.submit")]
     TaskSubmit,
+    #[serde(rename = "task.workspace.resolve")]
+    TaskWorkspaceResolve,
     #[serde(rename = "task.get")]
     TaskGet,
     #[serde(rename = "task.retry")]
@@ -163,6 +165,7 @@ impl Command {
         Self::AgentConversationFork,
         Self::AgentConversationRevert,
         Self::TaskSubmit,
+        Self::TaskWorkspaceResolve,
         Self::TaskGet,
         Self::TaskRetry,
         Self::TaskStream,
@@ -217,6 +220,7 @@ impl Command {
             Self::AgentConversationFork => "agent.conversation.fork",
             Self::AgentConversationRevert => "agent.conversation.revert",
             Self::TaskSubmit => "task.submit",
+            Self::TaskWorkspaceResolve => "task.workspace.resolve",
             Self::TaskGet => "task.get",
             Self::TaskRetry => "task.retry",
             Self::TaskStream => "task.stream",

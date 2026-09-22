@@ -48,6 +48,7 @@ persistence, and structured primitive dispatch.
 | `src/objects/`, `src/router/object_commands.rs` | Verified App object catalogue and explicit resolution through ordinary App dispatch |
 | `src/operations/`, `src/clawd/operation_previews.rs` | Shared, non-executing previews of App-declared effects and requested targets |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
+| `src/agent/workspace.rs` | Owner-home-bounded canonical task workspace contract |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/crypto.rs` | SHA-256/HMAC helpers with linear streaming updates and bounded partial-block buffering |
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |

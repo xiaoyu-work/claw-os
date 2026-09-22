@@ -141,6 +141,9 @@ pub async fn run(params: Value, client: &ClientIdentity) -> Result<Value, Broker
     if let Some(use_memory) = request.use_memory {
         task["use_memory"] = json!(use_memory);
     }
+    if let Some(workspace) = request.workspace {
+        task["workspace"] = json!(workspace.as_str());
+    }
     // Submission owns capability/session derivation and rechecks Activity
     // admission; an Activity never supplies authority of its own.
     super::tasks::submit(task, client)
@@ -194,6 +197,7 @@ fn job_view(job: &Job) -> Value {
         "title": preview(&job.prompt, 160),
         "status": job.status.as_str(),
         "session_id": job.session_id,
+        "workspace": job.workspace,
         "created_at": job.created_at,
         "finished_at": job.finished_at,
         "response": job.response.as_deref().map(|text| preview(text, 4096)),

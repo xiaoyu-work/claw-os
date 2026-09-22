@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -372,6 +372,9 @@ pub struct JobSpec {
     pub use_memory: bool,
     pub owner_uid: u32,
     pub owner_home: String,
+    /// Broker-validated canonical directory under `owner_home`. It selects
+    /// runtime context but grants no capability.
+    pub workspace: String,
     /// Reporting hint only; the broker resolves the Activity from its own Job.
     #[serde(default)]
     pub record_activity_receipts: bool,

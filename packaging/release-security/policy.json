@@ -87,7 +87,7 @@
     "claw-os-desktop"
   ],
   "protocols": {
-    "agentd_worker": 13,
+    "agentd_worker": 14,
     "broker_envelope": 2,
     "extension_host_control": 9
   },

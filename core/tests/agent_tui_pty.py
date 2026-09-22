@@ -116,6 +116,9 @@ class FixtureBroker:
         }
         self.cursor = 0
         self.requested_model = None
+        self.requested_workspace = None
+        self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+        self.workspace = str(self.home / "project")
         self.session_id = SESSION_ID
         self.title = "Terminal integration fixture"
         self.archived = False
@@ -147,6 +150,7 @@ class FixtureBroker:
         return {
             "id": self.task_id,
             "session_id": self.session_id,
+            "workspace": self.requested_workspace or str(self.home),
             "prompt": (
                 "First line\nSecond line"
                 if self.case == "multiline"
@@ -169,6 +173,7 @@ class FixtureBroker:
         return {
             "id": task_id,
             "session_id": self.session_id,
+            "workspace": str(self.home),
             "prompt": f"Historical {status} task",
             "title": f"Historical {status} task",
             "status": status,
@@ -373,8 +378,8 @@ class FixtureBroker:
                     self.activity_completion_note = params.get("completion_note")
                     return self.activity()
         if method == "activity.run":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity run addressed another goal")
+                    if params["id"] != ACTIVITY_ID or params.get("workspace") != str(self.home):
+                        raise AssertionError("Activity run changed its goal or workspace")
                     return self.activity_job()
         if method == "activity.attention":
                     if params["id"] != ACTIVITY_ID:
@@ -580,6 +585,11 @@ class FixtureBroker:
                     ]
                 }
             return {"jobs": []}
+        if method == "task.workspace.resolve":
+            requested = params.get("path")
+            if requested not in (None, "project", self.workspace):
+                raise AssertionError("workspace resolver received an unexpected path")
+            return {"workspace": str(self.home if requested is None else self.home / "project")}
         if method == "task.submit":
             if params.get("session_id") != self.session_id:
                 raise AssertionError("task was not submitted under the canonical conversation")
@@ -591,6 +601,9 @@ class FixtureBroker:
             if params.get("prompt") != expected_prompt:
                 raise AssertionError("terminal input was changed or dropped")
             self.requested_model = params.get("model")
+            self.requested_workspace = params.get("workspace")
+            if not self.requested_workspace:
+                raise AssertionError("task submission omitted its broker workspace")
             return self.job("running")
         if method == "task.cancel":
             if params["id"] == self.history_running_id:
@@ -651,6 +664,7 @@ class FixtureBroker:
                     "activity-controls",
                     "activity-evidence",
                     "notification-inbox",
+                    "workspace",
                     "task-center",
                 ):
                     events.extend([
@@ -679,6 +693,7 @@ class FixtureBroker:
                 "activity-controls",
                 "activity-evidence",
                 "notification-inbox",
+                "workspace",
                 "task-center",
             ) or self.cancelled.is_set()
             if not terminal:
@@ -829,6 +844,7 @@ def run(cos, case, transcript, original_namespace, trace):
         home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
         shadow_home = root / "home"
         shadow_home.mkdir(mode=0o700)
+        (shadow_home / "project").mkdir(mode=0o700)
         subprocess.run(["mount", "--bind", str(shadow_home), str(home)], check=True)
         cleanup.callback(subprocess.run, ["umount", str(home)], check=True)
         config = root / "config.json"
@@ -1397,6 +1413,17 @@ def run(cos, case, transcript, original_namespace, trace):
                     >= 2,
                 )
                 os.write(master, b"\x1b")
+            if case == "workspace":
+                send_prompt(master, output, "/workspace project")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.workspace.resolve"
+                        for request in broker.requests
+                    ),
+                )
             if case == "multiline":
                 os.write(master, b"\x1b[200~First line\nSecond line\x1b[201~")
                 settled = time.monotonic() + 0.4
@@ -1433,6 +1460,12 @@ def run(cos, case, transcript, original_namespace, trace):
             submissions = sum(request["command"] == "task.submit" for request in broker.requests)
             if submissions != 1:
                 raise AssertionError(f"expected one actual task submission, got {submissions}")
+            if case == "workspace" and not any(
+                request["command"] == "task.submit"
+                and request["params"].get("workspace") == broker.workspace
+                for request in broker.requests
+            ):
+                raise AssertionError("task submission did not retain the resolved workspace")
             if case == "resume" and any(
                 request["command"] == "agent.conversation.create"
                 for request in broker.requests
@@ -1481,6 +1514,7 @@ if __name__ == "__main__":
             "plain",
             "resume",
             "task-center",
+            "workspace",
         ),
         default="complete",
     )

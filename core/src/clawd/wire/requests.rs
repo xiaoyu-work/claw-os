@@ -145,6 +145,8 @@ pub struct ActivityRun {
     pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_memory: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Text<4096>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -456,6 +458,8 @@ pub struct AgentConversationRevert {
 pub struct TaskSubmit {
     pub prompt: Text<PROMPT_BYTES>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Text<4096>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<Text<PROMPT_BYTES>>,
@@ -469,6 +473,13 @@ pub struct TaskSubmit {
     pub model: Option<Text<256>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_memory: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskWorkspaceResolve {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Text<4096>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -484,7 +484,16 @@ pub fn broker_is_root() -> bool {
 pub fn spawn_worker(
     identity: &WorkerIdentity,
     isolation: &ExecutionIsolation,
+    task_id: &str,
+) -> Result<SpawnedWorker, String> {
+    spawn_worker_in(identity, isolation, task_id, &identity.home)
+}
+
+pub fn spawn_worker_in(
+    identity: &WorkerIdentity,
+    isolation: &ExecutionIsolation,
     _task_id: &str,
+    workspace: &Path,
 ) -> Result<SpawnedWorker, String> {
     let binary = worker_binary_path();
     if !binary.exists() {
@@ -515,7 +524,7 @@ pub fn spawn_worker(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    command.current_dir(&identity.home);
+    command.current_dir(workspace);
     command.env_clear();
     command.env("HOME", &identity.home);
     command.env("USER", &identity.username);
@@ -678,7 +687,6 @@ pub(crate) fn mark_inherited_descriptors_cloexec(first: RawFd) {
         if rc == 0 {
             return;
         }
-
     }
     let mut fd = first;
     while fd < 4096 {

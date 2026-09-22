@@ -48,6 +48,9 @@ audit.
 - Activity Evidence aggregates authenticated object declarations, immutable
   reported receipts and object-state annotations without resolving App data.
   Operation previews stay metadata-only and file plans stay App-owned.
+- Workspace selection resolves through `task.workspace.resolve`; the TUI keeps
+  only the returned canonical path and binds it to each submitted/queued task.
+  A cwd is context, never filesystem authority.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

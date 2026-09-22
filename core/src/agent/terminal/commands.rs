@@ -20,6 +20,7 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/models", "list configured-provider models"),
     ("/model", "select the model for future tasks"),
+    ("/workspace", "show or select a broker-validated workspace"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -78,6 +79,7 @@ pub(super) enum Command {
     Rewind(u32),
     Models,
     Model(String),
+    Workspace(Option<String>),
     Skills,
     Tasks,
     Task(String),
@@ -169,6 +171,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "models" => Command::Models,
         "model" if rest.is_empty() => Command::Models,
         "model" => Command::Model(rest.to_string()),
+        "workspace" if rest.is_empty() => Command::Workspace(None),
+        "workspace" => Command::Workspace(Some(rest.to_string())),
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -283,6 +287,7 @@ fn takes_argument(command: &str) -> bool {
             | "/rename"
             | "/rewind"
             | "/model"
+            | "/workspace"
             | "/task"
             | "/approval"
             | "/inbox"
@@ -323,6 +328,7 @@ pub(super) async fn execute(
             Command::Help
                 | Command::Tasks
                 | Command::Task(_)
+                | Command::Workspace(_)
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -357,7 +363,7 @@ pub(super) async fn execute(
     match command {
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
-             /fork  /rewind N  /models  /model ID  /skills\n\
+             /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -429,6 +435,16 @@ pub(super) async fn execute(
             } else {
                 app.push_error("Unknown model. Use /models for the configured catalogue.");
             }
+        }
+        Command::Workspace(None) => app.push_system(&format!(
+            "workspace: {}\nBroker validation is required before this path reaches a task.",
+            app.selected_workspace
+        )),
+        Command::Workspace(Some(path)) => {
+            let workspace = backend
+                .resolve_workspace((path != "home").then_some(path.as_str()))
+                .await?;
+            app.set_workspace(workspace);
         }
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
@@ -552,7 +568,9 @@ pub(super) async fn execute(
             app.open_activity_detail(detail);
         }
         Command::ActivityRun { id, prompt } => {
-            let job = backend.run_activity(&id, prompt.as_deref()).await?;
+            let job = backend
+                .run_activity(&id, prompt.as_deref(), &app.selected_workspace)
+                .await?;
             let task_id = job.id.clone();
             app.open_task_detail(job);
             app.push_system(&format!(
@@ -631,8 +649,8 @@ pub(super) async fn execute(
             app.open_activity_operation_preview(preview);
         }
         Command::Session => app.push_system(&format!(
-            "session: {}\nmodel: {}\nprovider: {}",
-            app.conversation.id, app.selected_model, app.info.provider
+            "session: {}\nmodel: {}\nprovider: {}\nworkspace: {}",
+            app.conversation.id, app.selected_model, app.info.provider, app.selected_workspace
         )),
         Command::Clear => app.clear_transcript(),
         Command::Cancel => {

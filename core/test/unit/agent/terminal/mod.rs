@@ -49,6 +49,7 @@ fn job(status: &str) -> Job {
         id: "task-1".into(),
         session_id: "ses_001953abcdef0_123456789abc".into(),
         activity_id: None,
+        workspace: Some("/home/claw/project".into()),
         prompt: "Run the terminal test".into(),
         status: status.into(),
         created_at: "2026-01-01T00:00:00Z".into(),
@@ -118,6 +119,10 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/rewind 3"), Some(Command::Rewind(3)));
     assert_eq!(parse_command("/unarchive"), Some(Command::Unarchive));
     assert_eq!(parse_command("/model"), Some(Command::Models));
+    assert_eq!(
+        parse_command("/workspace project/repo"),
+        Some(Command::Workspace(Some("project/repo".into())))
+    );
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -281,6 +286,17 @@ fn composer_edits_unicode_by_character_not_byte() {
     assert_eq!(app.cursor, 3);
     app.move_down();
     assert_eq!(app.cursor, 7);
+}
+
+#[test]
+fn queued_prompts_retain_the_workspace_selected_when_queued() {
+    let mut app = app();
+    app.set_workspace("/home/claw/project-a".into());
+    app.queue_prompt("first queued task".into());
+    app.set_workspace("/home/claw/project-b".into());
+    let queued = app.queued_prompts.pop_front().unwrap();
+    assert_eq!(queued.prompt, "first queued task");
+    assert_eq!(queued.workspace, "/home/claw/project-a");
 }
 
 #[test]
@@ -581,6 +597,7 @@ fn durable_task_picker_opens_redacted_details_and_exact_actions() {
         created_at: "2026-01-01T00:00:00Z".into(),
         session_id: Some("ses_001953abcdef0_123456789abc".into()),
         activity_id: None,
+        workspace: Some("/home/claw/project".into()),
         waiting_on: 0,
         cancel_requested: false,
         error: Some("failed".into()),

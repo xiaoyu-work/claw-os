@@ -107,6 +107,7 @@ The command set names Claw concepts only:
 /rewind <user-turn-count>
 /models
 /model [model-id]
+/workspace [path|home]
 /skills
 /tasks
 /task [task-id]
@@ -156,6 +157,22 @@ durability and external-effect consequences before any broker mutation.
 without an ID opens a searchable bounded conversation picker. These lists are
 presentation only; selecting an item still uses the normal broker operation and
 canonical identity checks.
+
+`/workspace` shows the selected task workspace. `/workspace home` resets to
+the authenticated owner's passwd home; `/workspace PATH` resolves an absolute
+path or a path relative to that home through `task.workspace.resolve`.
+The broker requires an existing canonical directory owned by that user and
+contained beneath the verified home. The returned path is bound to each
+durable task, revalidated at claim, and used as the worker cwd. It changes
+relative-path context but grants no filesystem capability.
+
+The selection also applies to `/activity-run`; non-TUI Activity CLI callers
+can pass `--workspace PATH` through the same broker validation.
+
+Queued prompts retain the workspace selected when they were queued. The task
+stream records the broker workspace snapshot, and model-visible cwd context is
+labelled request-local ProjectContext so session/audit evidence can reconstruct
+it.
 
 `/tasks` (or `/task` without an ID) opens the newest 100 owner-scoped durable
 tasks. Selecting one fetches its current canonical detail, including status,
@@ -257,7 +274,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence multiline resume plain; do
+for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -283,3 +300,5 @@ The controls scenario preserves exact revisions across limits, accounting,
 priority and capability-policy mutations. The evidence scenario reads objects,
 receipts, annotations and staged-plan projections, then verifies a metadata-only
 operation preview.
+The workspace scenario resolves a relative owner-home directory and verifies
+that the exact canonical path is retained by `task.submit`.

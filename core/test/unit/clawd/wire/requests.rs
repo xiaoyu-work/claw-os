@@ -106,6 +106,26 @@ fn requested_model_wire_is_optional_bounded_and_cannot_select_a_provider() {
 }
 
 #[test]
+fn task_workspace_wire_is_optional_bounded_and_carries_no_authority() {
+    let parsed: TaskSubmit = serde_json::from_value(json!({
+        "prompt": "hello",
+        "workspace": "projects/claw",
+    }))
+    .unwrap();
+    assert_eq!(parsed.workspace.unwrap().as_str(), "projects/claw");
+    assert!(serde_json::from_value::<TaskSubmit>(json!({
+        "prompt": "hello",
+        "workspace": "x".repeat(4097),
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<TaskWorkspaceResolve>(json!({
+        "path": "project",
+        "caps": ["fs.write:**"],
+    }))
+    .is_err());
+}
+
+#[test]
 fn activity_policy_wire_is_closed_bounded_and_cannot_supply_authority() {
     let valid = json!({"id":"00000000-0000-4000-8000-000000000001","policy":{"rules":[
         {"verb":"fs.delete","mode":"deny","scopes":[]}

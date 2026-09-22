@@ -746,6 +746,16 @@ where
     }
     identity
         .require_expected_identity(assignment.job.owner_uid, assignment.grant.claims.owner_gid)?;
+    let workspace = crate::agent::workspace::resolve(
+        assignment.job.owner_uid,
+        Some(&assignment.job.workspace),
+    )?;
+    let current = std::env::current_dir()
+        .and_then(|path| path.canonicalize())
+        .map_err(|error| format!("inspect agent worker workspace: {error}"))?;
+    if current != workspace {
+        return Err("agent worker cwd does not match its broker assignment".into());
+    }
     validate_execution_nonce(&assignment.grant.claims.prepare_nonce)?;
     validate_execution_nonce(&assignment.grant.claims.commit_nonce)?;
     if assignment.grant.claims.prepare_nonce == assignment.grant.claims.commit_nonce {
@@ -1189,6 +1199,7 @@ async fn execute(
         prompt: job.prompt,
         context: job.context,
         branch_context: job.branch_context,
+        workspace: Some(job.workspace),
         session_id: job.session_id,
         max_turns: job.max_turns,
         requested_model: job.requested_model,

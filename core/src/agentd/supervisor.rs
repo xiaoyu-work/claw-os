@@ -561,7 +561,18 @@ async fn supervise(
         session.client = effective_client;
     }
 
-    let spawned = match spawn::spawn_worker(&identity, &isolation, &job.id) {
+    let workspace = match crate::agent::workspace::resolve(owner_uid, job.workspace.as_deref()) {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            finish_error(
+                &store,
+                job,
+                &format!("task workspace is unavailable: {error}"),
+            );
+            return Ok(());
+        }
+    };
+    let spawned = match spawn::spawn_worker_in(&identity, &isolation, &job.id, &workspace) {
         Ok(spawned) => {
             if let Ok(mut throttle) = throttle.lock() {
                 throttle.record_success();
@@ -668,6 +679,7 @@ async fn supervise(
         &shutdown,
         broker_pid,
         &job,
+        &workspace,
         session,
         lease,
         channel,
@@ -1124,6 +1136,7 @@ async fn pump(
     shutdown: &Arc<AtomicBool>,
     broker_pid: u32,
     job: &Job,
+    workspace: &std::path::Path,
     session: Option<crate::proc::SessionInfo>,
     mut lease: Lease,
     channel: tokio::net::UnixStream,
@@ -1180,6 +1193,19 @@ async fn pump(
             ));
         }
     }
+    if let Err(error) = store.append_stream_progress(
+        &job.id,
+        serde_json::json!({
+            "kind": "task_workspace",
+            "workspace": workspace,
+            "source": "broker_validated_owner_workspace",
+            "grants_capability": false,
+        }),
+    ) {
+        return TaskOutcome::Failed(format!(
+            "could not record the task workspace snapshot: {error}"
+        ));
+    }
     let assignment = Assignment {
         protocol: protocol::PROTOCOL_VERSION,
         grant: signer.issue(claims_for(broker_pid, &lease, config.lease)),
@@ -1194,6 +1220,7 @@ async fn pump(
             use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
+            workspace: workspace.to_string_lossy().into_owned(),
             record_activity_receipts: job.activity_id.is_some(),
             activity_capability_checks: job.activity_id.is_some(),
             activity_monetary_checks: job.activity_id.is_some(),

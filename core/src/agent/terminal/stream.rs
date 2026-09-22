@@ -19,6 +19,7 @@ pub(super) async fn start_prompt(
     use_memory: bool,
     max_turns: Option<u32>,
     prompt: String,
+    workspace: String,
 ) {
     if app.conversation.archived {
         app.push_error("This conversation is archived. Use /new or /resume another session.");
@@ -32,6 +33,7 @@ pub(super) async fn start_prompt(
         .submit(
             &prompt,
             &app.conversation.id,
+            &workspace,
             use_memory,
             max_turns,
             &app.selected_model,
@@ -40,7 +42,8 @@ pub(super) async fn start_prompt(
     {
         Ok(job)
             if job.session_id == app.conversation.id
-                && job.requested_model.as_deref() == Some(app.selected_model.as_str()) =>
+                && job.requested_model.as_deref() == Some(app.selected_model.as_str())
+                && job.workspace.as_deref() == Some(workspace.as_str()) =>
         {
             app.begin_task(&job);
             spawn(backend, runtime_tx, job);
@@ -48,6 +51,10 @@ pub(super) async fn start_prompt(
         Ok(job) if job.session_id != app.conversation.id => {
             let _ = backend.cancel(&job.id).await;
             app.push_error("Claw submitted the task under another conversation.");
+        }
+        Ok(job) if job.workspace.as_deref() != Some(workspace.as_str()) => {
+            let _ = backend.cancel(&job.id).await;
+            app.push_error("Claw did not acknowledge the broker-validated task workspace.");
         }
         Ok(job) => {
             let _ = backend.cancel(&job.id).await;

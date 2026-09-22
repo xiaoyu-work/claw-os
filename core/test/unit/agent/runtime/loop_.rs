@@ -21,7 +21,7 @@ fn row(role: &str, content: &str) -> MessageRow {
 
 fn enable_achievable_compression(cfg: &mut AgentConfig, tools: &ToolRegistry, user_prompt: &str) {
     let deps = RuntimeDeps::compatibility(true);
-    let projection = resolve_projection(&deps, cfg, user_prompt, None, None).unwrap();
+    let projection = resolve_projection(&deps, cfg, user_prompt, None, None, None).unwrap();
     let base_tokens = crate::agent::context::compressor::estimate_total_tokens(
         Some(&projection.system_text()),
         &projection.request_messages(crate::agent::trust::envelope::process_seal()),

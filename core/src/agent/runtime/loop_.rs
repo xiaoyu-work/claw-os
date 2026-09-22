@@ -150,6 +150,7 @@ pub struct RuntimeRequest<'a> {
     recorder: Option<(&'a MemoryDb, &'a str)>,
     continuation_limit: Option<usize>,
     transient_context: Option<&'a str>,
+    project_context: Option<&'a str>,
     output: LifecycleOutput,
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
@@ -174,6 +175,7 @@ impl<'a> RuntimeRequest<'a> {
             recorder: None,
             continuation_limit: None,
             transient_context: None,
+            project_context: None,
             output: LifecycleOutput::Buffered,
             progress: progress::null_progress(),
             interrupt_scope: None,
@@ -220,6 +222,11 @@ impl<'a> RuntimeRequest<'a> {
 
     pub fn with_transient_context(mut self, context: Option<&'a str>) -> Self {
         self.transient_context = context;
+        self
+    }
+
+    pub fn with_project_context(mut self, context: Option<&'a str>) -> Self {
+        self.project_context = context;
         self
     }
 
@@ -279,6 +286,7 @@ pub async fn run_with_deps(
         compressor,
         initial_messages,
         transient_context: request.transient_context,
+        project_context: request.project_context,
         output: request.output,
         progress: request.progress,
         interrupt_scope: request.interrupt_scope,
@@ -310,6 +318,7 @@ pub async fn ask_with(
         compressor: None,
         initial_messages: ConversationSeed::empty(),
         transient_context: None,
+        project_context: None,
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
@@ -342,6 +351,7 @@ pub async fn ask_with_memory(
         compressor: None,
         initial_messages: ConversationSeed::empty(),
         transient_context: None,
+        project_context: None,
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
@@ -377,6 +387,7 @@ pub async fn ask_with_memory_continuation(
         compressor,
         initial_messages: prior,
         transient_context: None,
+        project_context: None,
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
@@ -410,6 +421,7 @@ pub async fn ask_with_compressor(
         compressor: Some(compressor),
         initial_messages: ConversationSeed::empty(),
         transient_context: None,
+        project_context: None,
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
@@ -1804,6 +1816,7 @@ fn resolve_projection(
     cfg: &AgentConfig,
     user_prompt: &str,
     _transient_context: Option<&str>,
+    project_context: Option<&str>,
     recorder: Option<(&MemoryDb, &str)>,
 ) -> Result<trust::PromptProjection, AgentError> {
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
@@ -1831,6 +1844,12 @@ fn resolve_projection(
         trust::SourceKind::UserMessage,
         user_prompt,
     ));
+    if let Some(context) = project_context.filter(|context| !context.is_empty()) {
+        projection.push(trust::LabeledSegment::of(
+            trust::SourceKind::ProjectContext,
+            context,
+        ));
+    }
 
     freeze_policy(recorder, &mut projection)?;
     record_projection(recorder, &projection);
@@ -1942,6 +1961,7 @@ struct LifecycleRequest<'a> {
     compressor: Option<Arc<dyn Compressor>>,
     initial_messages: ConversationSeed,
     transient_context: Option<&'a str>,
+    project_context: Option<&'a str>,
     output: LifecycleOutput,
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
@@ -1971,6 +1991,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         compressor,
         initial_messages,
         transient_context,
+        project_context,
         output,
         progress,
         interrupt_scope,
@@ -2049,7 +2070,14 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         }
     }
 
-    let mut projection = resolve_projection(deps, cfg, user_prompt, transient_context, recorder)?;
+    let mut projection = resolve_projection(
+        deps,
+        cfg,
+        user_prompt,
+        transient_context,
+        project_context,
+        recorder,
+    )?;
     let system = projection.system_text();
 
     let budget = crate::agent::context::budget::ContextBudget::from_config(cfg)?;
@@ -2532,6 +2560,7 @@ async fn ask_inner_streaming(
         compressor,
         initial_messages,
         transient_context,
+        project_context: None,
         output: LifecycleOutput::Streaming { sink },
         progress,
         interrupt_scope,
@@ -2584,6 +2613,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 compressor,
                 initial_messages: ConversationSeed::empty(),
                 transient_context: None,
+                project_context: None,
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
@@ -2604,6 +2634,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 compressor,
                 initial_messages: ConversationSeed::empty(),
                 transient_context: None,
+                project_context: None,
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,

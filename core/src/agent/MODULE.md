@@ -38,6 +38,9 @@ surfaces.
 - Persist an optional per-task model selection and pass it through the private
   worker assignment without changing provider, credentials, fallback policy,
   capabilities, or global configuration.
+- Persist the broker-resolved per-task workspace, revalidate it at worker
+  claim, use it as process cwd, and project it through labelled request-local
+  ProjectContext without adding filesystem capability.
 - Treat file and directory fsync as mandatory queue barriers. Cross-bucket
   moves sync both directories, and recovery deduplicates resurrected records
   by conservative execution-phase dominance before any mutation.
@@ -165,8 +168,9 @@ pool/fallback classification.
   conversation presentation changes. The renderer never owns canonical
   conversation, task, provider, tool or permission state.
 - `service::Submission`, worker assignment/execution, and the typed task
-  broker body when per-task options change. Model selection never rewrites
-  provider credentials, capability policy, or another request's configuration.
+  broker body when per-task options change. Model/workspace selection never
+  rewrites provider credentials, capability policy, filesystem authority, or
+  another request's configuration.
 - `trust/source.rs` with the ingestion adapter and an adversarial test when a
   new model-visible source is added.
 - `mcp_commands.rs` with `tools/mcp/` and worker launch policy when MCP process

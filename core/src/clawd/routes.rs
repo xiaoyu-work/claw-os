@@ -563,6 +563,7 @@ routes! {
             ("session_id", FieldRule::Token),
             ("max_turns", FieldRule::Count),
             ("prompt", FieldRule::Size),
+            ("workspace", FieldRule::Size),
         ],
         run: |c| activities::run(c.params, c.client).await,
     }
@@ -870,8 +871,19 @@ routes! {
             ("max_turns", FieldRule::Count),
             ("model", FieldRule::Identifier),
             ("prompt", FieldRule::Size),
+            ("workspace", FieldRule::Size),
         ],
         run: |c| tasks::submit(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    TaskWorkspaceResolve {
+        name: "task.workspace.resolve",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::TaskWorkspaceResolve,
+        audit: &[("path", FieldRule::Size)],
+        run: |c| tasks::workspace(c.params, c.client).map_err(BrokerError::from),
     }
     TaskList {
         name: "task.list",

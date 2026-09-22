@@ -68,6 +68,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .get("use_memory")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let requested_workspace = params.get("workspace").and_then(Value::as_str);
     let requested_activity = optional_activity_id(&params)?;
     let session_meta = session_id
         .as_deref()
@@ -81,6 +82,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     // Activity admission precedes session creation, capability refresh, and
     // queue publication. Its planning fields never supply capabilities.
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let workspace = crate::agent::workspace::resolve(owner_uid, requested_workspace)?;
     let owner_gid = client
         .gid
         .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
@@ -113,10 +115,21 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     job.use_memory = use_memory;
     job.activity_id = activity_id;
     job.requested_model = requested_model;
+    job.workspace = Some(workspace.to_string_lossy().into_owned());
     let task_id = job.id.clone();
     let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
+}
+
+pub fn workspace(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let owner_uid = client.require_uid()?;
+    if owner_uid == 0 {
+        return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
+    }
+    let requested = params.get("path").and_then(Value::as_str);
+    let workspace = crate::agent::workspace::resolve(owner_uid, requested)?;
+    Ok(json!({ "workspace": workspace.to_string_lossy() }))
 }
 
 fn create_task_session(
@@ -536,6 +549,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     retried.use_memory = original.use_memory;
     retried.activity_id = activity_id;
     retried.requested_model = requested_model;
+    retried.workspace = original.workspace;
     let task_id = retried.id.clone();
     let retried =
         with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(retried))
@@ -730,6 +744,7 @@ fn task_summary_value(job: &Value) -> Value {
         "finished_at": job.get("finished_at").cloned().unwrap_or(Value::Null),
         "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
         "activity_id": job.get("activity_id").cloned().unwrap_or(Value::Null),
+        "workspace": job.get("workspace").cloned().unwrap_or(Value::Null),
         "waiting_on": job.get("waiting_on").cloned().unwrap_or_else(|| json!([])),
         "cancel_requested": job
             .get("cancel_requested_at")

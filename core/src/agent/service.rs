@@ -10,7 +10,7 @@
 //!
 //! The protocol is intentionally tiny:
 //!
-//!   - `submit "<prompt>" [--session ID] [--activity ID] [--max-turns N]`
+//!   - `submit "<prompt>" [--session ID] [--activity ID] [--workspace PATH] [--max-turns N]`
 //!     drops a `pending/<job_id>.json` and returns `{job_id, status}`.
 //!   - `list [--status pending|running|done|cancelled] [--activity ID] [--limit N]`
 //!     enumerates jobs across one or all status buckets.
@@ -156,6 +156,10 @@ pub struct Job {
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_context: Option<String>,
+    /// Canonical owner-home workspace selected by the broker. It changes
+    /// process context only and never supplies filesystem authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -291,6 +295,7 @@ impl Job {
             prompt,
             context,
             branch_context,
+            workspace: None,
             session_id,
             activity_id: None,
             execution_reservation: None,
@@ -2595,6 +2600,7 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.prompt == right.prompt
         && left.context == right.context
         && left.branch_context == right.branch_context
+        && left.workspace == right.workspace
         && left.session_id == right.session_id
         && left.max_turns == right.max_turns
         && left.use_memory == right.use_memory
@@ -3033,6 +3039,7 @@ fn job_to_summary(job: &Job) -> Value {
         "id": job.id,
         "session_id": job.session_id,
         "activity_id": job.activity_id,
+        "workspace": job.workspace,
         "status": job.status.as_str(),
         "schema_version": job.schema_version,
         "execution_phase": job.execution_phase.as_str(),
@@ -3075,7 +3082,7 @@ pub fn cmd(args: &[String]) -> Result<Value, String> {
 fn help_value() -> Value {
     json!({
         "subcommands": [
-            "submit  \"<prompt>\" [--session ID] [--activity ID] [--max-turns N]",
+            "submit  \"<prompt>\" [--session ID] [--activity ID] [--workspace PATH] [--max-turns N]",
             "list    [--status pending|running|waiting_approval|done|cancelled] [--activity ID] [--limit N]",
             "status  [<job_id>]",
             "result  <job_id> [--wait-secs N]",
@@ -3091,6 +3098,7 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
     let mut prompt: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut max_turns: Option<u32> = None;
+    let mut workspace: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -3102,6 +3110,15 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
             "--max-turns" => {
                 let v = args.get(i + 1).ok_or("--max-turns needs a value")?;
                 max_turns = Some(v.parse().map_err(|e| format!("--max-turns: {e}"))?);
+                i += 2;
+            }
+            "--workspace" => {
+                workspace = Some(
+                    args.get(i + 1)
+                        .filter(|value| !value.is_empty())
+                        .ok_or("--workspace needs a non-empty path")?
+                        .clone(),
+                );
                 i += 2;
             }
             s if s.starts_with("--") => return Err(format!("unknown flag: {s}")),
@@ -3117,16 +3134,24 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
     }
     let prompt = prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--max-turns N]")?;
+        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--workspace PATH] [--max-turns N]")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
     // `cos agent service submit` runs in the user's own process, so
     // the worker (which is also in this process in single-shot mode)
     // will load that user's config naturally — but stamping owner_*
     // anyway keeps the on-disk job document complete for ops/audit.
     let (uid, home) = current_owner_identity();
-    let job = store
-        .submit(prompt, session_id, max_turns, uid, home)
-        .map_err(|e| e.to_string())?;
+    let job = if let Some(workspace) = workspace {
+        let owner_uid = uid.ok_or("task workspace requires a Unix owner identity")?;
+        let workspace = crate::agent::workspace::resolve(owner_uid, Some(&workspace))?;
+        let mut job = Job::new_pending(prompt, None, None, session_id, max_turns, uid, home);
+        job.workspace = Some(workspace.to_string_lossy().into_owned());
+        store.publish(job).map_err(|error| error.to_string())?
+    } else {
+        store
+            .submit(prompt, session_id, max_turns, uid, home)
+            .map_err(|error| error.to_string())?
+    };
     Ok(json!({
         "status": "submitted",
         "job_id": job.id,
@@ -3650,6 +3675,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             prompt: job.prompt.clone(),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
+            workspace: job.workspace.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.effective_max_turns(),
             requested_model: job.requested_model.clone(),
@@ -3709,6 +3735,7 @@ pub struct JobExecution {
     pub prompt: String,
     pub context: Option<String>,
     pub branch_context: Option<String>,
+    pub workspace: Option<String>,
     pub session_id: Option<String>,
     pub max_turns: Option<u32>,
     pub requested_model: Option<String>,
@@ -3839,6 +3866,7 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
         }
     };
 
+    let project_context = workspace_context(job.workspace.as_deref());
     let request = loop_::RuntimeRequest::streaming(
         provider,
         &cfg,
@@ -3849,6 +3877,7 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
     )
     .with_exposure(&exposure)
     .with_transient_context(job.context.as_deref())
+    .with_project_context(project_context.as_deref())
     .with_task_id(&job.id)
     .with_interrupt_scope(&job.id);
     let request = if job.use_memory {
@@ -3910,6 +3939,14 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
         },
         Err(e) => FinishOutcome::Error(e.to_string()),
     }
+}
+
+fn workspace_context(workspace: Option<&str>) -> Option<String> {
+    workspace.map(|workspace| {
+        format!(
+            "<PROJECT_CONTEXT>\ncwd: {workspace}\nThis broker-selected workspace resolves relative task paths but grants no filesystem capability.\n</PROJECT_CONTEXT>"
+        )
+    })
 }
 
 fn seed_branch_context(
