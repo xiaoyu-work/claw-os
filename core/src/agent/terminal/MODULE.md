@@ -39,6 +39,9 @@ audit.
 - Notification Inbox consumes only owner-scoped durable notification routes.
   Read, acknowledge, dismiss, channel and DND changes are explicit broker
   mutations; opening a notification is presentation only.
+- Activity views consume the shared owner-scoped Activity backend. Execution
+  results never complete a goal; completion and cancellation use explicit
+  confirmation and never imply task cancellation or effect rollback.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

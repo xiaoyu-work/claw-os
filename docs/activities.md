@@ -33,6 +33,14 @@ Run these commands in an installed Linux or WSL Claw OS environment with
 `clawd` available. Activity management does not require a configured model;
 starting Agent work requires the normal Agent setup and a non-root task owner.
 
+The full-screen `cos agent chat` TUI exposes the same backend through
+`/activities`, `/activity`, `/activity-create`, `/activity-run`,
+`/activity-pause`, `/activity-resume`, `/activity-complete`,
+`/activity-cancel`, and `/activity-attention`. Its detail panel is a
+presentation only. Completion and cancellation show their exact consequences
+before calling `activity.transition`; no TUI state can complete a goal,
+cancel an associated Job, or supply authority.
+
 ```bash
 cos activity create "Release v2" \
   --goal "Publish the project next Friday" \

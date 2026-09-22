@@ -31,6 +31,7 @@ ANSWER = "CLAW_TUI_PTY_COMPLETED_9F43"
 RUNNING = "CLAW_TUI_PTY_RUNNING_3A91"
 PENDING_APPROVAL_ID = "approval-center-pending"
 RECENT_APPROVAL_ID = "approval-center-recent"
+ACTIVITY_ID = "00000000-0000-4000-8000-000000000001"
 
 
 class FixtureBroker:
@@ -62,6 +63,9 @@ class FixtureBroker:
             "ntfy_server": "https://ntfy.sh",
             "ntfy_topic": None,
         }
+        self.activity_state = "active"
+        self.activity_completion_note = None
+        self.activity_task_id = "task-activity-fixture"
         self.cursor = 0
         self.requested_model = None
         self.session_id = SESSION_ID
@@ -166,6 +170,26 @@ class FixtureBroker:
                 "attempts": 1,
             }],
         }
+
+    def activity(self):
+        return {
+            "id": ACTIVITY_ID,
+            "owner_uid": os.geteuid(),
+            "title": "Fixture Activity",
+            "goal": "Complete the fixture goal",
+            "completion_criteria": "",
+            "boundaries": "",
+            "resources": [],
+            "state": self.activity_state,
+            "completion_note": self.activity_completion_note,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:01Z",
+        }
+
+    def activity_job(self):
+        value = self.history_job(self.activity_task_id, "pending")
+        value["activity_id"] = ACTIVITY_ID
+        return value
 
     def dispatch(self, method, params):
         if method == "daemon.status":
@@ -273,6 +297,67 @@ class FixtureBroker:
         if method == "notification.preferences.set":
                     self.notification_preferences = dict(params)
                     return self.notification_preferences
+        if method == "activity.create":
+                    if (
+                        params.get("title") != "Fixture Activity"
+                        or params.get("goal") != "Complete the fixture goal"
+                    ):
+                        raise AssertionError("Activity create changed its title or goal")
+                    self.activity_state = "active"
+                    self.activity_completion_note = None
+                    return self.activity()
+        if method == "activity.list":
+                    return {"schema": 1, "activities": [self.activity()]}
+        if method == "activity.get":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity get addressed another goal")
+                    return {
+                        "schema": 1,
+                        "activity": self.activity(),
+                        "jobs": [],
+                        "sessions": [],
+                        "job_limit": 100,
+                    }
+        if method == "activity.transition":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity transition addressed another goal")
+                    self.activity_state = params["state"]
+                    self.activity_completion_note = params.get("completion_note")
+                    return self.activity()
+        if method == "activity.run":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity run addressed another goal")
+                    return self.activity_job()
+        if method == "activity.attention":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity attention addressed another goal")
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "activity_state": self.activity_state,
+                        "limit": 100,
+                        "counts": {
+                            "queued": 1,
+                            "running": 0,
+                            "waiting": 0,
+                            "completed": 0,
+                            "failed": 0,
+                            "cancelled": 0,
+                            "indeterminate": 0,
+                            "pending_decisions": 0,
+                            "unavailable_decisions": 0,
+                            "unread_notifications": 0,
+                        },
+                        "decisions": [],
+                        "issues": [],
+                        "totals": {"decisions": 0, "issues": 0, "notifications": 0},
+                        "has_more": {
+                            "decisions": False,
+                            "issues": False,
+                            "notifications": False,
+                        },
+                        "notifications": [],
+                    }
                     for approval_id in params["ids"]
                 ]
             }
@@ -355,6 +440,7 @@ class FixtureBroker:
                     "confirmations",
                     "multiline",
                     "approval-center",
+                    "activity-lifecycle",
                     "notification-inbox",
                     "task-center",
                 ):
@@ -380,6 +466,7 @@ class FixtureBroker:
                 "confirmations",
                 "multiline",
                 "approval-center",
+                "activity-lifecycle",
                 "notification-inbox",
                 "task-center",
             ) or self.cancelled.is_set()
@@ -794,6 +881,146 @@ def run(cos, case, transcript, original_namespace, trace):
                         ),
                     )
                 os.write(master, b"\x1b")
+            if case == "activity-lifecycle":
+                    send_prompt(master, output, "/activities")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.list"
+                            for request in broker.requests
+                        ),
+                    )
+                    os.write(master, b"\r")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.get"
+                            for request in broker.requests
+                        ),
+                    )
+                    os.write(master, b"\x1b")
+                    send_prompt(
+                        master,
+                        output,
+                        "/activity-create Fixture Activity | Complete the fixture goal",
+                    )
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.create"
+                            for request in broker.requests
+                        )
+                        and sum(
+                            request["command"] == "activity.get"
+                            for request in broker.requests
+                        )
+                        >= 2,
+                    )
+                    os.write(master, b"p")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.transition"
+                            and request["params"].get("state") == "paused"
+                            for request in broker.requests
+                        ),
+                    )
+                    os.write(master, b"u")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.transition"
+                            and request["params"].get("state") == "active"
+                            for request in broker.requests
+                        ),
+                    )
+                    os.write(master, b"r")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.run"
+                            for request in broker.requests
+                        ),
+                    )
+                    os.write(master, b"\x1b")
+                    send_prompt(master, output, f"/activity {ACTIVITY_ID}")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: sum(
+                            request["command"] == "activity.get"
+                            for request in broker.requests
+                        )
+                        >= 2,
+                    )
+                    os.write(master, b"a")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.attention"
+                            for request in broker.requests
+                        ),
+                    )
+                    os.write(master, b"\x1b")
+                    send_prompt(
+                        master,
+                        output,
+                        f"/activity-complete {ACTIVITY_ID} | User confirmed completion",
+                    )
+                    time.sleep(0.2)
+                    os.write(master, b"y")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.transition"
+                            and request["params"].get("state") == "completed"
+                            and request["params"].get("completion_note")
+                            == "User confirmed completion"
+                            for request in broker.requests
+                        ),
+                    )
+                    send_prompt(master, output, f"/activity-resume {ACTIVITY_ID}")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: sum(
+                            request["command"] == "activity.transition"
+                            and request["params"].get("state") == "active"
+                            for request in broker.requests
+                        )
+                        >= 2,
+                    )
+                    send_prompt(master, output, f"/activity-cancel {ACTIVITY_ID}")
+                    time.sleep(0.2)
+                    os.write(master, b"y")
+                    read_terminal(
+                        master,
+                        output,
+                        time.monotonic() + 15,
+                        lambda _data: any(
+                            request["command"] == "activity.transition"
+                            and request["params"].get("state") == "cancelled"
+                            for request in broker.requests
+                        ),
+                    )
                 send_prompt(master, output, "/notify-settings")
                 read_terminal(
                     master,
@@ -940,6 +1167,7 @@ if __name__ == "__main__":
             "confirmations",
             "multiline",
             "approval-center",
+            "activity-lifecycle",
             "notification-inbox",
             "plain",
             "resume",

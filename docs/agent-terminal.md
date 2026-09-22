@@ -79,6 +79,9 @@ Controls:
   and `d` dismisses it. Opening a detail does not mutate durable state.
 - In notification settings, `w`, `e`, `n` toggle Web, desktop and ntfy
   delivery; `q` toggles all-day DND. Exact UTC windows use `/dnd`.
+- In an Activity detail, `r` runs the goal, `p` pauses future work, `u`
+  resumes or reopens, `c` prepares an explicit completion note, `x` stages
+  cancellation, and `a` opens the read-only attention view.
 
 Text entered while a task is active is queued locally and submitted after that
 task reaches a terminal state. Exiting does not silently cancel durable work.
@@ -110,6 +113,15 @@ The command set names Claw concepts only:
 /notify-channel <web|desktop|ntfy> <on|off>
 /notify-severity <web|desktop|ntfy> <info|warning|error|critical>
 /dnd <off|HH:MM-HH:MM>
+/activities [active|paused|completed|cancelled]
+/activity [activity-id]
+/activity-create <title> | <goal>
+/activity-run <activity-id> [prompt]
+/activity-pause <activity-id>
+/activity-resume <activity-id>
+/activity-complete <activity-id> | <confirmation-note>
+/activity-cancel <activity-id>
+/activity-attention <activity-id>
 /session
 /clear
 /cancel
@@ -156,6 +168,19 @@ toggles and `/notify-severity` preserve every unrelated preference.
 The full preference document is validated and stored by the existing
 Notification Service; the TUI does not own a parallel settings file.
 
+`/activities` opens the bounded owner-scoped Activity catalogue; `/activity`
+opens its goal, criteria, planning boundaries, inert references, recent tasks
+and associated sessions. `/activity-create` creates a minimal title/goal record
+in the shared service. `/activity-run` publishes ordinary durable work and
+does not create a second Agent runtime.
+
+Pause blocks future admission without cancelling in-flight work. Resume also
+explicitly reopens completed or cancelled goals. Completion requires a
+nonempty user note and a separate confirmation panel; a successful task never
+completes the Activity. Cancellation ends the goal without claiming success
+and does not cancel tasks or undo admitted effects. `/activity-attention`
+renders the shared read-only counts, decisions, issues and notifications.
+
 ## Backend ownership
 
 ```text
@@ -164,6 +189,7 @@ Claw ratatui renderer
   -> durable task submit/stream/list/get/cancel/retry routes
   -> protected pending/recent approval reads and root-owned decisions
   -> owner-scoped notification state and delivery preferences
+  -> shared Activity lifecycle, execution and attention routes
   -> claw-agentd and the shared guarded Agent runtime
 ```
 
@@ -190,7 +216,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations task-center approval-center notification-inbox multiline resume plain; do
+for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -210,4 +236,5 @@ cancels one exact running task and retries one exact terminal task. The
 approval-center scenario browses pending and recent owner-scoped decisions and
 keeps historical records read-only. The notification scenario performs exact
 read, acknowledge and dismiss mutations and updates durable delivery/DND
-preferences without a desktop dependency.
+preferences without a desktop dependency. The Activity scenario exercises the
+shared list/detail/create/run/pause/reopen/complete/cancel/attention lifecycle.

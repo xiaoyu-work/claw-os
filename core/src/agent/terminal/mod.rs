@@ -171,6 +171,9 @@ enum InputAction {
     ApprovalReview(String, ReviewDecision),
     MutateNotification(String, NotificationMutation),
     NotificationPreference(NotificationPreferenceAction),
+    ActivityRun(String),
+    ActivityTransition(String, &'static str),
+    ActivityAttention(String),
     Quit,
 }
 
@@ -217,6 +220,8 @@ async fn run_with_backend(
                             && app.approval_detail.is_none()
                             && app.notification_detail.is_none()
                             && app.notification_preferences.is_none()
+                            && app.activity_detail.is_none()
+                            && app.activity_attention.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -382,6 +387,65 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             KeyCode::Char('d') | KeyCode::Char('D') if state != "dismissed" => {
                 InputAction::MutateNotification(id, NotificationMutation::Dismiss)
             }
+            _ => InputAction::None,
+        };
+    }
+    if app.activity_attention.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_activity_attention();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.activity_attention_scroll = app.activity_attention_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.activity_attention_scroll = app.activity_attention_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if let Some(detail) = &app.activity_detail {
+        let id = detail.activity.id.clone();
+        let state = detail.activity.state.clone();
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_activity_detail();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.activity_detail_scroll = app.activity_detail_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.activity_detail_scroll = app.activity_detail_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') if state == "active" => {
+                InputAction::ActivityRun(id)
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') if state == "active" => {
+                InputAction::ActivityTransition(id, "paused")
+            }
+            KeyCode::Char('u') | KeyCode::Char('U') if state != "active" => {
+                InputAction::ActivityTransition(id, "active")
+            }
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if matches!(state.as_str(), "active" | "paused") =>
+            {
+                app.close_activity_detail();
+                app.prefill_input(format!("/activity-complete {id} | "));
+                InputAction::None
+            }
+            KeyCode::Char('x') | KeyCode::Char('X')
+                if matches!(state.as_str(), "active" | "paused") =>
+            {
+                app.confirm_activity_cancel(id);
+                InputAction::None
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => InputAction::ActivityAttention(id),
             _ => InputAction::None,
         };
     }
@@ -608,6 +672,10 @@ async fn apply_input_action(
             PickerSelection::Notification(notification) => {
                 app.open_notification_detail(notification)
             }
+            PickerSelection::Activity(id) => match backend.get_activity(&id).await {
+                Ok(detail) => app.open_activity_detail(detail),
+                Err(error) => app.push_error(&error),
+            },
         },
         InputAction::Confirm(action) => {
             if let Err(error) = commands::confirm(app, backend, action).await {
@@ -688,6 +756,33 @@ async fn apply_input_action(
                         preferences.dnd_end_minute_utc = Some(0);
                     }
                 }
+                InputAction::ActivityRun(id) => match backend.run_activity(&id, None).await {
+                    Ok(job) => {
+                        let task_id = job.id.clone();
+                        app.open_task_detail(job);
+                        app.push_system(&format!(
+                            "Activity work was submitted as durable task {task_id}."
+                        ));
+                    }
+                    Err(error) => app.push_error(&error),
+                },
+                InputAction::ActivityTransition(id, state) => {
+                    match backend.transition_activity(&id, state, None).await {
+                        Ok(activity) => {
+                            app.update_activity(activity);
+                            app.push_system(if state == "paused" {
+                                "Activity paused. In-flight tasks were not cancelled."
+                            } else {
+                                "Activity is active."
+                            });
+                        }
+                        Err(error) => app.push_error(&error),
+                    }
+                }
+                InputAction::ActivityAttention(id) => match backend.activity_attention(&id).await {
+                    Ok(attention) => app.open_activity_attention(attention),
+                    Err(error) => app.push_error(&error),
+                },
             }
             match backend.set_notification_preferences(&preferences).await {
                 Ok(preferences) => app.open_notification_preferences(preferences),

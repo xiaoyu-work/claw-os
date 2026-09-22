@@ -32,7 +32,222 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
     render_notification_preferences(frame, area, app);
+    render_activity_detail(frame, area, app);
+    render_activity_attention(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_activity_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(detail) = &app.activity_detail else {
+        return;
+    };
+    let activity = &detail.activity;
+    let width = screen.width.saturating_sub(4).min(100);
+    let height = screen.height.saturating_sub(4).min(32);
+    if width < 40 || height < 14 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let state_color = match activity.state.as_str() {
+        "active" => Color::Green,
+        "paused" => Color::Yellow,
+        "completed" => Color::Blue,
+        "cancelled" => Color::DarkGray,
+        _ => Color::Red,
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                activity.state.to_uppercase(),
+                Style::default()
+                    .fg(state_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(activity.id.clone(), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::raw(format!(
+            "created: {} | updated: {}",
+            activity.created_at, activity.updated_at
+        )),
+        Line::raw(""),
+        Line::styled(
+            activity.title.clone(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            "Goal",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    lines.extend(markdown_lines(&activity.goal));
+    if !activity.completion_criteria.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Completion criteria",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(markdown_lines(&activity.completion_criteria));
+    }
+    if !activity.boundaries.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Planning boundaries (not authority)",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(markdown_lines(&activity.boundaries));
+    }
+    if !activity.resources.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Inert resources",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(
+            activity
+                .resources
+                .iter()
+                .map(|resource| Line::raw(format!("- {}: {}", resource.label, resource.reference))),
+        );
+    }
+    if let Some(note) = &activity.completion_note {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Completion confirmation",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.extend(markdown_lines(note));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        format!("Recent tasks ({})", detail.jobs.len()),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    if detail.jobs.is_empty() {
+        lines.push(Line::styled(
+            "No associated work.",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    for job in &detail.jobs {
+        lines.push(Line::raw(format!(
+            "- {} {} | {}{}",
+            job.status.to_uppercase(),
+            job.title,
+            job.id,
+            if job.waiting_on > 0 {
+                format!(" | waiting:{}", job.waiting_on)
+            } else {
+                String::new()
+            }
+        )));
+        if let Some(error) = &job.error {
+            lines.push(Line::styled(
+                format!("  error: {error}"),
+                Style::default().fg(Color::Red),
+            ));
+        } else if let Some(response) = &job.response {
+            lines.push(Line::styled(
+                format!("  result: {response}"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+    if !detail.sessions.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::raw(format!(
+            "sessions: {}",
+            detail.sessions.join(", ")
+        )));
+    }
+    let actions = match activity.state.as_str() {
+        "active" => "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention",
+        "paused" => "[u] Resume  [c] Complete  [x] Cancel  [a] Attention",
+        "completed" | "cancelled" => "[u] Reopen  [a] Attention",
+        _ => "[a] Attention",
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.activity_detail_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(state_color))
+                    .title(" Activity ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(actions, Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
+}
+
+fn render_activity_attention(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(attention) = &app.activity_attention else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(100);
+    let height = screen.height.saturating_sub(4).min(32);
+    if width < 40 || height < 12 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let lines = attention
+        .presentation
+        .lines()
+        .map(|line| Line::raw(line.to_string()))
+        .collect::<Vec<_>>();
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.activity_attention_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Magenta))
+                    .title(format!(
+                        " Activity attention - {} ({}) ",
+                        attention.activity_id, attention.activity_state
+                    ))
+                    .title_bottom(Line::styled(
+                        "Up/Down scroll  Esc close",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
 }
 
 fn render_notification_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -685,6 +900,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         PickerKind::Tasks => format!(" {} - task ", picker.title),
         PickerKind::Approvals => format!(" {} - approval ", picker.title),
         PickerKind::Notifications => format!(" {} - notification ", picker.title),
+        PickerKind::Activities => format!(" {} - Activity ", picker.title),
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

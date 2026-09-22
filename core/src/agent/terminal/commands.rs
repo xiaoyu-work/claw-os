@@ -29,6 +29,15 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/notify-channel", "enable or disable a delivery channel"),
     ("/notify-severity", "set a channel minimum severity"),
     ("/dnd", "set or disable the UTC DND window"),
+    ("/activities", "browse persistent Activity goals"),
+    ("/activity", "open an Activity by id"),
+    ("/activity-create", "create TITLE | GOAL"),
+    ("/activity-run", "run an active Activity"),
+    ("/activity-pause", "pause future Activity work"),
+    ("/activity-resume", "resume or reopen an Activity"),
+    ("/activity-complete", "complete ID | CONFIRMATION NOTE"),
+    ("/activity-cancel", "cancel an Activity goal"),
+    ("/activity-attention", "show Activity attention"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -59,6 +68,15 @@ pub(super) enum Command {
     NotifyChannel(NotificationChannel, bool),
     NotifySeverity(NotificationChannel, String),
     Dnd(Option<(u16, u16)>),
+    Activities(Option<String>),
+    Activity(String),
+    ActivityCreate { title: String, goal: String },
+    ActivityRun { id: String, prompt: Option<String> },
+    ActivityPause(String),
+    ActivityResume(String),
+    ActivityComplete { id: String, note: String },
+    ActivityCancel(String),
+    ActivityAttention(String),
     Session,
     Clear,
     Cancel,
@@ -121,6 +139,27 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "dnd" => parse_dnd(rest)
             .map(Command::Dnd)
             .unwrap_or_else(|| Command::Unknown(value.to_string())),
+        "activities" if rest.is_empty() => Command::Activities(None),
+        "activities" if matches!(rest, "active" | "paused" | "completed" | "cancelled") => {
+            Command::Activities(Some(rest.to_string()))
+        }
+        "activity" if rest.is_empty() => Command::Activities(None),
+        "activity" => Command::Activity(rest.to_string()),
+        "activity-create" => parse_required_pair(rest)
+            .map(|(title, goal)| Command::ActivityCreate { title, goal })
+            .unwrap_or_else(|| Command::Unknown(value.to_string())),
+        "activity-run" => parse_id_and_optional_text(rest)
+            .map(|(id, prompt)| Command::ActivityRun { id, prompt })
+            .unwrap_or_else(|| Command::Unknown(value.to_string())),
+        "activity-pause" if !rest.is_empty() => Command::ActivityPause(rest.to_string()),
+        "activity-resume" | "activity-reopen" if !rest.is_empty() => {
+            Command::ActivityResume(rest.to_string())
+        }
+        "activity-complete" => parse_required_pair(rest)
+            .map(|(id, note)| Command::ActivityComplete { id, note })
+            .unwrap_or_else(|| Command::Unknown(value.to_string())),
+        "activity-cancel" if !rest.is_empty() => Command::ActivityCancel(rest.to_string()),
+        "activity-attention" if !rest.is_empty() => Command::ActivityAttention(rest.to_string()),
         "session" => Command::Session,
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
@@ -164,6 +203,15 @@ fn takes_argument(command: &str) -> bool {
             | "/notify-channel"
             | "/notify-severity"
             | "/dnd"
+            | "/activities"
+            | "/activity"
+            | "/activity-create"
+            | "/activity-run"
+            | "/activity-pause"
+            | "/activity-resume"
+            | "/activity-complete"
+            | "/activity-cancel"
+            | "/activity-attention"
     )
 }
 
@@ -186,6 +234,15 @@ pub(super) async fn execute(
                 | Command::NotifyChannel(_, _)
                 | Command::NotifySeverity(_, _)
                 | Command::Dnd(_)
+                | Command::Activities(_)
+                | Command::Activity(_)
+                | Command::ActivityCreate { .. }
+                | Command::ActivityRun { .. }
+                | Command::ActivityPause(_)
+                | Command::ActivityResume(_)
+                | Command::ActivityComplete { .. }
+                | Command::ActivityCancel(_)
+                | Command::ActivityAttention(_)
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -202,6 +259,10 @@ pub(super) async fn execute(
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
              /dnd off|HH:MM-HH:MM  /session\n\
+             /activities [STATE]  /activity ID  /activity-create TITLE | GOAL\n\
+             /activity-run ID [PROMPT]  /activity-pause ID  /activity-resume ID\n\
+             /activity-complete ID | NOTE  /activity-cancel ID\n\
+             /activity-attention ID\n\
              /clear  /cancel  /quit\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
@@ -362,6 +423,51 @@ pub(super) async fn execute(
             let preferences = backend.set_notification_preferences(&preferences).await?;
             app.open_notification_preferences(preferences);
         }
+        Command::Activities(state) => {
+            let activities = backend.list_activities(state.as_deref()).await?;
+            if activities.is_empty() {
+                app.push_system("No Activities match this view.");
+            } else {
+                app.open_activity_picker(activities);
+            }
+        }
+        Command::Activity(id) => {
+            let detail = backend.get_activity(&id).await?;
+            app.open_activity_detail(detail);
+        }
+        Command::ActivityCreate { title, goal } => {
+            let activity = backend.create_activity(&title, &goal).await?;
+            let detail = backend.get_activity(&activity.id).await?;
+            app.open_activity_detail(detail);
+        }
+        Command::ActivityRun { id, prompt } => {
+            let job = backend.run_activity(&id, prompt.as_deref()).await?;
+            let task_id = job.id.clone();
+            app.open_task_detail(job);
+            app.push_system(&format!(
+                "Activity work was submitted as durable task {task_id}."
+            ));
+        }
+        Command::ActivityPause(id) => {
+            let activity = backend.transition_activity(&id, "paused", None).await?;
+            app.update_activity(activity);
+            app.push_system("Activity paused. In-flight tasks were not cancelled.");
+        }
+        Command::ActivityResume(id) => {
+            let activity = backend.transition_activity(&id, "active", None).await?;
+            app.update_activity(activity);
+            app.push_system("Activity is active.");
+        }
+        Command::ActivityComplete { id, note } => {
+            app.confirm_activity_complete(id, note);
+        }
+        Command::ActivityCancel(id) => {
+            app.confirm_activity_cancel(id);
+        }
+        Command::ActivityAttention(id) => {
+            let attention = backend.activity_attention(&id).await?;
+            app.open_activity_attention(attention);
+        }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}",
             app.conversation.id, app.selected_model, app.info.provider
@@ -437,6 +543,27 @@ fn parse_utc_minute(value: &str) -> Option<u16> {
     (hour < 24 && minute < 60).then_some(hour * 60 + minute)
 }
 
+fn parse_required_pair(value: &str) -> Option<(String, String)> {
+    let (left, right) = value.split_once('|')?;
+    let left = left.trim();
+    let right = right.trim();
+    (!left.is_empty() && !right.is_empty()).then(|| (left.to_string(), right.to_string()))
+}
+
+fn parse_id_and_optional_text(value: &str) -> Option<(String, Option<String>)> {
+    let mut parts = value.splitn(2, char::is_whitespace);
+    let id = parts.next()?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let prompt = parts
+        .next()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(str::to_string);
+    Some((id.to_string(), prompt))
+}
+
 pub(super) async fn confirm(
     app: &mut App,
     backend: Arc<dyn Backend>,
@@ -458,6 +585,20 @@ pub(super) async fn confirm(
                 .await?;
             app.replace_conversation(conversation);
             app.push_system("Conversation replay was rewound; external effects were not undone.");
+        }
+        ConfirmationAction::ActivityComplete { id, note } => {
+            let activity = backend
+                .transition_activity(&id, "completed", Some(&note))
+                .await?;
+            app.update_activity(activity);
+            app.push_system("Activity explicitly completed with the supplied confirmation note.");
+        }
+        ConfirmationAction::ActivityCancel { id } => {
+            let activity = backend.transition_activity(&id, "cancelled", None).await?;
+            app.update_activity(activity);
+            app.push_system(
+                "Activity cancelled. In-flight tasks and admitted effects were not changed.",
+            );
         }
     }
     Ok(())

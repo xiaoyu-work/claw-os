@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::terminal::backend::{
-    ApprovalRequest, BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job,
-    NotificationAction, NotificationDelivery, NotificationItem, NotificationPage,
-    NotificationPreferences, TaskSummary,
+    Activity, ActivityAttention, ActivityDetail, ActivityResource, ApprovalRequest, BackendInfo,
+    Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
+    NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -143,6 +143,27 @@ fn claw_commands_are_closed_and_semantic() {
         Some(Command::Dnd(Some((1_350, 375))))
     );
     assert_eq!(parse_command("/dnd off"), Some(Command::Dnd(None)));
+    assert_eq!(
+        parse_command("/activity-create Release v2 | Publish next Friday"),
+        Some(Command::ActivityCreate {
+            title: "Release v2".into(),
+            goal: "Publish next Friday".into(),
+        })
+    );
+    assert_eq!(
+        parse_command("/activity-run activity-1 Prepare a draft"),
+        Some(Command::ActivityRun {
+            id: "activity-1".into(),
+            prompt: Some("Prepare a draft".into()),
+        })
+    );
+    assert_eq!(
+        parse_command("/activity-complete activity-1 | User reviewed it"),
+        Some(Command::ActivityComplete {
+            id: "activity-1".into(),
+            note: "User reviewed it".into(),
+        })
+    );
     assert_eq!(parse_command("/resume"), Some(Command::Sessions));
     assert_eq!(
         parse_command("/rewind 0"),
@@ -702,4 +723,85 @@ fn notification_inbox_uses_durable_mutations_and_preferences() {
         ),
         InputAction::NotificationPreference(NotificationPreferenceAction::ToggleWeb)
     );
+}
+
+#[test]
+fn activity_detail_preserves_explicit_lifecycle_and_completion() {
+    let activity = Activity {
+        id: "00000000-0000-4000-8000-000000000001".into(),
+        title: "Release v2".into(),
+        goal: "Publish the reviewed release".into(),
+        completion_criteria: "The user confirms publication".into(),
+        boundaries: "Ask before publishing".into(),
+        resources: vec![ActivityResource {
+            label: "Draft".into(),
+            reference: "app://files/document/release".into(),
+        }],
+        state: "active".into(),
+        completion_note: None,
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+    };
+    let mut app = app();
+    app.open_activity_detail(ActivityDetail {
+        activity: activity.clone(),
+        jobs: Vec::new(),
+        sessions: Vec::new(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('r'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::ActivityRun(activity.id.clone())
+    );
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('p'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::ActivityTransition(activity.id.clone(), "paused")
+    );
+
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(app.input, format!("/activity-complete {} | ", activity.id));
+    app.confirm_activity_complete(activity.id.clone(), "Reviewed by the user".into());
+    assert!(matches!(
+        app.take_confirmation(),
+        Some(ConfirmationAction::ActivityComplete { id, note })
+            if id == activity.id && note == "Reviewed by the user"
+    ));
+
+    app.open_activity_attention(ActivityAttention {
+        activity_id: activity.id,
+        activity_state: "active".into(),
+        presentation: "{\"counts\":{\"running\":1}}".into(),
+    });
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Activity attention"));
+    assert!(output.contains("running"));
 }

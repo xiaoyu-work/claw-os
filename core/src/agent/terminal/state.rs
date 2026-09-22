@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::backend::{
-    ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job, NotificationItem,
-    NotificationPage, NotificationPreferences, TaskSummary,
+    Activity, ActivityAttention, ActivityDetail, ApprovalRequest, BackendInfo, Conversation,
+    ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
+    TaskSummary,
 };
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
@@ -57,6 +58,7 @@ pub(super) enum PickerKind {
     Tasks,
     Approvals,
     Notifications,
+    Activities,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +84,7 @@ pub(super) enum PickerSelection {
     Task(String),
     Approval(ApprovalRequest),
     Notification(NotificationItem),
+    Activity(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +99,8 @@ pub(super) enum NotificationPreferenceAction {
 pub(super) enum ConfirmationAction {
     Archive,
     Rewind(u32),
+    ActivityComplete { id: String, note: String },
+    ActivityCancel { id: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -130,6 +135,10 @@ pub(super) struct App {
     pub notification_detail_scroll: u16,
     pub notification_preferences: Option<NotificationPreferences>,
     pub notification_preferences_scroll: u16,
+    pub activity_detail: Option<ActivityDetail>,
+    pub activity_detail_scroll: u16,
+    pub activity_attention: Option<ActivityAttention>,
+    pub activity_attention_scroll: u16,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -174,6 +183,10 @@ impl App {
             notification_detail_scroll: 0,
             notification_preferences: None,
             notification_preferences_scroll: 0,
+            activity_detail: None,
+            activity_detail_scroll: 0,
+            activity_attention: None,
+            activity_attention_scroll: 0,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -217,6 +230,10 @@ impl App {
         self.notification_preferences = None;
         self.notification_preferences_scroll = 0;
         self.notification_catalog.clear();
+        self.activity_detail = None;
+        self.activity_detail_scroll = 0;
+        self.activity_attention = None;
+        self.activity_attention_scroll = 0;
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -394,6 +411,8 @@ impl App {
             self.approval_detail = None;
             self.notification_detail = None;
             self.notification_preferences = None;
+            self.activity_detail = None;
+            self.activity_attention = None;
         }
     }
 
@@ -696,6 +715,11 @@ impl App {
             .as_deref()
             .map(|value| bounded_clean_text(value, 8_192));
         self.picker = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
         self.task_detail = Some(job);
         self.task_detail_scroll = 0;
     }
@@ -757,6 +781,10 @@ impl App {
             .map(|value| bounded_clean_text(value, 2_048));
         self.picker = None;
         self.task_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
         self.approval_detail = Some(approval);
         self.approval_detail_scroll = 0;
     }
@@ -821,6 +849,8 @@ impl App {
         self.task_detail = None;
         self.approval_detail = None;
         self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
         self.notification_detail = Some(notification);
         self.notification_detail_scroll = 0;
     }
@@ -835,6 +865,8 @@ impl App {
         self.task_detail = None;
         self.approval_detail = None;
         self.notification_detail = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
         self.notification_preferences = Some(preferences);
         self.notification_preferences_scroll = 0;
     }
@@ -842,6 +874,114 @@ impl App {
     pub fn close_notification_preferences(&mut self) {
         self.notification_preferences = None;
         self.notification_preferences_scroll = 0;
+    }
+
+    pub fn open_activity_picker(&mut self, activities: Vec<Activity>) {
+        self.activity_detail = None;
+        self.activity_attention = None;
+        self.picker = Some(Picker {
+            kind: PickerKind::Activities,
+            title: "Activities",
+            items: activities
+                .into_iter()
+                .map(|activity| PickerItem {
+                    label: format!(
+                        "{} {}",
+                        activity.state.to_uppercase(),
+                        bounded_clean_text(&activity.title, 120).replace('\n', " ")
+                    ),
+                    detail: format!(
+                        "{} | {}",
+                        bounded_clean_text(&activity.goal, 160).replace('\n', " "),
+                        activity.updated_at
+                    ),
+                    value: activity.id,
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn open_activity_detail(&mut self, mut detail: ActivityDetail) {
+        sanitize_activity(&mut detail.activity);
+        for job in &mut detail.jobs {
+            job.title = bounded_clean_text(&job.title, 512).replace('\n', " ");
+            job.response = job
+                .response
+                .as_deref()
+                .map(|value| bounded_clean_text(value, 4_096));
+            job.error = job
+                .error
+                .as_deref()
+                .map(|value| bounded_clean_text(value, 2_048));
+        }
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_attention = None;
+        self.activity_detail = Some(detail);
+        self.activity_detail_scroll = 0;
+    }
+
+    pub fn update_activity(&mut self, mut activity: Activity) {
+        sanitize_activity(&mut activity);
+        if let Some(detail) = &mut self.activity_detail {
+            if detail.activity.id == activity.id {
+                detail.activity = activity;
+            }
+        }
+    }
+
+    pub fn close_activity_detail(&mut self) {
+        self.activity_detail = None;
+        self.activity_detail_scroll = 0;
+    }
+
+    pub fn open_activity_attention(&mut self, mut attention: ActivityAttention) {
+        attention.presentation = bounded_clean_text(&attention.presentation, 256 * 1024);
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = Some(attention);
+        self.activity_attention_scroll = 0;
+    }
+
+    pub fn close_activity_attention(&mut self) {
+        self.activity_attention = None;
+        self.activity_attention_scroll = 0;
+    }
+
+    pub fn confirm_activity_complete(&mut self, id: String, note: String) {
+        self.confirmation = Some(Confirmation {
+            title: "Complete Activity goal?".into(),
+            body: format!(
+                "This explicitly records goal completion with note: {}. A successful Job alone never proves completion, and admitted effects are not changed.",
+                bounded_clean_text(&note, 512).replace('\n', " ")
+            ),
+            confirm_label: "Complete Activity".into(),
+            action: ConfirmationAction::ActivityComplete { id, note },
+        });
+    }
+
+    pub fn confirm_activity_cancel(&mut self, id: String) {
+        self.confirmation = Some(Confirmation {
+            title: "Cancel Activity goal?".into(),
+            body: "This ends the goal without claiming success. It does not cancel an in-flight task or undo admitted effects.".into(),
+            confirm_label: "Cancel Activity".into(),
+            action: ConfirmationAction::ActivityCancel { id },
+        });
+    }
+
+    pub fn prefill_input(&mut self, value: String) {
+        self.input = value;
+        self.cursor = self.input.chars().count();
+        self.command_selection = 0;
     }
 
     pub fn picker_insert(&mut self, value: char) {
@@ -942,6 +1082,7 @@ impl App {
             PickerKind::Notifications => {
                 PickerSelection::Notification(self.notification_catalog.get(&item.value)?.clone())
             }
+            PickerKind::Activities => PickerSelection::Activity(item.value.clone()),
         })
     }
 
@@ -1002,6 +1143,21 @@ fn bounded_clean_text(value: &str, max_chars: usize) -> String {
             "{}\n[terminal view truncated]",
             value.chars().take(max_chars).collect::<String>()
         )
+    }
+}
+
+fn sanitize_activity(activity: &mut Activity) {
+    activity.title = bounded_clean_text(&activity.title, 512).replace('\n', " ");
+    activity.goal = bounded_clean_text(&activity.goal, 16_384);
+    activity.completion_criteria = bounded_clean_text(&activity.completion_criteria, 8_192);
+    activity.boundaries = bounded_clean_text(&activity.boundaries, 8_192);
+    activity.completion_note = activity
+        .completion_note
+        .as_deref()
+        .map(|value| bounded_clean_text(value, 8_192));
+    for resource in &mut activity.resources {
+        resource.label = bounded_clean_text(&resource.label, 512).replace('\n', " ");
+        resource.reference = bounded_clean_text(&resource.reference, 4_096).replace('\n', " ");
     }
 }
 

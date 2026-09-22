@@ -149,6 +149,53 @@ pub(super) enum NotificationMutation {
     Dismiss,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityResource {
+    pub label: String,
+    pub reference: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Activity {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    pub completion_criteria: String,
+    pub boundaries: String,
+    pub resources: Vec<ActivityResource>,
+    pub state: String,
+    pub completion_note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityJob {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub session_id: Option<String>,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+    pub response: Option<String>,
+    pub error: Option<String>,
+    pub waiting_on: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityDetail {
+    pub activity: Activity,
+    pub jobs: Vec<ActivityJob>,
+    pub sessions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityAttention {
+    pub activity_id: String,
+    pub activity_state: String,
+    pub presentation: String,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct StreamFrame {
     pub cursor: u64,
@@ -226,6 +273,17 @@ pub(super) trait Backend: Send + Sync {
         &self,
         preferences: &NotificationPreferences,
     ) -> Result<NotificationPreferences, String>;
+    async fn list_activities(&self, state: Option<&str>) -> Result<Vec<Activity>, String>;
+    async fn get_activity(&self, id: &str) -> Result<ActivityDetail, String>;
+    async fn create_activity(&self, title: &str, goal: &str) -> Result<Activity, String>;
+    async fn transition_activity(
+        &self,
+        id: &str,
+        state: &str,
+        completion_note: Option<&str>,
+    ) -> Result<Activity, String>;
+    async fn run_activity(&self, id: &str, prompt: Option<&str>) -> Result<Job, String>;
+    async fn activity_attention(&self, id: &str) -> Result<ActivityAttention, String>;
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
@@ -534,6 +592,131 @@ impl Backend for BrokerBackend {
             )
             .await?;
         parse_notification_preferences(&value)
+    }
+
+    async fn list_activities(&self, state: Option<&str>) -> Result<Vec<Activity>, String> {
+        let mut params = json!({ "limit": 100 });
+        if let Some(state) = state {
+            params["state"] = json!(state);
+        }
+        let value = self.call(Command::ActivityList, params).await?;
+        let activities = value
+            .get("activities")
+            .and_then(Value::as_array)
+            .ok_or("Claw Activity list omitted activities")?;
+        if activities.len() > 100 {
+            return Err("Claw Activity list exceeded its terminal bound".into());
+        }
+        activities.iter().map(parse_activity).collect()
+    }
+
+    async fn get_activity(&self, id: &str) -> Result<ActivityDetail, String> {
+        validate_token(id, "Activity id")?;
+        let value = self
+            .call(Command::ActivityGet, json!({ "id": id, "limit": 100 }))
+            .await?;
+        let activity = parse_activity(
+            value
+                .get("activity")
+                .ok_or("Claw Activity detail omitted activity")?,
+        )?;
+        if activity.id != id {
+            return Err("Claw returned a different Activity".into());
+        }
+        let jobs = value
+            .get("jobs")
+            .and_then(Value::as_array)
+            .ok_or("Claw Activity detail omitted jobs")?;
+        let sessions = value
+            .get("sessions")
+            .and_then(Value::as_array)
+            .ok_or("Claw Activity detail omitted sessions")?;
+        if jobs.len() > 100 || sessions.len() > 100 {
+            return Err("Claw Activity detail exceeded its terminal bound".into());
+        }
+        Ok(ActivityDetail {
+            activity,
+            jobs: jobs
+                .iter()
+                .map(parse_activity_job)
+                .collect::<Result<_, _>>()?,
+            sessions: sessions
+                .iter()
+                .map(|session| {
+                    session
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "Claw Activity session is not a string".to_string())
+                })
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    async fn create_activity(&self, title: &str, goal: &str) -> Result<Activity, String> {
+        parse_activity(
+            &self
+                .call(
+                    Command::ActivityCreate,
+                    json!({ "title": title, "goal": goal }),
+                )
+                .await?,
+        )
+    }
+
+    async fn transition_activity(
+        &self,
+        id: &str,
+        state: &str,
+        completion_note: Option<&str>,
+    ) -> Result<Activity, String> {
+        validate_token(id, "Activity id")?;
+        let mut params = json!({ "id": id, "state": state });
+        if let Some(note) = completion_note {
+            params["completion_note"] = json!(note);
+        }
+        let activity = parse_activity(&self.call(Command::ActivityTransition, params).await?)?;
+        if activity.id != id || activity.state != state {
+            return Err("Claw returned a mismatched Activity transition".into());
+        }
+        Ok(activity)
+    }
+
+    async fn run_activity(&self, id: &str, prompt: Option<&str>) -> Result<Job, String> {
+        validate_token(id, "Activity id")?;
+        let mut params = json!({ "id": id });
+        if let Some(prompt) = prompt {
+            params["prompt"] = json!(prompt);
+        }
+        let job = parse_job(self.call(Command::ActivityRun, params).await?)?;
+        if job.activity_id.as_deref() != Some(id) {
+            return Err("Claw returned a task for another Activity".into());
+        }
+        Ok(job)
+    }
+
+    async fn activity_attention(&self, id: &str) -> Result<ActivityAttention, String> {
+        validate_token(id, "Activity id")?;
+        let value = self
+            .call(
+                Command::ActivityAttention,
+                json!({ "id": id, "limit": 100 }),
+            )
+            .await?;
+        let activity_id = required_string(&value, "activity_id")?;
+        if activity_id != id {
+            return Err("Claw returned attention for another Activity".into());
+        }
+        let activity_state = required_string(&value, "activity_state")?;
+        let presentation = serde_json::to_string_pretty(&value)
+            .map_err(|_| "Claw Activity attention could not be rendered".to_string())?;
+        if presentation.len() > 512 * 1024 {
+            return Err("Claw Activity attention exceeded its terminal bound".into());
+        }
+        Ok(ActivityAttention {
+            activity_id,
+            activity_state,
+            presentation,
+        })
     }
 
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String> {
@@ -949,6 +1132,53 @@ fn parse_notification_preferences(value: &Value) -> Result<NotificationPreferenc
         retention_days: required_u16(value, "retention_days")?,
         ntfy_server: required_string(value, "ntfy_server")?,
         ntfy_topic: optional_string(value, "ntfy_topic"),
+    })
+}
+
+fn parse_activity(value: &Value) -> Result<Activity, String> {
+    let resources = value
+        .get("resources")
+        .and_then(Value::as_array)
+        .ok_or("Activity omitted resources")?
+        .iter()
+        .map(|resource| {
+            Ok(ActivityResource {
+                label: required_string(resource, "label")?,
+                reference: required_string(resource, "reference")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if resources.len() > 32 {
+        return Err("Activity resource list exceeded its terminal bound".into());
+    }
+    Ok(Activity {
+        id: required_string(value, "id")?,
+        title: required_string(value, "title")?,
+        goal: required_string(value, "goal")?,
+        completion_criteria: required_string(value, "completion_criteria")?,
+        boundaries: required_string(value, "boundaries")?,
+        resources,
+        state: required_string(value, "state")?,
+        completion_note: optional_string(value, "completion_note"),
+        created_at: required_string(value, "created_at")?,
+        updated_at: required_string(value, "updated_at")?,
+    })
+}
+
+fn parse_activity_job(value: &Value) -> Result<ActivityJob, String> {
+    Ok(ActivityJob {
+        id: required_string(value, "id")?,
+        title: required_string(value, "title")?,
+        status: required_string(value, "status")?,
+        session_id: optional_string(value, "session_id"),
+        created_at: required_string(value, "created_at")?,
+        finished_at: optional_string(value, "finished_at"),
+        response: optional_string(value, "response"),
+        error: optional_string(value, "error"),
+        waiting_on: value
+            .get("waiting_on")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
     })
 }
 
