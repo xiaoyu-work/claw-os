@@ -6,6 +6,8 @@ use tokio::sync::mpsc;
 use super::backend::{Backend, Job};
 use super::state::{App, MAX_PROMPT_BYTES};
 
+const MAX_QUEUED_TASKS: usize = 64;
+
 pub(super) enum RuntimeEvent {
     Record(Value),
     Finished(Job),
@@ -34,6 +36,7 @@ pub(super) async fn start_prompt(
             &prompt,
             &app.conversation.id,
             &workspace,
+            None,
             use_memory,
             max_turns,
             &app.selected_model,
@@ -62,6 +65,70 @@ pub(super) async fn start_prompt(
         }
         Err(error) => app.push_error(&error),
     }
+}
+
+pub(super) async fn queue_prompt(
+    app: &mut App,
+    backend: Arc<dyn Backend>,
+    use_memory: bool,
+    max_turns: Option<u32>,
+    prompt: String,
+) {
+    if prompt.len() > MAX_PROMPT_BYTES {
+        app.push_error("Prompt exceeds the 64 KiB terminal limit.");
+        return;
+    }
+    if app.queued_tasks.len() >= MAX_QUEUED_TASKS {
+        app.push_error("The terminal durable queue is limited to 64 tasks.");
+        return;
+    }
+    let predecessor = app
+        .queued_tasks
+        .back()
+        .map(|job| job.id.clone())
+        .or_else(|| app.active_task.clone());
+    let Some(predecessor) = predecessor else {
+        app.push_error("No active task is available to anchor queued work.");
+        return;
+    };
+    let workspace = app.selected_workspace.clone();
+    match backend
+        .submit(
+            &prompt,
+            &app.conversation.id,
+            &workspace,
+            Some(&predecessor),
+            use_memory,
+            max_turns,
+            &app.selected_model,
+        )
+        .await
+    {
+        Ok(job)
+            if job.session_id == app.conversation.id
+                && job.workspace.as_deref() == Some(workspace.as_str())
+                && job.after_task_id.as_deref() == Some(predecessor.as_str())
+                && job.requested_model.as_deref() == Some(app.selected_model.as_str())
+                && job.status == "pending" =>
+        {
+            app.queue_task(job);
+        }
+        Ok(job) => {
+            let _ = backend.cancel(&job.id).await;
+            app.push_error("Claw did not acknowledge the durable queue dependency.");
+        }
+        Err(error) => app.push_error(&error),
+    }
+}
+
+pub(super) fn attach_queued(
+    app: &mut App,
+    backend: Arc<dyn Backend>,
+    runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    job: Job,
+) {
+    app.begin_task(&job);
+    spawn(backend, runtime_tx, job);
 }
 
 fn spawn(backend: Arc<dyn Backend>, runtime_tx: mpsc::UnboundedSender<RuntimeEvent>, job: Job) {

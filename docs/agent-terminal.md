@@ -41,7 +41,7 @@ The UI has four stable regions:
    approval, system and error entries.
 3. A dynamically sized multiline composer with Unicode-safe editing, paste
    handling and prompt history.
-4. A status line with controls, queued-input count, scroll position and token
+4. A status line with controls, durable-queue count, scroll position and token
    usage.
 
 Working tasks show an animated status and elapsed time. Tool rows retain their
@@ -88,8 +88,12 @@ Controls:
 - In an Activity detail, `e` opens Evidence Center. There, `p` prepares an
   operation-preview command; a preview can return to evidence with `e`.
 
-Text entered while a task is active is queued locally and submitted after that
-task reaches a terminal state. Exiting does not silently cancel durable work.
+Text entered while a task is active is immediately persisted as a pending Job
+with `after_task_id` bound to the current durable tail. The scheduler does not
+claim it until that exact same-owner/conversation predecessor is terminal.
+Exiting does not cancel or lose queued work. The dependency carries no
+capability or durable attendance; normal live presence and approval rules are
+re-evaluated when each Job runs.
 
 ## Commands
 
@@ -169,7 +173,7 @@ relative-path context but grants no filesystem capability.
 The selection also applies to `/activity-run`; non-TUI Activity CLI callers
 can pass `--workspace PATH` through the same broker validation.
 
-Queued prompts retain the workspace selected when they were queued. The task
+Queued tasks retain the model and workspace selected when they were queued. The task
 stream records the broker workspace snapshot, and model-visible cwd context is
 labelled request-local ProjectContext so session/audit evidence can reconstruct
 it.
@@ -252,7 +256,7 @@ Claw ratatui renderer
 ```
 
 The renderer owns only transient display state, the current composer, local
-prompt history and queued text. `clawd` owns conversation identity and
+prompt history and bounded stream handles for queued Jobs. `clawd` owns conversation identity, queue order and
 mutation; `claw-agentd` owns model/tool execution; the existing capability,
 approval, audit and Activity boundaries remain authoritative.
 
@@ -274,7 +278,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -302,3 +306,5 @@ receipts, annotations and staged-plan projections, then verifies a metadata-only
 operation preview.
 The workspace scenario resolves a relative owner-home directory and verifies
 that the exact canonical path is retained by `task.submit`.
+The durable-queue scenario submits a follow-up while work is active, verifies
+the predecessor binding, and then attaches to the persisted successor stream.

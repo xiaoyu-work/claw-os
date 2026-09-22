@@ -131,7 +131,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 51] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,

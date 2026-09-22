@@ -198,6 +198,7 @@ fn job_view(job: &Job) -> Value {
         "status": job.status.as_str(),
         "session_id": job.session_id,
         "workspace": job.workspace,
+        "after_task_id": job.after_task_id,
         "created_at": job.created_at,
         "finished_at": job.finished_at,
         "response": job.response.as_deref().map(|text| preview(text, 4096)),

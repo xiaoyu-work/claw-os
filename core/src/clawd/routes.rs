@@ -867,6 +867,7 @@ routes! {
         body: body::TaskSubmit,
         audit: &[
             ("session_id", FieldRule::Token),
+            ("after_task_id", FieldRule::Token),
             ("activity_id", FieldRule::Token),
             ("max_turns", FieldRule::Count),
             ("model", FieldRule::Identifier),

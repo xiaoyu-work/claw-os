@@ -259,6 +259,45 @@ fn finished_job_with_stream(store: &Store) -> Job {
 }
 
 #[test]
+fn durable_queue_claims_a_task_only_after_its_predecessor_is_terminal() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let first = store
+        .submit("first".into(), None, None, Some(1000), None)
+        .unwrap();
+    let mut second = Job::new_pending(
+        "second".into(),
+        None,
+        None,
+        None,
+        None,
+        Some(1000),
+        None,
+    );
+    second.after_task_id = Some(first.id.clone());
+    let second = store.publish(second).unwrap();
+
+    let claimed = store.claim_one().unwrap().unwrap();
+    assert_eq!(claimed.id, first.id);
+    assert!(store.claim_one().unwrap().is_none());
+    commit_claimed(&store, &claimed);
+    store
+        .finish(
+            claimed,
+            FinishOutcome::Ok {
+                response: "done".into(),
+                turns_used: 1,
+                provider: "test".into(),
+                model: "test".into(),
+                evidence: Box::new(None),
+                fallback: Box::new(None),
+            },
+        )
+        .unwrap();
+    assert_eq!(store.claim_one().unwrap().unwrap().id, second.id);
+}
+
+#[test]
 fn tool_progress_round_trips_through_task_stream() {
     let root = fresh_root();
     let store = Store::with_root(root.path().to_path_buf()).unwrap();

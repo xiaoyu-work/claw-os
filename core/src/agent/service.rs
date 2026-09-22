@@ -10,7 +10,7 @@
 //!
 //! The protocol is intentionally tiny:
 //!
-//!   - `submit "<prompt>" [--session ID] [--activity ID] [--workspace PATH] [--max-turns N]`
+//!   - `submit "<prompt>" [--session ID] [--after-task ID] [--activity ID] [--workspace PATH] [--max-turns N]`
 //!     drops a `pending/<job_id>.json` and returns `{job_id, status}`.
 //!   - `list [--status pending|running|done|cancelled] [--activity ID] [--limit N]`
 //!     enumerates jobs across one or all status buckets.
@@ -162,6 +162,10 @@ pub struct Job {
     pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Optional durable predecessor. The scheduler may claim this Job only
+    /// after that exact same-owner/session Job reaches a terminal state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -297,6 +301,7 @@ impl Job {
             branch_context,
             workspace: None,
             session_id,
+            after_task_id: None,
             activity_id: None,
             execution_reservation: None,
             max_turns,
@@ -777,27 +782,62 @@ impl Store {
         } else {
             None
         };
-        if job.activity_id.is_some() {
-            if let Some(session_id) = job.session_id.as_deref() {
-                for status in [
-                    JobStatus::Pending,
-                    JobStatus::Running,
-                    JobStatus::WaitingApproval,
-                ] {
-                    if let Some(active) = self
-                        .list_bucket(status, None)?
+        let mut active_session_jobs = Vec::new();
+        if let Some(session_id) = job.session_id.as_deref() {
+            for status in [
+                JobStatus::Pending,
+                JobStatus::Running,
+                JobStatus::WaitingApproval,
+            ] {
+                active_session_jobs.extend(
+                    self.list_bucket(status, None)?
                         .into_iter()
-                        .find(|active| active.session_id.as_deref() == Some(session_id))
-                    {
-                        return Err(io::Error::new(
-                            ErrorKind::AlreadyExists,
-                            format!(
-                                "Activity session {session_id} already has active task {}",
-                                active.id
-                            ),
-                        ));
-                    }
-                }
+                        .filter(|active| active.session_id.as_deref() == Some(session_id)),
+                );
+            }
+        }
+        if let Some(predecessor_id) = job.after_task_id.as_deref() {
+            let referenced = active_session_jobs
+                .iter()
+                .filter_map(|active| active.after_task_id.as_deref())
+                .collect::<std::collections::HashSet<_>>();
+            let tails = active_session_jobs
+                .iter()
+                .filter(|active| !referenced.contains(active.id.as_str()))
+                .collect::<Vec<_>>();
+            let predecessor = if active_session_jobs.is_empty() {
+                self.locate(predecessor_id)?
+                    .map(|(_, predecessor)| predecessor)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            ErrorKind::NotFound,
+                            format!("queued predecessor task not found: {predecessor_id}"),
+                        )
+                    })?
+            } else if tails.len() == 1 && tails[0].id == predecessor_id {
+                tails[0].clone()
+            } else {
+                return Err(io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "queued task must extend the unique active conversation tail",
+                ));
+            };
+            if predecessor.owner_uid != job.owner_uid || predecessor.session_id != job.session_id {
+                return Err(io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "queued predecessor has a different owner or conversation",
+                ));
+            }
+        } else if job.activity_id.is_some() {
+            if let Some(active) = active_session_jobs.first() {
+                return Err(io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!(
+                        "Activity session {} already has active task {}",
+                        job.session_id.as_deref().unwrap_or_default(),
+                        active.id
+                    ),
+                ));
             }
         }
         if let (Some(activity_id), Some(owner_uid), Some(meta)) =
@@ -1037,6 +1077,37 @@ impl Store {
                     "pending queue record lacks current durable pre-execution proof; legacy or unsupported jobs are not replayed",
                 )?;
                 continue;
+            }
+            if let Some(predecessor_id) = job.after_task_id.clone() {
+                let predecessor = self.locate(&predecessor_id)?;
+                let Some((_, predecessor)) = predecessor else {
+                    self.fail_waiting_job(
+                        &src,
+                        &id,
+                        job,
+                        format!("queued predecessor task is unavailable: {predecessor_id}"),
+                        "clawd.task.queue-dependency-failed",
+                    )?;
+                    continue;
+                };
+                if predecessor.owner_uid != job.owner_uid
+                    || predecessor.session_id != job.session_id
+                {
+                    self.fail_waiting_job(
+                        &src,
+                        &id,
+                        job,
+                        "queued predecessor has a different owner or conversation".into(),
+                        "clawd.task.queue-dependency-failed",
+                    )?;
+                    continue;
+                }
+                if !matches!(
+                    predecessor.status,
+                    JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+                ) {
+                    continue;
+                }
             }
             let activity = match job.activity_id.as_deref() {
                 Some(activity_id) => {
@@ -2602,6 +2673,7 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.branch_context == right.branch_context
         && left.workspace == right.workspace
         && left.session_id == right.session_id
+        && left.after_task_id == right.after_task_id
         && left.max_turns == right.max_turns
         && left.use_memory == right.use_memory
         && left.created_at == right.created_at
@@ -3040,6 +3112,7 @@ fn job_to_summary(job: &Job) -> Value {
         "session_id": job.session_id,
         "activity_id": job.activity_id,
         "workspace": job.workspace,
+        "after_task_id": job.after_task_id,
         "status": job.status.as_str(),
         "schema_version": job.schema_version,
         "execution_phase": job.execution_phase.as_str(),
@@ -3082,7 +3155,7 @@ pub fn cmd(args: &[String]) -> Result<Value, String> {
 fn help_value() -> Value {
     json!({
         "subcommands": [
-            "submit  \"<prompt>\" [--session ID] [--activity ID] [--workspace PATH] [--max-turns N]",
+            "submit  \"<prompt>\" [--session ID] [--after-task ID] [--activity ID] [--workspace PATH] [--max-turns N]",
             "list    [--status pending|running|waiting_approval|done|cancelled] [--activity ID] [--limit N]",
             "status  [<job_id>]",
             "result  <job_id> [--wait-secs N]",
@@ -3099,6 +3172,7 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
     let mut session_id: Option<String> = None;
     let mut max_turns: Option<u32> = None;
     let mut workspace: Option<String> = None;
+    let mut after_task_id: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -3121,6 +3195,15 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
                 );
                 i += 2;
             }
+            "--after-task" => {
+                after_task_id = Some(
+                    args.get(i + 1)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or("--after-task needs a non-empty value")?
+                        .clone(),
+                );
+                i += 2;
+            }
             s if s.starts_with("--") => return Err(format!("unknown flag: {s}")),
             _ => {
                 if prompt.is_none() {
@@ -3134,18 +3217,35 @@ fn cmd_submit(args: &[String]) -> Result<Value, String> {
     }
     let prompt = prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--workspace PATH] [--max-turns N]")?;
+        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--after-task ID] [--workspace PATH] [--max-turns N]")?;
     let store = Store::open_default().map_err(|e| e.to_string())?;
     // `cos agent service submit` runs in the user's own process, so
     // the worker (which is also in this process in single-shot mode)
     // will load that user's config naturally — but stamping owner_*
     // anyway keeps the on-disk job document complete for ops/audit.
     let (uid, home) = current_owner_identity();
-    let job = if let Some(workspace) = workspace {
-        let owner_uid = uid.ok_or("task workspace requires a Unix owner identity")?;
-        let workspace = crate::agent::workspace::resolve(owner_uid, Some(&workspace))?;
+    let job = if workspace.is_some() || after_task_id.is_some() {
+        let owner_uid = uid.ok_or("task workspace or dependency requires a Unix owner identity")?;
+        if let Some(predecessor_id) = after_task_id.as_deref() {
+            let expected_session = session_id
+                .as_deref()
+                .ok_or("--after-task requires --session")?;
+            let predecessor = store
+                .locate_for_owner(predecessor_id, Some(owner_uid))
+                .map_err(|error| error.to_string())?
+                .map(|(_, job)| job)
+                .ok_or_else(|| format!("queued predecessor task not found: {predecessor_id}"))?;
+            if predecessor.session_id.as_deref() != Some(expected_session) {
+                return Err("queued predecessor belongs to another conversation".into());
+            }
+        }
         let mut job = Job::new_pending(prompt, None, None, session_id, max_turns, uid, home);
-        job.workspace = Some(workspace.to_string_lossy().into_owned());
+        job.workspace = workspace
+            .as_deref()
+            .map(|workspace| crate::agent::workspace::resolve(owner_uid, Some(workspace)))
+            .transpose()?
+            .map(|workspace| workspace.to_string_lossy().into_owned());
+        job.after_task_id = after_task_id;
         store.publish(job).map_err(|error| error.to_string())?
     } else {
         store

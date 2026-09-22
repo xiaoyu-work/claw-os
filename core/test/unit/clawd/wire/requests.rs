@@ -126,6 +126,25 @@ fn task_workspace_wire_is_optional_bounded_and_carries_no_authority() {
 }
 
 #[test]
+fn durable_queue_predecessor_is_a_bounded_task_identity_only() {
+    let parsed: TaskSubmit = serde_json::from_value(json!({
+        "prompt": "follow up",
+        "session_id": "session-1",
+        "after_task_id": "task-previous",
+    }))
+    .unwrap();
+    assert_eq!(
+        parsed.after_task_id.unwrap().as_str(),
+        "task-previous"
+    );
+    assert!(serde_json::from_value::<TaskSubmit>(json!({
+        "prompt": "follow up",
+        "after_task_id": "../foreign",
+    }))
+    .is_err());
+}
+
+#[test]
 fn activity_policy_wire_is_closed_bounded_and_cannot_supply_authority() {
     let valid = json!({"id":"00000000-0000-4000-8000-000000000001","policy":{"rules":[
         {"verb":"fs.delete","mode":"deny","scopes":[]}

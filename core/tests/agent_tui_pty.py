@@ -43,6 +43,8 @@ class FixtureBroker:
         self.cancelled = threading.Event()
         self.stopped = threading.Event()
         self.task_id = str(uuid.uuid4())
+        self.queued_task_id = str(uuid.uuid4())
+        self.queue_submitted = threading.Event()
         self.history_running_id = "task-history-running"
         self.history_failed_id = "task-history-failed"
         self.history_retry_id = "task-history-retry"
@@ -114,7 +116,7 @@ class FixtureBroker:
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
         }
-        self.cursor = 0
+        self.cursors = {}
         self.requested_model = None
         self.requested_workspace = None
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
@@ -146,12 +148,13 @@ class FixtureBroker:
             "jobs_truncated": False,
         }
 
-    def job(self, status):
+    def job(self, status, task_id=None, prompt=None, after_task_id=None):
         return {
-            "id": self.task_id,
+            "id": task_id or self.task_id,
             "session_id": self.session_id,
             "workspace": self.requested_workspace or str(self.home),
-            "prompt": (
+            "after_task_id": after_task_id,
+            "prompt": prompt or (
                 "First line\nSecond line"
                 if self.case == "multiline"
                 else "Run the terminal integration fixture"
@@ -325,254 +328,254 @@ class FixtureBroker:
                             else "consumed"
                         ),
                     }
-        if method == "notification.list":
-                    return {
-                        "schema": 1,
-                        "cursor": 1,
-                        "unread": 1 if self.notification_state == "unread" else 0,
-                        "notifications": [self.notification()],
-                    }
-        if method in (
-                    "notification.read",
-                    "notification.acknowledge",
-                    "notification.dismiss",
-        ):
-                    if params["id"] != "notification-inbox-fixture":
-                        raise AssertionError("notification mutation addressed another record")
-                    self.notification_state = {
-                        "notification.read": "read",
-                        "notification.acknowledge": "acknowledged",
-                        "notification.dismiss": "dismissed",
-                    }[method]
-                    return self.notification()
-        if method == "notification.preferences.get":
-                    return self.notification_preferences
-        if method == "notification.preferences.set":
-                    self.notification_preferences = dict(params)
-                    return self.notification_preferences
-        if method == "activity.create":
-                    if (
-                        params.get("title") != "Fixture Activity"
-                        or params.get("goal") != "Complete the fixture goal"
-                    ):
-                        raise AssertionError("Activity create changed its title or goal")
-                    self.activity_state = "active"
-                    self.activity_completion_note = None
-                    return self.activity()
-        if method == "activity.list":
-                    return {"schema": 1, "activities": [self.activity()]}
-        if method == "activity.get":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity get addressed another goal")
-                    return {
-                        "schema": 1,
-                        "activity": self.activity(),
-                        "jobs": [],
-                        "sessions": [],
-                        "job_limit": 100,
-                    }
-        if method == "activity.transition":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity transition addressed another goal")
-                    self.activity_state = params["state"]
-                    self.activity_completion_note = params.get("completion_note")
-                    return self.activity()
-        if method == "activity.run":
-                    if params["id"] != ACTIVITY_ID or params.get("workspace") != str(self.home):
-                        raise AssertionError("Activity run changed its goal or workspace")
-                    return self.activity_job()
-        if method == "activity.attention":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity attention addressed another goal")
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "activity_state": self.activity_state,
-                        "limit": 100,
-                        "counts": {
-                            "queued": 1,
-                            "running": 0,
-                            "waiting": 0,
-                            "completed": 0,
-                            "failed": 0,
-                            "cancelled": 0,
-                            "indeterminate": 0,
-                            "pending_decisions": 0,
-                            "unavailable_decisions": 0,
-                            "unread_notifications": 0,
-                        },
-                        "decisions": [],
-                        "issues": [],
-                        "totals": {"decisions": 0, "issues": 0, "notifications": 0},
-                        "has_more": {
-                            "decisions": False,
-                            "issues": False,
-                            "notifications": False,
-                        },
-                        "notifications": [],
-                    }
-        if method == "activity.objects":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity objects addressed another goal")
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "objects": [{
-                            "label": "Config proposal",
-                            "reference": (
-                                "app://fs/change-plan?id=%2Ftmp%2Fconfig"
-                                "&revision=00000000-0000-4000-8000-000000000002"
-                            ),
-                            "status": "declared",
-                            "description": {
-                                "app_id": "fs",
-                                "object_type": "change-plan",
-                                "invocation": {
-                                    "operation": "plan_show",
-                                    "args": ["/tmp/config"],
-                                },
-                            },
-                            "error": None,
-                        }],
-                    }
-        if method == "activity.receipts":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity receipts addressed another goal")
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "receipts": [{
-                            "id": "00000000-0000-4000-8000-000000000003",
-                            "activity_id": ACTIVITY_ID,
-                            "received_at": "2026-01-01T00:00:02Z",
-                            "source": "caller_reported",
-                            "report": {
-                                "app_id": "fs",
-                                "operation": "plan_write",
-                                "outcome": "returned",
-                                "result": {
-                                    "preview": (
-                                        "App-reported file change plan; not authorization "
-                                        "or OS-confirmed effects.\n--- before\n+++ after"
-                                    ),
-                                },
-                            },
-                        }],
-                    }
-        if method == "activity.object_state.list":
-                    if params["id"] != ACTIVITY_ID:
-                        raise AssertionError("Activity object state addressed another goal")
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "entries": [{
-                            "id": "00000000-0000-4000-8000-000000000004",
-                            "reference": "app://fs/file?id=%2Ftmp%2Fconfig",
-                            "content": {
-                                "kind": "user_statement",
-                                "text": "Ready for review",
-                            },
-                            "source": "caller_reported",
-                            "recorded_at": "2026-01-01T00:00:03Z",
-                        }],
-                    }
-        if method == "activity.operation.preview":
-                    if (
-                        params["id"] != ACTIVITY_ID
-                        or params["app_id"] != "fs"
-                        or params["operation"] != "stat"
-                    ):
-                        raise AssertionError("operation preview changed its identity")
-                    return {
-                        "schema": 1,
-                        "app_id": "fs",
-                        "app_name": "Files",
-                        "app_version": "1",
-                        "package_digest": "sha256:" + "a" * 64,
-                        "operation": "stat",
-                        "operation_label": "Inspect file",
-                        "effects_declared": True,
-                        "effects": [{
-                            "kind": "read",
-                            "label": "Read file metadata",
-                            "requested_targets": [],
-                            "target_state": "unresolved",
-                        }],
-                        "unresolved_arguments": ["path"],
-                        "authorization_checked": False,
-                        "executed": False,
-                        "effects_confirmed": False,
-                        "notes": ["Preview only"],
-                    }
-        if method == "activity.execution_limits.get":
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "execution_limits": self.execution_limits,
-                    }
-        if method == "activity.execution_limits.set":
-                    if params.get("expected_revision") != self.execution_limits["revision"]:
-                        raise AssertionError("execution limit edit revision was not exact")
-                    self.execution_limits["revision"] += 1
-                    self.execution_limits["limits"] = params["limits"]
-                    return self.execution_limits
-        if method == "activity.execution_limits.enabled":
-                    if params["expected_revision"] != self.execution_limits["revision"]:
-                        raise AssertionError("execution limit revision was not exact")
-                    self.execution_limits["revision"] += 1
-                    self.execution_limits["enabled"] = params["enabled"]
-                    return self.execution_limits
-        if method == "activity.monetary_budget.get":
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "monetary_budget": self.monetary_budget,
-                    }
-        if method == "activity.monetary_budget.set":
-                    if params.get("expected_revision") != self.monetary_budget["revision"]:
-                        raise AssertionError("monetary budget edit revision was not exact")
-                    self.monetary_budget["revision"] += 1
-                    self.monetary_budget["budget"] = params["budget"]
-                    return self.monetary_budget
-        if method == "activity.monetary_budget.enabled":
-                    if params["expected_revision"] != self.monetary_budget["revision"]:
-                        raise AssertionError("monetary budget revision was not exact")
-                    self.monetary_budget["revision"] += 1
-                    self.monetary_budget["enabled"] = params["enabled"]
-                    return self.monetary_budget
-        if method == "activity.scheduling_policy.get":
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "scheduling_policy": self.scheduling_policy,
-                    }
-        if method == "activity.scheduling_policy.set":
-                    if params["expected_revision"] != self.scheduling_policy["revision"]:
-                        raise AssertionError("scheduling revision was not exact")
-                    self.scheduling_policy["revision"] += 1
-                    self.scheduling_policy["priority"] = params["priority"]
-                    return self.scheduling_policy
-        if method == "activity.capability_policy.get":
-                    return {
-                        "schema": 1,
-                        "activity_id": ACTIVITY_ID,
-                        "capability_policy": self.capability_policy,
-                    }
-        if method == "activity.capability_policy.set":
-                    if params.get("expected_revision") != self.capability_policy["revision"]:
-                        raise AssertionError("capability policy edit revision was not exact")
-                    self.capability_policy["revision"] += 1
-                    self.capability_policy["rules"] = params["policy"]["rules"]
-                    return self.capability_policy
-        if method == "activity.capability_policy.enabled":
-                    if params["expected_revision"] != self.capability_policy["revision"]:
-                        raise AssertionError("capability policy revision was not exact")
-                    self.capability_policy["revision"] += 1
-                    self.capability_policy["enabled"] = params["enabled"]
-                    return self.capability_policy
                     for approval_id in params["ids"]
                 ]
             }
+        if method == "notification.list":
+            return {
+                "schema": 1,
+                "cursor": 1,
+                "unread": 1 if self.notification_state == "unread" else 0,
+                "notifications": [self.notification()],
+            }
+        if method in (
+            "notification.read",
+            "notification.acknowledge",
+            "notification.dismiss",
+        ):
+            if params["id"] != "notification-inbox-fixture":
+                raise AssertionError("notification mutation addressed another record")
+            self.notification_state = {
+                "notification.read": "read",
+                "notification.acknowledge": "acknowledged",
+                "notification.dismiss": "dismissed",
+            }[method]
+            return self.notification()
+        if method == "notification.preferences.get":
+            return self.notification_preferences
+        if method == "notification.preferences.set":
+            self.notification_preferences = dict(params)
+            return self.notification_preferences
+        if method == "activity.create":
+            if (
+                params.get("title") != "Fixture Activity"
+                or params.get("goal") != "Complete the fixture goal"
+            ):
+                raise AssertionError("Activity create changed its title or goal")
+            self.activity_state = "active"
+            self.activity_completion_note = None
+            return self.activity()
+        if method == "activity.list":
+            return {"schema": 1, "activities": [self.activity()]}
+        if method == "activity.get":
+            if params["id"] != ACTIVITY_ID:
+                raise AssertionError("Activity get addressed another goal")
+            return {
+                "schema": 1,
+                "activity": self.activity(),
+                "jobs": [],
+                "sessions": [],
+                "job_limit": 100,
+            }
+        if method == "activity.transition":
+            if params["id"] != ACTIVITY_ID:
+                raise AssertionError("Activity transition addressed another goal")
+            self.activity_state = params["state"]
+            self.activity_completion_note = params.get("completion_note")
+            return self.activity()
+        if method == "activity.run":
+            if params["id"] != ACTIVITY_ID or params.get("workspace") != str(self.home):
+                raise AssertionError("Activity run changed its goal or workspace")
+            return self.activity_job()
+        if method == "activity.attention":
+            if params["id"] != ACTIVITY_ID:
+                raise AssertionError("Activity attention addressed another goal")
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "activity_state": self.activity_state,
+                "limit": 100,
+                "counts": {
+                    "queued": 1,
+                    "running": 0,
+                    "waiting": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "indeterminate": 0,
+                    "pending_decisions": 0,
+                    "unavailable_decisions": 0,
+                    "unread_notifications": 0,
+                },
+                "decisions": [],
+                "issues": [],
+                "totals": {"decisions": 0, "issues": 0, "notifications": 0},
+                "has_more": {
+                    "decisions": False,
+                    "issues": False,
+                    "notifications": False,
+                },
+                "notifications": [],
+            }
+        if method == "activity.objects":
+            if params["id"] != ACTIVITY_ID:
+                raise AssertionError("Activity objects addressed another goal")
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "objects": [{
+                    "label": "Config proposal",
+                    "reference": (
+                        "app://fs/change-plan?id=%2Ftmp%2Fconfig"
+                        "&revision=00000000-0000-4000-8000-000000000002"
+                    ),
+                    "status": "declared",
+                    "description": {
+                        "app_id": "fs",
+                        "object_type": "change-plan",
+                        "invocation": {
+                            "operation": "plan_show",
+                            "args": ["/tmp/config"],
+                        },
+                    },
+                    "error": None,
+                }],
+            }
+        if method == "activity.receipts":
+            if params["id"] != ACTIVITY_ID:
+                raise AssertionError("Activity receipts addressed another goal")
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "receipts": [{
+                    "id": "00000000-0000-4000-8000-000000000003",
+                    "activity_id": ACTIVITY_ID,
+                    "received_at": "2026-01-01T00:00:02Z",
+                    "source": "caller_reported",
+                    "report": {
+                        "app_id": "fs",
+                        "operation": "plan_write",
+                        "outcome": "returned",
+                        "result": {
+                            "preview": (
+                                "App-reported file change plan; not authorization "
+                                "or OS-confirmed effects.\n--- before\n+++ after"
+                            ),
+                        },
+                    },
+                }],
+            }
+        if method == "activity.object_state.list":
+            if params["id"] != ACTIVITY_ID:
+                raise AssertionError("Activity object state addressed another goal")
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "entries": [{
+                    "id": "00000000-0000-4000-8000-000000000004",
+                    "reference": "app://fs/file?id=%2Ftmp%2Fconfig",
+                    "content": {
+                        "kind": "user_statement",
+                        "text": "Ready for review",
+                    },
+                    "source": "caller_reported",
+                    "recorded_at": "2026-01-01T00:00:03Z",
+                }],
+            }
+        if method == "activity.operation.preview":
+            if (
+                params["id"] != ACTIVITY_ID
+                or params["app_id"] != "fs"
+                or params["operation"] != "stat"
+            ):
+                raise AssertionError("operation preview changed its identity")
+            return {
+                "schema": 1,
+                "app_id": "fs",
+                "app_name": "Files",
+                "app_version": "1",
+                "package_digest": "sha256:" + "a" * 64,
+                "operation": "stat",
+                "operation_label": "Inspect file",
+                "effects_declared": True,
+                "effects": [{
+                    "kind": "read",
+                    "label": "Read file metadata",
+                    "requested_targets": [],
+                    "target_state": "unresolved",
+                }],
+                "unresolved_arguments": ["path"],
+                "authorization_checked": False,
+                "executed": False,
+                "effects_confirmed": False,
+                "notes": ["Preview only"],
+            }
+        if method == "activity.execution_limits.get":
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "execution_limits": self.execution_limits,
+            }
+        if method == "activity.execution_limits.set":
+            if params.get("expected_revision") != self.execution_limits["revision"]:
+                raise AssertionError("execution limit edit revision was not exact")
+            self.execution_limits["revision"] += 1
+            self.execution_limits["limits"] = params["limits"]
+            return self.execution_limits
+        if method == "activity.execution_limits.enabled":
+            if params["expected_revision"] != self.execution_limits["revision"]:
+                raise AssertionError("execution limit revision was not exact")
+            self.execution_limits["revision"] += 1
+            self.execution_limits["enabled"] = params["enabled"]
+            return self.execution_limits
+        if method == "activity.monetary_budget.get":
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "monetary_budget": self.monetary_budget,
+            }
+        if method == "activity.monetary_budget.set":
+            if params.get("expected_revision") != self.monetary_budget["revision"]:
+                raise AssertionError("monetary budget edit revision was not exact")
+            self.monetary_budget["revision"] += 1
+            self.monetary_budget["budget"] = params["budget"]
+            return self.monetary_budget
+        if method == "activity.monetary_budget.enabled":
+            if params["expected_revision"] != self.monetary_budget["revision"]:
+                raise AssertionError("monetary budget revision was not exact")
+            self.monetary_budget["revision"] += 1
+            self.monetary_budget["enabled"] = params["enabled"]
+            return self.monetary_budget
+        if method == "activity.scheduling_policy.get":
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "scheduling_policy": self.scheduling_policy,
+            }
+        if method == "activity.scheduling_policy.set":
+            if params["expected_revision"] != self.scheduling_policy["revision"]:
+                raise AssertionError("scheduling revision was not exact")
+            self.scheduling_policy["revision"] += 1
+            self.scheduling_policy["priority"] = params["priority"]
+            return self.scheduling_policy
+        if method == "activity.capability_policy.get":
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "capability_policy": self.capability_policy,
+            }
+        if method == "activity.capability_policy.set":
+            if params.get("expected_revision") != self.capability_policy["revision"]:
+                raise AssertionError("capability policy edit revision was not exact")
+            self.capability_policy["revision"] += 1
+            self.capability_policy["rules"] = params["policy"]["rules"]
+            return self.capability_policy
+        if method == "activity.capability_policy.enabled":
+            if params["expected_revision"] != self.capability_policy["revision"]:
+                raise AssertionError("capability policy revision was not exact")
+            self.capability_policy["revision"] += 1
+            self.capability_policy["enabled"] = params["enabled"]
+            return self.capability_policy
         if method == "task.list":
             if self.case == "task-center":
                 return {
@@ -593,6 +596,31 @@ class FixtureBroker:
         if method == "task.submit":
             if params.get("session_id") != self.session_id:
                 raise AssertionError("task was not submitted under the canonical conversation")
+            if self.case == "durable-queue":
+                after_task_id = params.get("after_task_id")
+                if after_task_id is None:
+                    expected_prompt = "Run the terminal integration fixture"
+                    task_id = self.task_id
+                    status = "running"
+                else:
+                    if after_task_id != self.task_id:
+                        raise AssertionError("durable queue changed its predecessor")
+                    expected_prompt = "Queued follow up"
+                    task_id = self.queued_task_id
+                    status = "pending"
+                    self.queue_submitted.set()
+                if params.get("prompt") != expected_prompt:
+                    raise AssertionError("durable queue changed prompt text")
+                self.requested_model = params.get("model")
+                self.requested_workspace = params.get("workspace")
+                if not self.requested_workspace:
+                    raise AssertionError("durable queue omitted its broker workspace")
+                return self.job(
+                    status,
+                    task_id=task_id,
+                    prompt=expected_prompt,
+                    after_task_id=after_task_id,
+                )
             expected_prompt = (
                 "First line\nSecond line"
                 if self.case == "multiline"
@@ -627,13 +655,21 @@ class FixtureBroker:
                 return self.history_job(self.history_failed_id, "error")
             if params["id"] == self.history_retry_id:
                 return self.history_job(self.history_retry_id, "pending")
+            if params["id"] == self.queued_task_id:
+                return self.job(
+                    "pending",
+                    task_id=self.queued_task_id,
+                    prompt="Queued follow up",
+                    after_task_id=self.task_id,
+                )
             return self.job("cancelled" if self.cancelled.is_set() else "running")
         if method == "task.retry":
             if params["id"] != self.history_failed_id:
                 raise AssertionError("retry addressed the wrong task")
             return self.history_job(self.history_retry_id, "pending")
         if method == "task.stream":
-            if params["id"] != self.task_id:
+            task_id = params["id"]
+            if task_id not in (self.task_id, self.queued_task_id):
                 raise AssertionError("stream addressed the wrong task")
             events = []
             if params.get("cursor", 0) == 0:
@@ -666,7 +702,7 @@ class FixtureBroker:
                     "notification-inbox",
                     "workspace",
                     "task-center",
-                ):
+                ) or (self.case == "durable-queue" and task_id == self.queued_task_id):
                     events.extend([
                         {"progress": {
                             "kind": "tool_result", "id": "tool-1", "name": "cos_sysinfo",
@@ -681,7 +717,7 @@ class FixtureBroker:
                             },
                         }},
                     ])
-                self.cursor = len(events)
+                self.cursors[task_id] = len(events)
             terminal = self.case in (
                 "complete",
                 "resume",
@@ -695,15 +731,29 @@ class FixtureBroker:
                 "notification-inbox",
                 "workspace",
                 "task-center",
+            ) or (
+                self.case == "durable-queue"
+                and (task_id == self.queued_task_id or self.queue_submitted.is_set())
             ) or self.cancelled.is_set()
             if not terminal:
                 time.sleep(0.05)
             status = "cancelled" if self.cancelled.is_set() else "ok" if terminal else "running"
+            prompt = (
+                "Queued follow up"
+                if task_id == self.queued_task_id
+                else "Run the terminal integration fixture"
+            )
+            after_task_id = self.task_id if task_id == self.queued_task_id else None
             return {
-                "cursor": self.cursor,
+                "cursor": self.cursors.get(task_id, params.get("cursor", 0)),
                 "events": events,
                 "terminal": terminal,
-                "job": self.job(status),
+                "job": self.job(
+                    status,
+                    task_id=task_id,
+                    prompt=prompt,
+                    after_task_id=after_task_id,
+                ),
             }
         raise AssertionError(f"unexpected broker method: {method}")
 
@@ -1041,10 +1091,17 @@ def run(cos, case, transcript, original_namespace, trace):
                         request["command"] == "task.cancel"
                         and request["params"].get("id") == broker.history_running_id
                         for request in broker.requests
-                    ),
+                    )
+                    and sum(
+                        request["command"] == "task.get"
+                        and request["params"].get("id") == broker.history_running_id
+                        for request in broker.requests
+                    )
+                    >= 2,
                 )
                 time.sleep(0.2)
                 os.write(master, b"\x1b")
+                time.sleep(0.2)
                 send_prompt(master, output, "/tasks")
                 read_terminal(
                     master,
@@ -1072,32 +1129,40 @@ def run(cos, case, transcript, original_namespace, trace):
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "task.retry"
                         and request["params"].get("id") == broker.history_failed_id
                         for request in broker.requests
-                    ),
+                    )
+                    and broker.history_retry_id.encode() in data,
                 )
-                time.sleep(0.2)
                 os.write(master, b"\x1b")
+                time.sleep(0.2)
             if case == "approval-center":
                 send_prompt(master, output, "/approvals")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: all(
+                    lambda data: all(
                         any(request["command"] == command for request in broker.requests)
                         for command in (
                             "permission.pending",
                             "permission.recent",
                             "permission.status",
                         )
-                    ),
+                    )
+                    and b"Approval center" in data,
                 )
                 os.write(master, b"\r")
-                time.sleep(0.2)
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: PENDING_APPROVAL_ID.encode() in data,
+                )
                 os.write(master, b"\x1b")
+                time.sleep(0.2)
                 send_prompt(master, output, "/approvals")
                 read_terminal(
                     master,
@@ -1109,28 +1174,36 @@ def run(cos, case, transcript, original_namespace, trace):
                     )
                     >= 2,
                 )
+                time.sleep(0.3)
                 os.write(master, b"\x1b[B\r")
-                time.sleep(0.2)
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: RECENT_APPROVAL_ID.encode() in data,
+                )
                 os.write(master, b"a")
                 time.sleep(0.2)
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
             if case == "notification-inbox":
                 send_prompt(master, output, "/inbox")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "notification.list"
                         for request in broker.requests
-                    ),
+                    )
+                    and b"Notification Inbox" in data,
                 )
                 os.write(master, b"\r")
                 time.sleep(0.2)
-                for key, command in [
-                    (b"m", "notification.read"),
-                    (b"a", "notification.acknowledge"),
-                    (b"d", "notification.dismiss"),
+                for key, command, state in [
+                    (b"m", "notification.read", b"READ"),
+                    (b"a", "notification.acknowledge", b"ACKNOWLEDGED"),
+                    (b"d", "notification.dismiss", b"DISMISSED"),
                 ]:
                     os.write(master, key)
                     read_terminal(
@@ -1142,16 +1215,19 @@ def run(cos, case, transcript, original_namespace, trace):
                             for request in broker.requests
                         ),
                     )
+                    time.sleep(0.4)
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
                 send_prompt(master, output, "/notify-settings")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "notification.preferences.get"
                         for request in broker.requests
-                    ),
+                    )
+                    and b"Notification delivery settings" in data,
                 )
                 os.write(master, b"w")
                 read_terminal(
@@ -1177,28 +1253,32 @@ def run(cos, case, transcript, original_namespace, trace):
                     ),
                 )
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
             if case == "activity-lifecycle":
                 send_prompt(master, output, "/activities")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "activity.list"
                         for request in broker.requests
-                    ),
+                    )
+                    and b"Activities" in data,
                 )
                 os.write(master, b"\r")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "activity.get"
                         for request in broker.requests
-                    ),
+                    )
+                    and ACTIVITY_ID.encode() in data,
                 )
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
                 send_prompt(
                     master,
                     output,
@@ -1218,6 +1298,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     )
                     >= 2,
                 )
+                time.sleep(0.3)
                 os.write(master, b"p")
                 read_terminal(
                     master,
@@ -1229,6 +1310,7 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+                time.sleep(0.3)
                 os.write(master, b"u")
                 read_terminal(
                     master,
@@ -1240,17 +1322,20 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+                time.sleep(0.3)
                 os.write(master, b"r")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "activity.run"
                         for request in broker.requests
-                    ),
+                    )
+                    and broker.activity_task_id.encode() in data,
                 )
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
                 send_prompt(master, output, f"/activity {ACTIVITY_ID}")
                 read_terminal(
                     master,
@@ -1262,23 +1347,31 @@ def run(cos, case, transcript, original_namespace, trace):
                     )
                     >= 2,
                 )
+                time.sleep(0.3)
                 os.write(master, b"a")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "activity.attention"
                         for request in broker.requests
-                    ),
+                    )
+                    and b"Activity attention" in data,
                 )
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
                 send_prompt(
                     master,
                     output,
                     f"/activity-complete {ACTIVITY_ID} | User confirmed completion",
                 )
-                time.sleep(0.2)
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Complete Activity goal?" in data,
+                )
                 os.write(master, b"y")
                 read_terminal(
                     master,
@@ -1292,6 +1385,7 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+                time.sleep(0.3)
                 send_prompt(master, output, f"/activity-resume {ACTIVITY_ID}")
                 read_terminal(
                     master,
@@ -1304,8 +1398,14 @@ def run(cos, case, transcript, original_namespace, trace):
                     )
                     >= 2,
                 )
+                time.sleep(0.3)
                 send_prompt(master, output, f"/activity-cancel {ACTIVITY_ID}")
-                time.sleep(0.2)
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Cancel Activity goal?" in data,
+                )
                 os.write(master, b"y")
                 read_terminal(
                     master,
@@ -1323,7 +1423,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: all(
+                    lambda data: all(
                         any(request["command"] == command for request in broker.requests)
                         for command in (
                             "activity.execution_limits.get",
@@ -1331,8 +1431,10 @@ def run(cos, case, transcript, original_namespace, trace):
                             "activity.scheduling_policy.get",
                             "activity.capability_policy.get",
                         )
-                    ),
+                    )
+                    and b"Activity evidence" in data,
                 )
+                time.sleep(0.4)
                 for refresh, key, command in [
                     (2, b"l\r", "activity.execution_limits.enabled"),
                     (3, b"b\r", "activity.monetary_budget.enabled"),
@@ -1354,7 +1456,9 @@ def run(cos, case, transcript, original_namespace, trace):
                         )
                         >= count,
                     )
+                    time.sleep(0.4)
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
                 send_prompt(
                     master,
                     output,
@@ -1371,9 +1475,16 @@ def run(cos, case, transcript, original_namespace, trace):
                     lambda _data: any(
                         request["command"] == "activity.execution_limits.set"
                         for request in broker.requests
-                    ),
+                    )
+                    and sum(
+                        request["command"] == "activity.execution_limits.get"
+                        for request in broker.requests
+                    )
+                    >= 6,
                 )
+                time.sleep(0.4)
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
             if case == "activity-evidence":
                 send_prompt(master, output, f"/activity-evidence {ACTIVITY_ID}")
                 read_terminal(
@@ -1396,10 +1507,11 @@ def run(cos, case, transcript, original_namespace, trace):
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: any(
                         request["command"] == "activity.operation.preview"
                         for request in broker.requests
-                    ),
+                    )
+                    and b"Activity operation preview" in data,
                 )
                 os.write(master, b"e")
                 read_terminal(
@@ -1412,7 +1524,9 @@ def run(cos, case, transcript, original_namespace, trace):
                     )
                     >= 2,
                 )
+                time.sleep(0.4)
                 os.write(master, b"\x1b")
+                time.sleep(0.3)
             if case == "workspace":
                 send_prompt(master, output, "/workspace project")
                 read_terminal(
@@ -1421,6 +1535,31 @@ def run(cos, case, transcript, original_namespace, trace):
                     time.monotonic() + 15,
                     lambda _data: any(
                         request["command"] == "task.workspace.resolve"
+                        for request in broker.requests
+                    ),
+                )
+            if case == "durable-queue":
+                send_prompt(master, output, "Run the terminal integration fixture")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: RUNNING.encode() in data
+                    and sum(
+                        request["command"] == "task.submit"
+                        for request in broker.requests
+                    )
+                    == 1,
+                )
+                send_prompt(master, output, "Queued follow up")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "task.submit"
+                        and request["params"].get("after_task_id") == broker.task_id
+                        and request["params"].get("prompt") == "Queued follow up"
                         for request in broker.requests
                     ),
                 )
@@ -1434,9 +1573,9 @@ def run(cos, case, transcript, original_namespace, trace):
                     lambda _data: time.monotonic() >= settled,
                 )
                 os.write(master, b"\r")
-            else:
+            elif case != "durable-queue":
                 send_prompt(master, output, "Run the terminal integration fixture")
-            marker = ANSWER if case == "complete" else RUNNING
+            marker = ANSWER if case in ("complete", "durable-queue") else RUNNING
             read_terminal(
                 master, output, time.monotonic() + 30,
                 lambda data: marker.encode() in data,
@@ -1458,8 +1597,11 @@ def run(cos, case, transcript, original_namespace, trace):
             if broker.errors:
                 raise AssertionError("; ".join(broker.errors))
             submissions = sum(request["command"] == "task.submit" for request in broker.requests)
-            if submissions != 1:
-                raise AssertionError(f"expected one actual task submission, got {submissions}")
+            expected_submissions = 2 if case == "durable-queue" else 1
+            if submissions != expected_submissions:
+                raise AssertionError(
+                    f"expected {expected_submissions} actual task submission(s), got {submissions}"
+                )
             if case == "workspace" and not any(
                 request["command"] == "task.submit"
                 and request["params"].get("workspace") == broker.workspace
@@ -1505,6 +1647,7 @@ if __name__ == "__main__":
             "cancel",
             "commands",
             "confirmations",
+            "durable-queue",
             "multiline",
             "approval-center",
             "activity-lifecycle",

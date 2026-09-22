@@ -59,6 +59,10 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let after_task_id = params
+        .get("after_task_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let max_turns = params
         .get("max_turns")
         .and_then(Value::as_u64)
@@ -89,6 +93,19 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     crate::storage::ensure_owner_agent_state_dir(owner_uid, owner_gid)
         .map_err(|err| format!("prepare owner agent state: {err}"))?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
+    if let Some(predecessor_id) = after_task_id.as_deref() {
+        let expected_session = session_id
+            .as_deref()
+            .ok_or("queued task submission requires an explicit conversation id")?;
+        let predecessor = store
+            .locate_for_owner(predecessor_id, Some(owner_uid))
+            .map_err(|error| error.to_string())?
+            .map(|(_, job)| job)
+            .ok_or_else(|| format!("queued predecessor task not found: {predecessor_id}"))?;
+        if predecessor.session_id.as_deref() != Some(expected_session) {
+            return Err("queued predecessor belongs to another conversation".into());
+        }
+    }
     let session_client = SessionClient::new(SessionSource::BrokerTask, false, true);
     let session_id = match session_id {
         Some(session_id) => {
@@ -116,6 +133,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     job.activity_id = activity_id;
     job.requested_model = requested_model;
     job.workspace = Some(workspace.to_string_lossy().into_owned());
+    job.after_task_id = after_task_id;
     let task_id = job.id.clone();
     let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
         .map_err(|err| err.to_string())?;
@@ -550,6 +568,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     retried.activity_id = activity_id;
     retried.requested_model = requested_model;
     retried.workspace = original.workspace;
+    retried.after_task_id = original.after_task_id;
     let task_id = retried.id.clone();
     let retried =
         with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(retried))
@@ -745,6 +764,7 @@ fn task_summary_value(job: &Value) -> Value {
         "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
         "activity_id": job.get("activity_id").cloned().unwrap_or(Value::Null),
         "workspace": job.get("workspace").cloned().unwrap_or(Value::Null),
+        "after_task_id": job.get("after_task_id").cloned().unwrap_or(Value::Null),
         "waiting_on": job.get("waiting_on").cloned().unwrap_or_else(|| json!([])),
         "cancel_requested": job
             .get("cancel_requested_at")

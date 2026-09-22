@@ -13,7 +13,7 @@ audit.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | CLI options, terminal lifecycle, async event loop, commands and task streaming |
-| `state.rs` | Bounded transcript, composer, queue, approval and session state |
+| `state.rs` | Bounded transcript, composer, durable-task handles, approval and session state |
 | `commands.rs` | Closed Claw slash catalogue and canonical conversation/model/Skill actions |
 | `stream.rs` | Durable task submission, identity/model acknowledgement and stream polling |
 | `ui.rs` | ratatui layout, styling, Markdown-oriented transcript projection and cursor |
@@ -51,6 +51,9 @@ audit.
 - Workspace selection resolves through `task.workspace.resolve`; the TUI keeps
   only the returned canonical path and binds it to each submitted/queued task.
   A cwd is context, never filesystem authority.
+- Follow-up text is published immediately as a durable pending Job whose exact
+  predecessor is broker-validated. Local state retains only bounded handles
+  for stream attachment; it is not the queue authority.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

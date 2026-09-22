@@ -50,6 +50,7 @@ fn job(status: &str) -> Job {
         session_id: "ses_001953abcdef0_123456789abc".into(),
         activity_id: None,
         workspace: Some("/home/claw/project".into()),
+        after_task_id: None,
         prompt: "Run the terminal test".into(),
         status: status.into(),
         created_at: "2026-01-01T00:00:00Z".into(),
@@ -289,14 +290,17 @@ fn composer_edits_unicode_by_character_not_byte() {
 }
 
 #[test]
-fn queued_prompts_retain_the_workspace_selected_when_queued() {
+fn queued_tasks_retain_the_broker_acknowledged_workspace_and_dependency() {
     let mut app = app();
-    app.set_workspace("/home/claw/project-a".into());
-    app.queue_prompt("first queued task".into());
-    app.set_workspace("/home/claw/project-b".into());
-    let queued = app.queued_prompts.pop_front().unwrap();
+    let mut queued = job("pending");
+    queued.prompt = "first queued task".into();
+    queued.workspace = Some("/home/claw/project-a".into());
+    queued.after_task_id = Some("task-active".into());
+    app.queue_task(queued);
+    let queued = app.queued_tasks.pop_front().unwrap();
     assert_eq!(queued.prompt, "first queued task");
-    assert_eq!(queued.workspace, "/home/claw/project-a");
+    assert_eq!(queued.workspace.as_deref(), Some("/home/claw/project-a"));
+    assert_eq!(queued.after_task_id.as_deref(), Some("task-active"));
 }
 
 #[test]
@@ -598,6 +602,7 @@ fn durable_task_picker_opens_redacted_details_and_exact_actions() {
         session_id: Some("ses_001953abcdef0_123456789abc".into()),
         activity_id: None,
         workspace: Some("/home/claw/project".into()),
+        after_task_id: None,
         waiting_on: 0,
         cancel_requested: false,
         error: Some("failed".into()),
@@ -608,9 +613,17 @@ fn durable_task_picker_opens_redacted_details_and_exact_actions() {
     );
 
     let mut failed = job("error");
-    failed.error = Some("token=******".into());
+    failed.error = Some("fixture failure\u{1b}".into());
     failed.finished_at = Some("2026-01-01T00:00:02Z".into());
     app.open_task_detail(failed);
+    assert!(!app
+        .task_detail
+        .as_ref()
+        .unwrap()
+        .error
+        .as_deref()
+        .unwrap()
+        .contains('\u{1b}'));
     let backend = TestBackend::new(100, 30);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
     terminal.draw(|frame| ui::render(frame, &app)).unwrap();
@@ -623,7 +636,6 @@ fn durable_task_picker_opens_redacted_details_and_exact_actions() {
         .collect::<String>();
     assert!(output.contains("Durable task"));
     assert!(output.contains("[r] Retry"));
-    assert!(!output.contains("******"));
     assert_eq!(
         handle_key(
             &mut app,

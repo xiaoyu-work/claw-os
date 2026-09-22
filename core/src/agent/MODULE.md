@@ -41,6 +41,9 @@ surfaces.
 - Persist the broker-resolved per-task workspace, revalidate it at worker
   claim, use it as process cwd, and project it through labelled request-local
   ProjectContext without adding filesystem capability.
+- Persist optional same-owner/conversation predecessor links. Queue admission
+  skips dependent Jobs until the predecessor is terminal; missing or
+  mismatched dependencies fail explicitly rather than running out of order.
 - Treat file and directory fsync as mandatory queue barriers. Cross-bucket
   moves sync both directories, and recovery deduplicates resurrected records
   by conservative execution-phase dominance before any mutation.

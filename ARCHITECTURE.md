@@ -1586,6 +1586,15 @@ cwd, carries it in worker protocol v14, and records a task-stream snapshot.
 The runtime projects the path as request-local `ProjectContext`. None of these
 steps creates or widens an `fs.*` capability.
 
+Sequential terminal follow-ups use the ordinary durable queue, not frontend
+text state. `task.submit.after_task_id` may name only an owned Job in the same
+canonical conversation. The Job store persists that link and skips the
+dependent pending record until its predecessor is `ok`, `error`, or
+`cancelled`. A missing or mismatched predecessor fails the dependent Job
+explicitly. This orders execution without granting authority, inferring
+success, persisting attendance, or coupling queue lifetime to a terminal
+connection.
+
 The owner-scoped
 `agent.conversation.create/get/list/update/fork/revert` broker routes
 create empty system-Agent sessions without queuing work and expose the same

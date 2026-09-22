@@ -468,6 +468,8 @@ pub struct TaskSubmit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_task_id: Option<Token<128>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<Text<256>>,

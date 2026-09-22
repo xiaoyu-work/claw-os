@@ -25,6 +25,8 @@ pub(super) struct ConversationJob {
     pub(super) session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) after_task_id: Option<String>,
     pub(super) error: Option<String>,
 }
 
@@ -155,6 +157,7 @@ fn bounded_projection(jobs: Vec<Job>, sid: &SessionId) -> Result<ConversationJob
             finished_at: job.finished_at,
             session_id,
             workspace: job.workspace,
+            after_task_id: job.after_task_id,
             error: job.error,
         };
         let separator = usize::from(!jobs.is_empty());
@@ -213,6 +216,7 @@ pub(super) fn project_retained(jobs: Vec<Job>) -> Result<ConversationJobs, Strin
                 .session_id
                 .ok_or_else(|| "bound task has no source session".to_string())?,
             workspace: job.workspace,
+            after_task_id: job.after_task_id,
             error: job.error,
         };
         let separator = usize::from(!projected_jobs.is_empty());

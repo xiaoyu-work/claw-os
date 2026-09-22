@@ -22,6 +22,8 @@ fn activity_submit_flag_preserves_legacy_options_and_broker_parameters() {
         "session-id",
         "--activity",
         "activity-id",
+        "--after-task",
+        "task-previous",
         "--workspace",
         "projects/claw",
         "--max-turns",
@@ -34,6 +36,7 @@ fn activity_submit_flag_preserves_legacy_options_and_broker_parameters() {
             "prompt": "one step",
             "session_id": "session-id",
             "activity_id": "activity-id",
+            "after_task_id": "task-previous",
             "workspace": "projects/claw",
             "max_turns": 4,
         })

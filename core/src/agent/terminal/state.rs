@@ -111,12 +111,6 @@ pub(super) struct Confirmation {
     pub action: ConfirmationAction,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct QueuedPrompt {
-    pub prompt: String,
-    pub workspace: String,
-}
-
 pub(super) struct App {
     pub info: BackendInfo,
     pub conversation: Conversation,
@@ -128,7 +122,7 @@ pub(super) struct App {
     pub active_workspace: Option<String>,
     pub selected_model: String,
     pub selected_workspace: String,
-    pub queued_prompts: VecDeque<QueuedPrompt>,
+    pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
@@ -185,7 +179,7 @@ impl App {
             active_workspace: None,
             selected_model,
             selected_workspace,
-            queued_prompts: VecDeque::new(),
+            queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             input_history: Vec::new(),
             history_index: None,
@@ -267,7 +261,7 @@ impl App {
         self.active_task = None;
         self.active_workspace = None;
         self.task_started_at = None;
-        self.queued_prompts.clear();
+        self.queued_tasks.clear();
         self.usage_input = 0;
         self.usage_output = 0;
         self.usage_cached = 0;
@@ -489,15 +483,14 @@ impl App {
         self.push_entry(EntryKind::Error, clean_text(text));
     }
 
-    pub fn queue_prompt(&mut self, prompt: String) {
+    pub fn queue_task(&mut self, job: Job) {
         self.push_system(&format!(
-            "Queued for the current task: {}",
-            clean_text(&prompt)
+            "Queued durable task {} after {}: {}",
+            job.id,
+            job.after_task_id.as_deref().unwrap_or("current queue"),
+            clean_text(&job.prompt)
         ));
-        self.queued_prompts.push_back(QueuedPrompt {
-            prompt,
-            workspace: self.selected_workspace.clone(),
-        });
+        self.queued_tasks.push_back(job);
     }
 
     pub fn set_workspace(&mut self, workspace: String) {
@@ -726,6 +719,9 @@ impl App {
                     }
                     if let Some(workspace) = task.workspace.as_deref() {
                         flags.push(format!("cwd:{workspace}"));
+                    }
+                    if task.after_task_id.is_some() {
+                        flags.push("sequenced".into());
                     }
                     if task.error.is_some() {
                         flags.push("error".into());

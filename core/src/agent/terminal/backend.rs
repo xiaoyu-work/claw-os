@@ -54,6 +54,7 @@ pub(super) struct Job {
     pub session_id: String,
     pub activity_id: Option<String>,
     pub workspace: Option<String>,
+    pub after_task_id: Option<String>,
     pub prompt: String,
     pub status: String,
     pub created_at: String,
@@ -82,6 +83,7 @@ pub(super) struct TaskSummary {
     pub session_id: Option<String>,
     pub activity_id: Option<String>,
     pub workspace: Option<String>,
+    pub after_task_id: Option<String>,
     pub waiting_on: usize,
     pub cancel_requested: bool,
     pub error: Option<String>,
@@ -320,6 +322,7 @@ pub(super) trait Backend: Send + Sync {
         prompt: &str,
         session_id: &str,
         workspace: &str,
+        after_task_id: Option<&str>,
         use_memory: bool,
         max_turns: Option<u32>,
         model: &str,
@@ -506,6 +509,7 @@ impl Backend for BrokerBackend {
         prompt: &str,
         session_id: &str,
         workspace: &str,
+        after_task_id: Option<&str>,
         use_memory: bool,
         max_turns: Option<u32>,
         model: &str,
@@ -519,6 +523,9 @@ impl Backend for BrokerBackend {
         });
         if let Some(max_turns) = max_turns {
             params["max_turns"] = json!(max_turns);
+        }
+        if let Some(after_task_id) = after_task_id {
+            params["after_task_id"] = json!(after_task_id);
         }
         parse_job(self.call(Command::TaskSubmit, params).await?)
     }
@@ -807,10 +814,10 @@ impl Backend for BrokerBackend {
             params["prompt"] = json!(prompt);
         }
         let job = parse_job(self.call(Command::ActivityRun, params).await?)?;
-        if job.activity_id.as_deref() != Some(id)
-            || job.workspace.as_deref() != Some(workspace)
-        {
-            return Err("Claw returned an Activity task with mismatched identity or workspace".into());
+        if job.activity_id.as_deref() != Some(id) || job.workspace.as_deref() != Some(workspace) {
+            return Err(
+                "Claw returned an Activity task with mismatched identity or workspace".into(),
+            );
         }
         Ok(job)
     }
@@ -1323,6 +1330,7 @@ fn parse_job(value: Value) -> Result<Job, String> {
         session_id: required_string(&value, "session_id")?,
         activity_id: optional_string(&value, "activity_id"),
         workspace: optional_string(&value, "workspace"),
+        after_task_id: optional_string(&value, "after_task_id"),
         prompt: required_string(&value, "prompt")?,
         status: required_string(&value, "status")?,
         created_at: required_string(&value, "created_at")?,
@@ -1352,6 +1360,7 @@ fn parse_task_summary(value: &Value) -> Result<TaskSummary, String> {
         session_id: optional_string(value, "session_id"),
         activity_id: optional_string(value, "activity_id"),
         workspace: optional_string(value, "workspace"),
+        after_task_id: optional_string(value, "after_task_id"),
         waiting_on: value
             .get("waiting_on")
             .and_then(Value::as_array)

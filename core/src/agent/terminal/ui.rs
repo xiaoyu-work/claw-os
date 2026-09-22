@@ -863,6 +863,9 @@ fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     if let Some(workspace) = &task.workspace {
         lines.push(Line::raw(format!("workspace: {workspace}")));
     }
+    if let Some(predecessor) = &task.after_task_id {
+        lines.push(Line::raw(format!("queued after: {predecessor}")));
+    }
     if let Some(activity_id) = &task.activity_id {
         lines.push(Line::raw(format!("activity: {activity_id}")));
     }
@@ -1471,10 +1474,10 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let queue = if app.queued_prompts.is_empty() {
+    let queue = if app.queued_tasks.is_empty() {
         String::new()
     } else {
-        format!("  queued {}", app.queued_prompts.len())
+        format!("  durable queue {}", app.queued_tasks.len())
     };
     let line = Line::from(vec![
         Span::styled(

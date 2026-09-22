@@ -237,7 +237,7 @@ async fn run_with_backend(
                 }
             }
             Some(event) = runtime_rx.recv() => {
-                let mut next_prompt = None;
+                let mut next_task = None;
                 match event {
                     RuntimeEvent::Record(record) => {
                         match presentation::apply_record(&mut app, &record) {
@@ -257,7 +257,7 @@ async fn run_with_backend(
                     }
                     RuntimeEvent::Finished(job) => {
                         app.finish_task(&job);
-                        next_prompt = app.queued_prompts.pop_front();
+                        next_task = app.queued_tasks.pop_front();
                     }
                     RuntimeEvent::Failed(error) => {
                         app.push_error(&format!(
@@ -268,17 +268,13 @@ async fn run_with_backend(
                         app.status = RunStatus::Ready;
                     }
                 }
-                if let Some(queued) = next_prompt {
-                    stream::start_prompt(
+                if let Some(job) = next_task {
+                    stream::attach_queued(
                         &mut app,
                         backend.clone(),
                         runtime_tx.clone(),
-                        !options.no_memory,
-                        options.max_turns,
-                        queued.prompt,
-                        queued.workspace,
-                    )
-                    .await;
+                        job,
+                    );
                 }
             }
             _ = tick.tick() => app.tick(),
@@ -956,7 +952,8 @@ async fn apply_input_action(
                     app.push_error(&error);
                 }
             } else if app.active_task.is_some() {
-                app.queue_prompt(input);
+                stream::queue_prompt(app, backend, !options.no_memory, options.max_turns, input)
+                    .await;
             } else {
                 let workspace = app.selected_workspace.clone();
                 stream::start_prompt(
