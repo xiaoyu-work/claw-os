@@ -117,11 +117,14 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+          cos_fixture="$(mktemp /tmp/claw-agent-tui-cos.XXXXXX)"
+          trap 'rm -f "$cos_fixture"' EXIT
+          install -m 0755 target/${{ matrix.musl_target }}/release/cos "$cos_fixture"
           original_namespace="$(readlink /proc/self/ns/mnt)"
           for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
             unshare --user --map-current-user --keep-caps --mount --net \
               python3 -B core/tests/agent_tui_pty.py \
-              --cos target/${{ matrix.musl_target }}/release/cos \
+              --cos "$cos_fixture" \
               --case "$scenario" \
               --original-mount-namespace "$original_namespace" \
               --transcript "$RUNNER_TEMP/claw-tui-$scenario.log"
