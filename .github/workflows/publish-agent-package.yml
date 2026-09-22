@@ -127,7 +127,7 @@ jobs:
               --cos "$cos_fixture" \
               --case "$scenario" \
               --original-mount-namespace "$original_namespace" \
-              --transcript "$RUNNER_TEMP/claw-tui-$scenario.log"
+              --transcript "/tmp/claw-tui-$scenario.log"
           done
 
       - name: Verify Agent package
