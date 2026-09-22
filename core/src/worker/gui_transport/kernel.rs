@@ -39,9 +39,9 @@ struct Sizes {
     data: u16,
 }
 
-const RECV: libc::c_ulong = 0xc000_2100 | (size_of::<Notice>() as libc::c_ulong) << 16;
-const SEND: libc::c_ulong = 0xc000_2101 | (size_of::<Response>() as libc::c_ulong) << 16;
-const VALID: libc::c_ulong = 0x4008_2102;
+const RECV: libc::Ioctl = (0xc000_2100_u32 | (size_of::<Notice>() as u32) << 16) as libc::Ioctl;
+const SEND: libc::Ioctl = (0xc000_2101_u32 | (size_of::<Response>() as u32) << 16) as libc::Ioctl;
+const VALID: libc::Ioctl = 0x4008_2102_u32 as libc::Ioctl;
 
 pub(crate) struct Listener {
     descriptor: OwnedFd,

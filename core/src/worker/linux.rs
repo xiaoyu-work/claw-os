@@ -729,8 +729,13 @@ fn install_pre_exec(command: &mut Command, plan: PreExecPlan) {
 /// POSIX ceilings that apply whether or not a cgroup is available.
 /// They bound descriptor exhaustion, fork bombs, core dumps and file
 /// growth; the cgroup, when present, adds memory and CPU on top.
+#[cfg(target_env = "gnu")]
+type RlimitResource = libc::__rlimit_resource_t;
+#[cfg(not(target_env = "gnu"))]
+type RlimitResource = libc::c_int;
+
 fn apply_rlimits(limits: &super::policy::Limits, nproc_ceiling: u64) -> std::io::Result<()> {
-    let set = |resource: libc::__rlimit_resource_t, value: u64| -> std::io::Result<()> {
+    let set = |resource: RlimitResource, value: u64| -> std::io::Result<()> {
         let mut inherited = libc::rlimit {
             rlim_cur: 0,
             rlim_max: 0,

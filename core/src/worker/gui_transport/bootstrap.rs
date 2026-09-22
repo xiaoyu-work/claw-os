@@ -3,6 +3,8 @@ use std::mem::{size_of, zeroed};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::time::Instant;
 
+use super::checked_length;
+
 pub(crate) const READY: [u8; 4] = *b"CG1R";
 pub(crate) const INPUT: [u8; 4] = *b"CG1I";
 
@@ -140,12 +142,18 @@ pub(crate) fn send(
     message.msg_iov = &mut vector;
     message.msg_iovlen = 1;
     message.msg_control = control.as_mut_ptr().cast();
-    message.msg_controllen = unsafe { libc::CMSG_SPACE(size_of::<i32>() as u32) } as usize;
+    message.msg_controllen = checked_length(
+        unsafe { libc::CMSG_SPACE(size_of::<i32>() as u32) },
+        "GUI bootstrap ancillary length exceeds the platform ABI",
+    )?;
     unsafe {
         let header = libc::CMSG_FIRSTHDR(&message);
         (*header).cmsg_level = libc::SOL_SOCKET;
         (*header).cmsg_type = libc::SCM_RIGHTS;
-        (*header).cmsg_len = libc::CMSG_LEN(size_of::<i32>() as u32) as usize;
+        (*header).cmsg_len = checked_length(
+            libc::CMSG_LEN(size_of::<i32>() as u32),
+            "GUI bootstrap message length exceeds the platform ABI",
+        )?;
         std::ptr::write_unaligned(
             libc::CMSG_DATA(header).cast::<i32>(),
             descriptor.as_raw_fd(),
@@ -193,7 +201,10 @@ pub(crate) fn receive(
         message.msg_iov = &mut vector;
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = size_of_val(&control);
+        message.msg_controllen = checked_length(
+            size_of_val(&control),
+            "GUI bootstrap control buffer exceeds the platform ABI",
+        )?;
         let count = unsafe {
             libc::recvmsg(
                 socket.as_raw_fd(),
@@ -214,12 +225,16 @@ pub(crate) fn receive(
         let mut descriptors = Vec::new();
         let mut credentials = None;
         let mut invalid = message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0;
+        let header_bytes: usize = checked_length(
+            unsafe { libc::CMSG_LEN(0) },
+            "invalid GUI bootstrap header length",
+        )?;
         unsafe {
             let mut header = libc::CMSG_FIRSTHDR(&message);
             while !header.is_null() {
-                let length = (*header)
-                    .cmsg_len
-                    .saturating_sub(libc::CMSG_LEN(0) as usize);
+                let message_bytes: usize =
+                    checked_length((*header).cmsg_len, "invalid GUI bootstrap message length")?;
+                let length = message_bytes.saturating_sub(header_bytes);
                 let data = libc::CMSG_DATA(header);
                 match ((*header).cmsg_level, (*header).cmsg_type) {
                     (libc::SOL_SOCKET, libc::SCM_RIGHTS) => {

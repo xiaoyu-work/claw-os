@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use super::transport::Binding;
-use crate::worker::gui_transport::kernel;
+use crate::worker::gui_transport::{checked_length, kernel};
 
 const MAX_CONNECTIONS: usize = 16;
 const MAX_BYTES: usize = 65536;
@@ -291,7 +291,10 @@ fn receive(socket: std::os::fd::BorrowedFd<'_>, fds: bool) -> io::Result<Option<
     message.msg_iov = &mut vector;
     message.msg_iovlen = 1;
     message.msg_control = control.as_mut_ptr().cast();
-    message.msg_controllen = size_of_val(&control);
+    message.msg_controllen = checked_length(
+        size_of_val(&control),
+        "GUI transport control buffer exceeds the platform ABI",
+    )?;
     let count = unsafe {
         libc::recvmsg(
             socket.as_raw_fd(),
@@ -305,12 +308,16 @@ fn receive(socket: std::os::fd::BorrowedFd<'_>, fds: bool) -> io::Result<Option<
     let mut descriptors = Vec::new();
     let mut credentials = None;
     let mut invalid = message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0;
+    let header_bytes: usize = checked_length(
+        unsafe { libc::CMSG_LEN(0) },
+        "invalid GUI transport header length",
+    )?;
     unsafe {
         let mut header = libc::CMSG_FIRSTHDR(&message);
         while !header.is_null() {
-            let length = (*header)
-                .cmsg_len
-                .saturating_sub(libc::CMSG_LEN(0) as usize);
+            let message_bytes: usize =
+                checked_length((*header).cmsg_len, "invalid GUI transport message length")?;
+            let length = message_bytes.saturating_sub(header_bytes);
             let data = libc::CMSG_DATA(header);
             match ((*header).cmsg_level, (*header).cmsg_type) {
                 (libc::SOL_SOCKET, libc::SCM_CREDENTIALS) => {
@@ -390,15 +397,18 @@ fn send(socket: std::os::fd::BorrowedFd<'_>, packet: &mut Packet) -> io::Result<
     message.msg_iovlen = 1;
     if packet.written == 0 && !packet.descriptors.is_empty() {
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen =
-            unsafe { libc::CMSG_SPACE((packet.descriptors.len() * size_of::<i32>()) as u32) }
-                as usize;
+        message.msg_controllen = checked_length(
+            unsafe { libc::CMSG_SPACE((packet.descriptors.len() * size_of::<i32>()) as u32) },
+            "GUI transport ancillary length exceeds the platform ABI",
+        )?;
         unsafe {
             let header = libc::CMSG_FIRSTHDR(&message);
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len =
-                libc::CMSG_LEN((packet.descriptors.len() * size_of::<i32>()) as u32) as usize;
+            (*header).cmsg_len = checked_length(
+                libc::CMSG_LEN((packet.descriptors.len() * size_of::<i32>()) as u32),
+                "GUI transport message length exceeds the platform ABI",
+            )?;
             for (index, descriptor) in packet.descriptors.iter().enumerate() {
                 std::ptr::write_unaligned(
                     libc::CMSG_DATA(header).cast::<i32>().add(index),

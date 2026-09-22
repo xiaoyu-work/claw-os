@@ -3,6 +3,13 @@
 pub(crate) mod bootstrap;
 pub(crate) mod kernel;
 
+pub(crate) fn checked_length<T, U>(length: T, message: &'static str) -> std::io::Result<U>
+where
+    U: TryFrom<T>,
+{
+    U::try_from(length).map_err(|_| std::io::Error::other(message))
+}
+
 pub fn initialize_runner() -> Result<(), String> {
     use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
     use std::time::{Duration, Instant};
