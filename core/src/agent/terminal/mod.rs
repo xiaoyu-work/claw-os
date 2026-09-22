@@ -175,6 +175,7 @@ enum InputAction {
     ActivityTransition(String, &'static str),
     ActivityAttention(String),
     ActivityControls(String),
+    ActivityEvidence(String),
     Quit,
 }
 
@@ -224,6 +225,8 @@ async fn run_with_backend(
                             && app.activity_detail.is_none()
                             && app.activity_attention.is_none()
                             && app.activity_controls.is_none()
+                            && app.activity_evidence.is_none()
+                            && app.activity_operation_preview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -506,6 +509,50 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if let Some(preview) = &app.activity_operation_preview {
+        let activity_id = preview.activity_id.clone();
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_activity_operation_preview();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.activity_operation_preview_scroll =
+                    app.activity_operation_preview_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.activity_operation_preview_scroll =
+                    app.activity_operation_preview_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => InputAction::ActivityEvidence(activity_id),
+            _ => InputAction::None,
+        };
+    }
+    if let Some(evidence) = &app.activity_evidence {
+        let activity_id = evidence.activity_id.clone();
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_activity_evidence();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.activity_evidence_scroll = app.activity_evidence_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.activity_evidence_scroll = app.activity_evidence_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                app.close_activity_evidence();
+                app.prefill_input(format!("/activity-preview {activity_id} "));
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if let Some(detail) = &app.activity_detail {
         let id = detail.activity.id.clone();
         let state = detail.activity.state.clone();
@@ -546,6 +593,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Char('a') | KeyCode::Char('A') => InputAction::ActivityAttention(id),
             KeyCode::Char('o') | KeyCode::Char('O') => InputAction::ActivityControls(id),
+            KeyCode::Char('e') | KeyCode::Char('E') => InputAction::ActivityEvidence(id),
             _ => InputAction::None,
         };
     }
@@ -885,6 +933,10 @@ async fn apply_input_action(
                 },
                 InputAction::ActivityControls(id) => match backend.activity_controls(&id).await {
                     Ok(controls) => app.open_activity_controls(controls),
+                    Err(error) => app.push_error(&error),
+                },
+                InputAction::ActivityEvidence(id) => match backend.activity_evidence(&id).await {
+                    Ok(evidence) => app.open_activity_evidence(evidence),
                     Err(error) => app.push_error(&error),
                 },
             }

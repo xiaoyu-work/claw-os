@@ -35,7 +35,112 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_detail(frame, area, app);
     render_activity_attention(frame, area, app);
     render_activity_controls(frame, area, app);
+    render_activity_evidence(frame, area, app);
+    render_activity_operation_preview(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_activity_evidence(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(evidence) = &app.activity_evidence else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(106);
+    let height = screen.height.saturating_sub(4).min(34);
+    if width < 44 || height < 14 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![Line::styled(
+        "Reported evidence and inert references - not authority, truth, or confirmed effects",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )];
+    lines.extend(
+        evidence
+            .presentation
+            .lines()
+            .map(|line| Line::raw(line.to_string())),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.activity_evidence_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Blue))
+                    .title(" Activity evidence ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled(
+                            "[p] Prepare operation preview",
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
+}
+
+fn render_activity_operation_preview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(preview) = &app.activity_operation_preview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(100);
+    let height = screen.height.saturating_sub(4).min(32);
+    if width < 44 || height < 14 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![Line::styled(
+        "Metadata preview only - authorization not checked, App not executed, effects not confirmed",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )];
+    lines.extend(
+        preview
+            .presentation
+            .lines()
+            .map(|line| Line::raw(line.to_string())),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.activity_operation_preview_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(" Activity operation preview ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled("[e] Back to evidence", Style::default().fg(Color::Yellow)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
 }
 
 fn render_activity_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -280,10 +385,14 @@ fn render_activity_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         )));
     }
     let actions = match activity.state.as_str() {
-        "active" => "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention  [o] Controls",
-        "paused" => "[u] Resume  [c] Complete  [x] Cancel  [a] Attention  [o] Controls",
-        "completed" | "cancelled" => "[u] Reopen  [a] Attention  [o] Controls",
-        _ => "[a] Attention  [o] Controls",
+        "active" => {
+            "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention  [o] Controls  [e] Evidence"
+        }
+        "paused" => {
+            "[u] Resume  [c] Complete  [x] Cancel  [a] Attention  [o] Controls  [e] Evidence"
+        }
+        "completed" | "cancelled" => "[u] Reopen  [a] Attention  [o] Controls  [e] Evidence",
+        _ => "[a] Attention  [o] Controls  [e] Evidence",
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

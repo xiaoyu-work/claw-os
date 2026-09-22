@@ -117,6 +117,10 @@ or receipt results, reported windows, relations and superseded history. Forms
 submit the same broker contract and never infer new authority from a record.
 Late responses cannot replace another Activity's view or unsaved form.
 
+The full-screen Agent TUI includes the same bounded history in
+`/activity-evidence ACTIVITY_ID`; it never turns an annotation into a fact,
+permission, dependency or App-data copy.
+
 When the broker claims an associated job, it adds bounded excerpts of at most
 six unsuperseded entries to the existing **untrusted Activity context**. This
 includes expiry and retraction caveats. The exact context is recorded through

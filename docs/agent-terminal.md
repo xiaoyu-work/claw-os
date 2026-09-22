@@ -85,6 +85,8 @@ Controls:
 - In Activity controls, `l`, `b`, `p`, and `c` prepare revision-bound commands
   for execution limits, monetary budget, priority, and capability policy.
   `r` refreshes canonical state; prepared commands do not run until `Enter`.
+- In an Activity detail, `e` opens Evidence Center. There, `p` prepares an
+  operation-preview command; a preview can return to evidence with `e`.
 
 Text entered while a task is active is queued locally and submitted after that
 task reaches a terminal state. Exiting does not silently cancel durable work.
@@ -133,6 +135,8 @@ The command set names Claw concepts only:
 /activity-priority <activity-id> <foreground|standard|background> <revision|new>
 /activity-capability-set <activity-id> <revision|new> | <draft-json>
 /activity-capability-enable <activity-id> <on|off> <revision>
+/activity-evidence <activity-id>
+/activity-preview <activity-id> <app-id> <operation> | <json-argv>
 /session
 /clear
 /cancel
@@ -203,6 +207,19 @@ pending admission without preemption. Capability policies constrain existing
 authority and approval escalation but never grant permission; disabling a
 stored capability policy is a stop boundary, not unrestricted access.
 
+`/activity-evidence` combines the shared object-description, receipt and
+object-state routes. It labels declarations and references as inert, receipts
+as caller-reported, annotations as non-authoritative, and attached Files App
+change plans as App-owned proposals. A well-formed plan diff appears only
+through its existing receipt preview; the TUI neither reads private plan
+contents nor applies a proposal.
+
+`/activity-preview` accepts an explicit JSON argv array and calls the
+authenticated metadata preview. The response is rejected unless
+`authorization_checked`, `executed`, and `effects_confirmed` are all `false`.
+Previewing never resolves an object, executes App code, grants permission, or
+creates a receipt.
+
 ## Backend ownership
 
 ```text
@@ -213,6 +230,7 @@ Claw ratatui renderer
   -> owner-scoped notification state and delivery preferences
   -> shared Activity lifecycle, execution and attention routes
   -> revision-bound Activity control routes
+  -> read-only Activity object, preview, receipt and object-state evidence
   -> claw-agentd and the shared guarded Agent runtime
 ```
 
@@ -239,7 +257,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls multiline resume plain; do
+for scenario in complete cancel commands confirmations task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence multiline resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -262,4 +280,6 @@ read, acknowledge and dismiss mutations and updates durable delivery/DND
 preferences without a desktop dependency. The Activity scenario exercises the
 shared list/detail/create/run/pause/reopen/complete/cancel/attention lifecycle.
 The controls scenario preserves exact revisions across limits, accounting,
-priority and capability-policy mutations.
+priority and capability-policy mutations. The evidence scenario reads objects,
+receipts, annotations and staged-plan projections, then verifies a metadata-only
+operation preview.

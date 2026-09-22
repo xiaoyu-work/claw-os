@@ -134,6 +134,8 @@ the same reference updates its display label rather than duplicating it.
 This does not read the object, execute an App, or grant new permissions.
 
 Web and native desktop offer the same attachment and description operations.
+The full-screen Agent TUI reads those same descriptions in
+`/activity-evidence ACTIVITY_ID`; it does not resolve the object.
 Descriptions distinguish:
 
 | Status | Meaning |

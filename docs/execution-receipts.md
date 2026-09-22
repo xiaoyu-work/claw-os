@@ -116,6 +116,10 @@ Activity Web and native desktop display the same broker records. Reports
 remain readable after pause, cancellation, or completion, and a late result
 can be recorded without reopening or changing the Activity.
 
+The full-screen Agent TUI reads the same bounded ledger through
+`/activity-evidence ACTIVITY_ID`. It applies terminal redaction but does not
+rewrite, authenticate, execute or delete a report.
+
 The broker separately checks whether the current authenticated App package
 matches the report's package digest. A match allows a snapshot of the App's
 declared operation label and effect definitions. Otherwise the report is

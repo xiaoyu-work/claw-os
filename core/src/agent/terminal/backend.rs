@@ -249,6 +249,18 @@ pub(super) enum ActivityControlPolicy {
     CapabilityPolicy,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityEvidence {
+    pub activity_id: String,
+    pub presentation: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityOperationPreview {
+    pub activity_id: String,
+    pub presentation: String,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct StreamFrame {
     pub cursor: u64,
@@ -358,6 +370,14 @@ pub(super) trait Backend: Send + Sync {
         expected_revision: Option<u64>,
         priority: &str,
     ) -> Result<ActivityControls, String>;
+    async fn activity_evidence(&self, id: &str) -> Result<ActivityEvidence, String>;
+    async fn activity_operation_preview(
+        &self,
+        id: &str,
+        app_id: &str,
+        operation: &str,
+        args: &[String],
+    ) -> Result<ActivityOperationPreview, String>;
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
@@ -891,6 +911,119 @@ impl Backend for BrokerBackend {
             .await?;
         verify_activity_policy_ack(&value, id)?;
         self.activity_controls(id).await
+    }
+
+    async fn activity_evidence(&self, id: &str) -> Result<ActivityEvidence, String> {
+        validate_token(id, "Activity id")?;
+        let objects = self
+            .call(Command::ActivityObjects, json!({ "id": id }))
+            .await?;
+        let receipts = self
+            .call(Command::ActivityReceipts, json!({ "id": id, "limit": 100 }))
+            .await?;
+        let object_state = self
+            .call(
+                Command::ActivityObjectStateList,
+                json!({ "id": id, "limit": 100 }),
+            )
+            .await?;
+        for response in [&objects, &receipts, &object_state] {
+            if response.get("activity_id").and_then(Value::as_str) != Some(id) {
+                return Err("Claw returned evidence for another Activity".into());
+            }
+        }
+        let object_rows = bounded_array(&objects, "objects", 32)?;
+        let receipt_rows = bounded_array(&receipts, "receipts", 100)?;
+        let state_rows = bounded_array(&object_state, "entries", 100)?;
+        let file_plan_objects = object_rows
+            .iter()
+            .filter(|object| {
+                object
+                    .get("reference")
+                    .and_then(Value::as_str)
+                    .is_some_and(|reference| reference.starts_with("app://fs/change-plan?"))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let file_plan_receipts = receipt_rows
+            .iter()
+            .filter(|receipt| {
+                receipt
+                    .pointer("/report/result/preview")
+                    .and_then(Value::as_str)
+                    .is_some_and(|preview| preview.starts_with("App-reported file change plan;"))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let evidence = json!({
+            "activity_id": id,
+            "caveats": [
+                "Object declarations and references are inert and grant no authority.",
+                "Operation effects and receipts are App-declared or caller-reported, not confirmed effects.",
+                "Object-state entries are annotations, not semantic truth.",
+                "File plans remain App-owned proposals; inspect and apply them explicitly through the normal App gate."
+            ],
+            "objects": object_rows,
+            "operation_previews": "Use /activity-preview ID APP OP | JSON_ARGS; previewing never executes.",
+            "receipts": receipt_rows,
+            "object_state": state_rows,
+            "staged_file_plans": {
+                "attached_objects": file_plan_objects,
+                "reported_receipts": file_plan_receipts,
+            },
+        });
+        let presentation = serde_json::to_string_pretty(&evidence)
+            .map_err(|_| "Claw Activity evidence could not be rendered".to_string())?;
+        if presentation.len() > 2 * 1024 * 1024 {
+            return Err("Claw Activity evidence exceeded its terminal bound".into());
+        }
+        Ok(ActivityEvidence {
+            activity_id: id.to_string(),
+            presentation,
+        })
+    }
+
+    async fn activity_operation_preview(
+        &self,
+        id: &str,
+        app_id: &str,
+        operation: &str,
+        args: &[String],
+    ) -> Result<ActivityOperationPreview, String> {
+        validate_token(id, "Activity id")?;
+        validate_token(app_id, "App id")?;
+        validate_token(operation, "operation")?;
+        if args.len() > 64 || args.iter().any(|arg| arg.len() > 8_192) {
+            return Err("operation preview arguments exceed terminal bounds".into());
+        }
+        let value = self
+            .call(
+                Command::ActivityOperationPreview,
+                json!({
+                    "id": id,
+                    "app_id": app_id,
+                    "operation": operation,
+                    "args": args,
+                }),
+            )
+            .await?;
+        if value.get("app_id").and_then(Value::as_str) != Some(app_id)
+            || value.get("operation").and_then(Value::as_str) != Some(operation)
+            || value.get("authorization_checked").and_then(Value::as_bool) != Some(false)
+            || value.get("executed").and_then(Value::as_bool) != Some(false)
+            || value.get("effects_confirmed").and_then(Value::as_bool) != Some(false)
+        {
+            return Err("Claw returned an unsafe or mismatched operation preview".into());
+        }
+        let presentation = serde_json::to_string_pretty(&value)
+            .map_err(|_| "Claw operation preview could not be rendered".to_string())?;
+        if presentation.len() > 256 * 1024 {
+            return Err("Claw operation preview exceeded its terminal bound".into());
+        }
+        Ok(ActivityOperationPreview {
+            activity_id: id.to_string(),
+            presentation,
+        })
     }
 
     async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String> {
@@ -1432,6 +1565,17 @@ fn verify_activity_policy_ack(value: &Value, id: &str) -> Result<(), String> {
         return Err("Claw returned a mismatched Activity control acknowledgement".into());
     }
     Ok(())
+}
+
+fn bounded_array<'a>(value: &'a Value, key: &str, limit: usize) -> Result<&'a Vec<Value>, String> {
+    let values = value
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("Claw response omitted {key}"))?;
+    if values.len() > limit {
+        return Err(format!("Claw response {key} exceeded its terminal bound"));
+    }
+    Ok(values)
 }
 
 fn validate_token(value: &str, field: &str) -> Result<(), String> {

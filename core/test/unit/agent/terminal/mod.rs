@@ -1,9 +1,9 @@
 use super::*;
 use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
-    ActivityResource, ApprovalRequest, BackendInfo, Conversation, ConversationMessage,
-    ConversationSummary, Job, NotificationAction, NotificationDelivery, NotificationItem,
-    NotificationPage, NotificationPreferences, TaskSummary,
+    ActivityEvidence, ActivityOperationPreview, ActivityResource, ApprovalRequest, BackendInfo,
+    Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
+    NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -195,6 +195,17 @@ fn claw_commands_are_closed_and_semantic() {
             id: "activity-1".into(),
             priority: "foreground".into(),
             expected_revision: None,
+        })
+    );
+    assert_eq!(
+        parse_command(
+            "/activity-preview activity-1 fs write | [\"/tmp/file\",\"--content\",\"draft\"]"
+        ),
+        Some(Command::ActivityPreview {
+            id: "activity-1".into(),
+            app_id: "fs".into(),
+            operation: "write".into(),
+            args: vec!["/tmp/file".into(), "--content".into(), "draft".into()],
         })
     );
     assert_eq!(parse_command("/resume"), Some(Command::Sessions));
@@ -882,4 +893,49 @@ fn activity_controls_expose_exact_revisions_before_mutation() {
         app.input,
         "/activity-limits-enable 00000000-0000-4000-8000-000000000001 off 3"
     );
+}
+
+#[test]
+fn activity_evidence_and_previews_remain_non_authoritative() {
+    let mut app = app();
+    app.open_activity_evidence(ActivityEvidence {
+        activity_id: "00000000-0000-4000-8000-000000000001".into(),
+        presentation: "{\"objects\":[],\"receipts\":[],\"staged_file_plans\":[]}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('p'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(
+        app.input,
+        "/activity-preview 00000000-0000-4000-8000-000000000001 "
+    );
+
+    app.open_activity_operation_preview(ActivityOperationPreview {
+        activity_id: "00000000-0000-4000-8000-000000000001".into(),
+        presentation: json!({
+            "authorization_checked": false,
+            "executed": false,
+            "effects_confirmed": false,
+        })
+        .to_string(),
+    });
+    let backend = TestBackend::new(110, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Metadata preview only"));
+    assert!(output.contains("effects_confirmed"));
 }

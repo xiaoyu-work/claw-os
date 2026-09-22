@@ -57,6 +57,8 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
         "/activity-capability-enable",
         "enable or disable capability policy",
     ),
+    ("/activity-evidence", "show Activity objects and reports"),
+    ("/activity-preview", "preview App effects without executing"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -122,6 +124,13 @@ pub(super) enum Command {
         id: String,
         priority: String,
         expected_revision: Option<u64>,
+    },
+    ActivityEvidence(String),
+    ActivityPreview {
+        id: String,
+        app_id: String,
+        operation: String,
+        args: Vec<String>,
     },
     Session,
     Clear,
@@ -234,6 +243,10 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "activity-priority" => {
             parse_activity_priority(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
         }
+        "activity-evidence" if !rest.is_empty() => Command::ActivityEvidence(rest.to_string()),
+        "activity-preview" => {
+            parse_activity_preview(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
+        }
         "session" => Command::Session,
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
@@ -294,6 +307,8 @@ fn takes_argument(command: &str) -> bool {
             | "/activity-priority"
             | "/activity-capability-set"
             | "/activity-capability-enable"
+            | "/activity-evidence"
+            | "/activity-preview"
     )
 }
 
@@ -329,6 +344,8 @@ pub(super) async fn execute(
                 | Command::ActivityControlSet { .. }
                 | Command::ActivityControlEnabled { .. }
                 | Command::ActivityPriority { .. }
+                | Command::ActivityEvidence(_)
+                | Command::ActivityPreview { .. }
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -356,6 +373,7 @@ pub(super) async fn execute(
              /activity-priority ID CLASS REV|new\n\
              /activity-capability-set ID REV|new | JSON\n\
              /activity-capability-enable ID on|off REV\n\
+             /activity-evidence ID  /activity-preview ID APP OP | JSON_ARGS\n\
              /clear  /cancel  /quit\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
@@ -597,6 +615,21 @@ pub(super) async fn execute(
                 .await?;
             app.open_activity_controls(controls);
         }
+        Command::ActivityEvidence(id) => {
+            let evidence = backend.activity_evidence(&id).await?;
+            app.open_activity_evidence(evidence);
+        }
+        Command::ActivityPreview {
+            id,
+            app_id,
+            operation,
+            args,
+        } => {
+            let preview = backend
+                .activity_operation_preview(&id, &app_id, &operation, &args)
+                .await?;
+            app.open_activity_operation_preview(preview);
+        }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}",
             app.conversation.id, app.selected_model, app.info.provider
@@ -754,6 +787,32 @@ fn parse_revision(value: &str) -> Option<Option<u64>> {
         .ok()
         .filter(|revision| *revision > 0)
         .map(Some)
+}
+
+fn parse_activity_preview(value: &str) -> Option<Command> {
+    let (identity, raw_args) = value
+        .split_once('|')
+        .map_or((value, None), |(identity, args)| {
+            (identity, Some(args.trim()))
+        });
+    let mut identity = identity.split_whitespace();
+    let id = identity.next()?.to_string();
+    let app_id = identity.next()?.to_string();
+    let operation = identity.next()?.to_string();
+    if identity.next().is_some() {
+        return None;
+    }
+    let args = match raw_args {
+        None | Some("") => Vec::new(),
+        Some(raw) if raw.len() <= 64 * 8_192 => serde_json::from_str::<Vec<String>>(raw).ok()?,
+        Some(_) => return None,
+    };
+    (args.len() <= 64).then_some(Command::ActivityPreview {
+        id,
+        app_id,
+        operation,
+        args,
+    })
 }
 
 pub(super) async fn confirm(

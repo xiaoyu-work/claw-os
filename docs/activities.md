@@ -46,6 +46,12 @@ scheduling-priority and capability-policy records used by Web and native
 clients. The TUI prepares explicit revision-bound commands and never
 automatically rebases a stale edit.
 
+`/activity-evidence ID` presents the Activity's authenticated App object
+descriptions, immutable caller-reported receipts and object-state annotations.
+`/activity-preview ID APP OP | JSON_ARGS` uses the shared non-executing effect
+preview. Neither view resolves App data or upgrades reports into authority,
+truth, confirmed effects or goal completion.
+
 ```bash
 cos activity create "Release v2" \
   --goal "Publish the project next Friday" \

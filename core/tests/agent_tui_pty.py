@@ -406,6 +406,99 @@ class FixtureBroker:
                         },
                         "notifications": [],
                     }
+        if method == "activity.objects":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity objects addressed another goal")
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "objects": [{
+                            "label": "Config proposal",
+                            "reference": (
+                                "app://fs/change-plan?id=%2Ftmp%2Fconfig"
+                                "&revision=00000000-0000-4000-8000-000000000002"
+                            ),
+                            "status": "declared",
+                            "description": {
+                                "app_id": "fs",
+                                "object_type": "change-plan",
+                                "invocation": {
+                                    "operation": "plan_show",
+                                    "args": ["/tmp/config"],
+                                },
+                            },
+                            "error": None,
+                        }],
+                    }
+        if method == "activity.receipts":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity receipts addressed another goal")
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "receipts": [{
+                            "id": "00000000-0000-4000-8000-000000000003",
+                            "activity_id": ACTIVITY_ID,
+                            "received_at": "2026-01-01T00:00:02Z",
+                            "source": "caller_reported",
+                            "report": {
+                                "app_id": "fs",
+                                "operation": "plan_write",
+                                "outcome": "returned",
+                                "result": {
+                                    "preview": (
+                                        "App-reported file change plan; not authorization "
+                                        "or OS-confirmed effects.\n--- before\n+++ after"
+                                    ),
+                                },
+                            },
+                        }],
+                    }
+        if method == "activity.object_state.list":
+                    if params["id"] != ACTIVITY_ID:
+                        raise AssertionError("Activity object state addressed another goal")
+                    return {
+                        "schema": 1,
+                        "activity_id": ACTIVITY_ID,
+                        "entries": [{
+                            "id": "00000000-0000-4000-8000-000000000004",
+                            "reference": "app://fs/file?id=%2Ftmp%2Fconfig",
+                            "content": {
+                                "kind": "user_statement",
+                                "text": "Ready for review",
+                            },
+                            "source": "caller_reported",
+                            "recorded_at": "2026-01-01T00:00:03Z",
+                        }],
+                    }
+        if method == "activity.operation.preview":
+                    if (
+                        params["id"] != ACTIVITY_ID
+                        or params["app_id"] != "fs"
+                        or params["operation"] != "stat"
+                    ):
+                        raise AssertionError("operation preview changed its identity")
+                    return {
+                        "schema": 1,
+                        "app_id": "fs",
+                        "app_name": "Files",
+                        "app_version": "1",
+                        "package_digest": "sha256:" + "a" * 64,
+                        "operation": "stat",
+                        "operation_label": "Inspect file",
+                        "effects_declared": True,
+                        "effects": [{
+                            "kind": "read",
+                            "label": "Read file metadata",
+                            "requested_targets": [],
+                            "target_state": "unresolved",
+                        }],
+                        "unresolved_arguments": ["path"],
+                        "authorization_checked": False,
+                        "executed": False,
+                        "effects_confirmed": False,
+                        "notes": ["Preview only"],
+                    }
         if method == "activity.execution_limits.get":
                     return {
                         "schema": 1,
@@ -556,6 +649,7 @@ class FixtureBroker:
                     "approval-center",
                     "activity-lifecycle",
                     "activity-controls",
+                    "activity-evidence",
                     "notification-inbox",
                     "task-center",
                 ):
@@ -583,6 +677,7 @@ class FixtureBroker:
                 "approval-center",
                 "activity-lifecycle",
                 "activity-controls",
+                "activity-evidence",
                 "notification-inbox",
                 "task-center",
             ) or self.cancelled.is_set()
@@ -1263,6 +1358,45 @@ def run(cos, case, transcript, original_namespace, trace):
                     ),
                 )
                 os.write(master, b"\x1b")
+            if case == "activity-evidence":
+                send_prompt(master, output, f"/activity-evidence {ACTIVITY_ID}")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: all(
+                        any(request["command"] == command for request in broker.requests)
+                        for command in (
+                            "activity.objects",
+                            "activity.receipts",
+                            "activity.object_state.list",
+                        )
+                    ),
+                )
+                os.write(master, b"p")
+                time.sleep(0.2)
+                send_prompt(master, output, "fs stat | []")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "activity.operation.preview"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"e")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: sum(
+                        request["command"] == "activity.objects"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"\x1b")
             if case == "multiline":
                 os.write(master, b"\x1b[200~First line\nSecond line\x1b[201~")
                 settled = time.monotonic() + 0.4
@@ -1342,6 +1476,7 @@ if __name__ == "__main__":
             "approval-center",
             "activity-lifecycle",
             "activity-controls",
+            "activity-evidence",
             "notification-inbox",
             "plain",
             "resume",

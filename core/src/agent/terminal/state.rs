@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::backend::{
-    Activity, ActivityAttention, ActivityControls, ActivityDetail, ApprovalRequest, BackendInfo,
-    Conversation, ConversationSummary, Job, NotificationItem, NotificationPage,
-    NotificationPreferences, TaskSummary,
+    Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
+    ActivityOperationPreview, ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job,
+    NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
 };
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
@@ -141,6 +141,10 @@ pub(super) struct App {
     pub activity_attention_scroll: u16,
     pub activity_controls: Option<ActivityControls>,
     pub activity_controls_scroll: u16,
+    pub activity_evidence: Option<ActivityEvidence>,
+    pub activity_evidence_scroll: u16,
+    pub activity_operation_preview: Option<ActivityOperationPreview>,
+    pub activity_operation_preview_scroll: u16,
     pub scroll: u16,
     pub usage_input: u64,
     pub usage_output: u64,
@@ -191,6 +195,10 @@ impl App {
             activity_attention_scroll: 0,
             activity_controls: None,
             activity_controls_scroll: 0,
+            activity_evidence: None,
+            activity_evidence_scroll: 0,
+            activity_operation_preview: None,
+            activity_operation_preview_scroll: 0,
             scroll: 0,
             usage_input: 0,
             usage_output: 0,
@@ -240,6 +248,10 @@ impl App {
         self.activity_attention_scroll = 0;
         self.activity_controls = None;
         self.activity_controls_scroll = 0;
+        self.activity_evidence = None;
+        self.activity_evidence_scroll = 0;
+        self.activity_operation_preview = None;
+        self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
         self.active_task = None;
         self.task_started_at = None;
@@ -420,6 +432,8 @@ impl App {
             self.activity_detail = None;
             self.activity_attention = None;
             self.activity_controls = None;
+            self.activity_evidence = None;
+            self.activity_operation_preview = None;
         }
     }
 
@@ -986,6 +1000,46 @@ impl App {
     pub fn close_activity_controls(&mut self) {
         self.activity_controls = None;
         self.activity_controls_scroll = 0;
+    }
+
+    pub fn open_activity_evidence(&mut self, mut evidence: ActivityEvidence) {
+        evidence.presentation = bounded_clean_text(&evidence.presentation, 1024 * 1024);
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
+        self.activity_controls = None;
+        self.activity_operation_preview = None;
+        self.activity_evidence = Some(evidence);
+        self.activity_evidence_scroll = 0;
+    }
+
+    pub fn close_activity_evidence(&mut self) {
+        self.activity_evidence = None;
+        self.activity_evidence_scroll = 0;
+    }
+
+    pub fn open_activity_operation_preview(&mut self, mut preview: ActivityOperationPreview) {
+        preview.presentation = bounded_clean_text(&preview.presentation, 256 * 1024);
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
+        self.activity_controls = None;
+        self.activity_evidence = None;
+        self.activity_operation_preview = Some(preview);
+        self.activity_operation_preview_scroll = 0;
+    }
+
+    pub fn close_activity_operation_preview(&mut self) {
+        self.activity_operation_preview = None;
+        self.activity_operation_preview_scroll = 0;
     }
 
     pub fn confirm_activity_complete(&mut self, id: String, note: String) {

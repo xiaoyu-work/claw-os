@@ -45,6 +45,9 @@ audit.
 - Activity controls display canonical finite limits, configured monetary
   accounting, pending priority and capability constraints. Mutations carry an
   explicit fetched revision (or `new`) and never retry a stale CAS.
+- Activity Evidence aggregates authenticated object declarations, immutable
+  reported receipts and object-state annotations without resolving App data.
+  Operation previews stay metadata-only and file plans stay App-owned.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

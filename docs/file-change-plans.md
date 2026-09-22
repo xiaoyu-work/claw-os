@@ -111,6 +111,11 @@ therefore display the same reported diff rather than implementing their own
 planner. Receipts remain caller-reported, and long diffs are visibly truncated
 by the receipt preview limit. Inspect the full plan before applying it.
 
+The full-screen Agent TUI identifies attached `fs/change-plan` references and
+their reported receipt previews in `/activity-evidence ACTIVITY_ID`. It does
+not resolve private plan data or expose an Apply shortcut; inspection and
+application still cross the ordinary Files App permission path explicitly.
+
 ## Bounds and storage
 
 Plans support regular, single-link UTF-8 files without NUL, up to 64 KiB before

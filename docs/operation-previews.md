@@ -40,6 +40,11 @@ Web and native desktop object views call the same owner-scoped service using
 the declared object's existing invocation. They do not implement a local
 planner, execute the operation, or approve anything.
 
+The full-screen Agent TUI command is
+`/activity-preview ACTIVITY_ID APP_ID OPERATION | JSON_ARGV`. It rejects a
+response unless all three non-execution flags remain false and displays it as
+metadata only.
+
 ## What a preview means
 
 The response includes the authenticated App package digest, operation identity,
