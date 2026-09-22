@@ -60,6 +60,14 @@ class GidScanTests(unittest.TestCase):
                 b"10 1 8:1 / /mnt/stack rw - ext4 /dev/sda rw\n"
                 b"11 1 0:2 / /mnt/stack rw - tmpfs tmpfs rw\n"
             )
+        virtual_stack = SCAN.parse_mountinfo(
+            b"12 1 0:3 / /proc/sys/fs/binfmt_misc rw - autofs systemd-1 rw\n"
+            b"13 12 0:4 / /proc/sys/fs/binfmt_misc rw - binfmt_misc binfmt_misc rw\n"
+        )
+        self.assertEqual(
+            [record.fs_type for record in virtual_stack],
+            ["autofs", "binfmt_misc"],
+        )
         with self.assertRaisesRegex(SCAN.ScanError, "duplicate mount id"):
             SCAN.parse_mountinfo(
                 b"10 1 8:1 / /mnt/a rw - ext4 /dev/sda rw\n"

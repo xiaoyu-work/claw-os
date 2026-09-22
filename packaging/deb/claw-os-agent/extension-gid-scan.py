@@ -12,6 +12,7 @@ import time
 
 
 VIRTUAL_FILESYSTEMS = {
+    "autofs",
     "binfmt_misc",
     "bpf",
     "cgroup",
@@ -71,7 +72,7 @@ def decode_mount_path(value: bytes) -> str:
 def parse_mountinfo(data: bytes) -> list[MountRecord]:
     records: list[MountRecord] = []
     mount_ids: set[int] = set()
-    mountpoints: set[str] = set()
+    mountpoints: dict[str, str] = {}
     for line in data.splitlines():
         fields = line.split()
         try:
@@ -95,10 +96,14 @@ def parse_mountinfo(data: bytes) -> list[MountRecord]:
         fs_type = fields[separator + 1].decode("ascii", "strict")
         if mount_id in mount_ids:
             raise ScanError(f"duplicate mount id {mount_id}")
-        if mountpoint in mountpoints:
+        existing_fs_type = mountpoints.get(mountpoint)
+        if existing_fs_type is not None and (
+            existing_fs_type not in VIRTUAL_FILESYSTEMS
+            or fs_type not in VIRTUAL_FILESYSTEMS
+        ):
             raise ScanError(f"stacked or duplicate mountpoint is ambiguous: {mountpoint}")
         mount_ids.add(mount_id)
-        mountpoints.add(mountpoint)
+        mountpoints.setdefault(mountpoint, fs_type)
         records.append(
             MountRecord(
                 mount_id=mount_id,

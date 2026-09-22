@@ -316,7 +316,9 @@ instead of rewriting it, but only when it has no unrelated group members,
 primary users, processes, subordinate-ID overlap, group-owned files, or named
 POSIX ACL entries. The ownership/ACL proof snapshots mountinfo and scans every
 mounted filesystem independently, including nested, bind, tmpfs, persistent,
-and network mounts. Stacked/duplicate mountpoints are ambiguous and rejected.
+and network mounts. Stacked/duplicate mountpoints are rejected unless every
+layer is on the maintained kernel-virtual allowlist; any non-virtual layer
+remains ambiguous and fails closed.
 Each visible mount is opened and checked against the captured mount ID,
 device, inode, mode, and ownership before and after descriptor-relative
 scanning. Scans run in dedicated process groups with bounded TERM then SIGKILL

@@ -265,9 +265,10 @@ proves process, mount, task-state, and routed-ACL residue is gone.
 After the new package and its ordinary dependencies are unpacked/configured,
 `postinst` invokes the single-link root-owned
 `/usr/lib/cos/extension-gid-scan.py`. The helper snapshots mountinfo, rejects
-stacked/duplicate mountpoints, opens each non-kernel-virtual mount, verifies
-its `mnt_id`, device, inode, mode, and ownership before and after scanning,
-then runs `find -xdev` and real numeric `getfacl` inspection through the pinned
+stacked/duplicate mountpoints unless every layer is on the maintained
+kernel-virtual allowlist, opens each non-kernel-virtual mount, verifies its
+`mnt_id`, device, inode, mode, and ownership before and after scanning, then
+runs `find -xdev` and real numeric `getfacl` inspection through the pinned
 descriptor. Nested, bind, tmpfs, persistent, and network mounts remain
 separate roots. Each scan has a dedicated process group with bounded
 TERM/SIGKILL escalation and residue verification. Malformed or changed
