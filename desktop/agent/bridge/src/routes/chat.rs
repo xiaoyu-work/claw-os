@@ -25,54 +25,13 @@ use futures::stream::Stream;
 use serde_json::{Value, json};
 
 use crate::{api_error::ApiError, state::AppState, translation};
-use clawd_client::{Client, Command};
+use clawd_client::Command;
 
 /// Hard ceiling on a single chat turn. `task.stream` blocks ~1s per poll, so
 /// without this a task that never reports `terminal` (stuck agent, or a frame
 /// that never advances the cursor) would keep the SSE connection open and
 /// re-poll clawd once a second indefinitely while the client stays connected.
 const MAX_STREAM_DURATION: Duration = Duration::from_secs(30 * 60);
-
-struct CancelOnDrop {
-    clawd: Client,
-    task_id: String,
-    armed: bool,
-}
-
-impl CancelOnDrop {
-    fn new(clawd: Client, task_id: String) -> Self {
-        Self {
-            clawd,
-            task_id,
-            armed: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let clawd = self.clawd.clone();
-        let task_id = self.task_id.clone();
-        handle.spawn(async move {
-            if let Err(error) = clawd
-                .call(Command::TaskCancel, json!({ "id": task_id }))
-                .await
-            {
-                tracing::warn!(%error, "failed to cancel disconnected agent task");
-            }
-        });
-    }
-}
 
 fn delta_event(text: &str) -> Event {
     protocol_event(StreamEvent::Delta(DeltaPayload::new(text)))
@@ -117,6 +76,17 @@ fn task_submit_params(
     if let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) {
         params["session_id"] = Value::from(session_id.to_string());
     }
+    Ok(params)
+}
+
+fn follow_up_submit_params(
+    request: &ChatRequest,
+    prompt: &str,
+    predecessor_id: &str,
+    session_id: &str,
+) -> Result<Value, String> {
+    let mut params = task_submit_params(request, prompt, Some(session_id))?;
+    params["after_task_id"] = Value::String(predecessor_id.to_string());
     Ok(params)
 }
 
@@ -171,7 +141,6 @@ pub async fn stream_chat(
             }
         };
         let task_id = started.task_id.clone();
-        let mut cancel_on_drop = CancelOnDrop::new(clawd.clone(), task_id.clone());
         yield Ok(protocol_event(StreamEvent::TaskStarted(started)));
 
         let mut cursor = 0u64;
@@ -229,11 +198,147 @@ pub async fn stream_chat(
             yield Ok(delta_event(&answer));
         }
 
-        cancel_on_drop.disarm();
         yield Ok(protocol_event(StreamEvent::Done(payload)));
     };
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+pub async fn stream_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let clawd = state.clawd.clone();
+    let stream = async_stream::stream! {
+        let job = match clawd.call(Command::TaskGet, json!({ "id": task_id })).await {
+            Ok(value) => value,
+            Err(error) => {
+                yield Ok::<_, Infallible>(error_event(&error.to_string()));
+                return;
+            }
+        };
+        let started = match translation::task_started(job) {
+            Ok(started) => started,
+            Err(error) => {
+                yield Ok(error_event(&error));
+                return;
+            }
+        };
+        let task_id = started.task_id.clone();
+        yield Ok(protocol_event(StreamEvent::TaskStarted(started)));
+
+        let mut cursor = 0u64;
+        let mut emitted_text = false;
+        let mut turn_emitted_text = false;
+        let deadline = Instant::now() + MAX_STREAM_DURATION;
+        let result = loop {
+            if Instant::now() >= deadline {
+                yield Ok(error_event("agent task exceeded the maximum stream duration"));
+                return;
+            }
+            let frame = match clawd.call(Command::TaskStream, json!({
+                "id": task_id,
+                "cursor": cursor,
+                "timeout_ms": 1000u64
+            })).await {
+                Ok(value) => value,
+                Err(error) => {
+                    yield Ok(error_event(&error.to_string()));
+                    return;
+                }
+            };
+            let frame = match translation::task_stream(frame) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    yield Ok(error_event(&error));
+                    return;
+                }
+            };
+            cursor = frame.cursor;
+            for record in frame.events {
+                for outgoing in translation::stream_events(
+                    record,
+                    &mut turn_emitted_text,
+                    &mut emitted_text,
+                ) {
+                    yield Ok(protocol_event(outgoing));
+                }
+            }
+            if frame.terminal {
+                break frame.job;
+            }
+        };
+        let payload = match result.into_done() {
+            Ok(payload) => payload,
+            Err(error) => {
+                yield Ok(error_event(&error));
+                return;
+            }
+        };
+        if let Some(answer) = payload.presented_answer()
+            && !emitted_text
+        {
+            yield Ok(delta_event(&answer));
+        }
+        yield Ok(protocol_event(StreamEvent::Done(payload)));
+    };
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+pub async fn follow_up(
+    State(state): State<AppState>,
+    Path(predecessor_id): Path<String>,
+    request: Result<Json<ChatRequest>, JsonRejection>,
+) -> Result<Json<cos_agent_protocol::TaskStarted>, ApiError> {
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            "invalid follow-up request",
+        )
+    })?;
+    validate_chat_attachments(&request.attachments).map_err(|error| {
+        ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            error,
+        )
+    })?;
+    let prompt = request.resolved_prompt();
+    if prompt.trim().is_empty() {
+        return Err(ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            "empty prompt",
+        ));
+    }
+    let predecessor = state
+        .clawd
+        .call(Command::TaskGet, json!({ "id": predecessor_id }))
+        .await
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    let session_id = predecessor
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_gateway("predecessor task has no conversation"))?;
+    let params = follow_up_submit_params(&request, &prompt, &predecessor_id, session_id).map_err(
+        |error| {
+            ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::Internal,
+                error,
+            )
+        },
+    )?;
+    let submitted = state
+        .clawd
+        .call(Command::TaskSubmit, params)
+        .await
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    translation::task_started(submitted)
+        .map(Json)
+        .map_err(ApiError::bad_gateway)
 }
 
 pub async fn cancel_chat(

@@ -617,8 +617,10 @@ impl App {
         } else {
             fl!("request-changes")
         };
-        let can_submit =
-            !self.stream.is_active() && !self.voice.is_active() && self.active_history_ready();
+        let can_submit = !self.voice.is_active()
+            && !self.queue_pending
+            && self.active_history_ready()
+            && (!self.stream.is_active() || self.stream.task_id().is_some());
         let voice_active = self.voice.is_active();
         let editor = widget::text_editor(&self.input)
             .id(EDITOR_ID.clone())
@@ -642,7 +644,14 @@ impl App {
                     text_editor::Binding::from_key_press(press)
                 }
             });
-        let status: Element<'_, Message> = if let Some(metrics) = self.voice.metrics() {
+        let status: Element<'_, Message> = if self.queued_followups > 0 {
+            text(fl!(
+                "queued-followups",
+                count = (self.queued_followups as i64)
+            ))
+            .size(11.0)
+            .into()
+        } else if let Some(metrics) = self.voice.metrics() {
             text(format!(
                 "{} · {}",
                 fl!("recording"),
@@ -680,16 +689,27 @@ impl App {
         let attach = Self::symbolic_button(
             "mail-attachment-symbolic",
             fl!("attach-file"),
-            (!self.voice.is_active()).then_some(Message::AttachFile),
+            (!self.voice.is_active() && !self.queue_pending).then_some(Message::AttachFile),
             false,
         );
-        let action = if self.stream.is_active() {
-            Self::symbolic_button(
-                "media-playback-stop-symbolic",
-                fl!("stop"),
-                Some(Message::StopStream),
-                true,
-            )
+        let action: Element<'_, Message> = if self.stream.is_active() {
+            let mut actions = Row::new().spacing(spacing.space_xxs);
+            if !self.input.text().trim().is_empty() && self.stream.task_id().is_some() {
+                actions = actions.push(Self::symbolic_button(
+                    "list-add-symbolic",
+                    fl!("queue-follow-up"),
+                    (!self.queue_pending).then_some(Message::Submit),
+                    false,
+                ));
+            }
+            actions
+                .push(Self::symbolic_button(
+                    "media-playback-stop-symbolic",
+                    fl!("stop"),
+                    Some(Message::StopStream),
+                    true,
+                ))
+                .into()
         } else if self.stream.is_cancelling() {
             Self::symbolic_button("process-stop-symbolic", fl!("stopping"), None, true)
         } else {

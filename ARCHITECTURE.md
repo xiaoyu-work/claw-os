@@ -1583,16 +1583,16 @@ granting the Web process direct decision authority. The Inbox is the
 Notification Service projection; raw `context.event` records remain available
 separately as System Events.
 
-Closing or losing a Web SSE connection detaches the viewer but does not cancel
-the durable task. The Chat Stop control uses the task id returned at submission
-and calls `task.cancel` explicitly; completion remains observable through Tasks,
-session history, and notifications after a reconnect.
-When Chat reopens a canonical conversation with an active Job, it consumes the
-broker's bounded conversation history and Job projection, retains the bound
-outer user prompt, removes only that Job's bound intermediate presentation
-rows, and replays its owner-scoped `task.stream` from a cursor. It refuses to
-guess this split when task bindings are incomplete. Multiple viewers do not
-become task owners, and reattachment neither resubmits work nor changes
+Closing or losing an Agent Web or native Desktop SSE connection detaches the
+viewer but does not cancel the durable task. Each Stop control uses the task id
+returned at submission and calls `task.cancel` explicitly; completion remains
+observable through Tasks, session history, and notifications after a reconnect.
+When either presentation reopens a canonical conversation with an active Job,
+it consumes the broker's bounded conversation history and Job projection,
+retains the bound outer user prompt, removes only that Job's bound intermediate
+presentation rows, and replays its owner-scoped `task.stream` from a cursor. It
+refuses to guess this split when task bindings are incomplete. Multiple viewers
+do not become task owners, and reattachment neither resubmits work nor changes
 capabilities.
 Generic Web tool cards consume the same durable progress stream but receive
 only tool identity, lifecycle status, latency and returned-byte count.
@@ -1617,11 +1617,12 @@ dependent pending record until its predecessor is `ok`, `error`, or
 explicitly. This orders execution without granting authority, inferring
 success, persisting attendance, or coupling queue lifetime to a terminal
 connection.
-Agent Web uses the same contract when the user submits while Chat is busy. The
-Web adapter derives the canonical session from the owner-checked predecessor
-instead of accepting one from the browser, and multiple follow-ups form a
-durable predecessor chain. On each terminal stream, Chat reloads the
-conversation Job projection and attaches the next runnable task.
+Agent Web and native Desktop use the same contract when the user submits while
+Chat is busy. Each adapter derives the canonical session from the
+owner-checked predecessor instead of accepting one from presentation input,
+and multiple follow-ups form a durable predecessor chain. On each terminal
+stream, Chat reloads the conversation Job projection and attaches the next
+runnable task.
 
 The owner-scoped
 `agent.conversation.create/get/list/update/fork/revert` broker routes

@@ -265,8 +265,10 @@ pub struct ToolResultView {
     pub is_error: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HistoryMessage {
+    #[serde(default)]
+    pub id: i64,
     pub role: String,
     #[serde(default)]
     pub text: String,
@@ -276,15 +278,36 @@ pub struct HistoryMessage {
     pub tool_results: Vec<ToolResultView>,
     #[serde(default)]
     pub ts_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_user_prompt: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationJob {
+    pub id: String,
+    pub status: String,
+    pub prompt: String,
+    pub session_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HistoryResponse {
     pub session_id: String,
     #[serde(default)]
     pub n: usize,
     #[serde(default)]
     pub messages: Vec<HistoryMessage>,
+    #[serde(default)]
+    pub jobs: Vec<ConversationJob>,
+    #[serde(default)]
+    pub jobs_truncated: bool,
+    #[serde(default)]
+    pub task_bindings_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_bindings_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

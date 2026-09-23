@@ -22,7 +22,40 @@ fn stale_events_do_not_mutate_the_active_generation() {
 
     assert_eq!(reduction, StreamReduction::Stale);
     assert!(stream.is_active());
-    assert!(sessions.active().unwrap().messages.last().unwrap().content.is_empty());
+    assert!(
+        sessions
+            .active()
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .is_empty()
+    );
+}
+
+#[test]
+fn detach_aborts_only_the_local_stream_and_rejects_late_events() {
+    let (mut stream, mut sessions, generation) = active_stream();
+    stream.reduce(
+        generation,
+        StreamEvent::TaskStarted(TaskStarted {
+            task_id: "task-1".into(),
+            session_id: Some("remote-1".into()),
+        }),
+        &mut sessions,
+    );
+
+    assert_eq!(stream.detach(), Some(0));
+    assert!(!stream.is_active());
+    assert_eq!(
+        stream.reduce(
+            generation,
+            StreamEvent::Delta(DeltaPayload::new("late")),
+            &mut sessions,
+        ),
+        StreamReduction::Stale
+    );
 }
 
 #[test]
@@ -98,9 +131,6 @@ fn cancellation_waits_for_task_identity_then_rejects_late_events() {
             .content
             .contains("late")
     );
-    assert_eq!(
-        stream.cancel_finished(0, 1, Ok(()), &mut sessions),
-        Some(0)
-    );
+    assert_eq!(stream.cancel_finished(0, 1, Ok(()), &mut sessions), Some(0));
     assert!(!stream.is_cancelling());
 }

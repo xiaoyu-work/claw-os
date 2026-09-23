@@ -82,6 +82,28 @@ impl StreamState {
         }
     }
 
+    pub(crate) fn task_id(&self) -> Option<&str> {
+        match &self.phase {
+            StreamPhase::Active(active) => active.task_id.as_deref(),
+            StreamPhase::Cancelling(_)
+            | StreamPhase::Idle
+            | StreamPhase::Terminal
+            | StreamPhase::Cancelled => None,
+        }
+    }
+
+    pub(crate) fn detach(&mut self) -> Option<usize> {
+        let StreamPhase::Active(mut active) = std::mem::replace(&mut self.phase, StreamPhase::Idle)
+        else {
+            return None;
+        };
+        if let Some(abort) = active.abort.take() {
+            abort.abort();
+        }
+        self.next_generation = self.next_generation.wrapping_add(1);
+        Some(active.session_index)
+    }
+
     pub(crate) fn start(&mut self, session_index: usize, abort: AbortHandle) -> u64 {
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;

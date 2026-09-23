@@ -77,9 +77,9 @@ The bridge and approval applet share `crates/clawd-client` for canonical
 `CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),
 v2 broker envelopes and request correlation, `CBK1` length-prefixed framing,
 deadlines, bounds, and typed transport/protocol errors. This broker wire
-version is independent of desktop HTTP/SSE presentation protocol v2. Image
-attachments raised the paired UI/bridge minimum to v2 so an older bridge
-cannot silently discard them. Activity detail
+version is independent of desktop HTTP/SSE presentation protocol v3. The
+paired UI/bridge minimum is v3 because an older bridge can either discard image
+attachments or cancel a durable Job when its viewer disconnects. Activity detail
 also carries the shared `activity.attention` projection; the bridge validates
 its Activity identity and derives the legacy pending-approval presentation only
 from exact pending decisions in that projection. Grouped notification
@@ -138,10 +138,14 @@ The overlay is a single-instance Wayland layer-shell surface:
 - Escape stops/cancels active work before closing the surface.
 
 Chat streams expose task identity, live text, tool lifecycle, warnings,
-usage, and final metadata. Stop cancels the clawd task; dropping the
-client stream also triggers bridge-side cancellation.
+usage, and final metadata. Stop explicitly cancels the clawd task. Dropping the
+client stream only detaches that viewer; reopening its canonical conversation
+uses verified task bindings to reconstruct the prompt and replay
+`task.stream`. While a stream is active, follow-ups are durable
+`after_task_id` Jobs whose session is derived from the owner-checked
+predecessor rather than from UI input.
 
-Native image attachment uses desktop presentation protocol v2. The file chooser
+Native image attachment uses desktop presentation protocol v3. The file chooser
 reads only an explicitly selected PNG/JPEG/GIF/WebP image, enforces the shared
 four-image/256-KiB bounds, and sends inline data through the bridge to the
 canonical `task.submit` attachment contract. It no longer inserts a local path
@@ -475,10 +479,10 @@ selects the highest version in the intersection of its compiled range and the
 bridge discovery range. The bridge validates that selected version and echoes
 it on every response; the UI rejects a missing or different echo.
 
-The current binaries support exactly v1 (`min=1`, `current=1`), while the
-intersection policy permits a future `min=1,current=2` bridge to serve a v1 UI.
+The current binaries support exactly v3 (`min=3`, `current=3`), while the
+intersection policy permits a future `min=3,current=4` bridge to serve a v3 UI.
 No-overlap requests fail with HTTP 426 and headers advertising the bridge
-range. Additive fields within v1 must have Serde defaults so older v1 payloads
+range. Additive fields within v3 must have Serde defaults so older v3 payloads
 remain readable. Renames retain a deserialization alias. Removing a field,
 changing its meaning or type, or changing an SSE event name is incompatible
 and advances the current version; the minimum advances only when older
@@ -499,6 +503,8 @@ the prior non-disruptive `start` behavior.
 | --- | --- |
 | `GET /api/health` | Plain-text `ok`; version is negotiated in headers |
 | `POST /api/chat` | `ChatRequest`; typed SSE events below |
+| `POST /api/chat/:task_id/stream` | Replays the existing owner-scoped Job as typed SSE without resubmitting or cancelling on disconnect |
+| `POST /api/chat/:task_id/follow-up` | `ChatRequest` → `TaskStarted`; derives the canonical session from the owner-checked predecessor and persists `after_task_id` |
 | `POST /api/chat/:task_id/cancel` | `CancelResponse` / `ErrorEnvelope` |
 | `GET /api/activities?state=…&limit=…` | `ActivityListQuery` → `ActivityListResponse`; `activity.list` |
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
@@ -537,10 +543,10 @@ The chat stream covers `task`, `delta` (`text` remains a decode alias),
 `tool_use_start`, `tool_use`, `tool_start`, `tool_result`, `warning`,
 `turn_done`, `done`, and `error`. The shared decoder also retains the
 `tool_input_delta` compatibility event, while the bridge continues suppressing
-live tool arguments. Unknown future event names are ignored by v1 clients;
+live tool arguments. Unknown future event names are ignored by v3 clients;
 malformed known events fail decoding.
 
-Activity endpoints use the same bearer authentication, v1 negotiation, and
+Activity endpoints use the same bearer authentication, v3 negotiation, and
 typed error envelopes as chat. Request DTOs accept no owner or capability
 fields: clawd derives ownership from the bridge's kernel identity. The
 translation module validates the broker's Activity schema and removes private
@@ -548,7 +554,7 @@ job fields before emitting presentation DTOs. Object-state entries retain the
 contract's typed server-supplied `owner_uid`; it is never a caller selector.
 Execution-limit and capability-policy replies also retain it and are checked against the same
 process-identity helper used for private bridge discovery. Other Activity views omit owner internals. Additive job/session/approval fields
-retain their v1 defaults within presentation protocol v2. Continuity remains
+retain their defaults within presentation protocol v3. Continuity remains
 intentionally non-additive: its complete shape is exact and unknown fields fail.
 
 ## License

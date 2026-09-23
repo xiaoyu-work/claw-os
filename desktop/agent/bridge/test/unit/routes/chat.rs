@@ -27,3 +27,16 @@ fn image_attachments_are_forwarded_without_desktop_authority_fields() {
     assert!(params.get("owner_uid").is_none());
     assert!(params.get("workspace").is_none());
 }
+
+#[test]
+fn follow_up_uses_the_predecessors_session_instead_of_the_request_session() {
+    let request = ChatRequest {
+        prompt: Some("continue".to_string()),
+        session_id: Some("caller-controlled".to_string()),
+        ..ChatRequest::default()
+    };
+    let params =
+        follow_up_submit_params(&request, "continue", "task-previous", "session-verified").unwrap();
+    assert_eq!(params["session_id"], "session-verified");
+    assert_eq!(params["after_task_id"], "task-previous");
+}

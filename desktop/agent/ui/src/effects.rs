@@ -10,7 +10,7 @@ use crate::activities::{
 use crate::bridge::SessionUpdateRequest;
 use crate::bridge::{
     BridgeEndpoint, ChatRequest, cancel_task, ensure_bridge_endpoint, fetch_history, fetch_models,
-    fetch_sessions, fork_session, session_exists, update_session,
+    fetch_sessions, fork_session, queue_follow_up, session_exists, update_session,
 };
 
 pub(crate) fn connect_bridge() -> Task<Message> {
@@ -311,6 +311,69 @@ pub(crate) fn open_stream(
         },
     ))
     .map(cosmic::Action::App)
+}
+
+pub(crate) fn open_task_stream(
+    endpoint: BridgeEndpoint,
+    task_id: String,
+    generation: u64,
+    abort_registration: AbortRegistration,
+) -> Task<Message> {
+    cosmic::Task::stream(cosmic::iced::stream::channel(
+        32,
+        move |mut sender: cosmic::iced::futures::channel::mpsc::Sender<Message>| async move {
+            use futures::SinkExt;
+            use futures_util::StreamExt;
+            let stream_future = async move {
+                match crate::sse::open_task_stream(endpoint, &task_id).await {
+                    Ok(stream) => {
+                        let mut stream = std::pin::pin!(stream);
+                        while let Some(item) = stream.next().await {
+                            let message = match item {
+                                Ok(event) => Message::Stream(generation, event),
+                                Err(error) => {
+                                    Message::TransportError(generation, format!("{error:#}"))
+                                }
+                            };
+                            let terminal = matches!(
+                                message,
+                                Message::Stream(_, crate::bridge::StreamEvent::Error(_))
+                                    | Message::TransportError(_, _)
+                            );
+                            if sender.send(message).await.is_err() || terminal {
+                                return;
+                            }
+                        }
+                        let _ = sender.send(Message::StreamEnded(generation)).await;
+                    }
+                    Err(error) => {
+                        let _ = sender
+                            .send(Message::TransportError(generation, format!("{error:#}")))
+                            .await;
+                    }
+                }
+            };
+            let _ = Abortable::new(stream_future, abort_registration).await;
+        },
+    ))
+    .map(cosmic::Action::App)
+}
+
+pub(crate) fn queue_follow_up_task(
+    endpoint: BridgeEndpoint,
+    predecessor_id: String,
+    request: ChatRequest,
+    prompt: String,
+) -> Task<Message> {
+    Task::perform(
+        async move {
+            let result = queue_follow_up(endpoint, &predecessor_id, request)
+                .await
+                .map_err(|error| format!("{error:#}"));
+            (prompt, result)
+        },
+        |(prompt, result)| cosmic::Action::App(Message::FollowUpQueued { prompt, result }),
+    )
 }
 
 pub(crate) fn cancel_stream(

@@ -34,8 +34,8 @@ mod views;
 mod voice;
 
 use crate::bridge::{
-    BridgeEndpoint, ChatAttachment, ChatRequest, HistoryMessage, MAX_CHAT_ATTACHMENT_BYTES,
-    ModelsResponse, SessionSummary, SessionUpdateRequest, StreamEvent, validate_chat_attachments,
+    BridgeEndpoint, ChatAttachment, ChatRequest, MAX_CHAT_ATTACHMENT_BYTES, ModelsResponse,
+    SessionSummary, SessionUpdateRequest, StreamEvent, validate_chat_attachments,
 };
 use crate::bridge_state::BridgeState;
 use crate::overlay::{OverlayActivation, OverlayState};
@@ -110,11 +110,15 @@ pub enum Message {
     ForkSession(usize),
     SessionUpdated(Result<SessionSummary, String>),
     SessionForked(Result<SessionSummary, String>),
+    FollowUpQueued {
+        prompt: String,
+        result: Result<cos_agent_protocol::TaskStarted, String>,
+    },
     RetryHistory,
     SessionsFetched(Result<Vec<SessionSummary>, String>),
     HistoryFetched {
         session_id: String,
-        result: Result<Vec<HistoryMessage>, String>,
+        result: Result<cos_agent_protocol::HistoryResponse, String>,
     },
     ProvisionalResolved {
         session_index: usize,
@@ -142,6 +146,9 @@ pub struct App {
     show_archived_sessions: bool,
     renaming_session: Option<usize>,
     rename_session_title: String,
+    queued_followups: usize,
+    queue_tail_task_id: Option<String>,
+    queue_pending: bool,
     error: Option<String>,
     voice: VoiceState,
 }
@@ -181,6 +188,9 @@ impl Application for App {
             show_archived_sessions: false,
             renaming_session: None,
             rename_session_title: String::new(),
+            queued_followups: 0,
+            queue_tail_task_id: None,
+            queue_pending: false,
             error: None,
             voice: VoiceState::default(),
         };
@@ -240,7 +250,7 @@ impl Application for App {
                 }
             }
             Message::EditorAction(action) => {
-                if !self.voice.is_active() {
+                if !self.voice.is_active() && !self.queue_pending {
                     self.input.perform(action);
                 }
                 Task::none()
@@ -273,6 +283,9 @@ impl Application for App {
                 cosmic::iced::clipboard::write(content)
             }
             Message::AttachFile => {
+                if self.queue_pending {
+                    return Task::none();
+                }
                 self.overlay.set_file_picker_open(true);
                 Task::perform(
                     async {
@@ -346,8 +359,10 @@ impl Application for App {
                 {
                     StreamReduction::Failed { session_index } => {
                         self.bridge.transport_failed(error);
+                        self.sessions.invalidate_history(session_index);
                         Task::batch([
                             self.confirm_provisional_session(session_index),
+                            self.maybe_fetch_history(session_index),
                             effects::connect_bridge(),
                             scroll_to_bottom(),
                         ])
@@ -368,8 +383,10 @@ impl Application for App {
                 {
                     StreamReduction::Failed { session_index } => {
                         self.bridge.transport_failed(error);
+                        self.sessions.invalidate_history(session_index);
                         Task::batch([
                             self.confirm_provisional_session(session_index),
+                            self.maybe_fetch_history(session_index),
                             effects::connect_bridge(),
                             scroll_to_bottom(),
                         ])
@@ -388,7 +405,14 @@ impl Application for App {
                     result,
                     &mut self.sessions,
                 ) {
-                    self.confirm_provisional_session(session_index)
+                    let mut tasks = vec![self.confirm_provisional_session(session_index)];
+                    if self.queued_followups > 0 {
+                        self.sessions.invalidate_history(session_index);
+                        tasks.push(self.maybe_fetch_history(session_index));
+                    } else {
+                        self.queue_tail_task_id = None;
+                    }
+                    Task::batch(tasks)
                 } else {
                     Task::none()
                 }
@@ -446,24 +470,59 @@ impl Application for App {
                 focus_editor()
             }
             Message::SelectSession(index) => {
+                if self.stream.is_cancelling() || self.queue_pending {
+                    return Task::none();
+                }
+                if self.stream.is_active() && self.stream.session_index() != Some(index) {
+                    if self.stream.task_id().is_none()
+                        || self
+                            .active_session()
+                            .and_then(|session| session.remote_id.as_deref())
+                            .is_none()
+                        || self.queue_pending
+                    {
+                        return Task::none();
+                    }
+                    if let Some(previous) = self.stream.detach() {
+                        self.sessions.invalidate_history(previous);
+                    }
+                }
                 if !self.sessions.select(index) {
                     return Task::none();
                 }
                 self.activities.hide();
                 self.attachments.clear();
                 self.renaming_session = None;
+                self.queued_followups = 0;
+                self.queue_tail_task_id = None;
                 self.error = None;
                 Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
             }
             Message::NewSession => {
-                if self.stream.is_active() {
+                if self.stream.is_cancelling() || self.queue_pending {
                     return Task::none();
+                }
+                if self.stream.is_active() {
+                    if self.stream.task_id().is_none()
+                        || self
+                            .active_session()
+                            .and_then(|session| session.remote_id.as_deref())
+                            .is_none()
+                        || self.queue_pending
+                    {
+                        return Task::none();
+                    }
+                    if let Some(previous) = self.stream.detach() {
+                        self.sessions.invalidate_history(previous);
+                    }
                 }
                 self.activities.hide();
                 self.sessions.new_session();
                 self.input = text_editor::Content::new();
                 self.attachments.clear();
                 self.renaming_session = None;
+                self.queued_followups = 0;
+                self.queue_tail_task_id = None;
                 self.error = None;
                 Task::batch([focus_editor(), scroll_to_bottom()])
             }
@@ -557,6 +616,9 @@ impl Application for App {
                 )
             }
             Message::ForkSession(index) => {
+                if self.stream.is_active() || self.stream.is_cancelling() || self.queue_pending {
+                    return Task::none();
+                }
                 let Some(id) = self
                     .sessions
                     .get(index)
@@ -583,7 +645,12 @@ impl Application for App {
                 Task::none()
             }
             Message::SessionForked(Ok(summary)) => {
-                let index = self.sessions.apply_remote_summary(summary, true);
+                let select =
+                    !self.stream.is_active() && !self.stream.is_cancelling() && !self.queue_pending;
+                let index = self.sessions.apply_remote_summary(summary, select);
+                if !select {
+                    return Task::none();
+                }
                 self.activities.hide();
                 self.renaming_session = None;
                 self.error = None;
@@ -592,6 +659,34 @@ impl Application for App {
             Message::SessionForked(Err(error)) => {
                 self.error = Some(error);
                 Task::none()
+            }
+            Message::FollowUpQueued {
+                prompt,
+                result: Ok(started),
+            } => {
+                self.queue_pending = false;
+                self.queue_tail_task_id = Some(started.task_id);
+                self.queued_followups = self.queued_followups.saturating_add(1);
+                if self.input.text().trim() == prompt {
+                    self.input = text_editor::Content::new();
+                    self.attachments.clear();
+                }
+                self.overlay.consume_stream_context();
+                self.error = None;
+                if self.stream.is_active() || self.stream.is_cancelling() {
+                    focus_editor()
+                } else {
+                    let session_index = self.sessions.active_index();
+                    self.sessions.invalidate_history(session_index);
+                    Task::batch([self.maybe_fetch_history(session_index), focus_editor()])
+                }
+            }
+            Message::FollowUpQueued {
+                result: Err(error), ..
+            } => {
+                self.queue_pending = false;
+                self.error = Some(error);
+                focus_editor()
             }
             Message::RetryHistory => {
                 if !self.bridge.begin_connect() {
@@ -610,20 +705,60 @@ impl Application for App {
                 Task::none()
             }
             Message::HistoryFetched { session_id, result } => {
-                self.sessions.apply_history(&session_id, result);
-                scroll_to_bottom()
+                let is_active_session = self
+                    .active_session()
+                    .and_then(|session| session.remote_id.as_deref())
+                    == Some(session_id.as_str());
+                let Some(reattach) = self.sessions.apply_history(&session_id, result) else {
+                    if is_active_session {
+                        self.queued_followups = 0;
+                        self.queue_tail_task_id = None;
+                    }
+                    return scroll_to_bottom();
+                };
+                if !is_active_session {
+                    self.sessions.invalidate_history(reattach.session_index);
+                    return Task::none();
+                }
+                let Some(endpoint) = self.bridge.endpoint().cloned() else {
+                    self.error = Some(fl!("bridge-offline"));
+                    self.sessions.invalidate_history(reattach.session_index);
+                    return self.maybe_fetch_history(reattach.session_index);
+                };
+                let (abort_handle, abort_registration) = AbortHandle::new_pair();
+                let generation = self.stream.start(reattach.session_index, abort_handle);
+                self.queued_followups = reattach.queued_after;
+                self.queue_tail_task_id = Some(reattach.tail_id);
+                Task::batch([
+                    effects::open_task_stream(
+                        endpoint,
+                        reattach.id,
+                        generation,
+                        abort_registration,
+                    ),
+                    scroll_to_bottom(),
+                ])
             }
             Message::ProvisionalResolved {
                 session_index,
                 session_id,
                 result,
             } => {
-                let resolved = result.is_ok();
+                let resolved = matches!(&result, Ok(true));
                 if let Err(error) = &result {
                     tracing::warn!(%error, "failed to verify provisional Agent session");
                 }
                 self.sessions
                     .reconcile_provisional(session_index, &session_id, &result);
+                if resolved
+                    && self.sessions.active_index() == session_index
+                    && !self.stream.is_active()
+                    && !self.stream.is_cancelling()
+                    && self.queue_tail_task_id.is_some()
+                {
+                    self.sessions.invalidate_history(session_index);
+                    return self.maybe_fetch_history(session_index);
+                }
                 let deferred = self.overlay.take_deferred_submit();
                 if resolved
                     && let Some(deferred) = deferred
@@ -891,8 +1026,11 @@ impl App {
 
     fn submit(&mut self) -> Task<Message> {
         let prompt = self.input.text().trim().to_string();
-        if prompt.is_empty() || self.stream.is_active() || self.stream.is_cancelling() {
+        if prompt.is_empty() || self.stream.is_cancelling() || self.queue_pending {
             return Task::none();
+        }
+        if self.stream.is_active() {
+            return self.queue_follow_up(prompt);
         }
         if self
             .active_session()
@@ -920,6 +1058,8 @@ impl App {
 
         self.input = text_editor::Content::new();
         self.error = None;
+        self.queued_followups = 0;
+        self.queue_tail_task_id = None;
         let stream_session = self.sessions.begin_stream(prompt.clone());
         let one_shot_context = self
             .overlay
@@ -944,10 +1084,46 @@ impl App {
         Task::batch([cancel_voice, stream_task, scroll_to_bottom()])
     }
 
+    fn queue_follow_up(&mut self, prompt: String) -> Task<Message> {
+        let predecessor_id = self
+            .queue_tail_task_id
+            .clone()
+            .or_else(|| self.stream.task_id().map(str::to_string));
+        let Some(predecessor_id) = predecessor_id else {
+            return Task::none();
+        };
+        let Some(endpoint) = self.bridge.endpoint().cloned() else {
+            self.error = Some(fl!("bridge-offline"));
+            return Task::none();
+        };
+        let request = ChatRequest {
+            prompt: Some(prompt.clone()),
+            attachments: self.attachments.clone(),
+            model: None,
+            context: self
+                .overlay
+                .pending_context()
+                .map(str::trim)
+                .filter(|context| !context.is_empty())
+                .map(ToOwned::to_owned),
+            branch_context: self
+                .active_session()
+                .and_then(|session| session.persistent_context.clone()),
+            ..ChatRequest::default()
+        };
+        self.queue_pending = true;
+        effects::queue_follow_up_task(endpoint, predecessor_id, request, prompt)
+    }
+
     fn handle_stream_event(&mut self, generation: u64, event: StreamEvent) -> Task<Message> {
         let task_started = matches!(event, StreamEvent::TaskStarted(_));
+        let stream_session_index = self.stream.session_index();
+        let had_task_id = self.stream.task_id().is_some();
         let reduction = self.stream.reduce(generation, event, &mut self.sessions);
         if task_started && !matches!(reduction, StreamReduction::Stale) {
+            if self.queue_tail_task_id.is_none() {
+                self.queue_tail_task_id = self.stream.task_id().map(str::to_string);
+            }
             self.attachments.clear();
             self.overlay.consume_stream_context();
         }
@@ -957,11 +1133,30 @@ impl App {
                 session_index,
                 message_index,
             } => self.cancel_task(task_id, session_index, message_index),
-            StreamReduction::Failed { session_index } => Task::batch([
-                self.confirm_provisional_session(session_index),
-                scroll_to_bottom(),
-            ]),
+            StreamReduction::Failed { session_index } => {
+                let mut tasks = vec![
+                    self.confirm_provisional_session(session_index),
+                    scroll_to_bottom(),
+                ];
+                if had_task_id || self.queued_followups > 0 {
+                    self.sessions.invalidate_history(session_index);
+                    tasks.push(self.maybe_fetch_history(session_index));
+                } else {
+                    self.queue_tail_task_id = None;
+                }
+                Task::batch(tasks)
+            }
             StreamReduction::Terminal => {
+                if self.queued_followups > 0
+                    && let Some(session_index) = stream_session_index
+                {
+                    self.sessions.invalidate_history(session_index);
+                    return Task::batch([
+                        self.maybe_fetch_history(session_index),
+                        scroll_to_bottom(),
+                    ]);
+                }
+                self.queue_tail_task_id = None;
                 if self.overlay.auto_submit() && (!self.flags.overlay || self.overlay.is_visible())
                 {
                     self.overlay.take_auto_submit();

@@ -51,6 +51,14 @@ struct Conversation {
     messages: Vec<HistoryMessage>,
     #[serde(default)]
     message_count: u64,
+    #[serde(default)]
+    jobs: Vec<cos_agent_protocol::ConversationJob>,
+    #[serde(default)]
+    jobs_truncated: bool,
+    #[serde(default)]
+    task_bindings_complete: bool,
+    #[serde(default)]
+    task_bindings_error: Option<String>,
 }
 
 pub async fn list(
@@ -197,6 +205,10 @@ pub async fn history(
                 session_id: conversation.id,
                 n: messages.len(),
                 messages,
+                jobs: conversation.jobs,
+                jobs_truncated: conversation.jobs_truncated,
+                task_bindings_complete: conversation.task_bindings_complete,
+                task_bindings_error: conversation.task_bindings_error,
             }))
         }
         Err(primary) => {

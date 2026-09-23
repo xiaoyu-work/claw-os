@@ -1,9 +1,5 @@
 use super::*;
-use axum::{
-    body::Body,
-    http::Request as HttpRequest,
-    routing::get,
-};
+use axum::{body::Body, http::Request as HttpRequest, routing::get};
 use tower::ServiceExt as _;
 
 #[test]
@@ -32,13 +28,19 @@ fn selected_version_must_be_inside_bridge_range() {
     };
     assert!(validate_selected_version(ProtocolVersion(1), future_bridge));
     assert!(validate_selected_version(ProtocolVersion(2), future_bridge));
-    assert!(!validate_selected_version(ProtocolVersion(3), future_bridge));
+    assert!(!validate_selected_version(
+        ProtocolVersion(3),
+        future_bridge
+    ));
 
     let v2_only_bridge = ProtocolMetadata {
         min_protocol_version: ProtocolVersion(2),
         protocol_version: ProtocolVersion(2),
     };
-    assert!(!validate_selected_version(ProtocolVersion(1), v2_only_bridge));
+    assert!(!validate_selected_version(
+        ProtocolVersion(1),
+        v2_only_bridge
+    ));
 
     let refusal = protocol_error(
         v2_only_bridge,

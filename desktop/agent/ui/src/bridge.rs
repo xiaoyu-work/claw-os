@@ -24,9 +24,10 @@ pub use cos_agent_protocol::{
     ActivitySchedulingPriority, ActivitySchedulingPriorityResponse,
     ActivitySchedulingPrioritySetRequest, ActivityState, ActivityTransitionRequest,
     ActivityUpdateRequest, ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse,
-    ChatAttachment, ChatRequest, ErrorEnvelope, HistoryMessage, MAX_CHAT_ATTACHMENT_BYTES,
-    ModelsResponse, ObjectStateEntry, SessionSummary, SessionUpdateRequest, StreamEvent,
-    ToolCallView, ToolResultView, validate_chat_attachments,
+    ChatAttachment, ChatRequest, ConversationJob, ErrorEnvelope, HistoryMessage, HistoryResponse,
+    MAX_CHAT_ATTACHMENT_BYTES, ModelsResponse, ObjectStateEntry, SessionSummary,
+    SessionUpdateRequest, StreamEvent, TaskStarted, ToolCallView, ToolResultView,
+    validate_chat_attachments,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -349,7 +350,7 @@ pub async fn fork_session(endpoint: BridgeEndpoint, session_id: &str) -> Result<
 pub async fn fetch_history(
     endpoint: BridgeEndpoint,
     session_id: &str,
-) -> Result<Vec<HistoryMessage>> {
+) -> Result<cos_agent_protocol::HistoryResponse> {
     let path = format!("/api/sessions/{session_id}/history");
     let url = bridge_url(&endpoint, &path);
     let selected = selected_protocol_version(&endpoint)?;
@@ -367,11 +368,10 @@ pub async fn fetch_history(
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
-    let envelope = response
+    response
         .json::<cos_agent_protocol::HistoryResponse>()
         .await
-        .context("decoding history envelope")?;
-    Ok(envelope.messages)
+        .context("decoding history envelope")
 }
 
 pub async fn session_exists(endpoint: BridgeEndpoint, session_id: &str) -> Result<bool> {
@@ -438,6 +438,34 @@ pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> 
         return Err(response_error(response, &url).await);
     }
     Ok(())
+}
+
+pub async fn queue_follow_up(
+    endpoint: BridgeEndpoint,
+    predecessor_id: &str,
+    request: ChatRequest,
+) -> Result<TaskStarted> {
+    let url = bridge_url(&endpoint, &format!("/api/chat/{predecessor_id}/follow-up"));
+    let selected = selected_protocol_version(&endpoint)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("building follow-up client")?
+        .post(&url)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
+        .bearer_auth(&endpoint.token)
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("POST {url}"))?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        return Err(response_error(response, &url).await);
+    }
+    response
+        .json::<TaskStarted>()
+        .await
+        .context("decoding queued follow-up")
 }
 
 fn activity_request(

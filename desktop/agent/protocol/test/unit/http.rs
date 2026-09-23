@@ -98,6 +98,7 @@ fn endpoint_response_dtos_round_trip() {
         session_id: "session-1".into(),
         n: 1,
         messages: vec![HistoryMessage {
+            id: 1,
             role: "assistant".into(),
             text: "hello".into(),
             tool_calls: vec![ToolCallView {
@@ -114,7 +115,17 @@ fn endpoint_response_dtos_round_trip() {
                 is_error: false,
             }],
             ts_ms: 10,
+            ..HistoryMessage::default()
         }],
+        jobs: vec![ConversationJob {
+            id: "task-1".into(),
+            status: "running".into(),
+            prompt: "hello".into(),
+            session_id: "session-1".into(),
+            created_at: "2026-09-22T12:00:00Z".into(),
+        }],
+        task_bindings_complete: true,
+        ..HistoryResponse::default()
     };
     assert_eq!(
         serde_json::from_value::<HistoryResponse>(serde_json::to_value(&history).unwrap()).unwrap(),
@@ -161,11 +172,11 @@ fn discovery_metadata_has_a_golden_shape_and_valid_range() {
     assert!(endpoint.has_valid_version_range());
     assert_eq!(
         endpoint.negotiate(ProtocolMetadata::CURRENT),
-        Some(ProtocolVersion(2))
+        Some(ProtocolVersion(3))
     );
     assert_eq!(
         serde_json::to_string(&endpoint).unwrap(),
-        r#"{"port":43123,"token":"token","protocol_version":2,"min_protocol_version":2}"#
+        r#"{"port":43123,"token":"token","protocol_version":3,"min_protocol_version":3}"#
     );
     assert!(
         serde_json::from_str::<BridgeEndpoint>(

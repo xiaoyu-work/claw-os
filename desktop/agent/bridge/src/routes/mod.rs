@@ -32,6 +32,11 @@ pub fn api() -> Router<AppState> {
             "/chat",
             post(chat::stream_chat).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),
         )
+        .route("/chat/:task_id/stream", post(chat::stream_task))
+        .route(
+            "/chat/:task_id/follow-up",
+            post(chat::follow_up).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),
+        )
         .route("/chat/:task_id/cancel", post(chat::cancel_chat))
         .route(
             "/activities",

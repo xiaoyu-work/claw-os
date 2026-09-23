@@ -16,10 +16,10 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
 | `src/activities/monetary_budget.rs` | Fixed configured-accounting card, exact-CAS create/update/toggles, and spent/reserved/remaining presentation; no pricing, invoice, ledger or policy authority |
 | `src/activities/capability_policy.rs` | Fixed typed capability rule/scope controls, owner-scoped snapshots and CAS-bound edits/toggles; no grants, approval decisions or resource resolution |
-| `src/session.rs` | Canonical/legacy session projection, history reconciliation, presentation controls, retry branches, and transcript models |
-| `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
+| `src/session.rs` | Canonical/legacy session projection, verified Job-bound history reconstruction, presentation controls, retry branches, and transcript models |
+| `src/stream_state.rs` | Generation-aware stream reduction, viewer detachment, terminal states, explicit cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
-| `src/effects.rs` | Async bridge, history, stream, and cancellation effects that emit typed UI messages |
+| `src/effects.rs` | Async bridge, history, new/existing Job streams, durable follow-up, and cancellation effects that emit typed UI messages |
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
 | `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
 | `src/views.rs` | Read-only widget composition, including selected-image metadata, that emits `Message` values |
@@ -45,6 +45,14 @@ bridge and offers title/ID search plus broker-backed rename, archive/restore
 and fork controls. Legacy memory-only sessions remain read-only. The UI keeps
 only drafts and selection state; presentation IDs, lineage, archive state,
 idle-session locking and history remain broker-owned.
+
+Closing or navigating away from a live stream detaches only the viewer after
+task identity and canonical session identity are known. Reopening fetches the
+broker's bounded Job/message projection, refuses incomplete task bindings, and
+replays the existing task from cursor zero without resubmission. Stop remains
+an explicit `task.cancel`. Busy composer submissions create durable
+`after_task_id` follow-ups through a bridge route that derives the session from
+the owner-checked predecessor; UI queue counts are presentation state only.
 
 The fixed attention section renders the same broker-owned projection used by
 terminal and Agent Web clients: retained Job counts, exact decision records,

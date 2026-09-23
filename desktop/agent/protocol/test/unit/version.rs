@@ -24,21 +24,21 @@ fn metadata_round_trips() {
 
 #[test]
 fn negotiation_selects_highest_overlap() {
-    let v2_client = ProtocolMetadata::CURRENT;
+    let v3_client = ProtocolMetadata::CURRENT;
     let future_bridge = ProtocolMetadata {
         min_protocol_version: ProtocolVersion(2),
         protocol_version: ProtocolVersion(3),
     };
     assert_eq!(
-        v2_client.negotiate_highest(future_bridge),
-        Some(ProtocolVersion(2))
+        v3_client.negotiate_highest(future_bridge),
+        Some(ProtocolVersion(3))
     );
 
     let v1_only_bridge = ProtocolMetadata {
         min_protocol_version: ProtocolVersion(1),
         protocol_version: ProtocolVersion(1),
     };
-    assert_eq!(v2_client.negotiate_highest(v1_only_bridge), None);
+    assert_eq!(v3_client.negotiate_highest(v1_only_bridge), None);
     assert!(
         !ProtocolMetadata {
             min_protocol_version: ProtocolVersion(3),

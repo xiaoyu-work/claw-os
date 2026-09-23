@@ -2,7 +2,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use cosmic::widget;
 
-use crate::bridge::{HistoryMessage, SessionSummary, ToolCallView, ToolResultView};
+use crate::bridge::{
+    ConversationJob, HistoryMessage, HistoryResponse, SessionSummary, ToolCallView, ToolResultView,
+};
 use crate::fl;
 
 const MAX_BRANCH_CONTEXT_CHARS: usize = 32 * 1024;
@@ -183,6 +185,13 @@ pub(crate) struct SessionState {
     error: Option<String>,
 }
 
+pub(crate) struct ReattachTask {
+    pub(crate) session_index: usize,
+    pub(crate) id: String,
+    pub(crate) queued_after: usize,
+    pub(crate) tail_id: String,
+}
+
 impl Default for SessionState {
     fn default() -> Self {
         Self {
@@ -305,50 +314,117 @@ impl SessionState {
     pub(crate) fn apply_history(
         &mut self,
         session_id: &str,
-        result: Result<Vec<HistoryMessage>, String>,
-    ) {
-        let Some(session) = self
+        result: Result<HistoryResponse, String>,
+    ) -> Option<ReattachTask> {
+        let Some(session_index) = self
             .sessions
-            .iter_mut()
-            .find(|session| session.remote_id.as_deref() == Some(session_id))
+            .iter()
+            .position(|session| session.remote_id.as_deref() == Some(session_id))
         else {
-            return;
+            return None;
         };
+        let session = &mut self.sessions[session_index];
         match result {
-            Ok(rows) => {
+            Ok(response) => {
+                let active = response
+                    .jobs
+                    .iter()
+                    .filter(Self::active_job)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !active.is_empty()
+                    && (!response.task_bindings_complete || response.jobs_truncated)
+                {
+                    session.history =
+                        HistoryState::Failed(response.task_bindings_error.unwrap_or_else(|| {
+                            "Active task history cannot be safely reconstructed.".to_string()
+                        }));
+                    return None;
+                }
+                let current = active.first().cloned();
+                let prompt_retained = current.as_ref().is_some_and(|task| {
+                    response.messages.iter().any(|message| {
+                        message.task_id.as_deref() == Some(task.id.as_str())
+                            && message.is_user_prompt == Some(true)
+                    })
+                });
+                let rows = response
+                    .messages
+                    .into_iter()
+                    .filter(|row| {
+                        current.as_ref().is_none_or(|task| {
+                            row.task_id.as_deref() != Some(task.id.as_str())
+                                || row.is_user_prompt == Some(true)
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 session.messages = rows
                     .into_iter()
                     .filter(|row| row.role != "system")
-                    .map(|row| {
-                        let role = if row.role == "assistant" {
-                            ChatRole::Assistant
-                        } else {
-                            ChatRole::User
-                        };
-                        let mut message = ChatMessage {
-                            role: Some(role.clone()),
-                            content: row.text,
-                            tool_calls: row.tool_calls,
-                            tool_results: row.tool_results,
-                            ..ChatMessage::default()
-                        };
-                        if role == ChatRole::Assistant {
-                            message.refresh_markdown();
-                        }
-                        message
-                    })
+                    .map(Self::history_message)
                     .collect();
+                if let Some(task) = current {
+                    if !prompt_retained {
+                        session
+                            .messages
+                            .push(ChatMessage::user(task.prompt.clone()));
+                    }
+                    session.messages.push(ChatMessage::assistant_streaming());
+                    session.message_count = session.messages.len() as i64;
+                    session.history = HistoryState::Loaded;
+                    return Some(ReattachTask {
+                        session_index,
+                        id: task.id,
+                        queued_after: active.len().saturating_sub(1),
+                        tail_id: active.last().map(|job| job.id.clone()).unwrap_or_default(),
+                    });
+                }
                 session.message_count = session.messages.len() as i64;
                 session.history = HistoryState::Loaded;
             }
             Err(error) => session.history = HistoryState::Failed(error),
         }
+        None
+    }
+
+    fn active_job(job: &&ConversationJob) -> bool {
+        matches!(
+            job.status.as_str(),
+            "pending" | "running" | "waiting_approval"
+        )
+    }
+
+    fn history_message(row: HistoryMessage) -> ChatMessage {
+        let role = if row.role == "assistant" {
+            ChatRole::Assistant
+        } else {
+            ChatRole::User
+        };
+        let mut message = ChatMessage {
+            role: Some(role.clone()),
+            content: row.text,
+            tool_calls: row.tool_calls,
+            tool_results: row.tool_results,
+            ..ChatMessage::default()
+        };
+        if role == ChatRole::Assistant {
+            message.refresh_markdown();
+        }
+        message
     }
 
     pub(crate) fn history_ready(&self) -> bool {
         self.active().is_none_or(|session| {
             session.remote_id.is_none() || matches!(session.history, HistoryState::Loaded)
         })
+    }
+
+    pub(crate) fn invalidate_history(&mut self, index: usize) {
+        if let Some(session) = self.sessions.get_mut(index)
+            && session.remote_id.is_some()
+        {
+            session.history = HistoryState::NotLoaded;
+        }
     }
 
     pub(crate) fn begin_history_load(

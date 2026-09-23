@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL_VERSION_HEADER: &str = "x-clawos-agent-protocol-version";
 /// Response header advertising the oldest protocol accepted after refusal.
 pub const PROTOCOL_MIN_VERSION_HEADER: &str = "x-clawos-agent-min-protocol-version";
-pub const CURRENT_PROTOCOL_VERSION: u16 = 2;
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 2;
-pub const CURRENT_PROTOCOL_VERSION_HEADER_VALUE: &str = "2";
-pub const MIN_SUPPORTED_PROTOCOL_VERSION_HEADER_VALUE: &str = "2";
+pub const CURRENT_PROTOCOL_VERSION: u16 = 3;
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 3;
+pub const CURRENT_PROTOCOL_VERSION_HEADER_VALUE: &str = "3";
+pub const MIN_SUPPORTED_PROTOCOL_VERSION_HEADER_VALUE: &str = "3";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]

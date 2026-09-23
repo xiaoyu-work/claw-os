@@ -46,7 +46,9 @@ fn canonical_summary_updates_presentation_controls_and_can_select_a_fork() {
     let fork_index = state.apply_remote_summary(fork, true);
     assert_eq!(state.active_index(), fork_index);
     assert_eq!(
-        state.active().and_then(|session| session.remote_id.as_deref()),
+        state
+            .active()
+            .and_then(|session| session.remote_id.as_deref()),
         Some("session-2")
     );
 }
@@ -57,22 +59,23 @@ fn history_reconciliation_ignores_system_rows_and_refreshes_markdown() {
     state.merge_remote(vec![summary("remote-1", "Remote", 2)]);
     state.apply_history(
         "remote-1",
-        Ok(vec![
-            HistoryMessage {
-                role: "system".into(),
-                text: "hidden".into(),
-                tool_calls: Vec::new(),
-                tool_results: Vec::new(),
-                ts_ms: 0,
-            },
-            HistoryMessage {
-                role: "assistant".into(),
-                text: "**visible**".into(),
-                tool_calls: Vec::new(),
-                tool_results: Vec::new(),
-                ts_ms: 1,
-            },
-        ]),
+        Ok(HistoryResponse {
+            session_id: "remote-1".into(),
+            messages: vec![
+                HistoryMessage {
+                    role: "system".into(),
+                    text: "hidden".into(),
+                    ..HistoryMessage::default()
+                },
+                HistoryMessage {
+                    role: "assistant".into(),
+                    text: "**visible**".into(),
+                    ts_ms: 1,
+                    ..HistoryMessage::default()
+                },
+            ],
+            ..HistoryResponse::default()
+        }),
     );
 
     let remote = state
@@ -81,6 +84,131 @@ fn history_reconciliation_ignores_system_rows_and_refreshes_markdown() {
         .unwrap();
     assert_eq!(remote.messages.len(), 1);
     assert!(remote.messages[0].parsed_markdown.is_some());
+}
+
+#[test]
+fn active_history_rebuilds_one_task_and_preserves_the_bound_user_prompt() {
+    let mut state = SessionState::default();
+    state.apply_remote_summary(summary("remote-1", "Remote", 3), true);
+    let reattach = state
+        .apply_history(
+            "remote-1",
+            Ok(HistoryResponse {
+                session_id: "remote-1".into(),
+                messages: vec![
+                    HistoryMessage {
+                        id: 1,
+                        role: "user".into(),
+                        text: "Continue after reconnect".into(),
+                        task_id: Some("job-live".into()),
+                        is_user_prompt: Some(true),
+                        ..HistoryMessage::default()
+                    },
+                    HistoryMessage {
+                        id: 2,
+                        role: "assistant".into(),
+                        task_id: Some("job-live".into()),
+                        tool_calls: vec![ToolCallView {
+                            id: "duplicate".into(),
+                            name: "old".into(),
+                            input: serde_json::Value::Null,
+                            partial_json: String::new(),
+                            in_progress: false,
+                        }],
+                        ..HistoryMessage::default()
+                    },
+                ],
+                jobs: vec![
+                    ConversationJob {
+                        id: "job-live".into(),
+                        status: "running".into(),
+                        prompt: "Continue after reconnect".into(),
+                        session_id: "remote-1".into(),
+                        created_at: "2026-09-22T12:00:00Z".into(),
+                    },
+                    ConversationJob {
+                        id: "job-next".into(),
+                        status: "pending".into(),
+                        prompt: "Then summarize".into(),
+                        session_id: "remote-1".into(),
+                        created_at: "2026-09-22T12:01:00Z".into(),
+                    },
+                ],
+                task_bindings_complete: true,
+                ..HistoryResponse::default()
+            }),
+        )
+        .expect("active task");
+    assert_eq!(reattach.id, "job-live");
+    assert_eq!(reattach.tail_id, "job-next");
+    assert_eq!(reattach.queued_after, 1);
+
+    let session = state
+        .iter()
+        .find(|session| session.remote_id.as_deref() == Some("remote-1"))
+        .unwrap();
+    assert_eq!(session.messages.len(), 2);
+    assert_eq!(session.messages[0].content, "Continue after reconnect");
+    assert!(session.messages[1].in_progress);
+    assert!(session.messages[1].tool_calls.is_empty());
+}
+
+#[test]
+fn active_history_uses_the_job_prompt_when_the_bound_row_is_not_persisted_yet() {
+    let mut state = SessionState::default();
+    state.apply_remote_summary(summary("remote-1", "Remote", 0), true);
+    let reattach = state
+        .apply_history(
+            "remote-1",
+            Ok(HistoryResponse {
+                session_id: "remote-1".into(),
+                jobs: vec![ConversationJob {
+                    id: "job-live".into(),
+                    status: "pending".into(),
+                    prompt: "Persist me once".into(),
+                    session_id: "remote-1".into(),
+                    created_at: "2026-09-22T12:00:00Z".into(),
+                }],
+                task_bindings_complete: true,
+                ..HistoryResponse::default()
+            }),
+        )
+        .expect("pending task");
+
+    assert_eq!(reattach.id, "job-live");
+    let session = state.active().unwrap();
+    assert_eq!(session.messages.len(), 2);
+    assert_eq!(session.messages[0].content, "Persist me once");
+    assert_eq!(session.messages[0].role(), ChatRole::User);
+    assert!(session.messages[1].in_progress);
+}
+
+#[test]
+fn active_history_refuses_incomplete_task_bindings() {
+    let mut state = SessionState::default();
+    state.apply_remote_summary(summary("remote-1", "Remote", 1), true);
+    let reattach = state.apply_history(
+        "remote-1",
+        Ok(HistoryResponse {
+            session_id: "remote-1".into(),
+            jobs: vec![ConversationJob {
+                id: "job-live".into(),
+                status: "running".into(),
+                prompt: "Do not guess".into(),
+                session_id: "remote-1".into(),
+                created_at: "2026-09-22T12:00:00Z".into(),
+            }],
+            task_bindings_complete: false,
+            task_bindings_error: Some("verified bindings unavailable".into()),
+            ..HistoryResponse::default()
+        }),
+    );
+
+    assert!(reattach.is_none());
+    assert!(matches!(
+        &state.active().unwrap().history,
+        HistoryState::Failed(error) if error == "verified bindings unavailable"
+    ));
 }
 
 #[test]
