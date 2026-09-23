@@ -132,7 +132,13 @@ case "$1" in
                 systemctl --global daemon-reload >/dev/null 2>&1 || true
                 if security_set_is_runnable; then
                     if [ -n "$2" ]; then
-                        deb-systemd-invoke try-restart clawd.service >/dev/null || true
+                        # preinst deliberately stopped clawd before identity
+                        # migration, so try-restart would always leave an
+                        # enabled service inactive. Respect an administrator
+                        # disabling the unit, but restart every enabled install.
+                        if deb-systemd-helper --quiet was-enabled clawd.service; then
+                            deb-systemd-invoke start clawd.service >/dev/null || true
+                        fi
                         deb-systemd-invoke try-restart cos-browser.service >/dev/null || true
                     else
                         deb-systemd-invoke start clawd.service >/dev/null || true

@@ -139,6 +139,18 @@ sysusers_line=$(grep -n 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf
     fail "postinst must reserve the exact gid before sysusers observes it"
 assert_contains "$PREINST" 'deb-systemd-invoke stop clawd.service' \
     "upgrade must stop clawd before validating a legacy execution gid"
+assert_contains "$POSTINST" 'deb-systemd-helper --quiet was-enabled clawd.service' \
+    "upgrade must distinguish an enabled broker from an administrator-disabled unit"
+python3 - "$POSTINST" <<'PY'
+import sys
+
+body = open(sys.argv[1], encoding="utf-8").read()
+upgrade = body.index('if [ -n "$2" ]; then')
+enabled = body.index("deb-systemd-helper --quiet was-enabled clawd.service", upgrade)
+start = body.index("deb-systemd-invoke start clawd.service", enabled)
+browser = body.index("deb-systemd-invoke try-restart cos-browser.service", start)
+assert upgrade < enabled < start < browser
+PY
 assert_contains "$POSTINST" 'identity_finalize' \
     "postinst must validate and write the runtime reservation manifest"
 assert_contains "$POSTRM" 'identity_purge_owned' \

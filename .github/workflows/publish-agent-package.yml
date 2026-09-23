@@ -205,6 +205,7 @@ jobs:
                 fi
               done
               apt-get install -y --no-install-recommends "$package"
+              apt-get install -y --reinstall --no-install-recommends "$package"
             ' bash "$install_deb" "$GITHUB_WORKSPACE" "$CARGO_HOME" \
               "${RUSTUP_HOME:-$HOME/.rustup}"
           for attempt in {1..30}; do
@@ -221,6 +222,8 @@ jobs:
             sudo journalctl -u clawd.service --no-pager -n 100 || true
             exit 1
           fi
+          test -x /usr/bin/pkexec
+          test -x /usr/local/bin/claw-approval-helper
           /usr/local/bin/cos-browser --help >/dev/null
           COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
             /usr/local/bin/cos agent skills list \
