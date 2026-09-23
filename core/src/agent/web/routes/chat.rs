@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -34,6 +34,13 @@ pub struct ChatRequest {
     pub session_id: Option<String>,
     #[serde(default = "default_true")]
     pub use_memory: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskStreamRequest {
+    #[serde(default)]
+    pub cursor: Option<u64>,
 }
 
 fn default_true() -> bool {
@@ -96,18 +103,70 @@ pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>
         }
     });
 
-    let stream = ReceiverStream::new(rx, DisconnectOnDrop::new(disconnected, drive_task));
-    let body = Body::from_stream(stream);
+    stream_response(rx, disconnected, drive_task)
+}
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache, no-transform")
-        .header("X-Accel-Buffering", "no")
-        .body(body)
-        .unwrap_or_else(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "stream build failed").into_response()
-        })
+pub async fn attach(
+    State(_state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(request): Json<TaskStreamRequest>,
+) -> Response {
+    let job = match super::clawd::request(Command::TaskGet, json!({ "id": task_id })).await {
+        Ok(job) => job,
+        Err(error) => return error.into_api_error().into_response(),
+    };
+    let session_id = match required_field(&job, "session_id") {
+        Ok(session_id) => session_id.to_string(),
+        Err(error) => {
+            return (StatusCode::BAD_GATEWAY, Json(json!({ "error": error }))).into_response()
+        }
+    };
+
+    let (tx, rx) = mpsc::channel::<SseFrame>(SSE_CHANNEL_CAPACITY);
+    let disconnected = Arc::new(AtomicBool::new(false));
+    let drive_disconnected = disconnected.clone();
+    let drive_task_id = task_id.clone();
+    let drive_session_id = session_id.clone();
+    let drive_task = tokio::spawn(async move {
+        if !send_frame(
+            &tx,
+            sse::encode_event(
+                "task",
+                &json!({
+                    "task_id": &drive_task_id,
+                    "session_id": &drive_session_id,
+                    "reattached": true,
+                }),
+            ),
+        )
+        .await
+            || !send_frame(
+                &tx,
+                sse::encode_event("session", &json!({ "session_id": &drive_session_id })),
+            )
+            .await
+        {
+            return;
+        }
+        if let Err(error) = relay_task_stream(
+            &drive_task_id,
+            &drive_session_id,
+            request.cursor.unwrap_or(0),
+            &tx,
+            &drive_disconnected,
+        )
+        .await
+        {
+            let _ = tx
+                .send(Ok(bytes::Bytes::from(sse::encode_event(
+                    "error",
+                    &json!({ "error": error }),
+                ))))
+                .await;
+        }
+    });
+
+    stream_response(rx, disconnected, drive_task)
 }
 
 fn begin_turn(
@@ -155,10 +214,7 @@ async fn drive_chat(
     .await
 }
 
-async fn with_request_snapshot<F, R>(
-    config: Arc<crate::config::CosConfig>,
-    future: F,
-) -> R
+async fn with_request_snapshot<F, R>(config: Arc<crate::config::CosConfig>, future: F) -> R
 where
     F: std::future::Future<Output = R>,
 {
@@ -229,7 +285,18 @@ async fn drive_chat_scoped(
         return Ok(());
     }
 
-    let mut cursor = 0u64;
+    relay_task_stream(&task_id, &session_id, 0, &tx, &disconnected).await?;
+    drop(turn_lease);
+    Ok(())
+}
+
+async fn relay_task_stream(
+    task_id: &str,
+    session_id: &str,
+    mut cursor: u64,
+    tx: &mpsc::Sender<SseFrame>,
+    disconnected: &AtomicBool,
+) -> Result<(), String> {
     let mut emitted_text = false;
     let mut turn_emitted_text = false;
     let mut last_finish: Option<String> = None;
@@ -270,7 +337,7 @@ async fn drive_chat_scoped(
                 &mut emitted_text,
                 &mut last_finish,
             )? {
-                if !send_frame(&tx, outgoing).await {
+                if !send_frame(tx, outgoing).await {
                     return Ok(());
                 }
             }
@@ -305,11 +372,11 @@ async fn drive_chat_scoped(
         .get("response")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !emitted_text && !answer.is_empty() && !send_frame(&tx, text_frame(answer)).await {
+    if !emitted_text && !answer.is_empty() && !send_frame(tx, text_frame(answer)).await {
         return Ok(());
     }
     if let Some(evidence) = final_job.get("evidence").filter(|value| !value.is_null()) {
-        if !send_frame(&tx, sse::encode_event("evidence", evidence)).await {
+        if !send_frame(tx, sse::encode_event("evidence", evidence)).await {
             return Ok(());
         }
     }
@@ -317,7 +384,7 @@ async fn drive_chat_scoped(
         "session_id": final_job
             .get("session_id")
             .and_then(Value::as_str)
-            .unwrap_or(&session_id),
+            .unwrap_or(session_id),
         "model": final_job.get("model").cloned().unwrap_or(Value::Null),
         "provider": final_job.get("provider").cloned().unwrap_or(Value::Null),
         "turns": final_job.get("turns_used").cloned().unwrap_or(Value::Null),
@@ -326,8 +393,7 @@ async fn drive_chat_scoped(
         "fallback": final_job.get("fallback").cloned().unwrap_or(Value::Null),
         "finish": last_finish,
     });
-    let _ = send_frame(&tx, sse::encode_event("done", &done)).await;
-    drop(turn_lease);
+    let _ = send_frame(tx, sse::encode_event("done", &done)).await;
     Ok(())
 }
 
@@ -478,6 +544,25 @@ async fn cancel_task(task_id: &str) {
 
 async fn send_frame(tx: &mpsc::Sender<SseFrame>, frame: String) -> bool {
     tx.send(Ok(bytes::Bytes::from(frame))).await.is_ok()
+}
+
+fn stream_response(
+    rx: mpsc::Receiver<SseFrame>,
+    disconnected: Arc<AtomicBool>,
+    drive_task: tokio::task::JoinHandle<()>,
+) -> Response {
+    let stream = ReceiverStream::new(rx, DisconnectOnDrop::new(disconnected, drive_task));
+    let body = Body::from_stream(stream);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache, no-transform")
+        .header("X-Accel-Buffering", "no")
+        .body(body)
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "stream build failed").into_response()
+        })
 }
 
 struct DisconnectOnDrop {

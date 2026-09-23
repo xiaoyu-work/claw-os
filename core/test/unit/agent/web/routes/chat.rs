@@ -44,6 +44,18 @@ fn active_session_is_rejected_until_turn_finishes() {
 }
 
 #[test]
+fn task_stream_cursor_body_is_closed() {
+    let parsed: TaskStreamRequest =
+        serde_json::from_value(json!({ "cursor": 12 })).expect("valid cursor body");
+    assert_eq!(parsed.cursor, Some(12));
+    assert!(serde_json::from_value::<TaskStreamRequest>(json!({
+        "cursor": 12,
+        "session_id": "caller-controlled",
+    }))
+    .is_err());
+}
+
+#[test]
 fn user_facing_tool_events_omit_inputs_and_results() {
     let mut turn_emitted_text = false;
     let mut emitted_text = false;

@@ -59,6 +59,15 @@ struct LegacySessionList {
     sessions: Vec<LegacySession>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ConversationJob {
+    id: String,
+    status: String,
+    prompt: String,
+    created_at: String,
+    session_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct Conversation {
     #[serde(flatten)]
@@ -66,6 +75,12 @@ struct Conversation {
     messages: Vec<Value>,
     message_count: u64,
     messages_truncated: bool,
+    jobs: Vec<ConversationJob>,
+    job_count: u64,
+    jobs_truncated: bool,
+    task_bindings_complete: bool,
+    #[serde(default)]
+    task_bindings_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,6 +129,11 @@ pub async fn detail(
                 "parent_id": metadata.parent_id,
                 "message_count": conversation.message_count,
                 "messages_truncated": conversation.messages_truncated,
+                "jobs": conversation.jobs,
+                "job_count": conversation.job_count,
+                "jobs_truncated": conversation.jobs_truncated,
+                "task_bindings_complete": conversation.task_bindings_complete,
+                "task_bindings_error": conversation.task_bindings_error,
                 "manageable": true,
                 "legacy": false,
             })))
@@ -133,6 +153,11 @@ pub async fn history(
             "message_count": conversation.message_count,
             "messages_truncated": conversation.messages_truncated,
             "messages": conversation.messages,
+            "jobs": conversation.jobs,
+            "job_count": conversation.job_count,
+            "jobs_truncated": conversation.jobs_truncated,
+            "task_bindings_complete": conversation.task_bindings_complete,
+            "task_bindings_error": conversation.task_bindings_error,
         }))),
         Err(error) => legacy_history(&id).await.or(Err(error)),
     }

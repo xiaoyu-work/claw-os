@@ -24,6 +24,8 @@ web UI.
 - Read immutable caller-reported receipts, keeping report outcomes and result
   summaries separate from matched App declarations and OS-confirmed evidence.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
+- Reattach Chat to an owner-scoped durable task stream after navigation or
+  reload, using verified conversation task bindings to avoid replay duplicates.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
 - Reuse frozen session prompts and configured history compression through the
@@ -62,6 +64,12 @@ owner-memory access, idle-session mutation locking, archive state and branch
 lineage remain broker-owned; browser search is only a filter over the returned
 bounded inventory. Older memory-only sessions remain discoverable through the
 read-only `memory.*` broker routes and are visibly non-manageable.
+Conversation history projects bounded Job metadata from the same broker view.
+When its task bindings are complete, Chat keeps the active outer user prompt,
+removes that task's already-persisted intermediate presentation rows, and
+replays the owner-checked task stream from a cursor. Incomplete bindings remain
+visible as an explicit reconstruction error rather than being guessed from
+text or timestamps.
 Activity adapters retain Main's authenticated owner transport and local/remote
 Web session provenance. Task submission, safe retry, App-service admission and
 protected owner App review remain backend responsibilities. The existing

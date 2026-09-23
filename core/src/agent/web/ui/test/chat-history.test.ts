@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   accumulateTurnUsage,
   appendReasoningSummary,
+  restoreForActiveTask,
   restoreHistoryMessages,
   type ChatMessage,
 } from "../src/lib/chat-history";
@@ -53,6 +54,61 @@ describe("restoreHistoryMessages", () => {
 });
 
 describe("live chat presentation", () => {
+  test("rebuilds an active task without duplicating persisted tool rows", () => {
+    const messages = restoreForActiveTask(
+      [
+        { id: 1, role: "user", text: "Earlier request", task_id: "job-old" },
+        { id: 2, role: "assistant", text: "Earlier answer", task_id: "job-old" },
+        {
+          id: 3,
+          role: "user",
+          text: "Continue after refresh",
+          task_id: "job-live",
+          is_user_prompt: true,
+        },
+        {
+          id: 4,
+          role: "assistant",
+          text: "",
+          task_id: "job-live",
+          tool_calls: [{ id: "tool-live", name: "cos_sysinfo" }],
+        },
+        {
+          id: 5,
+          role: "user",
+          text: "",
+          task_id: "job-live",
+          is_user_prompt: false,
+          tool_results: [
+            { tool_use_id: "tool-live", text: "persisted result", is_error: false },
+          ],
+        },
+      ],
+      { id: "job-live", prompt: "Continue after refresh" },
+    );
+
+    expect(messages.map((message) => message.text)).toEqual([
+      "Earlier request",
+      "Earlier answer",
+      "Continue after refresh",
+      "",
+    ]);
+    expect(messages.flatMap((message) => message.tools)).toEqual([]);
+    expect(messages[messages.length - 1]?.status).toBe("streaming");
+  });
+
+  test("restores the queued prompt when the worker has not persisted it yet", () => {
+    const messages = restoreForActiveTask([], {
+      id: "job-pending",
+      prompt: "Queued request",
+    });
+
+    expect(messages.map((message) => [message.role, message.text])).toEqual([
+      ["user", "Queued request"],
+      ["assistant", ""],
+    ]);
+  });
+
   test("collects reasoning summaries and provider usage across turns", () => {
     const message: ChatMessage = {
       id: "assistant",

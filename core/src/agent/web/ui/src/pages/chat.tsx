@@ -29,6 +29,7 @@ import { api, streamSse } from "@/lib/api";
 import {
   accumulateTurnUsage,
   appendReasoningSummary,
+  restoreForActiveTask,
   restoreHistoryMessages,
   type ChatMessage,
   type TokenUsage,
@@ -43,6 +44,25 @@ import { Textarea } from "@/components/ui/textarea";
 
 type Msg = ChatMessage;
 
+type ConversationTask = {
+  id: string;
+  status: string;
+  prompt: string;
+};
+
+type HistoryResponse = {
+  messages?: any[];
+  jobs?: ConversationTask[];
+  task_bindings_complete?: boolean;
+  task_bindings_error?: string | null;
+};
+
+const ACTIVE_TASK_STATUSES = new Set([
+  "pending",
+  "running",
+  "waiting_approval",
+]);
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -53,6 +73,8 @@ export function ChatPage({ meta }: { meta: any }) {
   const [sessionId, setSessionId] = useState<string>(sessionFromRoute);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const [blockedByTask, setBlockedByTask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const taskIdRef = useRef<string>("");
@@ -67,39 +89,136 @@ export function ChatPage({ meta }: { meta: any }) {
 
   useEffect(() => {
     setSessionId(sessionFromRoute);
+    setBlockedByTask(null);
     if (!sessionFromRoute) {
+      setRestoring(false);
       setMessages([]);
       return;
     }
     if (skipReloadFor.current === sessionFromRoute) {
       skipReloadFor.current = "";
+      setRestoring(false);
       return;
     }
+    setRestoring(true);
     let cancelled = false;
-    api
-      .get<{ messages?: any[] } | any[]>(`/api/sessions/${sessionFromRoute}/history`)
-      .then((r) => {
+    const controller = new AbortController();
+    const restore = async () => {
+      try {
+        const response = await api.get<HistoryResponse | any[]>(
+          `/api/sessions/${sessionFromRoute}/history`,
+          { signal: controller.signal },
+        );
         if (cancelled) return;
-        const list: any[] = Array.isArray(r) ? r : r?.messages || [];
-        setMessages(restoreHistoryMessages(list));
-      })
-      .catch((error: any) => {
-        if (cancelled) return;
-        setMessages([
-          {
-            id: uid(),
+        const rows: any[] = Array.isArray(response)
+          ? response
+          : response?.messages || [];
+        const jobs = Array.isArray(response)
+          ? []
+          : Array.isArray(response?.jobs)
+            ? response.jobs
+            : [];
+        const activeTask = jobs
+          .slice()
+          .reverse()
+          .find((job) => ACTIVE_TASK_STATUSES.has(job.status));
+        setRestoring(false);
+        if (!activeTask) {
+          setMessages(restoreHistoryMessages(rows));
+          return;
+        }
+        if (!Array.isArray(response) && response.task_bindings_complete !== true) {
+          const restored = restoreHistoryMessages(rows);
+          restored.push({
+            id: `task-unavailable-${activeTask.id}`,
             role: "assistant",
             text: "",
             tools: [],
             reasoning: [],
-            warnings: [],
+            warnings: [
+              response.task_bindings_error ||
+                "The active task cannot be safely reconstructed in Chat. Open Tasks to monitor or stop it.",
+            ],
             status: "error",
-            error: error?.message || "Failed to load session history",
+            error: "Live task replay unavailable",
+          });
+          setMessages(restored);
+          setBlockedByTask(activeTask.id);
+          return;
+        }
+
+        setMessages(restoreForActiveTask(rows, activeTask));
+        setBusy(true);
+        abortRef.current = controller;
+        taskIdRef.current = activeTask.id;
+        await streamSse(
+          `/api/tasks/${encodeURIComponent(activeTask.id)}/stream`,
+          { cursor: 0 },
+          (event, data) => {
+            if (cancelled) return;
+            setMessages((current) => {
+              const copy = current.slice();
+              const last = copy[copy.length - 1];
+              if (!last || last.role !== "assistant") return current;
+              applyFrame(last, event, data);
+              return copy;
+            });
           },
-        ]);
-      });
+          controller.signal,
+        );
+      } catch (error: any) {
+        if (cancelled) return;
+        setRestoring(false);
+        if (controller.signal.aborted) {
+          setMessages((current) => {
+            const copy = current.slice();
+            const last = copy[copy.length - 1];
+            if (last?.role === "assistant" && last.status === "streaming") {
+              last.status = "interrupted";
+              last.error = "stopped";
+            }
+            return copy;
+          });
+          return;
+        }
+        setMessages((current) => {
+          const copy = current.slice();
+          const last = copy[copy.length - 1];
+          if (last?.role === "assistant" && last.status === "streaming") {
+            last.status = "error";
+            last.error = error?.message || "Failed to restore live task";
+            return copy;
+          }
+          return [
+            ...copy,
+            {
+              id: uid(),
+              role: "assistant",
+              text: "",
+              tools: [],
+              reasoning: [],
+              warnings: [],
+              status: "error",
+              error: error?.message || "Failed to load session history",
+            },
+          ];
+        });
+      } finally {
+        if (!cancelled && abortRef.current === controller) {
+          setBusy(false);
+          abortRef.current = null;
+          taskIdRef.current = "";
+        }
+      }
+    };
+    void restore();
     return () => {
       cancelled = true;
+      controller.abort();
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        taskIdRef.current = "";
+      }
     };
   }, [sessionFromRoute]);
 
@@ -135,7 +254,7 @@ export function ChatPage({ meta }: { meta: any }) {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || restoring || blockedByTask) return;
     setInput("");
     const userMsg: Msg = {
       id: uid(),
@@ -214,7 +333,7 @@ export function ChatPage({ meta }: { meta: any }) {
       taskIdRef.current = "";
       stopRequestedRef.current = false;
     }
-  }, [input, busy, sessionId, route, cancelTask]);
+  }, [input, busy, restoring, blockedByTask, sessionId, route, cancelTask]);
 
   const stop = useCallback(() => {
     const controller = abortRef.current;
@@ -263,7 +382,18 @@ export function ChatPage({ meta }: { meta: any }) {
               <Square className="h-4 w-4" />
             </Button>
           ) : (
-            <Button size="icon" onClick={send} disabled={!input.trim()} title="Send">
+            <Button
+              size="icon"
+              onClick={send}
+              disabled={!input.trim() || restoring || blockedByTask !== null}
+              title={
+                restoring
+                  ? "Restoring conversation"
+                  : blockedByTask
+                    ? "An active task must be monitored from Tasks"
+                    : "Send"
+              }
+            >
               <ArrowUp className="h-4 w-4" />
             </Button>
           )}

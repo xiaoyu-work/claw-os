@@ -24,6 +24,11 @@ export type ChatMessage = {
   error?: string;
 };
 
+export type ActiveConversationTask = {
+  id: string;
+  prompt: string;
+};
+
 export function appendReasoningSummary(message: ChatMessage, data: any) {
   const summaries = Array.isArray(data?.summary)
     ? data.summary.filter(
@@ -66,6 +71,40 @@ function tokenCount(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : 0;
+}
+
+export function restoreForActiveTask(
+  rows: any[],
+  task: ActiveConversationTask,
+): ChatMessage[] {
+  const retained = rows.filter(
+    (row) => row?.task_id !== task.id || row?.is_user_prompt === true,
+  );
+  const restored = restoreHistoryMessages(retained);
+  const promptRetained = rows.some(
+    (row) => row?.task_id === task.id && row?.is_user_prompt === true,
+  );
+  if (!promptRetained) {
+    restored.push({
+      id: `task-user-${task.id}`,
+      role: "user",
+      text: task.prompt,
+      tools: [],
+      reasoning: [],
+      warnings: [],
+      status: "done",
+    });
+  }
+  restored.push({
+    id: `task-assistant-${task.id}`,
+    role: "assistant",
+    text: "",
+    tools: [],
+    reasoning: [],
+    warnings: [],
+    status: "streaming",
+  });
+  return restored;
 }
 
 export function restoreHistoryMessages(rows: any[]): ChatMessage[] {

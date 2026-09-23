@@ -68,8 +68,14 @@ fn conversation_projection_keeps_bounded_history_metadata() {
             "messages": [{"id": 1, "role": "user", "text": "Review it"}],
             "message_count": 7,
             "messages_truncated": true,
-            "jobs": [],
-            "job_count": 0,
+            "jobs": [{
+                "id": "job-live",
+                "status": "running",
+                "prompt": "Continue after refresh",
+                "created_at": "2026-09-22T12:30:00Z",
+                "session_id": "ses_0000000000001_000000000001",
+            }],
+            "job_count": 1,
             "jobs_truncated": false,
             "task_bindings_complete": true,
         }
@@ -80,6 +86,9 @@ fn conversation_projection_keeps_bounded_history_metadata() {
     assert_eq!(conversation.messages.len(), 1);
     assert_eq!(conversation.message_count, 7);
     assert!(conversation.messages_truncated);
+    assert_eq!(conversation.jobs.len(), 1);
+    assert_eq!(conversation.jobs[0].id, "job-live");
+    assert!(conversation.task_bindings_complete);
 }
 
 #[test]

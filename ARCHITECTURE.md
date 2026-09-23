@@ -1576,6 +1576,13 @@ Closing or losing a Web SSE connection detaches the viewer but does not cancel
 the durable task. The Chat Stop control uses the task id returned at submission
 and calls `task.cancel` explicitly; completion remains observable through Tasks,
 session history, and notifications after a reconnect.
+When Chat reopens a canonical conversation with an active Job, it consumes the
+broker's bounded conversation history and Job projection, retains the bound
+outer user prompt, removes only that Job's bound intermediate presentation
+rows, and replays its owner-scoped `task.stream` from a cursor. It refuses to
+guess this split when task bindings are incomplete. Multiple viewers do not
+become task owners, and reattachment neither resubmits work nor changes
+capabilities.
 
 `task.workspace.resolve` is the only presentation-facing workspace resolver.
 `clawd` derives the owner from peer credentials, resolves relative paths under

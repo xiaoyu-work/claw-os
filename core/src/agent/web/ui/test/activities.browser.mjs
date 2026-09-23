@@ -32,6 +32,11 @@ const conversations = new Map([
     updated_at: "2026-09-18T12:00:00Z", archived: false, deleted: false,
     manageable: false, legacy: true,
   }],
+  ["session-reattach", {
+    id: "session-reattach", presentation_id: "55555555-5555-8555-8555-555555555555",
+    title: "Running task", created_at: "2026-09-22T12:00:00Z",
+    updated_at: "2026-09-22T12:45:00Z", archived: false, deleted: false,
+  }],
 ]);
 const receiptRecords = new Map();
 const objectStateRecords = new Map();
@@ -95,6 +100,7 @@ const previewReplies = [];
 let activityNumber = 0;
 let jobNumber = 0;
 let conversationNumber = 0;
+let reattachStreamRequests = 0;
 let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
 let invalidReceiptsOnce = null;
@@ -436,7 +442,64 @@ async function fixture(req, res) {
     session.updated_at = timestamp();
     return reply(req, res, { session });
   }
+  if (url.pathname === "/api/tasks/job-reattach/stream") {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(body, { cursor: 0 });
+    reattachStreamRequests += 1;
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    for (const [event, data] of [
+      ["task", { task_id: "job-reattach", session_id: "session-reattach", reattached: true }],
+      ["session", { session_id: "session-reattach" }],
+      ["reasoning", { summary: ["Recovered the durable task stream."] }],
+      ["tool_start", { id: "reattach-tool", name: "cos_sysinfo" }],
+      ["tool_result", { id: "reattach-tool", name: "cos_sysinfo", ok: true }],
+    ]) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+    await delay(100);
+    for (const [event, data] of [
+      ["text", { delta: "Resumed after refresh." }],
+      ["turn_done", {
+        finish: "stop",
+        usage: {
+          input_tokens: 9,
+          output_tokens: 4,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      }],
+      ["done", { session_id: "session-reattach" }],
+    ]) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+    res.end();
+    return;
+  }
   if (/^\/api\/sessions\/[^/]+\/history$/.test(url.pathname)) {
+    const sessionId = decodeURIComponent(url.pathname.split("/")[3]);
+    if (sessionId === "session-reattach") {
+      return reply(req, res, {
+        session_id: sessionId,
+        messages: [
+          { id: 1, role: "user", text: "Earlier request", task_id: "job-old", is_user_prompt: true },
+          { id: 2, role: "assistant", text: "Earlier answer", task_id: "job-old" },
+          {
+            id: 3, role: "user", text: "Continue after refresh",
+            task_id: "job-reattach", is_user_prompt: true,
+          },
+          {
+            id: 4, role: "assistant", text: "", task_id: "job-reattach",
+            tool_calls: [{ id: "persisted-tool", name: "persisted_duplicate" }],
+          },
+        ],
+        jobs: [{
+          id: "job-reattach", status: "running", prompt: "Continue after refresh",
+          session_id: sessionId, created_at: timestamp(),
+        }],
+        task_bindings_complete: true,
+        jobs_truncated: false,
+      });
+    }
     return reply(req, res, {
       messages: [{ id: 1, role: "assistant", text: "Saved Activity session" }],
     });
@@ -1201,6 +1264,16 @@ try {
   await wait("location.hash === '#/chat/session-fork-1'", "forked conversation selected");
   assert.equal(conversations.get("session-fork-1").parent_id, "session-release");
   console.log("PASS conversation search, rename, archive restoration and whole-session fork");
+
+  await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/chat/session-reattach` });
+  await wait("document.body.innerText.includes('Resumed after refresh.')", "reattached durable task output");
+  assert.equal(reattachStreamRequests, 1);
+  assert.equal(await evaluate("(document.body.innerText.match(/Continue after refresh/g) || []).length"), 1);
+  assert.equal(await evaluate("(document.body.innerText.match(/cos_sysinfo/g) || []).length"), 1);
+  assert.equal(await evaluate("document.body.innerText.includes('persisted_duplicate')"), false);
+  await click(`document.querySelector('details summary')`);
+  await wait("document.body.innerText.includes('Recovered the durable task stream.')", "reattached reasoning summary");
+  console.log("PASS active task history deduplication and durable stream reattachment");
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
