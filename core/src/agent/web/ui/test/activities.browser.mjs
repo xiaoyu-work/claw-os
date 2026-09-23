@@ -346,6 +346,31 @@ async function fixture(req, res) {
     return reply(req, res, { web_enabled: false, desktop_enabled: false, ntfy_enabled: false });
   }
   if (url.pathname === "/api/notifications/delivery/claim") return reply(req, res, { deliveries: [] });
+  if (url.pathname === "/api/chat") {
+    assert.equal(req.method, "POST");
+    assert.equal(body.prompt, "Show live presentation");
+    assert.equal(body.session_id, undefined);
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    for (const [event, data] of [
+      ["session", { session_id: "chat-browser" }],
+      ["reasoning", { summary: ["Compared the available Agent context."] }],
+      ["text", { delta: "Presentation complete." }],
+      ["turn_done", {
+        finish: "stop",
+        usage: {
+          input_tokens: 12,
+          output_tokens: 7,
+          cache_read_tokens: 5,
+          cache_write_tokens: 0,
+        },
+      }],
+      ["done", { session_id: "chat-browser" }],
+    ]) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+    res.end();
+    return;
+  }
   const sessionIds = [...new Set([...jobs.values()].map((job) => job.session_id).filter(Boolean))];
   if (url.pathname === "/api/sessions") {
     return reply(req, res, { sessions: sessionIds.map((id) => ({ id, title: `Session ${id}` })) });
@@ -1053,6 +1078,21 @@ try {
     await send("Page.reload");
     await wait(`!!document.querySelector('[aria-label="Activity detail"] h2')`, "restored detail after reload");
   };
+
+  await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/chat` });
+  await wait("!!document.querySelector('textarea')", "authenticated chat composer");
+  await evaluate(`(() => {
+    const input = document.querySelector('textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Show live presentation');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await click(`document.querySelector('button[title="Send"]')`);
+  await wait("document.body.innerText.includes('Presentation complete.')", "streamed assistant response");
+  await wait("document.body.innerText.includes('12 in') && document.body.innerText.includes('7 out') && document.body.innerText.includes('5 cache read')", "provider usage presentation");
+  await click(`document.querySelector('details summary')`);
+  await wait("document.body.innerText.includes('Compared the available Agent context.')", "reasoning summary presentation");
+  assert.equal(await evaluate("location.hash"), "#/chat/chat-browser");
+  console.log("PASS live reasoning summary and accumulated provider usage presentation");
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");

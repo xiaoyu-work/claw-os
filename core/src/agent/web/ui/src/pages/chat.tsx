@@ -10,17 +10,28 @@
  *   - sticky composer at the bottom
  *
  * Frames consumed (from core/src/agent/web/routes/chat.rs):
- *   task, text, tool_use_start, tool_use, tool_result, tool_start, warning,
- *   turn_done, done, error.
+ *   task, text, reasoning, tool_use_start, tool_use, tool_result, tool_start,
+ *   warning, turn_done, done, error.
  */
 
-import { ArrowUp, Loader2, Square, Wrench, AlertTriangle } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUp,
+  Brain,
+  Gauge,
+  Loader2,
+  Square,
+  Wrench,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, streamSse } from "@/lib/api";
 import {
+  accumulateTurnUsage,
+  appendReasoningSummary,
   restoreHistoryMessages,
   type ChatMessage,
+  type TokenUsage,
   type ToolCall,
 } from "@/lib/chat-history";
 import { renderSafeMarkdown } from "@/lib/safe-markdown";
@@ -80,6 +91,7 @@ export function ChatPage({ meta }: { meta: any }) {
             role: "assistant",
             text: "",
             tools: [],
+            reasoning: [],
             warnings: [],
             status: "error",
             error: error?.message || "Failed to load session history",
@@ -130,6 +142,7 @@ export function ChatPage({ meta }: { meta: any }) {
       role: "user",
       text,
       tools: [],
+      reasoning: [],
       warnings: [],
       status: "done",
     };
@@ -138,6 +151,7 @@ export function ChatPage({ meta }: { meta: any }) {
       role: "assistant",
       text: "",
       tools: [],
+      reasoning: [],
       warnings: [],
       status: "streaming",
     };
@@ -281,10 +295,15 @@ function applyFrame(msg: Msg, event: string, data: any) {
     case "tool_start":
       upsertTool(msg, data);
       break;
+    case "reasoning":
+      appendReasoningSummary(msg, data);
+      break;
     case "warning":
       msg.warnings.push(stringifyServerMessage(data, "warning"));
       break;
     case "turn_done":
+      accumulateTurnUsage(msg, data);
+      break;
     case "done":
       msg.status = "done";
       break;
@@ -349,6 +368,7 @@ function Message({ m }: { m: Msg }) {
   }
   return (
     <div className="flex flex-col gap-3">
+      {m.reasoning.length > 0 && <ReasoningSummary summaries={m.reasoning} />}
       {m.tools.map((t) => (
         <ToolCard key={t.id} t={t} />
       ))}
@@ -375,6 +395,47 @@ function Message({ m }: { m: Msg }) {
       {m.status === "error" && m.error && (
         <p className="text-xs text-destructive">{m.error}</p>
       )}
+      {m.usage && <UsageSummary usage={m.usage} />}
+    </div>
+  );
+}
+
+function ReasoningSummary({ summaries }: { summaries: string[] }) {
+  return (
+    <details className="rounded-md border border-muted px-3 py-2 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground">
+        <Brain className="h-3.5 w-3.5" />
+        Reasoning summary
+      </summary>
+      <div className="mt-2 grid gap-2 border-t pt-2 text-foreground">
+        {summaries.map((summary, index) => (
+          <p key={index} className="whitespace-pre-wrap break-words">
+            {summary}
+          </p>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function UsageSummary({ usage }: { usage: TokenUsage }) {
+  const parts = [
+    `${usage.inputTokens.toLocaleString()} in`,
+    `${usage.outputTokens.toLocaleString()} out`,
+  ];
+  if (usage.cacheReadTokens > 0) {
+    parts.push(`${usage.cacheReadTokens.toLocaleString()} cache read`);
+  }
+  if (usage.cacheWriteTokens > 0) {
+    parts.push(`${usage.cacheWriteTokens.toLocaleString()} cache write`);
+  }
+  return (
+    <div
+      className="flex items-center gap-2 text-[11px] text-muted-foreground"
+      title="Total provider usage across this response"
+    >
+      <Gauge className="h-3.5 w-3.5" />
+      <span>{parts.join(" · ")}</span>
     </div>
   );
 }
