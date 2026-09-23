@@ -25,6 +25,40 @@ fn fresh_session_db() -> memory::sqlite_fts::MemoryDb {
 }
 
 #[test]
+fn sessions_repair_options_require_preview_or_confirmation() {
+    assert_eq!(
+        parse_repair_options(&["--dry-run".into()]).unwrap(),
+        memory::recovery::RepairOptions {
+            dry_run: true,
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        parse_repair_options(&[
+            "--rebuild-fts".into(),
+            "--quarantine".into(),
+            "--yes".into()
+        ])
+        .unwrap(),
+        memory::recovery::RepairOptions {
+            rebuild_fts: true,
+            allow_quarantine: true,
+            ..Default::default()
+        }
+    );
+    assert!(parse_repair_options(&[]).unwrap_err().contains("--yes"));
+    assert!(parse_repair_options(&["--dry-run".into(), "--yes".into()])
+        .unwrap_err()
+        .contains("must not"));
+    assert!(parse_repair_options(&["--yes".into(), "--yes".into()])
+        .unwrap_err()
+        .contains("duplicate"));
+    assert!(parse_repair_options(&["--unknown".into()])
+        .unwrap_err()
+        .contains("usage"));
+}
+
+#[test]
 fn sessions_list_with_empty_db_returns_no_sessions() {
     let db = fresh_session_db();
     let v = sessions_list_with(&db, 20).expect("list ok");

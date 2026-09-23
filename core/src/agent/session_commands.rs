@@ -72,10 +72,64 @@ pub(super) fn sessions_cmd(args: &[String]) -> Result<Value, String> {
         "purge" => sessions_purge(&args[1..]),
         "stats" => sessions_stats(&args[1..]),
         "top" => sessions_top(&args[1..]),
+        "health" => sessions_health(&args[1..]),
+        "repair" => sessions_repair(&args[1..]),
         other => Err(format!(
-            "unknown sessions subcommand: {other}. try: list [N] | top [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats"
+            "unknown sessions subcommand: {other}. try: list [N] | top [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats | health | repair --dry-run | repair [--rebuild-fts] [--quarantine] --yes"
         )),
     }
+}
+
+fn sessions_health(args: &[String]) -> Result<Value, String> {
+    if !args.is_empty() {
+        return Err("usage: cos agent sessions health".to_string());
+    }
+    serde_json::to_value(
+        memory::recovery::diagnose_default()
+            .map_err(|error| format!("memory health check failed: {error}"))?,
+    )
+    .map_err(|error| format!("encode memory health report: {error}"))
+}
+
+fn sessions_repair(args: &[String]) -> Result<Value, String> {
+    let options = parse_repair_options(args)?;
+    serde_json::to_value(
+        memory::recovery::repair_default(options)
+            .map_err(|error| format!("memory repair failed: {error}"))?,
+    )
+    .map_err(|error| format!("encode memory repair report: {error}"))
+}
+
+fn parse_repair_options(args: &[String]) -> Result<memory::recovery::RepairOptions, String> {
+    let mut options = memory::recovery::RepairOptions::default();
+    let mut confirmed = false;
+    for argument in args {
+        match argument.as_str() {
+            "--dry-run" if !options.dry_run => options.dry_run = true,
+            "--rebuild-fts" if !options.rebuild_fts => options.rebuild_fts = true,
+            "--quarantine" if !options.allow_quarantine => options.allow_quarantine = true,
+            "--yes" if !confirmed => confirmed = true,
+            "--dry-run" | "--rebuild-fts" | "--quarantine" | "--yes" => {
+                return Err(format!("duplicate sessions repair option: {argument}"));
+            }
+            _ => {
+                return Err(
+                    "usage: cos agent sessions repair --dry-run | [--rebuild-fts] [--quarantine] --yes"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    if options.dry_run {
+        if confirmed {
+            return Err("sessions repair --dry-run must not include --yes".to_string());
+        }
+    } else if !confirmed {
+        return Err(
+            "refusing to repair memory without --yes; preview with --dry-run".to_string(),
+        );
+    }
+    Ok(options)
 }
 
 fn sessions_list(args: &[String]) -> Result<Value, String> {
