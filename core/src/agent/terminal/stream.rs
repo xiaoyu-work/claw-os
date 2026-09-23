@@ -136,6 +136,63 @@ pub(super) fn attach_queued(
     spawn(backend, runtime_tx, job);
 }
 
+pub(super) async fn restore_conversation(
+    app: &mut App,
+    backend: Arc<dyn Backend>,
+    runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
+) {
+    let conversation_id = app.conversation.id.clone();
+    let references = app.take_conversation_jobs();
+    let mut jobs = Vec::new();
+    for reference in references
+        .into_iter()
+        .filter(|job| !matches!(job.status.as_str(), "ok" | "error" | "cancelled"))
+        .take(MAX_QUEUED_TASKS + 1)
+    {
+        match backend.get_task(&reference.id).await {
+            Ok(job) if job.session_id == conversation_id && !job.is_terminal() => jobs.push(job),
+            Ok(_) => {}
+            Err(error) => {
+                app.push_error(&format!(
+                    "Could not restore durable task {}: {error}",
+                    reference.id
+                ));
+            }
+        }
+    }
+    if jobs.is_empty() {
+        return;
+    }
+    if jobs.len() > MAX_QUEUED_TASKS {
+        app.push_error("Conversation has too many active durable tasks to restore in the terminal.");
+        return;
+    }
+
+    let head = jobs.remove(0);
+    let mut tail = head.id.clone();
+    let mut queued = Vec::new();
+    let mut skipped = 0usize;
+    for job in jobs {
+        if job.after_task_id.as_deref() == Some(tail.as_str()) {
+            tail = job.id.clone();
+            queued.push(job);
+        } else {
+            skipped += 1;
+        }
+    }
+    if skipped > 0 {
+        app.push_system(&format!(
+            "{skipped} other active conversation task(s) remain available through /tasks."
+        ));
+    }
+    let queued_count = queued.len();
+    app.resume_task(&head, queued_count);
+    for job in queued {
+        app.restore_queued_task(job);
+    }
+    spawn(backend, runtime_tx, head);
+}
+
 fn spawn(backend: Arc<dyn Backend>, runtime_tx: mpsc::UnboundedSender<RuntimeEvent>, job: Job) {
     tokio::spawn(async move {
         let mut cursor = 0;

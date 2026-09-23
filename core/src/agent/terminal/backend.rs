@@ -30,12 +30,20 @@ pub(super) struct ConversationMessage {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ConversationJob {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct Conversation {
     pub id: String,
     pub title: String,
     pub archived: bool,
     pub history_truncated: bool,
     pub messages: Vec<ConversationMessage>,
+    pub jobs: Vec<ConversationJob>,
+    pub jobs_truncated: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1347,6 +1355,22 @@ fn parse_conversation(value: Value) -> Result<Conversation, String> {
             Some(ConversationMessage { role, text })
         })
         .collect();
+    let jobs = value
+        .get("jobs")
+        .and_then(Value::as_array)
+        .map_or(Ok(Vec::new()), |jobs| {
+            if jobs.len() > 1_000 {
+                return Err("Claw conversation job list exceeded its terminal bound".to_string());
+            }
+            jobs.iter()
+                .map(|job| {
+                    Ok(ConversationJob {
+                        id: required_string(job, "id")?,
+                        status: required_string(job, "status")?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
     Ok(Conversation {
         id: required_string(value, "id")?,
         title: value
@@ -1363,6 +1387,11 @@ fn parse_conversation(value: Value) -> Result<Conversation, String> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         messages,
+        jobs,
+        jobs_truncated: value
+            .get("jobs_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 

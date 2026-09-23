@@ -188,9 +188,10 @@ async fn run_with_backend(
         None => backend.create_conversation().await?,
     };
     let mut app = App::new(backend.info().clone(), conversation);
+    let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
+    stream::restore_conversation(&mut app, backend.clone(), runtime_tx.clone()).await;
     let mut terminal = TerminalSession::enter().map_err(|error| error.to_string())?;
     let mut input = EventStream::new();
-    let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
 
     while !app.should_quit {
@@ -825,7 +826,10 @@ async fn apply_input_action(
                 app.push_system(&format!("Future tasks will use {model}."));
             }
             PickerSelection::Session(id) => match backend.get_conversation(&id).await {
-                Ok(conversation) => app.replace_conversation(conversation),
+                Ok(conversation) => {
+                    app.replace_conversation(conversation);
+                    stream::restore_conversation(app, backend, runtime_tx).await;
+                }
                 Err(error) => app.push_error(&error),
             },
             PickerSelection::Task(id) => match backend.get_task(&id).await {
@@ -966,8 +970,10 @@ async fn apply_input_action(
         },
         InputAction::Submit(input) => {
             if let Some(command) = commands::parse(&input) {
-                if let Err(error) = commands::execute(app, backend, command).await {
+                if let Err(error) = commands::execute(app, backend.clone(), command).await {
                     app.push_error(&error);
+                } else {
+                    stream::restore_conversation(app, backend, runtime_tx).await;
                 }
             } else if app.active_task.is_some() {
                 stream::queue_prompt(app, backend, !options.no_memory, options.max_turns, input)

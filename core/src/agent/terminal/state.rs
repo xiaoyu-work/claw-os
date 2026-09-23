@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
-    ActivityOperationPreview, ApprovalRequest, BackendInfo, Conversation, ConversationSummary, Job,
-    NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
+    ActivityOperationPreview, ApprovalRequest, BackendInfo, Conversation, ConversationJob,
+    ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
+    TaskSummary,
 };
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
@@ -278,6 +279,11 @@ impl App {
                 "Only the most recent bounded conversation history is shown in this terminal.",
             );
         }
+        if self.conversation.jobs_truncated {
+            self.push_system(
+                "Only the most recent bounded durable-task metadata is available for this conversation.",
+            );
+        }
         if self.conversation.messages.is_empty() {
             self.push_system("New Claw conversation. Type /help for terminal commands.");
             return;
@@ -301,6 +307,34 @@ impl App {
         self.task_had_assistant_text = false;
         self.push_entry(EntryKind::User, clean_text(&job.prompt));
         self.scroll = 0;
+    }
+
+    pub fn resume_task(&mut self, job: &Job, queued_successors: usize) {
+        self.active_task = Some(job.id.clone());
+        self.active_workspace = job.workspace.clone();
+        self.status = RunStatus::Working;
+        self.task_started_at = Some(Instant::now());
+        self.active_assistant = None;
+        self.provider_had_text = false;
+        self.task_had_assistant_text = false;
+        self.push_system(&format!(
+            "Reattached durable task {}{}.",
+            job.id,
+            if queued_successors == 0 {
+                String::new()
+            } else {
+                format!(" with {queued_successors} queued successor(s)")
+            }
+        ));
+        self.scroll = 0;
+    }
+
+    pub fn restore_queued_task(&mut self, job: Job) {
+        self.queued_tasks.push_back(job);
+    }
+
+    pub fn take_conversation_jobs(&mut self) -> Vec<ConversationJob> {
+        std::mem::take(&mut self.conversation.jobs)
     }
 
     pub fn finish_task(&mut self, job: &Job) {

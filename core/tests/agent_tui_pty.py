@@ -132,6 +132,7 @@ class FixtureBroker:
         self.thread = threading.Thread(target=self.serve)
 
     def conversation(self):
+        jobs = [self.job("running")] if self.case == "resume-running" else []
         return {
             "id": self.session_id,
             "presentation_id": PRESENTATION_ID,
@@ -144,8 +145,8 @@ class FixtureBroker:
             "messages": [],
             "message_count": 0,
             "messages_truncated": False,
-            "jobs": [],
-            "job_count": 0,
+            "jobs": jobs,
+            "job_count": len(jobs),
             "jobs_truncated": False,
         }
 
@@ -926,7 +927,7 @@ def run(cos, case, transcript, original_namespace, trace):
         command = [str(cos), "agent", "chat", "--tui"]
         if case == "plain":
             command = [str(cos), "agent", "chat", "--plain", "--no-memory"]
-        elif case == "resume":
+        elif case in ("resume", "resume-running"):
             command.extend(["--session", PRESENTATION_ID])
         if trace:
             command = ["strace", "-f", "-tt", "-o", str(trace), *command]
@@ -1581,7 +1582,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     lambda _data: time.monotonic() >= settled,
                 )
                 os.write(master, b"\r")
-            elif case != "durable-queue":
+            elif case not in ("durable-queue", "resume-running"):
                 send_prompt(master, output, "Run the terminal integration fixture")
             marker = ANSWER if case in ("complete", "durable-queue") else RUNNING
             if case == "reconnect":
@@ -1613,7 +1614,11 @@ def run(cos, case, transcript, original_namespace, trace):
             if broker.errors:
                 raise AssertionError("; ".join(broker.errors))
             submissions = sum(request["command"] == "task.submit" for request in broker.requests)
-            expected_submissions = 2 if case == "durable-queue" else 1
+            expected_submissions = (
+                2 if case == "durable-queue"
+                else 0 if case == "resume-running"
+                else 1
+            )
             if submissions != expected_submissions:
                 raise AssertionError(
                     f"expected {expected_submissions} actual task submission(s), got {submissions}"
@@ -1673,6 +1678,7 @@ if __name__ == "__main__":
             "plain",
             "reconnect",
             "resume",
+            "resume-running",
             "task-center",
             "workspace",
         ),

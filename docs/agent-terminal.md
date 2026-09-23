@@ -99,6 +99,11 @@ A transient `clawd` disconnect keeps the exact active task and stream cursor.
 The header shows `RECONNECTING`; recovery resumes the same durable stream
 without resubmitting the prompt or inventing task failure.
 
+Opening a conversation with retained non-terminal work reattaches the oldest
+active task and its exact `after_task_id` successor chain. Existing history is
+not re-added as a new user prompt, and unrelated concurrent tasks stay
+available through `/tasks`.
+
 ## Commands
 
 The completion palette stays limited to Claw entry points and common
@@ -270,7 +275,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline reconnect resume plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -303,3 +308,5 @@ the predecessor binding, and then attaches to the persisted successor stream.
 The reconnect scenario drops two broker stream connections, preserves the
 cursor and task identity, and reaches the original terminal result without a
 second submission.
+The resume-running scenario opens a retained conversation, attaches its
+existing non-terminal task, and confirms that no replacement task is submitted.

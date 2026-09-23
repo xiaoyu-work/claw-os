@@ -32,6 +32,8 @@ audit.
 - A transient broker disconnect keeps the exact task and stream cursor,
   displays a reconnecting state, and resumes the durable stream without
   resubmitting work.
+- Opening a conversation reattaches its retained non-terminal task and exact
+  sequenced successors without duplicating the already recorded user prompt.
 - Display only shared redacted presentation data. Never expose tool arguments,
   successful result bodies, opaque reasoning state or credentials.
 - Approval keys call the installed OS helper for one exact pending request;

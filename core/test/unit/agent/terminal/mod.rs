@@ -40,6 +40,8 @@ fn app() -> App {
                     text: "Earlier answer".into(),
                 },
             ],
+            jobs: Vec::new(),
+            jobs_truncated: false,
         },
     )
 }
