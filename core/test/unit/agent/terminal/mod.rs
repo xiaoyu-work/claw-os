@@ -431,6 +431,46 @@ fn stream_projection_keeps_private_payloads_out_of_the_transcript() {
 }
 
 #[test]
+fn completed_stream_does_not_repeat_the_final_response() {
+    let mut app = app();
+    let mut completed = job("ok");
+    completed.response = Some("Visible answer".into());
+    app.begin_task(&completed);
+    presentation::apply_record(
+        &mut app,
+        &json!({"event": {"kind": "text_delta", "text": "Visible answer"}}),
+    )
+    .unwrap();
+    presentation::apply_record(
+        &mut app,
+        &json!({
+            "event": {
+                "kind": "done",
+                "finish": "stop",
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0
+                }
+            }
+        }),
+    )
+    .unwrap();
+    app.finish_task(&completed);
+
+    assert_eq!(
+        app.entries
+            .iter()
+            .filter(|entry| {
+                matches!(entry.kind, EntryKind::Assistant) && entry.text == "Visible answer"
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn approvals_have_one_explicit_terminal_decision() {
     let mut app = app();
     app.add_approvals(vec![ApprovalRequest {

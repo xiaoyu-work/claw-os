@@ -156,6 +156,7 @@ pub(super) struct App {
     task_started_at: Option<Instant>,
     active_assistant: Option<usize>,
     provider_had_text: bool,
+    task_had_assistant_text: bool,
     tool_entries: HashMap<String, usize>,
     approval_catalog: HashMap<String, ApprovalRequest>,
     notification_catalog: HashMap<String, NotificationItem>,
@@ -213,6 +214,7 @@ impl App {
             task_started_at: None,
             active_assistant: None,
             provider_had_text: false,
+            task_had_assistant_text: false,
             tool_entries: HashMap::new(),
             approval_catalog: HashMap::new(),
             notification_catalog: HashMap::new(),
@@ -233,6 +235,7 @@ impl App {
         self.seen_approvals.clear();
         self.active_assistant = None;
         self.provider_had_text = false;
+        self.task_had_assistant_text = false;
         self.scroll = 0;
         self.command_selection = 0;
         self.picker = None;
@@ -294,6 +297,7 @@ impl App {
         self.task_started_at = Some(Instant::now());
         self.active_assistant = None;
         self.provider_had_text = false;
+        self.task_had_assistant_text = false;
         self.push_entry(EntryKind::User, clean_text(&job.prompt));
         self.scroll = 0;
     }
@@ -303,7 +307,7 @@ impl App {
             self.push_error("Claw returned a terminal result for another task.");
             return;
         }
-        if self.active_assistant.is_none() {
+        if !self.task_had_assistant_text {
             if let Some(response) = job
                 .response
                 .as_deref()
@@ -324,6 +328,7 @@ impl App {
         self.task_started_at = None;
         self.active_assistant = None;
         self.provider_had_text = false;
+        self.task_had_assistant_text = false;
         for entry in &mut self.entries {
             if let EntryKind::Approval { status, .. } = &mut entry.kind {
                 if *status == ApprovalStatus::Pending {
@@ -346,6 +351,7 @@ impl App {
             return;
         }
         self.provider_had_text = true;
+        self.task_had_assistant_text = true;
         let text = clean_text(text);
         if let Some(index) = self.active_assistant {
             self.entries[index].text.push_str(&text);
