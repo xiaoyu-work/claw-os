@@ -807,6 +807,9 @@ class FixtureBroker:
                     connection.sendall(struct.pack(">4sBBI", b"CBK1", 2, 0, len(encoded)) + encoded)
                 except ConnectionAbortedError:
                     pass
+                except BrokenPipeError as error:
+                    if self.case != "resume-running":
+                        self.errors.append(str(error))
                 except (OSError, EOFError, ValueError, AssertionError) as error:
                     self.errors.append(str(error))
 
