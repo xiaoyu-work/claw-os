@@ -259,6 +259,24 @@ async fn run_with_backend(
                         app.finish_task(&job);
                         next_task = app.queued_tasks.pop_front();
                     }
+                    RuntimeEvent::Reconnecting(error) => {
+                        if app.status != RunStatus::Cancelling {
+                            app.status = RunStatus::Reconnecting;
+                        }
+                        app.push_system(&format!(
+                            "Broker connection interrupted; reconnecting to the durable task: {error}"
+                        ));
+                    }
+                    RuntimeEvent::Reconnected => {
+                        if app.status == RunStatus::Reconnecting {
+                            app.status = if app.current_approval().is_some() {
+                                RunStatus::WaitingApproval
+                            } else {
+                                RunStatus::Working
+                            };
+                        }
+                        app.push_system("Reconnected to the durable task.");
+                    }
                     RuntimeEvent::Failed(error) => {
                         app.push_error(&format!(
                             "{error}. The durable task may still be running; use /session to retain its conversation id."

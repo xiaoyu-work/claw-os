@@ -29,6 +29,9 @@ audit.
 - Keep durable tasks running when the UI disconnects unless the user explicitly
   cancels. Task browsing, cancellation and retry must use the owner-scoped
   broker contract rather than terminal-local task records.
+- A transient broker disconnect keeps the exact task and stream cursor,
+  displays a reconnecting state, and resumes the durable stream without
+  resubmitting work.
 - Display only shared redacted presentation data. Never expose tool arguments,
   successful result bodies, opaque reasoning state or credentials.
 - Approval keys call the installed OS helper for one exact pending request;

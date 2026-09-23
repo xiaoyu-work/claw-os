@@ -47,6 +47,7 @@ pub(super) struct Entry {
 pub(super) enum RunStatus {
     Ready,
     Working,
+    Reconnecting,
     WaitingApproval,
     Cancelling,
 }

@@ -119,6 +119,7 @@ class FixtureBroker:
         self.cursors = {}
         self.requested_model = None
         self.requested_workspace = None
+        self.stream_disconnects = 0
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
         self.workspace = str(self.home / "project")
         self.session_id = SESSION_ID
@@ -671,6 +672,9 @@ class FixtureBroker:
             task_id = params["id"]
             if task_id not in (self.task_id, self.queued_task_id):
                 raise AssertionError("stream addressed the wrong task")
+            if self.case == "reconnect" and self.stream_disconnects < 2:
+                self.stream_disconnects += 1
+                raise ConnectionAbortedError("fixture broker restart")
             events = []
             if params.get("cursor", 0) == 0:
                 events = [
@@ -702,6 +706,7 @@ class FixtureBroker:
                     "notification-inbox",
                     "workspace",
                     "task-center",
+                    "reconnect",
                 ) or (self.case == "durable-queue" and task_id == self.queued_task_id):
                     events.extend([
                         {"progress": {
@@ -731,6 +736,7 @@ class FixtureBroker:
                 "notification-inbox",
                 "workspace",
                 "task-center",
+                "reconnect",
             ) or (
                 self.case == "durable-queue"
                 and (task_id == self.queued_task_id or self.queue_submitted.is_set())
@@ -796,6 +802,8 @@ class FixtureBroker:
                         }
                     encoded = json.dumps(response).encode()
                     connection.sendall(struct.pack(">4sBBI", b"CBK1", 2, 0, len(encoded)) + encoded)
+                except ConnectionAbortedError:
+                    pass
                 except (OSError, EOFError, ValueError, AssertionError) as error:
                     self.errors.append(str(error))
 
@@ -1576,6 +1584,14 @@ def run(cos, case, transcript, original_namespace, trace):
             elif case != "durable-queue":
                 send_prompt(master, output, "Run the terminal integration fixture")
             marker = ANSWER if case in ("complete", "durable-queue") else RUNNING
+            if case == "reconnect":
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"RECONNECTING" in data,
+                )
+                marker = ANSWER
             read_terminal(
                 master, output, time.monotonic() + 30,
                 lambda data: marker.encode() in data,
@@ -1655,6 +1671,7 @@ if __name__ == "__main__":
             "activity-evidence",
             "notification-inbox",
             "plain",
+            "reconnect",
             "resume",
             "task-center",
             "workspace",

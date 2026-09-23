@@ -95,6 +95,10 @@ Exiting does not cancel or lose queued work. The dependency carries no
 capability or durable attendance; normal live presence and approval rules are
 re-evaluated when each Job runs.
 
+A transient `clawd` disconnect keeps the exact active task and stream cursor.
+The header shows `RECONNECTING`; recovery resumes the same durable stream
+without resubmitting the prompt or inventing task failure.
+
 ## Commands
 
 The completion palette stays limited to Claw entry points and common
@@ -266,7 +270,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline resume plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline reconnect resume plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -296,3 +300,6 @@ The workspace scenario resolves a relative owner-home directory and verifies
 that the exact canonical path is retained by `task.submit`.
 The durable-queue scenario submits a follow-up while work is active, verifies
 the predecessor binding, and then attaches to the persisted successor stream.
+The reconnect scenario drops two broker stream connections, preserves the
+cursor and task identity, and reaches the original terminal result without a
+second submission.

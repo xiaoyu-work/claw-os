@@ -1,16 +1,21 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::backend::{Backend, Job};
+use super::backend::{Backend, Job, StreamError};
 use super::state::{App, MAX_PROMPT_BYTES};
 
 const MAX_QUEUED_TASKS: usize = 64;
+const MAX_STREAM_RECONNECT_ATTEMPTS: u32 = 60;
+const STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 pub(super) enum RuntimeEvent {
     Record(Value),
     Finished(Job),
+    Reconnecting(String),
+    Reconnected,
     Failed(String),
 }
 
@@ -134,14 +139,36 @@ pub(super) fn attach_queued(
 fn spawn(backend: Arc<dyn Backend>, runtime_tx: mpsc::UnboundedSender<RuntimeEvent>, job: Job) {
     tokio::spawn(async move {
         let mut cursor = 0;
+        let mut reconnect_attempts = 0;
         loop {
             let frame = match backend.stream(&job.id, cursor).await {
                 Ok(frame) => frame,
-                Err(error) => {
+                Err(StreamError::Retryable(error))
+                    if reconnect_attempts < MAX_STREAM_RECONNECT_ATTEMPTS =>
+                {
+                    if reconnect_attempts == 0 {
+                        let _ = runtime_tx.send(RuntimeEvent::Reconnecting(error));
+                    }
+                    reconnect_attempts += 1;
+                    tokio::time::sleep(STREAM_RECONNECT_DELAY).await;
+                    continue;
+                }
+                Err(StreamError::Retryable(error)) => {
+                    let _ = runtime_tx.send(RuntimeEvent::Failed(format!(
+                        "Claw broker task stream did not recover after \
+                         {MAX_STREAM_RECONNECT_ATTEMPTS} attempts: {error}"
+                    )));
+                    return;
+                }
+                Err(StreamError::Fatal(error)) => {
                     let _ = runtime_tx.send(RuntimeEvent::Failed(error));
                     return;
                 }
             };
+            if reconnect_attempts > 0 {
+                reconnect_attempts = 0;
+                let _ = runtime_tx.send(RuntimeEvent::Reconnected);
+            }
             cursor = frame.cursor;
             for record in frame.records {
                 let _ = runtime_tx.send(RuntimeEvent::Record(record));

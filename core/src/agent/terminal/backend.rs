@@ -276,6 +276,11 @@ pub(super) struct StreamFrame {
     pub job: Job,
 }
 
+pub(super) enum StreamError {
+    Retryable(String),
+    Fatal(String),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ApprovalRequest {
     pub id: String,
@@ -331,7 +336,7 @@ pub(super) trait Backend: Send + Sync {
         model: &str,
     ) -> Result<Job, String>;
     async fn resolve_workspace(&self, path: Option<&str>) -> Result<String, String>;
-    async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, String>;
+    async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, StreamError>;
     async fn cancel(&self, task_id: &str) -> Result<(), String>;
     async fn list_tasks(&self) -> Result<Vec<TaskSummary>, String>;
     async fn get_task(&self, task_id: &str) -> Result<Job, String>;
@@ -542,37 +547,69 @@ impl Backend for BrokerBackend {
         required_string(&value, "workspace")
     }
 
-    async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, String> {
-        let value = self
-            .call(
-                Command::TaskStream,
-                json!({ "id": task_id, "cursor": cursor, "timeout_ms": 1_000 }),
-            )
-            .await?;
+    async fn stream(
+        &self,
+        task_id: &str,
+        cursor: u64,
+    ) -> Result<StreamFrame, StreamError> {
+        let request = Request::new(
+            Command::TaskStream,
+            json!({ "id": task_id, "cursor": cursor, "timeout_ms": 1_000 }),
+        );
+        let response = tokio::time::timeout(
+            Duration::from_secs(35),
+            crate::clawd::client::request(&self.socket, request),
+        )
+        .await
+        .map_err(|_| {
+            StreamError::Retryable("Claw broker task stream timed out".to_string())
+        })?
+        .map_err(|error| StreamError::Retryable(error.to_string()))?;
+        let value = if response.ok {
+            response
+                .result
+                .ok_or_else(|| StreamError::Fatal("Claw broker returned no result".to_string()))?
+        } else {
+            return Err(StreamError::Fatal(
+                response
+                    .error
+                    .map(|error| format!("{}: {}", error.code, error.message))
+                    .unwrap_or_else(|| "Claw broker returned no error".to_string()),
+            ));
+        };
         let next = value
             .get("cursor")
             .and_then(Value::as_u64)
-            .ok_or("Claw task stream omitted its cursor")?;
+            .ok_or_else(|| StreamError::Fatal("Claw task stream omitted its cursor".to_string()))?;
         let records = value
             .get("events")
             .and_then(Value::as_array)
             .cloned()
-            .ok_or("Claw task stream omitted its events")?;
+            .ok_or_else(|| StreamError::Fatal("Claw task stream omitted its events".to_string()))?;
         if next < cursor || (!records.is_empty() && next == cursor) || records.len() > 16_384 {
-            return Err("Claw task stream returned an invalid cursor or event count".into());
+            return Err(StreamError::Fatal(
+                "Claw task stream returned an invalid cursor or event count".to_string(),
+            ));
         }
         let terminal = value
             .get("terminal")
             .and_then(Value::as_bool)
-            .ok_or("Claw task stream omitted its terminal state")?;
+            .ok_or_else(|| {
+                StreamError::Fatal("Claw task stream omitted its terminal state".to_string())
+            })?;
         let job = parse_job(
             value
                 .get("job")
                 .cloned()
-                .ok_or("Claw task stream omitted its job")?,
-        )?;
+                .ok_or_else(|| {
+                    StreamError::Fatal("Claw task stream omitted its job".to_string())
+                })?,
+        )
+        .map_err(StreamError::Fatal)?;
         if job.id != task_id {
-            return Err("Claw task stream changed task identity".into());
+            return Err(StreamError::Fatal(
+                "Claw task stream changed task identity".to_string(),
+            ));
         }
         Ok(StreamFrame {
             cursor: next,

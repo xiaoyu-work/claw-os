@@ -1155,6 +1155,10 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
             format!("{} WORKING {}", spinner(app.frame), elapsed(app)),
             Style::default().fg(Color::Cyan),
         ),
+        RunStatus::Reconnecting => Span::styled(
+            format!("{} RECONNECTING", spinner(app.frame)),
+            Style::default().fg(Color::Yellow),
+        ),
         RunStatus::WaitingApproval => Span::styled("APPROVAL", Style::default().fg(Color::Magenta)),
         RunStatus::Cancelling => Span::styled(
             format!("{} STOPPING", spinner(app.frame)),
