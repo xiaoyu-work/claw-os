@@ -20,6 +20,11 @@ The full-screen UI is selected only when stdin, stdout and stderr are terminals
 and `TERM` is not `dumb`. `--tui` requires that environment explicitly. Root
 cannot submit Agent work on behalf of another account.
 
+The terminal still opens when text-provider setup is incomplete so local
+sessions, durable tasks, approvals, notifications, and Activities remain
+usable. It shows an explicit setup warning; model work still requires
+`cos agent setup text`.
+
 The compatible line interface remains available:
 
 ```bash

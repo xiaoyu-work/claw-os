@@ -24,6 +24,7 @@ fn app() -> App {
             provider: "ollama".into(),
             model: "claw-model".into(),
             models: vec!["claw-model".into(), "other-model".into()],
+            provider_ready: true,
         },
         Conversation {
             id: "ses_001953abcdef0_123456789abc".into(),
@@ -65,6 +66,18 @@ fn job(status: &str) -> Job {
         model: Some("claw-model".into()),
         turns_used: None,
     }
+}
+
+#[test]
+fn terminal_remains_available_before_provider_setup() {
+    let mut app = app();
+    app.info.provider_ready = false;
+    let app = App::new(app.info, app.conversation);
+    assert!(app.entries.iter().any(|entry| {
+        entry
+            .text
+            .contains("Local sessions, tasks, approvals, notifications, and Activities")
+    }));
 }
 
 #[test]

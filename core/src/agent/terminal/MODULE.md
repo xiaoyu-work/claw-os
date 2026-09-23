@@ -26,6 +26,9 @@ audit.
 ## Boundaries
 
 - Use canonical `ses_*` conversation IDs and ordinary broker routes directly.
+- Provider setup is not a prerequisite for opening local sessions, tasks,
+  approvals, notifications, or Activities. Show readiness errors explicitly
+  and require setup only before model work.
 - Keep durable tasks running when the UI disconnects unless the user explicitly
   cancels. Task browsing, cancellation and retry must use the owner-scoped
   broker contract rather than terminal-local task records.

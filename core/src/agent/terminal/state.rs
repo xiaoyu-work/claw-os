@@ -224,6 +224,13 @@ impl App {
             transcript_bytes: 0,
         };
         app.load_history();
+        if !app.info.provider_ready {
+            app.push_system(
+                "Text provider setup is incomplete. Local sessions, tasks, approvals, \
+                 notifications, and Activities remain available; run `cos agent setup text` \
+                 before submitting model work.",
+            );
+        }
         app
     }
 

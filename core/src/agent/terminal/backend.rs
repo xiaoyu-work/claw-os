@@ -21,6 +21,7 @@ pub(super) struct BackendInfo {
     pub provider: String,
     pub model: String,
     pub models: Vec<String>,
+    pub provider_ready: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -435,6 +436,7 @@ impl BrokerBackend {
                 provider: config.agent.provider.clone(),
                 model: config.agent.model.clone(),
                 models,
+                provider_ready: ready,
             },
             socket: crate::clawd::config::socket_path(),
         })

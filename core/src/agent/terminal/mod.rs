@@ -142,7 +142,6 @@ pub(super) fn run(options: ChatOptions) -> Result<Value, String> {
         return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.into());
     }
     let config = crate::config::current_snapshot();
-    super::setup::is_ready(&config.agent)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
