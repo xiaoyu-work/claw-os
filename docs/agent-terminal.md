@@ -103,7 +103,9 @@ without resubmitting the prompt or inventing task failure.
 Opening a conversation with retained non-terminal work reattaches the oldest
 active task and its exact `after_task_id` successor chain. Existing history is
 not re-added as a new user prompt, and unrelated concurrent tasks stay
-available through `/tasks`.
+available through `/tasks`. The latest requested model is restored only when
+it remains in the configured-provider catalogue; a provider fallback result is
+never treated as the user's model selection.
 
 ## Commands
 

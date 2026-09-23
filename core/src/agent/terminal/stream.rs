@@ -143,14 +143,34 @@ pub(super) async fn restore_conversation(
 ) {
     let conversation_id = app.conversation.id.clone();
     let references = app.take_conversation_jobs();
+    let latest_id = references
+        .iter()
+        .rev()
+        .find(|job| job.session_id == conversation_id)
+        .map(|job| job.id.clone());
+    let mut latest_job = None;
     let mut jobs = Vec::new();
     for reference in references
         .into_iter()
-        .filter(|job| !matches!(job.status.as_str(), "ok" | "error" | "cancelled"))
+        .filter(|job| {
+            job.session_id == conversation_id
+                && !matches!(job.status.as_str(), "ok" | "error" | "cancelled")
+        })
         .take(MAX_QUEUED_TASKS + 1)
     {
         match backend.get_task(&reference.id).await {
-            Ok(job) if job.session_id == conversation_id && !job.is_terminal() => jobs.push(job),
+            Ok(job) if job.session_id == conversation_id && !job.is_terminal() => {
+                if latest_id.as_deref() == Some(job.id.as_str()) {
+                    latest_job = Some(job.clone());
+                }
+                jobs.push(job);
+            }
+            Ok(job) if job.session_id != conversation_id => {
+                app.push_error(&format!(
+                    "Durable task {} belongs to another conversation; it was not restored.",
+                    job.id
+                ));
+            }
             Ok(_) => {}
             Err(error) => {
                 app.push_error(&format!(
@@ -160,6 +180,30 @@ pub(super) async fn restore_conversation(
             }
         }
     }
+    if latest_job.is_none() {
+        if let Some(latest_id) = latest_id {
+            match backend.get_task(&latest_id).await {
+                Ok(job) if job.session_id == conversation_id => latest_job = Some(job),
+                Ok(job) => {
+                    app.push_error(&format!(
+                        "Latest durable task {} belongs to another conversation; \
+                         its model selection was not restored.",
+                        job.id
+                    ));
+                }
+                Err(error) => {
+                    app.push_error(&format!(
+                        "Could not restore the conversation's latest model selection: {error}"
+                    ));
+                }
+            }
+        }
+    }
+    app.restore_selected_model(
+        latest_job
+            .as_ref()
+            .and_then(|job| job.requested_model.as_deref()),
+    );
     if jobs.is_empty() {
         return;
     }

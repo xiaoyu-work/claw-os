@@ -33,6 +33,7 @@ pub(super) struct ConversationMessage {
 pub(super) struct ConversationJob {
     pub id: String,
     pub status: String,
+    pub session_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1367,6 +1368,7 @@ fn parse_conversation(value: Value) -> Result<Conversation, String> {
                     Ok(ConversationJob {
                         id: required_string(job, "id")?,
                         status: required_string(job, "status")?,
+                        session_id: required_string(job, "session_id")?,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()

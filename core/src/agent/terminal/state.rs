@@ -333,6 +333,21 @@ impl App {
         self.queued_tasks.push_back(job);
     }
 
+    pub fn restore_selected_model(&mut self, model: Option<&str>) {
+        let Some(model) = model else {
+            return;
+        };
+        if self.info.models.iter().any(|candidate| candidate == model) {
+            self.selected_model = model.to_string();
+        } else {
+            self.push_system(&format!(
+                "The conversation's last requested model {model} is no longer available; \
+                 future tasks will use {}.",
+                self.selected_model
+            ));
+        }
+    }
+
     pub fn take_conversation_jobs(&mut self) -> Vec<ConversationJob> {
         std::mem::take(&mut self.conversation.jobs)
     }

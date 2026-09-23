@@ -353,6 +353,20 @@ fn searchable_pickers_return_typed_claw_selections() {
 }
 
 #[test]
+fn resumed_model_uses_only_the_configured_catalogue() {
+    let mut app = app();
+    app.restore_selected_model(Some("other-model"));
+    assert_eq!(app.selected_model, "other-model");
+
+    app.restore_selected_model(Some("removed-model"));
+    assert_eq!(app.selected_model, "other-model");
+    assert!(app
+        .entries
+        .iter()
+        .any(|entry| entry.text.contains("removed-model is no longer available")));
+}
+
+#[test]
 fn stream_projection_keeps_private_payloads_out_of_the_transcript() {
     let mut app = app();
     app.begin_task(&job("running"));
