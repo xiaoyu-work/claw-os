@@ -57,7 +57,8 @@ terminal. Tool identity and success/failure remain visible.
 Controls:
 
 - `Enter` submits the composer.
-- `Shift-Enter`, `Alt-Enter` or `Ctrl-J` inserts a newline.
+- `Ctrl-J` inserts a newline. Modified Enter is accepted when the terminal
+  reports its modifier, but the footer advertises only the portable binding.
 - `Esc` cancels the exact current task.
 - `PageUp` / `PageDown` scroll the transcript.
 - `Up` / `Down` navigate multiline input, prompt history, command suggestions
@@ -275,7 +276,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline multiline-key reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -310,3 +311,5 @@ cursor and task identity, and reaches the original terminal result without a
 second submission.
 The resume-running scenario opens a retained conversation, attaches its
 existing non-terminal task, and confirms that no replacement task is submitted.
+The multiline scenarios cover both bracketed paste and the portable `Ctrl-J`
+newline binding through the real PTY decoder.

@@ -625,7 +625,7 @@ class FixtureBroker:
                 )
             expected_prompt = (
                 "First line\nSecond line"
-                if self.case == "multiline"
+                if self.case in ("multiline", "multiline-key")
                 else "Run the terminal integration fixture"
             )
             if params.get("prompt") != expected_prompt:
@@ -700,6 +700,7 @@ class FixtureBroker:
                     "commands",
                     "confirmations",
                     "multiline",
+                    "multiline-key",
                     "approval-center",
                     "activity-lifecycle",
                     "activity-controls",
@@ -730,6 +731,7 @@ class FixtureBroker:
                 "commands",
                 "confirmations",
                 "multiline",
+                "multiline-key",
                 "approval-center",
                 "activity-lifecycle",
                 "activity-controls",
@@ -1582,6 +1584,16 @@ def run(cos, case, transcript, original_namespace, trace):
                     lambda _data: time.monotonic() >= settled,
                 )
                 os.write(master, b"\r")
+            elif case == "multiline-key":
+                os.write(master, b"First line\x0aSecond line")
+                settled = time.monotonic() + 0.4
+                read_terminal(
+                    master,
+                    output,
+                    settled + 2,
+                    lambda _data: time.monotonic() >= settled,
+                )
+                os.write(master, b"\r")
             elif case not in ("durable-queue", "resume-running"):
                 send_prompt(master, output, "Run the terminal integration fixture")
             marker = ANSWER if case in ("complete", "durable-queue") else RUNNING
@@ -1670,6 +1682,7 @@ if __name__ == "__main__":
             "confirmations",
             "durable-queue",
             "multiline",
+            "multiline-key",
             "approval-center",
             "activity-lifecycle",
             "activity-controls",

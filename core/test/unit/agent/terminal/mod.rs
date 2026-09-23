@@ -480,6 +480,24 @@ fn completed_stream_does_not_repeat_the_final_response() {
 }
 
 #[test]
+fn ctrl_j_inserts_the_advertised_newline() {
+    let mut app = app();
+    app.insert_text("First line");
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('j'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        ),
+        InputAction::None
+    );
+    app.insert_text("Second line");
+    assert_eq!(app.input, "First line\nSecond line");
+}
+
+#[test]
 fn approvals_have_one_explicit_terminal_decision() {
     let mut app = app();
     app.add_approvals(vec![ApprovalRequest {

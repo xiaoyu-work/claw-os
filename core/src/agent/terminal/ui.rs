@@ -1494,7 +1494,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
     let line = Line::from(vec![
         Span::styled(
-            " Enter send  Shift+Enter newline  Esc stop  Ctrl+K commands ",
+            " Enter send  Ctrl+J newline  Esc stop  Ctrl+K commands ",
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
