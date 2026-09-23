@@ -206,19 +206,24 @@ fn create_agent_session_with_client<T>(
     client: SessionClient,
     initialize: impl FnOnce(&session::SessionId) -> Result<T, String>,
 ) -> Result<(String, T), String> {
-    let sid = session::create(purpose).map_err(|err| err.to_string())?;
-    let prepared = initialize(&sid).and_then(|value| {
-        configure_task_session(&sid, owner_uid, owner_home, client)?;
-        Ok(value)
-    });
-    match prepared {
-        Ok(value) => Ok((sid.into_string(), value)),
-        Err(error) => {
-            session::end(&sid, session::Status::Failed)
-                .map_err(|cleanup| format!("initialize agent session {sid}: {error}; {cleanup}"))?;
-            Err(format!("initialize agent session {sid}: {error}"))
-        }
-    }
+    crate::paths::RoutedPathContext::for_owner(owner_uid, owner_home.to_path_buf()).scope_sync(
+        || {
+            let sid = session::create(purpose).map_err(|err| err.to_string())?;
+            let prepared = initialize(&sid).and_then(|value| {
+                configure_task_session(&sid, owner_uid, owner_home, client)?;
+                Ok(value)
+            });
+            match prepared {
+                Ok(value) => Ok((sid.into_string(), value)),
+                Err(error) => {
+                    session::end(&sid, session::Status::Failed).map_err(|cleanup| {
+                        format!("initialize agent session {sid}: {error}; {cleanup}")
+                    })?;
+                    Err(format!("initialize agent session {sid}: {error}"))
+                }
+            }
+        },
+    )
 }
 
 fn configure_task_session(
