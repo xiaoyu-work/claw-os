@@ -233,10 +233,10 @@ jobs:
           service_cgroup=/sys/fs/cgroup/system.slice/clawd.service
           main_pid="$(systemctl show clawd.service --property MainPID --value)"
           test -n "$main_pid"
-          test -z "$(cat "$service_cgroup/cgroup.procs")"
-          grep -qx "$main_pid" "$service_cgroup/cos-broker/cgroup.procs"
+          test -z "$(sudo cat "$service_cgroup/cgroup.procs")"
+          sudo grep -qx "$main_pid" "$service_cgroup/cos-broker/cgroup.procs"
           for controller in cpu memory pids; do
-            grep -qw "$controller" "$service_cgroup/cgroup.subtree_control"
+            sudo grep -qw "$controller" "$service_cgroup/cgroup.subtree_control"
           done
 
       - name: Upload Agent package
