@@ -25,6 +25,7 @@ fn app() -> App {
             model: "claw-model".into(),
             models: vec!["claw-model".into(), "other-model".into()],
             provider_ready: true,
+            model_catalog_warning: None,
         },
         Conversation {
             id: "ses_001953abcdef0_123456789abc".into(),
@@ -77,6 +78,18 @@ fn terminal_remains_available_before_provider_setup() {
         entry
             .text
             .contains("Local sessions, tasks, approvals, notifications, and Activities")
+    }));
+}
+
+#[test]
+fn terminal_surfaces_live_model_catalogue_degradation() {
+    let mut app = app();
+    app.info.model_catalog_warning = Some("Live model discovery failed".into());
+    let app = App::new(app.info, app.conversation);
+    assert!(app.entries.iter().any(|entry| {
+        entry
+            .text
+            .contains("Live model discovery failed. The configured model remains available")
     }));
 }
 

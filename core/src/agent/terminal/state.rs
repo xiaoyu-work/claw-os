@@ -231,6 +231,11 @@ impl App {
                  before submitting model work.",
             );
         }
+        if let Some(warning) = app.info.model_catalog_warning.clone() {
+            app.push_system(&format!(
+                "{warning}. The configured model remains available in this terminal."
+            ));
+        }
         app
     }
 

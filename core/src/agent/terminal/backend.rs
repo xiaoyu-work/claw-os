@@ -22,6 +22,7 @@ pub(super) struct BackendInfo {
     pub model: String,
     pub models: Vec<String>,
     pub provider_ready: bool,
+    pub model_catalog_warning: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -429,14 +430,15 @@ impl BrokerBackend {
         })
         .await
         .map_err(|_| "Claw model readiness check failed".to_string())??;
-        let models = super::models::catalog(Arc::new(config.agent.clone()), ready).await?;
+        let catalog = super::models::catalog(Arc::new(config.agent.clone()), ready).await?;
         Ok(Self {
             info: BackendInfo {
                 home,
                 provider: config.agent.provider.clone(),
                 model: config.agent.model.clone(),
-                models,
+                models: catalog.models,
                 provider_ready: ready,
+                model_catalog_warning: catalog.warning,
             },
             socket: crate::clawd::config::socket_path(),
         })

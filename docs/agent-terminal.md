@@ -23,7 +23,9 @@ cannot submit Agent work on behalf of another account.
 The terminal still opens when text-provider setup is incomplete so local
 sessions, durable tasks, approvals, notifications, and Activities remain
 usable. It shows an explicit setup warning; model work still requires
-`cos agent setup text`.
+`cos agent setup text`. A transient live model-catalogue failure also leaves
+the configured model available and displays the discovery error instead of
+preventing access to local UI surfaces.
 
 The compatible line interface remains available:
 
