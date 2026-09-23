@@ -187,7 +187,24 @@ jobs:
       - name: Install Agent package on Ubuntu
         run: |
           agent_deb="$(printf '%s\n' build/debs/claw-os-agent_*_"$ARCH".deb)"
-          sudo apt-get install -y --no-install-recommends "$PWD/$agent_deb"
+          install_deb="$(mktemp /tmp/claw-os-agent.XXXXXX.deb)"
+          trap 'rm -f "$install_deb"' EXIT
+          install -m 0644 "$agent_deb" "$install_deb"
+          # Exercise the real postinst scan without making it traverse the
+          # runner's transient Cargo and checkout build caches.
+          sudo unshare --mount --propagation private \
+            /bin/bash -euo pipefail -c '
+              package=$1
+              workspace=$2
+              cargo_home=$3
+              cd /tmp
+              for path in "$workspace" "$cargo_home"; do
+                if [ -d "$path" ]; then
+                  mount -t tmpfs -o nodev,nosuid,noexec,size=1m tmpfs "$path"
+                fi
+              done
+              apt-get install -y --no-install-recommends "$package"
+            ' bash "$install_deb" "$GITHUB_WORKSPACE" "$CARGO_HOME"
           for attempt in {1..30}; do
             if sudo systemctl is-active --quiet clawd.service \
                 && sudo test -S /run/cos/clawd.sock; then
