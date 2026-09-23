@@ -376,6 +376,58 @@ fn searchable_pickers_return_typed_claw_selections() {
         app.take_picker_selection(),
         Some(PickerSelection::Session("ses_two".into()))
     );
+
+    app.open_history_picker();
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::History {
+            before_user_turn: 0,
+            prompt: "Earlier question".into(),
+        })
+    );
+}
+
+#[test]
+fn double_escape_opens_backtrack_only_while_idle() {
+    let mut app = app();
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert!(app.backtrack_armed());
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert!(matches!(
+        app.picker.as_ref().map(|picker| picker.kind),
+        Some(crate::agent::terminal::state::PickerKind::History)
+    ));
+
+    app.close_picker();
+    app.begin_task(&job("running"));
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::Cancel
+    );
 }
 
 #[test]

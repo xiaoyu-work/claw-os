@@ -65,6 +65,9 @@ audit.
   conversation actions. Object lifecycle, policy and evidence actions belong
   in the panel opened by that entry point; compatible direct forms may remain
   parseable without appearing in completion.
+- While idle, double `Esc` opens retained user turns. Selecting one creates a
+  backend-checked prefix fork and restores the selected prompt for editing;
+  it never rewinds effects or forks active work.
 - Workspace selection resolves through `task.workspace.resolve`; the TUI keeps
   only the returned canonical path and binds it to each submitted/queued task.
   A cwd is context, never filesystem authority.

@@ -393,7 +393,9 @@ pub(super) async fn execute(
             app.push_system("Conversation restored from the archive.");
         }
         Command::Fork => {
-            let conversation = backend.fork_conversation(&app.conversation.id).await?;
+            let conversation = backend
+                .fork_conversation(&app.conversation.id, None)
+                .await?;
             app.replace_conversation(conversation);
             app.push_system("Forked into a new canonical Claw conversation.");
         }

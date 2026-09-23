@@ -1121,6 +1121,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     let title = match picker.kind {
         PickerKind::Models => format!(" {} - model ", picker.title),
         PickerKind::Sessions => format!(" {} - session ", picker.title),
+        PickerKind::History => format!(" {} - history ", picker.title),
         PickerKind::Tasks => format!(" {} - task ", picker.title),
         PickerKind::Approvals => format!(" {} - approval ", picker.title),
         PickerKind::Notifications => format!(" {} - notification ", picker.title),
@@ -1494,7 +1495,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
     let line = Line::from(vec![
         Span::styled(
-            " Enter send  Ctrl+J newline  Esc stop  Ctrl+K commands ",
+            if app.backtrack_armed() {
+                " Enter send  Esc again history  Ctrl+K commands "
+            } else {
+                " Enter send  Ctrl+J newline  Esc stop  Ctrl+K commands "
+            },
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(

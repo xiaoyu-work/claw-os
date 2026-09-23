@@ -694,6 +694,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if key.code != KeyCode::Esc {
+        app.disarm_backtrack();
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('c') if app.active_task.is_some() => InputAction::Cancel,
@@ -788,8 +791,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
         }
         KeyCode::Esc if app.active_task.is_some() => InputAction::Cancel,
         KeyCode::Esc => {
-            app.input.clear();
-            app.cursor = 0;
+            app.handle_idle_escape();
             InputAction::None
         }
         KeyCode::Enter
@@ -859,6 +861,24 @@ async fn apply_input_action(
             PickerSelection::Session(id) => match backend.get_conversation(&id).await {
                 Ok(conversation) => {
                     app.replace_conversation(conversation);
+                    stream::restore_conversation(app, backend, runtime_tx).await;
+                }
+                Err(error) => app.push_error(&error),
+            },
+            PickerSelection::History {
+                before_user_turn,
+                prompt,
+            } => match backend
+                .fork_conversation(&app.conversation.id, Some(before_user_turn))
+                .await
+            {
+                Ok(conversation) => {
+                    app.replace_conversation(conversation);
+                    app.prefill_input(prompt);
+                    app.push_system(
+                        "Forked before the selected prompt. Files, processes, approvals, \
+                         and other admitted effects were not rolled back.",
+                    );
                     stream::restore_conversation(app, backend, runtime_tx).await;
                 }
                 Err(error) => app.push_error(&error),

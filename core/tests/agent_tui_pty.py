@@ -125,6 +125,7 @@ class FixtureBroker:
         self.session_id = SESSION_ID
         self.title = "Terminal integration fixture"
         self.archived = False
+        self.backtrack_forked = False
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(path))
         self.listener.listen(8)
@@ -133,6 +134,16 @@ class FixtureBroker:
 
     def conversation(self):
         jobs = [self.job("running")] if self.case == "resume-running" else []
+        messages = []
+        if self.case == "backtrack":
+            messages = [
+                {"role": "user", "text": "First retained prompt"},
+                {"role": "assistant", "text": "First retained answer"},
+                {"role": "user", "text": "Second editable prompt"},
+                {"role": "assistant", "text": "Second retained answer"},
+            ]
+            if self.backtrack_forked:
+                messages = messages[:2]
         return {
             "id": self.session_id,
             "presentation_id": PRESENTATION_ID,
@@ -142,8 +153,8 @@ class FixtureBroker:
             "archived": self.archived,
             "deleted": False,
             "parent_id": None,
-            "messages": [],
-            "message_count": 0,
+            "messages": messages,
+            "message_count": len(messages),
             "messages_truncated": False,
             "jobs": jobs,
             "job_count": len(jobs),
@@ -275,6 +286,12 @@ class FixtureBroker:
         if method == "agent.conversation.fork":
             if params["id"] != self.session_id:
                 raise AssertionError("conversation fork addressed another session")
+            if self.case == "backtrack":
+                if params.get("before_user_turn") != 1:
+                    raise AssertionError("backtrack fork used the wrong retained prefix")
+                self.backtrack_forked = True
+            elif "before_user_turn" in params:
+                raise AssertionError("ordinary fork unexpectedly truncated history")
             self.session_id = FORK_SESSION_ID
             self.title = "Forked terminal fixture"
             return {"conversation": self.conversation()}
@@ -991,6 +1008,59 @@ def run(cos, case, transcript, original_namespace, trace):
                 master, output, time.monotonic() + 45,
                 ready,
             )
+            if case == "backtrack":
+                os.write(master, b"\x1b")
+                time.sleep(0.2)
+                os.write(master, b"\x1b")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Backtrack conversation" in data,
+                )
+                os.write(master, b"\x1b[B\r")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.fork"
+                        and request["params"].get("before_user_turn") == 1
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b")
+                settled = time.monotonic() + 0.2
+                read_terminal(
+                    master,
+                    output,
+                    settled + 2,
+                    lambda _data: time.monotonic() >= settled,
+                )
+                send_prompt(master, output, "/quit")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: process.poll() is not None,
+                    exit_process=process,
+                )
+                if process.wait(timeout=5) != 0:
+                    raise AssertionError(f"TUI exited with {process.returncode}")
+                if broker.errors:
+                    raise AssertionError("; ".join(broker.errors))
+                submissions = sum(
+                    request["command"] == "task.submit"
+                    for request in broker.requests
+                )
+                if submissions != 0:
+                    raise AssertionError("backtrack submitted the edited prompt automatically")
+                print(json.dumps({
+                    "case": case,
+                    "task_submissions": submissions,
+                    "completed": True,
+                }))
+                return
             if case == "commands":
                 send_prompt(master, output, "/resume")
                 read_terminal(
@@ -1707,6 +1777,7 @@ if __name__ == "__main__":
             "multiline",
             "multiline-key",
             "approval-center",
+            "backtrack",
             "activity-lifecycle",
             "activity-controls",
             "activity-evidence",

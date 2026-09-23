@@ -343,7 +343,11 @@ pub(super) trait Backend: Send + Sync {
         title: Option<&str>,
         archived: Option<bool>,
     ) -> Result<Conversation, String>;
-    async fn fork_conversation(&self, id: &str) -> Result<Conversation, String>;
+    async fn fork_conversation(
+        &self,
+        id: &str,
+        before_user_turn: Option<u32>,
+    ) -> Result<Conversation, String>;
     async fn revert_conversation(&self, id: &str, user_turns: u32) -> Result<Conversation, String>;
     async fn submit(
         &self,
@@ -533,11 +537,16 @@ impl Backend for BrokerBackend {
         parse_conversation(self.call(Command::AgentConversationUpdate, params).await?)
     }
 
-    async fn fork_conversation(&self, id: &str) -> Result<Conversation, String> {
-        parse_conversation(
-            self.call(Command::AgentConversationFork, json!({ "id": id }))
-                .await?,
-        )
+    async fn fork_conversation(
+        &self,
+        id: &str,
+        before_user_turn: Option<u32>,
+    ) -> Result<Conversation, String> {
+        let mut params = json!({ "id": id });
+        if let Some(before_user_turn) = before_user_turn {
+            params["before_user_turn"] = json!(before_user_turn);
+        }
+        parse_conversation(self.call(Command::AgentConversationFork, params).await?)
     }
 
     async fn revert_conversation(&self, id: &str, user_turns: u32) -> Result<Conversation, String> {

@@ -57,6 +57,7 @@ pub(super) enum RunStatus {
 pub(super) enum PickerKind {
     Models,
     Sessions,
+    History,
     Tasks,
     Approvals,
     Notifications,
@@ -83,6 +84,10 @@ pub(super) struct Picker {
 pub(super) enum PickerSelection {
     Model(String),
     Session(String),
+    History {
+        before_user_turn: u32,
+        prompt: String,
+    },
     Task(String),
     Approval(ApprovalRequest),
     Notification(NotificationItem),
@@ -162,8 +167,10 @@ pub(super) struct App {
     tool_entries: HashMap<String, usize>,
     approval_catalog: HashMap<String, ApprovalRequest>,
     notification_catalog: HashMap<String, NotificationItem>,
+    history_catalog: HashMap<String, (u32, String)>,
     seen_approvals: HashSet<String>,
     transcript_bytes: usize,
+    backtrack_armed_at: Option<Instant>,
 }
 
 impl App {
@@ -220,8 +227,10 @@ impl App {
             tool_entries: HashMap::new(),
             approval_catalog: HashMap::new(),
             notification_catalog: HashMap::new(),
+            history_catalog: HashMap::new(),
             seen_approvals: HashSet::new(),
             transcript_bytes: 0,
+            backtrack_armed_at: None,
         };
         app.load_history();
         if !app.info.provider_ready {
@@ -264,6 +273,7 @@ impl App {
         self.notification_preferences = None;
         self.notification_preferences_scroll = 0;
         self.notification_catalog.clear();
+        self.history_catalog.clear();
         self.activity_detail = None;
         self.activity_detail_scroll = 0;
         self.activity_attention = None;
@@ -282,6 +292,7 @@ impl App {
         self.usage_input = 0;
         self.usage_output = 0;
         self.usage_cached = 0;
+        self.backtrack_armed_at = None;
         self.load_history();
     }
 
@@ -592,6 +603,7 @@ impl App {
         self.input.insert(index, value);
         self.cursor += 1;
         self.command_selection = 0;
+        self.backtrack_armed_at = None;
     }
 
     pub fn insert_text(&mut self, value: &str) {
@@ -765,6 +777,69 @@ impl App {
             query: String::new(),
             selected: 0,
         });
+    }
+
+    pub fn open_history_picker(&mut self) {
+        self.history_catalog.clear();
+        let mut items = Vec::new();
+        let mut user_turn = 0u32;
+        for message in &self.conversation.messages {
+            if message.role != "user" {
+                continue;
+            }
+            let value = format!("user-turn-{user_turn}");
+            let prompt = bounded_clean_text(&message.text, MAX_PROMPT_BYTES);
+            let label = prompt
+                .lines()
+                .next()
+                .map(|line| bounded_clean_text(line, 120))
+                .unwrap_or_default();
+            self.history_catalog
+                .insert(value.clone(), (user_turn, prompt));
+            items.push(PickerItem {
+                label,
+                detail: format!("turn {} - fork before and edit", user_turn + 1),
+                value,
+            });
+            user_turn = user_turn.saturating_add(1);
+        }
+        if items.is_empty() {
+            self.push_system("This conversation has no retained user turns to backtrack.");
+            return;
+        }
+        self.picker = Some(Picker {
+            kind: PickerKind::History,
+            title: "Backtrack conversation",
+            items,
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn handle_idle_escape(&mut self) {
+        if !self.input.is_empty() {
+            self.input.clear();
+            self.cursor = 0;
+            self.backtrack_armed_at = None;
+            return;
+        }
+        if self
+            .backtrack_armed_at
+            .is_some_and(|armed| armed.elapsed() <= Duration::from_millis(1_500))
+        {
+            self.backtrack_armed_at = None;
+            self.open_history_picker();
+        } else {
+            self.backtrack_armed_at = Some(Instant::now());
+        }
+    }
+
+    pub fn backtrack_armed(&self) -> bool {
+        self.backtrack_armed_at.is_some()
+    }
+
+    pub fn disarm_backtrack(&mut self) {
+        self.backtrack_armed_at = None;
     }
 
     pub fn open_task_picker(&mut self, tasks: Vec<TaskSummary>) {
@@ -1252,6 +1327,14 @@ impl App {
         Some(match picker.kind {
             PickerKind::Models => PickerSelection::Model(item.value.clone()),
             PickerKind::Sessions => PickerSelection::Session(item.value.clone()),
+            PickerKind::History => {
+                let (before_user_turn, prompt) =
+                    self.history_catalog.remove(&item.value)?;
+                PickerSelection::History {
+                    before_user_turn,
+                    prompt,
+                }
+            }
             PickerKind::Tasks => PickerSelection::Task(item.value.clone()),
             PickerKind::Approvals => {
                 PickerSelection::Approval(self.approval_catalog.get(&item.value)?.clone())
@@ -1265,6 +1348,12 @@ impl App {
 
     pub fn tick(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        if self
+            .backtrack_armed_at
+            .is_some_and(|armed| armed.elapsed() > Duration::from_millis(1_500))
+        {
+            self.backtrack_armed_at = None;
+        }
     }
 
     pub fn task_elapsed(&self) -> Option<Duration> {
