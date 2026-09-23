@@ -31,8 +31,6 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/build-desktop-deb.sh`, `deb/tests/test_applet_provider.py` | Require the actual native Applet provider before declaring the Desktop-owned `claw-os-applet-services-v1` interface; no App/GUI grant or publication cutover |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |
 | `deb/*/{preinst,postinst,prerm,postrm}` | Upgrade/install/remove behavior and the downgrade gates |
-| `deb/claw-os-agent/extension-gid-scan.py` | Root-owned mount/ownership/ACL proof used during Agent postinstall |
-| `deb/tests/test-extension-gid-scan.py` | Real getfacl, mount pinning, stacked mount, and timeout-process-group coverage |
 | `deb/common/security-floor.preinst` | Shared pre-unpack refusal, rendered per package |
 | `deb/common/50claw-os-security-floor` | APT pre-install hook configuration (conffile) |
 | `release-security/policy.json` | Security epoch, ABI, protocols, tracked components |

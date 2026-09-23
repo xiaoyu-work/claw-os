@@ -261,20 +261,13 @@ extension execution fails closed unless per-task CPU, memory, pids, and
 `cgroup.kill` containment plus private tmpfs mounts can be verified. Cleanup
 failures retain a durable per-uid quarantine record until restart recovery
 proves process, mount, task-state, and routed-ACL residue is gone.
-`preinst` stops `clawd` for upgrades but does not run dependency-backed scans.
-After the new package and its ordinary dependencies are unpacked/configured,
-`postinst` invokes the single-link root-owned
-`/usr/lib/cos/extension-gid-scan.py`. The helper snapshots mountinfo, rejects
-stacked/duplicate mountpoints unless every layer is on the maintained
-kernel-virtual allowlist, opens each non-kernel-virtual mount, verifies its
-`mnt_id`, device, inode, mode, and ownership before and after scanning, then
-runs `find -xdev` and real numeric `getfacl` inspection through the pinned
-descriptor. Nested, bind, tmpfs, persistent, and network mounts remain
-separate roots. Each scan has a dedicated process group with bounded
-TERM/SIGKILL escalation and residue verification. Malformed or changed
-topology, inaccessible mounts, traversal errors, timeouts, ownership matches,
-or access/default ACL qualifiers fail closed. The Agent package depends
-explicitly on `acl`, `findutils`, `coreutils`, and Python for this proof.
+`preinst` stops `clawd` for upgrades. Identity provisioning checks exact
+name/UID/GID/NSS, shadow, systemd-homed, subordinate-ID and live-process
+collisions. It does not crawl host filesystem trees or enumerate mounts:
+WSL, container, network and removable mount topologies are not
+package-installation prerequisites. Numeric identity is not filesystem
+authority; extension access remains governed by the worker sandbox and
+capability-bound mounts.
 Partial attempts are rolled back, and `postinst` writes the exact root-owned
 runtime reservation manifest. Purge removes only
 accounts recorded as package-created, still matching policy, and owning no

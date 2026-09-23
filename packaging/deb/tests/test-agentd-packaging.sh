@@ -91,11 +91,6 @@ assert_contains "$TEST_WORKFLOW" '"$CARGO_TARGET_DIR/debug/claw-display-session"
     "the private fixture must receive the actual session binary as input twelve"
 assert_contains "$TEST_WORKFLOW" 'private_deferred_retirement_reclaims_the_exact_slot_and_workload' \
     "CI must exercise deferred display retirement and slot reclamation"
-assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'Depends: acl,' \
-    "the package must install getfacl for execution-gid collision scans"
-assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'findutils' \
-    "the package must install find for per-mount ownership scans"
-
 assert_contains "$BUILD_DEBS" 'ensure_bin claw-agentd cos' \
     "claw-os-agent must build the agent worker"
 assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-agentd' \
@@ -154,15 +149,6 @@ assert_contains "$IDENTITY_HELPER" 'identity_select_gid' \
     "upgrades must safely retain a provable legacy package gid"
 assert_contains "$IDENTITY_HELPER" 'COS_EXT_DYNAMIC_UID_FIRST=61184' \
     "package policy must encode systemd DynamicUser boundaries"
-assert_contains "$IDENTITY_HELPER" '/proc/self/mountinfo' \
-    "execution-gid validation must enumerate the live mount topology"
-assert_contains "$IDENTITY_HELPER" '/usr/lib/cos/extension-gid-scan.py' \
-    "identity provisioning must invoke the unpacked root-owned scan helper"
-assert_contains "$BUILD_DEBS" 'extension-gid-scan.py' \
-    "claw-os-agent must install its mount-pinning gid scan helper"
-assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/extension-gid-scan.py" \
-    '"/usr/bin/getfacl",' \
-    "the gid scan helper must use the real numeric getfacl interface"
 assert_contains "$IDENTITY_RS" 'FIRST_UID: u32 = 61_000' \
     "runtime and packaged uid-range start must agree"
 assert_contains "$IDENTITY_RS" 'GROUP_GID: u32 = 60_999' \
@@ -217,11 +203,6 @@ assert_contains "$TEST_WORKFLOW" 'expected_privileged_child_tests=19' \
     "CI must explicitly account for every privileged child-isolation test"
 assert_contains "$TEST_WORKFLOW" '"$lib_test" "$root/cos_lib_tests"' \
     "CI must copy the lib test binary into the root-owned fixture"
-assert_contains "$TEST_WORKFLOW" 'COS_GID_SCAN_HELPER_SOURCE="$root/extension-gid-scan.py"' \
-    "CI must run the real gid helper from the root-owned fixture"
-assert_contains "$TEST_WORKFLOW" '/usr/bin/python3 "$root/test-extension-gid-scan.py"' \
-    "CI must execute real getfacl, mount pin, and timeout integration tests"
-
 bash "$SCRIPT_DIR/test-extension-identities.sh"
 
 printf 'ok - agent isolation packaging contract\n'

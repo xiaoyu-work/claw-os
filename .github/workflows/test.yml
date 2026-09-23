@@ -219,12 +219,6 @@ jobs:
             "$extension_test" "$root/extension_host_boundary"
           sudo install -o root -g root -m 0755 \
             "$lib_test" "$root/cos_lib_tests"
-          sudo install -o root -g root -m 0755 \
-            packaging/deb/claw-os-agent/extension-gid-scan.py \
-            "$root/extension-gid-scan.py"
-          sudo install -o root -g root -m 0755 \
-            packaging/deb/tests/test-extension-gid-scan.py \
-            "$root/test-extension-gid-scan.py"
 
           sudo env \
             HOME=/root \
@@ -242,10 +236,6 @@ jobs:
             COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1 \
             "$root/cos_lib_tests" extension_host::child_isolation::tests \
             --test-threads=1
-          sudo env \
-            HOME=/root \
-            COS_GID_SCAN_HELPER_SOURCE="$root/extension-gid-scan.py" \
-            /usr/bin/python3 "$root/test-extension-gid-scan.py"
 
       - name: Test authenticated OS display and GUI lifetime
         shell: bash

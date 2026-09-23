@@ -17,10 +17,6 @@ identity_pending_manifest=$identity_state_dir/extension-identities.pending
 identity_quarantine_dir=$identity_state_dir/extension-quarantine
 identity_gid_manifest=$identity_state_dir/extension-group.gid
 identity_proc_dir=${COS_IDENTITY_PROC_DIR:-/proc}
-identity_mountinfo_file=${COS_IDENTITY_MOUNTINFO:-/proc/self/mountinfo}
-identity_scan_timeout=${COS_IDENTITY_SCAN_TIMEOUT:-300}
-identity_gid_scan_helper=${COS_IDENTITY_GID_SCAN_HELPER:-/usr/lib/cos/extension-gid-scan.py}
-identity_gid_scan_python=${COS_IDENTITY_GID_SCAN_PYTHON:-/usr/bin/python3}
 identity_systemd_dir=${COS_IDENTITY_SYSTEMD_DIR:-/run/systemd/system}
 identity_effective_gid=$COS_EXT_GID
 
@@ -115,18 +111,6 @@ identity_gid_has_unrelated_users() {
         '
 }
 
-identity_gid_has_files() {
-    scan_gid=$1
-    identity_regular_root_file "$identity_gid_scan_helper" || return 0
-    if LC_ALL=C "$identity_gid_scan_python" "$identity_gid_scan_helper" \
-        --gid "$scan_gid" \
-        --mountinfo "$identity_mountinfo_file" \
-        --timeout "$identity_scan_timeout"; then
-        return 1
-    fi
-    return 0
-}
-
 identity_select_gid() {
     action=$1
     old_version=${2-}
@@ -143,10 +127,6 @@ identity_select_gid() {
         }
         identity_gid_has_process "$COS_EXT_GID" && {
             identity_fail "fixed extension gid $COS_EXT_GID owns a process"
-            return 1
-        }
-        identity_gid_has_files "$COS_EXT_GID" && {
-            identity_fail "fixed extension gid $COS_EXT_GID owns files"
             return 1
         }
         identity_write_gid_manifest "$COS_EXT_GID"
@@ -189,10 +169,6 @@ EOF
             identity_fail "legacy extension gid $group_gid still owns a process; stop clawd and retry"
             return 1
         }
-        identity_gid_has_files "$group_gid" && {
-            identity_fail "legacy extension gid $group_gid owns unrelated files; refusing ambiguous migration"
-            return 1
-        }
         identity_write_gid_manifest "$group_gid" || return 1
     fi
     identity_gid_has_unrelated_users "$group_gid" && {
@@ -201,10 +177,6 @@ EOF
     }
     identity_gid_has_process "$group_gid" && {
         identity_fail "extension gid $group_gid still owns a process; stop clawd and retry"
-        return 1
-    }
-    identity_gid_has_files "$group_gid" && {
-        identity_fail "extension gid $group_gid owns unrelated files"
         return 1
     }
     identity_effective_gid=$group_gid
