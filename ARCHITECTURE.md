@@ -1601,6 +1601,11 @@ dependent pending record until its predecessor is `ok`, `error`, or
 explicitly. This orders execution without granting authority, inferring
 success, persisting attendance, or coupling queue lifetime to a terminal
 connection.
+Agent Web uses the same contract when the user submits while Chat is busy. The
+Web adapter derives the canonical session from the owner-checked predecessor
+instead of accepting one from the browser, and multiple follow-ups form a
+durable predecessor chain. On each terminal stream, Chat reloads the
+conversation Job projection and attaches the next runnable task.
 
 The owner-scoped
 `agent.conversation.create/get/list/update/fork/revert` broker routes

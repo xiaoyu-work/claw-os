@@ -3,10 +3,23 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::agent::web::state::AppState;
 use crate::clawd::routes::Command;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FollowUpRequest {
+    prompt: String,
+    #[serde(default = "default_true")]
+    use_memory: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
 
 pub async fn list(
     State(_state): State<AppState>,
@@ -61,6 +74,53 @@ pub async fn resume(
         .map_err(super::clawd::RpcError::into_api_error)
 }
 
+pub async fn follow_up(
+    State(_state): State<AppState>,
+    Path(predecessor_id): Path<String>,
+    Json(request): Json<FollowUpRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if request.prompt.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "empty prompt" })),
+        ));
+    }
+    let predecessor = super::clawd::request(Command::TaskGet, json!({ "id": predecessor_id }))
+        .await
+        .map_err(super::clawd::RpcError::into_api_error)?;
+    let params = follow_up_params(&predecessor, request).map_err(invalid_task_response)?;
+    super::clawd::request(Command::TaskSubmit, params)
+        .await
+        .map(Json)
+        .map_err(super::clawd::RpcError::into_api_error)
+}
+
+fn follow_up_params(predecessor: &Value, request: FollowUpRequest) -> Result<Value, String> {
+    let predecessor_id = predecessor
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "predecessor task has no id".to_string())?;
+    let session_id = predecessor
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "predecessor task has no conversation".to_string())?;
+    Ok(json!({
+        "prompt": request.prompt,
+        "session_id": session_id,
+        "after_task_id": predecessor_id,
+        "use_memory": request.use_memory,
+    }))
+}
+
+fn invalid_task_response(message: String) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(json!({ "error": format!("invalid clawd task: {message}") })),
+    )
+}
+
 fn preview(value: &str, max: usize) -> String {
     let compact = value.replace('\n', " ");
     if compact.chars().count() <= max {
@@ -68,4 +128,12 @@ fn preview(value: &str, max: usize) -> String {
     } else {
         format!("{}...", compact.chars().take(max).collect::<String>())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/web/routes/tasks.rs"
+    ));
 }

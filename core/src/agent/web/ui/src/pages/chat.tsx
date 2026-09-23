@@ -19,6 +19,7 @@ import {
   ArrowUp,
   Brain,
   Gauge,
+  ListPlus,
   Loader2,
   Square,
   Wrench,
@@ -76,8 +77,14 @@ export function ChatPage({ meta }: { meta: any }) {
   const [restoring, setRestoring] = useState(false);
   const [blockedByTask, setBlockedByTask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [queueing, setQueueing] = useState(false);
+  const [queuedCount, setQueuedCount] = useState(0);
+  const [restoreVersion, setRestoreVersion] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const taskIdRef = useRef<string>("");
+  const queueTailTaskIdRef = useRef<string>("");
+  const queuedTaskIdsRef = useRef<string[]>([]);
+  const queueWatchersRef = useRef<Map<string, AbortController>>(new Map());
   const stopRequestedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // When the server assigns a session id mid-stream we push the URL to
@@ -92,6 +99,9 @@ export function ChatPage({ meta }: { meta: any }) {
     setBlockedByTask(null);
     if (!sessionFromRoute) {
       setRestoring(false);
+      setQueuedCount(0);
+      queueTailTaskIdRef.current = "";
+      queuedTaskIdsRef.current = [];
       setMessages([]);
       return;
     }
@@ -100,6 +110,9 @@ export function ChatPage({ meta }: { meta: any }) {
       setRestoring(false);
       return;
     }
+    setQueuedCount(0);
+    queueTailTaskIdRef.current = "";
+    queuedTaskIdsRef.current = [];
     setRestoring(true);
     let cancelled = false;
     const controller = new AbortController();
@@ -118,15 +131,21 @@ export function ChatPage({ meta }: { meta: any }) {
           : Array.isArray(response?.jobs)
             ? response.jobs
             : [];
-        const activeTask = jobs
-          .slice()
-          .reverse()
-          .find((job) => ACTIVE_TASK_STATUSES.has(job.status));
+        const activeTasks = jobs.filter((job) =>
+          ACTIVE_TASK_STATUSES.has(job.status),
+        );
+        const activeTask = activeTasks[0];
         setRestoring(false);
         if (!activeTask) {
           setMessages(restoreHistoryMessages(rows));
           return;
         }
+        queueTailTaskIdRef.current =
+          activeTasks[activeTasks.length - 1]?.id || activeTask.id;
+        queuedTaskIdsRef.current = activeTasks
+          .slice(1)
+          .map((task) => task.id);
+        setQueuedCount(queuedTaskIdsRef.current.length);
         if (!Array.isArray(response) && response.task_bindings_complete !== true) {
           const restored = restoreHistoryMessages(rows);
           restored.push({
@@ -166,6 +185,14 @@ export function ChatPage({ meta }: { meta: any }) {
           },
           controller.signal,
         );
+        if (
+          !cancelled &&
+          !controller.signal.aborted &&
+          activeTasks.length > 1 &&
+          !queueWatchersRef.current.has(activeTask.id)
+        ) {
+          setRestoreVersion((version) => version + 1);
+        }
       } catch (error: any) {
         if (cancelled) return;
         setRestoring(false);
@@ -220,7 +247,7 @@ export function ChatPage({ meta }: { meta: any }) {
         taskIdRef.current = "";
       }
     };
-  }, [sessionFromRoute]);
+  }, [sessionFromRoute, restoreVersion]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -256,6 +283,9 @@ export function ChatPage({ meta }: { meta: any }) {
     const text = input.trim();
     if (!text || busy || restoring || blockedByTask) return;
     setInput("");
+    setQueuedCount(0);
+    queueTailTaskIdRef.current = "";
+    queuedTaskIdsRef.current = [];
     const userMsg: Msg = {
       id: uid(),
       role: "user",
@@ -287,6 +317,9 @@ export function ChatPage({ meta }: { meta: any }) {
           if (event === "task" && data?.task_id) {
             const taskId = String(data.task_id);
             taskIdRef.current = taskId;
+            if (!queueTailTaskIdRef.current) {
+              queueTailTaskIdRef.current = taskId;
+            }
             if (stopRequestedRef.current) {
               void cancelTask(taskId, ac);
             }
@@ -335,6 +368,92 @@ export function ChatPage({ meta }: { meta: any }) {
     }
   }, [input, busy, restoring, blockedByTask, sessionId, route, cancelTask]);
 
+  const watchPredecessor = useCallback((predecessorId: string, expectedSessionId: string) => {
+    if (queueWatchersRef.current.has(predecessorId)) return;
+    const controller = new AbortController();
+    queueWatchersRef.current.set(predecessorId, controller);
+    void (async () => {
+      try {
+        while (!controller.signal.aborted) {
+          if (
+            window.location.hash !==
+            `#/chat/${encodeURIComponent(expectedSessionId)}`
+          ) {
+            return;
+          }
+          const task = await api.get<{ status?: string }>(
+            `/api/tasks/${encodeURIComponent(predecessorId)}`,
+            { signal: controller.signal },
+          );
+          if (["ok", "error", "cancelled"].includes(String(task.status || ""))) {
+            if (
+              window.location.hash ===
+              `#/chat/${encodeURIComponent(expectedSessionId)}`
+            ) {
+              if (skipReloadFor.current === expectedSessionId) {
+                skipReloadFor.current = "";
+              }
+              setRestoreVersion((version) => version + 1);
+            }
+            return;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        }
+      } catch (error: any) {
+        if (!controller.signal.aborted) {
+          setMessages((current) => {
+            const copy = current.slice();
+            const last = copy[copy.length - 1];
+            if (last?.role === "assistant") {
+              last.warnings.push(
+                `Follow-up is queued, but automatic monitoring failed: ${
+                  error?.message || "unknown error"
+                }`,
+              );
+            }
+            return copy;
+          });
+        }
+      } finally {
+        queueWatchersRef.current.delete(predecessorId);
+      }
+    })();
+  }, []);
+
+  const queueFollowUp = useCallback(async () => {
+    const text = input.trim();
+    const predecessorId =
+      queueTailTaskIdRef.current || taskIdRef.current;
+    if (!text || !busy || !predecessorId || queueing) return;
+
+    setQueueing(true);
+    try {
+      const task = await api.post<{ id?: string; session_id?: string }>(
+        `/api/tasks/${encodeURIComponent(predecessorId)}/follow-up`,
+        { prompt: text },
+      );
+      const taskId = String(task.id || "");
+      if (!taskId) throw new Error("Queued task response omitted its id");
+      const queuedSessionId = String(task.session_id || sessionId);
+      queueTailTaskIdRef.current = taskId;
+      queuedTaskIdsRef.current.push(taskId);
+      setQueuedCount(queuedTaskIdsRef.current.length);
+      setInput("");
+      watchPredecessor(predecessorId, queuedSessionId);
+    } catch (error: any) {
+      setMessages((current) => {
+        const copy = current.slice();
+        const last = copy[copy.length - 1];
+        if (last?.role === "assistant") {
+          last.warnings.push(error?.message || "Failed to queue follow-up");
+        }
+        return copy;
+      });
+    } finally {
+      setQueueing(false);
+    }
+  }, [busy, input, queueing, sessionId, watchPredecessor]);
+
   const stop = useCallback(() => {
     const controller = abortRef.current;
     if (!controller) return;
@@ -370,7 +489,8 @@ export function ChatPage({ meta }: { meta: any }) {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send();
+                if (busy) void queueFollowUp();
+                else void send();
               }
             }}
             placeholder={placeholder}
@@ -378,9 +498,26 @@ export function ChatPage({ meta }: { meta: any }) {
             rows={1}
           />
           {busy ? (
-            <Button size="icon" variant="destructive" onClick={stop} title="Stop">
-              <Square className="h-4 w-4" />
-            </Button>
+            <>
+              {input.trim() && taskIdRef.current && (
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  onClick={() => void queueFollowUp()}
+                  disabled={queueing}
+                  title="Queue follow-up"
+                >
+                  {queueing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ListPlus className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
+              <Button size="icon" variant="destructive" onClick={stop} title="Stop">
+                <Square className="h-4 w-4" />
+              </Button>
+            </>
           ) : (
             <Button
               size="icon"
@@ -398,6 +535,12 @@ export function ChatPage({ meta }: { meta: any }) {
             </Button>
           )}
         </div>
+        {queuedCount > 0 && (
+          <p className="mx-auto mt-2 max-w-3xl text-xs text-muted-foreground">
+            {queuedCount} follow-up{queuedCount === 1 ? "" : "s"} queued in this
+            conversation.
+          </p>
+        )}
       </div>
     </div>
   );

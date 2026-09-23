@@ -101,6 +101,9 @@ let activityNumber = 0;
 let jobNumber = 0;
 let conversationNumber = 0;
 let reattachStreamRequests = 0;
+let chatFollowUpQueued = false;
+let chatPrimaryDone = false;
+let chatFollowUpStreamRequests = 0;
 let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
 let invalidReceiptsOnce = null;
@@ -385,6 +388,7 @@ async function fixture(req, res) {
     });
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     for (const [event, data] of [
+      ["task", { task_id: "job-chat", session_id: "chat-browser" }],
       ["session", { session_id: "chat-browser" }],
       ["reasoning", { summary: ["Compared the available Agent context."] }],
       ["text", { delta: "Presentation complete." }],
@@ -397,10 +401,14 @@ async function fixture(req, res) {
           cache_write_tokens: 0,
         },
       }],
-      ["done", { session_id: "chat-browser" }],
     ]) {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     }
+    const deadline = Date.now() + 12_000;
+    while (!chatFollowUpQueued && Date.now() < deadline) await delay(20);
+    assert.equal(chatFollowUpQueued, true, "busy Chat submitted a durable follow-up");
+    res.write(`event: done\ndata: ${JSON.stringify({ session_id: "chat-browser" })}\n\n`);
+    chatPrimaryDone = true;
     res.end();
     return;
   }
@@ -442,6 +450,50 @@ async function fixture(req, res) {
     session.updated_at = timestamp();
     return reply(req, res, { session });
   }
+  if (url.pathname === "/api/tasks/job-chat/follow-up") {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(body, { prompt: "Queued refinement" });
+    chatFollowUpQueued = true;
+    return reply(req, res, {
+      id: "job-chat-followup",
+      status: "pending",
+      session_id: "chat-browser",
+      after_task_id: "job-chat",
+    });
+  }
+  if (url.pathname === "/api/tasks/job-chat") {
+    assert.equal(req.method, "GET");
+    return reply(req, res, {
+      id: "job-chat",
+      status: chatPrimaryDone ? "ok" : "running",
+      session_id: "chat-browser",
+    });
+  }
+  if (url.pathname === "/api/tasks/job-chat-followup/stream") {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(body, { cursor: 0 });
+    chatFollowUpStreamRequests += 1;
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    for (const [event, data] of [
+      ["task", { task_id: "job-chat-followup", session_id: "chat-browser", reattached: true }],
+      ["session", { session_id: "chat-browser" }],
+      ["text", { delta: "Queued follow-up complete." }],
+      ["turn_done", {
+        finish: "stop",
+        usage: {
+          input_tokens: 6,
+          output_tokens: 3,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      }],
+      ["done", { session_id: "chat-browser" }],
+    ]) {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+    res.end();
+    return;
+  }
   if (url.pathname === "/api/tasks/job-reattach/stream") {
     assert.equal(req.method, "POST");
     assert.deepEqual(body, { cursor: 0 });
@@ -477,6 +529,33 @@ async function fixture(req, res) {
   }
   if (/^\/api\/sessions\/[^/]+\/history$/.test(url.pathname)) {
     const sessionId = decodeURIComponent(url.pathname.split("/")[3]);
+    if (sessionId === "chat-browser" && chatFollowUpQueued) {
+      return reply(req, res, {
+        session_id: sessionId,
+        messages: [
+          {
+            id: 10, role: "user", text: "Show live presentation",
+            task_id: "job-chat", is_user_prompt: true,
+          },
+          {
+            id: 11, role: "assistant", text: "Presentation complete.",
+            task_id: "job-chat",
+          },
+        ],
+        jobs: [
+          {
+            id: "job-chat", status: "ok", prompt: "Show live presentation",
+            session_id: sessionId, created_at: timestamp(),
+          },
+          {
+            id: "job-chat-followup", status: "running", prompt: "Queued refinement",
+            session_id: sessionId, created_at: timestamp(),
+          },
+        ],
+        task_bindings_complete: true,
+        jobs_truncated: false,
+      });
+    }
     if (sessionId === "session-reattach") {
       return reply(req, res, {
         session_id: sessionId,
@@ -1224,6 +1303,22 @@ try {
   await wait("document.body.innerText.includes('Compared the available Agent context.')", "reasoning summary presentation");
   assert.equal(await evaluate("location.hash"), "#/chat/chat-browser");
   console.log("PASS live reasoning summary and accumulated provider usage presentation");
+
+  await evaluate(`(() => {
+    const input = document.querySelector('textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Queued refinement');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await click(`document.querySelector('button[title="Queue follow-up"]')`);
+  await wait("document.body.innerText.includes('Queued follow-up complete.')", "queued follow-up execution");
+  assert.equal(chatFollowUpStreamRequests, 1);
+  assert.ok(requests.some((request) =>
+    request.method === "POST"
+    && request.path === "/api/tasks/job-chat/follow-up"
+    && request.body.prompt === "Queued refinement"
+    && !Object.hasOwn(request.body, "session_id")));
+  assert.equal(await evaluate("(document.body.innerText.match(/Queued refinement/g) || []).length"), 1);
+  console.log("PASS durable busy-time follow-up queue and automatic next-task attachment");
 
   await wait("document.body.innerText.toLowerCase().includes('read only')", "legacy conversation label");
   assert.equal(await evaluate("document.querySelector('[aria-label=\"Manage conversation: Previous conversation\"]')"), null);

@@ -120,6 +120,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks", get(routes::tasks::list))
         .route("/api/tasks/{id}", get(routes::tasks::show))
         .route("/api/tasks/{id}/stream", post(routes::chat::attach))
+        .route("/api/tasks/{id}/follow-up", post(routes::tasks::follow_up))
         .route("/api/tasks/{id}/stop", post(routes::tasks::stop))
         .route("/api/tasks/{id}/resume", post(routes::tasks::resume))
         .route("/api/approvals/pending", get(routes::approvals::pending))

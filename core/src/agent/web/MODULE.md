@@ -26,6 +26,8 @@ web UI.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
 - Reattach Chat to an owner-scoped durable task stream after navigation or
   reload, using verified conversation task bindings to avoid replay duplicates.
+- Queue busy-time Chat follow-ups as ordinary durable Jobs linked by
+  `after_task_id`; browser component state is never the queue authority.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
 - Reuse frozen session prompts and configured history compression through the
@@ -70,6 +72,10 @@ removes that task's already-persisted intermediate presentation rows, and
 replays the owner-checked task stream from a cursor. Incomplete bindings remain
 visible as an explicit reconstruction error rather than being guessed from
 text or timestamps.
+Busy-time follow-ups derive the canonical conversation from an owner-checked
+predecessor Job, persist through `task.submit.after_task_id`, and chain each
+later follow-up after the previously returned Job. Chat then discovers and
+attaches the next runnable Job through the same conversation projection.
 Activity adapters retain Main's authenticated owner transport and local/remote
 Web session provenance. Task submission, safe retry, App-service admission and
 protected owner App review remain backend responsibilities. The existing
