@@ -69,6 +69,11 @@ Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
 
+Agent also depends on `pkexec`, which brings the polkit runtime used by the
+installed `claw-approval-helper`. Headless and WSL terminal installations need
+the same protected approval path as desktop installations; the Desktop package
+must not be the component that accidentally supplies it.
+
 Agent also builds/installs the independent `claw-calendar-reader` from the
 OS-owned GPL Applet service library, with its original license. Its
 `claw-os-calendar-read-v1` interface is a Desktop dependency, not an App grant.

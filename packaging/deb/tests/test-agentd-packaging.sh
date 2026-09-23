@@ -78,6 +78,8 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-disp
     "Agent must provide the internal display runtime interface"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'libpam0g' \
     "Agent must declare its PAM runtime dependency"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'pkexec' \
+    "Agent must install the protected terminal approval launcher"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-display-session-v1' \
     "Desktop must require the Agent display runtime"
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" 'libpam0g-dev' \

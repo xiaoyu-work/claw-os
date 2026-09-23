@@ -305,6 +305,12 @@ restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed. A Root-managed graphical session is an
 interruption boundary: see [display lifetime](#root-managed-desktop-session-lifetime).
 
+The Agent package also installs `pkexec` and its polkit runtime. This is
+required even on headless Ubuntu and WSL because the terminal's authorize and
+deny actions invoke the installed `claw-approval-helper` only through that
+protected path. Upgrading an installation that lacks `pkexec` pulls it in
+without changing existing approval records.
+
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
 are replaced together. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user

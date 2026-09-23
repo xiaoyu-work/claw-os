@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +11,9 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use crate::clawd::protocol::Request;
 use crate::clawd::routes::Command;
 use crate::config::CosConfig;
+
+const PKEXEC_PATH: &str = "/usr/bin/pkexec";
+const APPROVAL_HELPER_PATH: &str = "/usr/local/bin/claw-approval-helper";
 
 #[derive(Clone, Debug)]
 pub(super) struct BackendInfo {
@@ -1152,9 +1155,10 @@ impl Backend for BrokerBackend {
             ReviewDecision::ApproveOnce => "approved",
             ReviewDecision::Deny => "denied",
         };
-        let mut command = tokio::process::Command::new("/usr/bin/pkexec");
+        ensure_approval_runtime(Path::new(PKEXEC_PATH), Path::new(APPROVAL_HELPER_PATH))?;
+        let mut command = tokio::process::Command::new(PKEXEC_PATH);
         command
-            .arg("/usr/local/bin/claw-approval-helper")
+            .arg(APPROVAL_HELPER_PATH)
             .arg("--id")
             .arg(id)
             .arg("--decision")
@@ -1171,7 +1175,7 @@ impl Backend for BrokerBackend {
         }
         let mut child = command
             .spawn()
-            .map_err(|_| "the installed Claw approval helper is unavailable".to_string())?;
+            .map_err(|error| format!("could not launch Claw approval authorization: {error}"))?;
         let stdout = child
             .stdout
             .take()
@@ -1245,6 +1249,22 @@ impl Backend for BrokerBackend {
             })
             .collect())
     }
+}
+
+pub(super) fn ensure_approval_runtime(pkexec: &Path, helper: &Path) -> Result<(), String> {
+    if !pkexec.is_file() {
+        return Err(format!(
+            "Claw approval authorization is unavailable: {} is not installed",
+            pkexec.display()
+        ));
+    }
+    if !helper.is_file() {
+        return Err(format!(
+            "Claw approval authorization is unavailable: {} is not installed",
+            helper.display()
+        ));
+    }
+    Ok(())
 }
 
 async fn request(

@@ -516,6 +516,25 @@ fn model_output_is_redacted_and_control_safe() {
 }
 
 #[test]
+fn approval_runtime_distinguishes_missing_pkexec_and_helper() {
+    let root = tempfile::tempdir().unwrap();
+    let pkexec = root.path().join("pkexec");
+    let helper = root.path().join("claw-approval-helper");
+
+    let error =
+        crate::agent::terminal::backend::ensure_approval_runtime(&pkexec, &helper).unwrap_err();
+    assert!(error.contains("pkexec"));
+
+    std::fs::write(&pkexec, b"fixture").unwrap();
+    let error =
+        crate::agent::terminal::backend::ensure_approval_runtime(&pkexec, &helper).unwrap_err();
+    assert!(error.contains("claw-approval-helper"));
+
+    std::fs::write(&helper, b"fixture").unwrap();
+    crate::agent::terminal::backend::ensure_approval_runtime(&pkexec, &helper).unwrap();
+}
+
+#[test]
 fn ratatui_frame_is_claw_owned_and_contains_core_state() {
     let mut app = app();
     app.push_assistant_delta("## Result\n\nClaw completed the work.");
