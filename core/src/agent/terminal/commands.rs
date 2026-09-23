@@ -1,5 +1,8 @@
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use base64::Engine;
 use serde_json::Value;
 
 use super::backend::{ActivityControlPolicy, Backend};
@@ -23,6 +26,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/models", "list configured-provider models"),
     ("/model", "select the model for future tasks"),
     ("/workspace", "show or select a broker-validated workspace"),
+    ("/attach", "attach an image to the next task"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -55,6 +59,7 @@ pub(super) enum Command {
     Models,
     Model(String),
     Workspace(Option<String>),
+    Attach(Option<String>),
     Skills,
     Tasks,
     Task(String),
@@ -148,6 +153,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "model" => Command::Model(rest.to_string()),
         "workspace" if rest.is_empty() => Command::Workspace(None),
         "workspace" => Command::Workspace(Some(rest.to_string())),
+        "attach" if rest.is_empty() => Command::Attach(None),
+        "attach" => Command::Attach(Some(rest.to_string())),
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -271,6 +278,7 @@ fn takes_argument(command: &str) -> bool {
             | "/rewind"
             | "/model"
             | "/workspace"
+            | "/attach"
             | "/task"
             | "/approval"
             | "/inbox"
@@ -312,6 +320,7 @@ pub(super) async fn execute(
                 | Command::Tasks
                 | Command::Task(_)
                 | Command::Workspace(_)
+                | Command::Attach(_)
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -347,6 +356,7 @@ pub(super) async fn execute(
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
              /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\
+             /attach [PATH|clear]\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -421,6 +431,21 @@ pub(super) async fn execute(
                 .await?;
             app.set_workspace(workspace);
         }
+        Command::Attach(path) => match path.as_deref() {
+            None => app.describe_attachments(),
+            Some("clear") => app.clear_attachments(),
+            Some(path) => {
+                let home = app.info.home.clone();
+                let workspace = PathBuf::from(&app.selected_workspace);
+                let path = path.to_string();
+                let attachment = tokio::task::spawn_blocking(move || {
+                    load_image_attachment(&path, &home, &workspace)
+                })
+                .await
+                .map_err(|_| "image attachment reader failed".to_string())??;
+                app.add_attachment(attachment)?;
+            }
+        },
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(
@@ -645,6 +670,86 @@ pub(super) async fn execute(
         }
     }
     Ok(())
+}
+
+pub(super) fn load_image_attachment(
+    value: &str,
+    home: &Path,
+    workspace: &Path,
+) -> Result<crate::agent::attachments::AttachmentInput, String> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value);
+    if value.is_empty() {
+        return Err("image attachment path is empty".into());
+    }
+    let requested = Path::new(value);
+    let requested = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        workspace.join(requested)
+    };
+    let path = requested
+        .canonicalize()
+        .map_err(|error| format!("resolve image attachment {}: {error}", requested.display()))?;
+    if !path.starts_with(home) {
+        return Err("image attachments must be inside the verified owner home".into());
+    }
+    let metadata = path
+        .metadata()
+        .map_err(|error| format!("inspect image attachment {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err("image attachment must be a regular file".into());
+    }
+    if metadata.len() > crate::agent::attachments::MAX_TOTAL_BYTES as u64 {
+        return Err(format!(
+            "image attachment exceeds the {}-byte task limit",
+            crate::agent::attachments::MAX_TOTAL_BYTES
+        ));
+    }
+    let media_type = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => return Err("image attachment must be PNG, JPEG, GIF, or WebP".into()),
+    };
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("image attachment has no valid UTF-8 file name")?
+        .to_string();
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .map_err(|error| format!("open image attachment {}: {error}", path.display()))?
+        .take(crate::agent::attachments::MAX_TOTAL_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read image attachment {}: {error}", path.display()))?;
+    if bytes.len() > crate::agent::attachments::MAX_TOTAL_BYTES {
+        return Err(format!(
+            "image attachment exceeds the {}-byte task limit",
+            crate::agent::attachments::MAX_TOTAL_BYTES
+        ));
+    }
+    let input = crate::agent::attachments::AttachmentInput {
+        name,
+        media_type: media_type.to_string(),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    };
+    crate::agent::attachments::normalize(vec![input.clone()])?;
+    Ok(input)
 }
 
 fn parse_channel(value: &str) -> Option<NotificationChannel> {

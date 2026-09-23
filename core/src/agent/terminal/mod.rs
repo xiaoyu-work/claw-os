@@ -721,6 +721,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.command_selection = 0;
                 InputAction::None
             }
+            KeyCode::Char('o') => {
+                app.prefill_input("/attach ".to_string());
+                InputAction::None
+            }
             KeyCode::Char('p') => {
                 app.move_up();
                 InputAction::None

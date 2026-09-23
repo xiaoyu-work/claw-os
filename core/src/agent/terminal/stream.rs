@@ -39,6 +39,7 @@ pub(super) async fn start_prompt(
     match backend
         .submit(
             &prompt,
+            app.pending_attachments(),
             &app.conversation.id,
             &workspace,
             None,
@@ -54,6 +55,7 @@ pub(super) async fn start_prompt(
                 && job.workspace.as_deref() == Some(workspace.as_str()) =>
         {
             app.begin_task(&job);
+            app.consume_attachments();
             spawn(backend, runtime_tx, job);
         }
         Ok(job) if job.session_id != app.conversation.id => {
@@ -100,6 +102,7 @@ pub(super) async fn queue_prompt(
     match backend
         .submit(
             &prompt,
+            app.pending_attachments(),
             &app.conversation.id,
             &workspace,
             Some(&predecessor),
@@ -117,6 +120,7 @@ pub(super) async fn queue_prompt(
                 && job.status == "pending" =>
         {
             app.queue_task(job);
+            app.consume_attachments();
         }
         Ok(job) => {
             let _ = backend.cancel(&job.id).await;

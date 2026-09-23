@@ -152,6 +152,10 @@ fn claw_commands_are_closed_and_semantic() {
         parse_command("/workspace project/repo"),
         Some(Command::Workspace(Some("project/repo".into())))
     );
+    assert_eq!(
+        parse_command("/attach project/screen.png"),
+        Some(Command::Attach(Some("project/screen.png".into())))
+    );
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -301,6 +305,37 @@ fn claw_commands_are_closed_and_semantic() {
         InputAction::None
     );
     assert_eq!(app.input, "/model ");
+}
+
+#[test]
+fn image_attachment_reads_one_explicit_home_file() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = home.path().join("project");
+    std::fs::create_dir(&workspace).unwrap();
+    let image = workspace.join("screen.png");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\nfixture").unwrap();
+
+    let attachment = commands::load_image_attachment("screen.png", home.path(), &workspace)
+        .expect("load image");
+    assert_eq!(attachment.name, "screen.png");
+    assert_eq!(attachment.media_type, "image/png");
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside_image = outside.path().join("outside.png");
+    std::fs::write(&outside_image, b"\x89PNG\r\n\x1a\nfixture").unwrap();
+    let error = commands::load_image_attachment(
+        outside_image.to_str().unwrap(),
+        home.path(),
+        &workspace,
+    )
+    .unwrap_err();
+    assert!(error.contains("verified owner home"));
+
+    let mut app = app();
+    app.add_attachment(attachment).unwrap();
+    assert_eq!(app.pending_attachment_count(), 1);
+    app.clear_attachments();
+    assert_eq!(app.pending_attachment_count(), 0);
 }
 
 #[test]

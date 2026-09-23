@@ -647,6 +647,21 @@ class FixtureBroker:
             )
             if params.get("prompt") != expected_prompt:
                 raise AssertionError("terminal input was changed or dropped")
+            if self.case == "attachments":
+                attachments = params.get("attachments")
+                if not isinstance(attachments, list) or len(attachments) != 1:
+                    raise AssertionError("terminal omitted the selected image attachment")
+                attachment = attachments[0]
+                if (
+                    attachment.get("name") != "fixture.png"
+                    or attachment.get("media_type") != "image/png"
+                    or "path" in attachment
+                ):
+                    raise AssertionError("terminal changed attachment identity or leaked its path")
+                if not isinstance(attachment.get("data"), str):
+                    raise AssertionError("terminal attachment omitted bounded image bytes")
+            elif params.get("attachments"):
+                raise AssertionError("terminal attached an image to the wrong task")
             self.requested_model = params.get("model")
             self.requested_workspace = params.get("workspace")
             if not self.requested_workspace:
@@ -719,6 +734,7 @@ class FixtureBroker:
                     "multiline",
                     "multiline-key",
                     "approval-center",
+                    "attachments",
                     "activity-lifecycle",
                     "activity-controls",
                     "activity-evidence",
@@ -751,6 +767,7 @@ class FixtureBroker:
                 "multiline",
                 "multiline-key",
                 "approval-center",
+                "attachments",
                 "activity-lifecycle",
                 "activity-controls",
                 "activity-evidence",
@@ -928,6 +945,10 @@ def run(cos, case, transcript, original_namespace, trace):
         shadow_home = root / "home"
         shadow_home.mkdir(mode=0o700)
         (shadow_home / "project").mkdir(mode=0o700)
+        if case == "attachments":
+            (shadow_home / "project" / "fixture.png").write_bytes(
+                b"\x89PNG\r\n\x1a\nfixture"
+            )
         subprocess.run(["mount", "--bind", str(shadow_home), str(home)], check=True)
         cleanup.callback(subprocess.run, ["umount", str(home)], check=True)
         config = root / "config.json"
@@ -1061,6 +1082,14 @@ def run(cos, case, transcript, original_namespace, trace):
                     "completed": True,
                 }))
                 return
+            if case == "attachments":
+                send_prompt(master, output, "/attach project/fixture.png")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Attached image fixture.png" in data,
+                )
             if case == "commands":
                 send_prompt(master, output, "/resume")
                 read_terminal(
@@ -1777,6 +1806,7 @@ if __name__ == "__main__":
             "multiline",
             "multiline-key",
             "approval-center",
+            "attachments",
             "backtrack",
             "activity-lifecycle",
             "activity-controls",

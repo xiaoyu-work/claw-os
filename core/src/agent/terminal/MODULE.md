@@ -74,6 +74,9 @@ audit.
 - Follow-up text is published immediately as a durable pending Job whose exact
   predecessor is broker-validated. Local state retains only bounded handles
   for stream attachment; it is not the queue authority.
+- `Ctrl-O` prepares one explicit image path under the verified owner home.
+  The terminal reads bounded bytes and submits the existing attachment wire
+  object; no path or filesystem capability reaches the task.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

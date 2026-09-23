@@ -352,6 +352,7 @@ pub(super) trait Backend: Send + Sync {
     async fn submit(
         &self,
         prompt: &str,
+        attachments: &[crate::agent::attachments::AttachmentInput],
         session_id: &str,
         workspace: &str,
         after_task_id: Option<&str>,
@@ -562,6 +563,7 @@ impl Backend for BrokerBackend {
     async fn submit(
         &self,
         prompt: &str,
+        attachments: &[crate::agent::attachments::AttachmentInput],
         session_id: &str,
         workspace: &str,
         after_task_id: Option<&str>,
@@ -576,6 +578,10 @@ impl Backend for BrokerBackend {
             "use_memory": use_memory,
             "model": model,
         });
+        if !attachments.is_empty() {
+            params["attachments"] =
+                serde_json::to_value(attachments).map_err(|error| error.to_string())?;
+        }
         if let Some(max_turns) = max_turns {
             params["max_turns"] = json!(max_turns);
         }

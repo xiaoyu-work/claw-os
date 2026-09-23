@@ -129,6 +129,7 @@ pub(super) struct App {
     pub active_workspace: Option<String>,
     pub selected_model: String,
     pub selected_workspace: String,
+    pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub input_history: Vec<String>,
@@ -189,6 +190,7 @@ impl App {
             active_workspace: None,
             selected_model,
             selected_workspace,
+            pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             input_history: Vec::new(),
@@ -292,6 +294,7 @@ impl App {
         self.usage_input = 0;
         self.usage_output = 0;
         self.usage_cached = 0;
+        self.pending_attachments.clear();
         self.backtrack_armed_at = None;
         self.load_history();
     }
@@ -577,6 +580,59 @@ impl App {
         self.push_system(&format!(
             "Future tasks will use workspace {}. Workspace selection grants no capability.",
             self.selected_workspace
+        ));
+    }
+
+    pub fn pending_attachments(&self) -> &[crate::agent::attachments::AttachmentInput] {
+        &self.pending_attachments
+    }
+
+    pub fn pending_attachment_count(&self) -> usize {
+        self.pending_attachments.len()
+    }
+
+    pub fn add_attachment(
+        &mut self,
+        attachment: crate::agent::attachments::AttachmentInput,
+    ) -> Result<(), String> {
+        let mut combined = self.pending_attachments.clone();
+        combined.push(attachment.clone());
+        crate::agent::attachments::normalize(combined)?;
+        self.pending_attachments.push(attachment);
+        self.push_system(&format!(
+            "Attached image {} for the next submitted task.",
+            self.pending_attachments
+                .last()
+                .map(|attachment| attachment.name.as_str())
+                .unwrap_or("image")
+        ));
+        Ok(())
+    }
+
+    pub fn clear_attachments(&mut self) {
+        let count = self.pending_attachments.len();
+        self.pending_attachments.clear();
+        self.push_system(&format!("Cleared {count} pending image attachment(s)."));
+    }
+
+    pub fn consume_attachments(&mut self) {
+        self.pending_attachments.clear();
+    }
+
+    pub fn describe_attachments(&mut self) {
+        if self.pending_attachments.is_empty() {
+            self.push_system("No images are attached to the next task.");
+            return;
+        }
+        let names = self
+            .pending_attachments
+            .iter()
+            .map(|attachment| attachment.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.push_system(&format!(
+            "{} image attachment(s) pending: {names}",
+            self.pending_attachments.len()
         ));
     }
 

@@ -1493,12 +1493,17 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         format!("  durable queue {}", app.queued_tasks.len())
     };
+    let attachments = if app.pending_attachment_count() == 0 {
+        String::new()
+    } else {
+        format!("  images {}", app.pending_attachment_count())
+    };
     let line = Line::from(vec![
         Span::styled(
             if app.backtrack_armed() {
                 " Enter send  Esc again history  Ctrl+K commands "
             } else {
-                " Enter send  Ctrl+J newline  Esc stop  Ctrl+K commands "
+                " Enter send  Ctrl+J newline  Ctrl+O image  Esc stop  Ctrl+K commands "
             },
             Style::default().fg(Color::DarkGray),
         ),
@@ -1512,10 +1517,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     format!("  scroll +{}", app.scroll)
                 } else {
                     String::new()
-                }
+                },
             ),
             Style::default().fg(Color::DarkGray),
         ),
+        Span::styled(attachments, Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
