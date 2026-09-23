@@ -120,6 +120,20 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
         options.socket_group.as_deref(),
     )?;
     let state = DaemonState::try_new()?;
+    let admission = Admission::new(Limits::default());
+    let agentd_broker = crate::agentd::supervisor::BrokerContext::new(
+        state.clone(),
+        admission.clone(),
+        options.socket_path.clone(),
+    )
+    .map_err(|message| DaemonError::Startup {
+        operation: "agentd.initialize",
+        message,
+        source: None,
+    })?;
+    // Establish the delegated subtree before Event Center or any other
+    // long-lived helper can inherit the systemd service cgroup.
+    agentd_broker.prime_extension_containment();
     let _event_center = event_center::start();
     if let Err(error) = firewall::reconcile_on_start().await {
         tracing::error!(error = %error, "failed to reconcile managed firewall state");
@@ -147,7 +161,6 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
         )
     })?;
     spawn_authority_sweep();
-    let admission = Admission::new(Limits::default());
     #[cfg(target_os = "linux")]
     if unsafe { libc::geteuid() } == 0 {
         super::gui::Manager::start(state.clone(), admission.clone()).map_err(|message| {
@@ -161,16 +174,6 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
             tracing::error!(%error, "Root display activation unavailable; GUI requests are refused");
         }
     }
-    let agentd_broker = crate::agentd::supervisor::BrokerContext::new(
-        state.clone(),
-        admission.clone(),
-        options.socket_path.clone(),
-    )
-    .map_err(|message| DaemonError::Startup {
-        operation: "agentd.initialize",
-        message,
-        source: None,
-    })?;
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
     let app_services = super::app_services::AppServiceManager::new(agentd_broker.clone());
     state

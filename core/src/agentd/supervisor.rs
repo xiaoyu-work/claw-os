@@ -147,7 +147,7 @@ impl BrokerContext {
         }
     }
 
-    fn prime_extension_containment(&self) {
+    pub(crate) fn prime_extension_containment(&self) {
         if let Err(error) = self.extension_containment() {
             tracing::error!(
                 error = %error,
