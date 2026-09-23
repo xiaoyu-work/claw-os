@@ -224,6 +224,20 @@ jobs:
           fi
           test -x /usr/bin/pkexec
           test -x /usr/local/bin/claw-approval-helper
+          approval_rule=/etc/polkit-1/rules.d/49-claw-os-ci-approval.rules
+          printf '%s\n' \
+            'polkit.addRule(function(action, subject) {' \
+            "  if (action.id == \"org.clawos.approval.decide\" && subject.user == \"$USER\") {" \
+            '    return polkit.Result.YES;' \
+            '  }' \
+            '});' \
+            | sudo tee "$approval_rule" >/dev/null
+          sudo chmod 0644 "$approval_rule"
+          sudo systemctl restart polkit.service
+          /usr/bin/pkexec /usr/local/bin/claw-approval-helper --help \
+            | grep -Fq 'usage: claw-approval-helper'
+          sudo rm -f "$approval_rule"
+          sudo systemctl restart polkit.service
           /usr/local/bin/cos-browser --help >/dev/null
           COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
             /usr/local/bin/cos agent skills list \

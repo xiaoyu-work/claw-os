@@ -85,6 +85,9 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-di
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" 'libpam0g-dev' \
     "the native package build must install PAM development inputs"
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
+    '/usr/bin/pkexec /usr/local/bin/claw-approval-helper --help' \
+    "the installed package must exercise its protected approval entrypoint"
+assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
     'cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}' \
     "the Agent build must produce the native GNU PAM library"
 assert_contains "$TEST_WORKFLOW" 'crates/claw-display-login/test/fixtures/bootstrap.sh' \
