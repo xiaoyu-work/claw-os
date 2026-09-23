@@ -512,6 +512,32 @@ fn ctrl_j_inserts_the_advertised_newline() {
 }
 
 #[test]
+fn ctrl_d_does_not_silently_detach_active_work() {
+    let mut app = app();
+    app.begin_task(&job("running"));
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('d'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        ),
+        InputAction::Cancel
+    );
+}
+
+#[test]
 fn approvals_have_one_explicit_terminal_decision() {
     let mut app = app();
     app.add_approvals(vec![ApprovalRequest {

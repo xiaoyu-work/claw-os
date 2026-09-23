@@ -668,7 +668,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('c') if app.active_task.is_some() => InputAction::Cancel,
-            KeyCode::Char('c') | KeyCode::Char('d') => InputAction::Quit,
+            KeyCode::Char('c') | KeyCode::Char('d') if app.active_task.is_none() => {
+                InputAction::Quit
+            }
             KeyCode::Char('a') => {
                 app.cursor = 0;
                 InputAction::None
