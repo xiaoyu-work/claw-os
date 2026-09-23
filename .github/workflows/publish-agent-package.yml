@@ -197,14 +197,16 @@ jobs:
               package=$1
               workspace=$2
               cargo_home=$3
+              rustup_home=$4
               cd /tmp
-              for path in "$workspace" "$cargo_home"; do
+              for path in "$workspace" "$cargo_home" "$rustup_home"; do
                 if [ -d "$path" ]; then
                   mount -t tmpfs -o nodev,nosuid,noexec,size=1m tmpfs "$path"
                 fi
               done
               apt-get install -y --no-install-recommends "$package"
-            ' bash "$install_deb" "$GITHUB_WORKSPACE" "$CARGO_HOME"
+            ' bash "$install_deb" "$GITHUB_WORKSPACE" "$CARGO_HOME" \
+              "${RUSTUP_HOME:-$HOME/.rustup}"
           for attempt in {1..30}; do
             if sudo systemctl is-active --quiet clawd.service \
                 && sudo test -S /run/cos/clawd.sock; then

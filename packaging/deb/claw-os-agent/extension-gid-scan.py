@@ -233,16 +233,15 @@ def verify_mount_descriptor(fd: int, record: MountRecord) -> tuple[int, int, int
     return stat_identity(descriptor)
 
 
-def run_checked(command: list[str], fd: int) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        command,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={"LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin"},
-        pass_fds=(fd,),
-        check=False,
-    )
+def stop_child(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
 def scan_mount(record: MountRecord, gid: int) -> None:
@@ -257,55 +256,68 @@ def scan_mount(record: MountRecord, gid: int) -> None:
         if stat.S_ISDIR(os.fstat(fd).st_mode):
             scan_root += "/."
 
-        ownership = run_checked(
-            [
-                "/usr/bin/find",
-                "-H",
-                scan_root,
-                "-xdev",
-                "-gid",
-                str(gid),
-                "-print",
-                "-quit",
-            ],
-            fd,
-        )
-        if ownership.returncode != 0:
-            raise ScanError(
-                f"ownership scan failed for {record.mountpoint}: "
-                f"{ownership.stderr.decode('utf-8', 'replace').strip()}"
-            )
-        if ownership.stdout:
-            raise ScanError(f"gid {gid} owns an object on {record.mountpoint}")
-
-        with tempfile.TemporaryFile() as acl_output:
-            acl = subprocess.run(
+        with (
+            tempfile.TemporaryFile() as ownership_output,
+            tempfile.TemporaryFile() as ownership_errors,
+            tempfile.TemporaryFile() as acl_output,
+            tempfile.TemporaryFile() as acl_errors,
+        ):
+            environment = {"LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin"}
+            ownership = subprocess.Popen(
                 [
                     "/usr/bin/find",
                     "-H",
                     scan_root,
                     "-xdev",
-                    "-exec",
+                    "-gid",
+                    str(gid),
+                    "-print",
+                    "-quit",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=ownership_output,
+                stderr=ownership_errors,
+                env=environment,
+                pass_fds=(fd,),
+            )
+            acl = subprocess.Popen(
+                [
                     "/usr/bin/getfacl",
-                    "-P",
-                    "-n",
-                    "-p",
-                    "-s",
+                    "--recursive",
+                    "--physical",
+                    "--numeric",
+                    "--absolute-names",
+                    "--skip-base",
+                    "--one-file-system",
                     "--",
-                    "{}",
-                    "+",
+                    scan_root,
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=acl_output,
-                stderr=subprocess.PIPE,
-                env={"LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin"},
+                stderr=acl_errors,
+                env=environment,
                 pass_fds=(fd,),
-                check=False,
             )
+            try:
+                ownership.wait()
+                ownership_output.seek(0)
+                ownership_errors.seek(0)
+                if ownership.returncode != 0:
+                    raise ScanError(
+                        f"ownership scan failed for {record.mountpoint}: "
+                        f"{ownership_errors.read().decode('utf-8', 'replace').strip()}"
+                    )
+                if ownership_output.read(1):
+                    raise ScanError(f"gid {gid} owns an object on {record.mountpoint}")
+                acl.wait()
+            finally:
+                stop_child(ownership)
+                stop_child(acl)
             if acl.returncode != 0:
+                acl_errors.seek(0)
                 raise ScanError(
                     f"ACL scan failed for {record.mountpoint}: "
-                    f"{acl.stderr.decode('utf-8', 'replace').strip()}"
+                    f"{acl_errors.read().decode('utf-8', 'replace').strip()}"
                 )
             acl_output.seek(0)
             access_prefix = f"group:{gid}:".encode()
@@ -380,7 +392,10 @@ def parent_main(arguments: argparse.Namespace) -> int:
             "--fs-type",
             record.fs_type,
         ]
-        run_bounded_scan(command, arguments.timeout)
+        try:
+            run_bounded_scan(command, arguments.timeout)
+        except ScanError as error:
+            raise ScanError(f"scan failed for {record.mountpoint}: {error}") from error
     with open(arguments.mountinfo, "rb") as mountinfo:
         if mountinfo.read() != snapshot:
             raise ScanError("mount topology changed during extension gid scan")
