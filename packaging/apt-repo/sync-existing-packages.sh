@@ -320,20 +320,25 @@ for target in "${targets[@]}"; do
         continue
     fi
 
-    # The signed index says this package/architecture is published. Once
-    # a baseline exists its release-security manifest must be published
-    # too, and must have been retrieved and verified above — otherwise
-    # the regression checks would run against a hole.
+    local_is_newer=0
+    if [ -n "$newest_local" ] \
+        && dpkg --compare-versions "$newest_local_version" gt "$candidate"; then
+        local_is_newer=1
+    fi
+
+    # A baseline-era candidate normally requires its published manifest.
+    # The one recovery case is a strictly newer local package: its signed
+    # manifest replaces the pre-protection candidate and closes the hole.
     if [ "$baseline_field" = "1" ] \
-        && [ ! -s "$PREVIOUS_RELEASE_SECURITY_DIR/${package}_${file_arch}.json" ]; then
+        && [ ! -s "$PREVIOUS_RELEASE_SECURITY_DIR/${package}_${file_arch}.json" ] \
+        && [ "$local_is_newer" != "1" ]; then
         echo "error: the published repository offers $package $candidate for" >&2
         echo "       $file_arch but no verified release-security manifest for it." >&2
         echo "       Refusing to publish against an incomplete baseline." >&2
         exit 1
     fi
 
-    if [ -n "$newest_local" ] \
-        && dpkg --compare-versions "$newest_local_version" gt "$candidate"; then
+    if [ "$local_is_newer" = "1" ]; then
         # Version ordering alone is not enough: a build that carries a
         # lower security epoch must never replace a published one, even
         # when its Debian version sorts higher. The comparison is made

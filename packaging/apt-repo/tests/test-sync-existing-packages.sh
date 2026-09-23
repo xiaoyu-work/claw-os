@@ -187,10 +187,11 @@ write_inrelease "$TEST_ROOT/bodies/InRelease" \
 run_sync() {
     local scenario="$1"
     local http_status="$2"
+    local body_dir="${3:-$TEST_ROOT/bodies}"
     mkdir -p "$scenario/tmp"
     PATH="$TEST_ROOT/bin:$ORIGINAL_PATH" \
         FIXTURE_HTTP_STATUS="$http_status" \
-        FIXTURE_BODY_DIR="$TEST_ROOT/bodies" \
+        FIXTURE_BODY_DIR="$body_dir" \
         FIXTURE_CANDIDATES="$scenario/candidates" \
         FIXTURE_CALL_LOG="$scenario/calls" \
         EXISTING_APT_REPO_URL="https://apt.example.invalid" \
@@ -266,6 +267,52 @@ test_first_publication() {
         || fail "first publication must not query a repository that does not exist"
 }
 
+test_repair_incomplete_baseline() {
+    local scenario="$TEST_ROOT/repair-incomplete-baseline"
+    local debs="$scenario/debs"
+    local remote="$scenario/remote"
+    local candidates="$scenario/candidates"
+    local bodies="$scenario/bodies"
+    mkdir -p "$debs" "$remote" "$bodies"
+    printf 'fixture keyring\n' > "$scenario/keyring.gpg"
+    : > "$scenario/calls"
+
+    make_deb "$scenario" claw-os-base 1.0 all remote "$remote"
+    make_deb "$scenario" claw-os-base 2.0 all protected-local "$debs"
+    cat > "$candidates" <<EOF
+claw-os-base|1.0|$remote/claw-os-base_1.0_all.deb
+EOF
+
+    printf '{"format":"claw.release-security-baseline/v1"}\n' \
+        > "$bodies/baseline.json"
+    printf 'fixture signature\n' > "$bodies/baseline.json.asc"
+    baseline_hash="$(sha256sum "$bodies/baseline.json" | cut -d' ' -f1)"
+    baseline_size="$(stat -c %s "$bodies/baseline.json")"
+    signature_hash="$(sha256sum "$bodies/baseline.json.asc" | cut -d' ' -f1)"
+    signature_size="$(stat -c %s "$bodies/baseline.json.asc")"
+    cat > "$bodies/InRelease" <<EOF
+Origin: Claw OS
+Suite: trixie
+Codename: trixie
+Architectures: amd64 arm64 all
+Components: main
+Date: $(date -u -R)
+Valid-Until: $(date -u -R -d '+30 days')
+Claw-Os-Release-Security-Baseline: 1
+SHA256:
+ $baseline_hash $baseline_size release-security/baseline.json
+ $signature_hash $signature_size release-security/baseline.json.asc
+EOF
+
+    run_sync "$scenario" 200 "$bodies"
+
+    assert_file "$debs/claw-os-base_2.0_all.deb"
+    assert_absent "$debs/claw-os-base_1.0_all.deb"
+    [ -f "$scenario/release-security-previous/.baseline-established" ] \
+        || fail "the repair path did not preserve the established baseline"
+}
+
 test_out_of_order_publication
 test_first_publication
+test_repair_incomplete_baseline
 echo "PASS: APT package synchronization"
