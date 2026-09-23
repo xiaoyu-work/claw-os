@@ -4115,16 +4115,20 @@ impl crate::agent::runtime::progress::ProgressSink for JobProgressSink {
         name: &str,
         ok: bool,
         latency_ms: u64,
-        _bytes_returned: usize,
-        _content_preview: &str,
+        bytes_returned: usize,
+        content_preview: &str,
     ) {
-        let progress = json!({
+        let mut progress = json!({
             "kind": "tool_result",
             "id": id,
             "name": name,
             "ok": ok,
             "latency_ms": latency_ms,
+            "bytes_returned": bytes_returned,
         });
+        if !ok && !content_preview.is_empty() {
+            progress["error_preview"] = json!(content_preview);
+        }
         if let Err(err) = Store::open_default()
             .and_then(|store| store.append_stream_progress(&self.job_id, progress))
         {

@@ -563,6 +563,18 @@ function applyFrame(msg: Msg, event: string, data: any) {
       const t = upsertTool(msg, data);
       t.isError = !!data?.is_error || data?.ok === false;
       t.finished = true;
+      if (Number.isSafeInteger(data?.latency_ms) && data.latency_ms >= 0) {
+        t.latencyMs = data.latency_ms;
+      }
+      if (
+        Number.isSafeInteger(data?.bytes_returned) &&
+        data.bytes_returned >= 0
+      ) {
+        t.bytesReturned = data.bytes_returned;
+      }
+      if (t.isError && typeof data?.error_preview === "string") {
+        t.errorPreview = data.error_preview;
+      }
       break;
     }
     case "tool_start":
@@ -714,7 +726,11 @@ function UsageSummary({ usage }: { usage: TokenUsage }) {
 }
 
 function ToolCard({ t }: { t: ToolCall }) {
-  const status = t.isError ? "failed" : t.finished ? "called" : "running…";
+  const status = t.isError ? "failed" : t.finished ? "completed" : "running…";
+  const metrics = [
+    t.latencyMs === undefined ? null : formatDuration(t.latencyMs),
+    t.bytesReturned === undefined ? null : formatBytes(t.bytesReturned),
+  ].filter((value): value is string => value !== null);
   return (
     <Card className="border-muted px-3 py-2 text-xs">
       <div className="flex w-full items-center justify-between gap-2">
@@ -723,10 +739,38 @@ function ToolCard({ t }: { t: ToolCall }) {
           <span className="font-mono font-semibold">{t.name}</span>
           <span className="text-muted-foreground">{status}</span>
         </span>
-        {!t.finished && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+        <span className="flex items-center gap-2 text-muted-foreground">
+          {metrics.length > 0 && (
+            <span title="Result body remains private to the Agent runtime">
+              {metrics.join(" · ")}
+            </span>
+          )}
+          {!t.finished && <Loader2 className="h-3 w-3 animate-spin" />}
+        </span>
       </div>
+      {t.errorPreview && (
+        <details className="mt-2 border-t pt-2">
+          <summary className="cursor-pointer text-destructive">
+            Error details
+          </summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] text-foreground">
+            {t.errorPreview}
+          </pre>
+        </details>
+      )}
     </Card>
   );
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${milliseconds} ms`;
+  return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)} s`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function EmptyState({ meta }: { meta: any }) {

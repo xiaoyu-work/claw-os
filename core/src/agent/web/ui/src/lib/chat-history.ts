@@ -3,6 +3,9 @@ export type ToolCall = {
   name: string;
   isError?: boolean;
   finished: boolean;
+  latencyMs?: number;
+  bytesReturned?: number;
+  errorPreview?: string;
 };
 
 export type TokenUsage = {

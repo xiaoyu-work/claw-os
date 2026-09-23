@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{ChatResponse, ContentBlock, FinishReason, StreamEvent, ToolCall, Usage};
+use crate::agent::runtime::progress::ProgressSink;
 
 mod execution_limit_queue {
     include!(concat!(
@@ -319,6 +320,46 @@ fn tool_progress_round_trips_through_task_stream() {
     assert_eq!(cursor, 1);
     assert_eq!(events[0]["progress"]["kind"], "tool_result");
     assert_eq!(events[0]["progress"]["id"], "tool-1");
+}
+
+#[test]
+fn job_progress_keeps_metrics_and_only_redacted_failure_preview() {
+    let root = fresh_root();
+    let _guard = EnvGuard::set(root.path());
+    let store = Store::open_default().unwrap();
+    let job = store.submit("test".into(), None, None, None, None).unwrap();
+    let sink: Arc<dyn ProgressSink> = Arc::new(JobProgressSink {
+        job_id: job.id.clone(),
+    });
+    let sink = crate::agent::runtime::presentation::user_visible_progress_sink(sink);
+
+    sink.on_tool_result(
+        "tool-success",
+        "cos_sysinfo",
+        true,
+        17,
+        4096,
+        "successful secret result",
+    );
+    let token = ["abcdefgh", "ijklmnop"].concat();
+    let failure = format!("request failed with Authorization: Bearer {token}");
+    sink.on_tool_result("tool-failure", "cos_proc", false, 23, 128, &failure);
+
+    let (_, events) = store.read_stream_events(&job.id, 0).unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["progress"]["latency_ms"], 17);
+    assert_eq!(events[0]["progress"]["bytes_returned"], 4096);
+    assert!(events[0]["progress"].get("error_preview").is_none());
+    assert_eq!(events[1]["progress"]["latency_ms"], 23);
+    assert_eq!(events[1]["progress"]["bytes_returned"], 128);
+    assert!(events[1]["progress"]["error_preview"]
+        .as_str()
+        .unwrap()
+        .contains("[REDACTED:bearer]"));
+    assert!(!events[1]["progress"]["error_preview"]
+        .as_str()
+        .unwrap()
+        .contains(&token));
 }
 
 #[test]

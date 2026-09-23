@@ -504,7 +504,16 @@ async function fixture(req, res) {
       ["session", { session_id: "session-reattach" }],
       ["reasoning", { summary: ["Recovered the durable task stream."] }],
       ["tool_start", { id: "reattach-tool", name: "cos_sysinfo" }],
-      ["tool_result", { id: "reattach-tool", name: "cos_sysinfo", ok: true }],
+      ["tool_result", {
+        id: "reattach-tool", name: "cos_sysinfo", ok: true,
+        latency_ms: 42, bytes_returned: 2048, error_preview: null,
+      }],
+      ["tool_start", { id: "failed-tool", name: "cos_proc" }],
+      ["tool_result", {
+        id: "failed-tool", name: "cos_proc", ok: false,
+        latency_ms: 17, bytes_returned: 64,
+        error_preview: "permission denied: [REDACTED:bearer]",
+      }],
     ]) {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     }
@@ -1366,6 +1375,9 @@ try {
   assert.equal(await evaluate("(document.body.innerText.match(/Continue after refresh/g) || []).length"), 1);
   assert.equal(await evaluate("(document.body.innerText.match(/cos_sysinfo/g) || []).length"), 1);
   assert.equal(await evaluate("document.body.innerText.includes('persisted_duplicate')"), false);
+  await wait("document.body.innerText.includes('42 ms') && document.body.innerText.includes('2.0 KiB')", "generic tool metrics");
+  await click(`Array.from(document.querySelectorAll('details summary')).find(el => el.textContent.trim() === 'Error details')`);
+  await wait("document.body.innerText.includes('permission denied: [REDACTED:bearer]')", "bounded redacted tool failure");
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Recovered the durable task stream.')", "reattached reasoning summary");
   console.log("PASS active task history deduplication and durable stream reattachment");

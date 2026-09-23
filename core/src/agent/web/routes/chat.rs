@@ -498,6 +498,9 @@ fn project_progress(progress: &Value) -> Vec<String> {
                 "id": id,
                 "name": name,
                 "ok": progress.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                "latency_ms": progress.get("latency_ms").and_then(Value::as_u64),
+                "bytes_returned": progress.get("bytes_returned").and_then(Value::as_u64),
+                "error_preview": visible_error_preview(progress),
             }),
         )],
         Some("waiting_approval") => {
@@ -518,6 +521,23 @@ fn project_progress(progress: &Value) -> Vec<String> {
         )],
         _ => Vec::new(),
     }
+}
+
+fn visible_error_preview(progress: &Value) -> Option<String> {
+    if progress.get("ok").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+    progress
+        .get("error_preview")
+        .and_then(Value::as_str)
+        .filter(|preview| !preview.is_empty())
+        .map(|preview| {
+            let redacted = crate::agent::safety::redact::Redactor::default_set().redact(preview);
+            crate::agent::runtime::progress::preview_with_limit(
+                &redacted,
+                crate::agent::runtime::progress::DEFAULT_PREVIEW_BYTES,
+            )
+        })
 }
 
 fn text_frame(text: &str) -> String {

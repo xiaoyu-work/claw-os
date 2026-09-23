@@ -24,6 +24,8 @@ web UI.
 - Read immutable caller-reported receipts, keeping report outcomes and result
   summaries separate from matched App declarations and OS-confirmed evidence.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
+- Present generic tool lifecycle, latency and result size; only failed tools
+  may expose a bounded, redacted error preview, never successful result bodies.
 - Reattach Chat to an owner-scoped durable task stream after navigation or
   reload, using verified conversation task bindings to avoid replay duplicates.
 - Queue busy-time Chat follow-ups as ordinary durable Jobs linked by
@@ -72,6 +74,10 @@ removes that task's already-persisted intermediate presentation rows, and
 replays the owner-checked task stream from a cursor. Incomplete bindings remain
 visible as an explicit reconstruction error rather than being guessed from
 text or timestamps.
+Tool progress reaches Web only after the runtime's user-visible projection has
+removed inputs and successful result bodies. The durable stream retains
+identity, status, latency, byte count and an optional bounded/redacted failure
+preview; the Web route redacts and bounds that preview again before SSE.
 Busy-time follow-ups derive the canonical conversation from an owner-checked
 predecessor Job, persist through `task.submit.after_task_id`, and chain each
 later follow-up after the previously returned Job. Chat then discovers and

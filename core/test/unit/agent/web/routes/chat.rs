@@ -96,7 +96,9 @@ fn user_facing_tool_events_omit_inputs_and_results() {
                     "id": "call-1",
                     "name": "cos_sysinfo",
                     "ok": true,
-                    "preview": "secret result",
+                    "latency_ms": 12,
+                    "bytes_returned": 128,
+                    "error_preview": "secret successful result",
                 }
             }),
             &mut turn_emitted_text,
@@ -107,9 +109,26 @@ fn user_facing_tool_events_omit_inputs_and_results() {
         .join(""),
     );
     assert!(output.contains("cos_sysinfo"));
+    assert!(output.contains(r#""latency_ms":12"#));
+    assert!(output.contains(r#""bytes_returned":128"#));
     assert!(!output.contains("secret"));
     assert!(!output.contains("\"input\""));
-    assert!(!output.contains("preview"));
+    assert!(!output.contains("secret successful result"));
+
+    let token = ["abcdefgh", "ijklmnop"].concat();
+    let failed = project_progress(&json!({
+        "kind": "tool_result",
+        "id": "call-2",
+        "name": "cos_proc",
+        "ok": false,
+        "latency_ms": 21,
+        "bytes_returned": 64,
+        "error_preview": format!("request failed with Authorization: Bearer {token}"),
+    }))
+    .join("");
+    assert!(failed.contains("request failed"));
+    assert!(failed.contains("[REDACTED:bearer]"));
+    assert!(!failed.contains(&token));
 }
 
 #[test]

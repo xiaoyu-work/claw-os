@@ -1583,6 +1583,11 @@ rows, and replays its owner-scoped `task.stream` from a cursor. It refuses to
 guess this split when task bindings are incomplete. Multiple viewers do not
 become task owners, and reattachment neither resubmits work nor changes
 capabilities.
+Generic Web tool cards consume the same durable progress stream but receive
+only tool identity, lifecycle status, latency and returned-byte count.
+Successful result bodies remain inside the Agent runtime/history trajectory;
+failed tools may include only the user-visible projection's bounded, redacted
+error preview, which the Web adapter redacts and bounds again.
 
 `task.workspace.resolve` is the only presentation-facing workspace resolver.
 `clawd` derives the owner from peer credentials, resolves relative paths under
