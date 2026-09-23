@@ -107,6 +107,11 @@ A transient `clawd` disconnect keeps the exact active task and stream cursor.
 The header shows `RECONNECTING`; recovery resumes the same durable stream
 without resubmitting the prompt or inventing task failure.
 
+If `clawd` is still starting, terminal launch retries for up to 60 seconds.
+Conversation reads are replay-safe; creation is retried only when the client
+proves the request was never dispatched. An ambiguous creation fails explicitly
+instead of creating duplicate conversations.
+
 Opening a conversation with retained non-terminal work reattaches the oldest
 active task and its exact `after_task_id` successor chain. Existing history is
 not re-added as a new user prompt, and unrelated concurrent tasks stay
@@ -285,7 +290,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline multiline-key reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center approval-center notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -318,6 +323,8 @@ the predecessor binding, and then attaches to the persisted successor stream.
 The reconnect scenario drops two broker stream connections, preserves the
 cursor and task identity, and reaches the original terminal result without a
 second submission.
+The startup-reconnect scenario begins without a broker socket, then starts the
+fixture broker and confirms exactly one conversation is created.
 The resume-running scenario opens a retained conversation, attaches its
 existing non-terminal task, and confirms that no replacement task is submitted.
 The multiline scenarios cover both bracketed paste and the portable `Ctrl-J`

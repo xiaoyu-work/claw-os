@@ -292,6 +292,11 @@ pub(super) enum StreamError {
     Fatal(String),
 }
 
+pub(super) enum InitialConnectionError {
+    Retryable(String),
+    Fatal(String),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ApprovalRequest {
     pub id: String,
@@ -325,6 +330,10 @@ pub(super) enum ReviewDecision {
 pub(super) trait Backend: Send + Sync {
     fn info(&self) -> &BackendInfo;
 
+    async fn initial_conversation(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Conversation, InitialConnectionError>;
     async fn create_conversation(&self) -> Result<Conversation, String>;
     async fn get_conversation(&self, id: &str) -> Result<Conversation, String>;
     async fn list_conversations(&self) -> Result<ConversationList, String>;
@@ -453,6 +462,22 @@ impl BrokerBackend {
 impl Backend for BrokerBackend {
     fn info(&self) -> &BackendInfo {
         &self.info
+    }
+
+    async fn initial_conversation(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Conversation, InitialConnectionError> {
+        let (command, params, replay_safe) = match session_id {
+            Some(id) => (
+                Command::AgentConversationGet,
+                json!({ "id": id, "limit": 1_000 }),
+                true,
+            ),
+            None => (Command::AgentConversationCreate, json!({}), false),
+        };
+        let value = initial_request(&self.socket, command, params, replay_safe).await?;
+        parse_conversation(value).map_err(InitialConnectionError::Fatal)
     }
 
     async fn create_conversation(&self) -> Result<Conversation, String> {
@@ -1337,6 +1362,49 @@ async fn request(
             .error
             .map(|error| format!("{}: {}", error.code, error.message))
             .unwrap_or_else(|| "Claw broker returned no error".to_string()))
+    }
+}
+
+async fn initial_request(
+    socket: &Path,
+    command: Command,
+    params: Value,
+    replay_safe: bool,
+) -> Result<Value, InitialConnectionError> {
+    let response = tokio::time::timeout(
+        Duration::from_secs(35),
+        crate::clawd::client::request(socket, Request::new(command, params)),
+    )
+    .await
+    .map_err(|_| {
+        if replay_safe {
+            InitialConnectionError::Retryable("Claw broker request timed out".to_string())
+        } else {
+            InitialConnectionError::Fatal(
+                "Claw conversation creation timed out; its outcome is unknown".to_string(),
+            )
+        }
+    })?
+    .map_err(|error| {
+        if replay_safe || !error.may_have_dispatched() {
+            InitialConnectionError::Retryable(error.to_string())
+        } else {
+            InitialConnectionError::Fatal(format!(
+                "Claw conversation creation may have reached the broker: {error}"
+            ))
+        }
+    })?;
+    if response.ok {
+        response
+            .result
+            .ok_or_else(|| InitialConnectionError::Fatal("Claw broker returned no result".into()))
+    } else {
+        Err(InitialConnectionError::Fatal(
+            response
+                .error
+                .map(|error| format!("{}: {}", error.code, error.message))
+                .unwrap_or_else(|| "Claw broker returned no error".to_string()),
+        ))
     }
 }
 

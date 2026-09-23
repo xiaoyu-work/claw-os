@@ -26,7 +26,9 @@ use ratatui::Terminal;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use self::backend::{Backend, BrokerBackend, NotificationMutation, ReviewDecision};
+use self::backend::{
+    Backend, BrokerBackend, InitialConnectionError, NotificationMutation, ReviewDecision,
+};
 use self::state::{
     App, ConfirmationAction, NotificationPreferenceAction, PickerSelection, RunStatus,
 };
@@ -182,10 +184,8 @@ async fn run_with_backend(
     backend: Arc<dyn Backend>,
     options: ChatOptions,
 ) -> Result<Value, String> {
-    let conversation = match options.session_id.as_deref() {
-        Some(id) => backend.get_conversation(id).await?,
-        None => backend.create_conversation().await?,
-    };
+    let conversation = connect_initial_conversation(backend.as_ref(), options.session_id.as_deref())
+        .await?;
     let mut app = App::new(backend.info().clone(), conversation);
     let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
     stream::restore_conversation(&mut app, backend.clone(), runtime_tx.clone()).await;
@@ -300,6 +300,36 @@ async fn run_with_backend(
     }
     drop(terminal);
     Ok(Value::Null)
+}
+
+async fn connect_initial_conversation(
+    backend: &dyn Backend,
+    session_id: Option<&str>,
+) -> Result<backend::Conversation, String> {
+    const MAX_ATTEMPTS: u32 = 60;
+    for attempt in 0..=MAX_ATTEMPTS {
+        match backend.initial_conversation(session_id).await {
+            Ok(conversation) => {
+                if attempt > 0 {
+                    eprintln!("Claw broker connection restored.");
+                }
+                return Ok(conversation);
+            }
+            Err(InitialConnectionError::Retryable(error)) if attempt < MAX_ATTEMPTS => {
+                if attempt == 0 {
+                    eprintln!("Claw broker is unavailable; retrying for up to 60 seconds: {error}");
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(InitialConnectionError::Retryable(error)) => {
+                return Err(format!(
+                    "Claw broker did not become available after {MAX_ATTEMPTS} retries: {error}"
+                ));
+            }
+            Err(InitialConnectionError::Fatal(error)) => return Err(error),
+        }
+    }
+    unreachable!("bounded startup retry loop always returns")
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {

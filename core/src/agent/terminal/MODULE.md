@@ -36,6 +36,8 @@ audit.
 - A transient broker disconnect keeps the exact task and stream cursor,
   displays a reconnecting state, and resumes the durable stream without
   resubmitting work.
+- Startup retries replay-safe reads and only conversation creation failures
+  proven not to have been dispatched. An ambiguous create is never replayed.
 - Opening a conversation reattaches its retained non-terminal task and exact
   sequenced successors without duplicating the already recorded user prompt.
   Its latest requested model is restored only when it remains in the current

@@ -709,6 +709,7 @@ class FixtureBroker:
                     "workspace",
                     "task-center",
                     "reconnect",
+                    "startup-reconnect",
                 ) or (self.case == "durable-queue" and task_id == self.queued_task_id):
                     events.extend([
                         {"progress": {
@@ -740,6 +741,7 @@ class FixtureBroker:
                 "workspace",
                 "task-center",
                 "reconnect",
+                "startup-reconnect",
             ) or (
                 self.case == "durable-queue"
                 and (task_id == self.queued_task_id or self.queue_submitted.is_set())
@@ -918,13 +920,14 @@ def run(cos, case, transcript, original_namespace, trace):
                 "base_url": "http://127.0.0.1:1",
             },
         }))
-        broker = FixtureBroker(root / "clawd.sock", case)
+        broker_path = root / "clawd.sock"
+        broker = None if case == "startup-reconnect" else FixtureBroker(broker_path, case)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 110, 0, 0))
         environment = {
             **os.environ,
             "TERM": "xterm-256color",
-            "CLAWD_SOCKET": str(broker.path),
+            "CLAWD_SOCKET": str(broker_path),
             "COS_CONFIG_PATH": str(config),
             "COS_DATA_DIR": str(root / "data"),
             "COS_USER_DATA_DIR": str(home / ".local" / "share" / "cos"),
@@ -942,6 +945,14 @@ def run(cos, case, transcript, original_namespace, trace):
             preexec_fn=terminal_child,
         )
         os.close(slave)
+        if broker is None:
+            read_terminal(
+                master,
+                output,
+                time.monotonic() + 10,
+                lambda data: b"Claw broker is unavailable; retrying" in data,
+            )
+            broker = FixtureBroker(broker_path, case)
         broker.thread.start()
         try:
             if case == "plain":
@@ -1649,6 +1660,15 @@ def run(cos, case, transcript, original_namespace, trace):
                 for request in broker.requests
             ):
                 raise AssertionError("resume created a replacement conversation")
+            if case == "startup-reconnect":
+                creates = sum(
+                    request["command"] == "agent.conversation.create"
+                    for request in broker.requests
+                )
+                if creates != 1:
+                    raise AssertionError(
+                        f"startup reconnect created {creates} conversations"
+                    )
             print(json.dumps({"case": case, "task_submissions": submissions, "completed": True}))
         except AssertionError:
             if transcript:
@@ -1695,6 +1715,7 @@ if __name__ == "__main__":
             "reconnect",
             "resume",
             "resume-running",
+            "startup-reconnect",
             "task-center",
             "workspace",
         ),
