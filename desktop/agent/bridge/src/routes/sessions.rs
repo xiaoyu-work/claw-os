@@ -200,7 +200,8 @@ pub async fn history(
 ) -> Result<Json<HistoryResponse>, ApiError> {
     match get_conversation(&state, &id, 500).await {
         Ok(conversation) => {
-            let messages = conversation.messages;
+            let mut messages = conversation.messages;
+            translation::sanitize_history_messages(&mut messages);
             Ok(Json(HistoryResponse {
                 session_id: conversation.id,
                 n: messages.len(),

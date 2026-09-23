@@ -4,6 +4,7 @@ use cosmic::widget;
 
 use crate::bridge::{
     ConversationJob, HistoryMessage, HistoryResponse, SessionSummary, ToolCallView, ToolResultView,
+    Usage,
 };
 use crate::fl;
 
@@ -16,12 +17,22 @@ pub(crate) enum ChatRole {
     Assistant,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TokenUsage {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cache_write_tokens: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChatMessage {
     pub(crate) role: Option<ChatRole>,
     pub(crate) content: String,
     pub(crate) tool_calls: Vec<ToolCallView>,
     pub(crate) tool_results: Vec<ToolResultView>,
+    pub(crate) reasoning: Vec<String>,
+    pub(crate) usage: Option<TokenUsage>,
     pub(crate) warnings: Vec<String>,
     pub(crate) error: Option<String>,
     pub(crate) parsed_markdown: Option<Vec<widget::markdown::Item>>,
@@ -62,6 +73,8 @@ impl ChatMessage {
         self.content.trim().is_empty()
             && self.tool_calls.is_empty()
             && self.tool_results.is_empty()
+            && self.reasoning.is_empty()
+            && self.usage.is_none()
             && self.warnings.is_empty()
             && self.error.is_none()
     }
@@ -90,6 +103,31 @@ impl ChatMessage {
         } else {
             self.tool_results.push(result);
         }
+    }
+
+    pub(crate) fn append_reasoning(&mut self, summaries: Vec<String>) {
+        for summary in summaries {
+            let summary = summary.trim();
+            if !summary.is_empty() && !self.reasoning.iter().any(|existing| existing == summary) {
+                self.reasoning.push(summary.to_string());
+            }
+        }
+    }
+
+    pub(crate) fn accumulate_usage(&mut self, turn: &Usage) {
+        let usage = self.usage.get_or_insert_with(TokenUsage::default);
+        usage.input_tokens = usage
+            .input_tokens
+            .saturating_add(u64::from(turn.input_tokens));
+        usage.output_tokens = usage
+            .output_tokens
+            .saturating_add(u64::from(turn.output_tokens));
+        usage.cache_read_tokens = usage
+            .cache_read_tokens
+            .saturating_add(u64::from(turn.cache_read_tokens));
+        usage.cache_write_tokens = usage
+            .cache_write_tokens
+            .saturating_add(u64::from(turn.cache_write_tokens));
     }
 }
 

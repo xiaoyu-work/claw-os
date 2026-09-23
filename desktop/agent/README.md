@@ -137,13 +137,13 @@ The overlay is a single-instance Wayland layer-shell surface:
   activation is never forwarded through the well-known D-Bus name.
 - Escape stops/cancels active work before closing the surface.
 
-Chat streams expose task identity, live text, tool lifecycle, warnings,
-usage, and final metadata. Stop explicitly cancels the clawd task. Dropping the
-client stream only detaches that viewer; reopening its canonical conversation
-uses verified task bindings to reconstruct the prompt and replay
-`task.stream`. While a stream is active, follow-ups are durable
-`after_task_id` Jobs whose session is derived from the owner-checked
-predecessor rather than from UI input.
+Chat streams expose task identity, live text, reasoning summaries, tool
+lifecycle, warnings, cumulative per-turn usage, and final metadata. Stop
+explicitly cancels the clawd task. Dropping the client stream only detaches
+that viewer; reopening its canonical conversation uses verified task bindings
+to reconstruct the prompt and replay `task.stream`. While a stream is active,
+follow-ups are durable `after_task_id` Jobs whose session is derived from the
+owner-checked predecessor rather than from UI input.
 
 Native image attachment uses desktop presentation protocol v3. The file chooser
 reads only an explicitly selected PNG/JPEG/GIF/WebP image, enforces the shared
@@ -540,11 +540,14 @@ the prior non-disruptive `start` behavior.
 | `POST /api/voice/upload` | Raw audio request; `VoiceResponse` / `ErrorEnvelope` |
 
 The chat stream covers `task`, `delta` (`text` remains a decode alias),
-`tool_use_start`, `tool_use`, `tool_start`, `tool_result`, `warning`,
-`turn_done`, `done`, and `error`. The shared decoder also retains the
-`tool_input_delta` compatibility event, while the bridge continues suppressing
-live tool arguments. Unknown future event names are ignored by v3 clients;
-malformed known events fail decoding.
+`reasoning`, `tool_use_start`, `tool_use`, `tool_start`, `tool_result`,
+`warning`, `turn_done`, `done`, and `error`. The shared decoder also retains
+the `tool_input_delta` compatibility event, while the bridge continues
+suppressing live tool arguments. Tool results expose status, latency and
+returned-byte count; only failed tools may carry a secondarily redacted,
+2-KiB-bounded error preview. Successful result bodies remain inside the Agent
+runtime/history trajectory. Unknown future event names are ignored by v3
+clients; malformed known events fail decoding.
 
 Activity endpoints use the same bearer authentication, v3 negotiation, and
 typed error envelopes as chat. Request DTOs accept no owner or capability

@@ -8,11 +8,14 @@ pub mod execution_limits;
 pub mod monetary_budget;
 pub mod scheduling_priority;
 
+use std::sync::OnceLock;
+
 use cos_agent_protocol::{
-    CancelResponse, DeltaPayload, DonePayload, HistoryResponse, SessionSummary, StreamEvent,
-    TaskStarted, ToolResultPayload, ToolStartPayload, ToolUsePayload, ToolUseStartPayload,
-    TurnDonePayload, Usage, WarningPayload,
+    CancelResponse, DeltaPayload, DonePayload, HistoryMessage, HistoryResponse, ReasoningPayload,
+    SessionSummary, StreamEvent, TaskStarted, ToolResultPayload, ToolStartPayload, ToolUsePayload,
+    ToolUseStartPayload, TurnDonePayload, Usage, WarningPayload,
 };
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -103,6 +106,10 @@ enum CoreAgentEvent {
     },
     ToolInputDelta,
     ToolUse(CoreToolCall),
+    Reasoning {
+        #[serde(default)]
+        summary: Vec<String>,
+    },
     Message {
         #[serde(default)]
         content: Vec<CoreContentBlock>,
@@ -148,6 +155,58 @@ struct CoreProgress {
     name: String,
     #[serde(default)]
     ok: Option<bool>,
+    #[serde(default)]
+    latency_ms: Option<u64>,
+    #[serde(default)]
+    bytes_returned: Option<u64>,
+    #[serde(default)]
+    error_preview: Option<String>,
+}
+
+const MAX_ERROR_PREVIEW_BYTES: usize = 2 * 1024;
+
+fn safe_error_preview(ok: Option<bool>, preview: Option<String>) -> Option<String> {
+    if ok != Some(false) {
+        return None;
+    }
+    let preview = preview.filter(|preview| !preview.is_empty())?;
+    static REDACTORS: OnceLock<Vec<Regex>> = OnceLock::new();
+    let mut redacted = preview;
+    for pattern in REDACTORS.get_or_init(|| {
+        [
+            r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            r"github_pat_[A-Za-z0-9_]{20,}",
+            r"gh[opusr]_[A-Za-z0-9]{30,}",
+            r"glpat-[A-Za-z0-9_\-]{10,}",
+            r"xox[baprs]-[A-Za-z0-9\-]{10,}",
+            r"AKIA[0-9A-Z]{16}",
+            r"ASIA[0-9A-Z]{16}",
+            r"AIza[0-9A-Za-z_\-]{35}",
+            r"sk-[A-Za-z0-9_\-]{20,}",
+            r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+",
+            r"\b[MNO][A-Za-z0-9_\-]{23,}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b",
+            r"(?i)bearer\s+[A-Za-z0-9_\-\.=]{8,}",
+            r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s/@]+:[^\s/@]+@",
+        ]
+        .into_iter()
+        .map(|pattern| Regex::new(pattern).expect("static redaction pattern"))
+        .collect()
+    }) {
+        redacted = pattern.replace_all(&redacted, "[REDACTED]").into_owned();
+    }
+    Some(truncate_utf8(&redacted, MAX_ERROR_PREVIEW_BYTES))
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let suffix = "...";
+    let mut end = max_bytes.saturating_sub(suffix.len());
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}{suffix}", &value[..end])
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,8 +268,23 @@ pub fn history(value: Value) -> Result<HistoryResponse, String> {
     let mut response: HistoryResponse = serde_json::from_value(value)
         .map_err(|error| format!("invalid memory.history result: {error}"))?;
     response.messages.retain(|message| message.role != "system");
+    sanitize_history_messages(&mut response.messages);
     response.n = response.messages.len();
     Ok(response)
+}
+
+pub fn sanitize_history_messages(messages: &mut [HistoryMessage]) {
+    for message in messages {
+        for result in &mut message.tool_results {
+            let text = std::mem::take(&mut result.text);
+            let candidate = result
+                .error_preview
+                .take()
+                .filter(|preview| !preview.is_empty())
+                .or_else(|| (!text.is_empty()).then_some(text));
+            result.error_preview = safe_error_preview(Some(!result.is_error), candidate);
+        }
+    }
 }
 
 pub fn stream_events(
@@ -235,6 +309,16 @@ pub fn stream_events(
         }
         CoreAgentEvent::ToolInputDelta => Vec::new(),
         CoreAgentEvent::ToolUse(call) => vec![tool_use_event(call)],
+        CoreAgentEvent::Reasoning { summary } => {
+            let summary = summary
+                .into_iter()
+                .filter(|summary| !summary.trim().is_empty())
+                .collect::<Vec<_>>();
+            (!summary.is_empty())
+                .then_some(StreamEvent::Reasoning(ReasoningPayload { summary }))
+                .into_iter()
+                .collect()
+        }
         CoreAgentEvent::Message {
             content,
             tool_calls,
@@ -293,6 +377,9 @@ fn progress_event(progress: CoreProgress) -> Option<StreamEvent> {
             content: None,
             text: None,
             is_error: None,
+            latency_ms: progress.latency_ms,
+            bytes_returned: progress.bytes_returned,
+            error_preview: safe_error_preview(progress.ok, progress.error_preview),
         })),
         _ => None,
     }

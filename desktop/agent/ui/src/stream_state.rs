@@ -165,6 +165,12 @@ impl StreamState {
                 }
                 StreamReduction::Applied
             }
+            StreamEvent::Reasoning(payload) => {
+                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    message.append_reasoning(payload.summary);
+                }
+                StreamReduction::Applied
+            }
             StreamEvent::ToolUseStart(payload) => {
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
                     message.upsert_tool_call(ToolCallView {
@@ -223,8 +229,8 @@ impl StreamState {
                 StreamReduction::Applied
             }
             StreamEvent::ToolResult(payload) => {
-                let text = payload.presented_text();
                 let is_error = payload.presented_is_error();
+                let error_preview = payload.presented_error_preview();
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
                     if let Some(call) = message
                         .tool_calls
@@ -236,8 +242,11 @@ impl StreamState {
                     message.upsert_tool_result(ToolResultView {
                         id: payload.id,
                         name: payload.name,
-                        text,
+                        text: String::new(),
                         is_error,
+                        latency_ms: payload.latency_ms,
+                        bytes_returned: payload.bytes_returned,
+                        error_preview,
                     });
                 }
                 StreamReduction::Applied
@@ -250,7 +259,12 @@ impl StreamState {
                 }
                 StreamReduction::Applied
             }
-            StreamEvent::TurnDone(_) => StreamReduction::Applied,
+            StreamEvent::TurnDone(turn) => {
+                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    message.accumulate_usage(&turn.usage);
+                }
+                StreamReduction::Applied
+            }
             StreamEvent::Done(done) => {
                 sessions.capture_remote(session_index, done.session_id.as_deref());
                 sessions.finalize_stream(session_index, done.presented_answer(), false);

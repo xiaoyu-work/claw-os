@@ -3,7 +3,7 @@
 //! Submits the prompt to `clawd` and re-frames the daemon response as SSE:
 //!
 //! * submitted task/session identity → `task`
-//! * incremental answer text → `delta`
+//! * incremental answer text / reasoning summaries → `delta` / `reasoning`
 //! * tool lifecycle → `tool_use_start`, `tool_use`, `tool_start`, `tool_result`
 //! * recoverable provider notices → `warning` / `turn_done`
 //! * final task envelope → `done`

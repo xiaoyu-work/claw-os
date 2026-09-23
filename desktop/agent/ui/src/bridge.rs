@@ -26,7 +26,7 @@ pub use cos_agent_protocol::{
     ActivityUpdateRequest, ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse,
     ChatAttachment, ChatRequest, ConversationJob, ErrorEnvelope, HistoryMessage, HistoryResponse,
     MAX_CHAT_ATTACHMENT_BYTES, ModelsResponse, ObjectStateEntry, SessionSummary,
-    SessionUpdateRequest, StreamEvent, TaskStarted, ToolCallView, ToolResultView,
+    SessionUpdateRequest, StreamEvent, TaskStarted, ToolCallView, ToolResultView, Usage,
     validate_chat_attachments,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};

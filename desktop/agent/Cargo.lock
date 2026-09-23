@@ -1095,6 +1095,7 @@ dependencies = [
  "clawd-client",
  "cos-agent-protocol",
  "futures",
+ "regex",
  "serde",
  "serde_json",
  "tokio",

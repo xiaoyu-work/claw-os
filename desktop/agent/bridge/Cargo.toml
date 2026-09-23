@@ -21,6 +21,7 @@ axum = { version = "0.7", features = ["macros"] }
 futures = "0.3"
 async-stream = "0.3"
 bytes = "1"
+regex = "1"
 chrono = { workspace = true }
 clawd-client = { path = "../../../crates/clawd-client" }
 cos-agent-protocol = { workspace = true }

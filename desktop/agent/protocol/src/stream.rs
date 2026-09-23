@@ -5,6 +5,7 @@ use crate::{ErrorCode, ToolInput};
 pub const TASK_EVENT: &str = "task";
 pub const DELTA_EVENT: &str = "delta";
 pub const TEXT_EVENT_ALIAS: &str = "text";
+pub const REASONING_EVENT: &str = "reasoning";
 pub const TOOL_USE_START_EVENT: &str = "tool_use_start";
 pub const TOOL_INPUT_DELTA_EVENT: &str = "tool_input_delta";
 pub const TOOL_USE_EVENT: &str = "tool_use";
@@ -19,6 +20,7 @@ pub const ERROR_EVENT: &str = "error";
 pub enum StreamEvent {
     TaskStarted(TaskStarted),
     Delta(DeltaPayload),
+    Reasoning(ReasoningPayload),
     ToolUseStart(ToolUseStartPayload),
     ToolInputDelta(ToolInputDeltaPayload),
     ToolUse(ToolUsePayload),
@@ -35,6 +37,7 @@ impl StreamEvent {
         match self {
             Self::TaskStarted(_) => TASK_EVENT,
             Self::Delta(_) => DELTA_EVENT,
+            Self::Reasoning(_) => REASONING_EVENT,
             Self::ToolUseStart(_) => TOOL_USE_START_EVENT,
             Self::ToolInputDelta(_) => TOOL_INPUT_DELTA_EVENT,
             Self::ToolUse(_) => TOOL_USE_EVENT,
@@ -51,6 +54,7 @@ impl StreamEvent {
         match self {
             Self::TaskStarted(payload) => serde_json::to_string(payload),
             Self::Delta(payload) => serde_json::to_string(payload),
+            Self::Reasoning(payload) => serde_json::to_string(payload),
             Self::ToolUseStart(payload) => serde_json::to_string(payload),
             Self::ToolInputDelta(payload) => serde_json::to_string(payload),
             Self::ToolUse(payload) => serde_json::to_string(payload),
@@ -75,6 +79,7 @@ impl StreamEvent {
                 let alias: TextAliasPayload = decode(data)?;
                 Self::Delta(DeltaPayload::new(alias.delta))
             }
+            REASONING_EVENT => Self::Reasoning(decode(data)?),
             TOOL_USE_START_EVENT => Self::ToolUseStart(decode(data)?),
             TOOL_INPUT_DELTA_EVENT => Self::ToolInputDelta(decode(data)?),
             TOOL_USE_EVENT => Self::ToolUse(decode(data)?),
@@ -124,6 +129,12 @@ struct TextAliasPayload {
     delta: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReasoningPayload {
+    #[serde(default)]
+    pub summary: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolUseStartPayload {
     #[serde(default)]
@@ -162,7 +173,7 @@ pub struct ToolStartPayload {
     pub input: Option<ToolInput>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResultPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -182,21 +193,24 @@ pub struct ToolResultPayload {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_returned: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_preview: Option<String>,
 }
 
 impl ToolResultPayload {
-    pub fn presented_text(&self) -> String {
-        self.preview
-            .as_ref()
-            .or(self.output.as_ref())
-            .or(self.content.as_ref())
-            .or(self.text.as_ref())
-            .cloned()
-            .unwrap_or_default()
-    }
-
     pub fn presented_is_error(&self) -> bool {
         self.is_error.unwrap_or_else(|| !self.ok.unwrap_or(true))
+    }
+
+    pub fn presented_error_preview(&self) -> Option<String> {
+        self.presented_is_error()
+            .then(|| self.error_preview.clone())
+            .flatten()
+            .filter(|preview| !preview.is_empty())
     }
 }
 

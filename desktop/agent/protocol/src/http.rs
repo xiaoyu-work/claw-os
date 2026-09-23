@@ -253,7 +253,7 @@ pub struct ToolCallView {
     pub in_progress: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResultView {
     #[serde(default)]
     pub id: String,
@@ -263,6 +263,12 @@ pub struct ToolResultView {
     pub text: String,
     #[serde(default)]
     pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_returned: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

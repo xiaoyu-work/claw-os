@@ -8,7 +8,7 @@ use cosmic::{Element, theme, widget};
 
 use crate::bridge::{ModelsResponse, ToolCallView, ToolResultView};
 use crate::fl;
-use crate::session::{ChatMessage, ChatRole, HistoryState, LocalSession};
+use crate::session::{ChatMessage, ChatRole, HistoryState, LocalSession, TokenUsage};
 use crate::styles;
 use crate::{App, CHAT_SCROLL_ID, EDITOR_ID, Message};
 
@@ -18,6 +18,28 @@ static WORDMARK_LIGHT: &[u8] = include_bytes!("../assets/clawos-wordmark.png");
 static WORDMARK_DARK: &[u8] = include_bytes!("../assets/clawos-wordmark-dark.png");
 
 const SIDEBAR_WIDTH: f32 = 220.0;
+
+fn format_latency(milliseconds: u64) -> String {
+    if milliseconds < 1_000 {
+        format!("{milliseconds} ms")
+    } else {
+        format!("{:.1} s", milliseconds as f64 / 1_000.0)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1_024 {
+        format!("{bytes} B")
+    } else if bytes < 1_024 * 1_024 {
+        format!("{:.1} KiB", bytes as f64 / 1_024.0)
+    } else {
+        format!("{:.1} MiB", bytes as f64 / (1_024.0 * 1_024.0))
+    }
+}
+
+fn fluent_count(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
 
 impl App {
     pub(super) fn view_standalone(&self) -> Element<'_, Message> {
@@ -444,13 +466,16 @@ impl App {
                         .align_x(Alignment::End),
                     );
                 }
-                for result in message.tool_results.iter().filter(|result| result.is_error) {
-                    column = column.push(Self::tool_result_card(result));
+                for result in &message.tool_results {
+                    column = column.push(Self::tool_card(None, Some(result), compact));
                 }
                 column.width(Length::Fill).into()
             }
             ChatRole::Assistant => {
                 let mut column = Column::new().spacing(spacing.space_xxs);
+                if !message.reasoning.is_empty() {
+                    column = column.push(Self::reasoning_card(&message.reasoning));
+                }
                 if let Some(items) = message.parsed_markdown.as_ref() {
                     let palette = if Self::is_dark() {
                         cosmic::iced::theme::Palette::DARK
@@ -471,10 +496,19 @@ impl App {
                     column = column.push(text(fl!("streaming")).size(body_size));
                 }
                 for call in &message.tool_calls {
-                    column = column.push(Self::tool_call_card(call, compact));
+                    let result = message.tool_results.iter().find(|result| {
+                        !call.id.is_empty() && result.id.as_str() == call.id.as_str()
+                    });
+                    column = column.push(Self::tool_card(Some(call), result, compact));
                 }
-                for result in message.tool_results.iter().filter(|result| result.is_error) {
-                    column = column.push(Self::tool_result_card(result));
+                for result in message.tool_results.iter().filter(|result| {
+                    result.id.is_empty()
+                        || !message
+                            .tool_calls
+                            .iter()
+                            .any(|call| !call.id.is_empty() && call.id == result.id)
+                }) {
+                    column = column.push(Self::tool_card(None, Some(result), compact));
                 }
                 for warning in &message.warnings {
                     column = column.push(Self::warning_card(warning));
@@ -482,6 +516,9 @@ impl App {
                 if let Some(error) = &message.error {
                     column =
                         column.push(Self::error_card(error, Some(Message::RetryMessage(index))));
+                }
+                if let Some(usage) = &message.usage {
+                    column = column.push(Self::usage_summary(usage));
                 }
                 if !message.content.is_empty() && !message.in_progress {
                     column = column.push(
@@ -506,33 +543,14 @@ impl App {
         }
     }
 
-    fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
+    fn reasoning_card(summaries: &[String]) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let column = Column::new()
-            .push(
-                Row::new()
-                    .push(widget::icon::from_name("system-run-symbolic").size(16))
-                    .push(
-                        text(if call.name.is_empty() {
-                            fl!("tool-running")
-                        } else {
-                            call.name.clone()
-                        })
-                        .size(if compact { 11.0 } else { 12.0 }),
-                    )
-                    .push(widget::space::horizontal())
-                    .push(
-                        text(if call.in_progress {
-                            fl!("tool-running")
-                        } else {
-                            String::new()
-                        })
-                        .size(10.0),
-                    )
-                    .spacing(spacing.space_xxs)
-                    .align_y(Alignment::Center),
-            )
+        let mut column = Column::new()
+            .push(text(fl!("reasoning-summary")).size(11.0))
             .spacing(spacing.space_xxs);
+        for summary in summaries {
+            column = column.push(text(summary).size(11.0));
+        }
         container(column)
             .padding([spacing.space_xxs, spacing.space_s])
             .class(theme::Container::custom(styles::tool_card))
@@ -540,26 +558,85 @@ impl App {
             .into()
     }
 
-    fn tool_result_card(result: &ToolResultView) -> Element<'_, Message> {
+    fn tool_card<'a>(
+        call: Option<&'a ToolCallView>,
+        result: Option<&'a ToolResultView>,
+        compact: bool,
+    ) -> Element<'a, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let mut label = if result.is_error {
-            fl!("tool-error")
-        } else {
-            fl!("tool-result")
+        let name = result
+            .map(|result| result.name.as_str())
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                call.map(|call| call.name.as_str())
+                    .filter(|name| !name.is_empty())
+            })
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| fl!("tool-running"));
+        let status = match result {
+            Some(result) if result.is_error => fl!("tool-failed"),
+            Some(_) => fl!("tool-completed"),
+            None if call.is_some_and(|call| call.in_progress) => fl!("tool-running"),
+            None => fl!("tool-requested"),
         };
-        if !result.name.trim().is_empty() {
-            label.push_str(": ");
-            label.push_str(&result.name);
+        let mut details = vec![status];
+        if let Some(latency_ms) = result.and_then(|result| result.latency_ms) {
+            details.push(format_latency(latency_ms));
         }
-        let column = Column::new().push(text(label).size(11.0));
-        container(column.spacing(spacing.space_xxs))
+        if let Some(bytes_returned) = result.and_then(|result| result.bytes_returned) {
+            details.push(format_bytes(bytes_returned));
+        }
+        let mut column = Column::new()
+            .push(
+                Row::new()
+                    .push(widget::icon::from_name("system-run-symbolic").size(16))
+                    .push(text(name).size(if compact { 11.0 } else { 12.0 }))
+                    .push(widget::space::horizontal())
+                    .push(text(details.join(" · ")).size(10.0))
+                    .spacing(spacing.space_xxs)
+                    .align_y(Alignment::Center),
+            )
+            .spacing(spacing.space_xxs);
+        if let Some(preview) = result
+            .filter(|result| result.is_error)
+            .and_then(|result| result.error_preview.as_deref())
+        {
+            column = column.push(text(preview).size(11.0));
+        }
+        container(column)
             .padding([spacing.space_xxs, spacing.space_s])
-            .class(theme::Container::custom(if result.is_error {
-                styles::tool_error_card
-            } else {
-                styles::tool_card
-            }))
+            .class(theme::Container::custom(
+                if result.is_some_and(|result| result.is_error) {
+                    styles::tool_error_card
+                } else {
+                    styles::tool_card
+                },
+            ))
             .width(Length::Fill)
+            .into()
+    }
+
+    fn usage_summary(usage: &TokenUsage) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let mut parts = vec![
+            fl!("usage-input", count = fluent_count(usage.input_tokens)),
+            fl!("usage-output", count = fluent_count(usage.output_tokens)),
+        ];
+        if usage.cache_read_tokens > 0 {
+            parts.push(fl!(
+                "usage-cache-read",
+                count = fluent_count(usage.cache_read_tokens)
+            ));
+        }
+        if usage.cache_write_tokens > 0 {
+            parts.push(fl!(
+                "usage-cache-write",
+                count = fluent_count(usage.cache_write_tokens)
+            ));
+        }
+        container(text(parts.join(" · ")).size(10.0))
+            .padding([spacing.space_xxs, spacing.space_s])
+            .class(theme::Container::custom(styles::tool_card))
             .into()
     }
 

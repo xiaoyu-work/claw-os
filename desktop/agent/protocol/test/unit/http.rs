@@ -113,6 +113,9 @@ fn endpoint_response_dtos_round_trip() {
                 name: "fs.read".into(),
                 text: "contents".into(),
                 is_error: false,
+                latency_ms: Some(12),
+                bytes_returned: Some(8),
+                error_preview: None,
             }],
             ts_ms: 10,
             ..HistoryMessage::default()

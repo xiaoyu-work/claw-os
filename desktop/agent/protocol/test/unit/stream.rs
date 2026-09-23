@@ -8,6 +8,9 @@ fn every_event_has_a_round_trip_codec() {
             session_id: Some("session-1".into()),
         }),
         StreamEvent::Delta(DeltaPayload::new("hello")),
+        StreamEvent::Reasoning(ReasoningPayload {
+            summary: vec!["Checking context".into()],
+        }),
         StreamEvent::ToolUseStart(ToolUseStartPayload {
             id: "tool-1".into(),
             name: "fs.read".into(),
@@ -37,6 +40,9 @@ fn every_event_has_a_round_trip_codec() {
             content: None,
             text: None,
             is_error: None,
+            latency_ms: Some(42),
+            bytes_returned: Some(128),
+            error_preview: None,
         }),
         StreamEvent::Warning(WarningPayload {
             message: "careful".into(),
@@ -102,14 +108,33 @@ fn aliases_and_unknown_events_are_backward_compatible() {
         StreamEvent::Delta(DeltaPayload::new("legacy"))
     );
     assert_eq!(StreamEvent::from_json("future", "{}").unwrap(), None);
-    let partial = StreamEvent::from_json(
-        "tool_input_delta",
-        r#"{"id":"tool-1","partial":"{}"}"#,
-    )
-    .unwrap()
-    .unwrap();
+    let partial = StreamEvent::from_json("tool_input_delta", r#"{"id":"tool-1","partial":"{}"}"#)
+        .unwrap()
+        .unwrap();
     assert!(matches!(
         partial,
         StreamEvent::ToolInputDelta(ToolInputDeltaPayload { delta, .. }) if delta == "{}"
     ));
+}
+
+#[test]
+fn tool_result_exposes_only_failure_preview() {
+    let success = ToolResultPayload {
+        ok: Some(true),
+        output: Some("successful body".into()),
+        error_preview: Some("must stay hidden".into()),
+        ..ToolResultPayload::default()
+    };
+    assert!(!success.presented_is_error());
+    assert!(success.presented_error_preview().is_none());
+
+    let failure = ToolResultPayload {
+        ok: Some(false),
+        error_preview: Some("bounded failure".into()),
+        ..ToolResultPayload::default()
+    };
+    assert_eq!(
+        failure.presented_error_preview().as_deref(),
+        Some("bounded failure")
+    );
 }

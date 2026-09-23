@@ -22,7 +22,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/effects.rs` | Async bridge, history, new/existing Job streams, durable follow-up, and cancellation effects that emit typed UI messages |
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
 | `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
-| `src/views.rs` | Read-only widget composition, including selected-image metadata, that emits `Message` values |
+| `src/views.rs` | Read-only widget composition for reasoning summaries, cumulative usage, safe tool status/metrics, selected-image metadata, and other presentation state |
 | `src/styles.rs` | Presentation styles |
 | `src/bridge.rs`, `src/sse.rs`, `src/recorder.rs` | Protocol transport, SSE decoding, and audio capture/upload adapters |
 
