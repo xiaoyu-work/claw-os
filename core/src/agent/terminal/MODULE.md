@@ -48,6 +48,10 @@ audit.
 - Activity Evidence aggregates authenticated object declarations, immutable
   reported receipts and object-state annotations without resolving App data.
   Operation previews stay metadata-only and file plans stay App-owned.
+- Keep slash completion limited to high-level entry points and common
+  conversation actions. Object lifecycle, policy and evidence actions belong
+  in the panel opened by that entry point; compatible direct forms may remain
+  parseable without appearing in completion.
 - Workspace selection resolves through `task.workspace.resolve`; the TUI keeps
   only the returned canonical path and binds it to each submitted/queued task.
   A cwd is context, never filesystem authority.

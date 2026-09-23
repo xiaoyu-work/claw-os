@@ -97,7 +97,9 @@ re-evaluated when each Job runs.
 
 ## Commands
 
-The command set names Claw concepts only:
+The completion palette stays limited to Claw entry points and common
+conversation actions. Object-specific actions belong in the panel opened by
+the entry point rather than appearing as separate top-level commands:
 
 ```text
 /help
@@ -123,25 +125,8 @@ The command set names Claw concepts only:
 /notify-channel <web|desktop|ntfy> <on|off>
 /notify-severity <web|desktop|ntfy> <info|warning|error|critical>
 /dnd <off|HH:MM-HH:MM>
-/activities [active|paused|completed|cancelled]
 /activity [activity-id]
-/activity-create <title> | <goal>
-/activity-run <activity-id> [prompt]
-/activity-pause <activity-id>
-/activity-resume <activity-id>
-/activity-complete <activity-id> | <confirmation-note>
-/activity-cancel <activity-id>
-/activity-attention <activity-id>
-/activity-controls <activity-id>
-/activity-limits-set <activity-id> <revision|new> | <draft-json>
-/activity-limits-enable <activity-id> <on|off> <revision>
-/activity-budget-set <activity-id> <revision|new> | <draft-json>
-/activity-budget-enable <activity-id> <on|off> <revision>
-/activity-priority <activity-id> <foreground|standard|background> <revision|new>
-/activity-capability-set <activity-id> <revision|new> | <draft-json>
-/activity-capability-enable <activity-id> <on|off> <revision>
-/activity-evidence <activity-id>
-/activity-preview <activity-id> <app-id> <operation> | <json-argv>
+/activity new <title> | <goal>
 /session
 /clear
 /cancel
@@ -170,8 +155,9 @@ contained beneath the verified home. The returned path is bound to each
 durable task, revalidated at claim, and used as the worker cwd. It changes
 relative-path context but grants no filesystem capability.
 
-The selection also applies to `/activity-run`; non-TUI Activity CLI callers
-can pass `--workspace PATH` through the same broker validation.
+The selection also applies to the Activity detail panel's Run action; non-TUI
+Activity CLI callers can pass `--workspace PATH` through the same broker
+validation.
 
 Queued tasks retain the model and workspace selected when they were queued. The task
 stream records the broker workspace snapshot, and model-visible cwd context is
@@ -204,23 +190,25 @@ toggles and `/notify-severity` preserve every unrelated preference.
 The full preference document is validated and stored by the existing
 Notification Service; the TUI does not own a parallel settings file.
 
-`/activities` opens the bounded owner-scoped Activity catalogue; `/activity`
+`/activity` opens the bounded owner-scoped Activity catalogue; `/activity ID`
 opens its goal, criteria, planning boundaries, inert references, recent tasks
-and associated sessions. `/activity-create` creates a minimal title/goal record
-in the shared service. `/activity-run` publishes ordinary durable work and
-does not create a second Agent runtime.
+and associated sessions. `/activity new TITLE | GOAL` creates a minimal record
+in the shared service. The detail panel's Run action publishes ordinary
+durable work and does not create a second Agent runtime. Existing direct
+Activity action forms remain accepted for compatibility and panel-generated
+edits, but the completion palette does not expose them as separate commands.
 
 Pause blocks future admission without cancelling in-flight work. Resume also
 explicitly reopens completed or cancelled goals. Completion requires a
 nonempty user note and a separate confirmation panel; a successful task never
 completes the Activity. Cancellation ends the goal without claiming success
-and does not cancel tasks or undo admitted effects. `/activity-attention`
-renders the shared read-only counts, decisions, issues and notifications.
+and does not cancel tasks or undo admitted effects. The Attention view renders
+the shared read-only counts, decisions, issues and notifications.
 
-`/activity-controls` reads all four canonical control records. JSON set
-commands use `new` only for initial creation and an exact positive revision for
-replacement. Enable/disable always requires a revision. A stale CAS is shown
-as an error and is never silently retried against refreshed state.
+The Controls view reads all four canonical control records. Control edits use
+`new` only for initial creation and an exact positive revision for replacement.
+Enable/disable always requires a revision. A stale CAS is shown as an error and
+is never silently retried against refreshed state.
 
 Execution limits constrain attempts, turns and expiry. Monetary budgets are
 owner-configured micro-USD accounting, not provider billing. Priority affects
@@ -228,18 +216,18 @@ pending admission without preemption. Capability policies constrain existing
 authority and approval escalation but never grant permission; disabling a
 stored capability policy is a stop boundary, not unrestricted access.
 
-`/activity-evidence` combines the shared object-description, receipt and
+The Evidence view combines the shared object-description, receipt and
 object-state routes. It labels declarations and references as inert, receipts
 as caller-reported, annotations as non-authoritative, and attached Files App
 change plans as App-owned proposals. A well-formed plan diff appears only
 through its existing receipt preview; the TUI neither reads private plan
 contents nor applies a proposal.
 
-`/activity-preview` accepts an explicit JSON argv array and calls the
-authenticated metadata preview. The response is rejected unless
-`authorization_checked`, `executed`, and `effects_confirmed` are all `false`.
-Previewing never resolves an object, executes App code, grants permission, or
-creates a receipt.
+The Evidence view's Preview action accepts an explicit App operation and JSON
+argv array, then calls the authenticated metadata preview. The response is
+rejected unless `authorization_checked`, `executed`, and `effects_confirmed`
+are all `false`. Previewing never resolves an object, executes App code, grants
+permission, or creates a receipt.
 
 ## Backend ownership
 

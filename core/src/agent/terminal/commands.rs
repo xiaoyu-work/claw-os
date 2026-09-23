@@ -5,7 +5,9 @@ use serde_json::Value;
 use super::backend::{ActivityControlPolicy, Backend};
 use super::state::{App, ConfirmationAction, RunStatus};
 
-pub(super) const COMMANDS: &[(&str, &str)] = &[
+// Keep object-specific mutations in their panels instead of turning the
+// completion palette into a list of backend operations.
+pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/help", "show Claw terminal commands"),
     ("/new", "start a new canonical conversation"),
     ("/sessions", "list recent conversations"),
@@ -32,34 +34,7 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ("/notify-channel", "enable or disable a delivery channel"),
     ("/notify-severity", "set a channel minimum severity"),
     ("/dnd", "set or disable the UTC DND window"),
-    ("/activities", "browse persistent Activity goals"),
-    ("/activity", "open an Activity by id"),
-    ("/activity-create", "create TITLE | GOAL"),
-    ("/activity-run", "run an active Activity"),
-    ("/activity-pause", "pause future Activity work"),
-    ("/activity-resume", "resume or reopen an Activity"),
-    ("/activity-complete", "complete ID | CONFIRMATION NOTE"),
-    ("/activity-cancel", "cancel an Activity goal"),
-    ("/activity-attention", "show Activity attention"),
-    ("/activity-controls", "show Activity execution policies"),
-    ("/activity-limits-set", "set finite execution limits"),
-    (
-        "/activity-limits-enable",
-        "enable or disable execution limits",
-    ),
-    ("/activity-budget-set", "set model-turn accounting budget"),
-    (
-        "/activity-budget-enable",
-        "enable or disable monetary budget",
-    ),
-    ("/activity-priority", "set pending admission priority"),
-    ("/activity-capability-set", "replace capability constraints"),
-    (
-        "/activity-capability-enable",
-        "enable or disable capability policy",
-    ),
-    ("/activity-evidence", "show Activity objects and reports"),
-    ("/activity-preview", "preview App effects without executing"),
+    ("/activity", "browse, open, or create an Activity"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -203,7 +178,15 @@ pub(super) fn parse(value: &str) -> Option<Command> {
             Command::Activities(Some(rest.to_string()))
         }
         "activity" if rest.is_empty() => Command::Activities(None),
-        "activity" => Command::Activity(rest.to_string()),
+        "activity" if rest == "new" => Command::Unknown(value.to_string()),
+        "activity" => rest.strip_prefix("new ").map_or_else(
+            || Command::Activity(rest.to_string()),
+            |draft| {
+                parse_required_pair(draft.trim())
+                    .map(|(title, goal)| Command::ActivityCreate { title, goal })
+                    .unwrap_or_else(|| Command::Unknown(value.to_string()))
+            },
+        ),
         "activity-create" => parse_required_pair(rest)
             .map(|(title, goal)| Command::ActivityCreate { title, goal })
             .unwrap_or_else(|| Command::Unknown(value.to_string())),
@@ -263,7 +246,7 @@ pub(super) fn suggestions(input: &str) -> Vec<(&'static str, &'static str)> {
     if !input.starts_with('/') || input.chars().any(char::is_whitespace) {
         return Vec::new();
     }
-    COMMANDS
+    PALETTE_COMMANDS
         .iter()
         .copied()
         .filter(|(command, _)| command.starts_with(input))
@@ -368,19 +351,9 @@ pub(super) async fn execute(
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
              /dnd off|HH:MM-HH:MM  /session\n\
-             /activities [STATE]  /activity ID  /activity-create TITLE | GOAL\n\
-             /activity-run ID [PROMPT]  /activity-pause ID  /activity-resume ID\n\
-             /activity-complete ID | NOTE  /activity-cancel ID\n\
-             /activity-attention ID\n\
-             /activity-controls ID  /activity-limits-set ID REV|new | JSON\n\
-             /activity-limits-enable ID on|off REV\n\
-             /activity-budget-set ID REV|new | JSON\n\
-             /activity-budget-enable ID on|off REV\n\
-             /activity-priority ID CLASS REV|new\n\
-             /activity-capability-set ID REV|new | JSON\n\
-             /activity-capability-enable ID on|off REV\n\
-             /activity-evidence ID  /activity-preview ID APP OP | JSON_ARGS\n\
+             /activity [ID]  /activity new TITLE | GOAL\n\
              /clear  /cancel  /quit\n\
+             Open an Activity to run, pause, complete, configure, or inspect it.\n\
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
         Command::New => {

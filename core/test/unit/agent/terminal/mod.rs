@@ -158,6 +158,13 @@ fn claw_commands_are_closed_and_semantic() {
         })
     );
     assert_eq!(
+        parse_command("/activity new Release v2 | Publish next Friday"),
+        Some(Command::ActivityCreate {
+            title: "Release v2".into(),
+            goal: "Publish next Friday".into(),
+        })
+    );
+    assert_eq!(
         parse_command("/activity-run activity-1 Prepare a draft"),
         Some(Command::ActivityRun {
             id: "activity-1".into(),
@@ -548,6 +555,17 @@ fn slash_palette_exposes_only_supported_claw_commands() {
     assert!(output.contains("/model"));
     assert!(!output.contains("/mcp"));
     assert!(!output.contains("/delete"));
+}
+
+#[test]
+fn activity_commands_use_one_palette_entry() {
+    let suggestions = commands::suggestions("/activi");
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].0, "/activity");
+    assert_eq!(
+        commands::completion("/activi", 0),
+        Some("/activity ".into())
+    );
 }
 
 #[test]

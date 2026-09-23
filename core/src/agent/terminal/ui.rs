@@ -1009,6 +1009,12 @@ fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
         .command_selection
         .min(suggestions.len().saturating_sub(1));
     let window_start = selected.saturating_sub(max_rows / 2);
+    let command_width = suggestions
+        .iter()
+        .map(|(command, _)| command.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
     let lines = suggestions
         .into_iter()
         .skip(window_start)
@@ -1017,7 +1023,10 @@ fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
         .map(|(index, (command, description))| {
             let selected = window_start + index == selected;
             Line::from(vec![
-                Span::styled(format!("{command:<12}"), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{command:<command_width$}"),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::styled(
                     description,
                     Style::default().fg(if selected {
