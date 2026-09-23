@@ -1334,7 +1334,7 @@ fn committed_worker_death_is_terminal_indeterminate() {
 }
 
 #[test]
-fn committed_live_worker_is_terminal_after_broker_recovery() {
+fn committed_live_worker_remains_running_during_reconciliation() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
     let job = store
@@ -1343,10 +1343,10 @@ fn committed_live_worker_is_terminal_after_broker_recovery() {
     let claimed = store.claim_one().unwrap().unwrap();
     commit_claimed(&store, &claimed);
 
-    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 1));
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 0));
     let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
-    assert_eq!(bucket, JobStatus::Ok);
-    assert_eq!(recovered.execution_phase, ExecutionPhase::Indeterminate);
+    assert_eq!(bucket, JobStatus::Running);
+    assert_eq!(recovered.execution_phase, ExecutionPhase::Committed);
 }
 
 #[test]

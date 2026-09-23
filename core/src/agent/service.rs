@@ -1287,9 +1287,11 @@ impl Store {
     ///     it is failed into `done/` with an explanatory error instead
     ///     of being requeued forever.
     ///
-    /// Intended to run once at worker start-up, before the claim loop.
-    /// Returns `(requeued, failed)` counts for logging. Malformed running
-    /// records are terminalized because their execution history is unknown.
+    /// Runs at worker start-up and during periodic reconciliation. A worker
+    /// whose exact PID/start-time identity is still alive is never an orphan,
+    /// regardless of execution phase. Returns `(requeued, failed)` counts for
+    /// logging. Malformed running records are terminalized because their
+    /// execution history is unknown.
     pub fn recover_orphaned_jobs(&self) -> io::Result<(usize, usize)> {
         self.reconcile_duplicate_job_ids()?;
         let running = self.bucket_dir(JobStatus::Running);
@@ -1360,22 +1362,10 @@ impl Store {
                 continue;
             }
 
-            if job.schema_version != JOB_SCHEMA_VERSION
-                || !job.execution_phase.replay_is_proven_safe()
-            {
-                self.finish_indeterminate(
-                    &path,
-                    &id,
-                    job,
-                    "broker restarted after execution may have begun; outcome is indeterminate and replay is refused",
-                )?;
-                failed += 1;
-                continue;
-            }
-
             let mut unverifiable_identity = false;
-            // Owner still alive with the exact same process identity ⇒ not
-            // an orphan; leave it be.
+            // An exact live worker is not orphaned. This check must precede
+            // replay-safety classification because reconciliation also runs
+            // periodically while committed tasks are executing.
             if let Some(pid) = job.worker_pid {
                 match job.worker_start_time_ticks {
                     Some(expected) => match crate::proc::read_start_time_ticks_pub(pid) {
@@ -1409,6 +1399,19 @@ impl Store {
                     "clawd.task.worker_identity_unverifiable",
                     &job,
                 );
+                failed += 1;
+                continue;
+            }
+
+            if job.schema_version != JOB_SCHEMA_VERSION
+                || !job.execution_phase.replay_is_proven_safe()
+            {
+                self.finish_indeterminate(
+                    &path,
+                    &id,
+                    job,
+                    "broker restarted after execution may have begun; outcome is indeterminate and replay is refused",
+                )?;
                 failed += 1;
                 continue;
             }
