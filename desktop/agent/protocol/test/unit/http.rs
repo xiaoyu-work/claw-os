@@ -48,6 +48,25 @@ fn legacy_messages_request_resolves_latest_user_prompt() {
 }
 
 #[test]
+fn conversation_updates_are_closed_and_carry_no_owner_or_lineage_selector() {
+    let request = SessionUpdateRequest {
+        title: Some("Release review".to_string()),
+        archived: Some(false),
+    };
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        serde_json::json!({"title": "Release review", "archived": false})
+    );
+    assert!(
+        serde_json::from_value::<SessionUpdateRequest>(serde_json::json!({
+            "title": "Release review",
+            "owner_uid": 1000,
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn response_defaults_accept_older_payloads() {
     let session: SessionSummary = serde_json::from_str(r#"{"id":"s","title":"Title"}"#).unwrap();
     assert_eq!(session.message_count, 0);
@@ -68,6 +87,7 @@ fn endpoint_response_dtos_round_trip() {
         title: "Session".into(),
         last_ts_ms: Some(10),
         message_count: 2,
+        ..SessionSummary::default()
     };
     assert_eq!(
         serde_json::from_value::<SessionSummary>(serde_json::to_value(&session).unwrap()).unwrap(),

@@ -7,9 +7,10 @@ use crate::Message;
 use crate::activities::{
     Action as ActivityAction, Request as ActivityRequest, Response as ActivityResponse,
 };
+use crate::bridge::SessionUpdateRequest;
 use crate::bridge::{
     BridgeEndpoint, ChatRequest, cancel_task, ensure_bridge_endpoint, fetch_history, fetch_models,
-    fetch_sessions, session_exists,
+    fetch_sessions, fork_session, session_exists, update_session,
 };
 
 pub(crate) fn connect_bridge() -> Task<Message> {
@@ -34,14 +35,40 @@ pub(crate) fn fetch_models_task(endpoint: BridgeEndpoint) -> Task<Message> {
     )
 }
 
-pub(crate) fn fetch_sessions_task(endpoint: BridgeEndpoint) -> Task<Message> {
+pub(crate) fn fetch_sessions_task(endpoint: BridgeEndpoint, archived: bool) -> Task<Message> {
     Task::perform(
         async move {
-            fetch_sessions(endpoint)
+            fetch_sessions(endpoint, archived)
                 .await
                 .map_err(|error| format!("{error:#}"))
         },
         |result| cosmic::Action::App(Message::SessionsFetched(result)),
+    )
+}
+
+pub(crate) fn update_session_task(
+    endpoint: BridgeEndpoint,
+    session_id: String,
+    request: SessionUpdateRequest,
+) -> Task<Message> {
+    Task::perform(
+        async move {
+            update_session(endpoint, &session_id, request)
+                .await
+                .map_err(|error| format!("{error:#}"))
+        },
+        |result| cosmic::Action::App(Message::SessionUpdated(result)),
+    )
+}
+
+pub(crate) fn fork_session_task(endpoint: BridgeEndpoint, session_id: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            fork_session(endpoint, &session_id)
+                .await
+                .map_err(|error| format!("{error:#}"))
+        },
+        |result| cosmic::Action::App(Message::SessionForked(result)),
     )
 }
 

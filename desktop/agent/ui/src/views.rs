@@ -330,12 +330,43 @@ impl App {
         } else {
             cosmic::theme::Button::MenuItem
         };
-        button::custom(row)
+        let select: Element<'_, Message> = button::custom(row)
             .width(Length::Fill)
             .padding([spacing.space_xxs, spacing.space_xs])
             .class(class)
             .on_press(Message::SelectSession(index))
-            .into()
+            .into();
+        let mut controls = Row::new().push(select).align_y(Alignment::Center);
+        if active && session.manageable && !responding {
+            controls = controls
+                .push(Self::symbolic_button(
+                    "document-edit-symbolic",
+                    fl!("rename-session"),
+                    Some(Message::BeginRenameSession(index)),
+                    false,
+                ))
+                .push(Self::symbolic_button(
+                    "edit-copy-symbolic",
+                    fl!("fork-session"),
+                    Some(Message::ForkSession(index)),
+                    false,
+                ))
+                .push(Self::symbolic_button(
+                    if session.archived {
+                        "edit-undo-symbolic"
+                    } else {
+                        "mail-archive-symbolic"
+                    },
+                    if session.archived {
+                        fl!("restore-session")
+                    } else {
+                        fl!("archive-session")
+                    },
+                    Some(Message::ArchiveSession(index)),
+                    false,
+                ));
+        }
+        controls.into()
     }
 
     fn empty_state(compact: bool) -> Element<'static, Message> {
@@ -791,8 +822,28 @@ impl App {
                 false,
             ))
             .align_y(Alignment::Center);
+        let search = widget::text_input(fl!("search-sessions"), &self.session_filter)
+            .on_input(Message::SessionFilterChanged);
+        let archive_toggle = button::text(if self.show_archived_sessions {
+            fl!("show-active-sessions")
+        } else {
+            fl!("show-archived-sessions")
+        })
+        .on_press(Message::ToggleArchivedSessions);
         let mut list = Column::new().spacing(2);
         for (index, session) in self.sessions.iter().enumerate() {
+            let query = self.session_filter.trim().to_lowercase();
+            if session.archived != self.show_archived_sessions
+                || (!query.is_empty()
+                    && !format!(
+                        "{} {}",
+                        session.display_title().to_lowercase(),
+                        session.remote_id.as_deref().unwrap_or_default()
+                    )
+                    .contains(&query))
+            {
+                continue;
+            }
             list = list.push(Self::session_row(
                 session,
                 !self.activities.is_visible() && index == self.sessions.active_index(),
@@ -803,7 +854,7 @@ impl App {
         if let Some(error) = self.sessions.error() {
             list = list.push(text(error).size(11.0));
         }
-        Column::new()
+        let mut sidebar = Column::new()
             .push(activities)
             .push(container(header).padding([
                 0u16,
@@ -811,6 +862,31 @@ impl App {
                 spacing.space_xs,
                 spacing.space_xs,
             ]))
+            .push(search)
+            .push(archive_toggle);
+        if self.renaming_session.is_some() {
+            let mut save = button::text(fl!("save"));
+            if !self.rename_session_title.trim().is_empty() {
+                save = save.on_press(Message::SaveRenamedSession);
+            }
+            sidebar = sidebar.push(
+                Column::new()
+                    .push(
+                        widget::text_input(fl!("rename-session"), &self.rename_session_title)
+                            .on_input(Message::RenameSessionChanged),
+                    )
+                    .push(
+                        Row::new()
+                            .push(save)
+                            .push(
+                                button::text(fl!("cancel")).on_press(Message::CancelRenameSession),
+                            )
+                            .spacing(spacing.space_xs),
+                    )
+                    .spacing(spacing.space_xs),
+            );
+        }
+        sidebar
             .push(scrollable(list).width(Length::Fill).height(Length::Fill))
             .spacing(spacing.space_xs)
             .into()

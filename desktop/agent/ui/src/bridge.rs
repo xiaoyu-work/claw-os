@@ -25,8 +25,8 @@ pub use cos_agent_protocol::{
     ActivitySchedulingPrioritySetRequest, ActivityState, ActivityTransitionRequest,
     ActivityUpdateRequest, ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse,
     ChatAttachment, ChatRequest, ErrorEnvelope, HistoryMessage, MAX_CHAT_ATTACHMENT_BYTES,
-    ModelsResponse, ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
-    validate_chat_attachments,
+    ModelsResponse, ObjectStateEntry, SessionSummary, SessionUpdateRequest, StreamEvent,
+    ToolCallView, ToolResultView, validate_chat_attachments,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -259,8 +259,18 @@ async fn bridge_health(endpoint: &BridgeEndpoint) -> HealthStatus {
 }
 
 /// `GET /api/sessions` — list persisted conversations newest-first.
-pub async fn fetch_sessions(endpoint: BridgeEndpoint) -> Result<Vec<SessionSummary>> {
-    let url = bridge_url(&endpoint, "/api/sessions");
+pub async fn fetch_sessions(
+    endpoint: BridgeEndpoint,
+    archived: bool,
+) -> Result<Vec<SessionSummary>> {
+    let url = bridge_url(
+        &endpoint,
+        if archived {
+            "/api/sessions?archived=true"
+        } else {
+            "/api/sessions"
+        },
+    );
     let selected = selected_protocol_version(&endpoint)?;
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -276,11 +286,63 @@ pub async fn fetch_sessions(endpoint: BridgeEndpoint) -> Result<Vec<SessionSumma
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
+
     let sessions = response
         .json::<Vec<SessionSummary>>()
         .await
         .context("decoding /api/sessions")?;
     Ok(sessions)
+}
+
+pub async fn update_session(
+    endpoint: BridgeEndpoint,
+    session_id: &str,
+    request: SessionUpdateRequest,
+) -> Result<SessionSummary> {
+    let url = bridge_url(&endpoint, &format!("/api/sessions/{session_id}"));
+    let selected = selected_protocol_version(&endpoint)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("building session update client")?
+        .patch(&url)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
+        .bearer_auth(&endpoint.token)
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("PATCH {url}"))?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        return Err(response_error(response, &url).await);
+    }
+    response
+        .json::<SessionSummary>()
+        .await
+        .context("decoding updated conversation")
+}
+
+pub async fn fork_session(endpoint: BridgeEndpoint, session_id: &str) -> Result<SessionSummary> {
+    let url = bridge_url(&endpoint, &format!("/api/sessions/{session_id}/fork"));
+    let selected = selected_protocol_version(&endpoint)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("building session fork client")?
+        .post(&url)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await
+        .with_context(|| format!("POST {url}"))?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        return Err(response_error(response, &url).await);
+    }
+    response
+        .json::<SessionSummary>()
+        .await
+        .context("decoding forked conversation")
 }
 
 /// `GET /api/sessions/:id/history` — full transcript for `session_id`.

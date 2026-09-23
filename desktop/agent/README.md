@@ -22,7 +22,7 @@ desktop/agent/
 │       └── routes/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
 │           ├── activities.rs # shared Activity service + durable work admission
-│           ├── sessions.rs # GET/DELETE /api/sessions[/:id]
+│           ├── sessions.rs # canonical list/get/update/fork/history + legacy read-only projection
 │           ├── models.rs   # GET /api/models
 │           └── voice.rs    # POST /api/voice/upload → configured STT provider
 └── ui/                     # cos-agent-ui — native libcosmic chat
@@ -104,6 +104,13 @@ acknowledgements without importing broker/domain code. The bridge
 remains the anti-corruption layer: `bridge/src/translation.rs` decodes generic
 clawd results, removes worker/task storage details and raw memory content, and
 emits only protocol types. The UI does not deserialize clawd or core models.
+
+Conversation inventory comes from the same owner-scoped
+`agent.conversation.*` service as Agent Web. Native search is presentation-only;
+rename, archive/restore and fork cross the bridge as typed requests and remain
+broker mutations under the idle-session lock. Memory-only legacy sessions are
+merged into the list as visibly read-only entries and continue through
+`memory.history`; Desktop never opens the Agent database.
 
 Within the UI, lifecycle state is split by invariant owner. `main.rs` routes
 typed messages among session, stream, bridge, voice, and overlay state;

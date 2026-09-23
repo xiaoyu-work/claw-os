@@ -6,6 +6,7 @@ fn summary(id: &str, title: &str, count: i64) -> SessionSummary {
         title: title.into(),
         last_ts_ms: Some(42),
         message_count: count,
+        ..SessionSummary::default()
     }
 }
 
@@ -20,6 +21,34 @@ fn remote_reconciliation_deduplicates_provisional_sessions() {
     let session = state.active().unwrap();
     assert_eq!(session.title, "Recovered");
     assert_eq!(session.message_count, 3);
+}
+
+#[test]
+fn canonical_summary_updates_presentation_controls_and_can_select_a_fork() {
+    crate::localize::localize();
+    let mut state = SessionState::default();
+    let mut original = summary("session-1", "Original", 2);
+    original.manageable = true;
+    state.merge_remote(vec![original]);
+
+    let mut renamed = summary("session-1", "Renamed", 2);
+    renamed.manageable = true;
+    renamed.archived = true;
+    let index = state.apply_remote_summary(renamed, false);
+    let session = state.get(index).unwrap();
+    assert_eq!(session.title, "Renamed");
+    assert!(session.archived);
+    assert!(session.manageable);
+    assert!(!session.legacy);
+
+    let mut fork = summary("session-2", "Renamed", 2);
+    fork.manageable = true;
+    let fork_index = state.apply_remote_summary(fork, true);
+    assert_eq!(state.active_index(), fork_index);
+    assert_eq!(
+        state.active().and_then(|session| session.remote_id.as_deref()),
+        Some("session-2")
+    );
 }
 
 #[test]
@@ -46,7 +75,10 @@ fn history_reconciliation_ignores_system_rows_and_refreshes_markdown() {
         ]),
     );
 
-    let remote = state.iter().find(|session| session.remote_id.as_deref() == Some("remote-1")).unwrap();
+    let remote = state
+        .iter()
+        .find(|session| session.remote_id.as_deref() == Some("remote-1"))
+        .unwrap();
     assert_eq!(remote.messages.len(), 1);
     assert!(remote.messages[0].parsed_markdown.is_some());
 }

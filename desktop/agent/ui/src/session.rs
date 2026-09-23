@@ -111,6 +111,9 @@ pub(crate) struct LocalSession {
     pub(crate) history: HistoryState,
     pub(crate) last_ts_ms: Option<i64>,
     pub(crate) message_count: i64,
+    pub(crate) archived: bool,
+    pub(crate) manageable: bool,
+    pub(crate) legacy: bool,
 }
 
 impl LocalSession {
@@ -125,6 +128,9 @@ impl LocalSession {
             history: HistoryState::Loaded,
             last_ts_ms: None,
             message_count: 0,
+            archived: false,
+            manageable: true,
+            legacy: false,
         }
     }
 
@@ -139,6 +145,9 @@ impl LocalSession {
             history: HistoryState::NotLoaded,
             last_ts_ms: summary.last_ts_ms,
             message_count: summary.message_count,
+            archived: summary.archived,
+            manageable: summary.manageable,
+            legacy: summary.legacy,
         }
     }
 
@@ -256,10 +265,41 @@ impl SessionState {
                 }
                 existing.last_ts_ms = summary.last_ts_ms.or(existing.last_ts_ms);
                 existing.message_count = existing.message_count.max(summary.message_count);
+                existing.archived = summary.archived;
+                existing.manageable = summary.manageable;
+                existing.legacy = summary.legacy;
                 continue;
             }
+
             self.sessions.push(LocalSession::from_summary(&summary));
         }
+    }
+
+    pub(crate) fn apply_remote_summary(&mut self, summary: SessionSummary, select: bool) -> usize {
+        let index = self
+            .sessions
+            .iter()
+            .position(|session| {
+                session.remote_id.as_deref() == Some(summary.id.as_str())
+                    || session.provisional_remote_id.as_deref() == Some(summary.id.as_str())
+            })
+            .unwrap_or_else(|| {
+                self.sessions.push(LocalSession::from_summary(&summary));
+                self.sessions.len() - 1
+            });
+        let session = &mut self.sessions[index];
+        session.remote_id = Some(summary.id);
+        session.provisional_remote_id = None;
+        session.title = summary.title;
+        session.last_ts_ms = summary.last_ts_ms;
+        session.message_count = summary.message_count;
+        session.archived = summary.archived;
+        session.manageable = summary.manageable;
+        session.legacy = summary.legacy;
+        if select {
+            self.active = index;
+        }
+        index
     }
 
     pub(crate) fn apply_history(

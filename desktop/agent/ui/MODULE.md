@@ -16,7 +16,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
 | `src/activities/monetary_budget.rs` | Fixed configured-accounting card, exact-CAS create/update/toggles, and spent/reserved/remaining presentation; no pricing, invoice, ledger or policy authority |
 | `src/activities/capability_policy.rs` | Fixed typed capability rule/scope controls, owner-scoped snapshots and CAS-bound edits/toggles; no grants, approval decisions or resource resolution |
-| `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
+| `src/session.rs` | Canonical/legacy session projection, history reconciliation, presentation controls, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
 | `src/effects.rs` | Async bridge, history, stream, and cancellation effects that emit typed UI messages |
@@ -39,6 +39,12 @@ stream. Job results cannot change goal state locally; explicit completion
 requires the user's confirmation note. Pending approvals link to associated
 sessions and remain decisions for the existing Approval Gate. Resource
 references are displayed as inert text, and boundaries grant no capabilities.
+
+The session sidebar consumes canonical conversation summaries through the
+bridge and offers title/ID search plus broker-backed rename, archive/restore
+and fork controls. Legacy memory-only sessions remain read-only. The UI keeps
+only drafts and selection state; presentation IDs, lineage, archive state,
+idle-session locking and history remain broker-owned.
 
 The fixed attention section renders the same broker-owned projection used by
 terminal and Agent Web clients: retained Job counts, exact decision records,

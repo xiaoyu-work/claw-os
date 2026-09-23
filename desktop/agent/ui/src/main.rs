@@ -35,7 +35,7 @@ mod voice;
 
 use crate::bridge::{
     BridgeEndpoint, ChatAttachment, ChatRequest, HistoryMessage, MAX_CHAT_ATTACHMENT_BYTES,
-    ModelsResponse, SessionSummary, StreamEvent, validate_chat_attachments,
+    ModelsResponse, SessionSummary, SessionUpdateRequest, StreamEvent, validate_chat_attachments,
 };
 use crate::bridge_state::BridgeState;
 use crate::overlay::{OverlayActivation, OverlayState};
@@ -100,6 +100,16 @@ pub enum Message {
     },
     SelectSession(usize),
     NewSession,
+    SessionFilterChanged(String),
+    ToggleArchivedSessions,
+    BeginRenameSession(usize),
+    RenameSessionChanged(String),
+    SaveRenamedSession,
+    CancelRenameSession,
+    ArchiveSession(usize),
+    ForkSession(usize),
+    SessionUpdated(Result<SessionSummary, String>),
+    SessionForked(Result<SessionSummary, String>),
     RetryHistory,
     SessionsFetched(Result<Vec<SessionSummary>, String>),
     HistoryFetched {
@@ -128,6 +138,10 @@ pub struct App {
     stream: StreamState,
     input: text_editor::Content,
     attachments: Vec<ChatAttachment>,
+    session_filter: String,
+    show_archived_sessions: bool,
+    renaming_session: Option<usize>,
+    rename_session_title: String,
     error: Option<String>,
     voice: VoiceState,
 }
@@ -163,6 +177,10 @@ impl Application for App {
             stream: StreamState::default(),
             input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
             attachments: Vec::new(),
+            session_filter: String::new(),
+            show_archived_sessions: false,
+            renaming_session: None,
+            rename_session_title: String::new(),
             error: None,
             voice: VoiceState::default(),
         };
@@ -433,6 +451,7 @@ impl Application for App {
                 }
                 self.activities.hide();
                 self.attachments.clear();
+                self.renaming_session = None;
                 self.error = None;
                 Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
             }
@@ -444,8 +463,135 @@ impl Application for App {
                 self.sessions.new_session();
                 self.input = text_editor::Content::new();
                 self.attachments.clear();
+                self.renaming_session = None;
                 self.error = None;
                 Task::batch([focus_editor(), scroll_to_bottom()])
+            }
+            Message::SessionFilterChanged(value) => {
+                self.session_filter = value;
+                Task::none()
+            }
+            Message::ToggleArchivedSessions => {
+                self.show_archived_sessions = !self.show_archived_sessions;
+                self.session_filter.clear();
+                self.renaming_session = None;
+                let Some(endpoint) = self.bridge.endpoint().cloned() else {
+                    self.error = Some(fl!("bridge-offline"));
+                    return Task::none();
+                };
+                effects::fetch_sessions_task(endpoint, self.show_archived_sessions)
+            }
+            Message::BeginRenameSession(index) => {
+                let Some(session) = self
+                    .sessions
+                    .get(index)
+                    .filter(|session| session.manageable)
+                else {
+                    return Task::none();
+                };
+                self.rename_session_title = session.display_title();
+                self.renaming_session = Some(index);
+                Task::none()
+            }
+            Message::RenameSessionChanged(value) => {
+                self.rename_session_title = value;
+                Task::none()
+            }
+            Message::CancelRenameSession => {
+                self.renaming_session = None;
+                self.rename_session_title.clear();
+                Task::none()
+            }
+            Message::SaveRenamedSession => {
+                let Some(index) = self.renaming_session else {
+                    return Task::none();
+                };
+                let Some(id) = self
+                    .sessions
+                    .get(index)
+                    .filter(|session| session.manageable)
+                    .and_then(|session| session.remote_id.clone())
+                else {
+                    return Task::none();
+                };
+                let title = self.rename_session_title.trim().to_string();
+                if title.is_empty() {
+                    return Task::none();
+                }
+                let Some(endpoint) = self.bridge.endpoint().cloned() else {
+                    self.error = Some(fl!("bridge-offline"));
+                    return Task::none();
+                };
+                effects::update_session_task(
+                    endpoint,
+                    id,
+                    SessionUpdateRequest {
+                        title: Some(title),
+                        archived: None,
+                    },
+                )
+            }
+            Message::ArchiveSession(index) => {
+                let Some(session) = self
+                    .sessions
+                    .get(index)
+                    .filter(|session| session.manageable)
+                else {
+                    return Task::none();
+                };
+                let Some(id) = session.remote_id.clone() else {
+                    return Task::none();
+                };
+                let archived = !session.archived;
+                let Some(endpoint) = self.bridge.endpoint().cloned() else {
+                    self.error = Some(fl!("bridge-offline"));
+                    return Task::none();
+                };
+                effects::update_session_task(
+                    endpoint,
+                    id,
+                    SessionUpdateRequest {
+                        title: None,
+                        archived: Some(archived),
+                    },
+                )
+            }
+            Message::ForkSession(index) => {
+                let Some(id) = self
+                    .sessions
+                    .get(index)
+                    .filter(|session| session.manageable)
+                    .and_then(|session| session.remote_id.clone())
+                else {
+                    return Task::none();
+                };
+                let Some(endpoint) = self.bridge.endpoint().cloned() else {
+                    self.error = Some(fl!("bridge-offline"));
+                    return Task::none();
+                };
+                effects::fork_session_task(endpoint, id)
+            }
+            Message::SessionUpdated(Ok(summary)) => {
+                self.sessions.apply_remote_summary(summary, false);
+                self.renaming_session = None;
+                self.rename_session_title.clear();
+                self.error = None;
+                Task::none()
+            }
+            Message::SessionUpdated(Err(error)) => {
+                self.error = Some(error);
+                Task::none()
+            }
+            Message::SessionForked(Ok(summary)) => {
+                let index = self.sessions.apply_remote_summary(summary, true);
+                self.activities.hide();
+                self.renaming_session = None;
+                self.error = None;
+                Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
+            }
+            Message::SessionForked(Err(error)) => {
+                self.error = Some(error);
+                Task::none()
             }
             Message::RetryHistory => {
                 if !self.bridge.begin_connect() {
@@ -510,7 +656,10 @@ impl Application for App {
                 self.bridge.connected(endpoint.clone());
                 let mut tasks = vec![effects::fetch_models_task(endpoint.clone())];
                 if !self.flags.overlay {
-                    tasks.push(effects::fetch_sessions_task(endpoint));
+                    tasks.push(effects::fetch_sessions_task(
+                        endpoint,
+                        self.show_archived_sessions,
+                    ));
                     if self.activities.is_visible() {
                         tasks.push(self.update_activities(activities::Message::Refresh));
                     }
@@ -651,6 +800,8 @@ impl App {
             title,
             last_ts_ms: None,
             message_count: 0,
+            manageable: true,
+            ..SessionSummary::default()
         }]);
         let index = self
             .sessions

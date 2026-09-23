@@ -97,9 +97,12 @@ pub fn api() -> Router<AppState> {
         .route("/sessions", get(sessions::list))
         .route(
             "/sessions/:id",
-            get(sessions::get).delete(sessions::delete_one),
+            get(sessions::get)
+                .patch(sessions::update)
+                .delete(sessions::delete_one),
         )
         .route("/sessions/:id/history", get(sessions::history))
+        .route("/sessions/:id/fork", post(sessions::fork))
         .route("/models", get(models::list))
         .route(
             "/voice/upload",
