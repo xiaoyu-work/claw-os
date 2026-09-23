@@ -152,6 +152,8 @@ pub struct Job {
     pub schema_version: u32,
     pub id: String,
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::agent::attachments::ImageAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -297,6 +299,7 @@ impl Job {
             schema_version: JOB_SCHEMA_VERSION,
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
+            attachments: Vec::new(),
             context,
             branch_context,
             workspace: None,
@@ -3773,6 +3776,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         JobExecution {
             id: job.id.clone(),
             prompt: job.prompt.clone(),
+            attachments: job.attachments.clone(),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             workspace: job.workspace.clone(),
@@ -3833,6 +3837,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
 pub struct JobExecution {
     pub id: String,
     pub prompt: String,
+    pub attachments: Vec<crate::agent::attachments::ImageAttachment>,
     pub context: Option<String>,
     pub branch_context: Option<String>,
     pub workspace: Option<String>,
@@ -3975,6 +3980,7 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
         stream_sink,
         progress_sink,
     )
+    .with_attachments(&job.attachments)
     .with_exposure(&exposure)
     .with_transient_context(job.context.as_deref())
     .with_project_context(project_context.as_deref())

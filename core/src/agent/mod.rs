@@ -3,6 +3,7 @@
 //! Command implementations live in responsibility-specific sibling modules.
 //! This module owns only subsystem composition and top-level CLI routing.
 
+pub mod attachments;
 pub mod audit_cli;
 pub mod classify;
 pub mod context;

@@ -1418,6 +1418,17 @@ CLI / web UI / bridge
   -> clawd persists usage/session/audit records and finishes the task
 ```
 
+Agent image attachments are bounded request data, not filesystem references or
+capabilities. Web and native Desktop accept up to four PNG/JPEG/GIF/WebP
+images, with 256 KiB decoded in total. `task.submit` revalidates canonical
+base64, names, MIME/magic agreement and aggregate size before persisting the
+inline bytes in the owner-scoped Job. Worker protocol v15 carries that verified
+snapshot to `claw-agentd`; the runtime adds image blocks only to the current
+owner message. Conversation memory records MIME, size and digest, never image
+bytes or a client path. Task JSON responses expose the same metadata without
+base64. No temporary file, path-derived authority or App integration is
+created.
+
 Interactive `cos agent chat` adds only a Claw-owned presentation path in front
 of this same task flow:
 

@@ -1107,6 +1107,7 @@ dependencies = [
 name = "cos-agent-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "serde",
  "serde_json",
@@ -1120,6 +1121,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "base64",
  "bytes",
  "cos-agent-protocol",
  "cos-runtime",

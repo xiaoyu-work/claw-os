@@ -28,8 +28,11 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_STREAM_DURATION: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChatRequest {
     pub prompt: String,
+    #[serde(default)]
+    pub attachments: Vec<crate::agent::attachments::AttachmentInput>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default = "default_true")]
@@ -55,6 +58,9 @@ pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>
             r#"{"error":"empty prompt"}"#,
         )
             .into_response();
+    }
+    if let Err(error) = crate::agent::attachments::normalize(req.attachments.clone()) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
     }
 
     let requested_session = req
@@ -85,6 +91,7 @@ pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>
         if let Err(error) = drive_chat(
             drive_state,
             req.prompt,
+            req.attachments,
             requested_session,
             lease_key,
             req.use_memory,
@@ -190,6 +197,7 @@ struct TurnConflict {
 async fn drive_chat(
     state: AppState,
     prompt: String,
+    attachments: Vec<crate::agent::attachments::AttachmentInput>,
     requested_session: Option<String>,
     provisional_session: String,
     use_memory: bool,
@@ -203,6 +211,7 @@ async fn drive_chat(
         drive_chat_scoped(
             state,
             prompt,
+            attachments,
             requested_session,
             provisional_session,
             use_memory,
@@ -224,6 +233,7 @@ where
 async fn drive_chat_scoped(
     state: AppState,
     prompt: String,
+    attachments: Vec<crate::agent::attachments::AttachmentInput>,
     requested_session: Option<String>,
     provisional_session: String,
     use_memory: bool,
@@ -242,6 +252,10 @@ async fn drive_chat_scoped(
         );
     }
     let mut params = json!({ "prompt": prompt, "use_memory": use_memory });
+    if !attachments.is_empty() {
+        params["attachments"] =
+            serde_json::to_value(attachments).map_err(|error| error.to_string())?;
+    }
     if let Some(session_id) = requested_session {
         params["session_id"] = json!(session_id);
     }

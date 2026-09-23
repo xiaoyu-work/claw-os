@@ -13,6 +13,8 @@ use crate::clawd::routes::Command;
 #[serde(deny_unknown_fields)]
 pub struct FollowUpRequest {
     prompt: String,
+    #[serde(default)]
+    attachments: Vec<crate::agent::attachments::AttachmentInput>,
     #[serde(default = "default_true")]
     use_memory: bool,
 }
@@ -85,6 +87,8 @@ pub async fn follow_up(
             Json(json!({ "error": "empty prompt" })),
         ));
     }
+    crate::agent::attachments::normalize(request.attachments.clone())
+        .map_err(|error| (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))))?;
     let predecessor = super::clawd::request(Command::TaskGet, json!({ "id": predecessor_id }))
         .await
         .map_err(super::clawd::RpcError::into_api_error)?;
@@ -106,12 +110,17 @@ fn follow_up_params(predecessor: &Value, request: FollowUpRequest) -> Result<Val
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "predecessor task has no conversation".to_string())?;
-    Ok(json!({
+    let mut params = json!({
         "prompt": request.prompt,
         "session_id": session_id,
         "after_task_id": predecessor_id,
         "use_memory": request.use_memory,
-    }))
+    });
+    if !request.attachments.is_empty() {
+        params["attachments"] =
+            serde_json::to_value(request.attachments).map_err(|error| error.to_string())?;
+    }
+    Ok(params)
 }
 
 fn invalid_task_response(message: String) -> (StatusCode, Json<Value>) {

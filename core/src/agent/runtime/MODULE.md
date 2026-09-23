@@ -41,6 +41,8 @@ through model turns, tools, hooks, progress, and final records.
 - Carry the durable Job id into persistence so every task-owned prompt,
   assistant response, and tool-result row is transactionally bound to the same
   canonical execution attempt.
+- Add verified Job image blocks only to the current owner request; persist a
+  bounded metadata description in conversation memory rather than base64.
 
 ## Key Files
 

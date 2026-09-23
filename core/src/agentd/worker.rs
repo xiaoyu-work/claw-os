@@ -1197,6 +1197,7 @@ async fn execute(
     let request = JobExecution {
         id: task_id.clone(),
         prompt: job.prompt,
+        attachments: job.attachments,
         context: job.context,
         branch_context: job.branch_context,
         workspace: Some(job.workspace),

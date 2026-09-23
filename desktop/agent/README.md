@@ -77,8 +77,9 @@ The bridge and approval applet share `crates/clawd-client` for canonical
 `CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),
 v2 broker envelopes and request correlation, `CBK1` length-prefixed framing,
 deadlines, bounds, and typed transport/protocol errors. This broker wire
-version is independent of the desktop HTTP/SSE presentation protocol v1.
-The additive Activity routes leave both versions unchanged. Activity detail
+version is independent of desktop HTTP/SSE presentation protocol v2. Image
+attachments raised the paired UI/bridge minimum to v2 so an older bridge
+cannot silently discard them. Activity detail
 also carries the shared `activity.attention` projection; the bridge validates
 its Activity identity and derives the legacy pending-approval presentation only
 from exact pending decisions in that projection. Grouped notification
@@ -132,6 +133,13 @@ The overlay is a single-instance Wayland layer-shell surface:
 Chat streams expose task identity, live text, tool lifecycle, warnings,
 usage, and final metadata. Stop cancels the clawd task; dropping the
 client stream also triggers bridge-side cancellation.
+
+Native image attachment uses desktop presentation protocol v2. The file chooser
+reads only an explicitly selected PNG/JPEG/GIF/WebP image, enforces the shared
+four-image/256-KiB bounds, and sends inline data through the bridge to the
+canonical `task.submit` attachment contract. It no longer inserts a local path
+marker into the prompt. The bridge owns no attachment store and derives no file
+authority from the selected path.
 
 Voice uploads are staged as private runtime files and transcribed via
 the configured `cos model transcribe` provider. App/window context is handed to the UI through an inherited AF_UNIX socketpair
@@ -533,8 +541,8 @@ job fields before emitting presentation DTOs. Object-state entries retain the
 contract's typed server-supplied `owner_uid`; it is never a caller selector.
 Execution-limit and capability-policy replies also retain it and are checked against the same
 process-identity helper used for private bridge discovery. Other Activity views omit owner internals. Additive job/session/approval fields
-have defaults within presentation protocol v1. Continuity is intentionally
-non-additive inside v1: its complete shape is exact and unknown fields fail.
+retain their v1 defaults within presentation protocol v2. Continuity remains
+intentionally non-additive: its complete shape is exact and unknown fields fail.
 
 ## License
 

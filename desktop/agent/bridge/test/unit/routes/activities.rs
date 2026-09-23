@@ -6,7 +6,9 @@ use axum::{
     middleware,
     response::IntoResponse,
 };
-use cos_agent_protocol::{ErrorEnvelope, PROTOCOL_VERSION_HEADER};
+use cos_agent_protocol::{
+    CURRENT_PROTOCOL_VERSION_HEADER_VALUE, ErrorEnvelope, PROTOCOL_VERSION_HEADER,
+};
 use tower::ServiceExt as _;
 
 fn router() -> Router {
@@ -48,14 +50,17 @@ async fn every_activity_surface_requires_authentication_and_version() {
                 Request::builder()
                     .method(method.clone())
                     .uri(path)
-                    .header(PROTOCOL_VERSION_HEADER, "1")
+                    .header(PROTOCOL_VERSION_HEADER, CURRENT_PROTOCOL_VERSION_HEADER_VALUE)
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
-        assert_eq!(response.headers()[PROTOCOL_VERSION_HEADER], "1");
+        assert_eq!(
+            response.headers()[PROTOCOL_VERSION_HEADER],
+            CURRENT_PROTOCOL_VERSION_HEADER_VALUE
+        );
 
         let response = router()
             .oneshot(
@@ -127,7 +132,7 @@ async fn owner_injection_and_malformed_requests_return_typed_errors() {
                 Request::builder()
                     .method(method)
                     .uri(path)
-                    .header(PROTOCOL_VERSION_HEADER, "1")
+                    .header(PROTOCOL_VERSION_HEADER, CURRENT_PROTOCOL_VERSION_HEADER_VALUE)
                     .header("authorization", "Bearer activity-test-token")
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -213,7 +218,7 @@ async fn receipt_surface_does_not_expose_authoring_mutation_or_execution() {
                 Request::builder()
                     .method(method.clone())
                     .uri("/activities/a/receipts")
-                    .header(PROTOCOL_VERSION_HEADER, "1")
+                    .header(PROTOCOL_VERSION_HEADER, CURRENT_PROTOCOL_VERSION_HEADER_VALUE)
                     .header("authorization", format!("Bearer {}", "activity-test-token"))
                     .body(Body::empty())
                     .unwrap(),
@@ -257,7 +262,7 @@ async fn object_state_http(method: Method, uri: &str, value: Option<Value>) -> a
     });
     router().oneshot(Request::builder()
         .method(method).uri(uri)
-        .header(PROTOCOL_VERSION_HEADER, "1")
+        .header(PROTOCOL_VERSION_HEADER, CURRENT_PROTOCOL_VERSION_HEADER_VALUE)
         .header("authorization", format!("Bearer {}", "activity-test-token"))
         .header("content-type", "application/json")
         .body(body).unwrap()

@@ -5,8 +5,8 @@ fn endpoint() -> BridgeEndpoint {
     BridgeEndpoint {
         port: 43123,
         token: "0123456789abcdef0123456789abcdef".into(),
-        protocol_version: ProtocolVersion(1),
-        min_protocol_version: ProtocolVersion(1),
+        protocol_version: ProtocolVersion::CURRENT,
+        min_protocol_version: ProtocolVersion(cos_agent_protocol::MIN_SUPPORTED_PROTOCOL_VERSION),
     }
 }
 

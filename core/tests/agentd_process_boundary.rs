@@ -304,6 +304,7 @@ fn assignment(
         job: JobSpec {
             id: task_id.to_string(),
             prompt: "process boundary probe".to_string(),
+            attachments: Vec::new(),
             context: None,
             branch_context: None,
             session_id: None,

@@ -67,11 +67,17 @@ async fn selected_version_is_echoed_on_success_and_api_error() {
     for path in ["/success", "/error"] {
         let request = HttpRequest::builder()
             .uri(path)
-            .header(PROTOCOL_VERSION_HEADER, "1")
+            .header(
+                PROTOCOL_VERSION_HEADER,
+                cos_agent_protocol::CURRENT_PROTOCOL_VERSION_HEADER_VALUE,
+            )
             .body(Body::empty())
             .unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.headers()[PROTOCOL_VERSION_HEADER], "1");
+        assert_eq!(
+            response.headers()[PROTOCOL_VERSION_HEADER],
+            cos_agent_protocol::CURRENT_PROTOCOL_VERSION_HEADER_VALUE
+        );
     }
 }
 

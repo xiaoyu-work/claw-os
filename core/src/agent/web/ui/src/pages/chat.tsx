@@ -21,12 +21,19 @@ import {
   Gauge,
   ListPlus,
   Loader2,
+  Paperclip,
   Square,
   Wrench,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, streamSse } from "@/lib/api";
+import {
+  formatAttachmentBytes,
+  readImageAttachments,
+  type PendingImageAttachment,
+} from "@/lib/chat-attachments";
 import {
   accumulateTurnUsage,
   appendReasoningSummary,
@@ -74,6 +81,8 @@ export function ChatPage({ meta }: { meta: any }) {
   const [sessionId, setSessionId] = useState<string>(sessionFromRoute);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<PendingImageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [blockedByTask, setBlockedByTask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,6 +90,7 @@ export function ChatPage({ meta }: { meta: any }) {
   const [queuedCount, setQueuedCount] = useState(0);
   const [restoreVersion, setRestoreVersion] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const taskIdRef = useRef<string>("");
   const queueTailTaskIdRef = useRef<string>("");
   const queuedTaskIdsRef = useRef<string[]>([]);
@@ -99,6 +109,8 @@ export function ChatPage({ meta }: { meta: any }) {
     setBlockedByTask(null);
     if (!sessionFromRoute) {
       setRestoring(false);
+      setAttachments([]);
+      setAttachmentError(null);
       setQueuedCount(0);
       queueTailTaskIdRef.current = "";
       queuedTaskIdsRef.current = [];
@@ -110,6 +122,8 @@ export function ChatPage({ meta }: { meta: any }) {
       setRestoring(false);
       return;
     }
+    setAttachments([]);
+    setAttachmentError(null);
     setQueuedCount(0);
     queueTailTaskIdRef.current = "";
     queuedTaskIdsRef.current = [];
@@ -152,6 +166,7 @@ export function ChatPage({ meta }: { meta: any }) {
             id: `task-unavailable-${activeTask.id}`,
             role: "assistant",
             text: "",
+            attachments: [],
             tools: [],
             reasoning: [],
             warnings: [
@@ -222,6 +237,7 @@ export function ChatPage({ meta }: { meta: any }) {
               id: uid(),
               role: "assistant",
               text: "",
+              attachments: [],
               tools: [],
               reasoning: [],
               warnings: [],
@@ -279,6 +295,20 @@ export function ChatPage({ meta }: { meta: any }) {
     [],
   );
 
+  const addAttachments = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      try {
+        const added = await readImageAttachments(files, attachments);
+        setAttachments((current) => [...current, ...added]);
+        setAttachmentError(null);
+      } catch (error: any) {
+        setAttachmentError(error?.message || "Failed to attach image");
+      }
+    },
+    [attachments],
+  );
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy || restoring || blockedByTask) return;
@@ -290,6 +320,12 @@ export function ChatPage({ meta }: { meta: any }) {
       id: uid(),
       role: "user",
       text,
+      attachments: attachments.map((attachment) => ({
+        name: attachment.name,
+        mediaType: attachment.mediaType,
+        bytes: attachment.bytes,
+        dataUrl: attachment.dataUrl,
+      })),
       tools: [],
       reasoning: [],
       warnings: [],
@@ -299,12 +335,16 @@ export function ChatPage({ meta }: { meta: any }) {
       id: uid(),
       role: "assistant",
       text: "",
+      attachments: [],
       tools: [],
       reasoning: [],
       warnings: [],
       status: "streaming",
     };
+    const submittedAttachments = attachments;
     setMessages((m) => [...m, userMsg, asstMsg]);
+    setAttachments([]);
+    setAttachmentError(null);
     setBusy(true);
     const ac = new AbortController();
     abortRef.current = ac;
@@ -312,7 +352,19 @@ export function ChatPage({ meta }: { meta: any }) {
     try {
       await streamSse(
         "/api/chat",
-        { prompt: text, session_id: sessionId || undefined },
+        {
+          prompt: text,
+          session_id: sessionId || undefined,
+          ...(submittedAttachments.length
+            ? {
+                attachments: submittedAttachments.map((attachment) => ({
+                  name: attachment.name,
+                  media_type: attachment.mediaType,
+                  data: attachment.data,
+                })),
+              }
+            : {}),
+        },
         (event, data) => {
           if (event === "task" && data?.task_id) {
             const taskId = String(data.task_id);
@@ -351,6 +403,9 @@ export function ChatPage({ meta }: { meta: any }) {
         ac.signal,
       );
     } catch (e: any) {
+      if (!taskIdRef.current) {
+        setAttachments(submittedAttachments);
+      }
       setMessages((m) => {
         const copy = m.slice();
         const last = copy[copy.length - 1];
@@ -366,7 +421,16 @@ export function ChatPage({ meta }: { meta: any }) {
       taskIdRef.current = "";
       stopRequestedRef.current = false;
     }
-  }, [input, busy, restoring, blockedByTask, sessionId, route, cancelTask]);
+  }, [
+    input,
+    attachments,
+    busy,
+    restoring,
+    blockedByTask,
+    sessionId,
+    route,
+    cancelTask,
+  ]);
 
   const watchPredecessor = useCallback((predecessorId: string, expectedSessionId: string) => {
     if (queueWatchersRef.current.has(predecessorId)) return;
@@ -428,9 +492,21 @@ export function ChatPage({ meta }: { meta: any }) {
 
     setQueueing(true);
     try {
+      const queuedAttachments = attachments;
       const task = await api.post<{ id?: string; session_id?: string }>(
         `/api/tasks/${encodeURIComponent(predecessorId)}/follow-up`,
-        { prompt: text },
+        {
+          prompt: text,
+          ...(queuedAttachments.length
+            ? {
+                attachments: queuedAttachments.map((attachment) => ({
+                  name: attachment.name,
+                  media_type: attachment.mediaType,
+                  data: attachment.data,
+                })),
+              }
+            : {}),
+        },
       );
       const taskId = String(task.id || "");
       if (!taskId) throw new Error("Queued task response omitted its id");
@@ -439,6 +515,8 @@ export function ChatPage({ meta }: { meta: any }) {
       queuedTaskIdsRef.current.push(taskId);
       setQueuedCount(queuedTaskIdsRef.current.length);
       setInput("");
+      setAttachments([]);
+      setAttachmentError(null);
       watchPredecessor(predecessorId, queuedSessionId);
     } catch (error: any) {
       setMessages((current) => {
@@ -452,7 +530,7 @@ export function ChatPage({ meta }: { meta: any }) {
     } finally {
       setQueueing(false);
     }
-  }, [busy, input, queueing, sessionId, watchPredecessor]);
+  }, [attachments, busy, input, queueing, sessionId, watchPredecessor]);
 
   const stop = useCallback(() => {
     const controller = abortRef.current;
@@ -482,57 +560,127 @@ export function ChatPage({ meta }: { meta: any }) {
         </div>
       </div>
       <div className="border-t bg-background/80 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl items-end gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                if (busy) void queueFollowUp();
-                else void send();
-              }
-            }}
-            placeholder={placeholder}
-            className="min-h-[44px] resize-none"
-            rows={1}
-          />
-          {busy ? (
-            <>
-              {input.trim() && taskIdRef.current && (
-                <Button
-                  size="icon"
-                  variant="secondary"
-                  onClick={() => void queueFollowUp()}
-                  disabled={queueing}
-                  title="Queue follow-up"
+        <div className="mx-auto max-w-3xl">
+          {attachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
+              {attachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className="group relative overflow-hidden rounded-md border bg-muted"
                 >
-                  {queueing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ListPlus className="h-4 w-4" />
-                  )}
-                </Button>
-              )}
-              <Button size="icon" variant="destructive" onClick={stop} title="Stop">
-                <Square className="h-4 w-4" />
-              </Button>
-            </>
-          ) : (
+                  <img
+                    src={attachment.dataUrl}
+                    alt={attachment.name}
+                    className="h-16 w-16 object-cover"
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove ${attachment.name}`}
+                    className="absolute right-0.5 top-0.5 rounded bg-background/90 p-0.5 opacity-0 shadow group-hover:opacity-100 focus:opacity-100"
+                    onClick={() =>
+                      setAttachments((current) =>
+                        current.filter((candidate) => candidate.id !== attachment.id),
+                      )
+                    }
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                  <span className="block max-w-16 truncate px-1 py-0.5 text-[9px]">
+                    {formatAttachmentBytes(attachment.bytes)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div
+            className="flex items-end gap-2"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void addAttachments(Array.from(event.dataTransfer.files));
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              className="hidden"
+              aria-label="Attach images"
+              onChange={(event) => {
+                void addAttachments(Array.from(event.target.files || []));
+                event.target.value = "";
+              }}
+            />
             <Button
               size="icon"
-              onClick={send}
-              disabled={!input.trim() || restoring || blockedByTask !== null}
-              title={
-                restoring
-                  ? "Restoring conversation"
-                  : blockedByTask
-                    ? "An active task must be monitored from Tasks"
-                    : "Send"
-              }
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={restoring || queueing}
+              title="Attach images"
             >
-              <ArrowUp className="h-4 w-4" />
+              <Paperclip className="h-4 w-4" />
             </Button>
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files);
+                if (files.length > 0) void addAttachments(files);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (busy) void queueFollowUp();
+                  else void send();
+                }
+              }}
+              placeholder={placeholder}
+              className="min-h-[44px] resize-none"
+              rows={1}
+            />
+            {busy ? (
+              <>
+                {input.trim() && taskIdRef.current && (
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    onClick={() => void queueFollowUp()}
+                    disabled={queueing}
+                    title="Queue follow-up"
+                  >
+                    {queueing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ListPlus className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
+                <Button size="icon" variant="destructive" onClick={stop} title="Stop">
+                  <Square className="h-4 w-4" />
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="icon"
+                onClick={send}
+                disabled={!input.trim() || restoring || blockedByTask !== null}
+                title={
+                  restoring
+                    ? "Restoring conversation"
+                    : blockedByTask
+                      ? "An active task must be monitored from Tasks"
+                      : "Send"
+                }
+              >
+                <ArrowUp className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+          {attachmentError && (
+            <p role="alert" className="mt-2 text-xs text-destructive">
+              {attachmentError}
+            </p>
           )}
         </div>
         {queuedCount > 0 && (
@@ -646,6 +794,27 @@ function Message({ m }: { m: Msg }) {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-2xl bg-primary px-4 py-2 text-primary-foreground">
+          {m.attachments.length > 0 && (
+            <div className="mb-2 grid grid-cols-2 gap-2">
+              {m.attachments.map((attachment, index) =>
+                attachment.dataUrl ? (
+                  <img
+                    key={`${attachment.name}-${index}`}
+                    src={attachment.dataUrl}
+                    alt={attachment.name}
+                    className="max-h-48 rounded object-contain"
+                  />
+                ) : (
+                  <div
+                    key={`${attachment.name}-${index}`}
+                    className="rounded border border-primary-foreground/20 px-2 py-1 text-xs"
+                  >
+                    {attachment.name} · {formatAttachmentBytes(attachment.bytes)}
+                  </div>
+                ),
+              )}
+            </div>
+          )}
           <p className="whitespace-pre-wrap break-words text-sm">{m.text}</p>
         </div>
       </div>

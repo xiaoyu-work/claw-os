@@ -872,6 +872,7 @@ routes! {
             ("max_turns", FieldRule::Count),
             ("model", FieldRule::Identifier),
             ("prompt", FieldRule::Size),
+            ("attachments", FieldRule::Size),
             ("workspace", FieldRule::Size),
         ],
         run: |c| tasks::submit(c.params, c.client).await.map_err(BrokerError::from),

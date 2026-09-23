@@ -181,7 +181,9 @@ rechecks the live revision independently of heartbeat renewal. Disabled,
 changed or newly introduced policies stop old attempts through normal
 cancellation and exact-child cleanup; admitted effects are not undone.
 
-Worker protocol v14 carries the broker-validated owner-home workspace used as
+Worker protocol v15 carries bounded broker-verified image attachments inline
+with the Job assignment; their bytes grant no path or device authority and are
+never accepted from worker-authored frames. Worker protocol v14 carries the broker-validated owner-home workspace used as
 the worker process context; it grants no filesystem capability. Worker
 protocol v13 adds a separately bounded monetary-budget exchange and an
 assignment hint; Root still derives the Activity, owner, pricing policy,

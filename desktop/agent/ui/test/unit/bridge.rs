@@ -40,27 +40,27 @@ fn old_health_fixture_without_echo_requires_restart() {
 #[test]
 fn future_bridge_negotiates_highest_client_overlap() {
     let state = decode_bridge_discovery(
-        br#"{"port":43123,"token":"0123456789abcdef0123456789abcdef","protocol_version":2,"min_protocol_version":1}"#,
+        br#"{"port":43123,"token":"0123456789abcdef0123456789abcdef","protocol_version":3,"min_protocol_version":2}"#,
     )
     .unwrap();
     let DiscoveryState::Ready(future) = state else {
-        panic!("future bridge with a v1 overlap must be usable");
+        panic!("future bridge with a v2 overlap must be usable");
     };
     assert_eq!(
         selected_protocol_version(&future).unwrap(),
-        ProtocolVersion(1)
+        ProtocolVersion(2)
     );
 
     let mut echoed = HeaderMap::new();
-    echoed.insert(PROTOCOL_VERSION_HEADER, "1".parse().unwrap());
-    assert!(validate_response_protocol_headers(&echoed, ProtocolVersion(1)).is_ok());
-    assert!(validate_response_protocol_headers(&echoed, ProtocolVersion(2)).is_err());
+    echoed.insert(PROTOCOL_VERSION_HEADER, "2".parse().unwrap());
+    assert!(validate_response_protocol_headers(&echoed, ProtocolVersion(2)).is_ok());
+    assert!(validate_response_protocol_headers(&echoed, ProtocolVersion(1)).is_err());
 }
 
 #[test]
 fn discovery_without_overlap_requires_upgrade() {
     let state = decode_bridge_discovery(
-        br#"{"port":43123,"token":"0123456789abcdef0123456789abcdef","protocol_version":3,"min_protocol_version":2}"#,
+        br#"{"port":43123,"token":"0123456789abcdef0123456789abcdef","protocol_version":1,"min_protocol_version":1}"#,
     )
     .unwrap();
     assert!(matches!(state, DiscoveryState::UpgradeRequired));
@@ -68,12 +68,12 @@ fn discovery_without_overlap_requires_upgrade() {
         service_action(&state, HealthStatus::NegotiationFailed),
         Some(ServiceAction::Restart)
     );
-    assert!(selected_protocol_version(&endpoint(2, 3)).is_err());
+    assert!(selected_protocol_version(&endpoint(1, 1)).is_err());
 }
 
 #[test]
 fn healthy_manual_bridge_is_left_running() {
-    let state = DiscoveryState::Ready(endpoint(1, 1));
+    let state = DiscoveryState::Ready(endpoint(2, 2));
     assert_eq!(service_action(&state, HealthStatus::Healthy), None);
     assert_eq!(
         service_action(&state, HealthStatus::Unavailable),
@@ -90,7 +90,7 @@ fn upgrade_restart_can_only_be_claimed_once() {
 
 #[test]
 fn activity_requests_authenticate_negotiate_and_escape_resource_identity() {
-    let endpoint = endpoint(1, 2);
+    let endpoint = endpoint(2, 2);
     let (request, selected) = activity_request(
         &endpoint,
         reqwest::Method::POST,
@@ -101,8 +101,8 @@ fn activity_requests_authenticate_negotiate_and_escape_resource_identity() {
         session_id: Some("session-1".into()),
         ..ActivityRunRequest::default()
     }).build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(selected, ProtocolVersion(2));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert_eq!(request.headers()["authorization"], format!("Bearer {TOKEN}"));
     assert_eq!(request.url().host_str(), Some("127.0.0.1"));
     assert_eq!(request.url().path_segments().unwrap().count(), 4);
@@ -115,7 +115,7 @@ fn activity_requests_authenticate_negotiate_and_escape_resource_identity() {
 
 #[test]
 fn activity_object_transport_uses_the_versioned_endpoint_and_typed_components() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let body = ActivityObjectAttachRequest {
         label: "Release status".into(),
         object: cos_agent_protocol::AppObjectReference {
@@ -131,8 +131,8 @@ fn activity_object_transport_uses_the_versioned_endpoint_and_typed_components() 
         &["activities", "activity-1", "objects"],
     ).unwrap();
     let request = request.json(&body).build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(selected, ProtocolVersion(2));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
     assert_eq!(request.url().path(), "/api/activities/activity-1/objects");
     let sent: ActivityObjectAttachRequest =
@@ -142,14 +142,14 @@ fn activity_object_transport_uses_the_versioned_endpoint_and_typed_components() 
 
 #[test]
 fn activity_continuity_transport_is_authenticated_versioned_and_owner_free() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let (export, selected) =
         continuity_export_request(&endpoint, "activity/id?not-query").unwrap();
     let export = export.build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     assert_eq!(export.method(), reqwest::Method::GET);
     assert!(export.headers().contains_key(reqwest::header::AUTHORIZATION));
-    assert_eq!(export.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(export.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert_eq!(export.url().path_segments().unwrap().count(), 5);
     assert!(export.url().path().ends_with("/continuity/export"));
     assert!(export.url().query().is_none());
@@ -184,7 +184,7 @@ fn activity_continuity_transport_is_authenticated_versioned_and_owner_free() {
     };
     let (import, selected) = continuity_import_request(&endpoint, &body).unwrap();
     let import = import.build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     assert_eq!(import.method(), reqwest::Method::POST);
     assert_eq!(import.url().path(), "/api/activities/continuity/import");
     assert!(import.url().query().is_none());
@@ -201,7 +201,7 @@ fn activity_continuity_transport_is_authenticated_versioned_and_owner_free() {
 
 #[test]
 fn activity_operation_preview_transport_is_authenticated_versioned_and_typed() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let body = ActivityOperationPreviewRequest {
         app_id: "kv".into(), operation: "get".into(),
         args: vec!["entry; $(not executed)".into()],
@@ -210,8 +210,8 @@ fn activity_operation_preview_transport_is_authenticated_versioned_and_typed() {
         &endpoint, reqwest::Method::POST, &["activities", "activity-1", "operation-preview"],
     ).unwrap();
     let request = request.json(&body).build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(selected, ProtocolVersion(2));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
     assert_eq!(request.url().path(), "/api/activities/activity-1/operation-preview");
     assert_eq!(request.method(), reqwest::Method::POST);
@@ -225,13 +225,13 @@ fn activity_operation_preview_transport_is_authenticated_versioned_and_typed() {
 
 #[test]
 fn activity_receipts_transport_is_authenticated_versioned_read_only_and_bounded() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let (request, selected) = activity_request(
         &endpoint, reqwest::Method::GET, &["activities", "activity-1", "receipts"],
     ).unwrap();
     let request = request.query(&ActivityReceiptsQuery { limit: Some(100) }).build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(selected, ProtocolVersion(2));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
     assert_eq!(request.method(), reqwest::Method::GET);
     assert_eq!(request.url().path(), "/api/activities/activity-1/receipts");
@@ -241,16 +241,16 @@ fn activity_receipts_transport_is_authenticated_versioned_read_only_and_bounded(
 
 #[test]
 fn activity_object_state_list_transport_preserves_exact_reference_and_bounds() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let reference = "app://kv/entry?id=a%2Fb%3Fx%3D1%26y%3D2&rev=v%2F1";
     let (request, selected) = object_state_list_request(
         &endpoint, "activity/id?not-query",
         &ActivityObjectStateQuery { reference: Some(reference.into()), limit: Some(100) },
     ).unwrap();
     let request = request.build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     assert_eq!(request.method(), reqwest::Method::GET);
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
     assert_eq!(request.url().path_segments().unwrap().count(), 4);
     assert!(request.url().path().ends_with("/object-state"));
@@ -269,7 +269,7 @@ fn activity_object_state_list_transport_preserves_exact_reference_and_bounds() {
 #[test]
 fn activity_object_state_record_transport_reuses_uuid_and_serializes_only_the_draft() {
     use cos_agent_protocol::{ObjectStateContent, ObjectStateDraft};
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let body = ActivityObjectStateRecordRequest {
         entry: ObjectStateDraft {
             id: "22222222-2222-4222-8222-222222222222".into(),
@@ -283,10 +283,10 @@ fn activity_object_state_record_transport_reuses_uuid_and_serializes_only_the_dr
     for _ in 0..2 {
         let (request, selected) = object_state_record_request(&endpoint, "activity", &body).unwrap();
         let request = request.build().unwrap();
-        assert_eq!(selected, ProtocolVersion(1));
+        assert_eq!(selected, ProtocolVersion(2));
         assert_eq!(request.method(), reqwest::Method::POST);
         assert_eq!(request.url().path(), "/api/activities/activity/object-state");
-        assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+        assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
         assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
         assert!(request.url().query().is_none());
         let bytes = request.body().unwrap().as_bytes().unwrap();
@@ -307,18 +307,18 @@ fn activity_object_state_record_transport_reuses_uuid_and_serializes_only_the_dr
 #[test]
 fn activity_execution_limits_transport_is_authenticated_versioned_and_keeps_activity_only_in_path() {
     use cos_agent_protocol::ExecutionLimitsDraft;
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let id = "activity/id?not-a-query";
     let (get, selected) = execution_limits_get_request(&endpoint, id).unwrap();
     let get = get.build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     assert_eq!(get.method(), reqwest::Method::GET);
     assert_eq!(get.url().path_segments().unwrap().count(), 4);
     assert!(get.url().path().ends_with("/execution-limits"));
     assert!(get.url().query().is_none());
     assert!(get.body().is_none());
     assert!(get.headers().contains_key(reqwest::header::AUTHORIZATION));
-    assert_eq!(get.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(get.headers()[PROTOCOL_VERSION_HEADER], "2");
 
     let body = ActivityExecutionLimitsSetRequest {
         expected_revision: None,
@@ -332,7 +332,7 @@ fn activity_execution_limits_transport_is_authenticated_versioned_and_keeps_acti
     let set = set.build().unwrap();
     assert_eq!(set.method(), reqwest::Method::POST);
     assert_eq!(set.url(), get.url());
-    assert_eq!(set.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(set.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(set.headers().contains_key(reqwest::header::AUTHORIZATION));
     let value: serde_json::Value =
         serde_json::from_slice(set.body().unwrap().as_bytes().unwrap()).unwrap();
@@ -347,7 +347,7 @@ fn activity_execution_limits_transport_is_authenticated_versioned_and_keeps_acti
 
 #[test]
 fn activity_execution_limits_toggle_transport_preserves_large_cas_and_has_no_reset_fields() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let body = ActivityExecutionLimitsEnabledRequest {
         expected_revision: u64::MAX - 1,
         enabled: false,
@@ -355,11 +355,11 @@ fn activity_execution_limits_toggle_transport_preserves_large_cas_and_has_no_res
     let (request, selected) =
         execution_limits_enabled_request(&endpoint, "activity", &body).unwrap();
     let request = request.build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     assert_eq!(request.method(), reqwest::Method::POST);
     assert_eq!(request.url().path(), "/api/activities/activity/execution-limits/enabled");
     assert!(request.url().query().is_none());
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
     let encoded = request.body().unwrap().as_bytes().unwrap();
     assert_eq!(
@@ -375,10 +375,10 @@ fn activity_execution_limits_toggle_transport_preserves_large_cas_and_has_no_res
 #[test]
 fn activity_monetary_budget_transport_is_authenticated_versioned_and_preserves_u64_cas() {
     use cos_agent_protocol::{MonetaryBudgetDraft, MonetaryCurrency};
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let id = "activity/id?not-a-query";
     let (get, selected) = monetary_budget_get_request(&endpoint, id).unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     let get = get.build().unwrap();
     assert_eq!(
         get.url().path(),
@@ -422,10 +422,10 @@ fn activity_monetary_budget_transport_is_authenticated_versioned_and_preserves_u
 
 #[test]
 fn activity_scheduling_priority_transport_is_authenticated_closed_and_preserves_u64_cas() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let id = "activity/id?not-a-query";
     let (get, selected) = scheduling_priority_get_request(&endpoint, id).unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     let get = get.build().unwrap();
     assert_eq!(
         get.url().path(),

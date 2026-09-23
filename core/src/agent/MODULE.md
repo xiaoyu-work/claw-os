@@ -44,6 +44,9 @@ surfaces.
 - Persist optional same-owner/conversation predecessor links. Queue admission
   skips dependent Jobs until the predecessor is terminal; missing or
   mismatched dependencies fail explicitly rather than running out of order.
+- Persist bounded, broker-verified image attachments as Job request data,
+  carry them over the worker protocol, and add them only to the current owner
+  message. Memory and task responses retain metadata rather than image bytes.
 - Treat file and directory fsync as mandatory queue barriers. Cross-bucket
   moves sync both directories, and recovery deduplicates resurrected records
   by conservative execution-phase dominance before any mutation.
@@ -77,6 +80,7 @@ surfaces.
 | `runtime/deps.rs` | Explicit hooks, clock, semantic indexer, and runtime path context |
 | `context/packet.rs`, `runtime/context.rs` | Budgeted labelled request data and exposure-gated pinned memory |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
+| `attachments.rs` | Shared image count/size/base64/MIME/magic validation and persisted metadata |
 | `runtime/monetary_budget.rs` | Injected Activity turn reservation/settlement contract and request-byte upper bound |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `service.rs`, `../activities/scheduling_policy.rs` | Shared pending admission ordering from current owner Activity policy, with 30-minute bounded aging and standalone FIFO compatibility |

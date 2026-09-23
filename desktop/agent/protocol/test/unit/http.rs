@@ -14,6 +14,31 @@ fn chat_request_preserves_v0_prompt_wire_shape() {
 }
 
 #[test]
+fn chat_image_attachments_are_bounded_and_self_validating() {
+    let attachment =
+        ChatAttachment::from_bytes("screen.png".to_string(), b"\x89PNG\r\n\x1a\nfixture").unwrap();
+    validate_chat_attachments(std::slice::from_ref(&attachment)).unwrap();
+    assert_eq!(attachment.media_type, "image/png");
+    assert!(attachment.decoded_len().unwrap() > 0);
+
+    let mut mismatched = attachment;
+    mismatched.media_type = "image/jpeg".to_string();
+    assert!(validate_chat_attachments(&[mismatched]).is_err());
+    assert!(
+        validate_chat_attachments(
+            &(0..=MAX_CHAT_ATTACHMENTS)
+                .map(|_| ChatAttachment::from_bytes(
+                    "screen.png".to_string(),
+                    b"\x89PNG\r\n\x1a\nfixture",
+                )
+                .unwrap())
+                .collect::<Vec<_>>()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn legacy_messages_request_resolves_latest_user_prompt() {
     let request: ChatRequest = serde_json::from_str(
         r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"latest"}]}"#,
@@ -24,13 +49,11 @@ fn legacy_messages_request_resolves_latest_user_prompt() {
 
 #[test]
 fn response_defaults_accept_older_payloads() {
-    let session: SessionSummary =
-        serde_json::from_str(r#"{"id":"s","title":"Title"}"#).unwrap();
+    let session: SessionSummary = serde_json::from_str(r#"{"id":"s","title":"Title"}"#).unwrap();
     assert_eq!(session.message_count, 0);
-    let voice: VoiceResponse = serde_json::from_str(
-        r#"{"text":"hello","bytes_received":4,"mime_type":"audio/wav"}"#,
-    )
-    .unwrap();
+    let voice: VoiceResponse =
+        serde_json::from_str(r#"{"text":"hello","bytes_received":4,"mime_type":"audio/wav"}"#)
+            .unwrap();
     assert!(!voice.placeholder);
     assert_eq!(
         serde_json::from_value::<VoiceResponse>(serde_json::to_value(&voice).unwrap()).unwrap(),
@@ -118,11 +141,11 @@ fn discovery_metadata_has_a_golden_shape_and_valid_range() {
     assert!(endpoint.has_valid_version_range());
     assert_eq!(
         endpoint.negotiate(ProtocolMetadata::CURRENT),
-        Some(ProtocolVersion(1))
+        Some(ProtocolVersion(2))
     );
     assert_eq!(
         serde_json::to_string(&endpoint).unwrap(),
-        r#"{"port":43123,"token":"token","protocol_version":1,"min_protocol_version":1}"#
+        r#"{"port":43123,"token":"token","protocol_version":2,"min_protocol_version":2}"#
     );
     assert!(
         serde_json::from_str::<BridgeEndpoint>(
@@ -134,8 +157,8 @@ fn discovery_metadata_has_a_golden_shape_and_valid_range() {
 
 #[test]
 fn stable_error_envelope_has_golden_shape() {
-    let error = ErrorEnvelope::new(ErrorCode::InvalidRequest, "bad request")
-        .with_hint("Fix the payload.");
+    let error =
+        ErrorEnvelope::new(ErrorCode::InvalidRequest, "bad request").with_hint("Fix the payload.");
     assert_eq!(
         serde_json::to_string(&error).unwrap(),
         r#"{"error":"bad request","code":"invalid_request","hint":"Fix the payload."}"#

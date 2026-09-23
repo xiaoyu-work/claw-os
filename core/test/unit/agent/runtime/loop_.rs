@@ -5,6 +5,7 @@ use crate::agent::memory::sqlite_fts::MessageRow;
 use crate::agent::tools::registry::{
     builtin_only_registry, default_registry_with_deps, ToolRegistry,
 };
+use base64::Engine;
 
 fn row(role: &str, content: &str) -> MessageRow {
     MessageRow {
@@ -872,6 +873,62 @@ async fn runtime_records_the_explicit_task_identity() {
         )
         .unwrap();
     assert_eq!(rows, (2, 1, 1));
+}
+
+#[tokio::test]
+async fn runtime_sends_verified_images_and_records_only_attachment_metadata() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let cfg = cfg();
+    let tools = builtin_only_registry();
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text("image answer".into()));
+    let provider: Arc<dyn Provider> = mock.clone();
+    let attachments =
+        crate::agent::attachments::normalize(vec![crate::agent::attachments::AttachmentInput {
+            name: "screen.png".to_string(),
+            media_type: "image/png".to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture"),
+        }])
+        .unwrap();
+    let deps = RuntimeDeps::compatibility(true);
+
+    run_with_deps(
+        &deps,
+        RuntimeRequest::buffered(provider, &cfg, "Inspect this image", &tools)
+            .with_attachments(&attachments)
+            .with_memory(&db, "image-session")
+            .with_task_id("image-job"),
+    )
+    .await
+    .unwrap();
+
+    let request = mock.last_request().expect("provider request");
+    let images = request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            ContentBlock::Image { media_type, data } => Some((media_type, data)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        images,
+        vec![(&attachments[0].media_type, &attachments[0].data)]
+    );
+
+    let recorded = db
+        .recent("image-session", 10)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.role == "user")
+        .expect("recorded user prompt")
+        .content;
+    assert!(recorded.contains("Inspect this image"));
+    assert!(recorded.contains("image/png"));
+    assert!(recorded.contains(&attachments[0].sha256));
+    assert!(!recorded.contains("screen.png"));
+    assert!(!recorded.contains(&attachments[0].data));
 }
 
 fn cfg() -> AgentConfig {

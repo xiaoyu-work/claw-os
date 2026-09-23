@@ -1212,6 +1212,7 @@ async fn pump(
         job: JobSpec {
             id: job.id.clone(),
             prompt: execution_prompt(job),
+            attachments: job.attachments.clone(),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),

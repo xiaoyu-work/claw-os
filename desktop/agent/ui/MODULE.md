@@ -9,7 +9,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 
 | Module | Ownership |
 | --- | --- |
-| `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
+| `src/main.rs` | Application assembly, top-level message routing, subscriptions, startup, and bounded image selection |
 | `src/activities.rs` | Activity list/detail and shared attention widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/activities/continuity.rs` | Exact bounded continuity-v1 export/import presentation, broker-revalidated copy, paste validation and explicit local-placement confirmation; no filesystem, persistence, sync, authority or proof restoration |
 | `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
@@ -22,7 +22,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/effects.rs` | Async bridge, history, stream, and cancellation effects that emit typed UI messages |
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
 | `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
-| `src/views.rs` | Read-only widget composition that emits `Message` values |
+| `src/views.rs` | Read-only widget composition, including selected-image metadata, that emits `Message` values |
 | `src/styles.rs` | Presentation styles |
 | `src/bridge.rs`, `src/sse.rs`, `src/recorder.rs` | Protocol transport, SSE decoding, and audio capture/upload adapters |
 
@@ -198,6 +198,12 @@ visible.
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
 read composed application state and emit messages, but transport orchestration
 belongs to `src/effects.rs` and lifecycle owners.
+
+Image selection reads one explicit file into the bounded protocol-v2
+`ChatAttachment`; the shared protocol checks magic/MIME and aggregate limits.
+The bridge and core broker revalidate it. Selected paths are never sent, shown
+as prompt instructions or treated as authority, and accepted attachments are
+cleared only after the durable task identity is observed.
 
 The broker client also serves the separate
 [OS system-review presenter](../../../crates/clawd-client/MODULE.md).

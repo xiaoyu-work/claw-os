@@ -680,15 +680,39 @@ impl App {
             .push(action)
             .spacing(spacing.space_xs)
             .align_y(Alignment::Center);
-        container(
-            Column::new()
-                .push(editor)
-                .push(bottom)
-                .spacing(spacing.space_xs),
-        )
-        .padding(spacing.space_s)
-        .class(theme::Container::custom(styles::input_card))
-        .into()
+        let mut content = Column::new().spacing(spacing.space_xs);
+        if !self.attachments.is_empty() {
+            let names = self
+                .attachments
+                .iter()
+                .map(|attachment| attachment.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            content = content.push(
+                Row::new()
+                    .push(
+                        text(format!(
+                            "{} ({}): {names}",
+                            fl!("attached-images"),
+                            self.attachments.len()
+                        ))
+                        .size(11.0),
+                    )
+                    .push(widget::space::horizontal())
+                    .push(Self::symbolic_button(
+                        "edit-clear-symbolic",
+                        fl!("clear-attachments"),
+                        Some(Message::ClearAttachments),
+                        false,
+                    ))
+                    .align_y(Alignment::Center),
+            );
+        }
+        content = content.push(editor).push(bottom);
+        container(content)
+            .padding(spacing.space_s)
+            .class(theme::Container::custom(styles::input_card))
+            .into()
     }
 
     fn connection_status(&self) -> Element<'_, Message> {

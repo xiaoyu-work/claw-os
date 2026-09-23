@@ -12,6 +12,7 @@ use crate::agent::web::routes;
 use crate::agent::web::state::AppState;
 
 const CONTINUITY_IMPORT_MAX_HTTP_BYTES: usize = 256 * 1024;
+const CHAT_MAX_HTTP_BYTES: usize = 1024 * 1024;
 
 pub fn build_app(state: AppState) -> Router {
     let cors = CorsLayer::new()
@@ -31,7 +32,10 @@ pub fn build_app(state: AppState) -> Router {
         // JSON API.
         .route("/api/auth/token", post(routes::auth::token))
         .route("/api/meta", get(routes::meta::handler))
-        .route("/api/chat", post(routes::chat::handler))
+        .route(
+            "/api/chat",
+            post(routes::chat::handler).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),
+        )
         .route(
             "/api/activities",
             get(routes::activities::list).post(routes::activities::create),
@@ -120,7 +124,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks", get(routes::tasks::list))
         .route("/api/tasks/{id}", get(routes::tasks::show))
         .route("/api/tasks/{id}/stream", post(routes::chat::attach))
-        .route("/api/tasks/{id}/follow-up", post(routes::tasks::follow_up))
+        .route(
+            "/api/tasks/{id}/follow-up",
+            post(routes::tasks::follow_up).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),
+        )
         .route("/api/tasks/{id}/stop", post(routes::tasks::stop))
         .route("/api/tasks/{id}/resume", post(routes::tasks::resume))
         .route("/api/approvals/pending", get(routes::approvals::pending))

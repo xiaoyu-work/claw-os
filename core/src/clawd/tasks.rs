@@ -36,6 +36,14 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
     }
     let prompt = required_string(&params, "prompt")?;
+    let attachment_inputs = params
+        .get("attachments")
+        .cloned()
+        .map(serde_json::from_value::<Vec<crate::agent::attachments::AttachmentInput>>)
+        .transpose()
+        .map_err(|error| format!("invalid image attachments: {error}"))?
+        .unwrap_or_default();
+    let attachments = crate::agent::attachments::normalize(attachment_inputs)?;
     let requested_model = params
         .get("model")
         .and_then(Value::as_str)
@@ -130,6 +138,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         session_client,
     );
     job.use_memory = use_memory;
+    job.attachments = attachments;
     job.activity_id = activity_id;
     job.requested_model = requested_model;
     job.workspace = Some(workspace.to_string_lossy().into_owned());
@@ -565,6 +574,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         session_client,
     );
     retried.use_memory = original.use_memory;
+    retried.attachments = original.attachments;
     retried.activity_id = activity_id;
     retried.requested_model = requested_model;
     retried.workspace = original.workspace;
@@ -741,12 +751,31 @@ mod tests {
 }
 
 fn job_value(job: Job) -> Value {
-    serde_json::to_value(job).unwrap_or_else(|err| {
-        json!({
-            "status": "error",
-            "error": format!("failed to serialize job: {err}"),
+    let attachment_summaries = job
+        .attachments
+        .iter()
+        .map(|attachment| {
+            json!({
+                "name": attachment.name,
+                "media_type": attachment.media_type,
+                "bytes": attachment.bytes,
+                "sha256": attachment.sha256,
+            })
         })
-    })
+        .collect::<Vec<_>>();
+    let mut value = match serde_json::to_value(job) {
+        Ok(value) => value,
+        Err(err) => {
+            return json!({
+                "status": "error",
+                "error": format!("failed to serialize job: {err}"),
+            })
+        }
+    };
+    if !attachment_summaries.is_empty() {
+        value["attachments"] = json!(attachment_summaries);
+    }
+    value
 }
 
 fn task_summary_value(job: &Value) -> Value {

@@ -34,7 +34,8 @@ mod views;
 mod voice;
 
 use crate::bridge::{
-    BridgeEndpoint, ChatRequest, HistoryMessage, ModelsResponse, SessionSummary, StreamEvent,
+    BridgeEndpoint, ChatAttachment, ChatRequest, HistoryMessage, MAX_CHAT_ATTACHMENT_BYTES,
+    ModelsResponse, SessionSummary, StreamEvent, validate_chat_attachments,
 };
 use crate::bridge_state::BridgeState;
 use crate::overlay::{OverlayActivation, OverlayState};
@@ -78,7 +79,8 @@ pub enum Message {
     RetryMessage(usize),
     CopyAssistant(usize),
     AttachFile,
-    FileAttached(Result<Option<std::path::PathBuf>, String>),
+    FileAttached(Result<Option<ChatAttachment>, String>),
+    ClearAttachments,
     Stream(u64, StreamEvent),
     TransportError(u64, String),
     StreamEnded(u64),
@@ -125,6 +127,7 @@ pub struct App {
     sessions: SessionState,
     stream: StreamState,
     input: text_editor::Content,
+    attachments: Vec<ChatAttachment>,
     error: Option<String>,
     voice: VoiceState,
 }
@@ -159,6 +162,7 @@ impl Application for App {
             sessions: SessionState::default(),
             stream: StreamState::default(),
             input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
+            attachments: Vec::new(),
             error: None,
             voice: VoiceState::default(),
         };
@@ -257,11 +261,31 @@ impl Application for App {
                         let dialog = cosmic::dialog::file_chooser::open::Dialog::new()
                             .title(fl!("attach-file"));
                         match dialog.open_file().await {
-                            Ok(response) => response
-                                .url()
-                                .to_file_path()
-                                .map(Some)
-                                .map_err(|_| fl!("attachment-error")),
+                            Ok(response) => {
+                                let path = response
+                                    .url()
+                                    .to_file_path()
+                                    .map_err(|_| fl!("attachment-error"))?;
+                                let metadata = tokio::fs::metadata(&path)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                if metadata.len() == 0
+                                    || metadata.len() > MAX_CHAT_ATTACHMENT_BYTES as u64
+                                {
+                                    return Err(fl!("attachment-error"));
+                                }
+                                let name = path
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    .ok_or_else(|| fl!("attachment-error"))?
+                                    .to_string();
+                                let bytes = tokio::fs::read(&path)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                                ChatAttachment::from_bytes(name, &bytes)
+                                    .map(Some)
+                                    .map_err(str::to_string)
+                            }
                             Err(cosmic::dialog::file_chooser::Error::Cancelled) => Ok(None),
                             Err(error) => Err(error.to_string()),
                         }
@@ -269,17 +293,17 @@ impl Application for App {
                     |result| cosmic::Action::App(Message::FileAttached(result)),
                 )
             }
-            Message::FileAttached(Ok(Some(path))) => {
+            Message::FileAttached(Ok(Some(attachment))) => {
                 self.overlay.set_file_picker_open(false);
-                let path = path.display().to_string();
-                let marker = format!("[{}: {path}]", fl!("attached-file-label"));
-                let existing = self.input.text();
-                let prompt = if existing.trim().is_empty() {
-                    marker
-                } else {
-                    format!("{existing}\n{marker}")
-                };
-                self.input = text_editor::Content::with_text(&prompt);
+                let mut attachments = self.attachments.clone();
+                attachments.push(attachment);
+                match validate_chat_attachments(&attachments) {
+                    Ok(()) => {
+                        self.attachments = attachments;
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error.to_string()),
+                }
                 focus_editor()
             }
             Message::FileAttached(Ok(None)) => {
@@ -290,6 +314,11 @@ impl Application for App {
                 self.overlay.set_file_picker_open(false);
                 self.error = Some(format!("{}: {error}", fl!("attachment-error")));
                 Task::none()
+            }
+            Message::ClearAttachments => {
+                self.attachments.clear();
+                self.error = None;
+                focus_editor()
             }
             Message::Stream(generation, event) => self.handle_stream_event(generation, event),
             Message::TransportError(generation, error) => {
@@ -403,6 +432,7 @@ impl Application for App {
                     return Task::none();
                 }
                 self.activities.hide();
+                self.attachments.clear();
                 self.error = None;
                 Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
             }
@@ -413,6 +443,7 @@ impl Application for App {
                 self.activities.hide();
                 self.sessions.new_session();
                 self.input = text_editor::Content::new();
+                self.attachments.clear();
                 self.error = None;
                 Task::batch([focus_editor(), scroll_to_bottom()])
             }
@@ -749,6 +780,7 @@ impl App {
             .begin_stream_context(one_shot_context.is_some());
         let request = ChatRequest {
             prompt: Some(prompt),
+            attachments: self.attachments.clone(),
             session_id: stream_session.remote_id,
             model: None,
             context: one_shot_context,
@@ -765,6 +797,7 @@ impl App {
         let task_started = matches!(event, StreamEvent::TaskStarted(_));
         let reduction = self.stream.reduce(generation, event, &mut self.sessions);
         if task_started && !matches!(reduction, StreamReduction::Stale) {
+            self.attachments.clear();
             self.overlay.consume_stream_context();
         }
         match reduction {

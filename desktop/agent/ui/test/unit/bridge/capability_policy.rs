@@ -5,18 +5,18 @@ use cos_agent_protocol::{
 
 #[test]
 fn capability_policy_transport_keeps_identity_in_url_and_cas_in_typed_body() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let id = "activity/id?not-query";
     let (request, selected) = capability_policy_get_request(&endpoint, id).unwrap();
     let get = request.build().unwrap();
-    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(selected, ProtocolVersion(2));
     assert_eq!(get.method(), reqwest::Method::GET);
     assert_eq!(get.url().path_segments().unwrap().count(), 4);
     assert!(get.url().path().ends_with("/capability-policy"));
     assert!(get.url().query().is_none());
     assert!(get.body().is_none());
     assert!(get.headers().contains_key(reqwest::header::AUTHORIZATION));
-    assert_eq!(get.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(get.headers()[PROTOCOL_VERSION_HEADER], "2");
     let body = ActivityCapabilityPolicySetRequest {
         expected_revision: None,
         policy: CapabilityPolicyDraft {
@@ -53,7 +53,7 @@ fn capability_policy_transport_keeps_identity_in_url_and_cas_in_typed_body() {
 
 #[test]
 fn capability_policy_transport_preserves_u64_revision_and_explicit_scope_types() {
-    let endpoint = endpoint(1, 1);
+    let endpoint = endpoint(2, 2);
     let body = ActivityCapabilityPolicyEnabledRequest {
         expected_revision: u64::MAX - 1,
         enabled: false,
@@ -65,7 +65,7 @@ fn capability_policy_transport_preserves_u64_revision_and_explicit_scope_types()
         "/api/activities/activity/capability-policy/enabled"
     );
     assert_eq!(request.method(), reqwest::Method::POST);
-    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "2");
     assert!(
         request
             .headers()

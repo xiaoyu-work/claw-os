@@ -19,6 +19,7 @@ use axum::{
 };
 use cos_agent_protocol::{
     CancelResponse, ChatRequest, DeltaPayload, ErrorCode, StreamError, StreamEvent,
+    validate_chat_attachments,
 };
 use futures::stream::Stream;
 use serde_json::{Value, json};
@@ -89,6 +90,36 @@ fn protocol_event(event: StreamEvent) -> Event {
     Event::default().event(name).data(data)
 }
 
+fn task_submit_params(
+    request: &ChatRequest,
+    prompt: &str,
+    session_id: Option<&str>,
+) -> Result<Value, String> {
+    let mut params = json!({ "prompt": prompt });
+    if !request.attachments.is_empty() {
+        params["attachments"] = serde_json::to_value(&request.attachments)
+            .map_err(|error| format!("encoding image attachments: {error}"))?;
+    }
+    if let Some(context) = request
+        .context
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        params["context"] = Value::from(context.trim().to_string());
+    }
+    if let Some(context) = request
+        .branch_context
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        params["branch_context"] = Value::from(context.trim().to_string());
+    }
+    if let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) {
+        params["session_id"] = Value::from(session_id.to_string());
+    }
+    Ok(params)
+}
+
 pub async fn stream_chat(
     State(state): State<AppState>,
     request: Result<Json<ChatRequest>, JsonRejection>,
@@ -100,29 +131,28 @@ pub async fn stream_chat(
             "invalid chat request",
         )
     })?;
+    validate_chat_attachments(&req.attachments).map_err(|error| {
+        ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            error,
+        )
+    })?;
     let prompt = req.resolved_prompt();
     let session_id = req.session_id.clone();
+    let params = task_submit_params(&req, &prompt, session_id.as_deref()).map_err(|error| {
+        ApiError::new(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::Internal,
+            error,
+        )
+    })?;
     let clawd = state.clawd.clone();
 
     let stream = async_stream::stream! {
         if prompt.trim().is_empty() {
             yield Ok::<_, Infallible>(error_event("empty prompt"));
             return;
-        }
-
-        let mut params = json!({ "prompt": prompt });
-        if let Some(context) = req.context.as_ref().filter(|value| !value.trim().is_empty()) {
-            params["context"] = Value::from(context.trim().to_string());
-        }
-        if let Some(context) = req
-            .branch_context
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            params["branch_context"] = Value::from(context.trim().to_string());
-        }
-        if let Some(session_id) = session_id.as_ref().filter(|value| !value.trim().is_empty()) {
-            params["session_id"] = Value::from(session_id.clone());
         }
 
         let submitted = match clawd.call(Command::TaskSubmit, params).await {

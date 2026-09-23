@@ -1,6 +1,7 @@
 use super::*;
 use crate::activities::{Activity, ActivityService, ActivityState};
 use crate::test_env::{lock_env, TestEnvVarGuard};
+use base64::Engine;
 
 fn activity_task_root() -> tempfile::TempDir {
     tempfile::Builder::new()
@@ -70,6 +71,54 @@ fn task_list_summary_omits_heavy_and_private_fields() {
             "{hidden} leaked into summary"
         );
     }
+}
+
+#[tokio::test]
+async fn image_attachments_are_verified_persisted_retried_and_redacted_from_results() {
+    let owner_uid = unsafe { libc::geteuid() } as u32;
+    if owner_uid == 0 {
+        return;
+    }
+    let _lock = lock_env();
+    let root = activity_task_root();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());
+    let client = activity_task_client(owner_uid);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture");
+    let submitted = submit(
+        json!({
+            "prompt": "inspect the screenshot",
+            "attachments": [{
+                "name": "screen.png",
+                "media_type": "image/png",
+                "data": encoded,
+            }],
+        }),
+        &client,
+    )
+    .await
+    .unwrap();
+    assert_eq!(submitted["attachments"][0]["name"], "screen.png");
+    assert!(submitted["attachments"][0].get("data").is_none());
+
+    let store = Store::open_default().unwrap();
+    let id = submitted["id"].as_str().unwrap();
+    let (_, stored) = store
+        .locate_for_owner(id, Some(owner_uid))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.attachments.len(), 1);
+    assert_eq!(stored.attachments[0].data, encoded);
+    let digest = stored.attachments[0].sha256.clone();
+    store.cancel_pending(id).unwrap().unwrap();
+
+    let retried = retry(json!({ "id": id }), &client).unwrap();
+    let (_, stored_retry) = store
+        .locate_for_owner(retried["id"].as_str().unwrap(), Some(owner_uid))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored_retry.attachments[0].sha256, digest);
+    assert_eq!(retried["attachments"][0]["sha256"], digest);
+    assert!(retried["attachments"][0].get("data").is_none());
 }
 
 #[tokio::test]

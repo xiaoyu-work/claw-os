@@ -77,6 +77,7 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
         job: protocol::JobSpec {
             id: "task-a".to_string(),
             prompt: "test".to_string(),
+            attachments: Vec::new(),
             context: None,
             branch_context: None,
             session_id: None,

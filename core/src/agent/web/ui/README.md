@@ -42,10 +42,12 @@ build below and integrate regenerated distribution files deliberately.
 - src/pages/            — Activities, durable chat/tasks, approvals, notification Inbox, raw system events, settings
 - src/app/globals.css   — OA's oklch tokens (light + dark + sidebar)
 
-Chat, Tasks, approvals, and Inbox use owner-scoped `clawd` routes. Session
-history is read by the user-owned Web process from the same owner partition
-the worker writes. Approval decisions invoke the installed polkit helper; the
-Web process never gains direct permission-decision authority.
+Chat, conversations, Tasks, approvals, and Inbox use owner-scoped `clawd`
+routes. Selected PNG/JPEG/GIF/WebP images stay in composer memory until the
+authenticated Chat request submits the bounded inline Job snapshot; no browser
+attachment store or path authority exists. Approval decisions invoke the
+installed polkit helper; the Web process never gains direct
+permission-decision authority.
 
 ## Activities
 

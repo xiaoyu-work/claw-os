@@ -24,8 +24,9 @@ pub use cos_agent_protocol::{
     ActivitySchedulingPriority, ActivitySchedulingPriorityResponse,
     ActivitySchedulingPrioritySetRequest, ActivityState, ActivityTransitionRequest,
     ActivityUpdateRequest, ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse,
-    ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse, ObjectStateEntry, SessionSummary,
-    StreamEvent, ToolCallView, ToolResultView,
+    ChatAttachment, ChatRequest, ErrorEnvelope, HistoryMessage, MAX_CHAT_ATTACHMENT_BYTES,
+    ModelsResponse, ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
+    validate_chat_attachments,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;

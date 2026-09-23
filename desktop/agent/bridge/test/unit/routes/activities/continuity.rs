@@ -65,7 +65,10 @@ async fn request(method: Method, path: &str, body: Body) -> axum::response::Resp
             Request::builder()
                 .method(method)
                 .uri(path)
-                .header(PROTOCOL_VERSION_HEADER, "1")
+                .header(
+                    PROTOCOL_VERSION_HEADER,
+                    cos_agent_protocol::CURRENT_PROTOCOL_VERSION_HEADER_VALUE,
+                )
                 .header("authorization", format!("Bearer {TOKEN}"))
                 .header("content-type", "application/json")
                 .body(body)
@@ -89,7 +92,10 @@ async fn continuity_routes_require_authentication_and_protocol_version() {
                 Request::builder()
                     .method(method.clone())
                     .uri(&path)
-                    .header(PROTOCOL_VERSION_HEADER, "1")
+                    .header(
+                        PROTOCOL_VERSION_HEADER,
+                        cos_agent_protocol::CURRENT_PROTOCOL_VERSION_HEADER_VALUE,
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )

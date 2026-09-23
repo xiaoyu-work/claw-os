@@ -30,6 +30,8 @@ web UI.
   reload, using verified conversation task bindings to avoid replay duplicates.
 - Queue busy-time Chat follow-ups as ordinary durable Jobs linked by
   `after_task_id`; browser component state is never the queue authority.
+- Accept bounded image selection, paste and drop, then submit the same
+  broker-verified Job attachment contract used by native Desktop.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
 - Reuse frozen session prompts and configured history compression through the
@@ -82,6 +84,10 @@ Busy-time follow-ups derive the canonical conversation from an owner-checked
 predecessor Job, persist through `task.submit.after_task_id`, and chain each
 later follow-up after the previously returned Job. Chat then discovers and
 attaches the next runnable Job through the same conversation projection.
+The browser keeps selected image bytes only in composer state and the
+authenticated request. `task.submit` remains the validation/persistence
+authority; Web creates no attachment filesystem, path authority or long-lived
+copy. Owner-scoped task responses disclose attachment metadata only.
 Activity adapters retain Main's authenticated owner transport and local/remote
 Web session provenance. Task submission, safe retry, App-service admission and
 protected owner App review remain backend responsibilities. The existing

@@ -377,6 +377,13 @@ async function fixture(req, res) {
     assert.equal(req.method, "POST");
     assert.equal(body.prompt, "Show live presentation");
     assert.equal(body.session_id, undefined);
+    assert.equal(body.attachments.length, 1);
+    assert.equal(body.attachments[0].name, "screen.png");
+    assert.equal(body.attachments[0].media_type, "image/png");
+    assert.deepEqual(
+      Buffer.from(body.attachments[0].data, "base64"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]),
+    );
     conversations.set("chat-browser", {
       id: "chat-browser",
       presentation_id: "33333333-3333-8333-8333-333333333333",
@@ -1301,12 +1308,23 @@ try {
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/chat` });
   await wait("!!document.querySelector('textarea')", "authenticated chat composer");
   await evaluate(`(() => {
+    const input = document.querySelector('[aria-label="Attach images"]');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    ], 'screen.png', {type: 'image/png'}));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', {bubbles: true}));
+  })()`);
+  await wait("!!document.querySelector('[aria-label=\"Attached images\"] img[alt=\"screen.png\"]')", "attached image preview");
+  await evaluate(`(() => {
     const input = document.querySelector('textarea');
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Show live presentation');
     input.dispatchEvent(new Event('input', {bubbles: true}));
   })()`);
   await click(`document.querySelector('button[title="Send"]')`);
   await wait("document.body.innerText.includes('Presentation complete.')", "streamed assistant response");
+  assert.equal(await evaluate("document.querySelectorAll('img[alt=\"screen.png\"]').length"), 1);
   await wait("document.body.innerText.includes('12 in') && document.body.innerText.includes('7 out') && document.body.innerText.includes('5 cache read')", "provider usage presentation");
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Compared the available Agent context.')", "reasoning summary presentation");

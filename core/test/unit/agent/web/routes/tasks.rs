@@ -11,6 +11,7 @@ fn follow_up_uses_only_the_owner_checked_predecessor_conversation() {
         }),
         FollowUpRequest {
             prompt: "Refine the answer".to_string(),
+            attachments: Vec::new(),
             use_memory: true,
         },
     )
@@ -39,6 +40,7 @@ fn follow_up_body_and_predecessor_shape_are_closed() {
         &json!({ "id": "job-predecessor" }),
         FollowUpRequest {
             prompt: "Refine".to_string(),
+            attachments: Vec::new(),
             use_memory: true,
         },
     )

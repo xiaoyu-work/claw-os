@@ -16,7 +16,7 @@ use std::time::Duration;
 use crate::agent::context::compressor::{self, Compressor, CompressorConfig, LlmCompressor};
 use crate::agent::context::think_scrub::ThinkScrubber;
 use crate::agent::llm::accumulate::StreamSink;
-use crate::agent::llm::{self, Message, Provider};
+use crate::agent::llm::{self, ContentBlock, Message, Provider};
 use crate::agent::memory::compaction::{BeginCompaction, CompactionSummary, NewCompaction};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
@@ -145,6 +145,7 @@ pub struct RuntimeRequest<'a> {
     provider: Arc<dyn Provider>,
     cfg: &'a AgentConfig,
     user_prompt: &'a str,
+    attachments: &'a [crate::agent::attachments::ImageAttachment],
     tools: &'a ToolRegistry,
     exposure: Option<&'a ToolExposureContext>,
     recorder: Option<(&'a MemoryDb, &'a str)>,
@@ -170,6 +171,7 @@ impl<'a> RuntimeRequest<'a> {
             provider,
             cfg,
             user_prompt,
+            attachments: &[],
             tools,
             exposure: None,
             recorder: None,
@@ -205,6 +207,14 @@ impl<'a> RuntimeRequest<'a> {
 
     pub fn with_memory(mut self, db: &'a MemoryDb, session_id: &'a str) -> Self {
         self.recorder = Some((db, session_id));
+        self
+    }
+
+    pub fn with_attachments(
+        mut self,
+        attachments: &'a [crate::agent::attachments::ImageAttachment],
+    ) -> Self {
+        self.attachments = attachments;
         self
     }
 
@@ -280,6 +290,7 @@ pub async fn run_with_deps(
         provider: request.provider,
         cfg: request.cfg,
         user_prompt: request.user_prompt,
+        attachments: request.attachments,
         tools: request.tools,
         exposure: request.exposure,
         recorder: request.recorder,
@@ -312,6 +323,7 @@ pub async fn ask_with(
         provider,
         cfg,
         user_prompt,
+        attachments: &[],
         tools,
         exposure: None,
         recorder: None,
@@ -345,6 +357,7 @@ pub async fn ask_with_memory(
         provider,
         cfg,
         user_prompt,
+        attachments: &[],
         tools,
         exposure: None,
         recorder: Some((db, session_id)),
@@ -381,6 +394,7 @@ pub async fn ask_with_memory_continuation(
         provider,
         cfg,
         user_prompt,
+        attachments: &[],
         tools,
         exposure: None,
         recorder: Some((db, session_id)),
@@ -415,6 +429,7 @@ pub async fn ask_with_compressor(
         provider,
         cfg,
         user_prompt,
+        attachments: &[],
         tools,
         exposure: None,
         recorder: db,
@@ -1955,6 +1970,7 @@ struct LifecycleRequest<'a> {
     provider: Arc<dyn Provider>,
     cfg: &'a AgentConfig,
     user_prompt: &'a str,
+    attachments: &'a [crate::agent::attachments::ImageAttachment],
     tools: &'a ToolRegistry,
     exposure: Option<&'a ToolExposureContext>,
     recorder: Option<(&'a MemoryDb, &'a str)>,
@@ -1985,6 +2001,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         provider,
         cfg,
         user_prompt,
+        attachments,
         tools,
         exposure,
         recorder,
@@ -2040,10 +2057,11 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     let mut user_origin = MessageOrigin::Ephemeral;
     let mut recorded_task_turn = None;
     if let Some((db, sid)) = recorder {
+        let record = crate::agent::attachments::recorded_prompt(user_prompt, attachments);
         let to_record = redactor
             .as_ref()
-            .map(|r| r.redact(user_prompt))
-            .unwrap_or_else(|| user_prompt.to_string());
+            .map(|r| r.redact(&record))
+            .unwrap_or(record);
         let segment = trust::LabeledSegment::of(trust::SourceKind::UserMessage, "");
         let recorded = match task_id {
             Some(task_id) => db
@@ -2125,11 +2143,22 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         mut messages,
         mut origins,
     } = initial_messages;
-    let request_messages = projection.request_messages(trust::envelope::process_seal());
+    let mut request_messages = projection.request_messages(trust::envelope::process_seal());
     let instruction_offset = projection
         .instruction_segment()
         .is_some()
         .then(|| request_messages.len().saturating_sub(1));
+    if !attachments.is_empty() {
+        let instruction = instruction_offset
+            .and_then(|offset| request_messages.get_mut(offset))
+            .ok_or_else(|| AgentError::Internal("image attachments have no user message".into()))?;
+        instruction
+            .content
+            .extend(attachments.iter().map(|attachment| ContentBlock::Image {
+                media_type: attachment.media_type.clone(),
+                data: attachment.data.clone(),
+            }));
+    }
     let request_start = messages.len();
     origins.resize(
         request_start + request_messages.len(),
@@ -2554,6 +2583,7 @@ async fn ask_inner_streaming(
         provider,
         cfg,
         user_prompt,
+        attachments: &[],
         tools,
         exposure: None,
         recorder,
@@ -2607,6 +2637,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 provider,
                 cfg,
                 user_prompt,
+                attachments: &[],
                 tools: &tools,
                 exposure: Some(&exposure),
                 recorder: Some((db, session_id.as_str())),
@@ -2628,6 +2659,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 provider,
                 cfg,
                 user_prompt,
+                attachments: &[],
                 tools: &tools,
                 exposure: Some(&exposure),
                 recorder: None,

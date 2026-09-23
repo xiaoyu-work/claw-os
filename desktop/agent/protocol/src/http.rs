@@ -1,6 +1,12 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use crate::{ProtocolMetadata, ProtocolVersion};
+
+pub const MAX_CHAT_ATTACHMENTS: usize = 4;
+pub const MAX_CHAT_ATTACHMENT_BYTES: usize = 256 * 1024;
+pub const MAX_CHAT_ATTACHMENT_NAME_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgeEndpoint {
@@ -72,6 +78,8 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChatAttachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<ChatRequestMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -81,6 +89,92 @@ pub struct ChatRequest {
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_context: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatAttachment {
+    pub name: String,
+    pub media_type: String,
+    pub data: String,
+}
+
+impl ChatAttachment {
+    pub fn from_bytes(name: String, bytes: &[u8]) -> Result<Self, &'static str> {
+        validate_attachment_name(&name)?;
+        if bytes.is_empty() {
+            return Err("Image attachment is empty.");
+        }
+        if bytes.len() > MAX_CHAT_ATTACHMENT_BYTES {
+            return Err("Image attachment exceeds the size limit.");
+        }
+        let media_type = detect_media_type(bytes).ok_or("Unsupported image format.")?;
+        Ok(Self {
+            name,
+            media_type: media_type.to_string(),
+            data: STANDARD.encode(bytes),
+        })
+    }
+
+    pub fn decoded_len(&self) -> Result<usize, &'static str> {
+        validate_attachment_name(&self.name)?;
+        let bytes = STANDARD
+            .decode(self.data.as_bytes())
+            .map_err(|_| "Image attachment is not valid base64.")?;
+        if bytes.is_empty() || bytes.len() > MAX_CHAT_ATTACHMENT_BYTES {
+            return Err("Image attachment has an invalid size.");
+        }
+        if STANDARD.encode(&bytes) != self.data {
+            return Err("Image attachment is not canonical base64.");
+        }
+        if detect_media_type(&bytes) != Some(self.media_type.as_str()) {
+            return Err("Image attachment does not match its declared media type.");
+        }
+        Ok(bytes.len())
+    }
+}
+
+pub fn validate_chat_attachments(attachments: &[ChatAttachment]) -> Result<(), &'static str> {
+    if attachments.len() > MAX_CHAT_ATTACHMENTS {
+        return Err("Too many image attachments.");
+    }
+    let mut total = 0usize;
+    for attachment in attachments {
+        total = total
+            .checked_add(attachment.decoded_len()?)
+            .ok_or("Image attachment size overflow.")?;
+        if total > MAX_CHAT_ATTACHMENT_BYTES {
+            return Err("Image attachments exceed the total size limit.");
+        }
+    }
+    Ok(())
+}
+
+fn validate_attachment_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty()
+        || name.len() > MAX_CHAT_ATTACHMENT_NAME_BYTES
+        || name.chars().count() > 128
+        || name.chars().any(char::is_control)
+        || name.contains('/')
+        || name.contains('\\')
+    {
+        return Err("Image attachment name is invalid.");
+    }
+    Ok(())
+}
+
+fn detect_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) && bytes.ends_with(&[0xff, 0xd9]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 impl ChatRequest {

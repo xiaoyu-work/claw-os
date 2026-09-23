@@ -556,6 +556,11 @@ fn a_task_submission_is_closed_and_bounded() {
         "prompt": "summarise the journal",
         "session_id": "sess-1",
         "max_turns": 4,
+        "attachments": [{
+            "name": "screen.png",
+            "media_type": "image/png",
+            "data": "aGVsbG8=",
+        }],
     });
     assert!(serde_json::from_value::<TaskSubmit>(ok).is_ok());
 
@@ -577,6 +582,36 @@ fn a_task_submission_is_closed_and_bounded() {
 
     let oversized = json!({"prompt": "x".repeat(PROMPT_BYTES + 1)});
     assert!(serde_json::from_value::<TaskSubmit>(oversized).is_err());
+    assert!(serde_json::from_value::<TaskSubmit>(json!({
+        "prompt": "hi",
+        "attachments": (0..=crate::agent::attachments::MAX_ATTACHMENTS)
+            .map(|index| json!({
+                "name": format!("{index}.png"),
+                "media_type": "image/png",
+                "data": "aGVsbG8=",
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<TaskSubmit>(json!({
+        "prompt": "hi",
+        "attachments": [{
+            "name": "screen.png",
+            "media_type": "image/png",
+            "data": "x".repeat(crate::agent::attachments::MAX_BASE64_BYTES + 1),
+        }],
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<TaskSubmit>(json!({
+        "prompt": "hi",
+        "attachments": [{
+            "name": "screen.png",
+            "media_type": "image/png",
+            "data": "aGVsbG8=",
+            "bytes": 5,
+        }],
+    }))
+    .is_err());
 }
 
 #[test]

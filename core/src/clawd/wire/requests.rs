@@ -455,8 +455,34 @@ pub struct AgentConversationRevert {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TaskAttachment {
+    pub name: Text<{ crate::agent::attachments::MAX_NAME_BYTES }>,
+    pub media_type: Text<64>,
+    pub data: Text<{ crate::agent::attachments::MAX_BASE64_BYTES }>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct TaskAttachments(Vec<TaskAttachment>);
+
+impl<'de> Deserialize<'de> for TaskAttachments {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let attachments = Vec::<TaskAttachment>::deserialize(deserializer)?;
+        if attachments.len() > crate::agent::attachments::MAX_ATTACHMENTS {
+            return Err(serde::de::Error::custom(
+                "image attachment list exceeds its maximum length",
+            ));
+        }
+        Ok(Self(attachments))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskSubmit {
     pub prompt: Text<PROMPT_BYTES>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<TaskAttachments>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<Text<4096>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

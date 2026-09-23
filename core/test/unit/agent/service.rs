@@ -69,6 +69,7 @@ fn requested_model_does_not_change_provider_policy_or_other_jobs() {
     let job = JobExecution {
         id: "job-1".into(),
         prompt: "hello".into(),
+        attachments: Vec::new(),
         context: None,
         branch_context: None,
         workspace: None,

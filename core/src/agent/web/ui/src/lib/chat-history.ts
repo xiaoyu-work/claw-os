@@ -15,10 +15,18 @@ export type TokenUsage = {
   cacheWriteTokens: number;
 };
 
+export type ChatAttachment = {
+  name: string;
+  mediaType: string;
+  bytes: number;
+  dataUrl?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  attachments: ChatAttachment[];
   tools: ToolCall[];
   reasoning: string[];
   usage?: TokenUsage;
@@ -92,6 +100,7 @@ export function restoreForActiveTask(
       id: `task-user-${task.id}`,
       role: "user",
       text: task.prompt,
+      attachments: [],
       tools: [],
       reasoning: [],
       warnings: [],
@@ -102,6 +111,7 @@ export function restoreForActiveTask(
     id: `task-assistant-${task.id}`,
     role: "assistant",
     text: "",
+    attachments: [],
     tools: [],
     reasoning: [],
     warnings: [],
@@ -169,6 +179,7 @@ export function restoreHistoryMessages(rows: any[]): ChatMessage[] {
       id: rowId,
       role,
       text,
+      attachments: [],
       tools,
       reasoning: [],
       warnings: [],
