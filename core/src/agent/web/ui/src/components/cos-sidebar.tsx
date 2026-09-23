@@ -11,18 +11,24 @@
 
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   ChevronDown,
+  GitFork,
   Inbox,
   ListTodo,
   MessageSquare,
+  MoreHorizontal,
   Moon,
+  Pencil,
   Plus,
+  Search,
   ShieldCheck,
   Settings,
   Sun,
   Target,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
 import { useNotifications } from "@/lib/notifications";
@@ -32,6 +38,14 @@ import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -39,6 +53,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import {
   Sidebar,
   SidebarContent,
@@ -70,11 +85,21 @@ const NAV_ITEMS: Array<{
 
 type Session = {
   id: string;
+  presentation_id?: string;
   title?: string | null;
   preview?: string | null;
   updated_at?: number | string;
   created_at?: number | string;
   message_count?: number;
+  archived?: boolean;
+  parent_id?: string;
+  manageable?: boolean;
+  legacy?: boolean;
+};
+
+type SessionList = {
+  sessions?: Session[];
+  truncated?: boolean;
 };
 
 export function CosSidebar({ meta }: { meta: any }) {
@@ -83,32 +108,123 @@ export function CosSidebar({ meta }: { meta: any }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [navOpen, setNavOpen] = useState(true);
   const [sessionsOpen, setSessionsOpen] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState("");
+  const [sessionsTruncated, setSessionsTruncated] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [busySession, setBusySession] = useState<string | null>(null);
+  const [renameSession, setRenameSession] = useState<Session | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
+
+  const fetchSessions = useCallback(async (archived: boolean) => {
+    const suffix = archived ? "?archived=true" : "";
+    const response = await api.get<SessionList | Session[]>(
+      `/api/sessions${suffix}`,
+    );
+    return {
+      sessions: Array.isArray(response) ? response : response?.sessions || [],
+      truncated: Array.isArray(response) ? false : response?.truncated === true,
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    const fetchSessions = () => {
-      api
-        .get<{ sessions?: Session[] } | Session[]>("/api/sessions")
-        .then((r) => {
+    const refresh = () => {
+      void fetchSessions(showArchived)
+        .then((result) => {
           if (cancelled) return;
-          const list = Array.isArray(r) ? r : r?.sessions || [];
-          setSessions(list);
+          setSessions(result.sessions);
+          setSessionsTruncated(result.truncated);
+          setSessionError(null);
         })
-        .catch(() => {});
+        .catch((error: any) => {
+          if (!cancelled) {
+            setSessionError(error?.message || "Failed to load conversations");
+          }
+        });
     };
-    fetchSessions();
+    refresh();
     // The chat page dispatches `cos:sessions-changed` after the server
     // creates a fresh session id mid-stream, so the new chat appears in
     // the sidebar immediately rather than only after the next reload.
-    const onChange = () => fetchSessions();
+    const onChange = () => refresh();
     window.addEventListener("cos:sessions-changed", onChange);
     return () => {
       cancelled = true;
       window.removeEventListener("cos:sessions-changed", onChange);
     };
-  }, []);
+  }, [fetchSessions, showArchived]);
 
-  const grouped = useMemo(() => groupByDate(sessions), [sessions]);
+  const filteredSessions = useMemo(() => {
+    const query = sessionSearch.trim().toLowerCase();
+    if (!query) return sessions;
+    return sessions.filter((session) =>
+      `${session.title || ""} ${session.id}`.toLowerCase().includes(query),
+    );
+  }, [sessionSearch, sessions]);
+  const grouped = useMemo(() => {
+    const sorted = filteredSessions.slice().sort(
+      (left, right) =>
+        (parseTs(right.updated_at ?? right.created_at) || 0) -
+        (parseTs(left.updated_at ?? left.created_at) || 0),
+    );
+    return groupByDate(sorted);
+  }, [filteredSessions]);
+
+  async function updateSession(
+    session: Session,
+    changes: { title?: string; archived?: boolean },
+  ) {
+    setBusySession(session.id);
+    setSessionError(null);
+    try {
+      const response = await api.post<{ session: Session }>(
+        `/api/sessions/${encodeURIComponent(session.id)}`,
+        changes,
+      );
+      const updated = response.session;
+      setSessions((current) => {
+        if (!!updated.archived !== showArchived) {
+          return current.filter((candidate) => candidate.id !== updated.id);
+        }
+        return current.map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        );
+      });
+      window.dispatchEvent(new CustomEvent("cos:sessions-changed"));
+      return updated;
+    } catch (error: any) {
+      setSessionError(error?.message || "Failed to update conversation");
+      return null;
+    } finally {
+      setBusySession(null);
+    }
+  }
+
+  async function forkSession(session: Session) {
+    setBusySession(session.id);
+    setSessionError(null);
+    try {
+      const response = await api.post<{ session: Session }>(
+        `/api/sessions/${encodeURIComponent(session.id)}/fork`,
+      );
+      setShowArchived(false);
+      window.dispatchEvent(new CustomEvent("cos:sessions-changed"));
+      navigate(`/chat/${response.session.id}`);
+    } catch (error: any) {
+      setSessionError(error?.message || "Failed to fork conversation");
+    } finally {
+      setBusySession(null);
+    }
+  }
+
+  async function saveRename() {
+    if (!renameSession) return;
+    const title = renameTitle.trim();
+    if (!title) return;
+    const updated = await updateSession(renameSession, { title });
+    if (updated) setRenameSession(null);
+  }
 
   return (
     <Sidebar collapsible="offcanvas" className="border-r">
@@ -192,9 +308,51 @@ export function CosSidebar({ meta }: { meta: any }) {
           </button>
           {sessionsOpen && (
             <SidebarGroupContent>
+              <div className="grid gap-2 px-2 pb-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    aria-label="Search conversations"
+                    value={sessionSearch}
+                    onChange={(event) => setSessionSearch(event.target.value)}
+                    placeholder="Search conversations"
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 justify-start gap-2 px-2 text-xs"
+                  onClick={() => {
+                    setShowArchived((value) => !value);
+                    setSessionSearch("");
+                  }}
+                >
+                  {showArchived ? (
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                  ) : (
+                    <Archive className="h-3.5 w-3.5" />
+                  )}
+                  {showArchived ? "Active conversations" : "Archived conversations"}
+                </Button>
+                {sessionError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {sessionError}
+                  </p>
+                )}
+                {sessionsTruncated && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Showing the newest 1,000 conversations.
+                  </p>
+                )}
+              </div>
               {grouped.length === 0 ? (
                 <p className="px-3 py-2 text-[11px] text-muted-foreground">
-                  No sessions yet — start a chat.
+                  {sessionSearch.trim()
+                    ? "No matching conversations."
+                    : showArchived
+                      ? "No archived conversations."
+                      : "No conversations yet — start a chat."}
                 </p>
               ) : (
                 grouped.map(([label, list]) => (
@@ -204,17 +362,71 @@ export function CosSidebar({ meta }: { meta: any }) {
                     </div>
                     <SidebarMenu>
                       {list.map((s) => (
-                        <SidebarMenuItem key={s.id}>
+                        <SidebarMenuItem
+                          key={s.id}
+                          className="group/session flex items-center"
+                        >
                           <SidebarMenuButton
                             isActive={current === `/chat/${s.id}`}
                             onClick={() => navigate(`/chat/${s.id}`)}
-                            className="h-auto py-1.5"
+                            className="h-auto min-w-0 flex-1 py-1.5"
                             tooltip={s.title || s.id}
                           >
-                            <span className="truncate text-xs">
+                            <span className="min-w-0 flex-1 truncate text-xs">
                               {s.title || s.preview || s.id.slice(0, 8)}
                             </span>
+                            {s.legacy && (
+                              <span
+                                className="text-[9px] uppercase tracking-wide text-muted-foreground"
+                                title="Previous conversation (read-only)"
+                              >
+                                read only
+                              </span>
+                            )}
                           </SidebarMenuButton>
+                          {s.manageable !== false && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  aria-label={`Manage conversation: ${s.title}`}
+                                  className="mr-1 rounded p-1 text-muted-foreground opacity-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus:opacity-100 group-hover/session:opacity-100"
+                                >
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent side="right" align="start">
+                                <DropdownMenuItem
+                                  onSelect={() => {
+                                    setRenameSession(s);
+                                    setRenameTitle(s.title || "");
+                                  }}
+                                >
+                                  <Pencil className="mr-2 h-3.5 w-3.5" />
+                                  Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => void forkSession(s)}>
+                                  <GitFork className="mr-2 h-3.5 w-3.5" />
+                                  Fork conversation
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onSelect={() =>
+                                    void updateSession(s, {
+                                      archived: !showArchived,
+                                    })
+                                  }
+                                >
+                                  {showArchived ? (
+                                    <ArchiveRestore className="mr-2 h-3.5 w-3.5" />
+                                  ) : (
+                                    <Archive className="mr-2 h-3.5 w-3.5" />
+                                  )}
+                                  {showArchived ? "Restore to active" : "Archive"}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
                         </SidebarMenuItem>
                       ))}
                     </SidebarMenu>
@@ -229,6 +441,47 @@ export function CosSidebar({ meta }: { meta: any }) {
       <SidebarFooter>
         <SidebarFooterUser meta={meta} />
       </SidebarFooter>
+      <Dialog
+        open={renameSession !== null}
+        onOpenChange={(open) => {
+          if (!open && busySession === null) setRenameSession(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename conversation</DialogTitle>
+            <DialogDescription>
+              This changes presentation metadata only. Conversation history and
+              task identity stay unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="grid gap-2 text-sm">
+            <span>Conversation title</span>
+            <Input
+              aria-label="Conversation title"
+              value={renameTitle}
+              onChange={(event) => setRenameTitle(event.target.value)}
+              maxLength={128}
+              autoFocus
+            />
+          </label>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRenameSession(null)}
+              disabled={busySession !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void saveRename()}
+              disabled={!renameTitle.trim() || busySession !== null}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Sidebar>
   );
 }

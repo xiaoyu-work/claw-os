@@ -9,6 +9,9 @@ web UI.
 
 - Authenticate local browser/desktop requests.
 - Map HTTP routes to agent/session/setup operations.
+- Present owner-scoped conversation inventory, metadata, history and
+  presentation mutations through `agent.conversation.*`; Web never opens or
+  mutates Agent memory as a separate authority.
 - Present the shared Activity broker's goals, planning metadata, explicit state
   changes, and associated job/session views without a Web-owned store or lifecycle.
 - Export and import the broker's closed portable Activity continuity document
@@ -53,6 +56,12 @@ web UI.
 Routes call agent/core services and use the same guarded runtime paths as CLI
 requests. SSE presentation is not conversation authority or persisted provider
 state. Generated `ui/dist/` assets come from the UI build.
+Conversation list/detail/history/update/fork routes adapt the shared broker
+contract used by terminal and native presentations. Canonical session identity,
+owner-memory access, idle-session mutation locking, archive state and branch
+lineage remain broker-owned; browser search is only a filter over the returned
+bounded inventory. Older memory-only sessions remain discoverable through the
+read-only `memory.*` broker routes and are visibly non-manageable.
 Activity adapters retain Main's authenticated owner transport and local/remote
 Web session provenance. Task submission, safe retry, App-service admission and
 protected owner App review remain backend responsibilities. The existing

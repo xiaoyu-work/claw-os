@@ -16,6 +16,23 @@ const bootstrap = "0".repeat(64);
 const accessToken = "activity-browser-regression";
 const activities = new Map();
 const jobs = new Map();
+const conversations = new Map([
+  ["session-release", {
+    id: "session-release", presentation_id: "11111111-1111-8111-8111-111111111111",
+    title: "Release notes", created_at: "2026-09-20T12:00:00Z",
+    updated_at: "2026-09-22T12:00:00Z", archived: false, deleted: false,
+  }],
+  ["session-budget", {
+    id: "session-budget", presentation_id: "22222222-2222-8222-8222-222222222222",
+    title: "Budget planning", created_at: "2026-09-19T12:00:00Z",
+    updated_at: "2026-09-21T12:00:00Z", archived: false, deleted: false,
+  }],
+  ["legacy-session", {
+    id: "legacy-session", title: "Previous conversation",
+    updated_at: "2026-09-18T12:00:00Z", archived: false, deleted: false,
+    manageable: false, legacy: true,
+  }],
+]);
 const receiptRecords = new Map();
 const objectStateRecords = new Map();
 const executionLimitRecords = new Map();
@@ -77,6 +94,7 @@ const effectPreview = {
 const previewReplies = [];
 let activityNumber = 0;
 let jobNumber = 0;
+let conversationNumber = 0;
 let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
 let invalidReceiptsOnce = null;
@@ -350,6 +368,15 @@ async function fixture(req, res) {
     assert.equal(req.method, "POST");
     assert.equal(body.prompt, "Show live presentation");
     assert.equal(body.session_id, undefined);
+    conversations.set("chat-browser", {
+      id: "chat-browser",
+      presentation_id: "33333333-3333-8333-8333-333333333333",
+      title: "Live presentation",
+      created_at: timestamp(),
+      updated_at: timestamp(),
+      archived: false,
+      deleted: false,
+    });
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     for (const [event, data] of [
       ["session", { session_id: "chat-browser" }],
@@ -371,9 +398,43 @@ async function fixture(req, res) {
     res.end();
     return;
   }
-  const sessionIds = [...new Set([...jobs.values()].map((job) => job.session_id).filter(Boolean))];
   if (url.pathname === "/api/sessions") {
-    return reply(req, res, { sessions: sessionIds.map((id) => ({ id, title: `Session ${id}` })) });
+    const archived = url.searchParams.get("archived") === "true";
+    const sessions = [...conversations.values()]
+      .filter((session) => session.archived === archived && !session.deleted)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    return reply(req, res, { n: sessions.length, total: sessions.length, truncated: false, sessions });
+  }
+  const sessionFork = /^\/api\/sessions\/([^/]+)\/fork$/.exec(url.pathname);
+  if (sessionFork) {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(body, {});
+    const parent = conversations.get(decodeURIComponent(sessionFork[1]));
+    assert.ok(parent, "fork addresses an existing conversation");
+    const number = ++conversationNumber;
+    const child = {
+      ...parent,
+      id: `session-fork-${number}`,
+      presentation_id: `44444444-4444-8444-8444-${String(number).padStart(12, "0")}`,
+      title: `${parent.title} (fork)`,
+      parent_id: parent.id,
+      archived: false,
+      created_at: timestamp(),
+      updated_at: timestamp(),
+    };
+    conversations.set(child.id, child);
+    return reply(req, res, { session: child });
+  }
+  const sessionUpdate = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
+  if (sessionUpdate && req.method === "POST") {
+    assert.ok(Object.keys(body).length > 0);
+    assert.ok(Object.keys(body).every((key) => ["title", "archived"].includes(key)));
+    const session = conversations.get(decodeURIComponent(sessionUpdate[1]));
+    assert.ok(session, "update addresses an existing conversation");
+    if (Object.hasOwn(body, "title")) session.title = body.title;
+    if (Object.hasOwn(body, "archived")) session.archived = body.archived;
+    session.updated_at = timestamp();
+    return reply(req, res, { session });
   }
   if (/^\/api\/sessions\/[^/]+\/history$/.test(url.pathname)) {
     return reply(req, res, {
@@ -987,6 +1048,13 @@ try {
   };
   const clickText = (text) => click(buttonExpression(text));
   const clickLabel = (label) => click(`document.querySelector('[aria-label=${JSON.stringify(label)}]')`);
+  const selectMenuItem = async (text) => {
+    const expression = `Array.from(document.querySelectorAll('[role="menuitem"]')).find(el =>
+      el.textContent.trim() === ${JSON.stringify(text)} && el.closest('[data-state="open"]')
+    )`;
+    await wait(`!!(${expression})`, `open menu item ${text}`);
+    await evaluate(`(${expression}).click()`);
+  };
   const fieldExpression = (label) => `Array.from(document.querySelectorAll('label')).find(el =>
     Array.from(el.childNodes).filter(node => node.nodeType === 3).map(node => node.textContent).join('').trim() === ${JSON.stringify(label)}
   )?.querySelector('input,textarea,select')`;
@@ -1093,6 +1161,46 @@ try {
   await wait("document.body.innerText.includes('Compared the available Agent context.')", "reasoning summary presentation");
   assert.equal(await evaluate("location.hash"), "#/chat/chat-browser");
   console.log("PASS live reasoning summary and accumulated provider usage presentation");
+
+  await wait("document.body.innerText.toLowerCase().includes('read only')", "legacy conversation label");
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Manage conversation: Previous conversation\"]')"), null);
+  await evaluate(`(() => {
+    const input = document.querySelector('[aria-label="Search conversations"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Release notes');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await wait("document.querySelectorAll('[aria-label^=\"Manage conversation:\"]').length === 1", "filtered conversation roster");
+  await clickLabel("Manage conversation: Release notes");
+  await selectMenuItem("Rename");
+  await evaluate(`(() => {
+    const input = document.querySelector('[aria-label="Conversation title"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Release review');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await clickText("Save");
+  await wait("document.body.innerText.includes('No matching conversations.')", "renamed conversation leaves the old search");
+  await evaluate(`(() => {
+    const input = document.querySelector('[aria-label="Search conversations"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await wait("!!document.querySelector('[aria-label=\"Manage conversation: Release review\"]')", "renamed conversation");
+  await wait("!document.querySelector('[role=\"dialog\"]')", "rename dialog closed");
+  await clickLabel("Manage conversation: Release review");
+  await selectMenuItem("Archive");
+  await wait("!document.body.innerText.includes('Release review')", "archived conversation leaves active roster");
+  await clickText("Archived conversations");
+  await wait("!!document.querySelector('[aria-label=\"Manage conversation: Release review\"]')", "archived conversation roster");
+  await clickLabel("Manage conversation: Release review");
+  await selectMenuItem("Restore to active");
+  await wait("!document.body.innerText.includes('Release review')", "restored conversation leaves archive roster");
+  await clickText("Active conversations");
+  await wait("!!document.querySelector('[aria-label=\"Manage conversation: Release review\"]')", "restored active conversation");
+  await clickLabel("Manage conversation: Release review");
+  await selectMenuItem("Fork conversation");
+  await wait("location.hash === '#/chat/session-fork-1'", "forked conversation selected");
+  assert.equal(conversations.get("session-fork-1").parent_id, "session-release");
+  console.log("PASS conversation search, rename, archive restoration and whole-session fork");
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");

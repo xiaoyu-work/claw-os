@@ -1,114 +1,299 @@
-//! `GET /api/sessions` and friends — owner-local conversation memory.
+//! Owner-scoped Web adapters for the canonical Agent conversation service.
 
-use std::collections::BTreeMap;
-
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::agent::memory::history::load_history;
-use crate::agent::memory::sqlite_fts::{MemoryDb, SessionSummary};
 use crate::agent::web::state::AppState;
+use crate::clawd::routes::Command;
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let mut by_id = BTreeMap::<String, SessionSummary>::new();
-    for db in open_owner_databases(&state)? {
-        for row in db
-            .sessions(200)
-            .map_err(|error| internal(format!("read sessions: {error}")))?
-        {
-            match by_id.get(&row.session_id) {
-                Some(current) if current.last_ts_ms >= row.last_ts_ms => {}
-                _ => {
-                    by_id.insert(row.session_id.clone(), row);
-                }
-            }
-        }
-    }
-    let mut rows = by_id.into_values().collect::<Vec<_>>();
-    rows.sort_by_key(|row| std::cmp::Reverse(row.last_ts_ms));
-    rows.truncate(200);
-    let sessions = rows
-        .into_iter()
-        .map(|row| {
-            json!({
-                "id": row.session_id,
-                "title": row.title,
-                "last_ts_ms": row.last_ts_ms,
-                "message_count": row.message_count,
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({ "n": sessions.len(), "sessions": sessions })))
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListQuery {
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateBody {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    archived: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SessionMetadata {
+    id: String,
+    presentation_id: String,
+    title: String,
+    created_at: String,
+    updated_at: String,
+    archived: bool,
+    deleted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversationList {
+    conversations: Vec<SessionMetadata>,
+    conversation_count: u64,
+    conversations_truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacySession {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    last_ts_ms: i64,
+    message_count: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacySessionList {
+    sessions: Vec<LegacySession>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Conversation {
+    #[serde(flatten)]
+    metadata: SessionMetadata,
+    messages: Vec<Value>,
+    message_count: u64,
+    messages_truncated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConversationResponse {
+    conversation: Conversation,
+}
+
+pub async fn list(
+    State(_state): State<AppState>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let archived = query.archived.unwrap_or(false);
+    let result = super::clawd::request(
+        Command::AgentConversationList,
+        json!({ "archived": archived, "limit": 1_000 }),
+    )
+    .await
+    .map_err(super::clawd::RpcError::into_api_error)?;
+    let legacy = if archived {
+        None
+    } else {
+        Some(
+            super::clawd::request(Command::MemorySessions, json!({ "limit": 1_000 }))
+                .await
+                .map_err(super::clawd::RpcError::into_api_error)?,
+        )
+    };
+    project_list(result, legacy).map(Json)
 }
 
 pub async fn detail(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    for db in open_owner_databases(&state)? {
-        if db
-            .has_session(&id)
-            .map_err(|error| internal(format!("read session: {error}")))?
-        {
-            let title = db
-                .title_for(&id)
-                .map_err(|error| internal(format!("read session title: {error}")))?;
-            return Ok(Json(json!({ "id": id, "title": title })));
+    match get_conversation(&id, 1).await {
+        Ok(conversation) => {
+            let metadata = conversation.metadata;
+            Ok(Json(json!({
+                "id": metadata.id,
+                "presentation_id": metadata.presentation_id,
+                "title": metadata.title,
+                "created_at": metadata.created_at,
+                "updated_at": metadata.updated_at,
+                "archived": metadata.archived,
+                "deleted": metadata.deleted,
+                "parent_id": metadata.parent_id,
+                "message_count": conversation.message_count,
+                "messages_truncated": conversation.messages_truncated,
+                "manageable": true,
+                "legacy": false,
+            })))
         }
+        Err(error) => legacy_detail(&id).await.or(Err(error)),
     }
-    Err((
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": format!("session not found: {id}") })),
-    ))
 }
 
 pub async fn history(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    for db in open_owner_databases(&state)? {
-        if !db
-            .has_session(&id)
-            .map_err(|error| internal(format!("read session: {error}")))?
-        {
-            continue;
-        }
-        let mut messages = load_history(&db, &id, 500)
-            .map_err(|error| internal(format!("read history: {error}")))?;
-        messages.retain(|message| message.role != "system");
-        return Ok(Json(json!({
-            "session_id": id,
-            "n": messages.len(),
-            "messages": messages,
-        })));
+    match get_conversation(&id, 500).await {
+        Ok(conversation) => Ok(Json(json!({
+            "session_id": conversation.metadata.id,
+            "n": conversation.messages.len(),
+            "message_count": conversation.message_count,
+            "messages_truncated": conversation.messages_truncated,
+            "messages": conversation.messages,
+        }))),
+        Err(error) => legacy_history(&id).await.or(Err(error)),
     }
-    Ok(Json(json!({ "session_id": id, "n": 0, "messages": [] })))
 }
 
-fn open_owner_databases(state: &AppState) -> Result<Vec<MemoryDb>, (StatusCode, Json<Value>)> {
-    let paths = [
-        crate::paths::system_agent_memory_db_path(state.inner.owner_uid),
-        crate::paths::agent_memory_db_path(),
-    ];
-    let mut databases = Vec::new();
-    for (index, path) in paths.iter().enumerate() {
-        if !path.is_file() || paths[..index].contains(path) {
-            continue;
-        }
-        databases.push(
-            MemoryDb::open_read_only(path)
-                .map_err(|error| internal(format!("open memory: {error}")))?,
+pub async fn update(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut params = json!({ "id": id });
+    if let Some(title) = body.title {
+        params["title"] = json!(title);
+    }
+    if let Some(archived) = body.archived {
+        params["archived"] = json!(archived);
+    }
+    let result = super::clawd::request(Command::AgentConversationUpdate, params)
+        .await
+        .map_err(super::clawd::RpcError::into_api_error)?;
+    let conversation = parse_conversation(result)?;
+    Ok(Json(
+        json!({ "session": project_metadata(conversation.metadata) }),
+    ))
+}
+
+pub async fn fork(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let result = super::clawd::request(Command::AgentConversationFork, json!({ "id": id }))
+        .await
+        .map_err(super::clawd::RpcError::into_api_error)?;
+    let conversation = parse_conversation(result)?;
+    Ok(Json(
+        json!({ "session": project_metadata(conversation.metadata) }),
+    ))
+}
+
+async fn get_conversation(id: &str, limit: u32) -> Result<Conversation, (StatusCode, Json<Value>)> {
+    let result = super::clawd::request(
+        Command::AgentConversationGet,
+        json!({ "id": id, "limit": limit }),
+    )
+    .await
+    .map_err(super::clawd::RpcError::into_api_error)?;
+    parse_conversation(result)
+}
+
+async fn legacy_detail(id: &str) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let result = super::clawd::request(Command::MemorySessions, json!({ "limit": 1_000 }))
+        .await
+        .map_err(super::clawd::RpcError::into_api_error)?;
+    let list: LegacySessionList = serde_json::from_value(result)
+        .map_err(|error| invalid_broker_response(format!("legacy session list: {error}")))?;
+    let session = list
+        .sessions
+        .into_iter()
+        .find(|session| session.id == id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("session not found: {id}") })),
+            )
+        })?;
+    Ok(Json(project_legacy(session)))
+}
+
+async fn legacy_history(id: &str) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let result = super::clawd::request(
+        Command::MemoryHistory,
+        json!({ "session_id": id, "limit": 500 }),
+    )
+    .await
+    .map_err(super::clawd::RpcError::into_api_error)?;
+    let messages = result
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_broker_response("legacy history omitted messages".to_string()))?;
+    if messages.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("session not found: {id}") })),
+        ));
+    }
+    Ok(Json(result))
+}
+
+fn project_list(result: Value, legacy: Option<Value>) -> Result<Value, (StatusCode, Json<Value>)> {
+    let list: ConversationList = serde_json::from_value(result)
+        .map_err(|error| invalid_broker_response(format!("conversation list: {error}")))?;
+    let mut canonical_ids = std::collections::BTreeSet::new();
+    let mut sessions = list
+        .conversations
+        .into_iter()
+        .map(|metadata| {
+            canonical_ids.insert(metadata.id.clone());
+            project_metadata(metadata)
+        })
+        .collect::<Vec<_>>();
+    let mut legacy_truncated = false;
+    if let Some(legacy) = legacy {
+        let legacy: LegacySessionList = serde_json::from_value(legacy)
+            .map_err(|error| invalid_broker_response(format!("legacy session list: {error}")))?;
+        legacy_truncated = legacy.sessions.len() == 1_000;
+        sessions.extend(
+            legacy
+                .sessions
+                .into_iter()
+                .filter(|session| !canonical_ids.contains(&session.id))
+                .map(project_legacy),
         );
     }
-    Ok(databases)
+    let total = list
+        .conversation_count
+        .saturating_add((sessions.len() - canonical_ids.len()) as u64);
+    Ok(json!({
+        "n": sessions.len(),
+        "total": total,
+        "truncated": list.conversations_truncated || legacy_truncated,
+        "sessions": sessions,
+    }))
 }
 
-fn internal(msg: String) -> (StatusCode, Json<Value>) {
+fn project_metadata(metadata: SessionMetadata) -> Value {
+    json!({
+        "id": metadata.id,
+        "presentation_id": metadata.presentation_id,
+        "title": metadata.title,
+        "created_at": metadata.created_at,
+        "updated_at": metadata.updated_at,
+        "archived": metadata.archived,
+        "deleted": metadata.deleted,
+        "parent_id": metadata.parent_id,
+        "manageable": true,
+        "legacy": false,
+    })
+}
+
+fn project_legacy(session: LegacySession) -> Value {
+    json!({
+        "id": session.id,
+        "title": session.title,
+        "updated_at": session.last_ts_ms,
+        "message_count": session.message_count,
+        "archived": false,
+        "manageable": false,
+        "legacy": true,
+    })
+}
+
+fn parse_conversation(result: Value) -> Result<Conversation, (StatusCode, Json<Value>)> {
+    serde_json::from_value::<ConversationResponse>(result)
+        .map(|response| response.conversation)
+        .map_err(|error| invalid_broker_response(format!("conversation: {error}")))
+}
+
+fn invalid_broker_response(message: String) -> (StatusCode, Json<Value>) {
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": msg })),
+        StatusCode::BAD_GATEWAY,
+        Json(json!({ "error": format!("invalid clawd {message}") })),
     )
 }
 

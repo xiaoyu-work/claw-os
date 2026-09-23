@@ -1,35 +1,106 @@
 use super::*;
 
-#[tokio::test]
-async fn session_views_merge_durable_and_legacy_owner_memory() {
-    let _lock = crate::test_env::lock_env();
-    let temp = tempfile::tempdir().unwrap();
-    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
-    let owner_uid = unsafe { libc::geteuid() } as u32;
-    let durable_id = crate::session::SessionId::generate().into_string();
-    let legacy_id = uuid::Uuid::new_v4().to_string();
+fn metadata(id: &str, title: &str) -> Value {
+    json!({
+        "id": id,
+        "presentation_id": "078ed458-0e17-882b-b0aa-ca1088683b25",
+        "title": title,
+        "created_at": "2026-09-22T12:00:00Z",
+        "updated_at": "2026-09-22T12:30:00Z",
+        "archived": false,
+        "deleted": false,
+    })
+}
 
-    let durable = crate::agent::memory::sqlite_fts::MemoryDb::open(
-        crate::paths::clawd_user_memory_db_path(owner_uid),
+#[test]
+fn list_projection_preserves_canonical_conversation_metadata() {
+    let projected = project_list(
+        json!({
+            "conversations": [metadata("ses_0000000000001_000000000001", "Release review")],
+            "conversation_count": 3,
+            "conversations_truncated": true,
+        }),
+        Some(json!({
+            "n": 2,
+            "sessions": [
+                {
+                    "id": "ses_0000000000001_000000000001",
+                    "title": "Generated title",
+                    "last_ts_ms": 100,
+                    "message_count": 2,
+                },
+                {
+                    "id": "legacy-session",
+                    "title": "Previous conversation",
+                    "last_ts_ms": 90,
+                    "message_count": 4,
+                }
+            ],
+        })),
     )
     .unwrap();
-    durable
-        .record_message_at(&durable_id, "user", "durable question", 20)
-        .unwrap();
-    let legacy =
-        crate::agent::memory::sqlite_fts::MemoryDb::open(crate::paths::agent_memory_db_path())
-            .unwrap();
-    legacy
-        .record_message_at(&legacy_id, "user", "legacy question", 10)
-        .unwrap();
-    drop((durable, legacy));
 
-    let state = AppState::new(crate::config::AgentConfig::default(), owner_uid);
-    let Json(list) = list(State(state.clone())).await.unwrap();
-    let sessions = list["sessions"].as_array().unwrap();
-    assert!(sessions.iter().any(|entry| entry["id"] == durable_id));
-    assert!(sessions.iter().any(|entry| entry["id"] == legacy_id));
+    assert_eq!(projected["n"], 2);
+    assert_eq!(projected["total"], 4);
+    assert_eq!(projected["truncated"], true);
+    assert_eq!(
+        projected["sessions"][0]["id"],
+        "ses_0000000000001_000000000001"
+    );
+    assert_eq!(projected["sessions"][0]["title"], "Release review");
+    assert_eq!(projected["sessions"][0]["manageable"], true);
+    assert_eq!(projected["sessions"][1]["id"], "legacy-session");
+    assert_eq!(projected["sessions"][1]["manageable"], false);
+    assert_eq!(projected["sessions"][1]["legacy"], true);
+}
 
-    let Json(history) = history(State(state), Path(legacy_id)).await.unwrap();
-    assert_eq!(history["messages"][0]["text"], "legacy question");
+#[test]
+fn conversation_projection_keeps_bounded_history_metadata() {
+    let conversation = parse_conversation(json!({
+        "conversation": {
+            "id": "ses_0000000000001_000000000001",
+            "presentation_id": "078ed458-0e17-882b-b0aa-ca1088683b25",
+            "title": "Release review",
+            "created_at": "2026-09-22T12:00:00Z",
+            "updated_at": "2026-09-22T12:30:00Z",
+            "archived": false,
+            "deleted": false,
+            "messages": [{"id": 1, "role": "user", "text": "Review it"}],
+            "message_count": 7,
+            "messages_truncated": true,
+            "jobs": [],
+            "job_count": 0,
+            "jobs_truncated": false,
+            "task_bindings_complete": true,
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(conversation.metadata.title, "Release review");
+    assert_eq!(conversation.messages.len(), 1);
+    assert_eq!(conversation.message_count, 7);
+    assert!(conversation.messages_truncated);
+}
+
+#[test]
+fn malformed_broker_responses_and_update_fields_are_rejected() {
+    let error = project_list(json!({ "sessions": [] }), None).unwrap_err();
+    assert_eq!(error.0, StatusCode::BAD_GATEWAY);
+
+    let error = project_list(
+        json!({
+            "conversations": [],
+            "conversation_count": 0,
+            "conversations_truncated": false,
+        }),
+        Some(json!({ "sessions": "not a list" })),
+    )
+    .unwrap_err();
+    assert_eq!(error.0, StatusCode::BAD_GATEWAY);
+
+    assert!(serde_json::from_value::<UpdateBody>(json!({
+        "title": "Allowed",
+        "owner_uid": 1000,
+    }))
+    .is_err());
 }

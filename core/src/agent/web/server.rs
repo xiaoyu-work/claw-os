@@ -111,8 +111,12 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::activities::enable_capability_policy),
         )
         .route("/api/sessions", get(routes::sessions::list))
-        .route("/api/sessions/{id}", get(routes::sessions::detail))
+        .route(
+            "/api/sessions/{id}",
+            get(routes::sessions::detail).post(routes::sessions::update),
+        )
         .route("/api/sessions/{id}/history", get(routes::sessions::history))
+        .route("/api/sessions/{id}/fork", post(routes::sessions::fork))
         .route("/api/tasks", get(routes::tasks::list))
         .route("/api/tasks/{id}", get(routes::tasks::show))
         .route("/api/tasks/{id}/stop", post(routes::tasks::stop))
