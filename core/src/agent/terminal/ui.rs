@@ -28,6 +28,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_footer(frame, chunks[3], app);
     render_command_palette(frame, chunks[1], app);
     render_picker(frame, area, app);
+    render_task_controls(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -39,6 +40,67 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_task_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    if !app.task_controls_open {
+        return;
+    }
+    let width = screen.width.saturating_sub(4).min(72);
+    let height = 12.min(screen.height.saturating_sub(4));
+    if width < 38 || height < 10 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let lines = vec![
+        Line::styled(
+            "Defaults for future tasks only",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::raw(format!("model: {}", app.selected_model)),
+        Line::raw(format!(
+            "memory: {}",
+            if app.task_use_memory { "on" } else { "off" }
+        )),
+        Line::raw(format!(
+            "max turns: {}",
+            app.task_max_turns
+                .map(|turns| turns.to_string())
+                .unwrap_or_else(|| "configured default".into())
+        )),
+        Line::raw("reasoning effort: provider default (not yet task-configurable)"),
+        Line::raw(""),
+        Line::styled(
+            "These settings do not change credentials, provider, or global config.",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue))
+                .title(" Task model controls ")
+                .title_bottom(Line::from(vec![
+                    Span::styled(
+                        "[o] Model  [m] Memory  [t] Max turns",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::raw("  "),
+                    Span::styled("Esc close", Style::default().fg(Color::DarkGray)),
+                ])),
+        ),
+        area,
+    );
 }
 
 fn render_activity_evidence(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -1557,7 +1619,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
             if app.backtrack_armed() {
                 " Enter send  Esc again history  Ctrl+K commands "
             } else {
-                " Enter send  Ctrl+J newline  Ctrl+O image  Esc stop  Ctrl+K commands "
+                " Enter send  Ctrl+J newline  Ctrl+O image  Ctrl+T model  Esc stop  Ctrl+K menu "
             },
             Style::default().fg(Color::DarkGray),
         ),

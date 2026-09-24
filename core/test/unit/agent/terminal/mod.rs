@@ -655,6 +655,39 @@ fn ctrl_d_does_not_silently_detach_active_work() {
 }
 
 #[test]
+fn task_controls_change_only_future_task_defaults() {
+    let mut app = app();
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('t'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        ),
+        InputAction::None
+    );
+    assert!(app.task_controls_open);
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('m'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('t'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(!app.task_use_memory);
+    assert_eq!(app.task_max_turns, Some(8));
+    assert_eq!(app.selected_model, "claw-model");
+}
+
+#[test]
 fn approvals_have_one_explicit_terminal_decision() {
     let mut app = app();
     app.add_approvals(vec![ApprovalRequest {

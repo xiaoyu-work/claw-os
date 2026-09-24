@@ -662,6 +662,9 @@ class FixtureBroker:
                     raise AssertionError("terminal attachment omitted bounded image bytes")
             elif params.get("attachments"):
                 raise AssertionError("terminal attached an image to the wrong task")
+            if self.case == "task-controls":
+                if params.get("use_memory") is not False or params.get("max_turns") != 8:
+                    raise AssertionError("terminal task controls were not bound to submission")
             self.requested_model = params.get("model")
             self.requested_workspace = params.get("workspace")
             if not self.requested_workspace:
@@ -742,6 +745,7 @@ class FixtureBroker:
                     "notification-inbox",
                     "workspace",
                     "task-center",
+                    "task-controls",
                     "reconnect",
                     "startup-reconnect",
                 ) or (self.case == "durable-queue" and task_id == self.queued_task_id):
@@ -776,6 +780,7 @@ class FixtureBroker:
                 "notification-inbox",
                 "workspace",
                 "task-center",
+                "task-controls",
                 "reconnect",
                 "startup-reconnect",
             ) or (
@@ -1092,6 +1097,16 @@ def run(cos, case, transcript, original_namespace, trace):
                     time.monotonic() + 15,
                     lambda data: b"Attached image fixture.png" in data,
                 )
+            if case == "task-controls":
+                os.write(master, b"\x14")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Task model controls" in data,
+                )
+                os.write(master, b"mt\x1b")
+                time.sleep(0.4)
             if case == "commands":
                 send_prompt(master, output, "/resume")
                 read_terminal(
@@ -1834,6 +1849,7 @@ if __name__ == "__main__":
             "resume-running",
             "startup-reconnect",
             "task-center",
+            "task-controls",
             "workspace",
         ),
         default="complete",

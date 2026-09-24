@@ -42,6 +42,10 @@ audit.
   sequenced successors without duplicating the already recorded user prompt.
   Its latest requested model is restored only when it remains in the current
   configured-provider catalogue.
+- `Ctrl-T` edits only supported future-task defaults: configured model,
+  memory use and max turns. It never mutates provider credentials or global
+  config, and it labels reasoning effort as provider-default until the shared
+  backend contract supports an explicit value.
 - Display only shared redacted presentation data. Never expose tool arguments,
   successful result bodies, opaque reasoning state or credentials.
 - Approval keys call the installed OS helper for one exact pending request;

@@ -188,6 +188,7 @@ async fn run_with_backend(
     let conversation = connect_initial_conversation(backend.as_ref(), options.session_id.as_deref())
         .await?;
     let mut app = App::new(backend.info().clone(), conversation);
+    app.set_task_defaults(!options.no_memory, options.max_turns);
     let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
     stream::restore_conversation(&mut app, backend.clone(), runtime_tx.clone()).await;
     let mut terminal = TerminalSession::enter().map_err(|error| error.to_string())?;
@@ -213,7 +214,6 @@ async fn run_with_backend(
                             &mut app,
                             backend.clone(),
                             runtime_tx.clone(),
-                            &options,
                         ).await;
                     }
                     Event::Paste(value) => {
@@ -229,6 +229,7 @@ async fn run_with_backend(
                             && app.activity_evidence.is_none()
                             && app.activity_review.is_none()
                             && app.activity_operation_preview.is_none()
+                            && !app.task_controls_open
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -352,6 +353,28 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 .map_or(InputAction::None, InputAction::Confirm),
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.close_confirmation();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if app.task_controls_open {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_task_controls();
+                InputAction::None
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                app.toggle_task_memory();
+                InputAction::None
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                app.cycle_task_max_turns();
+                InputAction::None
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                app.close_task_controls();
+                app.open_model_picker();
                 InputAction::None
             }
             _ => InputAction::None,
@@ -750,6 +773,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.prefill_input("/attach ".to_string());
                 InputAction::None
             }
+            KeyCode::Char('t') => {
+                app.open_task_controls();
+                InputAction::None
+            }
             KeyCode::Char('p') => {
                 app.move_up();
                 InputAction::None
@@ -856,7 +883,6 @@ async fn apply_input_action(
     app: &mut App,
     backend: Arc<dyn Backend>,
     runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
-    options: &ChatOptions,
 ) {
     match action {
         InputAction::None => {}
@@ -1064,16 +1090,26 @@ async fn apply_input_action(
                     stream::restore_conversation(app, backend, runtime_tx).await;
                 }
             } else if app.active_task.is_some() {
-                stream::queue_prompt(app, backend, !options.no_memory, options.max_turns, input)
-                    .await;
+                let use_memory = app.task_use_memory;
+                let max_turns = app.task_max_turns;
+                stream::queue_prompt(
+                    app,
+                    backend,
+                    use_memory,
+                    max_turns,
+                    input,
+                )
+                .await;
             } else {
                 let workspace = app.selected_workspace.clone();
+                let use_memory = app.task_use_memory;
+                let max_turns = app.task_max_turns;
                 stream::start_prompt(
                     app,
                     backend,
                     runtime_tx,
-                    !options.no_memory,
-                    options.max_turns,
+                    use_memory,
+                    max_turns,
                     input,
                     workspace,
                 )

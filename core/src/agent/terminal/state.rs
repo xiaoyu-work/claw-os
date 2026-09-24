@@ -132,6 +132,9 @@ pub(super) struct App {
     pub active_workspace: Option<String>,
     pub selected_model: String,
     pub selected_workspace: String,
+    pub task_use_memory: bool,
+    pub task_max_turns: Option<u32>,
+    pub task_controls_open: bool,
     pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
@@ -195,6 +198,9 @@ impl App {
             active_workspace: None,
             selected_model,
             selected_workspace,
+            task_use_memory: true,
+            task_max_turns: None,
+            task_controls_open: false,
             pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
@@ -293,6 +299,7 @@ impl App {
         self.activity_evidence_scroll = 0;
         self.activity_review = None;
         self.activity_review_scroll = 0;
+        self.task_controls_open = false;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -590,6 +597,33 @@ impl App {
             "Future tasks will use workspace {}. Workspace selection grants no capability.",
             self.selected_workspace
         ));
+    }
+
+    pub fn set_task_defaults(&mut self, use_memory: bool, max_turns: Option<u32>) {
+        self.task_use_memory = use_memory;
+        self.task_max_turns = max_turns;
+    }
+
+    pub fn open_task_controls(&mut self) {
+        self.picker = None;
+        self.task_controls_open = true;
+    }
+
+    pub fn close_task_controls(&mut self) {
+        self.task_controls_open = false;
+    }
+
+    pub fn toggle_task_memory(&mut self) {
+        self.task_use_memory = !self.task_use_memory;
+    }
+
+    pub fn cycle_task_max_turns(&mut self) {
+        self.task_max_turns = match self.task_max_turns {
+            None => Some(8),
+            Some(8) => Some(16),
+            Some(16) => Some(32),
+            Some(_) => None,
+        };
     }
 
     pub fn pending_attachments(&self) -> &[crate::agent::attachments::AttachmentInput] {

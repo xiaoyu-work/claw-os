@@ -668,8 +668,15 @@ pub(super) async fn execute(
             app.open_activity_operation_preview(preview);
         }
         Command::Session => app.push_system(&format!(
-            "session: {}\nmodel: {}\nprovider: {}\nworkspace: {}",
-            app.conversation.id, app.selected_model, app.info.provider, app.selected_workspace
+            "session: {}\nmodel: {}\nprovider: {}\nworkspace: {}\nmemory: {}\nmax turns: {}",
+            app.conversation.id,
+            app.selected_model,
+            app.info.provider,
+            app.selected_workspace,
+            if app.task_use_memory { "on" } else { "off" },
+            app.task_max_turns
+                .map(|turns| turns.to_string())
+                .unwrap_or_else(|| "configured default".into())
         )),
         Command::Clear => app.clear_transcript(),
         Command::Cancel => {
