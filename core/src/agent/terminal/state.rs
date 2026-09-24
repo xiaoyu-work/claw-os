@@ -147,6 +147,8 @@ pub(super) struct App {
     pub task_plan_only: bool,
     pub task_controls_open: bool,
     pub appearance_open: bool,
+    pub agents_open: bool,
+    pub agents_scroll: u16,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -222,6 +224,8 @@ impl App {
             task_plan_only: false,
             task_controls_open: false,
             appearance_open: false,
+            agents_open: false,
+            agents_scroll: 0,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -328,6 +332,8 @@ impl App {
         self.activity_review_scroll = 0;
         self.task_controls_open = false;
         self.appearance_open = false;
+        self.agents_open = false;
+        self.agents_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -684,6 +690,34 @@ impl App {
 
     pub fn close_appearance(&mut self) {
         self.appearance_open = false;
+    }
+
+    pub fn open_agents(&mut self) {
+        self.picker = None;
+        self.agents_open = true;
+        self.agents_scroll = 0;
+    }
+
+    pub fn close_agents(&mut self) {
+        self.agents_open = false;
+        self.agents_scroll = 0;
+    }
+
+    pub fn delegate_summaries(&self) -> Vec<(String, &'static str)> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.kind {
+                EntryKind::Tool { id, status } if entry.text == "cos_delegate" => Some((
+                    id.clone(),
+                    match status {
+                        ToolStatus::Running => "running",
+                        ToolStatus::Succeeded { .. } => "completed",
+                        ToolStatus::Failed { .. } => "failed",
+                    },
+                )),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn cycle_theme(&mut self) {

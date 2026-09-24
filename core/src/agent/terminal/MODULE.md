@@ -102,6 +102,9 @@ audit.
 - Appearance also switches between the default Emacs-style bindings and a
   bounded Vim composer with explicit NORMAL/INSERT modes. Active-task `Esc`
   always retains its cancellation meaning.
+- `/agents` projects only actual `cos_delegate` tool calls from the redacted
+  parent transcript. Current delegate children are ephemeral, so the panel
+  does not invent durable identities or unsupported switching.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

@@ -726,12 +726,13 @@ class FixtureBroker:
                 raise ConnectionAbortedError("fixture broker restart")
             events = []
             if params.get("cursor", 0) == 0:
+                tool_name = "cos_delegate" if self.case == "agents" else "cos_sysinfo"
                 events = [
                     {"event": {"kind": "text_delta", "text": RUNNING + "\n"}},
-                    {"event": {"kind": "tool_use_start", "id": "tool-1", "name": "cos_sysinfo"}},
+                    {"event": {"kind": "tool_use_start", "id": "tool-1", "name": tool_name}},
                     {"event": {
                         "kind": "tool_use", "id": "tool-1",
-                        "name": "cos_sysinfo", "input": None,
+                        "name": tool_name, "input": None,
                     }},
                     {"event": {
                         "kind": "done", "finish": "tool_use",
@@ -740,7 +741,7 @@ class FixtureBroker:
                             "cache_read_tokens": 0, "cache_write_tokens": 0,
                         },
                     }},
-                    {"progress": {"kind": "tool_start", "id": "tool-1", "name": "cos_sysinfo"}},
+                    {"progress": {"kind": "tool_start", "id": "tool-1", "name": tool_name}},
                 ]
                 if self.case in (
                     "complete",
@@ -752,6 +753,7 @@ class FixtureBroker:
                     "approval-center",
                     "attachments",
                     "appearance",
+                    "agents",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -769,7 +771,7 @@ class FixtureBroker:
                 ) or (self.case == "durable-queue" and task_id == self.queued_task_id):
                     events.extend([
                         {"progress": {
-                            "kind": "tool_result", "id": "tool-1", "name": "cos_sysinfo",
+                            "kind": "tool_result", "id": "tool-1", "name": tool_name,
                             "ok": True, "latency_ms": 42,
                         }},
                         {"event": {"kind": "text_delta", "text": "\n## Result\n\n" + ANSWER}},
@@ -792,6 +794,7 @@ class FixtureBroker:
                 "approval-center",
                 "attachments",
                 "appearance",
+                "agents",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1812,6 +1815,7 @@ def run(cos, case, transcript, original_namespace, trace):
             marker = (
                 ANSWER
                 if case in (
+                    "agents",
                     "complete",
                     "durable-queue",
                     "copy-export",
@@ -1860,6 +1864,17 @@ def run(cos, case, transcript, original_namespace, trace):
                     and ANSWER.encode() in data
                     and b"--- end Claw transcript snapshot ---" in data,
                 )
+            if case == "agents":
+                send_prompt(master, output, "/agents")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Scoped delegate calls" in data
+                    and b"tool-1" in data,
+                )
+                os.write(master, b"\x1b")
+                time.sleep(0.3)
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -1946,6 +1961,7 @@ if __name__ == "__main__":
             "approval-center",
             "attachments",
             "appearance",
+            "agents",
             "copy-export",
             "raw-scrollback",
             "vim",

@@ -31,6 +31,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_picker(frame, area, app);
     render_task_controls(frame, area, app);
     render_appearance(frame, area, app);
+    render_agents(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -42,6 +43,62 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_agents(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    if !app.agents_open {
+        return;
+    }
+    let width = screen.width.saturating_sub(4).min(84);
+    let height = screen.height.saturating_sub(4).min(24);
+    if width < 40 || height < 10 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let summaries = app.delegate_summaries();
+    let mut lines = vec![
+        Line::styled(
+            "Scoped delegate calls recorded in the parent task",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            "Delegates are ephemeral child loops, not switchable durable sessions.",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Line::raw(""),
+    ];
+    if summaries.is_empty() {
+        lines.push(Line::styled(
+            "No cos_delegate calls are present in this transcript.",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        lines.extend(summaries.into_iter().map(|(id, status)| {
+            Line::raw(format!("- {status:<9} {id}"))
+        }));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.agents_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Agents ")
+                    .title_bottom(Line::styled(
+                        "Up/Down scroll  Esc close",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
 }
 
 fn accent(app: &App) -> Color {

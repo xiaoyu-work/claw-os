@@ -242,6 +242,7 @@ async fn run_with_backend(
                             && app.activity_operation_preview.is_none()
                             && !app.task_controls_open
                             && !app.appearance_open
+                            && !app.agents_open
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -390,6 +391,23 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Char('k') | KeyCode::Char('K') => {
                 app.toggle_vim_mode();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if app.agents_open {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_agents();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.agents_scroll = app.agents_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.agents_scroll = app.agents_scroll.saturating_sub(5);
                 InputAction::None
             }
             _ => InputAction::None,

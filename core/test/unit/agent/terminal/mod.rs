@@ -172,6 +172,7 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/appearance"), Some(Command::Appearance));
     assert_eq!(parse_command("/vim"), Some(Command::Vim));
     assert_eq!(parse_command("/keymap"), Some(Command::Keymap));
+    assert_eq!(parse_command("/agents"), Some(Command::Agents));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -854,6 +855,22 @@ fn vim_keymap_edits_idle_composer_but_never_steals_task_cancel() {
             ),
         ),
         InputAction::Cancel
+    );
+}
+
+#[test]
+fn agents_view_reports_only_real_delegate_tool_calls() {
+    let mut app = app();
+    app.tool_started("delegate-1", "cos_delegate");
+    app.tool_started("tool-1", "cos_sysinfo");
+    assert_eq!(
+        app.delegate_summaries(),
+        vec![("delegate-1".into(), "running")]
+    );
+    app.tool_finished("delegate-1", "cos_delegate", true, Some(12));
+    assert_eq!(
+        app.delegate_summaries(),
+        vec![("delegate-1".into(), "completed")]
     );
 }
 

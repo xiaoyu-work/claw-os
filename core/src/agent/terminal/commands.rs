@@ -39,6 +39,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/export", "export visible conversation text as Markdown"),
     ("/raw", "publish a redacted snapshot to terminal scrollback"),
     ("/appearance", "configure theme, title, and status line"),
+    ("/agents", "show scoped delegate calls in this task"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -79,6 +80,7 @@ pub(super) enum Command {
     Appearance,
     Vim,
     Keymap,
+    Agents,
     Skills,
     Tasks,
     Task(String),
@@ -182,6 +184,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "appearance" if rest.is_empty() => Command::Appearance,
         "vim" if rest.is_empty() => Command::Vim,
         "keymap" if rest.is_empty() => Command::Keymap,
+        "agents" if rest.is_empty() => Command::Agents,
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -357,6 +360,7 @@ pub(super) async fn execute(
                 | Command::Appearance
                 | Command::Vim
                 | Command::Keymap
+                | Command::Agents
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -397,6 +401,7 @@ pub(super) async fn execute(
              /copy  /export PATH\n\
              /raw\n\
              /appearance\n\
+             /agents\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -528,6 +533,7 @@ pub(super) async fn execute(
             app.push_system(&format!("Composer keymap: {}.", app.keymap_name()));
         }
         Command::Keymap => app.open_appearance(),
+        Command::Agents => app.open_agents(),
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(
