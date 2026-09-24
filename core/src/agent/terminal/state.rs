@@ -59,6 +59,7 @@ pub(super) enum PickerKind {
     Models,
     Sessions,
     History,
+    Files,
     Tasks,
     Approvals,
     Notifications,
@@ -90,6 +91,7 @@ pub(super) enum PickerSelection {
         before_user_turn: u32,
         prompt: String,
     },
+    File(String),
     Task(String),
     Approval(ApprovalRequest),
     Notification(NotificationItem),
@@ -938,6 +940,35 @@ impl App {
         });
     }
 
+    pub fn open_file_picker(&mut self, files: super::commands::WorkspaceFiles) {
+        if files.paths.is_empty() {
+            self.push_system("The selected workspace has no files available for mention.");
+            return;
+        }
+        if files.truncated {
+            self.push_system("File mention picker is limited to the first 512 bounded entries.");
+        }
+        self.picker = Some(Picker {
+            kind: PickerKind::Files,
+            title: "Mention workspace file",
+            items: files
+                .paths
+                .into_iter()
+                .map(|path| PickerItem {
+                    label: path.clone(),
+                    detail: "path only - no file read or capability".into(),
+                    value: path,
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn insert_file_mention(&mut self, path: &str) {
+        self.insert_text(&format!("@{path} "));
+    }
+
     pub fn handle_idle_escape(&mut self) {
         if !self.input.is_empty() {
             self.input.clear();
@@ -1510,6 +1541,7 @@ impl App {
                     prompt,
                 }
             }
+            PickerKind::Files => PickerSelection::File(item.value.clone()),
             PickerKind::Tasks => PickerSelection::Task(item.value.clone()),
             PickerKind::Approvals => {
                 PickerSelection::Approval(self.approval_catalog.get(&item.value)?.clone())

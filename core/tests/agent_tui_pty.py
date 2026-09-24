@@ -645,6 +645,8 @@ class FixtureBroker:
             expected_prompt = (
                 "First line\nSecond line"
                 if self.case in ("multiline", "multiline-key")
+                else "Inspect @notes.txt"
+                if self.case == "file-mentions"
                 else "Run the terminal integration fixture"
             )
             if params.get("prompt") != expected_prompt:
@@ -745,6 +747,7 @@ class FixtureBroker:
                     "multiline-key",
                     "approval-center",
                     "attachments",
+                    "file-mentions",
                     "activity-lifecycle",
                     "activity-controls",
                     "activity-evidence",
@@ -780,6 +783,7 @@ class FixtureBroker:
                 "multiline-key",
                 "approval-center",
                 "attachments",
+                "file-mentions",
                 "activity-lifecycle",
                 "activity-controls",
                 "activity-evidence",
@@ -963,6 +967,8 @@ def run(cos, case, transcript, original_namespace, trace):
             (shadow_home / "project" / "fixture.png").write_bytes(
                 b"\x89PNG\r\n\x1a\nfixture"
             )
+        if case == "file-mentions":
+            (shadow_home / "notes.txt").write_text("mention path only")
         subprocess.run(["mount", "--bind", str(shadow_home), str(home)], check=True)
         cleanup.callback(subprocess.run, ["umount", str(home)], check=True)
         config = root / "config.json"
@@ -1115,6 +1121,17 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"rmt\x1b")
                 time.sleep(0.4)
+            if case == "file-mentions":
+                os.write(master, b"Inspect \x06")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Mention workspace file" in data,
+                )
+                os.write(master, b"notes\r")
+                time.sleep(0.4)
+                os.write(master, b"\r")
             if case == "commands":
                 send_prompt(master, output, "/resume")
                 read_terminal(
@@ -1745,7 +1762,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     lambda _data: time.monotonic() >= settled,
                 )
                 os.write(master, b"\r")
-            elif case not in ("durable-queue", "resume-running"):
+            elif case not in ("durable-queue", "resume-running", "file-mentions"):
                 send_prompt(master, output, "Run the terminal integration fixture")
             marker = ANSWER if case in ("complete", "durable-queue") else RUNNING
             if case == "reconnect":
@@ -1845,6 +1862,7 @@ if __name__ == "__main__":
             "multiline-key",
             "approval-center",
             "attachments",
+            "file-mentions",
             "backtrack",
             "activity-lifecycle",
             "activity-controls",

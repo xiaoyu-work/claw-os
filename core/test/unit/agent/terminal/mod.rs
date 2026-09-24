@@ -319,6 +319,7 @@ fn image_attachment_reads_one_explicit_home_file() {
     std::fs::create_dir(&workspace).unwrap();
     let image = workspace.join("screen.png");
     std::fs::write(&image, b"\x89PNG\r\n\x1a\nfixture").unwrap();
+    std::fs::write(workspace.join("notes.txt"), b"not read by completion").unwrap();
 
     let attachment = commands::load_image_attachment("screen.png", home.path(), &workspace)
         .expect("load image");
@@ -341,6 +342,10 @@ fn image_attachment_reads_one_explicit_home_file() {
     assert_eq!(app.pending_attachment_count(), 1);
     app.clear_attachments();
     assert_eq!(app.pending_attachment_count(), 0);
+
+    let files = commands::list_workspace_files(&workspace).unwrap();
+    assert_eq!(files.paths, ["notes.txt", "screen.png"]);
+    assert!(!files.truncated);
 }
 
 #[test]
@@ -424,6 +429,15 @@ fn searchable_pickers_return_typed_claw_selections() {
             before_user_turn: 0,
             prompt: "Earlier question".into(),
         })
+    );
+
+    app.open_file_picker(commands::WorkspaceFiles {
+        paths: vec!["src/main.rs".into()],
+        truncated: false,
+    });
+    assert_eq!(
+        app.take_picker_selection(),
+        Some(PickerSelection::File("src/main.rs".into()))
     );
 }
 

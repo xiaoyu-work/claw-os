@@ -121,7 +121,7 @@ jobs:
           trap 'rm -f "$cos_fixture"' EXIT
           install -m 0755 target/${{ matrix.musl_target }}/release/cos "$cos_fixture"
           original_namespace="$(readlink /proc/self/ns/mnt)"
-          for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+          for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments file-mentions backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
             unshare --user --map-current-user --keep-caps --mount --net \
               python3 -B core/tests/agent_tui_pty.py \
               --cos "$cos_fixture" \

@@ -84,6 +84,9 @@ audit.
 - `Ctrl-O` prepares one explicit image path under the verified owner home.
   The terminal reads bounded bytes and submits the existing attachment wire
   object; no path or filesystem capability reaches the task.
+- `Ctrl-F` lists at most 512 regular-file names under the selected workspace
+  and inserts an `@relative/path` mention. Completion reads no file contents,
+  follows no symlink directories, and grants no capability.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

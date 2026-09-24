@@ -8,6 +8,11 @@ use serde_json::Value;
 use super::backend::{ActivityControlPolicy, Backend};
 use super::state::{App, ConfirmationAction, RunStatus};
 
+pub(super) struct WorkspaceFiles {
+    pub paths: Vec<String>,
+    pub truncated: bool,
+}
+
 // Keep object-specific mutations in their panels instead of turning the
 // completion palette into a list of backend operations.
 pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
@@ -779,6 +784,58 @@ pub(super) fn load_image_attachment(
     };
     crate::agent::attachments::normalize(vec![input.clone()])?;
     Ok(input)
+}
+
+pub(super) fn list_workspace_files(workspace: &Path) -> Result<WorkspaceFiles, String> {
+    const MAX_FILES: usize = 512;
+    const MAX_DEPTH: usize = 4;
+    let workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("resolve workspace for file mentions: {error}"))?;
+    let mut paths = Vec::new();
+    let mut stack = vec![(workspace.clone(), 0usize)];
+    let mut truncated = false;
+    while let Some((directory, depth)) = stack.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| format!("list workspace {}: {error}", directory.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("read workspace entry: {error}"))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("inspect workspace entry: {error}"))?;
+            let path = entry.path();
+            if file_type.is_dir() && depth < MAX_DEPTH {
+                let name = entry.file_name();
+                if !matches!(
+                    name.to_str(),
+                    Some(".git" | "target" | "node_modules" | ".venv")
+                ) {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            if paths.len() == MAX_FILES {
+                truncated = true;
+                break;
+            }
+            let relative = path
+                .strip_prefix(&workspace)
+                .map_err(|_| "workspace file escaped its canonical root".to_string())?;
+            let relative = relative
+                .to_str()
+                .filter(|value| !value.chars().any(char::is_control))
+                .ok_or("workspace file path is not valid UTF-8")?;
+            paths.push(relative.replace('\\', "/"));
+        }
+        if truncated {
+            break;
+        }
+    }
+    paths.sort();
+    Ok(WorkspaceFiles { paths, truncated })
 }
 
 fn parse_channel(value: &str) -> Option<NotificationChannel> {

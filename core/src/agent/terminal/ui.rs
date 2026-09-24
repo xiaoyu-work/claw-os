@@ -1245,6 +1245,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         PickerKind::Models => format!(" {} - model ", picker.title),
         PickerKind::Sessions => format!(" {} - session ", picker.title),
         PickerKind::History => format!(" {} - history ", picker.title),
+        PickerKind::Files => format!(" {} - file ", picker.title),
         PickerKind::Tasks => format!(" {} - task ", picker.title),
         PickerKind::Approvals => format!(" {} - approval ", picker.title),
         PickerKind::Notifications => format!(" {} - notification ", picker.title),
@@ -1627,7 +1628,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
             if app.backtrack_armed() {
                 " Enter send  Esc again history  Ctrl+K commands "
             } else {
-                " Enter send  Ctrl+J newline  Ctrl+O image  Ctrl+T model  Esc stop  Ctrl+K menu "
+                " Enter send  Ctrl+J newline  Ctrl+F file  Ctrl+O image  Ctrl+T model  Esc stop "
             },
             Style::default().fg(Color::DarkGray),
         ),

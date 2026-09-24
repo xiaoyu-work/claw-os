@@ -169,6 +169,7 @@ enum InputAction {
     Confirm(ConfirmationAction),
     TaskCancel(String),
     TaskRetry(String),
+    FileMentions,
     ApprovalReview(String, ReviewDecision),
     MutateNotification(String, NotificationMutation),
     NotificationPreference(NotificationPreferenceAction),
@@ -763,6 +764,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.cursor = app.input.chars().count();
                 InputAction::None
             }
+            KeyCode::Char('f') => InputAction::FileMentions,
             KeyCode::Char('j') => {
                 app.insert_char('\n');
                 InputAction::None
@@ -942,6 +944,7 @@ async fn apply_input_action(
                 }
                 Err(error) => app.push_error(&error),
             },
+            PickerSelection::File(path) => app.insert_file_mention(&path),
             PickerSelection::Task(id) => match backend.get_task(&id).await {
                 Ok(task) => app.open_task_detail(task),
                 Err(error) => app.push_error(&error),
@@ -984,6 +987,18 @@ async fn apply_input_action(
             }
             Err(error) => app.push_error(&error),
         },
+        InputAction::FileMentions => {
+            let workspace = std::path::PathBuf::from(&app.selected_workspace);
+            match tokio::task::spawn_blocking(move || {
+                commands::list_workspace_files(&workspace)
+            })
+            .await
+            {
+                Ok(Ok(files)) => app.open_file_picker(files),
+                Ok(Err(error)) => app.push_error(&error),
+                Err(_) => app.push_error("workspace file mention reader failed"),
+            }
+        }
         InputAction::ApprovalReview(approval_id, decision) => {
             match backend.review(&approval_id, decision).await {
                 Ok(()) => {
