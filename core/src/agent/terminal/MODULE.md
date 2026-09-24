@@ -96,6 +96,9 @@ audit.
 - `/appearance` changes only local chrome: bounded accent theme, optional
   conversation terminal title, and compact/full status line. It mutates no
   backend or persisted configuration.
+- Appearance also switches between the default Emacs-style bindings and a
+  bounded Vim composer with explicit NORMAL/INSERT modes. Active-task `Esc`
+  always retains its cancellation meaning.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

@@ -82,6 +82,7 @@ fn render_appearance(frame: &mut Frame<'_>, screen: Rect, app: &App) {
             "status line: {}",
             if app.compact_statusline { "compact" } else { "full" }
         )),
+        Line::raw(format!("keymap: {}", app.keymap_name())),
         Line::raw(""),
         Line::styled(
             "No provider, task, permission, or persisted state is changed.",
@@ -97,7 +98,7 @@ fn render_appearance(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .title(" Appearance ")
                 .title_bottom(Line::from(vec![
                     Span::styled(
-                        "[t] Theme  [h] Title  [s] Status",
+                        "[t] Theme  [h] Title  [s] Status  [k] Keymap",
                         Style::default().fg(Color::Yellow),
                     ),
                     Span::raw("  "),
@@ -1623,6 +1624,15 @@ fn inline_spans(value: &str) -> Vec<Span<'static>> {
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let title = if app.vim_mode {
+        if app.vim_insert_mode {
+            " Message - VIM INSERT "
+        } else {
+            " Message - VIM NORMAL "
+        }
+    } else {
+        " Message "
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if app.current_approval().is_some() {
@@ -1630,7 +1640,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         } else {
             accent(app)
         }))
-        .title(" Message ");
+        .title(title);
     if let Some(approval) = app.current_approval() {
         let text = Line::from(vec![
             Span::styled(

@@ -149,6 +149,8 @@ pub(super) struct App {
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
+    pub vim_mode: bool,
+    pub vim_insert_mode: bool,
     pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
@@ -221,6 +223,8 @@ impl App {
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
+            vim_mode: false,
+            vim_insert_mode: true,
             pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
@@ -690,6 +694,27 @@ impl App {
 
     pub fn toggle_statusline(&mut self) {
         self.compact_statusline = !self.compact_statusline;
+    }
+
+    pub fn toggle_vim_mode(&mut self) {
+        self.vim_mode = !self.vim_mode;
+        self.vim_insert_mode = !self.vim_mode;
+    }
+
+    pub fn enter_vim_insert(&mut self) {
+        self.vim_insert_mode = true;
+    }
+
+    pub fn leave_vim_insert(&mut self) {
+        self.vim_insert_mode = false;
+    }
+
+    pub fn keymap_name(&self) -> &'static str {
+        if self.vim_mode {
+            "vim"
+        } else {
+            "emacs"
+        }
     }
 
     pub fn theme_name(&self) -> &'static str {

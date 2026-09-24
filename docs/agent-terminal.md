@@ -86,6 +86,9 @@ Controls:
   scrollback, then restores the full-screen UI.
 - `/appearance` opens terminal-local theme, title and compact/full status-line
   controls. These settings do not mutate provider, task or persisted state.
+- Appearance key `k` switches the composer between default bindings and
+  bounded Vim NORMAL/INSERT modes. `/vim` is a direct compatible toggle;
+  active-task `Esc` always cancels rather than being captured by Vim.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32.
@@ -316,7 +319,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance file-mentions copy-export raw-scrollback backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -363,6 +366,8 @@ The raw-scrollback scenario publishes the same redacted bounded transcript
 between explicit main-screen delimiters and then returns to the TUI.
 The appearance scenario changes accent, terminal title and status density while
 leaving backend state untouched.
+The Vim scenario switches to NORMAL mode, enters INSERT, submits one prompt,
+and preserves active-task cancellation semantics.
 The review scenario renders only authenticated Activity plan references and
 App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its

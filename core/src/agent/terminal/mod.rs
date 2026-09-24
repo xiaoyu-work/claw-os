@@ -388,6 +388,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.toggle_statusline();
                 InputAction::None
             }
+            KeyCode::Char('k') | KeyCode::Char('K') => {
+                app.toggle_vim_mode();
+                InputAction::None
+            }
             _ => InputAction::None,
         };
     }
@@ -825,6 +829,72 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             _ => InputAction::None,
         };
+    }
+    if app.vim_mode && app.active_task.is_none() {
+        if app.vim_insert_mode {
+            if key.code == KeyCode::Esc {
+                app.leave_vim_insert();
+                return InputAction::None;
+            }
+        } else {
+            return match key.code {
+                KeyCode::Char('i') => {
+                    app.enter_vim_insert();
+                    InputAction::None
+                }
+                KeyCode::Char('a') => {
+                    app.move_right();
+                    app.enter_vim_insert();
+                    InputAction::None
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    app.move_left();
+                    InputAction::None
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    app.move_right();
+                    InputAction::None
+                }
+                KeyCode::Char('x') | KeyCode::Delete => {
+                    app.delete();
+                    InputAction::None
+                }
+                KeyCode::Char('0') | KeyCode::Home => {
+                    app.cursor = 0;
+                    InputAction::None
+                }
+                KeyCode::Char('$') | KeyCode::End => {
+                    app.cursor = app.input.chars().count();
+                    InputAction::None
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    app.move_up();
+                    InputAction::None
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    app.move_down();
+                    InputAction::None
+                }
+                KeyCode::Char('/') => {
+                    app.enter_vim_insert();
+                    app.insert_char('/');
+                    InputAction::None
+                }
+                KeyCode::Esc => {
+                    app.handle_idle_escape();
+                    InputAction::None
+                }
+                KeyCode::Enter => {
+                    let input = app.take_input();
+                    if input.is_empty() {
+                        InputAction::None
+                    } else {
+                        InputAction::Submit(input)
+                    }
+                }
+                _ => InputAction::None,
+            };
+        }
     }
     match key.code {
         KeyCode::Char(value) => {

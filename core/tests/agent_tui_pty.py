@@ -750,6 +750,7 @@ class FixtureBroker:
                     "appearance",
                     "copy-export",
                     "raw-scrollback",
+                    "vim",
                     "file-mentions",
                     "activity-lifecycle",
                     "activity-controls",
@@ -789,6 +790,7 @@ class FixtureBroker:
                 "appearance",
                 "copy-export",
                 "raw-scrollback",
+                "vim",
                 "file-mentions",
                 "activity-lifecycle",
                 "activity-controls",
@@ -1791,11 +1793,26 @@ def run(cos, case, transcript, original_namespace, trace):
                     lambda _data: time.monotonic() >= settled,
                 )
                 os.write(master, b"\r")
+            elif case == "vim":
+                send_prompt(master, output, "/vim")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"VIM NORMAL" in data,
+                )
+                os.write(master, b"iRun the terminal integration fixture\r")
             elif case not in ("durable-queue", "resume-running", "file-mentions"):
                 send_prompt(master, output, "Run the terminal integration fixture")
             marker = (
                 ANSWER
-                if case in ("complete", "durable-queue", "copy-export", "raw-scrollback")
+                if case in (
+                    "complete",
+                    "durable-queue",
+                    "copy-export",
+                    "raw-scrollback",
+                    "vim",
+                )
                 else RUNNING
             )
             if case == "reconnect":
@@ -1926,6 +1943,7 @@ if __name__ == "__main__":
             "appearance",
             "copy-export",
             "raw-scrollback",
+            "vim",
             "file-mentions",
             "backtrack",
             "activity-lifecycle",

@@ -77,6 +77,8 @@ pub(super) enum Command {
     Export(String),
     Raw,
     Appearance,
+    Vim,
+    Keymap,
     Skills,
     Tasks,
     Task(String),
@@ -178,6 +180,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "export" if !rest.is_empty() => Command::Export(rest.to_string()),
         "raw" if rest.is_empty() => Command::Raw,
         "appearance" if rest.is_empty() => Command::Appearance,
+        "vim" if rest.is_empty() => Command::Vim,
+        "keymap" if rest.is_empty() => Command::Keymap,
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -351,6 +355,8 @@ pub(super) async fn execute(
                 | Command::Export(_)
                 | Command::Raw
                 | Command::Appearance
+                | Command::Vim
+                | Command::Keymap
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -517,6 +523,11 @@ pub(super) async fn execute(
         }
         Command::Raw => app.request_raw_scrollback(),
         Command::Appearance => app.open_appearance(),
+        Command::Vim => {
+            app.toggle_vim_mode();
+            app.push_system(&format!("Composer keymap: {}.", app.keymap_name()));
+        }
+        Command::Keymap => app.open_appearance(),
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(

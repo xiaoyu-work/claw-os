@@ -169,6 +169,8 @@ fn claw_commands_are_closed_and_semantic() {
     );
     assert_eq!(parse_command("/raw"), Some(Command::Raw));
     assert_eq!(parse_command("/appearance"), Some(Command::Appearance));
+    assert_eq!(parse_command("/vim"), Some(Command::Vim));
+    assert_eq!(parse_command("/keymap"), Some(Command::Keymap));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -770,7 +772,7 @@ fn task_controls_change_only_future_task_defaults() {
 fn appearance_controls_are_terminal_local() {
     let mut app = app();
     app.open_appearance();
-    for key in ['t', 'h', 's'] {
+    for key in ['t', 'h', 's', 'k'] {
         assert_eq!(
             handle_key(
                 &mut app,
@@ -788,6 +790,62 @@ fn appearance_controls_are_terminal_local() {
         Some("Claw - Claw terminal test")
     );
     assert!(app.compact_statusline);
+    assert_eq!(app.keymap_name(), "vim");
+    assert!(!app.vim_insert_mode);
+}
+
+#[test]
+fn vim_keymap_edits_idle_composer_but_never_steals_task_cancel() {
+    let mut app = app();
+    app.toggle_vim_mode();
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('i'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('0'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(app.input.is_empty());
+
+    app.begin_task(&job("running"));
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::Cancel
+    );
 }
 
 #[test]
