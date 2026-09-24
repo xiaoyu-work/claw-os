@@ -274,6 +274,12 @@ pub(super) struct ActivityEvidence {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ActivityReview {
+    pub activity_id: String,
+    pub presentation: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ActivityOperationPreview {
     pub activity_id: String,
     pub presentation: String,
@@ -416,6 +422,7 @@ pub(super) trait Backend: Send + Sync {
         priority: &str,
     ) -> Result<ActivityControls, String>;
     async fn activity_evidence(&self, id: &str) -> Result<ActivityEvidence, String>;
+    async fn activity_review(&self, id: &str) -> Result<ActivityReview, String>;
     async fn activity_operation_preview(
         &self,
         id: &str,
@@ -1105,6 +1112,31 @@ impl Backend for BrokerBackend {
             return Err("Claw Activity evidence exceeded its terminal bound".into());
         }
         Ok(ActivityEvidence {
+            activity_id: id.to_string(),
+            presentation,
+        })
+    }
+
+    async fn activity_review(&self, id: &str) -> Result<ActivityReview, String> {
+        let evidence = self.activity_evidence(id).await?;
+        let value: Value = serde_json::from_str(&evidence.presentation)
+            .map_err(|_| "Claw Activity evidence could not be reviewed".to_string())?;
+        let staged = value
+            .get("staged_file_plans")
+            .cloned()
+            .ok_or("Claw Activity evidence omitted staged file plans")?;
+        let review = json!({
+            "activity_id": id,
+            "authority": "Review is presentation only. Plans and diffs are App-reported proposals; no target is read or changed here.",
+            "staged_file_plans": staged,
+            "next": "Inspect or apply a selected plan explicitly through the normal Files App permission path."
+        });
+        let presentation = serde_json::to_string_pretty(&review)
+            .map_err(|_| "Claw file-change review could not be rendered".to_string())?;
+        if presentation.len() > 1024 * 1024 {
+            return Err("Claw file-change review exceeded its terminal bound".into());
+        }
+        Ok(ActivityReview {
             activity_id: id.to_string(),
             presentation,
         })

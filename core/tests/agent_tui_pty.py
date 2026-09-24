@@ -738,6 +738,7 @@ class FixtureBroker:
                     "activity-lifecycle",
                     "activity-controls",
                     "activity-evidence",
+                    "activity-review",
                     "notification-inbox",
                     "workspace",
                     "task-center",
@@ -771,6 +772,7 @@ class FixtureBroker:
                 "activity-lifecycle",
                 "activity-controls",
                 "activity-evidence",
+                "activity-review",
                 "notification-inbox",
                 "workspace",
                 "task-center",
@@ -1649,8 +1651,21 @@ def run(cos, case, transcript, original_namespace, trace):
                     >= 2,
                 )
                 time.sleep(0.4)
+            if case == "activity-review":
+                send_prompt(master, output, f"/review {ACTIVITY_ID}")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Staged file review" in data
+                    and b"staged_file_plans" in data
+                    and all(
+                        any(request["command"] == command for request in broker.requests)
+                        for command in ("activity.objects", "activity.receipts")
+                    ),
+                )
                 os.write(master, b"\x1b")
-                time.sleep(0.3)
+                time.sleep(0.4)
             if case == "workspace":
                 send_prompt(master, output, "/workspace project")
                 read_terminal(
@@ -1811,6 +1826,7 @@ if __name__ == "__main__":
             "activity-lifecycle",
             "activity-controls",
             "activity-evidence",
+            "activity-review",
             "notification-inbox",
             "plain",
             "reconnect",

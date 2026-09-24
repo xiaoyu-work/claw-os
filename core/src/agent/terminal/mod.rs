@@ -177,6 +177,7 @@ enum InputAction {
     ActivityAttention(String),
     ActivityControls(String),
     ActivityEvidence(String),
+    ActivityReview(String),
     Quit,
 }
 
@@ -226,6 +227,7 @@ async fn run_with_backend(
                             && app.activity_attention.is_none()
                             && app.activity_controls.is_none()
                             && app.activity_evidence.is_none()
+                            && app.activity_review.is_none()
                             && app.activity_operation_preview.is_none()
                             && app.picker.is_none()
                         {
@@ -576,6 +578,25 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if let Some(review) = &app.activity_review {
+        let activity_id = review.activity_id.clone();
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_activity_review();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.activity_review_scroll = app.activity_review_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.activity_review_scroll = app.activity_review_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => InputAction::ActivityEvidence(activity_id),
+            _ => InputAction::None,
+        };
+    }
     if let Some(evidence) = &app.activity_evidence {
         let activity_id = evidence.activity_id.clone();
         return match key.code {
@@ -595,6 +616,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.close_activity_evidence();
                 app.prefill_input(format!("/activity-preview {activity_id} "));
                 InputAction::None
+            }
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                InputAction::ActivityReview(activity_id)
             }
             _ => InputAction::None,
         };
@@ -640,6 +664,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             KeyCode::Char('a') | KeyCode::Char('A') => InputAction::ActivityAttention(id),
             KeyCode::Char('o') | KeyCode::Char('O') => InputAction::ActivityControls(id),
             KeyCode::Char('e') | KeyCode::Char('E') => InputAction::ActivityEvidence(id),
+            KeyCode::Char('v') | KeyCode::Char('V') => InputAction::ActivityReview(id),
             _ => InputAction::None,
         };
     }
@@ -899,6 +924,10 @@ async fn apply_input_action(
                 Ok(detail) => app.open_activity_detail(detail),
                 Err(error) => app.push_error(&error),
             },
+            PickerSelection::ActivityReview(id) => match backend.activity_review(&id).await {
+                Ok(review) => app.open_activity_review(review),
+                Err(error) => app.push_error(&error),
+            },
         },
         InputAction::Confirm(action) => {
             if let Err(error) = commands::confirm(app, backend, action).await {
@@ -1021,6 +1050,10 @@ async fn apply_input_action(
         },
         InputAction::ActivityEvidence(id) => match backend.activity_evidence(&id).await {
             Ok(evidence) => app.open_activity_evidence(evidence),
+            Err(error) => app.push_error(&error),
+        },
+        InputAction::ActivityReview(id) => match backend.activity_review(&id).await {
+            Ok(review) => app.open_activity_review(review),
             Err(error) => app.push_error(&error),
         },
         InputAction::Submit(input) => {

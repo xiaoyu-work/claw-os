@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
-    ActivityOperationPreview, ApprovalRequest, BackendInfo, Conversation, ConversationJob,
+    ActivityOperationPreview, ActivityReview, ApprovalRequest, BackendInfo, Conversation,
+    ConversationJob,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     TaskSummary,
 };
@@ -62,6 +63,7 @@ pub(super) enum PickerKind {
     Approvals,
     Notifications,
     Activities,
+    ActivityReviews,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,6 +94,7 @@ pub(super) enum PickerSelection {
     Approval(ApprovalRequest),
     Notification(NotificationItem),
     Activity(String),
+    ActivityReview(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,6 +156,8 @@ pub(super) struct App {
     pub activity_controls_scroll: u16,
     pub activity_evidence: Option<ActivityEvidence>,
     pub activity_evidence_scroll: u16,
+    pub activity_review: Option<ActivityReview>,
+    pub activity_review_scroll: u16,
     pub activity_operation_preview: Option<ActivityOperationPreview>,
     pub activity_operation_preview_scroll: u16,
     pub scroll: u16,
@@ -214,6 +219,8 @@ impl App {
             activity_controls_scroll: 0,
             activity_evidence: None,
             activity_evidence_scroll: 0,
+            activity_review: None,
+            activity_review_scroll: 0,
             activity_operation_preview: None,
             activity_operation_preview_scroll: 0,
             scroll: 0,
@@ -284,6 +291,8 @@ impl App {
         self.activity_controls_scroll = 0;
         self.activity_evidence = None;
         self.activity_evidence_scroll = 0;
+        self.activity_review = None;
+        self.activity_review_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -1152,6 +1161,36 @@ impl App {
         });
     }
 
+    pub fn open_activity_review_picker(&mut self, activities: Vec<Activity>) {
+        self.activity_detail = None;
+        self.activity_attention = None;
+        self.activity_controls = None;
+        self.activity_evidence = None;
+        self.activity_review = None;
+        self.picker = Some(Picker {
+            kind: PickerKind::ActivityReviews,
+            title: "Review staged file plans",
+            items: activities
+                .into_iter()
+                .map(|activity| PickerItem {
+                    label: format!(
+                        "{} {}",
+                        activity.state.to_uppercase(),
+                        bounded_clean_text(&activity.title, 120).replace('\n', " ")
+                    ),
+                    detail: format!(
+                        "{} | {}",
+                        bounded_clean_text(&activity.goal, 160).replace('\n', " "),
+                        activity.updated_at
+                    ),
+                    value: activity.id,
+                })
+                .collect(),
+            query: String::new(),
+            selected: 0,
+        });
+    }
+
     pub fn open_activity_detail(&mut self, mut detail: ActivityDetail) {
         sanitize_activity(&mut detail.activity);
         for job in &mut detail.jobs {
@@ -1172,6 +1211,7 @@ impl App {
         self.notification_preferences = None;
         self.activity_attention = None;
         self.activity_controls = None;
+        self.activity_review = None;
         self.activity_detail = Some(detail);
         self.activity_detail_scroll = 0;
     }
@@ -1236,6 +1276,7 @@ impl App {
         self.activity_attention = None;
         self.activity_controls = None;
         self.activity_operation_preview = None;
+        self.activity_review = None;
         self.activity_evidence = Some(evidence);
         self.activity_evidence_scroll = 0;
     }
@@ -1243,6 +1284,27 @@ impl App {
     pub fn close_activity_evidence(&mut self) {
         self.activity_evidence = None;
         self.activity_evidence_scroll = 0;
+    }
+
+    pub fn open_activity_review(&mut self, mut review: ActivityReview) {
+        review.presentation = bounded_clean_text(&review.presentation, 1024 * 1024);
+        self.picker = None;
+        self.task_detail = None;
+        self.approval_detail = None;
+        self.notification_detail = None;
+        self.notification_preferences = None;
+        self.activity_detail = None;
+        self.activity_attention = None;
+        self.activity_controls = None;
+        self.activity_evidence = None;
+        self.activity_operation_preview = None;
+        self.activity_review = Some(review);
+        self.activity_review_scroll = 0;
+    }
+
+    pub fn close_activity_review(&mut self) {
+        self.activity_review = None;
+        self.activity_review_scroll = 0;
     }
 
     pub fn open_activity_operation_preview(&mut self, mut preview: ActivityOperationPreview) {
@@ -1399,6 +1461,9 @@ impl App {
                 PickerSelection::Notification(self.notification_catalog.get(&item.value)?.clone())
             }
             PickerKind::Activities => PickerSelection::Activity(item.value.clone()),
+            PickerKind::ActivityReviews => {
+                PickerSelection::ActivityReview(item.value.clone())
+            }
         })
     }
 

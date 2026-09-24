@@ -27,6 +27,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/model", "select the model for future tasks"),
     ("/workspace", "show or select a broker-validated workspace"),
     ("/attach", "attach an image to the next task"),
+    ("/review", "review staged file plans and reported diffs"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -60,6 +61,7 @@ pub(super) enum Command {
     Model(String),
     Workspace(Option<String>),
     Attach(Option<String>),
+    Review(Option<String>),
     Skills,
     Tasks,
     Task(String),
@@ -155,6 +157,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "workspace" => Command::Workspace(Some(rest.to_string())),
         "attach" if rest.is_empty() => Command::Attach(None),
         "attach" => Command::Attach(Some(rest.to_string())),
+        "review" if rest.is_empty() => Command::Review(None),
+        "review" => Command::Review(Some(rest.to_string())),
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -279,6 +283,7 @@ fn takes_argument(command: &str) -> bool {
             | "/model"
             | "/workspace"
             | "/attach"
+            | "/review"
             | "/task"
             | "/approval"
             | "/inbox"
@@ -321,6 +326,7 @@ pub(super) async fn execute(
                 | Command::Task(_)
                 | Command::Workspace(_)
                 | Command::Attach(_)
+                | Command::Review(_)
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -357,6 +363,7 @@ pub(super) async fn execute(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
              /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\
              /attach [PATH|clear]\n\
+             /review [ACTIVITY_ID]\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -446,6 +453,18 @@ pub(super) async fn execute(
                 app.add_attachment(attachment)?;
             }
         },
+        Command::Review(None) => {
+            let activities = backend.list_activities(None).await?;
+            if activities.is_empty() {
+                app.push_system("No Activities are available for staged-file review.");
+            } else {
+                app.open_activity_review_picker(activities);
+            }
+        }
+        Command::Review(Some(id)) => {
+            let review = backend.activity_review(&id).await?;
+            app.open_activity_review(review);
+        }
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(

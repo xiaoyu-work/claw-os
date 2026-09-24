@@ -61,6 +61,9 @@ audit.
 - Activity Evidence aggregates authenticated object declarations, immutable
   reported receipts and object-state annotations without resolving App data.
   Operation previews stay metadata-only and file plans stay App-owned.
+- Review projects only attached Files change-plan references and their reported
+  receipt diffs from Activity Evidence. It neither scans the workspace nor
+  resolves, applies, or authorizes a plan.
 - Keep slash completion limited to high-level entry points and common
   conversation actions. Object lifecycle, policy and evidence actions belong
   in the panel opened by that entry point; compatible direct forms may remain

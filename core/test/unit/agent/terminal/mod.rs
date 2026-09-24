@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
-    ActivityEvidence, ActivityOperationPreview, ActivityResource, ApprovalRequest, BackendInfo,
-    Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
+    ActivityEvidence, ActivityOperationPreview, ActivityResource, ActivityReview, ApprovalRequest,
+    BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
     NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
@@ -155,6 +155,10 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(
         parse_command("/attach project/screen.png"),
         Some(Command::Attach(Some("project/screen.png".into())))
+    );
+    assert_eq!(
+        parse_command("/review activity-1"),
+        Some(Command::Review(Some("activity-1".into())))
     );
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
@@ -1217,4 +1221,27 @@ fn activity_evidence_and_previews_remain_non_authoritative() {
         .collect::<String>();
     assert!(output.contains("Metadata preview only"));
     assert!(output.contains("effects_confirmed"));
+
+    app.open_activity_review(ActivityReview {
+        activity_id: "00000000-0000-4000-8000-000000000001".into(),
+        presentation: json!({
+            "authority": "Review is presentation only.",
+            "staged_file_plans": {
+                "reported_receipts": [{
+                    "preview": "--- before\n+++ after"
+                }]
+            }
+        })
+        .to_string(),
+    });
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("App-reported proposals only"));
+    assert!(output.contains("staged_file_plans"));
 }

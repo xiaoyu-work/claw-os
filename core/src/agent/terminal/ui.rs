@@ -36,6 +36,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_attention(frame, area, app);
     render_activity_controls(frame, area, app);
     render_activity_evidence(frame, area, app);
+    render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
     render_confirmation(frame, area, app);
 }
@@ -79,9 +80,59 @@ fn render_activity_evidence(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .title(" Activity evidence ")
                     .title_bottom(Line::from(vec![
                         Span::styled(
-                            "[p] Prepare operation preview",
+                            "[p] Prepare operation preview  [v] Review file plans",
                             Style::default().fg(Color::Yellow),
                         ),
+                        Span::raw("  "),
+                        Span::styled(
+                            "Up/Down scroll  Esc close",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ])),
+            ),
+        area,
+    );
+}
+
+fn render_activity_review(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(review) = &app.activity_review else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(106);
+    let height = screen.height.saturating_sub(4).min(34);
+    if width < 44 || height < 14 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![Line::styled(
+        "App-reported proposals only - review grants no authority and applies nothing",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )];
+    lines.extend(
+        review
+            .presentation
+            .lines()
+            .map(|line| Line::raw(line.to_string())),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.activity_review_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Blue))
+                    .title(" Staged file review ")
+                    .title_bottom(Line::from(vec![
+                        Span::styled("[e] Full evidence", Style::default().fg(Color::Yellow)),
                         Span::raw("  "),
                         Span::styled(
                             "Up/Down scroll  Esc close",
@@ -386,13 +437,15 @@ fn render_activity_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     }
     let actions = match activity.state.as_str() {
         "active" => {
-            "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention  [o] Controls  [e] Evidence"
+            "[r] Run  [p] Pause  [c] Complete  [x] Cancel  [a] Attention  [o] Controls  [e] Evidence  [v] Review"
         }
         "paused" => {
-            "[u] Resume  [c] Complete  [x] Cancel  [a] Attention  [o] Controls  [e] Evidence"
+            "[u] Resume  [c] Complete  [x] Cancel  [a] Attention  [o] Controls  [e] Evidence  [v] Review"
         }
-        "completed" | "cancelled" => "[u] Reopen  [a] Attention  [o] Controls  [e] Evidence",
-        _ => "[a] Attention  [o] Controls  [e] Evidence",
+        "completed" | "cancelled" => {
+            "[u] Reopen  [a] Attention  [o] Controls  [e] Evidence  [v] Review"
+        }
+        _ => "[a] Attention  [o] Controls  [e] Evidence  [v] Review",
     };
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -1126,6 +1179,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         PickerKind::Approvals => format!(" {} - approval ", picker.title),
         PickerKind::Notifications => format!(" {} - notification ", picker.title),
         PickerKind::Activities => format!(" {} - Activity ", picker.title),
+        PickerKind::ActivityReviews => format!(" {} - review ", picker.title),
     };
     frame.render_widget(Clear, area);
     frame.render_widget(

@@ -100,6 +100,9 @@ Controls:
   `r` refreshes canonical state; prepared commands do not run until `Enter`.
 - In an Activity detail, `e` opens Evidence Center. There, `p` prepares an
   operation-preview command; a preview can return to evidence with `e`.
+- `/review [activity-id]` or `v` in an Activity/Evidence panel shows only
+  attached Files change-plan references and App-reported receipt diffs. It
+  never scans the workspace, resolves private plan data, or applies anything.
 
 Text entered while a task is active is immediately persisted as a pending Job
 with `after_task_id` bound to the current durable tail. The scheduler does not
@@ -295,7 +298,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center approval-center attachments backtrack notification-inbox activity-lifecycle activity-controls activity-evidence workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center approval-center attachments backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -334,6 +337,8 @@ The backtrack scenario selects the second retained user prompt, forks the
 verified prefix, restores the prompt for editing, and submits no task.
 The attachments scenario reads one explicit home-contained PNG and verifies
 that task submission carries bounded bytes and metadata but no local path.
+The review scenario renders only authenticated Activity plan references and
+App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its
 existing non-terminal task, and confirms that no replacement task is submitted.
 The multiline scenarios cover both bracketed paste and the portable `Ctrl-J`
