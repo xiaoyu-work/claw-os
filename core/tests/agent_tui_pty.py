@@ -1721,6 +1721,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     )
                     >= 2,
                 )
+                os.write(master, b"\x1b")
                 time.sleep(0.4)
             if case == "activity-review":
                 send_prompt(master, output, f"/review {ACTIVITY_ID}")
