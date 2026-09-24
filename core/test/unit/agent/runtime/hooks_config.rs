@@ -135,15 +135,27 @@ fn load_surfaces_malformed_json_as_invalid_data() {
 }
 
 #[test]
-fn load_accepts_unknown_future_fields() {
+fn save_preserves_unknown_future_fields_and_normalizes_duplicates() {
     let (_dir, path) = tmpfile("hooks.json");
     std::fs::write(
         &path,
-        r#"{"version":1,"enabled":["logging"],"future_field":"ignored"}"#,
+        r#"{"version":1,"enabled":["logging","logging"],"future_field":{"mode":"future"}}"#,
     )
     .unwrap();
-    let cfg = load(&path).expect("ok");
-    assert_eq!(cfg.enabled, vec![HookKind::Logging]);
+    let cfg = load(&path).expect("load");
+    assert_eq!(
+        cfg.enabled,
+        vec![HookKind::Logging, HookKind::Logging]
+    );
+    save(&path, &cfg).expect("save");
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(value["enabled"], serde_json::json!(["logging"]));
+    assert_eq!(
+        value["future_field"],
+        serde_json::json!({ "mode": "future" })
+    );
 }
 
 // ---- register_into ----

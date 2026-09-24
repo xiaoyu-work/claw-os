@@ -56,6 +56,7 @@ and agent tasks.
 | `activity_receipts.rs` | Shared immutable receipt recording for owner-scoped peers and authenticated task reports, with separate declaration snapshots |
 | `file_changes.rs` | Exact read/write-capability atomic file replacement, owner-aware path protection, and effect-level indeterminate journal brackets |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
+| `agent_hooks.rs` | Owner-scoped built-in runtime-hook settings for future Agent tasks; no arbitrary commands or renderer-side persistence |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
 | `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |

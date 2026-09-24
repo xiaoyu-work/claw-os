@@ -43,8 +43,8 @@ use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
     accessibility, activities, activity_attention, activity_object_state, activity_objects,
-    activity_receipts, app_services, app_sessions, audio, backup, bluetooth, browser, camera,
-    clipboard, config_editor, containers, context, context_events, conversations, crash,
+    activity_receipts, agent_hooks, app_services, app_sessions, audio, backup, bluetooth, browser,
+    camera, clipboard, config_editor, containers, context, context_events, conversations, crash,
     credentials, desktop, display, event_center, file_changes, firewall, hardware,
     journal as journal_ops, location, memory, network, network_diagnostics, notifications,
     operation_previews, packages, permissions, power, printer, scheduler, security, snapshots,
@@ -1004,6 +1004,28 @@ routes! {
         body: body::MemoryReset,
         audit: &[("confirm", FieldRule::Flag)],
         run: |c| memory::reset(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentHooksGet {
+        name: "agent.hooks.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Context),
+        body: body::NoBody,
+        run: |c| agent_hooks::get(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentHooksSet {
+        name: "agent.hooks.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Context),
+        body: body::AgentHooksSet,
+        audit: &[
+            ("kind", FieldRule::Token),
+            ("enabled", FieldRule::Flag),
+        ],
+        run: |c| agent_hooks::set(c.params, c.client).map_err(BrokerError::from),
     }
     AgentUsage {
         name: "agent.usage",

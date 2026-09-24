@@ -69,7 +69,7 @@ pub(super) fn interrupt_cmd(args: &[String]) -> Result<Value, String> {
 ///                                and unregister it from the
 ///                                current process. Idempotent.
 ///
-/// Supported kinds: `logging`. CLI `--kind <k>` form is also
+/// Supported kinds: `logging`, `audit`, `checkpoint`. CLI `--kind <k>` form is also
 /// accepted for `enable`/`disable` to mirror common subcommand
 /// conventions.
 pub(super) fn hooks_cmd(args: &[String]) -> Result<Value, String> {
@@ -81,7 +81,8 @@ pub(super) fn hooks_cmd(args: &[String]) -> Result<Value, String> {
         "list" => {
             let registry = global_registry();
             let names = registry.names();
-            let cfg = hooks_config::load(&crate::paths::agent_hooks_path()).unwrap_or_default();
+            let cfg = hooks_config::load(&crate::paths::agent_hooks_path())
+                .map_err(|error| format!("load Agent hooks config: {error}"))?;
             let enabled_kinds: Vec<String> = cfg
                 .enabled
                 .iter()
@@ -97,7 +98,11 @@ pub(super) fn hooks_cmd(args: &[String]) -> Result<Value, String> {
         "enable" => {
             let kind_str = parse_kind_arg(&args[1..])?;
             let kind = HookKind::parse(&kind_str)
-                .ok_or_else(|| format!("unknown hook kind: {kind_str}. try: logging"))?;
+                .ok_or_else(|| {
+                    format!(
+                        "unknown hook kind: {kind_str}. try: logging, audit, or checkpoint"
+                    )
+                })?;
             let path = crate::paths::agent_hooks_path();
             let mut cfg = hooks_config::load(&path).map_err(|e| e.to_string())?;
             let added = cfg.enable(kind);
@@ -122,7 +127,11 @@ pub(super) fn hooks_cmd(args: &[String]) -> Result<Value, String> {
         "disable" => {
             let kind_str = parse_kind_arg(&args[1..])?;
             let kind = HookKind::parse(&kind_str)
-                .ok_or_else(|| format!("unknown hook kind: {kind_str}. try: logging"))?;
+                .ok_or_else(|| {
+                    format!(
+                        "unknown hook kind: {kind_str}. try: logging, audit, or checkpoint"
+                    )
+                })?;
             let path = crate::paths::agent_hooks_path();
             let mut cfg = hooks_config::load(&path).map_err(|e| e.to_string())?;
             let removed = cfg.disable(kind);

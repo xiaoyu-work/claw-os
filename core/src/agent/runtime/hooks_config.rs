@@ -38,6 +38,8 @@ pub enum HookKind {
 }
 
 impl HookKind {
+    pub const ALL: [Self; 3] = [Self::Logging, Self::Audit, Self::Checkpoint];
+
     /// Parse a CLI/config string. Case-insensitive, accepts the
     /// `snake_case` JSON form and a few common aliases.
     pub fn parse(s: &str) -> Option<Self> {
@@ -70,6 +72,8 @@ pub struct HooksConfig {
     /// Order is preserved; duplicates are normalised away on save.
     #[serde(default)]
     pub enabled: Vec<HookKind>,
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 fn default_version() -> u32 {
@@ -81,6 +85,7 @@ impl Default for HooksConfig {
         Self {
             version: 1,
             enabled: Vec::new(),
+            extra: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -143,7 +148,10 @@ pub fn save(path: &Path, cfg: &HooksConfig) -> std::io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     let tmp = tmp_path_for(path);
-    let body = serde_json::to_string_pretty(cfg).map_err(|e| {
+    let mut normalized = cfg.clone();
+    let mut seen = std::collections::HashSet::new();
+    normalized.enabled.retain(|kind| seen.insert(*kind));
+    let body = serde_json::to_string_pretty(&normalized).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("serialize: {e}"))
     })?;
     fs::write(&tmp, body)?;

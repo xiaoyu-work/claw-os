@@ -37,6 +37,9 @@ through model turns, tools, hooks, progress, and final records.
 - Resolve progressive tool envelopes before hooks, approval, progress, and
   parallel scheduling while preserving provider call ids.
 - Run lifecycle hooks and progress/heartbeat reporting.
+- Load only closed built-in hook kinds from the owner-scoped persisted
+  configuration. Broker changes affect future tasks and never introduce
+  arbitrary command hooks.
 - Record conversation, prompt injection, usage, and error state.
 - Carry the durable Job id into persistence so every task-owned prompt,
   assistant response, and tool-result row is transactionally bound to the same

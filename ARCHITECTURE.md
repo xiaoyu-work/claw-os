@@ -40,6 +40,11 @@ The model never owns system authority. It sees only tools admitted by the tool
 registry and capability/guardrail layers. Privileged execution crosses the
 `clawd` broker or a policy-enforced primitive.
 
+Agent hook preferences flow through owner-scoped `clawd` routes into the
+owner's closed built-in hook configuration and are loaded only by future Agent
+tasks. The terminal renderer never writes hook files or supplies executable
+commands.
+
 ## Components
 
 | Component | Responsibility | Primary source |

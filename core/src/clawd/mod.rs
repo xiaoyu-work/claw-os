@@ -11,6 +11,7 @@ pub mod activity_objects;
 pub mod activity_receipts;
 pub mod activity_scheduling_policy;
 pub mod agent_client;
+pub mod agent_hooks;
 pub mod ai;
 pub mod app_notifications;
 pub mod app_permissions;

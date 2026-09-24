@@ -97,6 +97,10 @@ pub enum Command {
     MemoryHistory,
     #[serde(rename = "memory.reset")]
     MemoryReset,
+    #[serde(rename = "agent.hooks.get")]
+    AgentHooksGet,
+    #[serde(rename = "agent.hooks.set")]
+    AgentHooksSet,
     #[serde(rename = "permission.pending")]
     PermissionPending,
     #[serde(rename = "system.review.prepare")]
@@ -133,7 +137,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 54] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -175,6 +179,8 @@ impl Command {
         Self::MemorySessions,
         Self::MemoryHistory,
         Self::MemoryReset,
+        Self::AgentHooksGet,
+        Self::AgentHooksSet,
         Self::PermissionPending,
         Self::SystemReviewPrepare,
         Self::SystemReviewPending,
@@ -231,6 +237,8 @@ impl Command {
             Self::MemorySessions => "memory.sessions",
             Self::MemoryHistory => "memory.history",
             Self::MemoryReset => "memory.reset",
+            Self::AgentHooksGet => "agent.hooks.get",
+            Self::AgentHooksSet => "agent.hooks.set",
             Self::PermissionPending => "permission.pending",
             Self::SystemReviewPrepare => "system.review.prepare",
             Self::SystemReviewPending => "system.review.pending",

@@ -243,6 +243,8 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::MemorySessions, "memory.sessions"),
         (Command::MemoryHistory, "memory.history"),
         (Command::MemoryReset, "memory.reset"),
+        (Command::AgentHooksGet, "agent.hooks.get"),
+        (Command::AgentHooksSet, "agent.hooks.set"),
         (Command::PermissionPending, "permission.pending"),
         (Command::SystemReviewPrepare, "system.review.prepare"),
         (Command::SystemReviewPending, "system.review.pending"),
@@ -261,7 +263,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
     ];
-    assert_eq!(Command::ALL.len(), 52);
+    assert_eq!(Command::ALL.len(), 54);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

@@ -54,6 +54,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "memory.history",
     "memory.sessions",
     "memory.reset",
+    "agent.hooks.get",
+    "agent.hooks.set",
     "agent.usage",
     "credential.oauth-refresh",
     "system.audio.control",
@@ -218,6 +220,7 @@ fn every_route_owns_its_audit_metadata() {
     let payload_free: std::collections::BTreeSet<_> = [
         "daemon.health",
         "daemon.status",
+        "agent.hooks.get",
         "task.count",
         "context.snapshot",
         "context.sources",

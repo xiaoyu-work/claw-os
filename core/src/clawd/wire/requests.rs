@@ -571,6 +571,13 @@ pub struct MemoryReset {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentHooksSet {
+    pub kind: Token<32>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentUsage {
     pub args: TextList<16, 256>,
 }
