@@ -1545,7 +1545,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     ),
                 )
             if case == "voice-settings":
-                os.write(master, b"\x18")
+                os.write(master, b"\x1b[97;10u")
                 read_terminal(
                     master,
                     output,

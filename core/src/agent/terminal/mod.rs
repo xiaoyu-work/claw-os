@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEvent,
-    KeyEventKind, KeyModifiers,
+    KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -982,6 +983,15 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     if key.code != KeyCode::Esc {
         app.disarm_backtrack();
     }
+    if app.active_task.is_none()
+        && matches!(key.code, KeyCode::Char('a') | KeyCode::Char('A'))
+        && key.modifiers.contains(KeyModifiers::SUPER)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+    {
+        return InputAction::OpenVoiceOverview;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
             KeyCode::Char('c') if app.active_task.is_some() => InputAction::Cancel,
@@ -1015,7 +1025,6 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.open_task_controls();
                 InputAction::None
             }
-            KeyCode::Char('x') if app.active_task.is_none() => InputAction::OpenVoiceOverview,
             KeyCode::Char('p') => {
                 app.move_up();
                 InputAction::None
@@ -1507,15 +1516,36 @@ impl TerminalSession {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste) {
+        if let Err(error) = execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        ) {
             let _ = disable_raw_mode();
+            let _ = execute!(
+                io::stdout(),
+                PopKeyboardEnhancementFlags,
+                DisableBracketedPaste,
+                LeaveAlternateScreen
+            );
             return Err(error);
         }
         let mut terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
             Ok(terminal) => terminal,
             Err(error) => {
                 let _ = disable_raw_mode();
-                let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+                let _ = execute!(
+                    io::stdout(),
+                    PopKeyboardEnhancementFlags,
+                    DisableBracketedPaste,
+                    LeaveAlternateScreen
+                );
                 return Err(error);
             }
         };
@@ -1538,7 +1568,12 @@ impl TerminalSession {
     fn publish_scrollback(&mut self, snapshot: &str) -> io::Result<()> {
         self.terminal.show_cursor()?;
         disable_raw_mode()?;
-        execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen)?;
+        execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        )?;
 
         let write_result = (|| {
             let mut stdout = io::stdout();
@@ -1549,7 +1584,17 @@ impl TerminalSession {
         })();
 
         let raw_result = enable_raw_mode();
-        let screen_result = execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste);
+        let screen_result = execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        );
         let clear_result = self.terminal.clear();
         let cursor_result = self.terminal.hide_cursor();
 
@@ -1565,7 +1610,12 @@ impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = self.terminal.show_cursor();
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
     }
 }
 

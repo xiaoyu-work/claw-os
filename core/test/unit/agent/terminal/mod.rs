@@ -1430,8 +1430,9 @@ fn voice_center_uses_claw_media_models_without_claiming_realtime_capture() {
         handle_key(
             &mut app,
             crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char('x'),
-                crossterm::event::KeyModifiers::CONTROL,
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::SUPER
+                    | crossterm::event::KeyModifiers::SHIFT,
             ),
         ),
         InputAction::OpenVoiceOverview

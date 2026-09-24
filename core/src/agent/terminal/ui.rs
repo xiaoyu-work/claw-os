@@ -2436,7 +2436,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let controls = if app.backtrack_armed() {
         " Esc again history  Ctrl+K commands "
     } else {
-        " Enter send  Ctrl+J newline  Ctrl+F file  Ctrl+O image  Ctrl+T model  Ctrl+X voice  Esc stop "
+        " Enter send  Ctrl+J newline  Ctrl+F file  Ctrl+O image  Ctrl+T model  Super+Shift+A voice  Esc stop "
     };
     let usage = format!(
         "tokens {} in / {} out / {} cached{queue}{}",

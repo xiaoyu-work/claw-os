@@ -121,10 +121,11 @@ Controls:
   Copilot credential and retains provider config/history. The panel reports
   foreign-agent import unavailable rather than scanning other App data without
   an authenticated OS import service.
-- `Ctrl-X` opens Voice Center and shows the configured Claw STT/TTS models,
-  voice and output format. It does not substitute a Codex voice backend or open
-  microphone devices directly; realtime capture remains unavailable until the
-  OS provides a capability-gated recorder/session service.
+- `Super+Shift+A` opens Voice Center and shows the configured Claw STT/TTS models,
+  voice and output format. It does not substitute a Codex voice backend.
+  Desktop consumes the global shortcut first and already owns bounded
+  recording/transcription; terminal-only sessions use enhanced keyboard
+  reporting for the same combination while that recorder boundary is shared.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32. `p` toggles durable Plan mode.
