@@ -37,6 +37,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_agent_hooks(frame, area, app);
     render_mcp_overview(frame, area, app);
     render_extensions_overview(frame, area, app);
+    render_usage_overview(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -86,7 +87,7 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "[m] Memory  [h] Hooks  [c] MCP  [e] Extensions  Esc close",
+                        "[m] Memory [h] Hooks [c] MCP [e] Extensions [u] Usage  Esc close",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
@@ -383,6 +384,92 @@ fn render_extensions_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
             ),
         area,
     );
+}
+
+fn render_usage_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(overview) = &app.usage_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(96);
+    let height = screen.height.saturating_sub(4).min(32);
+    if width < 56 || height < 18 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let total = &overview.total;
+    let mut lines = vec![
+        Line::styled(
+            format!("Owner Agent usage - {}", overview.period.label()),
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("Canonical ledger totals only; Claw does not infer monetary cost."),
+        Line::raw(""),
+        Line::raw(format!(
+            "calls {}  success {}  error {}  duration {} ms",
+            total.calls, total.success, total.error, total.total_duration_ms
+        )),
+        Line::raw(format!(
+            "tokens: input {}  output {}  cache read {}  cache write {}",
+            total.input_tokens,
+            total.output_tokens,
+            total.cache_read_tokens,
+            total.cache_write_tokens
+        )),
+        Line::raw(format!(
+            "ledger: {} lines / {} bytes  parse errors {}",
+            overview.log_lines, overview.log_bytes, overview.parse_errors
+        )),
+        Line::raw(""),
+        Line::styled("Providers", Style::default().fg(Color::Yellow)),
+    ];
+    append_usage_breakdown(&mut lines, &overview.providers);
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("Models", Style::default().fg(Color::Yellow)));
+    append_usage_breakdown(&mut lines, &overview.models);
+    if overview.breakdown_truncated {
+        lines.push(Line::styled(
+            "Breakdown truncated by the canonical ledger or terminal bound.",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.usage_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Usage Center ")
+                    .title_bottom(Line::styled(
+                        "[d] daily  [w] weekly  [c] cumulative  Up/Down scroll  Esc back",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
+}
+
+fn append_usage_breakdown(
+    lines: &mut Vec<Line<'static>>,
+    entries: &[super::backend::UsageBreakdown],
+) {
+    if entries.is_empty() {
+        lines.push(Line::styled("  none", Style::default().fg(Color::DarkGray)));
+        return;
+    }
+    lines.extend(entries.iter().map(|entry| {
+        Line::raw(format!(
+            "  {}: {} calls, {} in / {} out",
+            entry.name, entry.totals.calls, entry.totals.input_tokens, entry.totals.output_tokens
+        ))
+    }));
 }
 
 fn render_agents(frame: &mut Frame<'_>, screen: Rect, app: &App) {

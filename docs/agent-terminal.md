@@ -111,6 +111,9 @@ Controls:
   Press `e` for Extensions Center. It shows verified, disabled and quarantined
   Apps, Skills and selected Agent extensions under Claw's single extension
   model; installation and activation remain separate OS-reviewed operations.
+  Press `u` for Usage Center. `d`, `w` and `c` select daily, weekly and
+  cumulative owner-ledger totals. Claw shows recorded token/cache/duration
+  values and does not infer monetary cost.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32. `p` toggles durable Plan mode.
@@ -346,7 +349,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -411,6 +414,8 @@ The mcp-center scenario displays only bounded server identity/status metadata
 and does not start, probe or reveal launch/authentication material.
 The extensions-center scenario keeps Apps, Skills and Agent extensions in one
 authenticated inventory and performs no package installation or activation.
+The usage-center scenario switches cumulative/daily owner-ledger queries and
+renders only recorded usage fields.
 The review scenario renders only authenticated Activity plan references and
 App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its

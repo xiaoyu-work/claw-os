@@ -354,9 +354,38 @@ class FixtureBroker:
             return value
         if method == "agent.usage":
             return {
-                "period": "fixture",
-                "input_tokens": 10,
-                "output_tokens": 5,
+                "scope": "overall",
+                "total": {
+                    "calls": 2,
+                    "success": 2,
+                    "error": 0,
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 3,
+                    "cache_write_tokens": 1,
+                    "total_duration_ms": 50,
+                    "finish_reasons": {"stop": 2},
+                    "errors": 0,
+                },
+                "by_provider": {
+                    "fixture": {
+                        "calls": 2,
+                        "success": 2,
+                        "error": 0,
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cache_read_tokens": 3,
+                        "cache_write_tokens": 1,
+                        "total_duration_ms": 50,
+                        "finish_reasons": {"stop": 2},
+                        "errors": 0,
+                    },
+                },
+                "by_model": {},
+                "parse_errors": 0,
+                "log_lines": 2,
+                "log_bytes": 256,
+                "breakdown_truncated": False,
             }
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
@@ -815,6 +844,7 @@ class FixtureBroker:
                     "hooks-center",
                     "mcp-center",
                     "extensions-center",
+                    "usage-center",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -862,6 +892,7 @@ class FixtureBroker:
                 "hooks-center",
                 "mcp-center",
                 "extensions-center",
+                "usage-center",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1065,6 +1096,7 @@ def run(cos, case, transcript, original_namespace, trace):
             "hooks-center",
             "mcp-center",
             "extensions-center",
+            "usage-center",
         ):
             agent_config.update({
                 "mcp_servers": [{
@@ -1319,6 +1351,8 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
             if case == "mcp-center":
                 send_prompt(master, output, "/platform")
                 read_terminal(
@@ -1336,6 +1370,8 @@ def run(cos, case, transcript, original_namespace, trace):
                     and b"fixture_mcp" in data
                     and b"operator config" in data,
                 )
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
             if case == "extensions-center":
@@ -1358,6 +1394,38 @@ def run(cos, case, transcript, original_namespace, trace):
                 time.sleep(0.4)
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
+            if case == "usage-center":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data,
+                )
+                os.write(master, b"u")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Usage Center" in data
+                    and sum(
+                        request["command"] == "agent.usage"
+                        for request in broker.requests
+                    )
+                    >= 2,
+                )
+                os.write(master, b"d")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Usage Center" in data
+                    and any(
+                        request["command"] == "agent.usage"
+                        and "--since" in request["params"].get("args", [])
+                        for request in broker.requests
+                    ),
+                )
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
                 os.write(master, b"\x1b")
@@ -2218,6 +2286,7 @@ if __name__ == "__main__":
             "hooks-center",
             "mcp-center",
             "extensions-center",
+            "usage-center",
             "copy-export",
             "raw-scrollback",
             "vim",

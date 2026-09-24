@@ -123,6 +123,9 @@ audit.
 - The Platform Extensions Center projects verified, disabled and quarantined
   Apps, Skills and selected Agent extensions as one Claw extension model.
   It never creates a separate Plugin authority or installs/activates content.
+- The Platform Usage Center queries the owner-scoped canonical AI ledger for
+  daily, weekly or cumulative totals. It bounds provider/model breakdowns and
+  never invents monetary cost.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

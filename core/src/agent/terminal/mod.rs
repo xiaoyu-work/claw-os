@@ -183,6 +183,7 @@ enum InputAction {
     ToggleAgentHook(&'static str),
     OpenMcpOverview,
     OpenExtensionsOverview,
+    OpenUsageOverview(backend::UsagePeriod),
     Quit,
 }
 
@@ -252,6 +253,7 @@ async fn run_with_backend(
                             && app.agent_hook_settings.is_none()
                             && app.mcp_overview.is_none()
                             && app.extensions_overview.is_none()
+                            && app.usage_overview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -485,6 +487,32 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if app.usage_overview.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_usage_overview();
+                InputAction::None
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                InputAction::OpenUsageOverview(backend::UsagePeriod::Daily)
+            }
+            KeyCode::Char('w') | KeyCode::Char('W') => {
+                InputAction::OpenUsageOverview(backend::UsagePeriod::Weekly)
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                InputAction::OpenUsageOverview(backend::UsagePeriod::Cumulative)
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.usage_scroll = app.usage_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.usage_scroll = app.usage_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if app.platform_overview.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -506,6 +534,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             KeyCode::Char('h') | KeyCode::Char('H') => InputAction::OpenAgentHooks,
             KeyCode::Char('c') | KeyCode::Char('C') => InputAction::OpenMcpOverview,
             KeyCode::Char('e') | KeyCode::Char('E') => InputAction::OpenExtensionsOverview,
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                InputAction::OpenUsageOverview(backend::UsagePeriod::Cumulative)
+            }
             _ => InputAction::None,
         };
     }
@@ -1139,6 +1170,18 @@ async fn apply_input_action(
         },
         InputAction::OpenExtensionsOverview => match backend.extensions_overview().await {
             Ok(overview) => app.open_extensions_overview(overview),
+            Err(error) => {
+                app.close_platform_overview();
+                app.push_error(&error);
+            }
+        },
+        InputAction::OpenUsageOverview(period) => match backend.usage_overview(period).await {
+            Ok(overview) => app.open_usage_overview(overview),
+            Err(error) if app.usage_overview.is_some() => {
+                app.close_usage_overview();
+                app.close_platform_overview();
+                app.push_error(&error);
+            }
             Err(error) => {
                 app.close_platform_overview();
                 app.push_error(&error);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -377,6 +377,41 @@ pub(super) struct ExtensionsOverview {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum UsagePeriod {
+    Daily,
+    Weekly,
+    Cumulative,
+}
+
+impl UsagePeriod {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Daily => "last 24 hours",
+            Self::Weekly => "last 7 days",
+            Self::Cumulative => "all retained usage",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct UsageBreakdown {
+    pub name: String,
+    pub totals: crate::agent::llm::usage::Totals,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct UsageOverview {
+    pub period: UsagePeriod,
+    pub total: crate::agent::llm::usage::Totals,
+    pub providers: Vec<UsageBreakdown>,
+    pub models: Vec<UsageBreakdown>,
+    pub parse_errors: usize,
+    pub log_lines: u64,
+    pub log_bytes: u64,
+    pub breakdown_truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
     Deny,
@@ -493,6 +528,7 @@ pub(super) trait Backend: Send + Sync {
         -> Result<AgentHookSettings, String>;
     async fn mcp_overview(&self) -> Result<McpOverview, String>;
     async fn extensions_overview(&self) -> Result<ExtensionsOverview, String>;
+    async fn usage_overview(&self, period: UsagePeriod) -> Result<UsageOverview, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1576,6 +1612,25 @@ impl Backend for BrokerBackend {
             .await
             .map_err(|_| "Claw extension inventory reader failed".to_string())
     }
+
+    async fn usage_overview(&self, period: UsagePeriod) -> Result<UsageOverview, String> {
+        let mut args = vec!["overall".to_string()];
+        let now = chrono::Utc::now();
+        let since = match period {
+            UsagePeriod::Daily => Some(now - chrono::Duration::days(1)),
+            UsagePeriod::Weekly => Some(now - chrono::Duration::days(7)),
+            UsagePeriod::Cumulative => None,
+        };
+        if let Some(since) = since {
+            args.push("--since".into());
+            args.push(since.to_rfc3339());
+        }
+        parse_usage_overview(
+            period,
+            self.call(Command::AgentUsage, json!({ "args": args }))
+                .await?,
+        )
+    }
 }
 
 const MAX_MCP_PRESENTATION_ENTRIES: usize = 256;
@@ -1713,6 +1768,64 @@ fn build_extensions_overview(config: &CosConfig, owner_uid: u32) -> ExtensionsOv
     }
 
     ExtensionsOverview { entries, truncated }
+}
+
+const MAX_USAGE_BREAKDOWN_ENTRIES: usize = 20;
+
+#[derive(Deserialize)]
+struct RawUsageOverview {
+    scope: String,
+    total: crate::agent::llm::usage::Totals,
+    by_provider: BTreeMap<String, crate::agent::llm::usage::Totals>,
+    by_model: BTreeMap<String, crate::agent::llm::usage::Totals>,
+    parse_errors: usize,
+    log_lines: u64,
+    log_bytes: u64,
+    breakdown_truncated: bool,
+}
+
+pub(super) fn parse_usage_overview(
+    period: UsagePeriod,
+    value: Value,
+) -> Result<UsageOverview, String> {
+    let raw: RawUsageOverview = serde_json::from_value(value)
+        .map_err(|error| format!("invalid Agent usage response: {error}"))?;
+    if raw.scope != "overall" {
+        return Err("invalid Agent usage response: expected overall scope".to_string());
+    }
+    let (providers, providers_truncated) = top_usage_breakdown(raw.by_provider);
+    let (models, models_truncated) = top_usage_breakdown(raw.by_model);
+    Ok(UsageOverview {
+        period,
+        total: raw.total,
+        providers,
+        models,
+        parse_errors: raw.parse_errors,
+        log_lines: raw.log_lines,
+        log_bytes: raw.log_bytes,
+        breakdown_truncated: raw.breakdown_truncated
+            || providers_truncated
+            || models_truncated,
+    })
+}
+
+fn top_usage_breakdown(
+    values: BTreeMap<String, crate::agent::llm::usage::Totals>,
+) -> (Vec<UsageBreakdown>, bool) {
+    let truncated = values.len() > MAX_USAGE_BREAKDOWN_ENTRIES;
+    let mut values = values
+        .into_iter()
+        .map(|(name, totals)| UsageBreakdown { name, totals })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        right
+            .totals
+            .calls
+            .cmp(&left.totals.calls)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    values.truncate(MAX_USAGE_BREAKDOWN_ENTRIES);
+    (values, truncated)
 }
 
 #[derive(Deserialize)]

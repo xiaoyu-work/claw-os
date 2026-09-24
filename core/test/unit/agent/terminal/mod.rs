@@ -1,11 +1,12 @@
 use super::*;
 use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
-    parse_agent_hook_settings, ActivityEvidence, ActivityOperationPreview, ActivityResource,
-    ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo, Conversation,
-    ConversationMessage, ConversationSummary, ExtensionSummary, ExtensionsOverview, Job,
-    McpOverview, McpServerSummary, NotificationAction, NotificationDelivery, NotificationItem,
-    NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
+    parse_agent_hook_settings, parse_usage_overview, ActivityEvidence, ActivityOperationPreview,
+    ActivityResource, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
+    Conversation, ConversationMessage, ConversationSummary, ExtensionSummary, ExtensionsOverview,
+    Job, McpOverview, McpServerSummary, NotificationAction, NotificationDelivery,
+    NotificationItem, NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
+    UsageBreakdown, UsageOverview, UsagePeriod,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -1184,6 +1185,126 @@ fn platform_extensions_center_preserves_one_claw_extension_model() {
     assert!(output.contains("quarantined"));
     assert!(output.contains("signature verification failed"));
     assert!(output.contains("no separate Plugin authority"));
+}
+
+#[test]
+fn platform_usage_center_renders_only_canonical_ledger_totals() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('u'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::OpenUsageOverview(UsagePeriod::Cumulative)
+    );
+    let totals = crate::agent::llm::usage::Totals {
+        calls: 3,
+        success: 2,
+        error: 1,
+        input_tokens: 120,
+        output_tokens: 40,
+        cache_read_tokens: 30,
+        cache_write_tokens: 10,
+        total_duration_ms: 900,
+        ..Default::default()
+    };
+    app.open_usage_overview(UsageOverview {
+        period: UsagePeriod::Cumulative,
+        total: totals.clone(),
+        providers: vec![UsageBreakdown {
+            name: "copilot".into(),
+            totals: totals.clone(),
+        }],
+        models: vec![UsageBreakdown {
+            name: "gpt-test".into(),
+            totals,
+        }],
+        parse_errors: 0,
+        log_lines: 3,
+        log_bytes: 512,
+        breakdown_truncated: false,
+    });
+
+    let backend = TestBackend::new(110, 28);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Usage Center"));
+    assert!(output.contains("all retained usage"));
+    assert!(output.contains("copilot"));
+    assert!(output.contains("gpt-test"));
+    assert!(output.contains("does not infer monetary cost"));
+}
+
+#[test]
+fn usage_parser_bounds_breakdowns_and_rejects_non_overall_scope() {
+    let mut providers = serde_json::Map::new();
+    for index in 0..25 {
+        providers.insert(
+            format!("provider-{index:02}"),
+            json!({
+                "calls": index,
+                "success": index,
+                "error": 0,
+                "input_tokens": index,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "total_duration_ms": 0,
+                "finish_reasons": {},
+                "errors": 0,
+            }),
+        );
+    }
+    let value = json!({
+        "scope": "overall",
+        "total": {
+            "calls": 25,
+            "success": 25,
+            "error": 0,
+            "input_tokens": 300,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_duration_ms": 0,
+            "finish_reasons": {},
+            "errors": 0,
+        },
+        "by_provider": providers,
+        "by_model": {},
+        "parse_errors": 0,
+        "log_lines": 25,
+        "log_bytes": 1000,
+        "breakdown_truncated": false,
+    });
+    let overview = parse_usage_overview(UsagePeriod::Daily, value).unwrap();
+    assert_eq!(overview.providers.len(), 20);
+    assert_eq!(overview.providers[0].name, "provider-24");
+    assert!(overview.breakdown_truncated);
+
+    let invalid = json!({
+        "scope": "session",
+        "total": crate::agent::llm::usage::Totals::default(),
+        "by_provider": {},
+        "by_model": {},
+        "parse_errors": 0,
+        "log_lines": 0,
+        "log_bytes": 0,
+        "breakdown_truncated": false,
+    });
+    assert!(parse_usage_overview(UsagePeriod::Cumulative, invalid).is_err());
 }
 
 #[test]

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
     ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationJob, ExtensionsOverview, McpOverview,
+    Conversation, ConversationJob, ExtensionsOverview, McpOverview, UsageOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -159,6 +159,8 @@ pub(super) struct App {
     pub mcp_scroll: u16,
     pub extensions_overview: Option<ExtensionsOverview>,
     pub extensions_scroll: u16,
+    pub usage_overview: Option<UsageOverview>,
+    pub usage_scroll: u16,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -247,6 +249,8 @@ impl App {
             mcp_scroll: 0,
             extensions_overview: None,
             extensions_scroll: 0,
+            usage_overview: None,
+            usage_scroll: 0,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -366,6 +370,8 @@ impl App {
         self.mcp_scroll = 0;
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -748,6 +754,8 @@ impl App {
         self.mcp_scroll = 0;
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
     }
 
     pub fn close_platform_overview(&mut self) {
@@ -760,6 +768,8 @@ impl App {
         self.mcp_scroll = 0;
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
     }
 
     pub fn open_memory_center(&mut self) {
@@ -770,6 +780,8 @@ impl App {
         self.mcp_scroll = 0;
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
     }
 
     pub fn close_memory_center(&mut self) {
@@ -782,6 +794,8 @@ impl App {
         self.mcp_scroll = 0;
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
         self.agent_hook_settings = Some(settings);
         self.agent_hook_error = None;
     }
@@ -814,6 +828,8 @@ impl App {
         self.agent_hook_error = None;
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
         self.mcp_overview = Some(overview);
         self.mcp_scroll = 0;
     }
@@ -839,11 +855,37 @@ impl App {
         self.mcp_scroll = 0;
         self.extensions_overview = Some(overview);
         self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
     }
 
     pub fn close_extensions_overview(&mut self) {
         self.extensions_overview = None;
         self.extensions_scroll = 0;
+    }
+
+    pub fn open_usage_overview(&mut self, mut overview: UsageOverview) {
+        for entry in overview
+            .providers
+            .iter_mut()
+            .chain(overview.models.iter_mut())
+        {
+            entry.name = bounded_clean_text(&entry.name, 128).replace('\n', " ");
+        }
+        self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
+        self.usage_overview = Some(overview);
+        self.usage_scroll = 0;
+    }
+
+    pub fn close_usage_overview(&mut self) {
+        self.usage_overview = None;
+        self.usage_scroll = 0;
     }
 
     pub fn confirm_memory_reset(&mut self) {
