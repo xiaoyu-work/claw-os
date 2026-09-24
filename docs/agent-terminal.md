@@ -82,6 +82,8 @@ Controls:
 - `/copy` sends the latest displayed Assistant response through bounded OSC 52.
   `/export PATH` creates a new owner-private Markdown file below the verified
   home and refuses overwrite.
+- `/raw` publishes the bounded redacted transcript to the main terminal
+  scrollback, then restores the full-screen UI.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32.
@@ -312,7 +314,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments file-mentions copy-export backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments file-mentions copy-export raw-scrollback backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -355,6 +357,8 @@ The file-mentions scenario completes one workspace filename into the prompt and
 verifies that no file contents or authority are attached.
 The copy-export scenario emits an OSC 52 copy and creates one non-overwriting
 owner-home Markdown export containing only visible conversation text.
+The raw-scrollback scenario publishes the same redacted bounded transcript
+between explicit main-screen delimiters and then returns to the TUI.
 The review scenario renders only authenticated Activity plan references and
 App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its

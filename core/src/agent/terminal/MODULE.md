@@ -90,6 +90,9 @@ audit.
 - `/copy` emits only the latest redacted Assistant display through bounded
   OSC 52. `/export PATH` creates one new `0600` Markdown file under the
   verified owner home from visible user/assistant entries; it never overwrites.
+- `/raw` temporarily leaves the alternate screen, publishes the bounded
+  redacted transcript to the main terminal scrollback, then restores raw mode
+  and the full-screen UI.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

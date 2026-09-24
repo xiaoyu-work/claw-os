@@ -171,6 +171,7 @@ pub(super) struct App {
     pub usage_output: u64,
     pub usage_cached: u64,
     pub should_quit: bool,
+    raw_scrollback_requested: bool,
     pub frame: u64,
     task_started_at: Option<Instant>,
     active_assistant: Option<usize>,
@@ -238,6 +239,7 @@ impl App {
             usage_output: 0,
             usage_cached: 0,
             should_quit: false,
+            raw_scrollback_requested: false,
             frame: 0,
             task_started_at: None,
             active_assistant: None,
@@ -316,6 +318,7 @@ impl App {
         self.usage_cached = 0;
         self.pending_attachments.clear();
         self.backtrack_armed_at = None;
+        self.raw_scrollback_requested = false;
         self.load_history();
     }
 
@@ -731,6 +734,34 @@ impl App {
             return Err("There are no user or assistant messages to export.".into());
         }
         Ok(output)
+    }
+
+    pub fn request_raw_scrollback(&mut self) {
+        self.raw_scrollback_requested = true;
+    }
+
+    pub fn take_raw_scrollback(&mut self) -> Option<String> {
+        if !std::mem::take(&mut self.raw_scrollback_requested) {
+            return None;
+        }
+        let mut output = String::new();
+        for entry in &self.entries {
+            let label = match &entry.kind {
+                EntryKind::User => "user",
+                EntryKind::Assistant => "assistant",
+                EntryKind::Reasoning => "reasoning",
+                EntryKind::Tool { .. } => "tool",
+                EntryKind::System => "system",
+                EntryKind::Error => "error",
+                EntryKind::Approval { .. } => "approval",
+            };
+            output.push('[');
+            output.push_str(label);
+            output.push_str("] ");
+            output.push_str(&entry.text);
+            output.push_str("\n\n");
+        }
+        Some(output)
     }
 
     pub fn take_input(&mut self) -> String {

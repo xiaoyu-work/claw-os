@@ -37,6 +37,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/review", "review staged file plans and reported diffs"),
     ("/copy", "copy the latest assistant response"),
     ("/export", "export visible conversation text as Markdown"),
+    ("/raw", "publish a redacted snapshot to terminal scrollback"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -73,6 +74,7 @@ pub(super) enum Command {
     Review(Option<String>),
     Copy,
     Export(String),
+    Raw,
     Skills,
     Tasks,
     Task(String),
@@ -172,6 +174,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "review" => Command::Review(Some(rest.to_string())),
         "copy" if rest.is_empty() => Command::Copy,
         "export" if !rest.is_empty() => Command::Export(rest.to_string()),
+        "raw" if rest.is_empty() => Command::Raw,
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -343,6 +346,7 @@ pub(super) async fn execute(
                 | Command::Review(_)
                 | Command::Copy
                 | Command::Export(_)
+                | Command::Raw
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -381,6 +385,7 @@ pub(super) async fn execute(
              /attach [PATH|clear]\n\
              /review [ACTIVITY_ID]\n\
              /copy  /export PATH\n\
+             /raw\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -505,6 +510,7 @@ pub(super) async fn execute(
             .map_err(|_| "conversation export writer failed".to_string())??;
             app.push_system(&format!("Exported visible conversation text to {}.", path.display()));
         }
+        Command::Raw => app.request_raw_scrollback(),
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(

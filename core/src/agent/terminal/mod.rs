@@ -8,7 +8,7 @@ mod state;
 mod stream;
 mod ui;
 
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -216,6 +216,13 @@ async fn run_with_backend(
                             backend.clone(),
                             runtime_tx.clone(),
                         ).await;
+                        if let Some(snapshot) = app.take_raw_scrollback() {
+                            if let Err(error) = terminal.publish_scrollback(&snapshot) {
+                                app.push_error(&format!(
+                                    "Could not publish terminal scrollback: {error}"
+                                ));
+                            }
+                        }
                     }
                     Event::Paste(value) => {
                         if app.current_approval().is_none()
@@ -1160,6 +1167,31 @@ impl TerminalSession {
         };
         terminal.clear()?;
         Ok(Self { terminal })
+    }
+
+    fn publish_scrollback(&mut self, snapshot: &str) -> io::Result<()> {
+        self.terminal.show_cursor()?;
+        disable_raw_mode()?;
+        execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen)?;
+
+        let write_result = (|| {
+            let mut stdout = io::stdout();
+            writeln!(stdout, "\n--- Claw transcript snapshot ---")?;
+            stdout.write_all(snapshot.as_bytes())?;
+            writeln!(stdout, "--- end Claw transcript snapshot ---\n")?;
+            stdout.flush()
+        })();
+
+        let raw_result = enable_raw_mode();
+        let screen_result = execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste);
+        let clear_result = self.terminal.clear();
+        let cursor_result = self.terminal.hide_cursor();
+
+        write_result?;
+        raw_result?;
+        screen_result?;
+        clear_result?;
+        cursor_result
     }
 }
 

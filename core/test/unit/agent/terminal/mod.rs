@@ -167,6 +167,7 @@ fn claw_commands_are_closed_and_semantic() {
         parse_command("/export transcript.md"),
         Some(Command::Export("transcript.md".into()))
     );
+    assert_eq!(parse_command("/raw"), Some(Command::Raw));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -378,6 +379,11 @@ fn copy_and_export_use_only_redacted_visible_text() {
     assert!(markdown.contains("## Assistant"));
     assert!(markdown.contains("visible"));
     assert!(!markdown.contains(&secret), "{markdown}");
+    app.request_raw_scrollback();
+    let raw = app.take_raw_scrollback().unwrap();
+    assert!(raw.contains("[assistant]"));
+    assert!(!raw.contains(&secret));
+    assert!(app.take_raw_scrollback().is_none());
 
     let home = tempfile::tempdir().unwrap();
     let workspace = home.path().join("project");

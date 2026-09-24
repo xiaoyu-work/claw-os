@@ -748,6 +748,7 @@ class FixtureBroker:
                     "approval-center",
                     "attachments",
                     "copy-export",
+                    "raw-scrollback",
                     "file-mentions",
                     "activity-lifecycle",
                     "activity-controls",
@@ -785,6 +786,7 @@ class FixtureBroker:
                 "approval-center",
                 "attachments",
                 "copy-export",
+                "raw-scrollback",
                 "file-mentions",
                 "activity-lifecycle",
                 "activity-controls",
@@ -1766,7 +1768,11 @@ def run(cos, case, transcript, original_namespace, trace):
                 os.write(master, b"\r")
             elif case not in ("durable-queue", "resume-running", "file-mentions"):
                 send_prompt(master, output, "Run the terminal integration fixture")
-            marker = ANSWER if case in ("complete", "durable-queue", "copy-export") else RUNNING
+            marker = (
+                ANSWER
+                if case in ("complete", "durable-queue", "copy-export", "raw-scrollback")
+                else RUNNING
+            )
             if case == "reconnect":
                 read_terminal(
                     master,
@@ -1797,6 +1803,16 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 if ANSWER not in exported.read_text():
                     raise AssertionError("conversation export omitted the assistant answer")
+            if case == "raw-scrollback":
+                send_prompt(master, output, "/raw")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"--- Claw transcript snapshot ---" in data
+                    and ANSWER.encode() in data
+                    and b"--- end Claw transcript snapshot ---" in data,
+                )
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -1883,6 +1899,7 @@ if __name__ == "__main__":
             "approval-center",
             "attachments",
             "copy-export",
+            "raw-scrollback",
             "file-mentions",
             "backtrack",
             "activity-lifecycle",
