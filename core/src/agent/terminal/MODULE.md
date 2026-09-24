@@ -120,6 +120,9 @@ audit.
 - The Platform MCP Center lists bounded operator-configured and verified
   discovered server metadata without starting/probing a server or exposing its
   command, arguments, environment, working directory, URL or credentials.
+- The Platform Extensions Center projects verified, disabled and quarantined
+  Apps, Skills and selected Agent extensions as one Claw extension model.
+  It never creates a separate Plugin authority or installs/activates content.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

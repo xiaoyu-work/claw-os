@@ -361,6 +361,21 @@ pub(super) struct McpOverview {
     pub truncated: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ExtensionSummary {
+    pub kind: &'static str,
+    pub id: String,
+    pub status: &'static str,
+    pub trust: String,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ExtensionsOverview {
+    pub entries: Vec<ExtensionSummary>,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -477,6 +492,7 @@ pub(super) trait Backend: Send + Sync {
     async fn set_agent_hook(&self, kind: &str, enabled: bool)
         -> Result<AgentHookSettings, String>;
     async fn mcp_overview(&self) -> Result<McpOverview, String>;
+    async fn extensions_overview(&self) -> Result<ExtensionsOverview, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1552,6 +1568,14 @@ impl Backend for BrokerBackend {
             .await
             .map_err(|_| "Claw MCP inventory reader failed".to_string())
     }
+
+    async fn extensions_overview(&self) -> Result<ExtensionsOverview, String> {
+        let config = self.config.clone();
+        let owner_uid = self.owner_uid;
+        tokio::task::spawn_blocking(move || build_extensions_overview(&config, owner_uid))
+            .await
+            .map_err(|_| "Claw extension inventory reader failed".to_string())
+    }
 }
 
 const MAX_MCP_PRESENTATION_ENTRIES: usize = 256;
@@ -1596,6 +1620,99 @@ fn build_mcp_overview(config: &CosConfig) -> McpOverview {
         discovery_enabled: config.agent.agent_api_discovery_enabled,
         truncated,
     }
+}
+
+const MAX_EXTENSION_PRESENTATION_ENTRIES: usize = 512;
+
+fn build_extensions_overview(config: &CosConfig, owner_uid: u32) -> ExtensionsOverview {
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut push = |entry: ExtensionSummary| {
+        if entries.len() < MAX_EXTENSION_PRESENTATION_ENTRIES {
+            entries.push(entry);
+        } else {
+            truncated = true;
+        }
+    };
+
+    let apps_dir = std::env::var_os("COS_APPS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"));
+    let apps = crate::apps::discover_all(&apps_dir);
+    for (id, app) in apps.verified {
+        push(ExtensionSummary {
+            kind: "App",
+            id,
+            status: "verified",
+            trust: app.trust_label().to_string(),
+            diagnostic: None,
+        });
+    }
+    for (id, app) in apps.quarantined {
+        push(ExtensionSummary {
+            kind: "App",
+            id,
+            status: "quarantined",
+            trust: "quarantined".into(),
+            diagnostic: app.quarantine_reason().map(str::to_string),
+        });
+    }
+
+    let skills = crate::agent::skills::loader::load_catalog_default();
+    for (id, skill) in skills.skills {
+        push(ExtensionSummary {
+            kind: "Skill",
+            id,
+            status: "verified",
+            trust: skill.trust_label().to_string(),
+            diagnostic: None,
+        });
+    }
+    for (id, diagnostic) in skills.disabled {
+        push(ExtensionSummary {
+            kind: "Skill",
+            id,
+            status: "disabled",
+            trust: "policy".into(),
+            diagnostic: Some(diagnostic),
+        });
+    }
+    for (id, diagnostic) in skills.errors {
+        push(ExtensionSummary {
+            kind: "Skill",
+            id,
+            status: "quarantined",
+            trust: "quarantined".into(),
+            diagnostic: Some(diagnostic),
+        });
+    }
+
+    let extensions =
+        crate::agent_extensions::registry::ExtensionRegistry::load_selected_for_owner(
+            &crate::agent_extensions::registry::installed_root(),
+            &config.agent.extensions,
+            owner_uid,
+        );
+    for (id, extension) in extensions.registered {
+        push(ExtensionSummary {
+            kind: "Agent extension",
+            id,
+            status: "verified",
+            trust: extension.package.source().as_str().to_string(),
+            diagnostic: None,
+        });
+    }
+    for extension in extensions.quarantined {
+        push(ExtensionSummary {
+            kind: "Agent extension",
+            id: extension.id,
+            status: "quarantined",
+            trust: "quarantined".into(),
+            diagnostic: Some(extension.diagnostic),
+        });
+    }
+
+    ExtensionsOverview { entries, truncated }
 }
 
 #[derive(Deserialize)]

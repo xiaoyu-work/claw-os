@@ -36,6 +36,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_memory_center(frame, area, app);
     render_agent_hooks(frame, area, app);
     render_mcp_overview(frame, area, app);
+    render_extensions_overview(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -85,7 +86,7 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "[m] Memories  [h] Hooks  [c] MCP  Up/Down scroll  Esc close",
+                        "[m] Memory  [h] Hooks  [c] MCP  [e] Extensions  Esc close",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
@@ -292,6 +293,89 @@ fn render_mcp_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(accent(app)))
                     .title(" MCP Center ")
+                    .title_bottom(Line::styled(
+                        "Up/Down scroll  Esc back",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
+}
+
+fn render_extensions_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(overview) = &app.extensions_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(100);
+    let height = screen.height.saturating_sub(4).min(32);
+    if width < 56 || height < 16 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![
+        Line::styled(
+            "One authenticated Claw extension model",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("Apps, Skills, and Agent extensions share one model; MCP stays in MCP Center."),
+        Line::raw("Claw has no separate Plugin authority."),
+        Line::raw("This inventory executes and activates nothing; package changes stay in OS review flows."),
+        Line::raw(""),
+    ];
+    if overview.entries.is_empty() {
+        lines.push(Line::styled(
+            "No authenticated or quarantined extension entry is installed.",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        for entry in &overview.entries {
+            let color = if entry.status == "quarantined" {
+                Color::Red
+            } else if entry.status == "disabled" {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<15}", entry.kind),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{:<12}", entry.status),
+                    Style::default().fg(color),
+                ),
+                Span::raw(format!("{} [{}]", entry.id, entry.trust)),
+            ]));
+            if let Some(diagnostic) = &entry.diagnostic {
+                lines.push(Line::styled(
+                    format!("  {diagnostic}"),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+    }
+    if overview.truncated {
+        lines.push(Line::styled(
+            "Inventory truncated at 512 entries.",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.extensions_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Extensions Center ")
                     .title_bottom(Line::styled(
                         "Up/Down scroll  Esc back",
                         Style::default().fg(Color::DarkGray),

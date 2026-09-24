@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
     ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationJob, McpOverview,
+    Conversation, ConversationJob, ExtensionsOverview, McpOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -157,6 +157,8 @@ pub(super) struct App {
     pub agent_hook_error: Option<String>,
     pub mcp_overview: Option<McpOverview>,
     pub mcp_scroll: u16,
+    pub extensions_overview: Option<ExtensionsOverview>,
+    pub extensions_scroll: u16,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -243,6 +245,8 @@ impl App {
             agent_hook_error: None,
             mcp_overview: None,
             mcp_scroll: 0,
+            extensions_overview: None,
+            extensions_scroll: 0,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -360,6 +364,8 @@ impl App {
         self.agent_hook_error = None;
         self.mcp_overview = None;
         self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -740,6 +746,8 @@ impl App {
         self.agent_hook_error = None;
         self.mcp_overview = None;
         self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
     }
 
     pub fn close_platform_overview(&mut self) {
@@ -750,6 +758,8 @@ impl App {
         self.agent_hook_error = None;
         self.mcp_overview = None;
         self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
     }
 
     pub fn open_memory_center(&mut self) {
@@ -758,6 +768,8 @@ impl App {
         self.agent_hook_error = None;
         self.mcp_overview = None;
         self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
     }
 
     pub fn close_memory_center(&mut self) {
@@ -768,6 +780,8 @@ impl App {
         self.memory_center_open = false;
         self.mcp_overview = None;
         self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
         self.agent_hook_settings = Some(settings);
         self.agent_hook_error = None;
     }
@@ -798,6 +812,8 @@ impl App {
         self.memory_center_open = false;
         self.agent_hook_settings = None;
         self.agent_hook_error = None;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
         self.mcp_overview = Some(overview);
         self.mcp_scroll = 0;
     }
@@ -805,6 +821,29 @@ impl App {
     pub fn close_mcp_overview(&mut self) {
         self.mcp_overview = None;
         self.mcp_scroll = 0;
+    }
+
+    pub fn open_extensions_overview(&mut self, mut overview: ExtensionsOverview) {
+        for entry in &mut overview.entries {
+            entry.id = bounded_clean_text(&entry.id, 128).replace('\n', " ");
+            entry.trust = bounded_clean_text(&entry.trust, 128).replace('\n', " ");
+            entry.diagnostic = entry
+                .diagnostic
+                .as_deref()
+                .map(|diagnostic| bounded_clean_text(diagnostic, 2_048));
+        }
+        self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
+        self.extensions_overview = Some(overview);
+        self.extensions_scroll = 0;
+    }
+
+    pub fn close_extensions_overview(&mut self) {
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
     }
 
     pub fn confirm_memory_reset(&mut self) {

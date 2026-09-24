@@ -3,9 +3,9 @@ use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
     parse_agent_hook_settings, ActivityEvidence, ActivityOperationPreview, ActivityResource,
     ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo, Conversation,
-    ConversationMessage, ConversationSummary, Job, NotificationAction, NotificationDelivery,
-    McpOverview, McpServerSummary, NotificationItem, NotificationPage, NotificationPreferences,
-    PlatformOverview, TaskSummary,
+    ConversationMessage, ConversationSummary, ExtensionSummary, ExtensionsOverview, Job,
+    McpOverview, McpServerSummary, NotificationAction, NotificationDelivery, NotificationItem,
+    NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -1131,6 +1131,59 @@ fn platform_mcp_center_exposes_metadata_without_launch_material() {
     assert!(output.contains("fixture"));
     assert!(output.contains("operator config"));
     assert!(output.contains("command, args, env, cwd, and URL stay hidden"));
+}
+
+#[test]
+fn platform_extensions_center_preserves_one_claw_extension_model() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('e'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::OpenExtensionsOverview
+    );
+    app.open_extensions_overview(ExtensionsOverview {
+        entries: vec![
+            ExtensionSummary {
+                kind: "App",
+                id: "calendar".into(),
+                status: "verified",
+                trust: "publisher".into(),
+                diagnostic: None,
+            },
+            ExtensionSummary {
+                kind: "Agent extension",
+                id: "broken".into(),
+                status: "quarantined",
+                trust: "quarantined".into(),
+                diagnostic: Some("signature verification failed".into()),
+            },
+        ],
+        truncated: false,
+    });
+
+    let backend = TestBackend::new(110, 26);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Extensions Center"));
+    assert!(output.contains("calendar"));
+    assert!(output.contains("quarantined"));
+    assert!(output.contains("signature verification failed"));
+    assert!(output.contains("no separate Plugin authority"));
 }
 
 #[test]

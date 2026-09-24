@@ -814,6 +814,7 @@ class FixtureBroker:
                     "memory-center",
                     "hooks-center",
                     "mcp-center",
+                    "extensions-center",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -860,6 +861,7 @@ class FixtureBroker:
                 "memory-center",
                 "hooks-center",
                 "mcp-center",
+                "extensions-center",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1057,7 +1059,13 @@ def run(cos, case, transcript, original_namespace, trace):
             "model": "tui-fixture",
             "base_url": "http://127.0.0.1:1",
         }
-        if case in ("platform", "memory-center", "hooks-center", "mcp-center"):
+        if case in (
+            "platform",
+            "memory-center",
+            "hooks-center",
+            "mcp-center",
+            "extensions-center",
+        ):
             agent_config.update({
                 "mcp_servers": [{
                     "name": "fixture_mcp",
@@ -1328,6 +1336,26 @@ def run(cos, case, transcript, original_namespace, trace):
                     and b"fixture_mcp" in data
                     and b"operator config" in data,
                 )
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
+            if case == "extensions-center":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data,
+                )
+                os.write(master, b"e")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Extensions Center" in data
+                    and b"One authenticated Claw extension model" in data,
+                )
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
                 os.write(master, b"\x1b")
@@ -2189,6 +2217,7 @@ if __name__ == "__main__":
             "memory-center",
             "hooks-center",
             "mcp-center",
+            "extensions-center",
             "copy-export",
             "raw-scrollback",
             "vim",
