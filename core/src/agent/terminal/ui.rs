@@ -35,6 +35,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_platform_overview(frame, area, app);
     render_memory_center(frame, area, app);
     render_agent_hooks(frame, area, app);
+    render_mcp_overview(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -84,7 +85,7 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "[m] Memories  [h] Hooks  Up/Down scroll  Esc close",
+                        "[m] Memories  [h] Hooks  [c] MCP  Up/Down scroll  Esc close",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
@@ -221,6 +222,81 @@ fn render_agent_hooks(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     Style::default().fg(Color::DarkGray),
                 )),
         ),
+        area,
+    );
+}
+
+fn render_mcp_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(overview) = &app.mcp_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(94);
+    let height = screen.height.saturating_sub(4).min(30);
+    if width < 52 || height < 16 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![
+        Line::styled(
+            "MCP server inventory - read only",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("No server is started or probed; command, args, env, cwd, and URL stay hidden."),
+        Line::raw(format!(
+            "verified discovery: {}",
+            if overview.discovery_enabled { "on" } else { "off" }
+        )),
+        Line::raw(""),
+    ];
+    if overview.servers.is_empty() {
+        lines.push(Line::styled(
+            "No configured or verified discovered MCP server.",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        for server in &overview.servers {
+            let status = if server.enabled { "enabled" } else { "disabled" };
+            let timeout = if server.timeout_secs == 0 {
+                "no timeout".to_string()
+            } else {
+                format!("{}s timeout", server.timeout_secs)
+            };
+            lines.push(Line::raw(format!(
+                "- {status:<8} {}  [{}; {timeout}]",
+                server.name, server.transport
+            )));
+            lines.push(Line::styled(
+                format!("  {}", server.source),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+    if overview.truncated {
+        lines.push(Line::styled(
+            "Inventory truncated at 256 entries.",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.mcp_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" MCP Center ")
+                    .title_bottom(Line::styled(
+                        "Up/Down scroll  Esc back",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
         area,
     );
 }

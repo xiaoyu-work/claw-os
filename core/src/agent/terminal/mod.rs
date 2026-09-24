@@ -181,6 +181,7 @@ enum InputAction {
     ActivityReview(String),
     OpenAgentHooks,
     ToggleAgentHook(&'static str),
+    OpenMcpOverview,
     Quit,
 }
 
@@ -248,6 +249,7 @@ async fn run_with_backend(
                             && app.platform_overview.is_none()
                             && !app.memory_center_open
                             && app.agent_hook_settings.is_none()
+                            && app.mcp_overview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -447,6 +449,23 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if app.mcp_overview.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_mcp_overview();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.mcp_scroll = app.mcp_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.mcp_scroll = app.mcp_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if app.platform_overview.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -466,6 +485,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 InputAction::None
             }
             KeyCode::Char('h') | KeyCode::Char('H') => InputAction::OpenAgentHooks,
+            KeyCode::Char('c') | KeyCode::Char('C') => InputAction::OpenMcpOverview,
             _ => InputAction::None,
         };
     }
@@ -1090,6 +1110,13 @@ async fn apply_input_action(
                 Err(error) => app.set_agent_hook_error(&error),
             }
         }
+        InputAction::OpenMcpOverview => match backend.mcp_overview().await {
+            Ok(overview) => app.open_mcp_overview(overview),
+            Err(error) => {
+                app.close_platform_overview();
+                app.push_error(&error);
+            }
+        },
         InputAction::Cancel => {
             let Some(task_id) = app.active_task.clone() else {
                 return;

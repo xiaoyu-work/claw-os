@@ -4,7 +4,8 @@ use crate::agent::terminal::backend::{
     parse_agent_hook_settings, ActivityEvidence, ActivityOperationPreview, ActivityResource,
     ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo, Conversation,
     ConversationMessage, ConversationSummary, Job, NotificationAction, NotificationDelivery,
-    NotificationItem, NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
+    McpOverview, McpServerSummary, NotificationItem, NotificationPage, NotificationPreferences,
+    PlatformOverview, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -1086,6 +1087,50 @@ fn hook_settings_parser_rejects_open_or_incomplete_inventories() {
     ] {
         assert!(parse_agent_hook_settings(invalid).is_err());
     }
+}
+
+#[test]
+fn platform_mcp_center_exposes_metadata_without_launch_material() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::OpenMcpOverview
+    );
+    app.open_mcp_overview(McpOverview {
+        servers: vec![McpServerSummary {
+            name: "fixture".into(),
+            source: "operator config",
+            enabled: true,
+            transport: "stdio",
+            timeout_secs: 30,
+        }],
+        discovery_enabled: false,
+        truncated: false,
+    });
+
+    let backend = TestBackend::new(110, 26);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("MCP Center"));
+    assert!(output.contains("fixture"));
+    assert!(output.contains("operator config"));
+    assert!(output.contains("command, args, env, cwd, and URL stay hidden"));
 }
 
 #[test]

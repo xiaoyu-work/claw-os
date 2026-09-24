@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
     ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationJob,
+    Conversation, ConversationJob, McpOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -155,6 +155,8 @@ pub(super) struct App {
     pub memory_center_open: bool,
     pub agent_hook_settings: Option<AgentHookSettings>,
     pub agent_hook_error: Option<String>,
+    pub mcp_overview: Option<McpOverview>,
+    pub mcp_scroll: u16,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -239,6 +241,8 @@ impl App {
             memory_center_open: false,
             agent_hook_settings: None,
             agent_hook_error: None,
+            mcp_overview: None,
+            mcp_scroll: 0,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -354,6 +358,8 @@ impl App {
         self.memory_center_open = false;
         self.agent_hook_settings = None;
         self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -732,6 +738,8 @@ impl App {
         self.memory_center_open = false;
         self.agent_hook_settings = None;
         self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
     }
 
     pub fn close_platform_overview(&mut self) {
@@ -740,12 +748,16 @@ impl App {
         self.memory_center_open = false;
         self.agent_hook_settings = None;
         self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
     }
 
     pub fn open_memory_center(&mut self) {
         self.memory_center_open = true;
         self.agent_hook_settings = None;
         self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
     }
 
     pub fn close_memory_center(&mut self) {
@@ -754,6 +766,8 @@ impl App {
 
     pub fn open_agent_hooks(&mut self, settings: AgentHookSettings) {
         self.memory_center_open = false;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
         self.agent_hook_settings = Some(settings);
         self.agent_hook_error = None;
     }
@@ -775,6 +789,22 @@ impl App {
 
     pub fn set_agent_hook_error(&mut self, error: &str) {
         self.agent_hook_error = Some(bounded_clean_text(error, 2_048));
+    }
+
+    pub fn open_mcp_overview(&mut self, mut overview: McpOverview) {
+        for server in &mut overview.servers {
+            server.name = bounded_clean_text(&server.name, 128).replace('\n', " ");
+        }
+        self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
+        self.mcp_overview = Some(overview);
+        self.mcp_scroll = 0;
+    }
+
+    pub fn close_mcp_overview(&mut self) {
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
     }
 
     pub fn confirm_memory_reset(&mut self) {

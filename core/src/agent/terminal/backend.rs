@@ -345,6 +345,22 @@ pub(super) struct AgentHookSettings {
     pub changed: Option<bool>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct McpServerSummary {
+    pub name: String,
+    pub source: &'static str,
+    pub enabled: bool,
+    pub transport: &'static str,
+    pub timeout_secs: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct McpOverview {
+    pub servers: Vec<McpServerSummary>,
+    pub discovery_enabled: bool,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -460,6 +476,7 @@ pub(super) trait Backend: Send + Sync {
     async fn agent_hooks(&self) -> Result<AgentHookSettings, String>;
     async fn set_agent_hook(&self, kind: &str, enabled: bool)
         -> Result<AgentHookSettings, String>;
+    async fn mcp_overview(&self) -> Result<McpOverview, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1527,6 +1544,57 @@ impl Backend for BrokerBackend {
             )
             .await?,
         )
+    }
+
+    async fn mcp_overview(&self) -> Result<McpOverview, String> {
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || build_mcp_overview(&config))
+            .await
+            .map_err(|_| "Claw MCP inventory reader failed".to_string())
+    }
+}
+
+const MAX_MCP_PRESENTATION_ENTRIES: usize = 256;
+
+fn build_mcp_overview(config: &CosConfig) -> McpOverview {
+    let mut servers = config
+        .agent
+        .mcp_servers
+        .iter()
+        .map(|server| McpServerSummary {
+            name: server.name.clone(),
+            source: "operator config",
+            enabled: server.enabled,
+            transport: "stdio",
+            timeout_secs: server.timeout_secs,
+        })
+        .collect::<Vec<_>>();
+    if config.agent.agent_api_discovery_enabled {
+        let paths = config
+            .agent
+            .agent_api_paths
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        let paths = (!paths.is_empty()).then_some(paths.as_slice());
+        servers.extend(
+            crate::agent::tools::mcp::discover::discover(paths)
+                .into_iter()
+                .map(|server| McpServerSummary {
+                    name: server.name,
+                    source: "verified discovery",
+                    enabled: true,
+                    transport: if server.url.is_some() { "http" } else { "stdio" },
+                    timeout_secs: server.timeout_secs,
+                }),
+        );
+    }
+    let truncated = servers.len() > MAX_MCP_PRESENTATION_ENTRIES;
+    servers.truncate(MAX_MCP_PRESENTATION_ENTRIES);
+    McpOverview {
+        servers,
+        discovery_enabled: config.agent.agent_api_discovery_enabled,
+        truncated,
     }
 }
 
