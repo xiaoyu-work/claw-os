@@ -39,7 +39,6 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/export", "export visible conversation text as Markdown"),
     ("/raw", "publish a redacted snapshot to terminal scrollback"),
     ("/appearance", "configure theme, title, and status line"),
-    ("/voice", "show Claw voice models and realtime availability"),
     ("/agents", "show scoped delegate calls in this task"),
     ("/side", "start or return from a side conversation"),
     ("/platform", "show verified Skills, MCP, Apps, and usage"),
@@ -81,7 +80,6 @@ pub(super) enum Command {
     Export(String),
     Raw,
     Appearance,
-    Voice,
     Vim,
     Keymap,
     Agents,
@@ -188,7 +186,6 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "export" if !rest.is_empty() => Command::Export(rest.to_string()),
         "raw" if rest.is_empty() => Command::Raw,
         "appearance" if rest.is_empty() => Command::Appearance,
-        "voice" if rest.is_empty() || rest == "settings" => Command::Voice,
         "vim" if rest.is_empty() => Command::Vim,
         "keymap" if rest.is_empty() => Command::Keymap,
         "agents" if rest.is_empty() => Command::Agents,
@@ -413,7 +410,6 @@ pub(super) async fn execute(
              /copy  /export PATH\n\
              /raw\n\
              /appearance\n\
-             /voice [settings]\n\
              /agents\n\
              /side [return]\n\
              /platform\n\
@@ -543,10 +539,6 @@ pub(super) async fn execute(
         }
         Command::Raw => app.request_raw_scrollback(),
         Command::Appearance => app.open_appearance(),
-        Command::Voice => {
-            let overview = backend.voice_overview().await?;
-            app.open_voice_overview(overview);
-        }
         Command::Vim => {
             app.toggle_vim_mode();
             app.push_system(&format!("Composer keymap: {}.", app.keymap_name()));

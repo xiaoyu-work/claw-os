@@ -180,8 +180,6 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/side"), Some(Command::Side(false)));
     assert_eq!(parse_command("/side return"), Some(Command::Side(true)));
     assert_eq!(parse_command("/platform"), Some(Command::Platform));
-    assert_eq!(parse_command("/voice"), Some(Command::Voice));
-    assert_eq!(parse_command("/voice settings"), Some(Command::Voice));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -1428,6 +1426,16 @@ fn platform_account_center_requires_logout_confirmation_and_never_scans_import_r
 #[test]
 fn voice_center_uses_claw_media_models_without_claiming_realtime_capture() {
     let mut app = app();
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('x'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        ),
+        InputAction::OpenVoiceOverview
+    );
     app.open_voice_overview(VoiceOverview {
         stt_provider: "openai".into(),
         stt_model: "whisper-1".into(),

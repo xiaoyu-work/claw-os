@@ -121,7 +121,7 @@ Controls:
   Copilot credential and retains provider config/history. The panel reports
   foreign-agent import unavailable rather than scanning other App data without
   an authenticated OS import service.
-- `/voice` opens Voice Center and shows the configured Claw STT/TTS models,
+- `Ctrl-X` opens Voice Center and shows the configured Claw STT/TTS models,
   voice and output format. It does not substitute a Codex voice backend or open
   microphone devices directly; realtime capture remains unavailable until the
   OS provides a capability-gated recorder/session service.

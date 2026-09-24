@@ -186,6 +186,7 @@ enum InputAction {
     OpenUsageOverview(backend::UsagePeriod),
     OpenDebugOverview,
     OpenAccountOverview,
+    OpenVoiceOverview,
     Quit,
 }
 
@@ -1014,6 +1015,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.open_task_controls();
                 InputAction::None
             }
+            KeyCode::Char('x') if app.active_task.is_none() => InputAction::OpenVoiceOverview,
             KeyCode::Char('p') => {
                 app.move_up();
                 InputAction::None
@@ -1246,6 +1248,10 @@ async fn apply_input_action(
                 app.close_platform_overview();
                 app.push_error(&error);
             }
+        },
+        InputAction::OpenVoiceOverview => match backend.voice_overview().await {
+            Ok(overview) => app.open_voice_overview(overview),
+            Err(error) => app.push_error(&error),
         },
         InputAction::Cancel => {
             let Some(task_id) = app.active_task.clone() else {
