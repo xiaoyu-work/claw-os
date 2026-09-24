@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -335,6 +336,15 @@ pub(super) struct PlatformOverview {
     pub presentation: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AgentHookSettings {
+    pub logging: bool,
+    pub audit: bool,
+    pub checkpoint: bool,
+    pub updated_kind: Option<String>,
+    pub changed: Option<bool>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -447,6 +457,9 @@ pub(super) trait Backend: Send + Sync {
     async fn skills(&self) -> Result<Vec<SkillSummary>, String>;
     async fn platform_overview(&self) -> Result<PlatformOverview, String>;
     async fn reset_memories(&self) -> Result<LearnedMemoryReset, String>;
+    async fn agent_hooks(&self) -> Result<AgentHookSettings, String>;
+    async fn set_agent_hook(&self, kind: &str, enabled: bool)
+        -> Result<AgentHookSettings, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1497,6 +1510,93 @@ impl Backend for BrokerBackend {
         }
         Ok(report)
     }
+
+    async fn agent_hooks(&self) -> Result<AgentHookSettings, String> {
+        parse_agent_hook_settings(self.call(Command::AgentHooksGet, json!({})).await?)
+    }
+
+    async fn set_agent_hook(
+        &self,
+        kind: &str,
+        enabled: bool,
+    ) -> Result<AgentHookSettings, String> {
+        parse_agent_hook_settings(
+            self.call(
+                Command::AgentHooksSet,
+                json!({ "kind": kind, "enabled": enabled }),
+            )
+            .await?,
+        )
+    }
+}
+
+#[derive(Deserialize)]
+struct RawAgentHookSetting {
+    kind: String,
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct RawAgentHookSettings {
+    applies_to: String,
+    hooks: Vec<RawAgentHookSetting>,
+    #[serde(default)]
+    updated_kind: Option<String>,
+    #[serde(default)]
+    changed: Option<bool>,
+}
+
+pub(super) fn parse_agent_hook_settings(value: Value) -> Result<AgentHookSettings, String> {
+    let raw: RawAgentHookSettings = serde_json::from_value(value)
+        .map_err(|error| format!("invalid Agent hook settings response: {error}"))?;
+    if raw.applies_to != "future_tasks" {
+        return Err("invalid Agent hook settings response: unsupported apply scope".to_string());
+    }
+    if raw.updated_kind.is_some() != raw.changed.is_some() {
+        return Err("invalid Agent hook settings response: incomplete update result".to_string());
+    }
+    if raw.hooks.len() != 3 {
+        return Err("invalid Agent hook settings response: incomplete hook inventory".to_string());
+    }
+    let mut logging = None;
+    let mut audit = None;
+    let mut checkpoint = None;
+    for hook in raw.hooks {
+        let slot = match hook.kind.as_str() {
+            "logging" => &mut logging,
+            "audit" => &mut audit,
+            "checkpoint" => &mut checkpoint,
+            _ => {
+                return Err(format!(
+                    "invalid Agent hook settings response: unknown kind {}",
+                    hook.kind
+                ));
+            }
+        };
+        if slot.replace(hook.enabled).is_some() {
+            return Err(format!(
+                "invalid Agent hook settings response: duplicate kind {}",
+                hook.kind
+            ));
+        }
+    }
+    if raw
+        .updated_kind
+        .as_deref()
+        .is_some_and(|kind| !matches!(kind, "logging" | "audit" | "checkpoint"))
+    {
+        return Err("invalid Agent hook settings response: unknown updated kind".to_string());
+    }
+    Ok(AgentHookSettings {
+        logging: logging
+            .ok_or_else(|| "invalid Agent hook settings response: missing logging".to_string())?,
+        audit: audit
+            .ok_or_else(|| "invalid Agent hook settings response: missing audit".to_string())?,
+        checkpoint: checkpoint
+            .ok_or_else(|| "invalid Agent hook settings response: missing checkpoint".to_string())?,
+        updated_kind: raw.updated_kind,
+        changed: raw.changed,
+    })
 }
 
 pub(super) fn ensure_approval_runtime(pkexec: &Path, helper: &Path) -> Result<(), String> {

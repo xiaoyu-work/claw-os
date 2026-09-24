@@ -34,6 +34,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_agents(frame, area, app);
     render_platform_overview(frame, area, app);
     render_memory_center(frame, area, app);
+    render_agent_hooks(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -83,7 +84,7 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "[m] Memories  Up/Down scroll  Esc close",
+                        "[m] Memories  [h] Hooks  Up/Down scroll  Esc close",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
@@ -141,6 +142,82 @@ fn render_memory_center(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .title(" Memory Center ")
                 .title_bottom(Line::styled(
                     "[m] toggle  [r] reset  Esc back",
+                    Style::default().fg(Color::DarkGray),
+                )),
+        ),
+        area,
+    );
+}
+
+fn render_agent_hooks(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(settings) = &app.agent_hook_settings else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(88);
+    let height = screen.height.saturating_sub(4).min(21);
+    if width < 48 || height < 17 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let enabled = |value| if value { "on" } else { "off" };
+    let mut lines = vec![
+        Line::styled(
+            "Built-in lifecycle hooks - future tasks only",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("No arbitrary commands or environment values are accepted."),
+        Line::raw(""),
+        Line::styled(
+            format!("[l] logging: {}", enabled(settings.logging)),
+            Style::default().fg(Color::Yellow),
+        ),
+        Line::raw("    Emits structured lifecycle events to Claw tracing."),
+        Line::styled(
+            format!("[a] audit: {}", enabled(settings.audit)),
+            Style::default().fg(Color::Yellow),
+        ),
+        Line::raw("    Adds owner Agent lifecycle records; broker audit remains mandatory."),
+        Line::styled(
+            format!("[c] checkpoint: {}", enabled(settings.checkpoint)),
+            Style::default().fg(Color::Yellow),
+        ),
+        Line::raw("    Creates checkpoints before configured dangerous tools."),
+        Line::raw(""),
+        Line::styled(
+            "Changes are loaded by future tasks and never rewrite a running task.",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    if let (Some(kind), Some(changed)) = (&settings.updated_kind, settings.changed) {
+        let state = app.agent_hook_enabled(kind).map(enabled).unwrap_or("unknown");
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            if changed {
+                format!("Saved {kind}: {state}.")
+            } else {
+                format!("{kind} was already {state}.")
+            },
+            Style::default().fg(accent(app)),
+        ));
+    }
+    if let Some(error) = &app.agent_hook_error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(error.clone(), Style::default().fg(Color::Red)));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(accent(app)))
+                .title(" Hooks Center ")
+                .title_bottom(Line::styled(
+                    "[l] logging  [a] audit  [c] checkpoint  Esc back",
                     Style::default().fg(Color::DarkGray),
                 )),
         ),

@@ -1,10 +1,10 @@
 use super::*;
 use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
-    ActivityEvidence, ActivityOperationPreview, ActivityResource, ActivityReview, ApprovalRequest,
-    BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
-    NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences,
-    PlatformOverview, TaskSummary,
+    parse_agent_hook_settings, ActivityEvidence, ActivityOperationPreview, ActivityResource,
+    ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo, Conversation,
+    ConversationMessage, ConversationSummary, Job, NotificationAction, NotificationDelivery,
+    NotificationItem, NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -985,6 +985,107 @@ fn memory_reset_refusal_is_visible_while_a_task_is_active() {
                 .text
                 .contains("cannot be reset while a task is active")
     }));
+}
+
+#[test]
+fn platform_hooks_center_uses_closed_future_task_settings() {
+    let settings = AgentHookSettings {
+        logging: false,
+        audit: true,
+        checkpoint: false,
+        updated_kind: None,
+        changed: None,
+    };
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('h'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::OpenAgentHooks
+    );
+    app.open_agent_hooks(settings);
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::ToggleAgentHook("checkpoint")
+    );
+
+    let backend = TestBackend::new(110, 26);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Hooks Center"));
+    assert!(output.contains("logging: off"));
+    assert!(output.contains("audit: on"));
+    assert!(output.contains("No arbitrary commands"));
+}
+
+#[test]
+fn hook_settings_parser_rejects_open_or_incomplete_inventories() {
+    let valid = json!({
+        "applies_to": "future_tasks",
+        "hooks": [
+            {"kind": "logging", "enabled": false},
+            {"kind": "audit", "enabled": true},
+            {"kind": "checkpoint", "enabled": false},
+        ],
+    });
+    assert_eq!(
+        parse_agent_hook_settings(valid).unwrap(),
+        AgentHookSettings {
+            logging: false,
+            audit: true,
+            checkpoint: false,
+            updated_kind: None,
+            changed: None,
+        }
+    );
+    for invalid in [
+        json!({
+            "applies_to": "current_task",
+            "hooks": [
+                {"kind": "logging", "enabled": false},
+                {"kind": "audit", "enabled": false},
+                {"kind": "checkpoint", "enabled": false},
+            ],
+        }),
+        json!({
+            "applies_to": "future_tasks",
+            "hooks": [
+                {"kind": "logging", "enabled": false},
+                {"kind": "audit", "enabled": false},
+                {"kind": "external", "enabled": true},
+            ],
+        }),
+        json!({
+            "applies_to": "future_tasks",
+            "hooks": [
+                {"kind": "logging", "enabled": false},
+                {"kind": "logging", "enabled": true},
+                {"kind": "checkpoint", "enabled": false},
+            ],
+        }),
+    ] {
+        assert!(parse_agent_hook_settings(invalid).is_err());
+    }
 }
 
 #[test]

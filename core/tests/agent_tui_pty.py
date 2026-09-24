@@ -50,6 +50,11 @@ class FixtureBroker:
         self.history_retry_id = "task-history-retry"
         self.history_cancelled = False
         self.notification_state = "unread"
+        self.agent_hooks = {
+            "logging": False,
+            "audit": False,
+            "checkpoint": True,
+        }
         self.notification_preferences = {
             "web_enabled": True,
             "desktop_enabled": True,
@@ -265,6 +270,15 @@ class FixtureBroker:
         value["activity_id"] = ACTIVITY_ID
         return value
 
+    def hook_settings(self):
+        return {
+            "applies_to": "future_tasks",
+            "hooks": [
+                {"kind": kind, "enabled": self.agent_hooks[kind]}
+                for kind in ("logging", "audit", "checkpoint")
+            ],
+        }
+
     def dispatch(self, method, params):
         if method == "daemon.status":
             return {"daemon": "clawd", "status": "running"}
@@ -322,6 +336,22 @@ class FixtureBroker:
                 "semantic_rows_deleted": 4,
                 "conversations_preserved": True,
             }
+        if method == "agent.hooks.get":
+            if self.case != "hooks-center":
+                raise AssertionError("unexpected Agent hooks query")
+            return self.hook_settings()
+        if method == "agent.hooks.set":
+            if self.case != "hooks-center":
+                raise AssertionError("unexpected Agent hooks mutation")
+            kind = params.get("kind")
+            enabled = params.get("enabled")
+            if kind not in self.agent_hooks or not isinstance(enabled, bool):
+                raise AssertionError("Agent hooks mutation was not closed and typed")
+            changed = self.agent_hooks[kind] != enabled
+            self.agent_hooks[kind] = enabled
+            value = self.hook_settings()
+            value.update({"updated_kind": kind, "changed": changed})
+            return value
         if method == "agent.usage":
             return {
                 "period": "fixture",
@@ -782,6 +812,7 @@ class FixtureBroker:
                     "side",
                     "platform",
                     "memory-center",
+                    "hooks-center",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -826,6 +857,7 @@ class FixtureBroker:
                 "side",
                 "platform",
                 "memory-center",
+                "hooks-center",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1023,7 +1055,7 @@ def run(cos, case, transcript, original_namespace, trace):
             "model": "tui-fixture",
             "base_url": "http://127.0.0.1:1",
         }
-        if case in ("platform", "memory-center"):
+        if case in ("platform", "memory-center", "hooks-center"):
             agent_config.update({
                 "mcp_servers": [{
                     "name": "fixture_mcp",
@@ -1242,6 +1274,43 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+            if case == "hooks-center":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data,
+                )
+                os.write(master, b"h")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Hooks Center" in data
+                    and b"Built-in lifecycle hooks" in data
+                    and any(
+                        request["command"] == "agent.hooks.get"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"la")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"logging: on" in data
+                    and b"audit: on" in data
+                    and sum(
+                        request["command"] == "agent.hooks.set"
+                        for request in broker.requests
+                    )
+                    == 2,
+                )
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
             if case == "file-mentions":
                 os.write(master, b"Inspect \x06")
                 read_terminal(
@@ -2095,6 +2164,7 @@ if __name__ == "__main__":
             "side",
             "platform",
             "memory-center",
+            "hooks-center",
             "copy-export",
             "raw-scrollback",
             "vim",

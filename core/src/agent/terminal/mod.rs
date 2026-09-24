@@ -179,6 +179,8 @@ enum InputAction {
     ActivityControls(String),
     ActivityEvidence(String),
     ActivityReview(String),
+    OpenAgentHooks,
+    ToggleAgentHook(&'static str),
     Quit,
 }
 
@@ -245,6 +247,7 @@ async fn run_with_backend(
                             && !app.agents_open
                             && app.platform_overview.is_none()
                             && !app.memory_center_open
+                            && app.agent_hook_settings.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -432,6 +435,18 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if app.agent_hook_settings.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_agent_hooks();
+                InputAction::None
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => InputAction::ToggleAgentHook("logging"),
+            KeyCode::Char('a') | KeyCode::Char('A') => InputAction::ToggleAgentHook("audit"),
+            KeyCode::Char('c') | KeyCode::Char('C') => InputAction::ToggleAgentHook("checkpoint"),
+            _ => InputAction::None,
+        };
+    }
     if app.platform_overview.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -450,6 +465,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.open_memory_center();
                 InputAction::None
             }
+            KeyCode::Char('h') | KeyCode::Char('H') => InputAction::OpenAgentHooks,
             _ => InputAction::None,
         };
     }
@@ -1057,6 +1073,23 @@ async fn apply_input_action(
     match action {
         InputAction::None => {}
         InputAction::Quit => app.should_quit = true,
+        InputAction::OpenAgentHooks => match backend.agent_hooks().await {
+            Ok(settings) => app.open_agent_hooks(settings),
+            Err(error) => {
+                app.close_platform_overview();
+                app.push_error(&error);
+            }
+        },
+        InputAction::ToggleAgentHook(kind) => {
+            let Some(enabled) = app.agent_hook_enabled(kind) else {
+                app.set_agent_hook_error("Agent hook settings changed; reopen the panel.");
+                return;
+            };
+            match backend.set_agent_hook(kind, !enabled).await {
+                Ok(settings) => app.open_agent_hooks(settings),
+                Err(error) => app.set_agent_hook_error(&error),
+            }
+        }
         InputAction::Cancel => {
             let Some(task_id) = app.active_task.clone() else {
                 return;

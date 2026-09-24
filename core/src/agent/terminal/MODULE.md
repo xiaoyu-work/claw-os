@@ -114,6 +114,9 @@ audit.
 - The Platform Memory Center reuses the future-task memory option and sends an
   explicitly confirmed `memory.reset` through `clawd`. Reset removes learned
   notes/App/semantic memory only; conversation and execution evidence remain.
+- The Platform Hooks Center reads and writes only the closed built-in
+  logging/audit/checkpoint set through `clawd`. Changes apply to future tasks;
+  no command, environment, third-party handler or renderer-owned trust exists.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

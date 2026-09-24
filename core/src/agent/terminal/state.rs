@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
-    ActivityOperationPreview, ActivityReview, ApprovalRequest, BackendInfo, Conversation,
-    ConversationJob,
+    ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
+    Conversation, ConversationJob,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -153,6 +153,8 @@ pub(super) struct App {
     pub platform_overview: Option<PlatformOverview>,
     pub platform_scroll: u16,
     pub memory_center_open: bool,
+    pub agent_hook_settings: Option<AgentHookSettings>,
+    pub agent_hook_error: Option<String>,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -235,6 +237,8 @@ impl App {
             platform_overview: None,
             platform_scroll: 0,
             memory_center_open: false,
+            agent_hook_settings: None,
+            agent_hook_error: None,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -348,6 +352,8 @@ impl App {
         self.platform_overview = None;
         self.platform_scroll = 0;
         self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -724,20 +730,51 @@ impl App {
         self.platform_overview = Some(overview);
         self.platform_scroll = 0;
         self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
     }
 
     pub fn close_platform_overview(&mut self) {
         self.platform_overview = None;
         self.platform_scroll = 0;
         self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
     }
 
     pub fn open_memory_center(&mut self) {
         self.memory_center_open = true;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
     }
 
     pub fn close_memory_center(&mut self) {
         self.memory_center_open = false;
+    }
+
+    pub fn open_agent_hooks(&mut self, settings: AgentHookSettings) {
+        self.memory_center_open = false;
+        self.agent_hook_settings = Some(settings);
+        self.agent_hook_error = None;
+    }
+
+    pub fn close_agent_hooks(&mut self) {
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
+    }
+
+    pub fn agent_hook_enabled(&self, kind: &str) -> Option<bool> {
+        let settings = self.agent_hook_settings.as_ref()?;
+        match kind {
+            "logging" => Some(settings.logging),
+            "audit" => Some(settings.audit),
+            "checkpoint" => Some(settings.checkpoint),
+            _ => None,
+        }
+    }
+
+    pub fn set_agent_hook_error(&mut self, error: &str) {
+        self.agent_hook_error = Some(bounded_clean_text(error, 2_048));
     }
 
     pub fn confirm_memory_reset(&mut self) {
