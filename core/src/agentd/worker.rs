@@ -1206,6 +1206,7 @@ async fn execute(
         requested_model: job.requested_model,
         requested_reasoning_effort: job.requested_reasoning_effort,
         use_memory: job.use_memory,
+        plan_only: job.plan_only,
         presence: assignment.presence,
     };
 

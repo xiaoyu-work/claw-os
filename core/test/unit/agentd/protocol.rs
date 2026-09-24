@@ -77,6 +77,7 @@ fn requested_model_round_trips_in_the_worker_assignment() {
         requested_model: Some("provider/model-v2".to_string()),
         requested_reasoning_effort: Some("high".to_string()),
         use_memory: true,
+        plan_only: true,
         owner_uid: 1000,
         owner_home: "/home/test".to_string(),
         workspace: "/home/test/project".to_string(),
@@ -87,6 +88,7 @@ fn requested_model_round_trips_in_the_worker_assignment() {
     let document = serde_json::to_value(spec).unwrap();
     assert_eq!(document["requested_model"], "provider/model-v2");
     assert_eq!(document["requested_reasoning_effort"], "high");
+    assert_eq!(document["plan_only"], true);
     assert_eq!(document["workspace"], "/home/test/project");
     assert_eq!(document["attachments"][0]["sha256"], attachments[0].sha256);
     let decoded = serde_json::from_value::<JobSpec>(document).unwrap();

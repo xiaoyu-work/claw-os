@@ -374,6 +374,8 @@ pub struct JobSpec {
     pub requested_reasoning_effort: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub use_memory: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub plan_only: bool,
     pub owner_uid: u32,
     pub owner_home: String,
     /// Broker-validated canonical directory under `owner_home`. It selects
@@ -397,6 +399,10 @@ fn default_true() -> bool {
 
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 // ---------------------------------------------------------------------------

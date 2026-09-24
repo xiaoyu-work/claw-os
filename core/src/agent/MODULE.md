@@ -39,6 +39,9 @@ surfaces.
   them through the private worker assignment without changing credentials,
   capabilities, or global configuration. Explicit effort requires Copilot
   Responses and rejects incompatible fallback/provider paths.
+- Persist Plan mode on the Job and worker assignment. The worker enforces an
+  empty tool allowlist and records model-visible plan guidance; the TUI flag
+  alone is never the enforcement boundary.
 - Persist the broker-resolved per-task workspace, revalidate it at worker
   claim, use it as process cwd, and project it through labelled request-local
   ProjectContext without adding filesystem capability.

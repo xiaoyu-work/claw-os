@@ -47,6 +47,7 @@ pub(super) async fn start_prompt(
             max_turns,
             &app.selected_model,
             app.task_reasoning_effort.as_deref(),
+            app.task_plan_only,
         )
         .await
     {
@@ -111,6 +112,7 @@ pub(super) async fn queue_prompt(
             max_turns,
             &app.selected_model,
             app.task_reasoning_effort.as_deref(),
+            app.task_plan_only,
         )
         .await
     {
@@ -214,6 +216,11 @@ pub(super) async fn restore_conversation(
         latest_job
             .as_ref()
             .and_then(|job| job.requested_reasoning_effort.as_deref()),
+    );
+    app.restore_plan_mode(
+        latest_job
+            .as_ref()
+            .is_some_and(|job| job.plan_only),
     );
     if jobs.is_empty() {
         return;

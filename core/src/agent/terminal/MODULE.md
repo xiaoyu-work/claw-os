@@ -46,6 +46,9 @@ audit.
   reasoning effort, memory use and max turns. It never mutates provider
   credentials or global config. Explicit effort is persisted on the Job and
   fails unless Copilot selects a Responses-capable model.
+- Plan mode is a durable future-task control. The Job carries `plan_only`,
+  agentd preserves it, and the runtime exposes no tools; the panel is only its
+  presentation.
 - Display only shared redacted presentation data. Never expose tool arguments,
   successful result bodies, opaque reasoning state or credentials.
 - Approval keys call the installed OS helper for one exact pending request;

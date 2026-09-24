@@ -144,6 +144,7 @@ pub(super) struct App {
     pub task_use_memory: bool,
     pub task_max_turns: Option<u32>,
     pub task_reasoning_effort: Option<String>,
+    pub task_plan_only: bool,
     pub task_controls_open: bool,
     pub appearance_open: bool,
     pub terminal_theme: TerminalTheme,
@@ -218,6 +219,7 @@ impl App {
             task_use_memory: true,
             task_max_turns: None,
             task_reasoning_effort: None,
+            task_plan_only: false,
             task_controls_open: false,
             appearance_open: false,
             terminal_theme: TerminalTheme::Cyan,
@@ -671,6 +673,10 @@ impl App {
         };
     }
 
+    pub fn toggle_task_plan_mode(&mut self) {
+        self.task_plan_only = !self.task_plan_only;
+    }
+
     pub fn open_appearance(&mut self) {
         self.picker = None;
         self.appearance_open = true;
@@ -732,6 +738,10 @@ impl App {
 
     pub fn restore_reasoning_effort(&mut self, effort: Option<&str>) {
         self.task_reasoning_effort = effort.map(str::to_string);
+    }
+
+    pub fn restore_plan_mode(&mut self, plan_only: bool) {
+        self.task_plan_only = plan_only;
     }
 
     pub fn pending_attachments(&self) -> &[crate::agent::attachments::AttachmentInput] {

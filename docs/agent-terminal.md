@@ -91,7 +91,7 @@ Controls:
   active-task `Esc` always cancels rather than being captured by Vim.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
-  through default/8/16/32.
+  through default/8/16/32. `p` toggles durable Plan mode.
 - `Ctrl-C` cancels active work, or exits while idle.
 - `Ctrl-D` exits while idle.
 - During an approval, `a` requests one exact authorization and `d` requests
@@ -199,6 +199,11 @@ reasoning effort is persisted across queueing, retry and resume, and currently
 requires Copilot to select a Responses-capable model. Legacy
 Chat Completions and non-Copilot fallbacks fail explicitly rather than silently
 ignoring the requested effort.
+
+Plan mode is persisted on the submitted Job and carried through agentd,
+queueing, retry and resume. The worker enforces an empty tool allowlist and
+adds explicit plan-only context, so this is not a cosmetic TUI flag and cannot
+perform tool effects.
 
 `/workspace` shows the selected task workspace. `/workspace home` resets to
 the authenticated owner's passwd home; `/workspace PATH` resolves an absolute

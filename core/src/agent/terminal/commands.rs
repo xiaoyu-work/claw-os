@@ -731,13 +731,18 @@ pub(super) async fn execute(
             app.open_activity_operation_preview(preview);
         }
         Command::Session => app.push_system(&format!(
-            "session: {}\nmodel: {}\nprovider: {}\nreasoning effort: {}\nworkspace: {}\nmemory: {}\nmax turns: {}",
+            "session: {}\nmodel: {}\nprovider: {}\nreasoning effort: {}\nmode: {}\nworkspace: {}\nmemory: {}\nmax turns: {}",
             app.conversation.id,
             app.selected_model,
             app.info.provider,
             app.task_reasoning_effort
                 .as_deref()
                 .unwrap_or("provider default"),
+            if app.task_plan_only {
+                "plan only"
+            } else {
+                "execute"
+            },
             app.selected_workspace,
             if app.task_use_memory { "on" } else { "off" },
             app.task_max_turns

@@ -78,6 +78,7 @@ fn requested_model_does_not_change_provider_policy_or_other_jobs() {
         requested_model: Some("selected".into()),
         requested_reasoning_effort: None,
         use_memory: false,
+        plan_only: false,
         presence: None,
     };
     let effective = job_config(&configured, &job).unwrap();
@@ -113,6 +114,7 @@ fn reasoning_effort_is_exact_and_copilot_only() {
         requested_model: Some("gpt-5.6-sol".into()),
         requested_reasoning_effort: Some("high".into()),
         use_memory: true,
+        plan_only: false,
         presence: None,
     };
     assert_eq!(
@@ -131,6 +133,34 @@ fn reasoning_effort_is_exact_and_copilot_only() {
         .unwrap_err()
         .contains("requires Copilot"));
     assert!(validate_requested_reasoning_effort(Some("extreme")).is_err());
+}
+
+#[test]
+fn plan_mode_disables_every_model_tool_without_changing_global_config() {
+    let configured = crate::config::AgentConfig {
+        tool_allow: None,
+        tool_deny: vec!["already-denied".into()],
+        ..Default::default()
+    };
+    let job = JobExecution {
+        id: "job-plan".into(),
+        prompt: "make a plan".into(),
+        attachments: Vec::new(),
+        context: None,
+        branch_context: None,
+        workspace: None,
+        session_id: None,
+        max_turns: None,
+        requested_model: None,
+        requested_reasoning_effort: None,
+        use_memory: true,
+        plan_only: true,
+        presence: None,
+    };
+    let effective = job_config(&configured, &job).unwrap();
+    assert_eq!(effective.tool_allow, Some(Vec::new()));
+    assert_eq!(effective.tool_deny, configured.tool_deny);
+    assert!(configured.tool_allow.is_none());
 }
 
 #[test]

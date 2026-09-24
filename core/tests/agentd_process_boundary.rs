@@ -312,6 +312,7 @@ fn assignment(
             requested_model: None,
             requested_reasoning_effort: None,
             use_memory: true,
+            plan_only: false,
             record_activity_receipts: false,
             activity_capability_checks: false,
             activity_monetary_checks: false,

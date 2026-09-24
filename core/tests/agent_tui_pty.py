@@ -119,6 +119,7 @@ class FixtureBroker:
         self.cursors = {}
         self.requested_model = None
         self.requested_reasoning_effort = None
+        self.requested_plan_only = False
         self.requested_workspace = None
         self.stream_disconnects = 0
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
@@ -181,6 +182,7 @@ class FixtureBroker:
             "model": "tui-fixture",
             "requested_model": self.requested_model,
             "requested_reasoning_effort": self.requested_reasoning_effort,
+            "plan_only": self.requested_plan_only,
             "turns_used": 2,
             "response": ANSWER if status == "ok" else None,
             "error": None,
@@ -671,10 +673,12 @@ class FixtureBroker:
                     params.get("use_memory") is not False
                     or params.get("max_turns") != 8
                     or params.get("reasoning_effort") != "minimal"
+                    or params.get("plan_only") is not True
                 ):
                     raise AssertionError("terminal task controls were not bound to submission")
             self.requested_model = params.get("model")
             self.requested_reasoning_effort = params.get("reasoning_effort")
+            self.requested_plan_only = params.get("plan_only", False)
             self.requested_workspace = params.get("workspace")
             if not self.requested_workspace:
                 raise AssertionError("task submission omitted its broker workspace")
@@ -1150,7 +1154,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     time.monotonic() + 15,
                     lambda data: b"Task model controls" in data,
                 )
-                os.write(master, b"rmt\x1b")
+                os.write(master, b"prmt\x1b")
                 time.sleep(0.4)
             if case == "file-mentions":
                 os.write(master, b"Inspect \x06")

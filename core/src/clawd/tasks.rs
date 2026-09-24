@@ -87,6 +87,10 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .get("use_memory")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let plan_only = params
+        .get("plan_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let requested_workspace = params.get("workspace").and_then(Value::as_str);
     let requested_activity = optional_activity_id(&params)?;
     let session_meta = session_id
@@ -145,6 +149,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         session_client,
     );
     job.use_memory = use_memory;
+    job.plan_only = plan_only;
     job.attachments = attachments;
     job.activity_id = activity_id;
     job.requested_model = requested_model;
@@ -591,6 +596,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         session_client,
     );
     retried.use_memory = original.use_memory;
+    retried.plan_only = original.plan_only;
     retried.attachments = original.attachments;
     retried.activity_id = activity_id;
     retried.requested_model = requested_model;

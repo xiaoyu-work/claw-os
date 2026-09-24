@@ -413,6 +413,10 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.cycle_task_reasoning_effort();
                 InputAction::None
             }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                app.toggle_task_plan_mode();
+                InputAction::None
+            }
             KeyCode::Char('o') | KeyCode::Char('O') => {
                 app.close_task_controls();
                 app.open_model_picker();

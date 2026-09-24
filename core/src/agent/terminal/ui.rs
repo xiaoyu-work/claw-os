@@ -149,6 +149,10 @@ fn render_task_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .as_deref()
                 .unwrap_or("provider default")
         )),
+        Line::raw(format!(
+            "mode: {}",
+            if app.task_plan_only { "plan only" } else { "execute" }
+        )),
         Line::raw(""),
         Line::styled(
             "These settings do not change credentials, provider, or global config.",
@@ -164,7 +168,7 @@ fn render_task_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .title(" Task model controls ")
                 .title_bottom(Line::from(vec![
                     Span::styled(
-                        "[o] Model  [r] Reasoning  [m] Memory  [t] Max turns",
+                        "[o] Model  [r] Reasoning  [p] Plan  [m] Memory  [t] Turns",
                         Style::default().fg(Color::Yellow),
                     ),
                     Span::raw("  "),
@@ -1075,6 +1079,9 @@ fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     }
     if let Some(effort) = &task.requested_reasoning_effort {
         lines.push(Line::raw(format!("reasoning effort: {effort}")));
+    }
+    if task.plan_only {
+        lines.push(Line::raw("mode: plan only (tools disabled)"));
     }
     if let Some(turns) = task.turns_used {
         lines.push(Line::raw(format!("turns: {turns}")));

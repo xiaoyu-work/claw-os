@@ -93,6 +93,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
                 "data": encoded,
             }],
             "reasoning_effort": "high",
+            "plan_only": true,
         }),
         &client,
     )
@@ -110,6 +111,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
     assert_eq!(stored.attachments.len(), 1);
     assert_eq!(stored.attachments[0].data, encoded);
     assert_eq!(stored.requested_reasoning_effort.as_deref(), Some("high"));
+    assert!(stored.plan_only);
     let digest = stored.attachments[0].sha256.clone();
     store.cancel_pending(id).unwrap().unwrap();
 
@@ -123,6 +125,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
         stored_retry.requested_reasoning_effort.as_deref(),
         Some("high")
     );
+    assert!(stored_retry.plan_only);
     assert_eq!(retried["attachments"][0]["sha256"], digest);
     assert!(retried["attachments"][0].get("data").is_none());
 }

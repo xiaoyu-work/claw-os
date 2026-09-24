@@ -1220,6 +1220,7 @@ async fn pump(
             requested_model: job.requested_model.clone(),
             requested_reasoning_effort: job.requested_reasoning_effort.clone(),
             use_memory: job.use_memory,
+            plan_only: job.plan_only,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
             workspace: workspace.to_string_lossy().into_owned(),

@@ -180,6 +180,8 @@ pub struct Job {
     pub requested_reasoning_effort: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub use_memory: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub plan_only: bool,
     pub status: JobStatus,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,6 +265,10 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 impl Job {
     fn new_pending(
         prompt: String,
@@ -313,6 +319,7 @@ impl Job {
             requested_model: None,
             requested_reasoning_effort: None,
             use_memory: true,
+            plan_only: false,
             status: JobStatus::Pending,
             created_at: now_iso(),
             started_at: None,
@@ -2693,6 +2700,7 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.requested_model == right.requested_model
         && left.requested_reasoning_effort == right.requested_reasoning_effort
         && left.use_memory == right.use_memory
+        && left.plan_only == right.plan_only
         && left.created_at == right.created_at
         && left.owner_uid == right.owner_uid
         && left.owner_home == right.owner_home
@@ -3799,6 +3807,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             requested_model: job.requested_model.clone(),
             requested_reasoning_effort: job.requested_reasoning_effort.clone(),
             use_memory: job.use_memory,
+            plan_only: job.plan_only,
             presence: None,
         },
         stream_sink,
@@ -3861,6 +3870,7 @@ pub struct JobExecution {
     pub requested_model: Option<String>,
     pub requested_reasoning_effort: Option<String>,
     pub use_memory: bool,
+    pub plan_only: bool,
     pub presence: Option<crate::session::SessionPresence>,
 }
 
@@ -3890,6 +3900,9 @@ fn job_config(
             );
         }
         config.reasoning_effort = Some(effort.clone());
+    }
+    if job.plan_only {
+        config.tool_allow = Some(Vec::new());
     }
     Ok(config)
 }
@@ -3974,7 +3987,11 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
     let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     tools.set_guardrails(guardrails);
     tools.set_approval(loop_::approval_from_cfg(&cfg));
-    let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &exposure).await;
+    let _mcp_handles = if job.plan_only {
+        None
+    } else {
+        Some(loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &exposure).await)
+    };
     let tools = Arc::new(tools);
     let extension_runtime = crate::agent_extensions::runtime::ExtensionRuntime::activate(
         &cfg.extensions,
@@ -4003,6 +4020,19 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
     };
 
     let project_context = workspace_context(job.workspace.as_deref());
+    let transient_context = if job.plan_only {
+        Some(match job.context.as_deref() {
+            Some(context) => format!(
+                "{context}\n\nPlan mode is active: produce a concrete plan only. \
+                 Do not claim that tools ran or effects occurred; the runtime exposes no tools."
+            ),
+            None => "Plan mode is active: produce a concrete plan only. Do not claim that \
+                     tools ran or effects occurred; the runtime exposes no tools."
+                .to_string(),
+        })
+    } else {
+        job.context.clone()
+    };
     let request = loop_::RuntimeRequest::streaming(
         provider,
         &cfg,
@@ -4013,7 +4043,7 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
     )
     .with_attachments(&job.attachments)
     .with_exposure(&exposure)
-    .with_transient_context(job.context.as_deref())
+    .with_transient_context(transient_context.as_deref())
     .with_project_context(project_context.as_deref())
     .with_task_id(&job.id)
     .with_interrupt_scope(&job.id);

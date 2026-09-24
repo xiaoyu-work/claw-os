@@ -65,6 +65,7 @@ fn job(status: &str) -> Job {
         error: None,
         requested_model: Some("claw-model".into()),
         requested_reasoning_effort: None,
+        plan_only: false,
         provider: Some("ollama".into()),
         model: Some("claw-model".into()),
         turns_used: None,
@@ -744,6 +745,13 @@ fn task_controls_change_only_future_task_defaults() {
     handle_key(
         &mut app,
         crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('p'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('r'),
             crossterm::event::KeyModifiers::NONE,
         ),
@@ -765,6 +773,7 @@ fn task_controls_change_only_future_task_defaults() {
     assert!(!app.task_use_memory);
     assert_eq!(app.task_max_turns, Some(8));
     assert_eq!(app.task_reasoning_effort.as_deref(), Some("minimal"));
+    assert!(app.task_plan_only);
     assert_eq!(app.selected_model, "claw-model");
 }
 

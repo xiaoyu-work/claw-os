@@ -146,6 +146,8 @@ pub struct ActivityRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_memory: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<Text<4096>>,
 }
 
