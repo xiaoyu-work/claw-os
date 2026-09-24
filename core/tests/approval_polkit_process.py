@@ -67,8 +67,14 @@ class Terminal:
         self.stdout = bytearray()
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
+        # pkexec authenticates its parent; that parent must also be the fixture user.
+        owner_command = [
+            "/usr/bin/python3", "-c",
+            "import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))",
+            *args,
+        ]
         self.process = subprocess.Popen(
-            args,
+            owner_command,
             stdin=slave,
             stdout=subprocess.PIPE if capture_stdout else slave,
             stderr=slave,
@@ -127,6 +133,16 @@ class Terminal:
         if self.process.stdout is not None:
             self.stdout.extend(self.process.stdout.read())
         return result
+
+    def require_exit(self, expected):
+        status = self.finish()
+        if status != expected:
+            plain = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(self.output))
+            raise AssertionError(
+                f"expected exit {expected}, received {status}; "
+                f"terminal={plain[-4000:].decode(errors='replace')!r}; "
+                f"stdout={self.stdout[-2000:].decode(errors='replace')!r}"
+            )
 
     def close(self):
         stop(self.process)
@@ -312,7 +328,7 @@ def run(args):
                 with contextlib.closing(Terminal(
                     ["/usr/bin/pkexec", str(HELPER), "--help"], uid, uid, home, True,
                 )) as terminal:
-                    assert terminal.finish() == 127
+                    terminal.require_exit(127)
                     assert b"Password:" not in terminal.output
                     assert b"usage: claw-approval-helper" not in terminal.stdout
                 print(json.dumps({"case": "legacy-sessionless-policy-refused", "completed": True}), flush=True)
@@ -332,7 +348,7 @@ def run(args):
                 )) as terminal:
                     terminal.expect(b"Password:")
                     terminal.send(PASSWORD.encode() + b"\n")
-                    assert terminal.finish() == 0
+                    terminal.require_exit(0)
                     assert b"usage: claw-approval-helper" in terminal.stdout
                     assert PASSWORD.encode() not in terminal.output
                 print(json.dumps({"case": "sessionless-real-pam", "completed": True}), flush=True)
@@ -355,7 +371,7 @@ def run(args):
                 )) as terminal:
                     terminal.expect(b"Password:")
                     terminal.send(PASSWORD.encode() + b"\n")
-                    assert terminal.finish() == 0
+                    terminal.require_exit(0)
                     result = json.loads(terminal.stdout)
                     assert result["id"] == request["id"] and result["decision"] == "approved"
                 status = rpc("permission.status", {"ids": [request["id"]]}, uid)
@@ -391,7 +407,7 @@ def run(args):
                 )) as terminal:
                     terminal.expect(b"Password:")
                     terminal.send(PASSWORD.encode() + b"\n")
-                    assert terminal.finish() == 0
+                    terminal.require_exit(0)
                     assert json.loads(terminal.stdout)["decision"] == "denied"
                 status = rpc("permission.status", {"ids": [refused["id"]]}, uid)
                 assert status["result"]["statuses"][0]["status"] == "denied"
@@ -406,7 +422,7 @@ def run(args):
                 )) as terminal:
                     terminal.expect(b"Password:")
                     terminal.send(PASSWORD.encode() + b"\n")
-                    assert terminal.finish() == 1
+                    terminal.require_exit(1)
                     assert not terminal.stdout
                 status = rpc("permission.status", {"ids": [foreign["id"]]}, other_uid)
                 assert status["result"]["statuses"][0]["status"] == "pending"
@@ -454,7 +470,7 @@ def run(args):
                     terminal.send(b"\x1b[27;1u")
                     time.sleep(0.2)
                     terminal.send(b"/quit\r")
-                    assert terminal.finish() == 0
+                    terminal.require_exit(0)
                 print(json.dumps({"case": "real-tui-pam-broker-approval", "completed": True}), flush=True)
             except BaseException:
                 for name, (log, process) in logs.items():
