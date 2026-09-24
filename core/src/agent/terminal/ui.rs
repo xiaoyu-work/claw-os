@@ -38,6 +38,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_mcp_overview(frame, area, app);
     render_extensions_overview(frame, area, app);
     render_usage_overview(frame, area, app);
+    render_debug_overview(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -87,7 +88,7 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "[m] Memory [h] Hooks [c] MCP [e] Extensions [u] Usage  Esc close",
+                        "[m] Memory [h] Hooks [c] MCP [e] Ext [u] Usage [d] Debug  Esc",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
@@ -449,6 +450,99 @@ fn render_usage_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .title(" Usage Center ")
                     .title_bottom(Line::styled(
                         "[d] daily  [w] weekly  [c] cumulative  Up/Down scroll  Esc back",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
+}
+
+fn render_debug_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(debug) = &app.debug_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(96);
+    let height = screen.height.saturating_sub(4).min(31);
+    if width < 56 || height < 18 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let on = |value| if value { "on" } else { "off" };
+    let allow = debug
+        .tool_allow_count
+        .map_or_else(|| "all minus deny list".to_string(), |count| format!("{count} names"));
+    let active_task = app.active_task.as_deref().unwrap_or("none");
+    let reasoning = debug.reasoning_effort.as_deref().unwrap_or("provider default");
+    let mut lines = vec![
+        Line::styled(
+            "Safe effective runtime diagnostics",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("Credentials, headers, URLs, MCP launch data, and private payloads are omitted."),
+        Line::raw(""),
+        Line::styled("Broker", Style::default().fg(Color::Yellow)),
+        Line::raw(format!(
+            "{}: {}  uptime {} ms  started {}",
+            debug.daemon, debug.daemon_status, debug.uptime_ms, debug.started_at
+        )),
+        Line::styled("Conversation", Style::default().fg(Color::Yellow)),
+        Line::raw(format!("id: {}", app.conversation.id)),
+        Line::raw(format!("workspace: {}", clean_text(&app.selected_workspace))),
+        Line::raw(format!("active task: {active_task}")),
+        Line::styled("Provider", Style::default().fg(Color::Yellow)),
+        Line::raw(format!(
+            "{} / {}  ready {}  catalogue {} model(s)",
+            debug.provider,
+            debug.model,
+            on(debug.provider_ready),
+            debug.model_count
+        )),
+        Line::raw(format!(
+            "max turns {}  reasoning {}  compression {}",
+            debug.max_turns,
+            reasoning,
+            on(debug.compression_enabled)
+        )),
+        Line::styled("Safety and extensions", Style::default().fg(Color::Yellow)),
+        Line::raw(format!(
+            "memory redaction {}  progressive tools {}",
+            on(debug.memory_redaction_enabled),
+            on(debug.progressive_tools_enabled)
+        )),
+        Line::raw(format!(
+            "tool allow: {allow}  deny: {}",
+            debug.tool_deny_count
+        )),
+        Line::raw(format!(
+            "configured MCP: {}  discovery {}  selected Agent extensions: {}",
+            debug.configured_mcp_count,
+            on(debug.mcp_discovery_enabled),
+            debug.selected_extension_count
+        )),
+    ];
+    if let Some(warning) = &debug.model_catalog_warning {
+        lines.push(Line::styled(
+            format!("model catalogue warning: {warning}"),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.debug_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Debug Center ")
+                    .title_bottom(Line::styled(
+                        "Up/Down scroll  Esc back",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),

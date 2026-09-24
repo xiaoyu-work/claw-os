@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use super::backend::{
     Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
     ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationJob, ExtensionsOverview, McpOverview, UsageOverview,
+    Conversation, ConversationJob, DebugOverview, ExtensionsOverview, McpOverview, UsageOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -161,6 +161,8 @@ pub(super) struct App {
     pub extensions_scroll: u16,
     pub usage_overview: Option<UsageOverview>,
     pub usage_scroll: u16,
+    pub debug_overview: Option<DebugOverview>,
+    pub debug_scroll: u16,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -251,6 +253,8 @@ impl App {
             extensions_scroll: 0,
             usage_overview: None,
             usage_scroll: 0,
+            debug_overview: None,
+            debug_scroll: 0,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -372,6 +376,8 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = None;
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -756,6 +762,8 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = None;
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
     }
 
     pub fn close_platform_overview(&mut self) {
@@ -770,6 +778,8 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = None;
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
     }
 
     pub fn open_memory_center(&mut self) {
@@ -782,6 +792,8 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = None;
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
     }
 
     pub fn close_memory_center(&mut self) {
@@ -796,6 +808,8 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = None;
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
         self.agent_hook_settings = Some(settings);
         self.agent_hook_error = None;
     }
@@ -830,6 +844,8 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = None;
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
         self.mcp_overview = Some(overview);
         self.mcp_scroll = 0;
     }
@@ -881,11 +897,42 @@ impl App {
         self.extensions_scroll = 0;
         self.usage_overview = Some(overview);
         self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
     }
 
     pub fn close_usage_overview(&mut self) {
         self.usage_overview = None;
         self.usage_scroll = 0;
+    }
+
+    pub fn open_debug_overview(&mut self, mut overview: DebugOverview) {
+        overview.daemon = bounded_clean_text(&overview.daemon, 64).replace('\n', " ");
+        overview.daemon_status =
+            bounded_clean_text(&overview.daemon_status, 64).replace('\n', " ");
+        overview.started_at = bounded_clean_text(&overview.started_at, 128).replace('\n', " ");
+        overview.provider = bounded_clean_text(&overview.provider, 128).replace('\n', " ");
+        overview.model = bounded_clean_text(&overview.model, 256).replace('\n', " ");
+        overview.model_catalog_warning = overview
+            .model_catalog_warning
+            .as_deref()
+            .map(|warning| bounded_clean_text(warning, 2_048));
+        self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
+        self.debug_overview = Some(overview);
+        self.debug_scroll = 0;
+    }
+
+    pub fn close_debug_overview(&mut self) {
+        self.debug_overview = None;
+        self.debug_scroll = 0;
     }
 
     pub fn confirm_memory_reset(&mut self) {

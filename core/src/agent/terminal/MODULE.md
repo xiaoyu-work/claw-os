@@ -126,6 +126,9 @@ audit.
 - The Platform Usage Center queries the owner-scoped canonical AI ledger for
   daily, weekly or cumulative totals. It bounds provider/model breakdowns and
   never invents monetary cost.
+- The Platform Debug Center combines narrow `daemon.health` with safe effective
+  runtime switches and local presentation identity. It never dumps credentials,
+  headers, URLs, MCP launch material, context or transaction payloads.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

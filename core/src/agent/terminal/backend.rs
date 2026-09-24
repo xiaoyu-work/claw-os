@@ -411,6 +411,29 @@ pub(super) struct UsageOverview {
     pub breakdown_truncated: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DebugOverview {
+    pub daemon: String,
+    pub daemon_status: String,
+    pub started_at: String,
+    pub uptime_ms: u64,
+    pub provider: String,
+    pub model: String,
+    pub provider_ready: bool,
+    pub model_count: usize,
+    pub model_catalog_warning: Option<String>,
+    pub max_turns: u32,
+    pub reasoning_effort: Option<String>,
+    pub compression_enabled: bool,
+    pub memory_redaction_enabled: bool,
+    pub progressive_tools_enabled: bool,
+    pub tool_allow_count: Option<usize>,
+    pub tool_deny_count: usize,
+    pub configured_mcp_count: usize,
+    pub mcp_discovery_enabled: bool,
+    pub selected_extension_count: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -529,6 +552,7 @@ pub(super) trait Backend: Send + Sync {
     async fn mcp_overview(&self) -> Result<McpOverview, String>;
     async fn extensions_overview(&self) -> Result<ExtensionsOverview, String>;
     async fn usage_overview(&self, period: UsagePeriod) -> Result<UsageOverview, String>;
+    async fn debug_overview(&self) -> Result<DebugOverview, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1631,6 +1655,45 @@ impl Backend for BrokerBackend {
                 .await?,
         )
     }
+
+    async fn debug_overview(&self) -> Result<DebugOverview, String> {
+        let health: RawDaemonHealth = serde_json::from_value(
+            self.call(Command::DaemonHealth, json!({})).await?,
+        )
+        .map_err(|error| format!("invalid Claw daemon health response: {error}"))?;
+        if health.daemon != "clawd" || health.status != "ok" {
+            return Err("invalid Claw daemon health response: daemon is not healthy".to_string());
+        }
+        Ok(DebugOverview {
+            daemon: health.daemon,
+            daemon_status: health.status,
+            started_at: health.started_at,
+            uptime_ms: health.uptime_ms,
+            provider: self.info.provider.clone(),
+            model: self.info.model.clone(),
+            provider_ready: self.info.provider_ready,
+            model_count: self.info.models.len(),
+            model_catalog_warning: self.info.model_catalog_warning.clone(),
+            max_turns: self.config.agent.max_turns,
+            reasoning_effort: self.config.agent.reasoning_effort.clone(),
+            compression_enabled: self.config.agent.compress_enabled,
+            memory_redaction_enabled: self.config.agent.redact_memory_enabled,
+            progressive_tools_enabled: self.config.agent.progressive_tools_enabled,
+            tool_allow_count: self.config.agent.tool_allow.as_ref().map(Vec::len),
+            tool_deny_count: self.config.agent.tool_deny.len(),
+            configured_mcp_count: self.config.agent.mcp_servers.len(),
+            mcp_discovery_enabled: self.config.agent.agent_api_discovery_enabled,
+            selected_extension_count: self.config.agent.extensions.len(),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct RawDaemonHealth {
+    status: String,
+    daemon: String,
+    started_at: String,
+    uptime_ms: u64,
 }
 
 const MAX_MCP_PRESENTATION_ENTRIES: usize = 256;

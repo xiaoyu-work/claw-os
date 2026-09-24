@@ -282,6 +282,13 @@ class FixtureBroker:
     def dispatch(self, method, params):
         if method == "daemon.status":
             return {"daemon": "clawd", "status": "running"}
+        if method == "daemon.health":
+            return {
+                "daemon": "clawd",
+                "status": "ok",
+                "started_at": "2026-01-01T00:00:00Z",
+                "uptime_ms": 1000,
+            }
         if method == "agent.conversation.create":
             return {"conversation": self.conversation()}
         if method == "agent.conversation.get":
@@ -845,6 +852,7 @@ class FixtureBroker:
                     "mcp-center",
                     "extensions-center",
                     "usage-center",
+                    "debug-center",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -893,6 +901,7 @@ class FixtureBroker:
                 "mcp-center",
                 "extensions-center",
                 "usage-center",
+                "debug-center",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1097,6 +1106,7 @@ def run(cos, case, transcript, original_namespace, trace):
             "mcp-center",
             "extensions-center",
             "usage-center",
+            "debug-center",
         ):
             agent_config.update({
                 "mcp_servers": [{
@@ -1423,6 +1433,29 @@ def run(cos, case, transcript, original_namespace, trace):
                     and any(
                         request["command"] == "agent.usage"
                         and "--since" in request["params"].get("args", [])
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
+            if case == "debug-center":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data,
+                )
+                os.write(master, b"d")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Debug Center" in data
+                    and any(
+                        request["command"] == "daemon.health"
                         for request in broker.requests
                     ),
                 )
@@ -2287,6 +2320,7 @@ if __name__ == "__main__":
             "mcp-center",
             "extensions-center",
             "usage-center",
+            "debug-center",
             "copy-export",
             "raw-scrollback",
             "vim",

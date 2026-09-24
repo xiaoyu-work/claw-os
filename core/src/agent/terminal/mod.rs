@@ -184,6 +184,7 @@ enum InputAction {
     OpenMcpOverview,
     OpenExtensionsOverview,
     OpenUsageOverview(backend::UsagePeriod),
+    OpenDebugOverview,
     Quit,
 }
 
@@ -254,6 +255,7 @@ async fn run_with_backend(
                             && app.mcp_overview.is_none()
                             && app.extensions_overview.is_none()
                             && app.usage_overview.is_none()
+                            && app.debug_overview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -513,6 +515,23 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if app.debug_overview.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_debug_overview();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.debug_scroll = app.debug_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.debug_scroll = app.debug_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if app.platform_overview.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -537,6 +556,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             KeyCode::Char('u') | KeyCode::Char('U') => {
                 InputAction::OpenUsageOverview(backend::UsagePeriod::Cumulative)
             }
+            KeyCode::Char('d') | KeyCode::Char('D') => InputAction::OpenDebugOverview,
             _ => InputAction::None,
         };
     }
@@ -1182,6 +1202,13 @@ async fn apply_input_action(
                 app.close_platform_overview();
                 app.push_error(&error);
             }
+            Err(error) => {
+                app.close_platform_overview();
+                app.push_error(&error);
+            }
+        },
+        InputAction::OpenDebugOverview => match backend.debug_overview().await {
+            Ok(overview) => app.open_debug_overview(overview),
             Err(error) => {
                 app.close_platform_overview();
                 app.push_error(&error);

@@ -3,8 +3,8 @@ use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
     parse_agent_hook_settings, parse_usage_overview, ActivityEvidence, ActivityOperationPreview,
     ActivityResource, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationMessage, ConversationSummary, ExtensionSummary, ExtensionsOverview,
-    Job, McpOverview, McpServerSummary, NotificationAction, NotificationDelivery,
+    Conversation, ConversationMessage, ConversationSummary, DebugOverview, ExtensionSummary,
+    ExtensionsOverview, Job, McpOverview, McpServerSummary, NotificationAction, NotificationDelivery,
     NotificationItem, NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
     UsageBreakdown, UsageOverview, UsagePeriod,
 };
@@ -1305,6 +1305,61 @@ fn usage_parser_bounds_breakdowns_and_rejects_non_overall_scope() {
         "breakdown_truncated": false,
     });
     assert!(parse_usage_overview(UsagePeriod::Cumulative, invalid).is_err());
+}
+
+#[test]
+fn platform_debug_center_omits_secret_bearing_configuration() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('d'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::OpenDebugOverview
+    );
+    app.open_debug_overview(DebugOverview {
+        daemon: "clawd".into(),
+        daemon_status: "ok".into(),
+        started_at: "2026-01-01T00:00:00Z".into(),
+        uptime_ms: 1000,
+        provider: "copilot".into(),
+        model: "gpt-test".into(),
+        provider_ready: true,
+        model_count: 2,
+        model_catalog_warning: None,
+        max_turns: 16,
+        reasoning_effort: Some("high".into()),
+        compression_enabled: true,
+        memory_redaction_enabled: true,
+        progressive_tools_enabled: true,
+        tool_allow_count: None,
+        tool_deny_count: 1,
+        configured_mcp_count: 2,
+        mcp_discovery_enabled: true,
+        selected_extension_count: 1,
+    });
+
+    let backend = TestBackend::new(110, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Debug Center"));
+    assert!(output.contains("clawd"));
+    assert!(output.contains("gpt-test"));
+    assert!(output.contains("Credentials, headers, URLs"));
+    assert!(!output.contains("api_key"));
 }
 
 #[test]
