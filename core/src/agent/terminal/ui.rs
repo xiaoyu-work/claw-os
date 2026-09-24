@@ -39,6 +39,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_extensions_overview(frame, area, app);
     render_usage_overview(frame, area, app);
     render_debug_overview(frame, area, app);
+    render_account_overview(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -88,7 +89,7 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "[m] Memory [h] Hooks [c] MCP [e] Ext [u] Usage [d] Debug  Esc",
+                        "[m] Mem [h] Hooks [c] MCP [e] Ext [u] Usage [d] Debug [a] Account",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
@@ -543,6 +544,77 @@ fn render_debug_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .title(" Debug Center ")
                     .title_bottom(Line::styled(
                         "Up/Down scroll  Esc back",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
+}
+
+fn render_account_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(account) = &app.account_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(88);
+    let height = screen.height.saturating_sub(4).min(22);
+    if width < 52 || height < 17 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![
+        Line::styled(
+            "Agent account and import",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(format!("configured provider: {}", app.info.provider)),
+        Line::raw(format!(
+            "{} credential: {}",
+            account.provider,
+            if account.credential_present {
+                "present (validity checked only when used)"
+            } else {
+                "not present"
+            }
+        )),
+        Line::raw(""),
+        Line::styled("Logout", Style::default().fg(Color::Yellow)),
+    ];
+    if account.credential_present {
+        lines.push(Line::raw("[l] Revoke the owner Copilot credential after confirmation."));
+    } else {
+        lines.push(Line::styled(
+            "No stored Copilot credential to revoke.",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    lines.extend([
+        Line::raw("Provider configuration and conversation history are never deleted by logout."),
+        Line::raw(""),
+        Line::styled("Import", Style::default().fg(Color::Yellow)),
+        Line::raw("No authenticated foreign-agent importer is registered in this Claw build."),
+        Line::raw("The renderer will not scan Claude, Cursor, Codex, or other App data roots."),
+        Line::raw("Use an explicit OS-reviewed import service when one is installed."),
+    ]);
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Account Center ")
+                    .title_bottom(Line::styled(
+                        if account.credential_present {
+                            "[l] logout  Esc back"
+                        } else {
+                            "Esc back"
+                        },
                         Style::default().fg(Color::DarkGray),
                     )),
             ),

@@ -185,6 +185,7 @@ enum InputAction {
     OpenExtensionsOverview,
     OpenUsageOverview(backend::UsagePeriod),
     OpenDebugOverview,
+    OpenAccountOverview,
     Quit,
 }
 
@@ -256,6 +257,7 @@ async fn run_with_backend(
                             && app.extensions_overview.is_none()
                             && app.usage_overview.is_none()
                             && app.debug_overview.is_none()
+                            && app.account_overview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -532,6 +534,19 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             _ => InputAction::None,
         };
     }
+    if app.account_overview.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_account_overview();
+                InputAction::None
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                app.confirm_account_logout();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
     if app.platform_overview.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -557,6 +572,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 InputAction::OpenUsageOverview(backend::UsagePeriod::Cumulative)
             }
             KeyCode::Char('d') | KeyCode::Char('D') => InputAction::OpenDebugOverview,
+            KeyCode::Char('a') | KeyCode::Char('A') => InputAction::OpenAccountOverview,
             _ => InputAction::None,
         };
     }
@@ -1209,6 +1225,13 @@ async fn apply_input_action(
         },
         InputAction::OpenDebugOverview => match backend.debug_overview().await {
             Ok(overview) => app.open_debug_overview(overview),
+            Err(error) => {
+                app.close_platform_overview();
+                app.push_error(&error);
+            }
+        },
+        InputAction::OpenAccountOverview => match backend.account_overview().await {
+            Ok(overview) => app.open_account_overview(overview),
             Err(error) => {
                 app.close_platform_overview();
                 app.push_error(&error);

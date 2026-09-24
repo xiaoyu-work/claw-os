@@ -55,6 +55,7 @@ class FixtureBroker:
             "audit": False,
             "checkpoint": True,
         }
+        self.copilot_credential_present = True
         self.notification_preferences = {
             "web_enabled": True,
             "desktop_enabled": True,
@@ -359,6 +360,23 @@ class FixtureBroker:
             value = self.hook_settings()
             value.update({"updated_kind": kind, "changed": changed})
             return value
+        if method == "agent.account.get":
+            if self.case != "account-center":
+                raise AssertionError("unexpected Agent account query")
+            return {
+                "provider": "copilot",
+                "credential_present": self.copilot_credential_present,
+            }
+        if method == "agent.account.logout":
+            if self.case != "account-center" or params != {"confirm": True}:
+                raise AssertionError("unexpected Agent account logout")
+            was_present = self.copilot_credential_present
+            self.copilot_credential_present = False
+            return {
+                "provider": "copilot",
+                "credential_present": False,
+                "was_present": was_present,
+            }
         if method == "agent.usage":
             return {
                 "scope": "overall",
@@ -853,6 +871,7 @@ class FixtureBroker:
                     "extensions-center",
                     "usage-center",
                     "debug-center",
+                    "account-center",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -902,6 +921,7 @@ class FixtureBroker:
                 "extensions-center",
                 "usage-center",
                 "debug-center",
+                "account-center",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1095,7 +1115,7 @@ def run(cos, case, transcript, original_namespace, trace):
         cleanup.callback(subprocess.run, ["umount", str(home)], check=True)
         config = root / "config.json"
         agent_config = {
-            "provider": "copilot" if case == "task-controls" else "ollama",
+            "provider": "copilot" if case in ("task-controls", "account-center") else "ollama",
             "model": "tui-fixture",
             "base_url": "http://127.0.0.1:1",
         }
@@ -1107,6 +1127,7 @@ def run(cos, case, transcript, original_namespace, trace):
             "extensions-center",
             "usage-center",
             "debug-center",
+            "account-center",
         ):
             agent_config.update({
                 "mcp_servers": [{
@@ -1463,6 +1484,49 @@ def run(cos, case, transcript, original_namespace, trace):
                 time.sleep(0.4)
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
+            if case == "account-center":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data,
+                )
+                os.write(master, b"a")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Account Center" in data
+                    and any(
+                        request["command"] == "agent.account.get"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"l")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Log out of GitHub Copilot?" in data,
+                )
+                if any(
+                    request["command"] == "agent.account.logout"
+                    for request in broker.requests
+                ):
+                    raise AssertionError("Agent account logged out before confirmation")
+                os.write(master, b"y")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Copilot credential revoked" in data
+                    and any(
+                        request["command"] == "agent.account.logout"
+                        and request["params"] == {"confirm": True}
+                        for request in broker.requests
+                    ),
+                )
             if case == "file-mentions":
                 os.write(master, b"Inspect \x06")
                 read_terminal(
@@ -2321,6 +2385,7 @@ if __name__ == "__main__":
             "extensions-center",
             "usage-center",
             "debug-center",
+            "account-center",
             "copy-export",
             "raw-scrollback",
             "vim",

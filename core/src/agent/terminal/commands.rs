@@ -1224,6 +1224,19 @@ pub(super) async fn confirm(
                 report.semantic_rows_deleted,
             ));
         }
+        ConfirmationAction::AccountLogout => {
+            app.close_account_overview();
+            app.close_platform_overview();
+            let result = backend.account_logout().await?;
+            if app.info.provider == result.provider {
+                app.info.provider_ready = false;
+            }
+            app.push_system(if result.was_present {
+                "Copilot credential revoked. Provider configuration and conversation history were retained."
+            } else {
+                "No Copilot credential was present. Provider configuration and conversation history were retained."
+            });
+        }
     }
     Ok(())
 }

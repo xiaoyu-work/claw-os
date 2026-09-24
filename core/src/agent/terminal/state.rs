@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::backend::{
-    Activity, ActivityAttention, ActivityControls, ActivityDetail, ActivityEvidence,
-    ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationJob, DebugOverview, ExtensionsOverview, McpOverview, UsageOverview,
+    AccountOverview, Activity, ActivityAttention, ActivityControls, ActivityDetail,
+    ActivityEvidence, ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest,
+    BackendInfo, Conversation, ConversationJob, DebugOverview, ExtensionsOverview, McpOverview,
+    UsageOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -121,6 +122,7 @@ pub(super) enum ConfirmationAction {
     ActivityComplete { id: String, note: String },
     ActivityCancel { id: String },
     MemoryReset,
+    AccountLogout,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -163,6 +165,7 @@ pub(super) struct App {
     pub usage_scroll: u16,
     pub debug_overview: Option<DebugOverview>,
     pub debug_scroll: u16,
+    pub account_overview: Option<AccountOverview>,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -255,6 +258,7 @@ impl App {
             usage_scroll: 0,
             debug_overview: None,
             debug_scroll: 0,
+            account_overview: None,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -378,6 +382,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -764,6 +769,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
     }
 
     pub fn close_platform_overview(&mut self) {
@@ -780,6 +786,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
     }
 
     pub fn open_memory_center(&mut self) {
@@ -794,6 +801,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
     }
 
     pub fn close_memory_center(&mut self) {
@@ -810,6 +818,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
         self.agent_hook_settings = Some(settings);
         self.agent_hook_error = None;
     }
@@ -846,6 +855,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
         self.mcp_overview = Some(overview);
         self.mcp_scroll = 0;
     }
@@ -899,6 +909,7 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = None;
         self.debug_scroll = 0;
+        self.account_overview = None;
     }
 
     pub fn close_usage_overview(&mut self) {
@@ -928,11 +939,54 @@ impl App {
         self.usage_scroll = 0;
         self.debug_overview = Some(overview);
         self.debug_scroll = 0;
+        self.account_overview = None;
     }
 
     pub fn close_debug_overview(&mut self) {
         self.debug_overview = None;
         self.debug_scroll = 0;
+    }
+
+    pub fn open_account_overview(&mut self, mut overview: AccountOverview) {
+        overview.provider = bounded_clean_text(&overview.provider, 64).replace('\n', " ");
+        self.memory_center_open = false;
+        self.agent_hook_settings = None;
+        self.agent_hook_error = None;
+        self.mcp_overview = None;
+        self.mcp_scroll = 0;
+        self.extensions_overview = None;
+        self.extensions_scroll = 0;
+        self.usage_overview = None;
+        self.usage_scroll = 0;
+        self.debug_overview = None;
+        self.debug_scroll = 0;
+        self.account_overview = Some(overview);
+    }
+
+    pub fn close_account_overview(&mut self) {
+        self.account_overview = None;
+    }
+
+    pub fn confirm_account_logout(&mut self) {
+        if self.active_task.is_some() {
+            self.close_account_overview();
+            self.close_platform_overview();
+            self.push_error("Agent account cannot log out while a task is active.");
+            return;
+        }
+        if !self
+            .account_overview
+            .as_ref()
+            .is_some_and(|account| account.credential_present)
+        {
+            return;
+        }
+        self.confirmation = Some(Confirmation {
+            title: "Log out of GitHub Copilot?".into(),
+            body: "This revokes the authenticated owner's stored Copilot credential and clears local Copilot token/model caches. Provider configuration and conversation history remain.".into(),
+            confirm_label: "Log out".into(),
+            action: ConfirmationAction::AccountLogout,
+        });
     }
 
     pub fn confirm_memory_reset(&mut self) {

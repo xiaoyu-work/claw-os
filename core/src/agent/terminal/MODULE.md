@@ -129,6 +129,10 @@ audit.
 - The Platform Debug Center combines narrow `daemon.health` with safe effective
   runtime switches and local presentation identity. It never dumps credentials,
   headers, URLs, MCP launch material, context or transaction payloads.
+- The Platform Account Center reads only fixed Copilot credential presence and
+  performs confirmed broker logout. It never reads secret values. Foreign-agent
+  import stays unavailable until an authenticated OS importer exists; the
+  renderer never scans another App's data roots.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

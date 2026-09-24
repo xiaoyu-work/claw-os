@@ -1,10 +1,11 @@
 use super::*;
 use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
-    parse_agent_hook_settings, parse_usage_overview, ActivityEvidence, ActivityOperationPreview,
-    ActivityResource, ActivityReview, AgentHookSettings, ApprovalRequest, BackendInfo,
-    Conversation, ConversationMessage, ConversationSummary, DebugOverview, ExtensionSummary,
-    ExtensionsOverview, Job, McpOverview, McpServerSummary, NotificationAction, NotificationDelivery,
+    parse_agent_hook_settings, parse_usage_overview, AccountOverview, ActivityEvidence,
+    ActivityOperationPreview, ActivityResource, ActivityReview, AgentHookSettings, ApprovalRequest,
+    BackendInfo, Conversation, ConversationMessage, ConversationSummary, DebugOverview,
+    ExtensionSummary, ExtensionsOverview, Job, McpOverview, McpServerSummary, NotificationAction,
+    NotificationDelivery,
     NotificationItem, NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
     UsageBreakdown, UsageOverview, UsagePeriod,
 };
@@ -1360,6 +1361,66 @@ fn platform_debug_center_omits_secret_bearing_configuration() {
     assert!(output.contains("gpt-test"));
     assert!(output.contains("Credentials, headers, URLs"));
     assert!(!output.contains("api_key"));
+}
+
+#[test]
+fn platform_account_center_requires_logout_confirmation_and_never_scans_import_roots() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::OpenAccountOverview
+    );
+    app.open_account_overview(AccountOverview {
+        provider: "copilot".into(),
+        credential_present: true,
+    });
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('l'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(
+        app.confirmation.as_ref().map(|value| &value.action),
+        Some(&ConfirmationAction::AccountLogout)
+    );
+
+    let backend = TestBackend::new(110, 28);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Log out of GitHub Copilot?"));
+    assert!(output.contains("Provider configuration"));
+
+    app.close_confirmation();
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 28)).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Account Center"));
+    assert!(output.contains("No authenticated foreign-agent importer"));
+    assert!(output.contains("will not scan Claude, Cursor, Codex"));
 }
 
 #[test]

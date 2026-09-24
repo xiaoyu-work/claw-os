@@ -434,6 +434,18 @@ pub(super) struct DebugOverview {
     pub selected_extension_count: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AccountOverview {
+    pub provider: String,
+    pub credential_present: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AccountLogout {
+    pub provider: String,
+    pub was_present: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -553,6 +565,8 @@ pub(super) trait Backend: Send + Sync {
     async fn extensions_overview(&self) -> Result<ExtensionsOverview, String>;
     async fn usage_overview(&self, period: UsagePeriod) -> Result<UsageOverview, String>;
     async fn debug_overview(&self) -> Result<DebugOverview, String>;
+    async fn account_overview(&self) -> Result<AccountOverview, String>;
+    async fn account_logout(&self) -> Result<AccountLogout, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1686,6 +1700,58 @@ impl Backend for BrokerBackend {
             selected_extension_count: self.config.agent.extensions.len(),
         })
     }
+
+    async fn account_overview(&self) -> Result<AccountOverview, String> {
+        parse_account_overview(self.call(Command::AgentAccountGet, json!({})).await?)
+    }
+
+    async fn account_logout(&self) -> Result<AccountLogout, String> {
+        let result = parse_account_logout(
+            self.call(Command::AgentAccountLogout, json!({ "confirm": true }))
+                .await?,
+        )?;
+        crate::agent::llm::providers::copilot_auth::try_forget_all_cached().map_err(|error| {
+            format!("Copilot credential was revoked but local cache cleanup failed: {error}")
+        })?;
+        Ok(result)
+    }
+}
+
+#[derive(Deserialize)]
+struct RawAccountOverview {
+    provider: String,
+    credential_present: bool,
+}
+
+#[derive(Deserialize)]
+struct RawAccountLogout {
+    provider: String,
+    credential_present: bool,
+    was_present: bool,
+}
+
+fn parse_account_overview(value: Value) -> Result<AccountOverview, String> {
+    let raw: RawAccountOverview = serde_json::from_value(value)
+        .map_err(|error| format!("invalid Agent account response: {error}"))?;
+    if raw.provider != "copilot" {
+        return Err("invalid Agent account response: unsupported provider".to_string());
+    }
+    Ok(AccountOverview {
+        provider: raw.provider,
+        credential_present: raw.credential_present,
+    })
+}
+
+fn parse_account_logout(value: Value) -> Result<AccountLogout, String> {
+    let raw: RawAccountLogout = serde_json::from_value(value)
+        .map_err(|error| format!("invalid Agent account logout response: {error}"))?;
+    if raw.provider != "copilot" || raw.credential_present {
+        return Err("invalid Agent account logout response: credential remains present".to_string());
+    }
+    Ok(AccountLogout {
+        provider: raw.provider,
+        was_present: raw.was_present,
+    })
 }
 
 #[derive(Deserialize)]

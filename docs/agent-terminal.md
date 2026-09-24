@@ -117,6 +117,10 @@ Controls:
   Press `d` for Debug Center. It combines narrow broker health with safe
   effective runtime switches while omitting credentials, headers, URLs, MCP
   launch material, context and transaction payloads.
+  Press `a` for Account Center. Confirmed logout revokes only the owner's
+  Copilot credential and retains provider config/history. The panel reports
+  foreign-agent import unavailable rather than scanning other App data without
+  an authenticated OS import service.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32. `p` toggles durable Plan mode.
@@ -352,7 +356,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -421,6 +425,8 @@ The usage-center scenario switches cumulative/daily owner-ledger queries and
 renders only recorded usage fields.
 The debug-center scenario uses narrow daemon health and verifies the safe
 diagnostic panel without reading broad daemon context or configuration secrets.
+The account-center scenario requires confirmation before fixed Copilot logout
+and never scans foreign-agent configuration roots.
 The review scenario renders only authenticated Activity plan references and
 App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its
