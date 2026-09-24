@@ -33,6 +33,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_appearance(frame, area, app);
     render_agents(frame, area, app);
     render_platform_overview(frame, area, app);
+    render_memory_center(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -82,10 +83,67 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .border_style(Style::default().fg(accent(app)))
                     .title(" Platform ")
                     .title_bottom(Line::styled(
-                        "Up/Down scroll  Esc close",
+                        "[m] Memories  Up/Down scroll  Esc close",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),
+        area,
+    );
+}
+
+fn render_memory_center(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    if !app.memory_center_open {
+        return;
+    }
+    let width = screen.width.saturating_sub(4).min(88);
+    let height = screen.height.saturating_sub(4).min(20);
+    if width < 48 || height < 16 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let memory = if app.task_use_memory { "on" } else { "off" };
+    let lines = vec![
+        Line::styled(
+            "Memory settings",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::styled(
+            format!("[m] Use and record memory for future tasks: {memory}"),
+            Style::default().fg(Color::Yellow),
+        ),
+        Line::raw(
+            "    Loads retained conversation context and records new Agent memory for each future task.",
+        ),
+        Line::raw(
+            "    Turning it off does not remove durable Job metadata or audit evidence.",
+        ),
+        Line::raw(""),
+        Line::styled("[r] Reset learned memory", Style::default().fg(Color::Yellow)),
+        Line::raw(
+            "    Deletes notes, App-emitted memory, and the derived semantic index after confirmation.",
+        ),
+        Line::raw(
+            "    Conversations, Jobs, task bindings, compaction summaries, and audit remain.",
+        ),
+    ];
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(accent(app)))
+                .title(" Memory Center ")
+                .title_bottom(Line::styled(
+                    "[m] toggle  [r] reset  Esc back",
+                    Style::default().fg(Color::DarkGray),
+                )),
+        ),
         area,
     );
 }

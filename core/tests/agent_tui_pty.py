@@ -309,7 +309,19 @@ class FixtureBroker:
                 raise AssertionError("conversation rewind changed identity or count")
             return {"conversation": self.conversation()}
         if method == "memory.sessions":
-            return {"n": 1 if self.case == "platform" else 0, "sessions": []}
+            return {
+                "n": 1 if self.case in ("platform", "memory-center") else 0,
+                "sessions": [],
+            }
+        if method == "memory.reset":
+            if self.case != "memory-center" or params != {"confirm": True}:
+                raise AssertionError("unexpected learned-memory reset")
+            return {
+                "notes_deleted": 2,
+                "app_memories_deleted": 3,
+                "semantic_rows_deleted": 4,
+                "conversations_preserved": True,
+            }
         if method == "agent.usage":
             return {
                 "period": "fixture",
@@ -687,6 +699,8 @@ class FixtureBroker:
                     or params.get("plan_only") is not True
                 ):
                     raise AssertionError("terminal task controls were not bound to submission")
+            if self.case == "memory-center" and params.get("use_memory") is not False:
+                raise AssertionError("memory center toggle was not bound to submission")
             self.requested_model = params.get("model")
             self.requested_reasoning_effort = params.get("reasoning_effort")
             self.requested_plan_only = params.get("plan_only", False)
@@ -767,6 +781,7 @@ class FixtureBroker:
                     "agents",
                     "side",
                     "platform",
+                    "memory-center",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -810,6 +825,7 @@ class FixtureBroker:
                 "agents",
                 "side",
                 "platform",
+                "memory-center",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1007,7 +1023,7 @@ def run(cos, case, transcript, original_namespace, trace):
             "model": "tui-fixture",
             "base_url": "http://127.0.0.1:1",
         }
-        if case == "platform":
+        if case in ("platform", "memory-center"):
             agent_config.update({
                 "mcp_servers": [{
                     "name": "fixture_mcp",
@@ -1186,6 +1202,46 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"prmt\x1b")
                 time.sleep(0.4)
+            if case == "memory-center":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data,
+                )
+                os.write(master, b"m")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Memory Center" in data
+                    and b"Use and record memory for future tasks: on" in data,
+                )
+                os.write(master, b"mr")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Reset learned memory?" in data,
+                )
+                if any(
+                    request["command"] == "memory.reset"
+                    for request in broker.requests
+                ):
+                    raise AssertionError("learned memory reset ran before confirmation")
+                os.write(master, b"y")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Reset learned memory:" in data
+                    and any(
+                        request["command"] == "memory.reset"
+                        and request["params"] == {"confirm": True}
+                        for request in broker.requests
+                    ),
+                )
             if case == "file-mentions":
                 os.write(master, b"Inspect \x06")
                 read_terminal(
@@ -2038,6 +2094,7 @@ if __name__ == "__main__":
             "agents",
             "side",
             "platform",
+            "memory-center",
             "copy-export",
             "raw-scrollback",
             "vim",

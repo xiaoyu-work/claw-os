@@ -111,6 +111,9 @@ audit.
 - `/platform` is a read-only inventory of verified Skills, configured and
   authenticated MCP packages, Apps/extensions, memory-session count and owner
   usage. It starts or executes none of them and omits commands/environment.
+- The Platform Memory Center reuses the future-task memory option and sends an
+  explicitly confirmed `memory.reset` through `clawd`. Reset removes learned
+  notes/App/semantic memory only; conversation and execution evidence remain.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

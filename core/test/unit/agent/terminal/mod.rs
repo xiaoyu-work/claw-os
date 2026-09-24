@@ -914,6 +914,80 @@ fn platform_overview_is_bounded_read_only_presentation() {
 }
 
 #[test]
+fn platform_memory_center_controls_future_memory_and_confirms_reset() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('m'),
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert!(app.memory_center_open);
+
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('m'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(!app.task_use_memory);
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('r'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(
+        app.confirmation.as_ref().map(|value| &value.action),
+        Some(&ConfirmationAction::MemoryReset)
+    );
+
+    let backend = TestBackend::new(110, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Reset learned memory?"));
+    assert!(output.contains("Conversation history"));
+}
+
+#[test]
+fn memory_reset_refusal_is_visible_while_a_task_is_active() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    app.open_memory_center();
+    app.active_task = Some("task-active".into());
+
+    app.confirm_memory_reset();
+
+    assert!(!app.memory_center_open);
+    assert!(app.platform_overview.is_none());
+    assert!(app.confirmation.is_none());
+    assert!(app.entries.iter().any(|entry| {
+        entry.kind == EntryKind::Error
+            && entry
+                .text
+                .contains("cannot be reset while a task is active")
+    }));
+}
+
+#[test]
 fn approvals_have_one_explicit_terminal_decision() {
     let mut app = app();
     app.add_approvals(vec![ApprovalRequest {

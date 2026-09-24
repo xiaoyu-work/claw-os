@@ -1213,6 +1213,17 @@ pub(super) async fn confirm(
                 "Activity cancelled. In-flight tasks and admitted effects were not changed.",
             );
         }
+        ConfirmationAction::MemoryReset => {
+            app.close_memory_center();
+            app.close_platform_overview();
+            let report = backend.reset_memories().await?;
+            app.push_system(&format!(
+                "Reset learned memory: {} note(s), {} App memory row(s), and {} semantic row(s) removed. Conversation history and execution evidence were preserved.",
+                report.notes_deleted,
+                report.app_memories_deleted,
+                report.semantic_rows_deleted,
+            ));
+        }
     }
     Ok(())
 }

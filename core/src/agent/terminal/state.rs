@@ -120,6 +120,7 @@ pub(super) enum ConfirmationAction {
     Rewind(u32),
     ActivityComplete { id: String, note: String },
     ActivityCancel { id: String },
+    MemoryReset,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,6 +152,7 @@ pub(super) struct App {
     pub agents_scroll: u16,
     pub platform_overview: Option<PlatformOverview>,
     pub platform_scroll: u16,
+    pub memory_center_open: bool,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -232,6 +234,7 @@ impl App {
             agents_scroll: 0,
             platform_overview: None,
             platform_scroll: 0,
+            memory_center_open: false,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -344,6 +347,7 @@ impl App {
         self.agents_scroll = 0;
         self.platform_overview = None;
         self.platform_scroll = 0;
+        self.memory_center_open = false;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -719,11 +723,36 @@ impl App {
         self.picker = None;
         self.platform_overview = Some(overview);
         self.platform_scroll = 0;
+        self.memory_center_open = false;
     }
 
     pub fn close_platform_overview(&mut self) {
         self.platform_overview = None;
         self.platform_scroll = 0;
+        self.memory_center_open = false;
+    }
+
+    pub fn open_memory_center(&mut self) {
+        self.memory_center_open = true;
+    }
+
+    pub fn close_memory_center(&mut self) {
+        self.memory_center_open = false;
+    }
+
+    pub fn confirm_memory_reset(&mut self) {
+        if self.active_task.is_some() {
+            self.close_memory_center();
+            self.close_platform_overview();
+            self.push_error("Learned memory cannot be reset while a task is active.");
+            return;
+        }
+        self.confirmation = Some(Confirmation {
+            title: "Reset learned memory?".into(),
+            body: "This deletes MEMORY.md, USER.md, custom notes, App-emitted memory, and the derived semantic index. Conversation history, Jobs, task bindings, compaction summaries, and audit evidence remain.".into(),
+            confirm_label: "Reset learned memory".into(),
+            action: ConfirmationAction::MemoryReset,
+        });
     }
 
     pub fn delegate_summaries(&self) -> Vec<(String, &'static str)> {

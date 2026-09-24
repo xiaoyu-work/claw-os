@@ -98,6 +98,10 @@ Controls:
 - `/platform` displays a bounded read-only inventory of verified Skills,
   configured/discovered MCP, Apps/extensions, memory count and owner usage.
   It starts no MCP server, executes no App and exposes no command/env fields.
+  Press `m` for Memory Center: `m` toggles memory for future tasks and `r`
+  resets learned notes/App/semantic memory after confirmation. Reset is
+  refused while tasks are active and preserves conversations and execution
+  evidence.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32. `p` toggles durable Plan mode.
@@ -333,7 +337,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -388,6 +392,9 @@ The side scenario creates one checked fork, archives it on explicit return,
 and resumes the canonical parent before submitting further work.
 The platform scenario combines authenticated local discovery with owner-scoped
 memory and usage queries without launching any extension.
+The memory-center scenario changes only future task memory, requires a second
+confirmation before owner-scoped learned-memory reset, and binds the new task
+to the selected memory mode.
 The review scenario renders only authenticated Activity plan references and
 App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its

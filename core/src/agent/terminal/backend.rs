@@ -12,6 +12,8 @@ use crate::clawd::protocol::Request;
 use crate::clawd::routes::Command;
 use crate::config::CosConfig;
 
+pub(super) use crate::agent::memory::maintenance::LearnedMemoryReset;
+
 const PKEXEC_PATH: &str = "/usr/bin/pkexec";
 const APPROVAL_HELPER_PATH: &str = "/usr/local/bin/claw-approval-helper";
 
@@ -444,6 +446,7 @@ pub(super) trait Backend: Send + Sync {
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
     async fn skills(&self) -> Result<Vec<SkillSummary>, String>;
     async fn platform_overview(&self) -> Result<PlatformOverview, String>;
+    async fn reset_memories(&self) -> Result<LearnedMemoryReset, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1478,6 +1481,21 @@ impl Backend for BrokerBackend {
             return Err("Claw platform overview exceeded its terminal bound".into());
         }
         Ok(PlatformOverview { presentation })
+    }
+
+    async fn reset_memories(&self) -> Result<LearnedMemoryReset, String> {
+        let report: LearnedMemoryReset = serde_json::from_value(
+            self.call(Command::MemoryReset, json!({ "confirm": true }))
+                .await?,
+        )
+        .map_err(|error| format!("invalid learned-memory reset response: {error}"))?;
+        if !report.conversations_preserved {
+            return Err(
+                "invalid learned-memory reset response: conversation preservation was not confirmed"
+                    .to_string(),
+            );
+        }
+        Ok(report)
     }
 }
 
