@@ -168,6 +168,7 @@ fn claw_commands_are_closed_and_semantic() {
         Some(Command::Export("transcript.md".into()))
     );
     assert_eq!(parse_command("/raw"), Some(Command::Raw));
+    assert_eq!(parse_command("/appearance"), Some(Command::Appearance));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -763,6 +764,30 @@ fn task_controls_change_only_future_task_defaults() {
     assert_eq!(app.task_max_turns, Some(8));
     assert_eq!(app.task_reasoning_effort.as_deref(), Some("minimal"));
     assert_eq!(app.selected_model, "claw-model");
+}
+
+#[test]
+fn appearance_controls_are_terminal_local() {
+    let mut app = app();
+    app.open_appearance();
+    for key in ['t', 'h', 's'] {
+        assert_eq!(
+            handle_key(
+                &mut app,
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(key),
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+            ),
+            InputAction::None
+        );
+    }
+    assert_eq!(app.theme_name(), "blue");
+    assert_eq!(
+        app.terminal_title().as_deref(),
+        Some("Claw - Claw terminal test")
+    );
+    assert!(app.compact_statusline);
 }
 
 #[test]

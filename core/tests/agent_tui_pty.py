@@ -747,6 +747,7 @@ class FixtureBroker:
                     "multiline-key",
                     "approval-center",
                     "attachments",
+                    "appearance",
                     "copy-export",
                     "raw-scrollback",
                     "file-mentions",
@@ -785,6 +786,7 @@ class FixtureBroker:
                 "multiline-key",
                 "approval-center",
                 "attachments",
+                "appearance",
                 "copy-export",
                 "raw-scrollback",
                 "file-mentions",
@@ -1114,6 +1116,29 @@ def run(cos, case, transcript, original_namespace, trace):
                     output,
                     time.monotonic() + 15,
                     lambda data: b"Attached image fixture.png" in data,
+                )
+            if case == "appearance":
+                send_prompt(master, output, "/appearance")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Appearance" in data
+                    and b"Local terminal presentation only" in data,
+                )
+                os.write(master, b"ths\x1b")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Claw - Terminal integration fixture" in data,
+                )
+                settled = time.monotonic() + 0.4
+                read_terminal(
+                    master,
+                    output,
+                    settled + 2,
+                    lambda _data: time.monotonic() >= settled,
                 )
             if case == "task-controls":
                 os.write(master, b"\x14")
@@ -1898,6 +1923,7 @@ if __name__ == "__main__":
             "multiline-key",
             "approval-center",
             "attachments",
+            "appearance",
             "copy-export",
             "raw-scrollback",
             "file-mentions",

@@ -18,7 +18,7 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
 use futures_util::StreamExt;
 use ratatui::backend::CrosstermBackend;
@@ -198,6 +198,9 @@ async fn run_with_backend(
 
     while !app.should_quit {
         terminal
+            .update_title(app.terminal_title().as_deref())
+            .map_err(|error| error.to_string())?;
+        terminal
             .terminal
             .draw(|frame| ui::render(frame, &app))
             .map_err(|error| error.to_string())?;
@@ -238,6 +241,7 @@ async fn run_with_backend(
                             && app.activity_review.is_none()
                             && app.activity_operation_preview.is_none()
                             && !app.task_controls_open
+                            && !app.appearance_open
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -361,6 +365,27 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 .map_or(InputAction::None, InputAction::Confirm),
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.close_confirmation();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if app.appearance_open {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_appearance();
+                InputAction::None
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                app.cycle_theme();
+                InputAction::None
+            }
+            KeyCode::Char('h') | KeyCode::Char('H') => {
+                app.toggle_terminal_title();
+                InputAction::None
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                app.toggle_statusline();
                 InputAction::None
             }
             _ => InputAction::None,
@@ -1147,6 +1172,7 @@ async fn apply_input_action(
 
 struct TerminalSession {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    last_title: Option<String>,
 }
 
 impl TerminalSession {
@@ -1166,7 +1192,19 @@ impl TerminalSession {
             }
         };
         terminal.clear()?;
-        Ok(Self { terminal })
+        Ok(Self {
+            terminal,
+            last_title: None,
+        })
+    }
+
+    fn update_title(&mut self, title: Option<&str>) -> io::Result<()> {
+        if self.last_title.as_deref() == title {
+            return Ok(());
+        }
+        execute!(io::stdout(), SetTitle(title.unwrap_or_default()))?;
+        self.last_title = title.map(str::to_string);
+        Ok(())
     }
 
     fn publish_scrollback(&mut self, snapshot: &str) -> io::Result<()> {

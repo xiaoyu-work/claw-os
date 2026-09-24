@@ -7,7 +7,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::commands::suggestions;
 use super::state::{
-    clean_text, App, ApprovalStatus, Entry, EntryKind, PickerKind, RunStatus, ToolStatus,
+    clean_text, App, ApprovalStatus, Entry, EntryKind, PickerKind, RunStatus, TerminalTheme,
+    ToolStatus,
 };
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
@@ -29,6 +30,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_command_palette(frame, chunks[1], app);
     render_picker(frame, area, app);
     render_task_controls(frame, area, app);
+    render_appearance(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -40,6 +42,70 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn accent(app: &App) -> Color {
+    match app.terminal_theme {
+        TerminalTheme::Cyan => Color::Cyan,
+        TerminalTheme::Blue => Color::Blue,
+        TerminalTheme::Magenta => Color::Magenta,
+    }
+}
+
+fn render_appearance(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    if !app.appearance_open {
+        return;
+    }
+    let width = screen.width.saturating_sub(4).min(68);
+    let height = 11.min(screen.height.saturating_sub(4));
+    if width < 36 || height < 9 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let lines = vec![
+        Line::styled(
+            "Local terminal presentation only",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::raw(format!("theme: {}", app.theme_name())),
+        Line::raw(format!(
+            "terminal title: {}",
+            if app.terminal_title_enabled { "on" } else { "off" }
+        )),
+        Line::raw(format!(
+            "status line: {}",
+            if app.compact_statusline { "compact" } else { "full" }
+        )),
+        Line::raw(""),
+        Line::styled(
+            "No provider, task, permission, or persisted state is changed.",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(accent(app)))
+                .title(" Appearance ")
+                .title_bottom(Line::from(vec![
+                    Span::styled(
+                        "[t] Theme  [h] Title  [s] Status",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::raw("  "),
+                    Span::styled("Esc close", Style::default().fg(Color::DarkGray)),
+                ])),
+        ),
+        area,
+    );
 }
 
 fn render_task_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -818,7 +884,7 @@ fn render_notification_preferences(frame: &mut Frame<'_>, screen: Rect, app: &Ap
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(accent(app)))
                     .title(" Notification delivery settings ")
                     .title_bottom(Line::from(vec![
                         Span::styled(
@@ -1148,7 +1214,7 @@ fn render_command_palette(frame: &mut Frame<'_>, transcript: Rect, app: &App) {
             Line::from(vec![
                 Span::styled(
                     format!("{command:<command_width$}"),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(accent(app)),
                 ),
                 Span::styled(
                     description,
@@ -1215,7 +1281,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 Line::from(vec![
                     Span::styled(
                         if selected { "> " } else { "  " },
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent(app)),
                     ),
                     Span::styled(
                         item.label.clone(),
@@ -1258,7 +1324,7 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(accent(app)))
                     .title(title)
                     .title_bottom(Line::from(vec![
                         Span::styled(query, Style::default().fg(Color::DarkGray)),
@@ -1279,7 +1345,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         RunStatus::Ready => Span::styled("READY", Style::default().fg(Color::Green)),
         RunStatus::Working => Span::styled(
             format!("{} WORKING {}", spinner(app.frame), elapsed(app)),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(accent(app)),
         ),
         RunStatus::Reconnecting => Span::styled(
             format!("{} RECONNECTING", spinner(app.frame)),
@@ -1306,7 +1372,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
             " CLAW AGENT ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(accent(app))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -1562,7 +1628,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .border_style(Style::default().fg(if app.current_approval().is_some() {
             Color::Magenta
         } else {
-            Color::Cyan
+            accent(app)
         }))
         .title(" Message ");
     if let Some(approval) = app.current_approval() {
@@ -1623,27 +1689,33 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         format!("  images {}", app.pending_attachment_count())
     };
+    let controls = if app.backtrack_armed() {
+        " Esc again history  Ctrl+K commands "
+    } else {
+        " Enter send  Ctrl+J newline  Ctrl+F file  Ctrl+O image  Ctrl+T model  Esc stop "
+    };
+    let usage = format!(
+        "tokens {} in / {} out / {} cached{queue}{}",
+        app.usage_input,
+        app.usage_output,
+        app.usage_cached,
+        if app.scroll > 0 {
+            format!("  scroll +{}", app.scroll)
+        } else {
+            String::new()
+        },
+    );
     let line = Line::from(vec![
         Span::styled(
-            if app.backtrack_armed() {
-                " Enter send  Esc again history  Ctrl+K commands "
-            } else {
-                " Enter send  Ctrl+J newline  Ctrl+F file  Ctrl+O image  Ctrl+T model  Esc stop "
-            },
+            controls,
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
-            format!(
-                "tokens {} in / {} out / {} cached{queue}{}",
-                app.usage_input,
-                app.usage_output,
-                app.usage_cached,
-                if app.scroll > 0 {
-                    format!("  scroll +{}", app.scroll)
-                } else {
-                    String::new()
-                },
-            ),
+            if app.compact_statusline {
+                String::new()
+            } else {
+                usage
+            },
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(attachments, Style::default().fg(Color::DarkGray)),

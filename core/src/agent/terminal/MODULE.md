@@ -93,6 +93,9 @@ audit.
 - `/raw` temporarily leaves the alternate screen, publishes the bounded
   redacted transcript to the main terminal scrollback, then restores raw mode
   and the full-screen UI.
+- `/appearance` changes only local chrome: bounded accent theme, optional
+  conversation terminal title, and compact/full status line. It mutates no
+  backend or persisted configuration.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

@@ -55,6 +55,13 @@ pub(super) enum RunStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TerminalTheme {
+    Cyan,
+    Blue,
+    Magenta,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PickerKind {
     Models,
     Sessions,
@@ -138,6 +145,10 @@ pub(super) struct App {
     pub task_max_turns: Option<u32>,
     pub task_reasoning_effort: Option<String>,
     pub task_controls_open: bool,
+    pub appearance_open: bool,
+    pub terminal_theme: TerminalTheme,
+    pub terminal_title_enabled: bool,
+    pub compact_statusline: bool,
     pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
@@ -206,6 +217,10 @@ impl App {
             task_max_turns: None,
             task_reasoning_effort: None,
             task_controls_open: false,
+            appearance_open: false,
+            terminal_theme: TerminalTheme::Cyan,
+            terminal_title_enabled: false,
+            compact_statusline: false,
             pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
@@ -306,6 +321,7 @@ impl App {
         self.activity_review = None;
         self.activity_review_scroll = 0;
         self.task_controls_open = false;
+        self.appearance_open = false;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -640,6 +656,7 @@ impl App {
             );
             return;
         }
+
         self.task_reasoning_effort = match self.task_reasoning_effort.as_deref() {
             None => Some("minimal".into()),
             Some("minimal") => Some("low".into()),
@@ -648,6 +665,44 @@ impl App {
             Some("high") => Some("xhigh".into()),
             Some(_) => None,
         };
+    }
+
+    pub fn open_appearance(&mut self) {
+        self.picker = None;
+        self.appearance_open = true;
+    }
+
+    pub fn close_appearance(&mut self) {
+        self.appearance_open = false;
+    }
+
+    pub fn cycle_theme(&mut self) {
+        self.terminal_theme = match self.terminal_theme {
+            TerminalTheme::Cyan => TerminalTheme::Blue,
+            TerminalTheme::Blue => TerminalTheme::Magenta,
+            TerminalTheme::Magenta => TerminalTheme::Cyan,
+        };
+    }
+
+    pub fn toggle_terminal_title(&mut self) {
+        self.terminal_title_enabled = !self.terminal_title_enabled;
+    }
+
+    pub fn toggle_statusline(&mut self) {
+        self.compact_statusline = !self.compact_statusline;
+    }
+
+    pub fn theme_name(&self) -> &'static str {
+        match self.terminal_theme {
+            TerminalTheme::Cyan => "cyan",
+            TerminalTheme::Blue => "blue",
+            TerminalTheme::Magenta => "magenta",
+        }
+    }
+
+    pub fn terminal_title(&self) -> Option<String> {
+        self.terminal_title_enabled
+            .then(|| format!("Claw - {}", self.conversation.title))
     }
 
     pub fn restore_reasoning_effort(&mut self, effort: Option<&str>) {

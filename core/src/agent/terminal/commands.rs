@@ -38,6 +38,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/copy", "copy the latest assistant response"),
     ("/export", "export visible conversation text as Markdown"),
     ("/raw", "publish a redacted snapshot to terminal scrollback"),
+    ("/appearance", "configure theme, title, and status line"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -75,6 +76,7 @@ pub(super) enum Command {
     Copy,
     Export(String),
     Raw,
+    Appearance,
     Skills,
     Tasks,
     Task(String),
@@ -175,6 +177,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "copy" if rest.is_empty() => Command::Copy,
         "export" if !rest.is_empty() => Command::Export(rest.to_string()),
         "raw" if rest.is_empty() => Command::Raw,
+        "appearance" if rest.is_empty() => Command::Appearance,
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -347,6 +350,7 @@ pub(super) async fn execute(
                 | Command::Copy
                 | Command::Export(_)
                 | Command::Raw
+                | Command::Appearance
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -386,6 +390,7 @@ pub(super) async fn execute(
              /review [ACTIVITY_ID]\n\
              /copy  /export PATH\n\
              /raw\n\
+             /appearance\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -511,6 +516,7 @@ pub(super) async fn execute(
             app.push_system(&format!("Exported visible conversation text to {}.", path.display()));
         }
         Command::Raw => app.request_raw_scrollback(),
+        Command::Appearance => app.open_appearance(),
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(
