@@ -1218,6 +1218,7 @@ async fn pump(
             session_id: job.session_id.clone(),
             max_turns: job.effective_max_turns(),
             requested_model: job.requested_model.clone(),
+            requested_reasoning_effort: job.requested_reasoning_effort.clone(),
             use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),

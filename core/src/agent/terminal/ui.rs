@@ -76,7 +76,12 @@ fn render_task_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .map(|turns| turns.to_string())
                 .unwrap_or_else(|| "configured default".into())
         )),
-        Line::raw("reasoning effort: provider default (not yet task-configurable)"),
+        Line::raw(format!(
+            "reasoning effort: {}",
+            app.task_reasoning_effort
+                .as_deref()
+                .unwrap_or("provider default")
+        )),
         Line::raw(""),
         Line::styled(
             "These settings do not change credentials, provider, or global config.",
@@ -92,7 +97,7 @@ fn render_task_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .title(" Task model controls ")
                 .title_bottom(Line::from(vec![
                     Span::styled(
-                        "[o] Model  [m] Memory  [t] Max turns",
+                        "[o] Model  [r] Reasoning  [m] Memory  [t] Max turns",
                         Style::default().fg(Color::Yellow),
                     ),
                     Span::raw("  "),
@@ -1000,6 +1005,9 @@ fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                 .map(|provider| format!(" ({provider})"))
                 .unwrap_or_default()
         )));
+    }
+    if let Some(effort) = &task.requested_reasoning_effort {
+        lines.push(Line::raw(format!("reasoning effort: {effort}")));
     }
     if let Some(turns) = task.turns_used {
         lines.push(Line::raw(format!("turns: {turns}")));

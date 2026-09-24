@@ -266,6 +266,21 @@ pub async fn run_with_deps(
     deps: &RuntimeDeps,
     request: RuntimeRequest<'_>,
 ) -> Result<AskResult, AgentError> {
+    if let Some(effort) = request.cfg.reasoning_effort.as_deref() {
+        crate::config::validate_reasoning_effort(Some(effort))
+            .map_err(|error| AgentError::Llm(llm::LlmError::InvalidRequest(error)))?;
+        if request.cfg.provider != "copilot"
+            || request
+                .cfg
+                .provider_fallbacks
+                .iter()
+                .any(|fallback| fallback.provider != "copilot")
+        {
+            return Err(AgentError::Llm(llm::LlmError::InvalidRequest(
+                "reasoning effort requires Copilot with no non-Copilot fallback".into(),
+            )));
+        }
+    }
     let compressor = request
         .compress
         .then(|| {
@@ -2278,7 +2293,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         let len_before = messages.len();
         let outcome_result = match (&output, force_finalize) {
             (LifecycleOutput::Buffered, true) => {
-                super::turn::run_final_turn_interruptible(
+                super::turn::run_final_turn_interruptible_with_reasoning(
                     provider.clone(),
                     &cfg.model,
                     turn_system,
@@ -2288,6 +2303,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     &llm_tools,
                     cfg.max_tokens,
                     cfg.temperature,
+                    cfg.reasoning_effort.as_deref(),
                     recorder.map(|(_, sid)| sid),
                     retry_policy_from_cfg(cfg),
                     Some(&hook_ctx),
@@ -2298,7 +2314,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                 .await
             }
             (LifecycleOutput::Buffered, false) => {
-                super::turn::run_turn_interruptible(
+                super::turn::run_turn_interruptible_with_reasoning(
                     provider.clone(),
                     &cfg.model,
                     turn_system,
@@ -2308,6 +2324,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     &llm_tools,
                     cfg.max_tokens,
                     cfg.temperature,
+                    cfg.reasoning_effort.as_deref(),
                     recorder.map(|(_, sid)| sid),
                     retry_policy_from_cfg(cfg),
                     Some(&hook_ctx),
@@ -2328,6 +2345,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     &llm_tools,
                     cfg.max_tokens,
                     cfg.temperature,
+                    cfg.reasoning_effort.as_deref(),
                     recorder.map(|(_, sid)| sid),
                     sink.clone(),
                     Some(&hook_ctx),
@@ -2348,6 +2366,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     &llm_tools,
                     cfg.max_tokens,
                     cfg.temperature,
+                    cfg.reasoning_effort.as_deref(),
                     recorder.map(|(_, sid)| sid),
                     sink.clone(),
                     Some(&hook_ctx),

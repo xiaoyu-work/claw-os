@@ -76,6 +76,7 @@ fn requested_model_does_not_change_provider_policy_or_other_jobs() {
         session_id: None,
         max_turns: Some(3),
         requested_model: Some("selected".into()),
+        requested_reasoning_effort: None,
         use_memory: false,
         presence: None,
     };
@@ -91,6 +92,45 @@ fn requested_model_does_not_change_provider_policy_or_other_jobs() {
         ..job
     };
     assert_eq!(job_config(&configured, &legacy).unwrap().model, "original");
+}
+
+#[test]
+fn reasoning_effort_is_exact_and_copilot_only() {
+    let configured = crate::config::AgentConfig {
+        provider: "copilot".into(),
+        model: "gpt-5.6-sol".into(),
+        ..Default::default()
+    };
+    let job = JobExecution {
+        id: "job-reasoning".into(),
+        prompt: "hello".into(),
+        attachments: Vec::new(),
+        context: None,
+        branch_context: None,
+        workspace: None,
+        session_id: None,
+        max_turns: None,
+        requested_model: Some("gpt-5.6-sol".into()),
+        requested_reasoning_effort: Some("high".into()),
+        use_memory: true,
+        presence: None,
+    };
+    assert_eq!(
+        job_config(&configured, &job)
+            .unwrap()
+            .reasoning_effort
+            .as_deref(),
+        Some("high")
+    );
+
+    let unsupported = crate::config::AgentConfig {
+        provider: "ollama".into(),
+        ..configured
+    };
+    assert!(job_config(&unsupported, &job)
+        .unwrap_err()
+        .contains("requires Copilot"));
+    assert!(validate_requested_reasoning_effort(Some("extreme")).is_err());
 }
 
 #[test]

@@ -78,7 +78,8 @@ Controls:
 - `Ctrl-O` prepares `/attach`; enter or drag a PNG, JPEG, GIF or WebP path
   beneath the verified owner home. `/attach clear` removes pending images.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
-  `m` toggles memory, and `t` cycles max turns through default/8/16/32.
+  `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
+  through default/8/16/32.
 - `Ctrl-C` cancels active work, or exits while idle.
 - `Ctrl-D` exits while idle.
 - During an approval, `a` requests one exact authorization and `d` requests
@@ -181,10 +182,11 @@ without an ID opens a searchable bounded conversation picker. These lists are
 presentation only; selecting an item still uses the normal broker operation and
 canonical identity checks.
 
-Task model controls affect only subsequently submitted Jobs. Reasoning effort
-is shown as provider-default because the shared provider-neutral Job contract
-does not yet expose an explicit effort value; the TUI does not pretend that a
-local toggle changed provider behavior.
+Task model controls affect only subsequently submitted Jobs. Explicit
+reasoning effort is persisted across queueing, retry and resume, and currently
+requires Copilot to select a Responses-capable model. Legacy
+Chat Completions and non-Copilot fallbacks fail explicitly rather than silently
+ignoring the requested effort.
 
 `/workspace` shows the selected task workspace. `/workspace home` resets to
 the authenticated owner's passwd home; `/workspace PATH` resolves an absolute

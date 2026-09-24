@@ -628,6 +628,13 @@ fn build_wire_request_body(
     wire_api: super::copilot_auth::CopilotWireApi,
     compatibility: AliasCompatibility,
 ) -> Result<serde_json::Value> {
+    if request.extra.get("_cos_reasoning_effort").is_some()
+        && wire_api != super::copilot_auth::CopilotWireApi::Responses
+    {
+        return Err(LlmError::InvalidRequest(
+            "reasoning effort requires a Copilot model with the Responses endpoint".into(),
+        ));
+    }
     match wire_api {
         super::copilot_auth::CopilotWireApi::ChatCompletions => {
             if compatibility.chat_stream_usage {

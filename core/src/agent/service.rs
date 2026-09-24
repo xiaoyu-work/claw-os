@@ -176,6 +176,8 @@ pub struct Job {
     pub max_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_reasoning_effort: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub use_memory: bool,
     pub status: JobStatus,
@@ -309,6 +311,7 @@ impl Job {
             execution_reservation: None,
             max_turns,
             requested_model: None,
+            requested_reasoning_effort: None,
             use_memory: true,
             status: JobStatus::Pending,
             created_at: now_iso(),
@@ -369,6 +372,10 @@ pub(crate) fn validate_requested_model(model: Option<&str>) -> Result<(), String
         }
     }
     Ok(())
+}
+
+pub(crate) fn validate_requested_reasoning_effort(effort: Option<&str>) -> Result<(), String> {
+    crate::config::validate_reasoning_effort(effort)
 }
 
 // ---------------------------------------------------------------------------
@@ -763,6 +770,8 @@ impl Store {
 
     pub(crate) fn publish(&self, mut job: Job) -> io::Result<Job> {
         validate_requested_model(job.requested_model.as_deref())
+            .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
+        validate_requested_reasoning_effort(job.requested_reasoning_effort.as_deref())
             .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
         let _session_lock = job
             .session_id
@@ -2681,6 +2690,8 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.session_id == right.session_id
         && left.after_task_id == right.after_task_id
         && left.max_turns == right.max_turns
+        && left.requested_model == right.requested_model
+        && left.requested_reasoning_effort == right.requested_reasoning_effort
         && left.use_memory == right.use_memory
         && left.created_at == right.created_at
         && left.owner_uid == right.owner_uid
@@ -3786,6 +3797,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             session_id: job.session_id.clone(),
             max_turns: job.effective_max_turns(),
             requested_model: job.requested_model.clone(),
+            requested_reasoning_effort: job.requested_reasoning_effort.clone(),
             use_memory: job.use_memory,
             presence: None,
         },
@@ -3847,6 +3859,7 @@ pub struct JobExecution {
     pub session_id: Option<String>,
     pub max_turns: Option<u32>,
     pub requested_model: Option<String>,
+    pub requested_reasoning_effort: Option<String>,
     pub use_memory: bool,
     pub presence: Option<crate::session::SessionPresence>,
 }
@@ -3856,12 +3869,27 @@ fn job_config(
     job: &JobExecution,
 ) -> Result<crate::config::AgentConfig, String> {
     validate_requested_model(job.requested_model.as_deref())?;
+    validate_requested_reasoning_effort(job.requested_reasoning_effort.as_deref())?;
     let mut config = configured.clone();
     if let Some(max_turns) = job.max_turns {
         config.max_turns = max_turns;
     }
     if let Some(model) = &job.requested_model {
         config.model = model.clone();
+    }
+    if let Some(effort) = &job.requested_reasoning_effort {
+        if configured.provider != "copilot"
+            || configured
+                .provider_fallbacks
+                .iter()
+                .any(|fallback| fallback.provider != "copilot")
+        {
+            return Err(
+                "per-task reasoning effort requires Copilot with no non-Copilot fallback"
+                    .to_string(),
+            );
+        }
+        config.reasoning_effort = Some(effort.clone());
     }
     Ok(config)
 }

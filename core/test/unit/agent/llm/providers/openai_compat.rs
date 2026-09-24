@@ -555,6 +555,25 @@ fn builds_responses_body_with_tool_history() {
 }
 
 #[test]
+fn responses_reasoning_effort_is_explicit_and_chat_completions_refuse_it() {
+    let mut request = req_text("reason carefully");
+    request.extra = serde_json::json!({"_cos_reasoning_effort": "high"});
+    let body = responses_wire::build_request_body(&request, "gpt-5.6-sol", false);
+    assert_eq!(body["reasoning"]["effort"], "high");
+    assert!(body.get("_cos_reasoning_effort").is_none());
+
+    let error = build_wire_request_body(
+        &request,
+        "legacy-model",
+        false,
+        crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions,
+        compatibility_for_alias("copilot"),
+    )
+    .unwrap_err();
+    assert!(matches!(error, LlmError::InvalidRequest(_)));
+}
+
+#[test]
 fn responses_does_not_replay_reasoning_without_encrypted_state() {
     let mut request = req_text("unused");
     request.system = None;

@@ -134,6 +134,7 @@ pub(super) struct App {
     pub selected_workspace: String,
     pub task_use_memory: bool,
     pub task_max_turns: Option<u32>,
+    pub task_reasoning_effort: Option<String>,
     pub task_controls_open: bool,
     pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
@@ -200,6 +201,7 @@ impl App {
             selected_workspace,
             task_use_memory: true,
             task_max_turns: None,
+            task_reasoning_effort: None,
             task_controls_open: false,
             pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
@@ -624,6 +626,27 @@ impl App {
             Some(16) => Some(32),
             Some(_) => None,
         };
+    }
+
+    pub fn cycle_task_reasoning_effort(&mut self) {
+        if self.info.provider != "copilot" {
+            self.push_error(
+                "Per-task reasoning effort currently requires the Copilot Responses provider.",
+            );
+            return;
+        }
+        self.task_reasoning_effort = match self.task_reasoning_effort.as_deref() {
+            None => Some("minimal".into()),
+            Some("minimal") => Some("low".into()),
+            Some("low") => Some("medium".into()),
+            Some("medium") => Some("high".into()),
+            Some("high") => Some("xhigh".into()),
+            Some(_) => None,
+        };
+    }
+
+    pub fn restore_reasoning_effort(&mut self, effort: Option<&str>) {
+        self.task_reasoning_effort = effort.map(str::to_string);
     }
 
     pub fn pending_attachments(&self) -> &[crate::agent::attachments::AttachmentInput] {

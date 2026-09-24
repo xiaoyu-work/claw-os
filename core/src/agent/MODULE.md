@@ -35,9 +35,10 @@ surfaces.
 - Persist a versioned execution phase for every queued task. Workers acknowledge
   PREPARE while blocked; only a durable COMMIT record permits execution.
   Recovery requeues only phases that prove COMMIT was never issued.
-- Persist an optional per-task model selection and pass it through the private
-  worker assignment without changing provider, credentials, fallback policy,
-  capabilities, or global configuration.
+- Persist optional per-task model and reasoning-effort selections and pass
+  them through the private worker assignment without changing credentials,
+  capabilities, or global configuration. Explicit effort requires Copilot
+  Responses and rejects incompatible fallback/provider paths.
 - Persist the broker-resolved per-task workspace, revalidate it at worker
   claim, use it as process cwd, and project it through labelled request-local
   ProjectContext without adding filesystem capability.

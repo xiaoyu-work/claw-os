@@ -63,6 +63,7 @@ fn job(status: &str) -> Job {
         response: None,
         error: None,
         requested_model: Some("claw-model".into()),
+        requested_reasoning_effort: None,
         provider: Some("ollama".into()),
         model: Some("claw-model".into()),
         turns_used: None,
@@ -657,6 +658,7 @@ fn ctrl_d_does_not_silently_detach_active_work() {
 #[test]
 fn task_controls_change_only_future_task_defaults() {
     let mut app = app();
+    app.info.provider = "copilot".into();
     assert_eq!(
         handle_key(
             &mut app,
@@ -668,6 +670,13 @@ fn task_controls_change_only_future_task_defaults() {
         InputAction::None
     );
     assert!(app.task_controls_open);
+    handle_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('r'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
     handle_key(
         &mut app,
         crossterm::event::KeyEvent::new(
@@ -684,6 +693,7 @@ fn task_controls_change_only_future_task_defaults() {
     );
     assert!(!app.task_use_memory);
     assert_eq!(app.task_max_turns, Some(8));
+    assert_eq!(app.task_reasoning_effort.as_deref(), Some("minimal"));
     assert_eq!(app.selected_model, "claw-model");
 }
 

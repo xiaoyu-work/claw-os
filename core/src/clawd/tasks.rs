@@ -49,6 +49,13 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     crate::agent::service::validate_requested_model(requested_model.as_deref())?;
+    let requested_reasoning_effort = params
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    crate::agent::service::validate_requested_reasoning_effort(
+        requested_reasoning_effort.as_deref(),
+    )?;
     let context = params
         .get("context")
         .and_then(Value::as_str)
@@ -141,6 +148,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     job.attachments = attachments;
     job.activity_id = activity_id;
     job.requested_model = requested_model;
+    job.requested_reasoning_effort = requested_reasoning_effort;
     job.workspace = Some(workspace.to_string_lossy().into_owned());
     job.after_task_id = after_task_id;
     let task_id = job.id.clone();
@@ -546,7 +554,11 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         ));
     }
     crate::agent::service::validate_requested_model(original.requested_model.as_deref())?;
+    crate::agent::service::validate_requested_reasoning_effort(
+        original.requested_reasoning_effort.as_deref(),
+    )?;
     let requested_model = original.requested_model.clone();
+    let requested_reasoning_effort = original.requested_reasoning_effort.clone();
     let owner_uid = original
         .owner_uid
         .ok_or_else(|| "task has no recorded owner and cannot be retried".to_string())?;
@@ -582,6 +594,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     retried.attachments = original.attachments;
     retried.activity_id = activity_id;
     retried.requested_model = requested_model;
+    retried.requested_reasoning_effort = requested_reasoning_effort;
     retried.workspace = original.workspace;
     retried.after_task_id = original.after_task_id;
     let task_id = retried.id.clone();

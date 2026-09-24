@@ -77,6 +77,7 @@ pub(super) struct Job {
     pub response: Option<String>,
     pub error: Option<String>,
     pub requested_model: Option<String>,
+    pub requested_reasoning_effort: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub turns_used: Option<u32>,
@@ -365,6 +366,7 @@ pub(super) trait Backend: Send + Sync {
         use_memory: bool,
         max_turns: Option<u32>,
         model: &str,
+        reasoning_effort: Option<&str>,
     ) -> Result<Job, String>;
     async fn resolve_workspace(&self, path: Option<&str>) -> Result<String, String>;
     async fn stream(&self, task_id: &str, cursor: u64) -> Result<StreamFrame, StreamError>;
@@ -577,6 +579,7 @@ impl Backend for BrokerBackend {
         use_memory: bool,
         max_turns: Option<u32>,
         model: &str,
+        reasoning_effort: Option<&str>,
     ) -> Result<Job, String> {
         let mut params = json!({
             "prompt": prompt,
@@ -591,6 +594,9 @@ impl Backend for BrokerBackend {
         }
         if let Some(max_turns) = max_turns {
             params["max_turns"] = json!(max_turns);
+        }
+        if let Some(reasoning_effort) = reasoning_effort {
+            params["reasoning_effort"] = json!(reasoning_effort);
         }
         if let Some(after_task_id) = after_task_id {
             params["after_task_id"] = json!(after_task_id);
@@ -1546,6 +1552,7 @@ fn parse_job(value: Value) -> Result<Job, String> {
         response: optional_string(&value, "response"),
         error: optional_string(&value, "error"),
         requested_model: optional_string(&value, "requested_model"),
+        requested_reasoning_effort: optional_string(&value, "requested_reasoning_effort"),
         provider: optional_string(&value, "provider"),
         model: optional_string(&value, "model"),
         turns_used: value

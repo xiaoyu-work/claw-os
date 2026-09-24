@@ -370,6 +370,8 @@ pub struct JobSpec {
     pub max_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_reasoning_effort: Option<String>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub use_memory: bool,
     pub owner_uid: u32,

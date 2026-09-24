@@ -1204,6 +1204,7 @@ async fn execute(
         session_id: job.session_id,
         max_turns: job.max_turns,
         requested_model: job.requested_model,
+        requested_reasoning_effort: job.requested_reasoning_effort,
         use_memory: job.use_memory,
         presence: assignment.presence,
     };

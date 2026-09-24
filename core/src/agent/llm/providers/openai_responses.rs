@@ -72,6 +72,13 @@ pub(crate) fn build_request_body(
         if let Some(max_tokens) = request.max_tokens {
             object.insert("max_output_tokens".into(), serde_json::json!(max_tokens));
         }
+        if let Some(effort) = request
+            .extra
+            .get("_cos_reasoning_effort")
+            .and_then(serde_json::Value::as_str)
+        {
+            object.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
+        }
         // Copilot's GPT-5 / reasoning models reject sampling knobs.
         if !use_max_completion_tokens(model) {
             if let Some(temperature) = request.temperature {

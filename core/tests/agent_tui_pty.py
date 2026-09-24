@@ -118,6 +118,7 @@ class FixtureBroker:
         }
         self.cursors = {}
         self.requested_model = None
+        self.requested_reasoning_effort = None
         self.requested_workspace = None
         self.stream_disconnects = 0
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
@@ -179,6 +180,7 @@ class FixtureBroker:
             "provider": "ollama",
             "model": "tui-fixture",
             "requested_model": self.requested_model,
+            "requested_reasoning_effort": self.requested_reasoning_effort,
             "turns_used": 2,
             "response": ANSWER if status == "ok" else None,
             "error": None,
@@ -663,9 +665,14 @@ class FixtureBroker:
             elif params.get("attachments"):
                 raise AssertionError("terminal attached an image to the wrong task")
             if self.case == "task-controls":
-                if params.get("use_memory") is not False or params.get("max_turns") != 8:
+                if (
+                    params.get("use_memory") is not False
+                    or params.get("max_turns") != 8
+                    or params.get("reasoning_effort") != "minimal"
+                ):
                     raise AssertionError("terminal task controls were not bound to submission")
             self.requested_model = params.get("model")
+            self.requested_reasoning_effort = params.get("reasoning_effort")
             self.requested_workspace = params.get("workspace")
             if not self.requested_workspace:
                 raise AssertionError("task submission omitted its broker workspace")
@@ -961,7 +968,8 @@ def run(cos, case, transcript, original_namespace, trace):
         config = root / "config.json"
         config.write_text(json.dumps({
             "agent": {
-                "provider": "ollama", "model": "tui-fixture",
+                "provider": "copilot" if case == "task-controls" else "ollama",
+                "model": "tui-fixture",
                 "base_url": "http://127.0.0.1:1",
             },
         }))
@@ -1105,7 +1113,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     time.monotonic() + 15,
                     lambda data: b"Task model controls" in data,
                 )
-                os.write(master, b"mt\x1b")
+                os.write(master, b"rmt\x1b")
                 time.sleep(0.4)
             if case == "commands":
                 send_prompt(master, output, "/resume")

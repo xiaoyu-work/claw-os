@@ -92,6 +92,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
                 "media_type": "image/png",
                 "data": encoded,
             }],
+            "reasoning_effort": "high",
         }),
         &client,
     )
@@ -108,6 +109,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
         .unwrap();
     assert_eq!(stored.attachments.len(), 1);
     assert_eq!(stored.attachments[0].data, encoded);
+    assert_eq!(stored.requested_reasoning_effort.as_deref(), Some("high"));
     let digest = stored.attachments[0].sha256.clone();
     store.cancel_pending(id).unwrap().unwrap();
 
@@ -117,6 +119,10 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
         .unwrap()
         .unwrap();
     assert_eq!(stored_retry.attachments[0].sha256, digest);
+    assert_eq!(
+        stored_retry.requested_reasoning_effort.as_deref(),
+        Some("high")
+    );
     assert_eq!(retried["attachments"][0]["sha256"], digest);
     assert!(retried["attachments"][0].get("data").is_none());
 }
@@ -144,6 +150,18 @@ async fn requested_model_is_validated_before_any_session_or_queue_side_effects()
             .await
             .unwrap_err();
         assert!(error.contains("model"), "{error}");
+        assert!(!session::sessions_root().exists());
+        assert!(!crate::paths::agent_jobs_dir().exists());
+        assert!(!crate::paths::clawd_user_agent_state_dir(owner_uid).exists());
+    }
+    for effort in ["", "default", "HIGH", "extreme"] {
+        let error = submit(
+            json!({"prompt": "never queued", "reasoning_effort": effort}),
+            &client,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("reasoning_effort"), "{error}");
         assert!(!session::sessions_root().exists());
         assert!(!crate::paths::agent_jobs_dir().exists());
         assert!(!crate::paths::clawd_user_agent_state_dir(owner_uid).exists());

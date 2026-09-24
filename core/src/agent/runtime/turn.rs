@@ -64,6 +64,7 @@ struct TurnRequest<'a> {
     llm_tools: &'a [LlmTool],
     max_tokens: u32,
     temperature: f32,
+    reasoning_effort: Option<&'a str>,
     session_id: Option<&'a str>,
     hook_ctx: Option<&'a HookContext>,
     progress: Arc<dyn ProgressSink>,
@@ -142,6 +143,7 @@ pub async fn run_turn(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort: None,
         session_id,
         hook_ctx,
         progress,
@@ -171,6 +173,46 @@ pub(crate) async fn run_turn_interruptible(
     interrupt: &interrupt::Handle,
     monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_interruptible_with_reasoning(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        exposure,
+        llm_tools,
+        max_tokens,
+        temperature,
+        None,
+        session_id,
+        retry_policy,
+        hook_ctx,
+        progress,
+        interrupt,
+        monetary_budget,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_turn_interruptible_with_reasoning(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    reasoning_effort: Option<&str>,
+    session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt: &interrupt::Handle,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
+) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_inner(TurnRequest {
         provider,
         model,
@@ -181,6 +223,7 @@ pub(crate) async fn run_turn_interruptible(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort,
         session_id,
         hook_ctx,
         progress,
@@ -220,6 +263,7 @@ pub async fn run_final_turn(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort: None,
         session_id,
         hook_ctx,
         progress,
@@ -249,6 +293,46 @@ pub(crate) async fn run_final_turn_interruptible(
     interrupt: &interrupt::Handle,
     monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    run_final_turn_interruptible_with_reasoning(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        exposure,
+        llm_tools,
+        max_tokens,
+        temperature,
+        None,
+        session_id,
+        retry_policy,
+        hook_ctx,
+        progress,
+        interrupt,
+        monetary_budget,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_final_turn_interruptible_with_reasoning(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    reasoning_effort: Option<&str>,
+    session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt: &interrupt::Handle,
+    monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
+) -> Result<TurnReport, super::loop_::AgentError> {
     run_turn_inner(TurnRequest {
         provider,
         model,
@@ -259,6 +343,7 @@ pub(crate) async fn run_final_turn_interruptible(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort,
         session_id,
         hook_ctx,
         progress,
@@ -281,6 +366,7 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort,
         session_id,
         hook_ctx,
         progress,
@@ -314,6 +400,9 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
             "_cos_turn_index": hook_ctx.map(|context| context.turn_index).unwrap_or(0),
         }),
     };
+    if let Some(reasoning_effort) = reasoning_effort {
+        request.extra["_cos_reasoning_effort"] = serde_json::json!(reasoning_effort);
+    }
 
     // Prompt-cache markers are no-ops for providers that don't support
     // them (the marker keys live in `request.extra` and are ignored by
@@ -603,6 +692,7 @@ pub async fn run_turn_streaming(
         llm_tools,
         max_tokens,
         temperature,
+        None,
         session_id,
         sink,
         hook_ctx,
@@ -625,6 +715,7 @@ pub(crate) async fn run_turn_streaming_interruptible(
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
+    reasoning_effort: Option<&str>,
     session_id: Option<&str>,
     sink: Arc<dyn StreamSink>,
     hook_ctx: Option<&HookContext>,
@@ -642,6 +733,7 @@ pub(crate) async fn run_turn_streaming_interruptible(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort,
         session_id,
         sink,
         hook_ctx,
@@ -679,6 +771,7 @@ pub async fn run_final_turn_streaming(
         llm_tools,
         max_tokens,
         temperature,
+        None,
         session_id,
         sink,
         hook_ctx,
@@ -701,6 +794,7 @@ pub(crate) async fn run_final_turn_streaming_interruptible(
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
+    reasoning_effort: Option<&str>,
     session_id: Option<&str>,
     sink: Arc<dyn StreamSink>,
     hook_ctx: Option<&HookContext>,
@@ -718,6 +812,7 @@ pub(crate) async fn run_final_turn_streaming_interruptible(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort,
         session_id,
         sink,
         hook_ctx,
@@ -740,6 +835,7 @@ async fn run_turn_streaming_inner(
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
+    reasoning_effort: Option<&str>,
     session_id: Option<&str>,
     sink: Arc<dyn StreamSink>,
     hook_ctx: Option<&HookContext>,
@@ -758,6 +854,7 @@ async fn run_turn_streaming_inner(
         llm_tools,
         max_tokens,
         temperature,
+        reasoning_effort,
         session_id,
         hook_ctx,
         progress,

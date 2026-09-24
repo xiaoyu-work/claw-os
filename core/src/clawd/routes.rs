@@ -871,6 +871,7 @@ routes! {
             ("activity_id", FieldRule::Token),
             ("max_turns", FieldRule::Count),
             ("model", FieldRule::Identifier),
+            ("reasoning_effort", FieldRule::Token),
             ("prompt", FieldRule::Size),
             ("attachments", FieldRule::Size),
             ("workspace", FieldRule::Size),

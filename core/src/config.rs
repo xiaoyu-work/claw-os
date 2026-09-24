@@ -109,6 +109,11 @@ pub struct AgentConfig {
     #[serde(default = "default_agent_temperature")]
     pub temperature: f32,
 
+    /// Optional provider-neutral reasoning effort requested for the main
+    /// Agent task. Currently enforced only for Copilot Responses models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+
     /// Optional path to a Markdown file injected at the start of the system
     /// prompt. If unset, only the built-in scaffold prompt is used.
     #[serde(default)]
@@ -424,6 +429,17 @@ pub struct AgentConfig {
     /// Defaults to `AWS_SESSION_TOKEN` when unset.
     #[serde(default)]
     pub aws_session_token_env: Option<String>,
+}
+
+pub(crate) fn validate_reasoning_effort(effort: Option<&str>) -> Result<(), String> {
+    if let Some(effort) = effort {
+        if !matches!(effort, "minimal" | "low" | "medium" | "high" | "xhigh") {
+            return Err(
+                "reasoning_effort must be minimal, low, medium, high, or xhigh".to_string(),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -934,6 +950,7 @@ impl Default for AgentConfig {
             max_turns: default_agent_max_turns(),
             max_tokens: default_agent_max_tokens(),
             temperature: default_agent_temperature(),
+            reasoning_effort: None,
             system_prompt_path: None,
             api_key_credential: None,
             api_key_env: None,
