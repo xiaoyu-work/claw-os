@@ -578,6 +578,12 @@ pub struct AgentHooksSet {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentAccountLogout {
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentUsage {
     pub args: TextList<16, 256>,
 }

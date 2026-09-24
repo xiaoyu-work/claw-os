@@ -101,6 +101,10 @@ pub enum Command {
     AgentHooksGet,
     #[serde(rename = "agent.hooks.set")]
     AgentHooksSet,
+    #[serde(rename = "agent.account.get")]
+    AgentAccountGet,
+    #[serde(rename = "agent.account.logout")]
+    AgentAccountLogout,
     #[serde(rename = "permission.pending")]
     PermissionPending,
     #[serde(rename = "system.review.prepare")]
@@ -137,7 +141,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 56] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -181,6 +185,8 @@ impl Command {
         Self::MemoryReset,
         Self::AgentHooksGet,
         Self::AgentHooksSet,
+        Self::AgentAccountGet,
+        Self::AgentAccountLogout,
         Self::PermissionPending,
         Self::SystemReviewPrepare,
         Self::SystemReviewPending,
@@ -239,6 +245,8 @@ impl Command {
             Self::MemoryReset => "memory.reset",
             Self::AgentHooksGet => "agent.hooks.get",
             Self::AgentHooksSet => "agent.hooks.set",
+            Self::AgentAccountGet => "agent.account.get",
+            Self::AgentAccountLogout => "agent.account.logout",
             Self::PermissionPending => "permission.pending",
             Self::SystemReviewPrepare => "system.review.prepare",
             Self::SystemReviewPending => "system.review.pending",

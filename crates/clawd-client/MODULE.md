@@ -18,6 +18,10 @@ The inventory also includes `agent.hooks.get/set` for closed built-in hook
 settings. Arbitrary commands, environment values and trust decisions are not
 part of this Claw route.
 
+`agent.account.get/logout` is fixed to the authenticated owner's Copilot
+credential. Logout requires confirmation, refuses active tasks and cannot name
+or read any other credential.
+
 The inventory also includes `activity.monetary_budget.get/set/enabled` and
 `activity.scheduling_policy.get/set` for the native Agent bridge. These names
 only expose existing broker services; the client owns neither Activity identity

@@ -27,7 +27,7 @@ pub(super) fn default_model_name(provider: &str) -> Option<String> {
 /// Credential name the OAuth-device path stores the long-lived GitHub
 /// token under in the `agent` namespace. Centralised so the parent apply
 /// path and the OAuth writer agree on a single string.
-pub(super) const COPILOT_GITHUB_TOKEN_CREDENTIAL: &str = "copilot_github_token";
+pub(super) use crate::agent::llm::providers::copilot_auth::COPILOT_GITHUB_TOKEN_CREDENTIAL;
 const MIN_OAUTH_POLL_SECS: u64 = 5;
 
 pub(super) struct OAuthTerminalLogin {

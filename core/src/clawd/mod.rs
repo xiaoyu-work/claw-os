@@ -10,6 +10,7 @@ pub mod activity_object_state;
 pub mod activity_objects;
 pub mod activity_receipts;
 pub mod activity_scheduling_policy;
+pub mod agent_account;
 pub mod agent_client;
 pub mod agent_hooks;
 pub mod ai;

@@ -68,6 +68,25 @@ fn cache_is_isolated_per_token() {
     assert!(lookup_cached(fp_b).unwrap().is_none());
 }
 
+#[test]
+fn logout_cache_cleanup_removes_every_cached_token() {
+    let fingerprint = token_fingerprint("logout-cache-token");
+    store_cached(
+        fingerprint,
+        CopilotToken {
+            bearer: "cached-bearer".into(),
+            base_url: "https://api.individual.githubcopilot.com".into(),
+            expires_at_unix: u64::MAX,
+        },
+    )
+    .unwrap();
+    assert!(lookup_cached(fingerprint).unwrap().is_some());
+
+    try_forget_all_cached().unwrap();
+
+    assert!(lookup_cached(fingerprint).unwrap().is_none());
+}
+
 fn model(value: serde_json::Value) -> CopilotModel {
     serde_json::from_value(value).expect("valid Copilot model fixture")
 }

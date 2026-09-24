@@ -45,6 +45,11 @@ owner's closed built-in hook configuration and are loaded only by future Agent
 tasks. The terminal renderer never writes hook files or supplies executable
 commands.
 
+Agent account logout is likewise brokered and fixed to the authenticated
+owner's Copilot credential. It refuses active tasks and clears process-local
+Copilot token/model caches; it does not expose a general credential mutation
+route.
+
 ## Components
 
 | Component | Responsibility | Primary source |

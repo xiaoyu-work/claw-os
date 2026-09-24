@@ -45,6 +45,7 @@ pub const COPILOT_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+pub(crate) const COPILOT_GITHUB_TOKEN_CREDENTIAL: &str = "copilot_github_token";
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.individual.githubcopilot.com";
 const SCOPES: &str = "read:user";
 const AUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -591,6 +592,22 @@ pub fn try_forget_cached(github_token: &str) -> Result<(), CopilotAuthError> {
             resource: "token cache",
         })?
         .remove(&fp);
+    Ok(())
+}
+
+pub fn try_forget_all_cached() -> Result<(), CopilotAuthError> {
+    cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "token cache",
+        })?
+        .clear();
+    model_catalog_cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "model catalog cache",
+        })?
+        .clear();
     Ok(())
 }
 

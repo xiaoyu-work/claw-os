@@ -43,9 +43,9 @@ use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
     accessibility, activities, activity_attention, activity_object_state, activity_objects,
-    activity_receipts, agent_hooks, app_services, app_sessions, audio, backup, bluetooth, browser,
-    camera, clipboard, config_editor, containers, context, context_events, conversations, crash,
-    credentials, desktop, display, event_center, file_changes, firewall, hardware,
+    activity_receipts, agent_account, agent_hooks, app_services, app_sessions, audio, backup,
+    bluetooth, browser, camera, clipboard, config_editor, containers, context, context_events,
+    conversations, crash, credentials, desktop, display, event_center, file_changes, firewall, hardware,
     journal as journal_ops, location, memory, network, network_diagnostics, notifications,
     operation_previews, packages, permissions, power, printer, scheduler, security, snapshots,
     storage, system_journal, systemd, tasks, transactions, usage, usb_guard, users,
@@ -1026,6 +1026,25 @@ routes! {
             ("enabled", FieldRule::Flag),
         ],
         run: |c| agent_hooks::set(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentAccountGet {
+        name: "agent.account.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Credential),
+        body: body::NoBody,
+        run: |c| agent_account::status(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    AgentAccountLogout {
+        name: "agent.account.logout",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Credential),
+        body: body::AgentAccountLogout,
+        audit: &[("confirm", FieldRule::Flag)],
+        run: |c| agent_account::logout(c.params, c.client).await.map_err(BrokerError::from),
     }
     AgentUsage {
         name: "agent.usage",

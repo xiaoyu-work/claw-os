@@ -97,6 +97,13 @@ pub(crate) fn broker_refresh_access_token(name: &str, namespace: &str) -> Result
     oauth::broker_refresh_access_token(&FILE_STORE, name, namespace)
 }
 
+/// Trusted fixed-surface broker revocation. User/App-controlled credential
+/// names must continue through the capability-gated CLI path.
+pub(crate) fn revoke_for_broker(name: &str, namespace: &str) -> Result<bool, String> {
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    revoke(&id).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     include!(concat!(
