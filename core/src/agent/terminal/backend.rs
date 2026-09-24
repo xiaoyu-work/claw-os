@@ -328,6 +328,11 @@ pub(super) struct SkillSummary {
     pub origin: &'static str,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PlatformOverview {
+    pub presentation: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -438,11 +443,14 @@ pub(super) trait Backend: Send + Sync {
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
     async fn skills(&self) -> Result<Vec<SkillSummary>, String>;
+    async fn platform_overview(&self) -> Result<PlatformOverview, String>;
 }
 
 pub(super) struct BrokerBackend {
     info: BackendInfo,
     socket: PathBuf,
+    config: Arc<CosConfig>,
+    owner_uid: u32,
 }
 
 impl BrokerBackend {
@@ -466,6 +474,8 @@ impl BrokerBackend {
                 model_catalog_warning: catalog.warning,
             },
             socket: crate::clawd::config::socket_path(),
+            config,
+            owner_uid: uid,
         })
     }
 
@@ -1382,6 +1392,92 @@ impl Backend for BrokerBackend {
                 },
             })
             .collect())
+    }
+
+    async fn platform_overview(&self) -> Result<PlatformOverview, String> {
+        let skills = self.skills().await?;
+        let usage = self
+            .call(Command::AgentUsage, json!({ "args": [] }))
+            .await?;
+        let memory = self
+            .call(Command::MemorySessions, json!({ "limit": 1 }))
+            .await?;
+        let config = self.config.clone();
+        let owner_uid = self.owner_uid;
+        let local = tokio::task::spawn_blocking(move || {
+            let configured_mcp = config
+                .agent
+                .mcp_servers
+                .iter()
+                .filter(|server| server.enabled)
+                .map(|server| server.name.clone())
+                .collect::<Vec<_>>();
+            let discovered_mcp = if config.agent.agent_api_discovery_enabled {
+                let paths = config
+                    .agent
+                    .agent_api_paths
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect::<Vec<_>>();
+                let paths = (!paths.is_empty()).then_some(paths.as_slice());
+                crate::agent::tools::mcp::discover::discover(paths)
+                    .into_iter()
+                    .map(|server| server.name)
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let apps_dir = std::env::var_os("COS_APPS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"));
+            let apps = crate::apps::discover_all(&apps_dir);
+            let verified_apps = apps.verified.keys().cloned().collect::<Vec<_>>();
+            let quarantined_apps = apps.quarantined.keys().cloned().collect::<Vec<_>>();
+            let extensions = crate::agent_extensions::registry::ExtensionRegistry::load_selected_for_owner(
+                &crate::agent_extensions::registry::installed_root(),
+                &config.agent.extensions,
+                owner_uid,
+            );
+            let verified_extensions = extensions.registered.keys().cloned().collect::<Vec<_>>();
+            let quarantined_extensions = extensions
+                .quarantined
+                .iter()
+                .map(|extension| extension.id.clone())
+                .collect::<Vec<_>>();
+            (
+                configured_mcp,
+                discovered_mcp,
+                verified_apps,
+                quarantined_apps,
+                verified_extensions,
+                quarantined_extensions,
+            )
+        })
+        .await
+        .map_err(|_| "Claw platform discovery failed".to_string())?;
+        let presentation = serde_json::to_string_pretty(&json!({
+            "authority": "Read-only verified inventory. This panel starts no MCP server, executes no App, and activates no extension.",
+            "skills": skills.into_iter().map(|skill| skill.id).collect::<Vec<_>>(),
+            "mcp": {
+                "configured_enabled": local.0,
+                "verified_discovered": local.1,
+            },
+            "apps": {
+                "verified": local.2,
+                "quarantined": local.3,
+            },
+            "extensions": {
+                "verified_selected": local.4,
+                "quarantined_selected": local.5,
+            },
+            "memory_sessions": memory.get("n").cloned().unwrap_or(Value::Null),
+            "usage": usage,
+        }))
+        .map_err(|_| "Claw platform overview could not be rendered".to_string())?;
+        if presentation.len() > 512 * 1024 {
+            return Err("Claw platform overview exceeded its terminal bound".into());
+        }
+        Ok(PlatformOverview { presentation })
     }
 }
 

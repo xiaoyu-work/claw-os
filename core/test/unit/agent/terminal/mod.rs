@@ -3,7 +3,8 @@ use crate::agent::terminal::backend::{
     Activity, ActivityAttention, ActivityControlPolicy, ActivityControls, ActivityDetail,
     ActivityEvidence, ActivityOperationPreview, ActivityResource, ActivityReview, ApprovalRequest,
     BackendInfo, Conversation, ConversationMessage, ConversationSummary, Job, NotificationAction,
-    NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences, TaskSummary,
+    NotificationDelivery, NotificationItem, NotificationPage, NotificationPreferences,
+    PlatformOverview, TaskSummary,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -175,6 +176,7 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/agents"), Some(Command::Agents));
     assert_eq!(parse_command("/side"), Some(Command::Side(false)));
     assert_eq!(parse_command("/side return"), Some(Command::Side(true)));
+    assert_eq!(parse_command("/platform"), Some(Command::Platform));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -884,6 +886,31 @@ fn side_conversation_state_is_explicit_and_clearable() {
     assert!(app.in_side_conversation());
     app.clear_side_conversation();
     assert!(!app.in_side_conversation());
+}
+
+#[test]
+fn platform_overview_is_bounded_read_only_presentation() {
+    let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: json!({
+            "authority": "Read-only verified inventory.",
+            "skills": ["claw-os"],
+            "mcp": {"configured_enabled": ["fixture"]},
+        })
+        .to_string(),
+    });
+    let backend = TestBackend::new(110, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Verified read-only inventory"));
+    assert!(output.contains("claw-os"));
 }
 
 #[test]

@@ -6,7 +6,7 @@ use super::backend::{
     ActivityOperationPreview, ActivityReview, ApprovalRequest, BackendInfo, Conversation,
     ConversationJob,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
-    TaskSummary,
+    PlatformOverview, TaskSummary,
 };
 
 const MAX_TRANSCRIPT_ENTRIES: usize = 2_048;
@@ -149,6 +149,8 @@ pub(super) struct App {
     pub appearance_open: bool,
     pub agents_open: bool,
     pub agents_scroll: u16,
+    pub platform_overview: Option<PlatformOverview>,
+    pub platform_scroll: u16,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -228,6 +230,8 @@ impl App {
             appearance_open: false,
             agents_open: false,
             agents_scroll: 0,
+            platform_overview: None,
+            platform_scroll: 0,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -338,6 +342,8 @@ impl App {
         self.appearance_open = false;
         self.agents_open = false;
         self.agents_scroll = 0;
+        self.platform_overview = None;
+        self.platform_scroll = 0;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -706,6 +712,18 @@ impl App {
     pub fn close_agents(&mut self) {
         self.agents_open = false;
         self.agents_scroll = 0;
+    }
+
+    pub fn open_platform_overview(&mut self, mut overview: PlatformOverview) {
+        overview.presentation = bounded_clean_text(&overview.presentation, 512 * 1024);
+        self.picker = None;
+        self.platform_overview = Some(overview);
+        self.platform_scroll = 0;
+    }
+
+    pub fn close_platform_overview(&mut self) {
+        self.platform_overview = None;
+        self.platform_scroll = 0;
     }
 
     pub fn delegate_summaries(&self) -> Vec<(String, &'static str)> {

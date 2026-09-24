@@ -32,6 +32,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_task_controls(frame, area, app);
     render_appearance(frame, area, app);
     render_agents(frame, area, app);
+    render_platform_overview(frame, area, app);
     render_task_detail(frame, area, app);
     render_approval_detail(frame, area, app);
     render_notification_detail(frame, area, app);
@@ -43,6 +44,50 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
     render_confirmation(frame, area, app);
+}
+
+fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(overview) = &app.platform_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(106);
+    let height = screen.height.saturating_sub(4).min(34);
+    if width < 44 || height < 14 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let mut lines = vec![Line::styled(
+        "Verified read-only inventory - nothing is launched or activated",
+        Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+    )];
+    lines.extend(
+        overview
+            .presentation
+            .lines()
+            .map(|line| Line::raw(line.to_string())),
+    );
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.platform_scroll, 0))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Platform ")
+                    .title_bottom(Line::styled(
+                        "Up/Down scroll  Esc close",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
 }
 
 fn render_agents(frame: &mut Frame<'_>, screen: Rect, app: &App) {

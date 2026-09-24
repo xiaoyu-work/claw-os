@@ -309,7 +309,13 @@ class FixtureBroker:
                 raise AssertionError("conversation rewind changed identity or count")
             return {"conversation": self.conversation()}
         if method == "memory.sessions":
-            return {"n": 0, "sessions": []}
+            return {"n": 1 if self.case == "platform" else 0, "sessions": []}
+        if method == "agent.usage":
+            return {
+                "period": "fixture",
+                "input_tokens": 10,
+                "output_tokens": 5,
+            }
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
         if method == "permission.pending" and self.case == "approval-center":
@@ -760,6 +766,7 @@ class FixtureBroker:
                     "appearance",
                     "agents",
                     "side",
+                    "platform",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -802,6 +809,7 @@ class FixtureBroker:
                 "appearance",
                 "agents",
                 "side",
+                "platform",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -994,13 +1002,23 @@ def run(cos, case, transcript, original_namespace, trace):
         subprocess.run(["mount", "--bind", str(shadow_home), str(home)], check=True)
         cleanup.callback(subprocess.run, ["umount", str(home)], check=True)
         config = root / "config.json"
-        config.write_text(json.dumps({
-            "agent": {
-                "provider": "copilot" if case == "task-controls" else "ollama",
-                "model": "tui-fixture",
-                "base_url": "http://127.0.0.1:1",
-            },
-        }))
+        agent_config = {
+            "provider": "copilot" if case == "task-controls" else "ollama",
+            "model": "tui-fixture",
+            "base_url": "http://127.0.0.1:1",
+        }
+        if case == "platform":
+            agent_config.update({
+                "mcp_servers": [{
+                    "name": "fixture_mcp",
+                    "command": "false",
+                    "enabled": True,
+                }],
+                "agent_api_discovery_enabled": False,
+            })
+            (root / "apps").mkdir()
+            (root / "extensions").mkdir()
+        config.write_text(json.dumps({"agent": agent_config}))
         broker_path = root / "clawd.sock"
         broker = None if case == "startup-reconnect" else FixtureBroker(broker_path, case)
         master, slave = pty.openpty()
@@ -1012,6 +1030,8 @@ def run(cos, case, transcript, original_namespace, trace):
             "COS_CONFIG_PATH": str(config),
             "COS_DATA_DIR": str(root / "data"),
             "COS_USER_DATA_DIR": str(home / ".local" / "share" / "cos"),
+            "COS_APPS_DIR": str(root / "apps"),
+            "COS_AGENT_EXTENSIONS_DIR": str(root / "extensions"),
         }
         command = [str(cos), "agent", "chat", "--tui"]
         if case == "plain":
@@ -1910,6 +1930,25 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+            if case == "platform":
+                send_prompt(master, output, "/platform")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Verified read-only inventory" in data
+                    and b"fixture_mcp" in data
+                    and any(
+                        request["command"] == "agent.usage"
+                        for request in broker.requests
+                    )
+                    and any(
+                        request["command"] == "memory.sessions"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b")
+                time.sleep(0.3)
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -1998,6 +2037,7 @@ if __name__ == "__main__":
             "appearance",
             "agents",
             "side",
+            "platform",
             "copy-export",
             "raw-scrollback",
             "vim",

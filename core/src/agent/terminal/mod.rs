@@ -243,6 +243,7 @@ async fn run_with_backend(
                             && !app.task_controls_open
                             && !app.appearance_open
                             && !app.agents_open
+                            && app.platform_overview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -408,6 +409,23 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Down | KeyCode::PageDown => {
                 app.agents_scroll = app.agents_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if app.platform_overview.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_platform_overview();
+                InputAction::None
+            }
+            KeyCode::Up | KeyCode::PageUp => {
+                app.platform_scroll = app.platform_scroll.saturating_add(5);
+                InputAction::None
+            }
+            KeyCode::Down | KeyCode::PageDown => {
+                app.platform_scroll = app.platform_scroll.saturating_sub(5);
                 InputAction::None
             }
             _ => InputAction::None,

@@ -41,6 +41,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/appearance", "configure theme, title, and status line"),
     ("/agents", "show scoped delegate calls in this task"),
     ("/side", "start or return from a side conversation"),
+    ("/platform", "show verified Skills, MCP, Apps, and usage"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -83,6 +84,7 @@ pub(super) enum Command {
     Keymap,
     Agents,
     Side(bool),
+    Platform,
     Skills,
     Tasks,
     Task(String),
@@ -189,6 +191,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "agents" if rest.is_empty() => Command::Agents,
         "side" if rest.is_empty() => Command::Side(false),
         "side" if rest == "return" => Command::Side(true),
+        "platform" if rest.is_empty() => Command::Platform,
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -366,6 +369,7 @@ pub(super) async fn execute(
                 | Command::Vim
                 | Command::Keymap
                 | Command::Agents
+                | Command::Platform
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -408,6 +412,7 @@ pub(super) async fn execute(
              /appearance\n\
              /agents\n\
              /side [return]\n\
+             /platform\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -565,6 +570,10 @@ pub(super) async fn execute(
             let parent = backend.get_conversation(&parent_id).await?;
             app.replace_conversation(parent);
             app.push_system("Returned from the archived side conversation.");
+        }
+        Command::Platform => {
+            let overview = backend.platform_overview().await?;
+            app.open_platform_overview(overview);
         }
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),

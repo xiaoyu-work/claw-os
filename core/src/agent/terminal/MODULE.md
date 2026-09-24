@@ -108,6 +108,9 @@ audit.
 - `/side` creates a backend-checked canonical fork only while idle. `/side
   return` archives that fork and resolves the retained parent through the
   broker; closing the TUI never silently deletes either history.
+- `/platform` is a read-only inventory of verified Skills, configured and
+  authenticated MCP packages, Apps/extensions, memory-session count and owner
+  usage. It starts or executes none of them and omits commands/environment.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.
