@@ -258,6 +258,7 @@ async fn run_with_backend(
                             && app.usage_overview.is_none()
                             && app.debug_overview.is_none()
                             && app.account_overview.is_none()
+                            && app.voice_overview.is_none()
                             && app.picker.is_none()
                         {
                             app.insert_text(&value.replace("\r\n", "\n").replace('\r', "\n"));
@@ -406,6 +407,15 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             }
             KeyCode::Char('k') | KeyCode::Char('K') => {
                 app.toggle_vim_mode();
+                InputAction::None
+            }
+            _ => InputAction::None,
+        };
+    }
+    if app.voice_overview.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                app.close_voice_overview();
                 InputAction::None
             }
             _ => InputAction::None,

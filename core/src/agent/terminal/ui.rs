@@ -31,6 +31,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_picker(frame, area, app);
     render_task_controls(frame, area, app);
     render_appearance(frame, area, app);
+    render_voice_overview(frame, area, app);
     render_agents(frame, area, app);
     render_platform_overview(frame, area, app);
     render_memory_center(frame, area, app);
@@ -90,6 +91,74 @@ fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
                     .title(" Platform ")
                     .title_bottom(Line::styled(
                         "[m] Mem [h] Hooks [c] MCP [e] Ext [u] Usage [d] Debug [a] Account",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
+}
+
+fn render_voice_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
+    let Some(voice) = &app.voice_overview else {
+        return;
+    };
+    let width = screen.width.saturating_sub(4).min(88);
+    let height = screen.height.saturating_sub(4).min(22);
+    if width < 52 || height < 17 {
+        return;
+    }
+    let area = Rect::new(
+        screen.x + (screen.width.saturating_sub(width)) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    let configured = |value| if value { "configured" } else { "not configured" };
+    let lines = vec![
+        Line::styled(
+            "Claw voice models",
+            Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw("Voice uses the OS-configured Claw media providers, not a Codex backend."),
+        Line::raw(""),
+        Line::styled("Speech to text", Style::default().fg(Color::Yellow)),
+        Line::raw(format!(
+            "{} / {}  ({})",
+            voice.stt_provider,
+            voice.stt_model,
+            configured(voice.stt_configured)
+        )),
+        Line::styled("Text to speech", Style::default().fg(Color::Yellow)),
+        Line::raw(format!(
+            "{} / {}  ({})",
+            voice.tts_provider,
+            voice.tts_model,
+            configured(voice.tts_configured)
+        )),
+        Line::raw(format!(
+            "voice {}  output format {}",
+            voice.tts_voice, voice.tts_format
+        )),
+        Line::raw(""),
+        Line::styled("Realtime conversation", Style::default().fg(Color::Yellow)),
+        Line::raw(if voice.realtime_capture_available {
+            "Capability-gated microphone capture is available."
+        } else {
+            "Unavailable: this build has no capability-gated microphone recorder/session service."
+        }),
+        Line::raw("The TUI will not open PipeWire or microphone devices directly."),
+    ];
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(accent(app)))
+                    .title(" Voice Center ")
+                    .title_bottom(Line::styled(
+                        "Esc close",
                         Style::default().fg(Color::DarkGray),
                     )),
             ),

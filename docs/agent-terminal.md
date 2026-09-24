@@ -121,6 +121,10 @@ Controls:
   Copilot credential and retains provider config/history. The panel reports
   foreign-agent import unavailable rather than scanning other App data without
   an authenticated OS import service.
+- `/voice` opens Voice Center and shows the configured Claw STT/TTS models,
+  voice and output format. It does not substitute a Codex voice backend or open
+  microphone devices directly; realtime capture remains unavailable until the
+  OS provides a capability-gated recorder/session service.
 - `Ctrl-T` opens future-task model controls. `o` selects a configured model,
   `r` cycles reasoning effort, `m` toggles memory, and `t` cycles max turns
   through default/8/16/32. `p` toggles durable Plan mode.
@@ -356,7 +360,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -427,6 +431,8 @@ The debug-center scenario uses narrow daemon health and verifies the safe
 diagnostic panel without reading broad daemon context or configuration secrets.
 The account-center scenario requires confirmation before fixed Copilot logout
 and never scans foreign-agent configuration roots.
+The voice-settings scenario proves the TUI projects the configured Claw
+STT/TTS models while leaving realtime microphone capture unavailable.
 The review scenario renders only authenticated Activity plan references and
 App-reported receipt diffs, with no workspace scan or apply action.
 The resume-running scenario opens a retained conversation, attaches its

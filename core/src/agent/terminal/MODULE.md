@@ -133,6 +133,10 @@ audit.
   performs confirmed broker logout. It never reads secret values. Foreign-agent
   import stays unavailable until an authenticated OS importer exists; the
   renderer never scans another App's data roots.
+- `/voice` reports the configured Claw STT/TTS provider, model, voice and
+  format without reading credentials. Realtime start/mute/stop remains
+  unavailable until a capability-gated recorder/session service exists; the
+  renderer never opens microphone devices directly.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

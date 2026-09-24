@@ -5,7 +5,7 @@ use super::backend::{
     AccountOverview, Activity, ActivityAttention, ActivityControls, ActivityDetail,
     ActivityEvidence, ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest,
     BackendInfo, Conversation, ConversationJob, DebugOverview, ExtensionsOverview, McpOverview,
-    UsageOverview,
+    UsageOverview, VoiceOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -166,6 +166,7 @@ pub(super) struct App {
     pub debug_overview: Option<DebugOverview>,
     pub debug_scroll: u16,
     pub account_overview: Option<AccountOverview>,
+    pub voice_overview: Option<VoiceOverview>,
     pub terminal_theme: TerminalTheme,
     pub terminal_title_enabled: bool,
     pub compact_statusline: bool,
@@ -259,6 +260,7 @@ impl App {
             debug_overview: None,
             debug_scroll: 0,
             account_overview: None,
+            voice_overview: None,
             terminal_theme: TerminalTheme::Cyan,
             terminal_title_enabled: false,
             compact_statusline: false,
@@ -383,6 +385,7 @@ impl App {
         self.debug_overview = None;
         self.debug_scroll = 0;
         self.account_overview = None;
+        self.voice_overview = None;
         self.activity_operation_preview = None;
         self.activity_operation_preview_scroll = 0;
         self.status = RunStatus::Ready;
@@ -770,6 +773,7 @@ impl App {
         self.debug_overview = None;
         self.debug_scroll = 0;
         self.account_overview = None;
+        self.voice_overview = None;
     }
 
     pub fn close_platform_overview(&mut self) {
@@ -965,6 +969,23 @@ impl App {
 
     pub fn close_account_overview(&mut self) {
         self.account_overview = None;
+    }
+
+    pub fn open_voice_overview(&mut self, mut overview: VoiceOverview) {
+        overview.stt_provider =
+            bounded_clean_text(&overview.stt_provider, 128).replace('\n', " ");
+        overview.stt_model = bounded_clean_text(&overview.stt_model, 256).replace('\n', " ");
+        overview.tts_provider =
+            bounded_clean_text(&overview.tts_provider, 128).replace('\n', " ");
+        overview.tts_model = bounded_clean_text(&overview.tts_model, 256).replace('\n', " ");
+        overview.tts_voice = bounded_clean_text(&overview.tts_voice, 128).replace('\n', " ");
+        overview.tts_format = bounded_clean_text(&overview.tts_format, 32).replace('\n', " ");
+        self.picker = None;
+        self.voice_overview = Some(overview);
+    }
+
+    pub fn close_voice_overview(&mut self) {
+        self.voice_overview = None;
     }
 
     pub fn confirm_account_logout(&mut self) {

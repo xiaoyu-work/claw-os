@@ -872,6 +872,7 @@ class FixtureBroker:
                     "usage-center",
                     "debug-center",
                     "account-center",
+                    "voice-settings",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -922,6 +923,7 @@ class FixtureBroker:
                 "usage-center",
                 "debug-center",
                 "account-center",
+                "voice-settings",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1128,6 +1130,7 @@ def run(cos, case, transcript, original_namespace, trace):
             "usage-center",
             "debug-center",
             "account-center",
+            "voice-settings",
         ):
             agent_config.update({
                 "mcp_servers": [{
@@ -1139,7 +1142,21 @@ def run(cos, case, transcript, original_namespace, trace):
             })
             (root / "apps").mkdir()
             (root / "extensions").mkdir()
-        config.write_text(json.dumps({"agent": agent_config}))
+        config_document = {"agent": agent_config}
+        if case == "voice-settings":
+            config_document.update({
+                "stt": {
+                    "provider": "none",
+                    "model": "system-stt",
+                },
+                "tts": {
+                    "provider": "none",
+                    "model": "system-tts",
+                    "default_voice": "claw",
+                    "default_format": "wav",
+                },
+            })
+        config.write_text(json.dumps(config_document))
         broker_path = root / "clawd.sock"
         broker = None if case == "startup-reconnect" else FixtureBroker(broker_path, case)
         master, slave = pty.openpty()
@@ -1527,6 +1544,18 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
+            if case == "voice-settings":
+                send_prompt(master, output, "/voice")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Voice Center" in data
+                    and b"system-stt" in data
+                    and b"system-tts" in data,
+                )
+                os.write(master, b"\x1b")
+                time.sleep(0.4)
             if case == "file-mentions":
                 os.write(master, b"Inspect \x06")
                 read_terminal(
@@ -2385,6 +2414,7 @@ if __name__ == "__main__":
             "usage-center",
             "debug-center",
             "account-center",
+            "voice-settings",
             "copy-export",
             "raw-scrollback",
             "vim",

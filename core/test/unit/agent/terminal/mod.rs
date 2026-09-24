@@ -7,7 +7,7 @@ use crate::agent::terminal::backend::{
     ExtensionSummary, ExtensionsOverview, Job, McpOverview, McpServerSummary, NotificationAction,
     NotificationDelivery,
     NotificationItem, NotificationPage, NotificationPreferences, PlatformOverview, TaskSummary,
-    UsageBreakdown, UsageOverview, UsagePeriod,
+    UsageBreakdown, UsageOverview, UsagePeriod, VoiceOverview,
 };
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
@@ -180,6 +180,8 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/side"), Some(Command::Side(false)));
     assert_eq!(parse_command("/side return"), Some(Command::Side(true)));
     assert_eq!(parse_command("/platform"), Some(Command::Platform));
+    assert_eq!(parse_command("/voice"), Some(Command::Voice));
+    assert_eq!(parse_command("/voice settings"), Some(Command::Voice));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -1421,6 +1423,38 @@ fn platform_account_center_requires_logout_confirmation_and_never_scans_import_r
     assert!(output.contains("Account Center"));
     assert!(output.contains("No authenticated foreign-agent importer"));
     assert!(output.contains("will not scan Claude, Cursor, Codex"));
+}
+
+#[test]
+fn voice_center_uses_claw_media_models_without_claiming_realtime_capture() {
+    let mut app = app();
+    app.open_voice_overview(VoiceOverview {
+        stt_provider: "openai".into(),
+        stt_model: "whisper-1".into(),
+        stt_configured: true,
+        tts_provider: "openai".into(),
+        tts_model: "gpt-4o-mini-tts".into(),
+        tts_voice: "alloy".into(),
+        tts_format: "wav".into(),
+        tts_configured: true,
+        realtime_capture_available: false,
+    });
+
+    let backend = TestBackend::new(110, 26);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Voice Center"));
+    assert!(output.contains("whisper-1"));
+    assert!(output.contains("gpt-4o-mini-tts"));
+    assert!(output.contains("not a Codex backend"));
+    assert!(output.contains("no capability-gated microphone recorder"));
 }
 
 #[test]

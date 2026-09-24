@@ -446,6 +446,19 @@ pub(super) struct AccountLogout {
     pub was_present: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct VoiceOverview {
+    pub stt_provider: String,
+    pub stt_model: String,
+    pub stt_configured: bool,
+    pub tts_provider: String,
+    pub tts_model: String,
+    pub tts_voice: String,
+    pub tts_format: String,
+    pub tts_configured: bool,
+    pub realtime_capture_available: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReviewDecision {
     ApproveOnce,
@@ -567,6 +580,7 @@ pub(super) trait Backend: Send + Sync {
     async fn debug_overview(&self) -> Result<DebugOverview, String>;
     async fn account_overview(&self) -> Result<AccountOverview, String>;
     async fn account_logout(&self) -> Result<AccountLogout, String>;
+    async fn voice_overview(&self) -> Result<VoiceOverview, String>;
 }
 
 pub(super) struct BrokerBackend {
@@ -1714,6 +1728,31 @@ impl Backend for BrokerBackend {
             format!("Copilot credential was revoked but local cache cleanup failed: {error}")
         })?;
         Ok(result)
+    }
+
+    async fn voice_overview(&self) -> Result<VoiceOverview, String> {
+        let config = self.config.clone();
+        tokio::task::spawn_blocking(move || {
+            let stt = crate::agent::media::factory::stt_registry_from_cfg(&config);
+            let tts = crate::agent::media::factory::tts_registry_from_cfg(&config);
+            VoiceOverview {
+                stt_provider: config.stt.provider.clone(),
+                stt_model: config.stt.model.clone(),
+                stt_configured: stt
+                    .get(&config.stt.provider)
+                    .is_some_and(|provider| provider.is_configured()),
+                tts_provider: config.tts.provider.clone(),
+                tts_model: config.tts.model.clone(),
+                tts_voice: config.tts.default_voice.clone(),
+                tts_format: config.tts.default_format.clone(),
+                tts_configured: tts
+                    .get(&config.tts.provider)
+                    .is_some_and(|provider| provider.is_configured()),
+                realtime_capture_available: false,
+            }
+        })
+        .await
+        .map_err(|_| "Claw voice settings reader failed".to_string())
     }
 }
 
