@@ -692,6 +692,7 @@ impl App {
             self.push_system("No images are attached to the next task.");
             return;
         }
+
         let names = self
             .pending_attachments
             .iter()
@@ -702,6 +703,34 @@ impl App {
             "{} image attachment(s) pending: {names}",
             self.pending_attachments.len()
         ));
+    }
+
+    pub fn last_assistant_text(&self) -> Option<&str> {
+        self.entries.iter().rev().find_map(|entry| {
+            matches!(&entry.kind, EntryKind::Assistant).then_some(entry.text.as_str())
+        })
+    }
+
+    pub fn export_markdown(&self) -> Result<String, String> {
+        let mut output = String::from("# Claw conversation\n\n");
+        let mut messages = 0usize;
+        for entry in &self.entries {
+            let heading = match &entry.kind {
+                EntryKind::User => "User",
+                EntryKind::Assistant => "Assistant",
+                _ => continue,
+            };
+            output.push_str("## ");
+            output.push_str(heading);
+            output.push_str("\n\n");
+            output.push_str(&entry.text);
+            output.push_str("\n\n");
+            messages += 1;
+        }
+        if messages == 0 {
+            return Err("There are no user or assistant messages to export.".into());
+        }
+        Ok(output)
     }
 
     pub fn take_input(&mut self) -> String {

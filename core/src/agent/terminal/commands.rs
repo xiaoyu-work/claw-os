@@ -1,9 +1,11 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine;
 use serde_json::Value;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use super::backend::{ActivityControlPolicy, Backend};
 use super::state::{App, ConfirmationAction, RunStatus};
@@ -33,6 +35,8 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/workspace", "show or select a broker-validated workspace"),
     ("/attach", "attach an image to the next task"),
     ("/review", "review staged file plans and reported diffs"),
+    ("/copy", "copy the latest assistant response"),
+    ("/export", "export visible conversation text as Markdown"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -67,6 +71,8 @@ pub(super) enum Command {
     Workspace(Option<String>),
     Attach(Option<String>),
     Review(Option<String>),
+    Copy,
+    Export(String),
     Skills,
     Tasks,
     Task(String),
@@ -164,6 +170,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "attach" => Command::Attach(Some(rest.to_string())),
         "review" if rest.is_empty() => Command::Review(None),
         "review" => Command::Review(Some(rest.to_string())),
+        "copy" if rest.is_empty() => Command::Copy,
+        "export" if !rest.is_empty() => Command::Export(rest.to_string()),
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -289,6 +297,7 @@ fn takes_argument(command: &str) -> bool {
             | "/workspace"
             | "/attach"
             | "/review"
+            | "/export"
             | "/task"
             | "/approval"
             | "/inbox"
@@ -332,6 +341,8 @@ pub(super) async fn execute(
                 | Command::Workspace(_)
                 | Command::Attach(_)
                 | Command::Review(_)
+                | Command::Copy
+                | Command::Export(_)
                 | Command::Approvals
                 | Command::Approval(_)
                 | Command::Notifications(_)
@@ -369,6 +380,7 @@ pub(super) async fn execute(
              /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\
              /attach [PATH|clear]\n\
              /review [ACTIVITY_ID]\n\
+             /copy  /export PATH\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -469,6 +481,29 @@ pub(super) async fn execute(
         Command::Review(Some(id)) => {
             let review = backend.activity_review(&id).await?;
             app.open_activity_review(review);
+        }
+        Command::Copy => {
+            let text = app
+                .last_assistant_text()
+                .ok_or("There is no assistant response to copy.")?;
+            let sequence = osc52_copy_sequence(text)?;
+            let mut stdout = std::io::stdout();
+            stdout
+                .write_all(sequence.as_bytes())
+                .and_then(|_| stdout.flush())
+                .map_err(|error| format!("write terminal clipboard sequence: {error}"))?;
+            app.push_system("Copied the latest displayed assistant response through OSC 52.");
+        }
+        Command::Export(path) => {
+            let markdown = app.export_markdown()?;
+            let home = app.info.home.clone();
+            let workspace = PathBuf::from(&app.selected_workspace);
+            let path = tokio::task::spawn_blocking(move || {
+                write_markdown_export(&path, &home, &workspace, &markdown)
+            })
+            .await
+            .map_err(|_| "conversation export writer failed".to_string())??;
+            app.push_system(&format!("Exported visible conversation text to {}.", path.display()));
         }
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
@@ -836,6 +871,74 @@ pub(super) fn list_workspace_files(workspace: &Path) -> Result<WorkspaceFiles, S
     }
     paths.sort();
     Ok(WorkspaceFiles { paths, truncated })
+}
+
+pub(super) fn osc52_copy_sequence(text: &str) -> Result<String, String> {
+    const MAX_COPY_BYTES: usize = 64 * 1024;
+    if text.is_empty() {
+        return Err("There is no assistant response to copy.".into());
+    }
+    if text.len() > MAX_COPY_BYTES {
+        return Err(format!(
+            "assistant response exceeds the {MAX_COPY_BYTES}-byte terminal clipboard limit"
+        ));
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    Ok(format!("\u{1b}]52;c;{encoded}\u{7}"))
+}
+
+pub(super) fn write_markdown_export(
+    value: &str,
+    home: &Path,
+    workspace: &Path,
+    markdown: &str,
+) -> Result<PathBuf, String> {
+    let requested = Path::new(value.trim());
+    if requested.as_os_str().is_empty() {
+        return Err("conversation export path is empty".into());
+    }
+    let requested = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        workspace.join(requested)
+    };
+    let parent = requested
+        .parent()
+        .ok_or("conversation export path has no parent")?
+        .canonicalize()
+        .map_err(|error| format!("resolve conversation export parent: {error}"))?;
+    if !parent.starts_with(home) {
+        return Err("conversation export must stay inside the verified owner home".into());
+    }
+    let name = requested
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or("conversation export path has no file name")?;
+    let target = parent.join(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&target)
+        .map_err(|error| format!("create conversation export {}: {error}", target.display()))?;
+    if let Err(error) = file
+        .write_all(markdown.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
+        let cleanup = std::fs::remove_file(&target);
+        return Err(match cleanup {
+            Ok(()) => format!("write conversation export {}: {error}", target.display()),
+            Err(cleanup) => format!(
+                "write conversation export {}: {error}; cleanup failed: {cleanup}",
+                target.display()
+            ),
+        });
+    }
+    std::fs::File::open(&parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync conversation export directory: {error}"))?;
+    Ok(target)
 }
 
 fn parse_channel(value: &str) -> Option<NotificationChannel> {

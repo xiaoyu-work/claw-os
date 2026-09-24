@@ -10,6 +10,7 @@ use crate::agent::terminal::state::{
     clean_text, App, ApprovalStatus, ConfirmationAction, EntryKind, NotificationPreferenceAction,
     PickerSelection, ToolStatus,
 };
+use base64::Engine;
 use ratatui::backend::TestBackend;
 use serde_json::json;
 
@@ -160,6 +161,11 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(
         parse_command("/review activity-1"),
         Some(Command::Review(Some("activity-1".into())))
+    );
+    assert_eq!(parse_command("/copy"), Some(Command::Copy));
+    assert_eq!(
+        parse_command("/export transcript.md"),
+        Some(Command::Export("transcript.md".into()))
     );
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
@@ -346,6 +352,48 @@ fn image_attachment_reads_one_explicit_home_file() {
     let files = commands::list_workspace_files(&workspace).unwrap();
     assert_eq!(files.paths, ["notes.txt", "screen.png"]);
     assert!(!files.truncated);
+}
+
+#[test]
+fn copy_and_export_use_only_redacted_visible_text() {
+    let sequence = commands::osc52_copy_sequence("visible answer").unwrap();
+    let encoded = sequence
+        .strip_prefix("\u{1b}]52;c;")
+        .unwrap()
+        .strip_suffix('\u{7}')
+        .unwrap();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap(),
+        b"visible answer"
+    );
+
+    let mut app = app();
+    let secret = format!("{}-{}", "sk", "abcdef0123456789ABCDEFXYZ123");
+    app.push_assistant_delta(&secret);
+    app.push_assistant_delta(" visible");
+    let markdown = app.export_markdown().unwrap();
+    assert!(markdown.contains("## User"));
+    assert!(markdown.contains("## Assistant"));
+    assert!(markdown.contains("visible"));
+    assert!(!markdown.contains(&secret), "{markdown}");
+
+    let home = tempfile::tempdir().unwrap();
+    let workspace = home.path().join("project");
+    std::fs::create_dir(&workspace).unwrap();
+    let exported =
+        commands::write_markdown_export("conversation.md", home.path(), &workspace, &markdown)
+            .unwrap();
+    assert_eq!(std::fs::read_to_string(&exported).unwrap(), markdown);
+    assert!(commands::write_markdown_export(
+        "conversation.md",
+        home.path(),
+        &workspace,
+        &markdown
+    )
+    .unwrap_err()
+    .contains("create conversation export"));
 }
 
 #[test]

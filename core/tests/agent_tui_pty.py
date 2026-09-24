@@ -747,6 +747,7 @@ class FixtureBroker:
                     "multiline-key",
                     "approval-center",
                     "attachments",
+                    "copy-export",
                     "file-mentions",
                     "activity-lifecycle",
                     "activity-controls",
@@ -783,6 +784,7 @@ class FixtureBroker:
                 "multiline-key",
                 "approval-center",
                 "attachments",
+                "copy-export",
                 "file-mentions",
                 "activity-lifecycle",
                 "activity-controls",
@@ -1764,7 +1766,7 @@ def run(cos, case, transcript, original_namespace, trace):
                 os.write(master, b"\r")
             elif case not in ("durable-queue", "resume-running", "file-mentions"):
                 send_prompt(master, output, "Run the terminal integration fixture")
-            marker = ANSWER if case in ("complete", "durable-queue") else RUNNING
+            marker = ANSWER if case in ("complete", "durable-queue", "copy-export") else RUNNING
             if case == "reconnect":
                 read_terminal(
                     master,
@@ -1777,6 +1779,24 @@ def run(cos, case, transcript, original_namespace, trace):
                 master, output, time.monotonic() + 30,
                 lambda data: marker.encode() in data,
             )
+            if case == "copy-export":
+                send_prompt(master, output, "/copy")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"\x1b]52;c;" in data,
+                )
+                send_prompt(master, output, "/export conversation.md")
+                exported = shadow_home / "conversation.md"
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: exported.is_file(),
+                )
+                if ANSWER not in exported.read_text():
+                    raise AssertionError("conversation export omitted the assistant answer")
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -1862,6 +1882,7 @@ if __name__ == "__main__":
             "multiline-key",
             "approval-center",
             "attachments",
+            "copy-export",
             "file-mentions",
             "backtrack",
             "activity-lifecycle",

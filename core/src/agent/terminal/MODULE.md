@@ -87,6 +87,9 @@ audit.
 - `Ctrl-F` lists at most 512 regular-file names under the selected workspace
   and inserts an `@relative/path` mention. Completion reads no file contents,
   follows no symlink directories, and grants no capability.
+- `/copy` emits only the latest redacted Assistant display through bounded
+  OSC 52. `/export PATH` creates one new `0600` Markdown file under the
+  verified owner home from visible user/assistant entries; it never overwrites.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.
