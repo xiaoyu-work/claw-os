@@ -40,6 +40,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/raw", "publish a redacted snapshot to terminal scrollback"),
     ("/appearance", "configure theme, title, and status line"),
     ("/agents", "show scoped delegate calls in this task"),
+    ("/side", "start or return from a side conversation"),
     ("/skills", "list enabled Claw Skills"),
     ("/tasks", "browse durable Agent tasks"),
     ("/task", "open a durable task by id"),
@@ -81,6 +82,7 @@ pub(super) enum Command {
     Vim,
     Keymap,
     Agents,
+    Side(bool),
     Skills,
     Tasks,
     Task(String),
@@ -185,6 +187,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "vim" if rest.is_empty() => Command::Vim,
         "keymap" if rest.is_empty() => Command::Keymap,
         "agents" if rest.is_empty() => Command::Agents,
+        "side" if rest.is_empty() => Command::Side(false),
+        "side" if rest == "return" => Command::Side(true),
         "skills" => Command::Skills,
         "tasks" => Command::Tasks,
         "task" if rest.is_empty() => Command::Tasks,
@@ -311,6 +315,7 @@ fn takes_argument(command: &str) -> bool {
             | "/attach"
             | "/review"
             | "/export"
+            | "/side"
             | "/task"
             | "/approval"
             | "/inbox"
@@ -402,6 +407,7 @@ pub(super) async fn execute(
              /raw\n\
              /appearance\n\
              /agents\n\
+             /side [return]\n\
              /tasks  /task ID  /approvals  /approval ID\n\
              /inbox [all]  /notification ID  /notify-settings\n\
              /notify-channel CHANNEL on|off  /notify-severity CHANNEL LEVEL\n\
@@ -534,6 +540,32 @@ pub(super) async fn execute(
         }
         Command::Keymap => app.open_appearance(),
         Command::Agents => app.open_agents(),
+        Command::Side(false) => {
+            if app.in_side_conversation() {
+                return Err("Already in a side conversation. Use /side return first.".into());
+            }
+            let parent_id = app.conversation.id.clone();
+            let conversation = backend.fork_conversation(&parent_id, None).await?;
+            let side_id = conversation.id.clone();
+            app.replace_conversation(conversation);
+            app.begin_side_conversation(parent_id, side_id);
+            app.push_system(
+                "Side conversation started as a checked durable fork. \
+                 Use /side return to archive it and return to the parent.",
+            );
+        }
+        Command::Side(true) => {
+            let (parent_id, side_id) = app
+                .side_conversation()
+                .map(|(parent, side)| (parent.to_string(), side.to_string()))
+                .ok_or("This terminal is not in a side conversation.")?;
+            backend
+                .update_conversation(&side_id, None, Some(true))
+                .await?;
+            let parent = backend.get_conversation(&parent_id).await?;
+            app.replace_conversation(parent);
+            app.push_system("Returned from the archived side conversation.");
+        }
         Command::Skills => match backend.skills().await {
             Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
             Ok(skills) => app.push_system(

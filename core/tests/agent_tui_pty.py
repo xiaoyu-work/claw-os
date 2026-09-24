@@ -125,6 +125,7 @@ class FixtureBroker:
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
         self.workspace = str(self.home / "project")
         self.session_id = SESSION_ID
+        self.parent_session_id = SESSION_ID
         self.title = "Terminal integration fixture"
         self.archived = False
         self.backtrack_forked = False
@@ -270,7 +271,11 @@ class FixtureBroker:
         if method == "agent.conversation.create":
             return {"conversation": self.conversation()}
         if method == "agent.conversation.get":
-            if params["id"] not in (self.session_id, PRESENTATION_ID):
+            if params["id"] == self.parent_session_id:
+                self.session_id = self.parent_session_id
+                self.title = "Terminal integration fixture"
+                self.archived = False
+            elif params["id"] not in (self.session_id, PRESENTATION_ID):
                 raise AssertionError("terminal did not preserve the native session identity")
             return {"conversation": self.conversation()}
         if method == "agent.conversation.list":
@@ -754,6 +759,7 @@ class FixtureBroker:
                     "attachments",
                     "appearance",
                     "agents",
+                    "side",
                     "copy-export",
                     "raw-scrollback",
                     "vim",
@@ -795,6 +801,7 @@ class FixtureBroker:
                 "attachments",
                 "appearance",
                 "agents",
+                "side",
                 "copy-export",
                 "raw-scrollback",
                 "vim",
@@ -1207,7 +1214,8 @@ def run(cos, case, transcript, original_namespace, trace):
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: any(
+                    lambda data: b"SIDE" in data
+                    and any(
                         request["command"] == "agent.conversation.fork"
                         for request in broker.requests
                     ),
@@ -1875,6 +1883,33 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"\x1b")
                 time.sleep(0.3)
+            if case == "side":
+                send_prompt(master, output, "/side")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.fork"
+                        for request in broker.requests
+                    ),
+                )
+                send_prompt(master, output, "/side return")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: any(
+                        request["command"] == "agent.conversation.update"
+                        and request["params"].get("archived") is True
+                        for request in broker.requests
+                    )
+                    and any(
+                        request["command"] == "agent.conversation.get"
+                        and request["params"].get("id") == broker.parent_session_id
+                        for request in broker.requests
+                    ),
+                )
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -1962,6 +1997,7 @@ if __name__ == "__main__":
             "attachments",
             "appearance",
             "agents",
+            "side",
             "copy-export",
             "raw-scrollback",
             "vim",

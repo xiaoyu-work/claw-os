@@ -154,6 +154,8 @@ pub(super) struct App {
     pub compact_statusline: bool,
     pub vim_mode: bool,
     pub vim_insert_mode: bool,
+    side_parent_id: Option<String>,
+    side_conversation_id: Option<String>,
     pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
@@ -231,6 +233,8 @@ impl App {
             compact_statusline: false,
             vim_mode: false,
             vim_insert_mode: true,
+            side_parent_id: None,
+            side_conversation_id: None,
             pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
@@ -347,6 +351,7 @@ impl App {
         self.pending_attachments.clear();
         self.backtrack_armed_at = None;
         self.raw_scrollback_requested = false;
+        self.clear_side_conversation();
         self.load_history();
     }
 
@@ -768,6 +773,27 @@ impl App {
     pub fn terminal_title(&self) -> Option<String> {
         self.terminal_title_enabled
             .then(|| format!("Claw - {}", self.conversation.title))
+    }
+
+    pub fn begin_side_conversation(&mut self, parent_id: String, side_id: String) {
+        self.side_parent_id = Some(parent_id);
+        self.side_conversation_id = Some(side_id);
+    }
+
+    pub fn side_conversation(&self) -> Option<(&str, &str)> {
+        Some((
+            self.side_parent_id.as_deref()?,
+            self.side_conversation_id.as_deref()?,
+        ))
+    }
+
+    pub fn clear_side_conversation(&mut self) {
+        self.side_parent_id = None;
+        self.side_conversation_id = None;
+    }
+
+    pub fn in_side_conversation(&self) -> bool {
+        self.side_parent_id.is_some()
     }
 
     pub fn restore_reasoning_effort(&mut self, effort: Option<&str>) {

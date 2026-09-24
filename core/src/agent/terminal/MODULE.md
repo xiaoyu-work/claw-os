@@ -105,6 +105,9 @@ audit.
 - `/agents` projects only actual `cos_delegate` tool calls from the redacted
   parent transcript. Current delegate children are ephemeral, so the panel
   does not invent durable identities or unsupported switching.
+- `/side` creates a backend-checked canonical fork only while idle. `/side
+  return` archives that fork and resolves the retained parent through the
+  broker; closing the TUI never silently deletes either history.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

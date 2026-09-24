@@ -1442,6 +1442,14 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
         Span::raw("  "),
         status,
+        Span::styled(
+            if app.in_side_conversation() {
+                "  SIDE"
+            } else {
+                ""
+            },
+            Style::default().fg(Color::Yellow),
+        ),
         Span::raw("  "),
         Span::styled(&app.selected_model, Style::default().fg(Color::Blue)),
         Span::raw("  "),

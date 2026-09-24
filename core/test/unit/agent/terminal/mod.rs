@@ -173,6 +173,8 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/vim"), Some(Command::Vim));
     assert_eq!(parse_command("/keymap"), Some(Command::Keymap));
     assert_eq!(parse_command("/agents"), Some(Command::Agents));
+    assert_eq!(parse_command("/side"), Some(Command::Side(false)));
+    assert_eq!(parse_command("/side return"), Some(Command::Side(true)));
     assert_eq!(parse_command("/tasks"), Some(Command::Tasks));
     assert_eq!(
         parse_command("/task task-1"),
@@ -872,6 +874,16 @@ fn agents_view_reports_only_real_delegate_tool_calls() {
         app.delegate_summaries(),
         vec![("delegate-1".into(), "completed")]
     );
+}
+
+#[test]
+fn side_conversation_state_is_explicit_and_clearable() {
+    let mut app = app();
+    app.begin_side_conversation("ses_parent".into(), "ses_side".into());
+    assert_eq!(app.side_conversation(), Some(("ses_parent", "ses_side")));
+    assert!(app.in_side_conversation());
+    app.clear_side_conversation();
+    assert!(!app.in_side_conversation());
 }
 
 #[test]
