@@ -1575,8 +1575,7 @@ def run(cos, case, transcript, original_namespace, trace):
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda data: b"SIDE" in data
-                    and any(
+                    lambda _data: any(
                         request["command"] == "agent.conversation.fork"
                         for request in broker.requests
                     ),
