@@ -995,6 +995,16 @@ routes! {
         audit: &[("limit", FieldRule::Count)],
         run: |c| memory::sessions(c.params, c.client).map_err(BrokerError::from),
     }
+    MemoryReset {
+        name: "memory.reset",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Context),
+        body: body::MemoryReset,
+        audit: &[("confirm", FieldRule::Flag)],
+        run: |c| memory::reset(c.params, c.client).map_err(BrokerError::from),
+    }
     AgentUsage {
         name: "agent.usage",
         access: Access::User,

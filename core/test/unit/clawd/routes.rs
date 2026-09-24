@@ -53,6 +53,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "task.count",
     "memory.history",
     "memory.sessions",
+    "memory.reset",
     "agent.usage",
     "credential.oauth-refresh",
     "system.audio.control",

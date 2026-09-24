@@ -20,6 +20,9 @@ and agent tasks.
   attention projection for terminal-only, Web, and native desktop clients.
 - Expose owner-scoped approval views used by the Agent Web control center;
   permission decisions still cross the polkit helper.
+- Expose explicit owner-scoped learned-memory reset under the owner's
+  filesystem identity. It refuses active tasks and retains conversation and
+  execution evidence.
 - Expose owner-scoped notification publication, subscription, state, and
   delivery-leasing RPC.
 - Supervise unprivileged `claw-agentd` workers and task-owned

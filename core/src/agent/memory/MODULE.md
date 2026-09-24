@@ -19,6 +19,9 @@ results, and curates durable notes from completed work.
 - Curate notes with crash-safe run bracketing, excluding injected/compacted data.
 - Redact sensitive model-visible memory where required.
 - Preserve schema, transaction, and recovery behavior.
+- Reset owner-learned notes, App memory and derived semantic rows only through
+  the owner-scoped broker route; conversation rows, task bindings, compaction
+  summaries, Jobs and audit evidence are retained.
 
 ## Key Files
 

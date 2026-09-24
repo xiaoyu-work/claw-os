@@ -530,6 +530,33 @@ pub fn search(
         .collect())
 }
 
+/// Count every App-owned memory row without loading its content.
+pub fn count_all(db: &MemoryDb) -> Result<usize, MemoryError> {
+    let conn = db.lock_conn()?;
+    let count = conn.query_row(
+        "SELECT COUNT(*) FROM messages
+         WHERE role = 'app' AND session_id LIKE 'app:%'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    usize::try_from(count)
+        .map_err(|_| MemoryError::Poisoned("App memory row count is invalid".into()))
+}
+
+/// Delete every App-owned memory row while retaining conversation history.
+///
+/// Semantic rows are maintained separately because a complete learned-memory
+/// reset clears the whole derived semantic index in one operation.
+pub fn forget_all(db: &MemoryDb) -> Result<usize, MemoryError> {
+    let conn = db.lock_conn()?;
+    conn.execute(
+        "DELETE FROM messages
+         WHERE role = 'app' AND session_id LIKE 'app:%'",
+        [],
+    )
+    .map_err(MemoryError::from)
+}
+
 /// Delete every app-owned row, or every row for a single source.
 /// Returns the count deleted.
 ///

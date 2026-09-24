@@ -95,6 +95,8 @@ pub enum Command {
     MemorySessions,
     #[serde(rename = "memory.history")]
     MemoryHistory,
+    #[serde(rename = "memory.reset")]
+    MemoryReset,
     #[serde(rename = "permission.pending")]
     PermissionPending,
     #[serde(rename = "system.review.prepare")]
@@ -131,7 +133,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -172,6 +174,7 @@ impl Command {
         Self::TaskCancel,
         Self::MemorySessions,
         Self::MemoryHistory,
+        Self::MemoryReset,
         Self::PermissionPending,
         Self::SystemReviewPrepare,
         Self::SystemReviewPending,
@@ -227,6 +230,7 @@ impl Command {
             Self::TaskCancel => "task.cancel",
             Self::MemorySessions => "memory.sessions",
             Self::MemoryHistory => "memory.history",
+            Self::MemoryReset => "memory.reset",
             Self::PermissionPending => "permission.pending",
             Self::SystemReviewPrepare => "system.review.prepare",
             Self::SystemReviewPending => "system.review.pending",

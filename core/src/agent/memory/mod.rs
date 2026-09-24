@@ -12,6 +12,7 @@ pub mod conversation_bindings;
 pub mod conversations;
 pub mod curator;
 pub mod history;
+pub mod maintenance;
 pub mod notes;
 pub mod ontology;
 pub mod recovery;

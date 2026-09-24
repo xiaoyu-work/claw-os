@@ -9,6 +9,11 @@ Its closed command inventory includes owner-scoped
 presentation identifiers only; canonical session identity, verified replay
 boundaries and all ownership checks remain in `clawd`.
 
+The inventory includes `memory.reset`, but the client supplies only transport.
+The broker requires explicit confirmation, refuses active tasks and Root
+owners, performs mutation under the authenticated owner identity, and preserves
+conversation and execution evidence.
+
 The inventory also includes `activity.monetary_budget.get/set/enabled` and
 `activity.scheduling_policy.get/set` for the native Agent bridge. These names
 only expose existing broker services; the client owns neither Activity identity

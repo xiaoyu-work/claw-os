@@ -1,4 +1,4 @@
-//! `memory.*` clawd commands — read-only views over the agent memory DB.
+//! `memory.*` clawd commands — owner-scoped views and learned-memory reset.
 //!
 //! Used by the desktop agent UI (via `cos-agent-bridge`) to load
 //! historical conversation rows so users can resume chats across
@@ -6,11 +6,15 @@
 //! route — both reuse `agent::memory::history`.
 
 use serde_json::{json, Value};
+use std::sync::mpsc;
 
 use crate::agent::memory::history::load_history;
+use crate::agent::memory::maintenance;
 use crate::agent::memory::sqlite_fts::MemoryDb;
+use crate::agent::service::{JobStatus, Store};
+use crate::agentd::spawn::ROOT_OWNER_REFUSAL;
 
-use super::client_identity::ClientIdentity;
+use super::client_identity::{ClientIdentity, FsIdentityGuard};
 
 const DEFAULT_LIMIT: usize = 500;
 const MAX_LIMIT: usize = 2000;
@@ -80,6 +84,59 @@ pub fn sessions(params: Value, client: &ClientIdentity) -> Result<Value, String>
     }))
 }
 
+/// `memory.reset` — clear learned notes, App memory and the derived semantic
+/// index while retaining conversation history and execution evidence.
+pub fn reset(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let request: super::wire::requests::MemoryReset =
+        serde_json::from_value(params).map_err(|error| format!("invalid memory reset: {error}"))?;
+    if !request.confirm {
+        return Err("memory reset requires confirm=true".to_string());
+    }
+    let uid = client.require_uid()?;
+    if uid == 0 {
+        return Err(ROOT_OWNER_REFUSAL.to_string());
+    }
+    refuse_active_tasks(uid)?;
+    reset_for_owner(uid)
+}
+
+fn refuse_active_tasks(owner_uid: u32) -> Result<(), String> {
+    let store = Store::open_default().map_err(|error| error.to_string())?;
+    for status in [
+        JobStatus::Pending,
+        JobStatus::Running,
+        JobStatus::WaitingApproval,
+    ] {
+        if !store
+            .list_bucket_for_owner(status, Some(1), Some(owner_uid))
+            .map_err(|error| error.to_string())?
+            .is_empty()
+        {
+            return Err(
+                "learned memory cannot be reset while this owner has an active Agent task"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn reset_for_owner(owner_uid: u32) -> Result<Value, String> {
+    let state_dir = crate::paths::clawd_user_agent_state_dir(owner_uid);
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("clawd-owner-memory-reset".to_string())
+        .spawn(move || {
+            let result = FsIdentityGuard::enter(owner_uid)
+                .and_then(|_identity| maintenance::reset_at(&state_dir))
+                .and_then(|report| serde_json::to_value(report).map_err(|error| error.to_string()));
+            let _ = tx.send(result);
+        })
+        .map_err(|error| format!("start owner memory reset: {error}"))?;
+    rx.recv()
+        .map_err(|_| "owner memory reset stopped without a result".to_string())?
+}
+
 fn open_client_db(client: &ClientIdentity) -> Result<MemoryDb, String> {
     let uid = client.require_uid()?;
     if uid == 0 {
@@ -87,4 +144,12 @@ fn open_client_db(client: &ClientIdentity) -> Result<MemoryDb, String> {
     }
     MemoryDb::open(crate::paths::clawd_user_memory_db_path(uid))
         .map_err(|err| format!("open memory: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/memory.rs"
+    ));
 }

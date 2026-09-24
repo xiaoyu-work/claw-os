@@ -92,6 +92,19 @@ async fn list_returns_only_app_rows_newest_first() {
     assert_eq!(rows[2].text, "first");
 }
 
+#[test]
+fn count_and_forget_all_preserve_conversation_rows() {
+    let db = open_db();
+    db.record_message("app:calendar", "app", "meeting").unwrap();
+    db.record_message("app:mail", "app", "message").unwrap();
+    db.record_message("ses_xx", "user", "private prompt").unwrap();
+
+    assert_eq!(count_all(&db).unwrap(), 2);
+    assert_eq!(forget_all(&db).unwrap(), 2);
+    assert_eq!(count_all(&db).unwrap(), 0);
+    assert_eq!(db.count_session("ses_xx").unwrap(), 1);
+}
+
 #[tokio::test]
 async fn list_filtered_by_source() {
     let db = open_db();
