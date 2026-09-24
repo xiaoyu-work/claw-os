@@ -74,6 +74,14 @@ installed `claw-approval-helper`. Headless and WSL terminal installations need
 the same protected approval path as desktop installations; the Desktop package
 must not be the component that accidentally supplies it.
 
+The fixed helper action requires `auth_self` even without a local logind
+seat/session, as on WSL. This allows a password challenge but never automatic
+or cached authorization. Publication runs the installed TUI, pkexec's text
+agent, real PAM and helper against a private broker in mount/PID/network
+namespaces, with synthetic accounts and no live PAM/polkit changes. It covers
+legacy policy refusal, wrong-password/cancel, exact owner decisions and retry;
+an unconditional CI `YES` rule is not authentication coverage.
+
 Agent also builds/installs the independent `claw-calendar-reader` from the
 OS-owned GPL Applet service library, with its original license. Its
 `claw-os-calendar-read-v1` interface is a Desktop dependency, not an App grant.

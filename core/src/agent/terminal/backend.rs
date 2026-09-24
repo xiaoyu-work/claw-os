@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::clawd::protocol::Request;
 use crate::clawd::routes::Command;
@@ -1449,7 +1449,7 @@ impl Backend for BrokerBackend {
             })
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         if decision == ReviewDecision::ApproveOnce {
             command.arg("--duration").arg("once");
@@ -1461,9 +1461,14 @@ impl Backend for BrokerBackend {
             .stdout
             .take()
             .ok_or("approval helper stdout is unavailable")?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("approval helper stderr is unavailable")?;
         let result = tokio::time::timeout(Duration::from_secs(120), async {
             tokio::try_join!(
                 read_helper_output(stdout),
+                relay_authorization_diagnostics(stderr, tokio::io::stderr()),
                 async {
                     child
                         .wait()
@@ -1473,7 +1478,7 @@ impl Backend for BrokerBackend {
             )
         })
         .await;
-        let (stdout, status) = match result {
+        let (stdout, stderr, status) = match result {
             Ok(Ok(result)) => result,
             Ok(Err(error)) => {
                 let _ = child.kill().await;
@@ -1485,10 +1490,7 @@ impl Backend for BrokerBackend {
             }
         };
         if !status.success() {
-            return Err(format!(
-                "approval authorization was denied or cancelled (exit {})",
-                status.code().unwrap_or(-1)
-            ));
+            return Err(authorization_failure(status.code(), &stderr));
         }
         let response: Value = serde_json::from_slice(&stdout)
             .map_err(|_| "approval helper returned invalid JSON".to_string())?;
@@ -1500,7 +1502,7 @@ impl Backend for BrokerBackend {
         let status = self
             .call(Command::PermissionStatus, json!({ "ids": [id] }))
             .await?;
-        if !has_approval_status(&status, id, expected) {
+        if !approval_decision_confirmed(&status, id, decision) {
             return Err("the root approval decision could not be confirmed".into());
         }
         Ok(())
@@ -2543,6 +2545,64 @@ fn has_approval_status(value: &Value, id: &str, expected: &str) -> bool {
         })
 }
 
+fn approval_decision_confirmed(value: &Value, id: &str, decision: ReviewDecision) -> bool {
+    match decision {
+        ReviewDecision::ApproveOnce => {
+            has_approval_status(value, id, "approved") || has_approval_status(value, id, "consumed")
+        }
+        ReviewDecision::Deny => has_approval_status(value, id, "denied"),
+    }
+}
+
+fn authorization_failure(code: Option<i32>, stderr: &[u8]) -> String {
+    let message = match code {
+        Some(126) => "OS authentication was cancelled",
+        Some(127) => "Polkit authentication failed or was refused",
+        Some(_) => "Claw approval helper failed",
+        None => "OS authorization process was interrupted",
+    };
+    let exit = code.map(|code| format!(" (exit {code})")).unwrap_or_default();
+    let diagnostic = super::state::clean_text(&String::from_utf8_lossy(stderr))
+        .chars()
+        .take(2_048)
+        .collect::<String>();
+    let diagnostic = diagnostic.trim();
+    if diagnostic.is_empty() {
+        format!("{message}{exit}. Approval was not confirmed.")
+    } else {
+        format!("{message}{exit}. Approval was not confirmed.\n{diagnostic}")
+    }
+}
+
+async fn relay_authorization_diagnostics(
+    mut reader: impl AsyncRead + Unpin,
+    mut terminal: impl AsyncWrite + Unpin,
+) -> Result<Vec<u8>, String> {
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 1_024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("read OS authorization diagnostic: {error}"))?;
+        if count == 0 {
+            return Ok(output);
+        }
+        if output.len() + count > 16 * 1_024 {
+            return Err("OS authorization diagnostic exceeds its size limit".into());
+        }
+        terminal
+            .write_all(&buffer[..count])
+            .await
+            .map_err(|error| format!("display OS authorization diagnostic: {error}"))?;
+        terminal
+            .flush()
+            .await
+            .map_err(|error| format!("flush OS authorization diagnostic: {error}"))?;
+        output.extend_from_slice(&buffer[..count]);
+    }
+}
+
 async fn read_helper_output(reader: impl AsyncRead + Unpin) -> Result<Vec<u8>, String> {
     const MAX_HELPER_BYTES: u64 = 16 * 1024;
     let mut output = Vec::new();
@@ -2555,4 +2615,12 @@ async fn read_helper_output(reader: impl AsyncRead + Unpin) -> Result<Vec<u8>, S
         return Err("approval helper response exceeds its size limit".into());
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/terminal/backend.rs"
+    ));
 }

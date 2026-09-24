@@ -21,7 +21,9 @@ audit.
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes and protected approval helper |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
 | `../../../test/unit/agent/terminal/mod.rs` | State, rendering, privacy and option regression tests |
+| `../../../test/unit/agent/terminal/backend.rs` | Approval readback and bounded authorization diagnostics |
 | `../../../tests/agent_tui_pty.py` | Real-binary PTY completion/cancellation/plain scenarios |
+| `../../../tests/approval_polkit_process.py` | Private-namespace real TUI, polkit/PAM/helper and broker authorization, refusal and retry |
 
 ## Boundaries
 
@@ -141,7 +143,12 @@ audit.
 - Active approvals render explicit Authorize once/Deny choices. Selection uses
   Left/Right plus Enter (with `a`/`d` shortcuts), ignores key repeats, and
   temporarily yields the terminal to the protected `pkexec` authentication
-  prompt before restoring the alternate screen.
+  prompt before restoring the alternate screen. Drop the input event stream
+  during authentication so it cannot read password input. Use pkexec's existing
+  graphical or built-in text agent, not a second authentication process.
+  Failures retain bounded diagnostics after the screen is restored. An exact
+  approved request already consumed by its task is still a confirmed decision,
+  not a failure or a new grant.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.
@@ -149,7 +156,7 @@ audit.
 ## Validation
 
 ```bash
-cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
+cargo test -p cos --lib agent::terminal:: -- --test-threads=1
 cargo test -p cos --lib conversations:: -- --test-threads=1
 ```
 

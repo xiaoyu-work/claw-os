@@ -85,8 +85,25 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-di
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" 'libpam0g-dev' \
     "the native package build must install PAM development inputs"
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
-    '/usr/bin/pkexec /usr/local/bin/claw-approval-helper --help' \
-    "the installed package must exercise its protected approval entrypoint"
+    'python3 -B core/tests/approval_polkit_process.py' \
+    "the installed package must exercise actual PAM authentication, not a YES override"
+python3 - "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+actions = ET.parse(sys.argv[1]).getroot().findall("action")
+assert len(actions) == 1
+action = actions[0]
+assert action.attrib["id"] == "org.clawos.approval.decide"
+for audience in ("allow_any", "allow_inactive", "allow_active"):
+    assert action.findtext(f"defaults/{audience}") == "auth_self", audience
+assert {
+    annotation.attrib["key"]: annotation.text
+    for annotation in action.findall("annotate")
+} == {
+    "org.freedesktop.policykit.exec.path": "/usr/local/bin/claw-approval-helper",
+}
+PY
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
     'cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}' \
     "the Agent build must produce the native GNU PAM library"

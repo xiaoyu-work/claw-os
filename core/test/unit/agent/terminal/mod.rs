@@ -1469,6 +1469,11 @@ fn voice_center_uses_claw_media_models_without_claiming_realtime_capture() {
 #[test]
 fn approvals_have_one_explicit_terminal_decision() {
     let mut app = app();
+    app.open_platform_overview(PlatformOverview {
+        presentation: "{}".into(),
+    });
+    app.open_memory_center();
+    app.confirm_archive();
     app.add_approvals(vec![ApprovalRequest {
         id: "approval-1".into(),
         verb: "fs.write".into(),
@@ -1483,6 +1488,9 @@ fn approvals_have_one_explicit_terminal_decision() {
         duration: None,
         note: None,
     }]);
+    assert!(app.platform_overview.is_none());
+    assert!(!app.memory_center_open);
+    assert!(app.confirmation.is_none());
     assert_eq!(app.current_approval().unwrap().id, "approval-1");
     assert_eq!(app.approval_choice, ReviewDecision::ApproveOnce);
     assert_eq!(
@@ -1496,6 +1504,12 @@ fn approvals_have_one_explicit_terminal_decision() {
         InputAction::None
     );
     assert_eq!(app.approval_choice, ReviewDecision::Deny);
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER | KeyModifiers::SHIFT] {
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Char('a'), modifiers)),
+            InputAction::None
+        );
+    }
     assert_eq!(
         handle_key(
             &mut app,
@@ -1793,6 +1807,14 @@ fn approval_center_keeps_history_read_only_and_pending_decisions_exact() {
         Some(PickerSelection::Approval(pending.clone()))
     );
     app.open_approval_detail(pending);
+    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+        for code in [KeyCode::Char('a'), KeyCode::Char('d'), KeyCode::Enter] {
+            assert_eq!(
+                handle_key(&mut app, KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind)),
+                InputAction::None
+            );
+        }
+    }
     let backend = TestBackend::new(100, 30);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
     terminal.draw(|frame| ui::render(frame, &app)).unwrap();

@@ -135,7 +135,11 @@ Controls:
   and `Enter` confirms; `a` / `d` remain direct shortcuts. Decision keys act
   only on key press, never auto-repeat. The TUI temporarily returns the terminal
   to the protected `pkexec` prompt, then restores the full-screen view. The
-  frontend response itself grants nothing.
+  frontend response itself grants nothing. Without a desktop policy agent,
+  pkexec uses its built-in text authenticator; type the Linux account password
+  there, not in the chat composer. WSL terminals without a logind session use
+  the same per-decision authentication. Failed authentication leaves approval
+  unconfirmed and its diagnostic visible.
 - In a durable task detail, `c` cancels a non-terminal task, `r` retries a
   terminal task as a new durable task, and `Up` / `Down` scroll its bounded
   redacted result.
@@ -359,7 +363,7 @@ capabilities or another task's configuration.
 From the repository root in Linux/WSL:
 
 ```bash
-cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
+cargo test -p cos --lib agent::terminal:: -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
@@ -371,6 +375,29 @@ for scenario in complete cancel commands confirmations durable-queue task-center
     --original-mount-namespace "$original_namespace"
 done
 ```
+
+The real authorization fixture needs `pkexec`, `polkitd`, D-Bus, OpenSSL and
+PAM. From the repository root, after building the binaries:
+
+```bash
+cargo build -p cos --bin cos --bin clawd --bin claw-approval-helper
+original_mount="$(readlink /proc/self/ns/mnt)"
+original_pid="$(readlink /proc/self/ns/pid)"
+sudo unshare --mount --pid --fork --mount-proc --net \
+  python3 -B core/tests/approval_polkit_process.py \
+  --cos target/debug/cos \
+  --clawd target/debug/clawd \
+  --helper target/debug/claw-approval-helper \
+  --policy rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy \
+  --original-mount-namespace "$original_mount" \
+  --original-pid-namespace "$original_pid"
+```
+
+It reproduces sessionless policy refusal, then exercises real password
+authentication, wrong-password/cancel, approve/deny, cross-owner refusal and
+TUI failure/retry/restoration. All accounts, PAM/polkit configuration, sockets
+and approval state are private to its namespaces; it neither reads real
+password material nor uses a `polkit.Result.YES` override.
 
 Unit tests cover input parsing/editing, redaction, stream projection, approval
 state and ratatui rendering. The PTY fixture drives the real `cos` binary,

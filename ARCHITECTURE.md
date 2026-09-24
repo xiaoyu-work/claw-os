@@ -137,6 +137,11 @@ presentation revisions bind each action to the snapshot the user saw.
 The privileged helper accepts bounded typed decisions; owner cancellation
 needs no elevation. App confirmation cannot apply choices, and capability
 choices delegate to the existing scope/lifetime/revocation authority.
+The fixed helper's polkit action requires fresh `auth_self` authentication in
+every session category, including WSL processes without a logind seat/session.
+No category gets implicit or cached authorization. pkexec owns the password
+exchange; the helper derives the caller from `PKEXEC_UID`, and broker decisions
+remain scoped to that owner's exact request.
 In-process Root App registration also consults that protected owner review and
 the existing App deny gate before deriving local capabilities or creating a
 session. Non-root callers retain their authenticated broker path; an owner

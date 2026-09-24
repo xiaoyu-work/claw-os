@@ -311,6 +311,16 @@ deny actions invoke the installed `claw-approval-helper` only through that
 protected path. Upgrading an installation that lacks `pkexec` pulls it in
 without changing existing approval records.
 
+Claw's fixed approval-helper policy requires `auth_self` for active, inactive
+and sessionless callers. WSL processes can have a terminal but no local logind
+seat/session; rejecting that category prevented even a password prompt.
+This permits authentication, not automatic approval: the helper still binds
+the decision to `PKEXEC_UID`, and the broker rejects another owner's request.
+Authorization is not cached (`auth_self_keep` and unconditional `yes` are not
+used). pkexec's built-in text agent handles headless terminals. Restart an
+already-open TUI after upgrading so it also picks up the terminal-input handoff
+and improved failure diagnostics.
+
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
 are replaced together. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user

@@ -10,8 +10,11 @@
     <description>Approve or deny a Claw OS agent action</description>
     <message>Authentication is required to decide an agent permission request</message>
     <defaults>
-      <allow_any>no</allow_any>
-      <allow_inactive>no</allow_inactive>
+      <!-- WSL and headless terminals may have no local logind seat/session.
+           The fixed helper still authenticates the caller and binds decisions
+           to PKEXEC_UID; never grant or cache authorization without authentication. -->
+      <allow_any>auth_self</allow_any>
+      <allow_inactive>auth_self</allow_inactive>
       <allow_active>auth_self</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/claw-approval-helper</annotate>

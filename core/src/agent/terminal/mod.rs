@@ -227,22 +227,19 @@ async fn run_with_backend(
                             InputAction::Review(_) | InputAction::ApprovalReview(_, _)
                         );
                         if interactive_authorization {
-                            match terminal.suspend_for_authorization() {
-                                Ok(()) => {
-                                    apply_input_action(
-                                        action,
-                                        &mut app,
-                                        backend.clone(),
-                                        runtime_tx.clone(),
-                                    ).await;
-                                    terminal
-                                        .resume_after_authorization()
-                                        .map_err(|error| error.to_string())?;
-                                }
-                                Err(error) => app.push_error(&format!(
-                                    "Could not open the OS authorization prompt: {error}"
-                                )),
-                            }
+                            // The polkit agent must be the only reader of password input.
+                            drop(input);
+                            terminal.suspend_for_authorization()
+                                .map_err(|error| format!("Open OS authorization prompt: {error}"))?;
+                            apply_input_action(
+                                action,
+                                &mut app,
+                                backend.clone(),
+                                runtime_tx.clone(),
+                            ).await;
+                            terminal.resume_after_authorization()
+                                .map_err(|error| format!("Restore terminal after authorization: {error}"))?;
+                            input = EventStream::new();
                         } else {
                             apply_input_action(
                                 action,
@@ -390,6 +387,12 @@ async fn connect_initial_conversation(
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
+    if (app.current_approval().is_some() || app.approval_detail.is_some())
+        && (key.kind != KeyEventKind::Press
+            || !key.modifiers.difference(KeyModifiers::SHIFT).is_empty())
+    {
+        return InputAction::None;
+    }
     if app.current_approval().is_some() {
         return match key.code {
             KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
@@ -1420,7 +1423,10 @@ async fn apply_input_action(
                         "Approval denied through the protected OS helper."
                     });
                 }
-                Err(error) => app.push_error(&error),
+                Err(error) => {
+                    app.close_approval_detail();
+                    app.push_error(&error);
+                }
             }
         }
         InputAction::MutateNotification(id, mutation) => {

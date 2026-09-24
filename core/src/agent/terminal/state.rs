@@ -627,6 +627,12 @@ impl App {
         if !self.pending_approvals.is_empty() {
             self.status = RunStatus::WaitingApproval;
             self.picker = None;
+            self.confirmation = None;
+            self.appearance_open = false;
+            self.agents_open = false;
+            self.task_controls_open = false;
+            self.close_platform_overview();
+            self.close_voice_overview();
             self.task_detail = None;
             self.approval_detail = None;
             self.notification_detail = None;
@@ -635,6 +641,7 @@ impl App {
             self.activity_attention = None;
             self.activity_controls = None;
             self.activity_evidence = None;
+            self.activity_review = None;
             self.activity_operation_preview = None;
         }
     }
