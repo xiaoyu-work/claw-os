@@ -5,7 +5,7 @@ use super::backend::{
     AccountOverview, Activity, ActivityAttention, ActivityControls, ActivityDetail,
     ActivityEvidence, ActivityOperationPreview, ActivityReview, AgentHookSettings, ApprovalRequest,
     BackendInfo, Conversation, ConversationJob, DebugOverview, ExtensionsOverview, McpOverview,
-    UsageOverview, VoiceOverview,
+    ReviewDecision, UsageOverview, VoiceOverview,
     ConversationSummary, Job, NotificationItem, NotificationPage, NotificationPreferences,
     PlatformOverview, TaskSummary,
 };
@@ -177,6 +177,7 @@ pub(super) struct App {
     pending_attachments: Vec<crate::agent::attachments::AttachmentInput>,
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
+    pub approval_choice: ReviewDecision,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
     pub command_selection: usize,
@@ -271,6 +272,7 @@ impl App {
             pending_attachments: Vec::new(),
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
+            approval_choice: ReviewDecision::ApproveOnce,
             input_history: Vec::new(),
             history_index: None,
             command_selection: 0,
@@ -338,6 +340,7 @@ impl App {
         self.transcript_bytes = 0;
         self.tool_entries.clear();
         self.pending_approvals.clear();
+        self.approval_choice = ReviewDecision::ApproveOnce;
         self.seen_approvals.clear();
         self.active_assistant = None;
         self.provider_had_text = false;
@@ -517,6 +520,7 @@ impl App {
             }
         }
         self.pending_approvals.clear();
+        self.approval_choice = ReviewDecision::ApproveOnce;
         if self
             .task_detail
             .as_ref()
@@ -598,6 +602,7 @@ impl App {
     }
 
     pub fn add_approvals(&mut self, approvals: Vec<ApprovalRequest>) {
+        let was_empty = self.pending_approvals.is_empty();
         for approval in approvals {
             if !self.seen_approvals.insert(approval.id.clone()) {
                 continue;
@@ -616,6 +621,9 @@ impl App {
             );
             self.pending_approvals.push_back(approval);
         }
+        if was_empty && !self.pending_approvals.is_empty() {
+            self.approval_choice = ReviewDecision::ApproveOnce;
+        }
         if !self.pending_approvals.is_empty() {
             self.status = RunStatus::WaitingApproval;
             self.picker = None;
@@ -633,6 +641,13 @@ impl App {
 
     pub fn current_approval(&self) -> Option<&ApprovalRequest> {
         self.pending_approvals.front()
+    }
+
+    pub fn cycle_approval_choice(&mut self) {
+        self.approval_choice = match self.approval_choice {
+            ReviewDecision::ApproveOnce => ReviewDecision::Deny,
+            ReviewDecision::Deny => ReviewDecision::ApproveOnce,
+        };
     }
 
     pub fn resolve_approval(&mut self, id: &str, approved: bool) {
@@ -659,6 +674,7 @@ impl App {
         } else {
             RunStatus::Ready
         };
+        self.approval_choice = ReviewDecision::ApproveOnce;
     }
 
     pub fn push_system(&mut self, text: &str) {

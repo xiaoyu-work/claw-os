@@ -222,12 +222,35 @@ async fn run_with_backend(
                 match event.map_err(|error| error.to_string())? {
                     Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                         let action = handle_key(&mut app, key);
-                        apply_input_action(
-                            action,
-                            &mut app,
-                            backend.clone(),
-                            runtime_tx.clone(),
-                        ).await;
+                        let interactive_authorization = matches!(
+                            &action,
+                            InputAction::Review(_) | InputAction::ApprovalReview(_, _)
+                        );
+                        if interactive_authorization {
+                            match terminal.suspend_for_authorization() {
+                                Ok(()) => {
+                                    apply_input_action(
+                                        action,
+                                        &mut app,
+                                        backend.clone(),
+                                        runtime_tx.clone(),
+                                    ).await;
+                                    terminal
+                                        .resume_after_authorization()
+                                        .map_err(|error| error.to_string())?;
+                                }
+                                Err(error) => app.push_error(&format!(
+                                    "Could not open the OS authorization prompt: {error}"
+                                )),
+                            }
+                        } else {
+                            apply_input_action(
+                                action,
+                                &mut app,
+                                backend.clone(),
+                                runtime_tx.clone(),
+                            ).await;
+                        }
                         if let Some(snapshot) = app.take_raw_scrollback() {
                             if let Err(error) = terminal.publish_scrollback(&snapshot) {
                                 app.push_error(&format!(
@@ -369,11 +392,20 @@ async fn connect_initial_conversation(
 fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     if app.current_approval().is_some() {
         return match key.code {
-            KeyCode::Char('a') | KeyCode::Char('A') => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                app.cycle_approval_choice();
+                InputAction::None
+            }
+            KeyCode::Enter if key.kind == KeyEventKind::Press => {
+                InputAction::Review(app.approval_choice)
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') if key.kind == KeyEventKind::Press => {
                 InputAction::Review(ReviewDecision::ApproveOnce)
             }
-            KeyCode::Char('d') | KeyCode::Char('D') => InputAction::Review(ReviewDecision::Deny),
-            KeyCode::Esc => InputAction::Cancel,
+            KeyCode::Char('d') | KeyCode::Char('D') if key.kind == KeyEventKind::Press => {
+                InputAction::Review(ReviewDecision::Deny)
+            }
+            KeyCode::Esc if key.kind == KeyEventKind::Press => InputAction::Cancel,
             _ => InputAction::None,
         };
     }
@@ -1563,6 +1595,40 @@ impl TerminalSession {
         execute!(io::stdout(), SetTitle(title.unwrap_or_default()))?;
         self.last_title = title.map(str::to_string);
         Ok(())
+    }
+
+    fn suspend_for_authorization(&mut self) -> io::Result<()> {
+        self.terminal.show_cursor()?;
+        disable_raw_mode()?;
+        execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        )?;
+        let mut stdout = io::stdout();
+        writeln!(
+            stdout,
+            "\nClaw OS authorization: complete the protected system prompt below.\n"
+        )?;
+        stdout.flush()
+    }
+
+    fn resume_after_authorization(&mut self) -> io::Result<()> {
+        enable_raw_mode()?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        )?;
+        self.terminal.clear()?;
+        self.terminal.hide_cursor()
     }
 
     fn publish_scrollback(&mut self, snapshot: &str) -> io::Result<()> {

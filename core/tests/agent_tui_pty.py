@@ -414,7 +414,7 @@ class FixtureBroker:
             }
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
-        if method == "permission.pending" and self.case == "approval-center":
+        if method == "permission.pending" and self.case in ("approval-center", "approval-choice"):
             return {
                 "requests": [{
                     "id": PENDING_APPROVAL_ID,
@@ -852,6 +852,13 @@ class FixtureBroker:
                     }},
                     {"progress": {"kind": "tool_start", "id": "tool-1", "name": tool_name}},
                 ]
+                if self.case == "approval-choice":
+                    events.append({
+                        "progress": {
+                            "kind": "waiting_approval",
+                            "request_ids": [PENDING_APPROVAL_ID],
+                        },
+                    })
                 if self.case in (
                     "complete",
                     "resume",
@@ -2318,6 +2325,27 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"\x1b")
                 time.sleep(0.3)
+            if case == "approval-choice":
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: b"Authorize once" in data
+                    and b"Left/Right choose" in data
+                    and any(
+                        request["command"] == "permission.pending"
+                        for request in broker.requests
+                    ),
+                )
+                os.write(master, b"\x1b[C")
+                time.sleep(0.3)
+                os.write(master, b"\x1b[27;1u")
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda _data: broker.cancelled.is_set(),
+                )
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -2402,6 +2430,7 @@ if __name__ == "__main__":
             "multiline",
             "multiline-key",
             "approval-center",
+            "approval-choice",
             "attachments",
             "appearance",
             "agents",

@@ -138,6 +138,10 @@ audit.
   remains unavailable until Desktop's bounded recorder/transcription boundary
   is shared with the TUI. Desktop consumes the same global binding first;
   terminal-only sessions receive it through enhanced keyboard reporting.
+- Active approvals render explicit Authorize once/Deny choices. Selection uses
+  Left/Right plus Enter (with `a`/`d` shortcuts), ignores key repeats, and
+  temporarily yields the terminal to the protected `pkexec` authentication
+  prompt before restoring the alternate screen.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

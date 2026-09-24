@@ -2376,16 +2376,39 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }))
         .title(title);
     if let Some(approval) = app.current_approval() {
-        let text = Line::from(vec![
-            Span::styled(
-                format!("{} {} ", approval.verb, approval.scope),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "[a] authorize once  [d] deny  [Esc] stop task",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
+        let approve_style = if app.approval_choice == super::backend::ReviewDecision::ApproveOnce {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Magenta)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let deny_style = if app.approval_choice == super::backend::ReviewDecision::Deny {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let text = vec![
+            Line::from(vec![
+                Span::styled(
+                    format!("{} {} ", approval.verb, approval.scope),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(" Authorize once ", approve_style),
+                Span::raw("  "),
+                Span::styled(" Deny ", deny_style),
+                Span::styled(
+                    "   Left/Right choose  Enter confirm  Esc stop task",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+        ];
         frame.render_widget(Paragraph::new(text).block(block), area);
         return;
     }
@@ -2469,7 +2492,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn composer_height(width: u16, app: &App) -> u16 {
     if app.current_approval().is_some() {
-        return 3;
+        return 4;
     }
     let inner = width.saturating_sub(4).max(1);
     let rows = app

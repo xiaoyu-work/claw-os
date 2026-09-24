@@ -1447,9 +1447,9 @@ impl Backend for BrokerBackend {
                 ReviewDecision::ApproveOnce => "approve",
                 ReviewDecision::Deny => "deny",
             })
-            .stdin(Stdio::null())
+            .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::inherit())
             .kill_on_drop(true);
         if decision == ReviewDecision::ApproveOnce {
             command.arg("--duration").arg("once");
@@ -1461,14 +1461,9 @@ impl Backend for BrokerBackend {
             .stdout
             .take()
             .ok_or("approval helper stdout is unavailable")?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or("approval helper stderr is unavailable")?;
         let result = tokio::time::timeout(Duration::from_secs(120), async {
             tokio::try_join!(
                 read_helper_output(stdout),
-                read_helper_output(stderr),
                 async {
                     child
                         .wait()
@@ -1478,7 +1473,7 @@ impl Backend for BrokerBackend {
             )
         })
         .await;
-        let (stdout, _stderr, status) = match result {
+        let (stdout, status) = match result {
             Ok(Ok(result)) => result,
             Ok(Err(error)) => {
                 let _ = child.kill().await;
@@ -1490,7 +1485,10 @@ impl Backend for BrokerBackend {
             }
         };
         if !status.success() {
-            return Err("approval authorization was denied or cancelled".into());
+            return Err(format!(
+                "approval authorization was denied or cancelled (exit {})",
+                status.code().unwrap_or(-1)
+            ));
         }
         let response: Value = serde_json::from_slice(&stdout)
             .map_err(|_| "approval helper returned invalid JSON".to_string())?;

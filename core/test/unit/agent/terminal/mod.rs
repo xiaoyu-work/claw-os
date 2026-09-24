@@ -1484,6 +1484,50 @@ fn approvals_have_one_explicit_terminal_decision() {
         note: None,
     }]);
     assert_eq!(app.current_approval().unwrap().id, "approval-1");
+    assert_eq!(app.approval_choice, ReviewDecision::ApproveOnce);
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Right,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(app.approval_choice, ReviewDecision::Deny);
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new_with_kind(
+                crossterm::event::KeyCode::Char('a'),
+                crossterm::event::KeyModifiers::NONE,
+                crossterm::event::KeyEventKind::Repeat,
+            ),
+        ),
+        InputAction::None
+    );
+    assert_eq!(
+        handle_key(
+            &mut app,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        ),
+        InputAction::Review(ReviewDecision::Deny)
+    );
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 20)).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("Authorize once"));
+    assert!(output.contains("Left/Right choose"));
     app.resolve_approval("approval-1", true);
     assert!(app.current_approval().is_none());
     assert!(app.entries.iter().any(|entry| {

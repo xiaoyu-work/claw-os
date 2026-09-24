@@ -131,9 +131,11 @@ Controls:
   through default/8/16/32. `p` toggles durable Plan mode.
 - `Ctrl-C` cancels active work, or exits while idle.
 - `Ctrl-D` exits while idle.
-- During an approval, `a` requests one exact authorization and `d` requests
-  denial through the installed OS helper. The frontend response itself grants
-  nothing.
+- During an approval, `Left` / `Right` select **Authorize once** or **Deny**,
+  and `Enter` confirms; `a` / `d` remain direct shortcuts. Decision keys act
+  only on key press, never auto-repeat. The TUI temporarily returns the terminal
+  to the protected `pkexec` prompt, then restores the full-screen view. The
+  frontend response itself grants nothing.
 - In a durable task detail, `c` cancels a non-terminal task, `r` retries a
   terminal task as a new durable task, and `Up` / `Down` scroll its bounded
   redacted result.
@@ -361,7 +363,7 @@ cargo test -p cos --lib agent::terminal::tests -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -379,7 +381,9 @@ multiline paste, requires archive/rewind confirmation and confirms plain mode
 never contacts the broker. The task-center scenario browses owner-scoped tasks,
 cancels one exact running task and retries one exact terminal task. The
 approval-center scenario browses pending and recent owner-scoped decisions and
-keeps historical records read-only. The notification scenario performs exact
+keeps historical records read-only. The approval-choice scenario renders
+explicit selectable actions, ignores decision-key repeats and cancels without
+invoking authorization. The notification scenario performs exact
 read, acknowledge and dismiss mutations and updates durable delivery/DND
 preferences without a desktop dependency. The Activity scenario exercises the
 shared list/detail/create/run/pause/reopen/complete/cancel/attention lifecycle.
