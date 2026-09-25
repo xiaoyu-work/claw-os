@@ -19,6 +19,7 @@ audit.
 | `ui.rs` | ratatui layout, styling, Markdown-oriented transcript projection and cursor |
 | `presentation.rs` | Redacted model/tool/reasoning/progress projection |
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes and protected approval helper |
+| `authorization.rs` | Per-decision unprivileged polkit text agent, readiness and bounded teardown |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
 | `../../../test/unit/agent/terminal/mod.rs` | State, rendering, privacy and option regression tests |
 | `../../../test/unit/agent/terminal/backend.rs` | Approval readback and bounded authorization diagnostics |
@@ -144,8 +145,10 @@ audit.
   Left/Right plus Enter (with `a`/`d` shortcuts), ignores key repeats, and
   temporarily yields the terminal to the protected `pkexec` authentication
   prompt before restoring the alternate screen. Drop the input event stream
-  during authentication so it cannot read password input. Use pkexec's existing
-  graphical or built-in text agent, not a second authentication process.
+  during authentication so it cannot read password input. Register an
+  unprivileged `pkttyagent` against the exact TUI PID/start time, await its
+  readiness, and reap it after the helper returns. Disable pkexec's internal
+  agent to avoid its setuid/creator-UID cookie mismatch on affected systems.
   Failures retain bounded diagnostics after the screen is restored. An exact
   approved request already consumed by its task is still a confirmed decision,
   not a failure or a new grant.

@@ -1437,63 +1437,7 @@ impl Backend for BrokerBackend {
             ReviewDecision::Deny => "denied",
         };
         ensure_approval_runtime(Path::new(PKEXEC_PATH), Path::new(APPROVAL_HELPER_PATH))?;
-        let mut command = tokio::process::Command::new(PKEXEC_PATH);
-        command
-            .arg(APPROVAL_HELPER_PATH)
-            .arg("--id")
-            .arg(id)
-            .arg("--decision")
-            .arg(match decision {
-                ReviewDecision::ApproveOnce => "approve",
-                ReviewDecision::Deny => "deny",
-            })
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        if decision == ReviewDecision::ApproveOnce {
-            command.arg("--duration").arg("once");
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("could not launch Claw approval authorization: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or("approval helper stdout is unavailable")?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or("approval helper stderr is unavailable")?;
-        let result = tokio::time::timeout(Duration::from_secs(120), async {
-            tokio::try_join!(
-                read_helper_output(stdout),
-                relay_authorization_diagnostics(stderr, tokio::io::stderr()),
-                async {
-                    child
-                        .wait()
-                        .await
-                        .map_err(|_| "could not wait for approval authorization".to_string())
-                }
-            )
-        })
-        .await;
-        let (stdout, stderr, status) = match result {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => {
-                let _ = child.kill().await;
-                return Err(error);
-            }
-            Err(_) => {
-                let _ = child.kill().await;
-                return Err("approval authorization timed out".into());
-            }
-        };
-        if !status.success() {
-            return Err(authorization_failure(status.code(), &stderr));
-        }
-        let response: Value = serde_json::from_slice(&stdout)
-            .map_err(|_| "approval helper returned invalid JSON".to_string())?;
+        let response = super::authorization::with_agent(run_approval_helper(id, decision)).await?;
         if response.get("id").and_then(Value::as_str) != Some(id)
             || response.get("decision").and_then(Value::as_str) != Some(expected)
         {
@@ -2063,6 +2007,56 @@ pub(super) fn parse_agent_hook_settings(value: Value) -> Result<AgentHookSetting
         updated_kind: raw.updated_kind,
         changed: raw.changed,
     })
+}
+
+async fn run_approval_helper(id: &str, decision: ReviewDecision) -> Result<Value, String> {
+    let mut command = tokio::process::Command::new(PKEXEC_PATH);
+    command
+        .arg("--disable-internal-agent")
+        .arg(APPROVAL_HELPER_PATH)
+        .arg("--id")
+        .arg(id)
+        .arg("--decision")
+        .arg(match decision {
+            ReviewDecision::ApproveOnce => "approve",
+            ReviewDecision::Deny => "deny",
+        })
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if decision == ReviewDecision::ApproveOnce {
+        command.arg("--duration").arg("once");
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not launch Claw approval authorization: {error}"))?;
+    let stdout = child.stdout.take().ok_or("approval helper stdout is unavailable")?;
+    let stderr = child.stderr.take().ok_or("approval helper stderr is unavailable")?;
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::try_join!(
+            read_helper_output(stdout),
+            relay_authorization_diagnostics(stderr, tokio::io::stderr()),
+            async {
+                child.wait().await.map_err(|error| format!("wait for OS authorization: {error}"))
+            }
+        )
+    })
+    .await
+    .map_err(|_| "OS authorization timed out".to_string())
+    .and_then(|result| result);
+    let (stdout, stderr, status) = match result {
+        Ok(output) => output,
+        Err(error) => {
+            child.kill().await.map_err(|cleanup| format!("{error}; stop helper: {cleanup}"))?;
+            return Err(error);
+        }
+    };
+    if !status.success() {
+        return Err(authorization_failure(status.code(), &stderr));
+    }
+    serde_json::from_slice(&stdout)
+        .map_err(|_| "approval helper returned invalid JSON".to_string())
 }
 
 pub(super) fn ensure_approval_runtime(pkexec: &Path, helper: &Path) -> Result<(), String> {

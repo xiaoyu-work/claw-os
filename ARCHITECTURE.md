@@ -139,7 +139,7 @@ needs no elevation. App confirmation cannot apply choices, and capability
 choices delegate to the existing scope/lifetime/revocation authority.
 The fixed helper's polkit action requires fresh `auth_self` authentication in
 every session category, including WSL processes without a logind seat/session.
-No category gets implicit or cached authorization. pkexec owns the password
+No category gets implicit or cached authorization. Polkit owns the password
 exchange; the helper derives the caller from `PKEXEC_UID`, and broker decisions
 remain scoped to that owner's exact request.
 In-process Root App registration also consults that protected owner review and

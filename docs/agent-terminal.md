@@ -135,8 +135,8 @@ Controls:
   and `Enter` confirms; `a` / `d` remain direct shortcuts. Decision keys act
   only on key press, never auto-repeat. The TUI temporarily returns the terminal
   to the protected `pkexec` prompt, then restores the full-screen view. The
-  frontend response itself grants nothing. Without a desktop policy agent,
-  pkexec uses its built-in text authenticator; type the Linux account password
+  frontend response itself grants nothing. A per-decision unprivileged
+  `pkttyagent` supplies text authentication; type the Linux account password
   there, not in the chat composer. WSL terminals without a logind session use
   the same per-decision authentication. Failed authentication leaves approval
   unconfirmed and its diagnostic visible.

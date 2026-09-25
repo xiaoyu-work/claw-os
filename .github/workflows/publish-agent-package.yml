@@ -223,6 +223,7 @@ jobs:
             exit 1
           fi
           test -x /usr/bin/pkexec
+          test -x /usr/bin/pkttyagent
           test -x /usr/local/bin/claw-approval-helper
           original_mount="$(readlink /proc/self/ns/mnt)"
           original_pid="$(readlink /proc/self/ns/pid)"

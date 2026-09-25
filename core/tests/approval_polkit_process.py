@@ -15,6 +15,7 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -61,6 +62,25 @@ def child_identity(uid, gid):
     os.setuid(uid)
 
 
+def owner_command(args):
+    if args[0] != "/usr/bin/pkexec":
+        return subprocess.call(args)
+    start = Path("/proc/self/stat").read_text().rsplit(")", 1)[1].split()[19]
+    agent = subprocess.Popen(
+        ["/usr/bin/pkttyagent", "--process", f"{os.getpid()},{start}",
+         "--notify-fd=1"],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        ready, _, _ = select.select([agent.stdout], [], [], 5)
+        if not ready or agent.stdout.read(1) != b"" or agent.poll() is not None:
+            raise RuntimeError("fixture authentication agent did not register")
+        return subprocess.call([args[0], "--disable-internal-agent", *args[1:]])
+    finally:
+        stop(agent)
+        agent.stdout.close()
+
+
 class Terminal:
     def __init__(self, args, uid, gid, home, capture_stdout=False):
         self.output = bytearray()
@@ -69,10 +89,9 @@ class Terminal:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
         # pkexec authenticates its parent; that parent must also be the fixture user.
         owner_command = [
-            "/usr/bin/python3", "-c",
-            "import subprocess, sys; sys.exit(subprocess.call(sys.argv[1:]))",
+            "/usr/bin/python3", str(Path(__file__).resolve()), "--owner-command",
             *args,
-        ]
+        ] if args[0] == "/usr/bin/pkexec" else args
         self.process = subprocess.Popen(
             owner_command,
             stdin=slave,
@@ -228,6 +247,8 @@ def run(args):
     command("mount", "--make-rprivate", "/")
     accounts = pwd.getpwall()
     polkit = pwd.getpwnam("polkitd")
+    pam_helper = Path(args.polkitd).with_name("polkit-agent-helper-1")
+    socket_helper = not pam_helper.stat().st_mode & stat.S_ISUID
     used = {account.pw_uid for account in accounts}
     uid, other_uid = [value for value in range(45000, 46000) if value not in used][:2]
     with tempfile.TemporaryDirectory(prefix="claw-polkit-test-") as temporary:
@@ -244,7 +265,7 @@ def run(args):
                 "/usr/share/polkit-1", "/usr/local/bin",
             ):
                 mount_private(target)
-            for path in ("/run/dbus", "/run/cos", "/etc/polkit-1/rules.d",
+            for path in ("/run/dbus", "/run/cos", "/run/polkit", "/etc/polkit-1/rules.d",
                          "/usr/share/polkit-1/actions", "/usr/share/polkit-1/rules.d"):
                 Path(path).mkdir(parents=True, exist_ok=True)
             command("mount", "--bind", "/sys/fs/cgroup", "/sys/fs/cgroup")
@@ -323,6 +344,24 @@ def run(args):
                         if Path("/run/dbus/system_bus_socket").exists():
                             break
                         time.sleep(0.05)
+            if socket_helper:
+                log = cleanup.enter_context((root / "pam-socket.log").open("w+"))
+                process = subprocess.Popen(
+                    ["systemd-socket-activate", "--accept", "--inetd",
+                     "--listen=/run/polkit/agent-helper.socket", str(pam_helper),
+                     "--socket-activated"],
+                    stdout=log, stderr=log,
+                    env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+                )
+                cleanup.callback(stop, process)
+                logs["pam-socket"] = (log, process)
+                for _ in range(100):
+                    if Path("/run/polkit/agent-helper.socket").exists():
+                        Path("/run/polkit/agent-helper.socket").chmod(0o666)
+                        break
+                    time.sleep(0.05)
+                else:
+                    raise AssertionError("private polkit socket helper did not start")
             try:
                 wait_bus()
                 with contextlib.closing(Terminal(
@@ -435,38 +474,30 @@ def run(args):
                     ["/usr/local/bin/cos", "agent", "chat", "--tui"], uid, uid, home,
                 )) as terminal:
                     terminal.expect(b"New Claw conversation")
-                    terminal.send(f"/approval {request['id']}".encode())
-                    time.sleep(0.2)
-                    terminal.send(b"\r")
-                    terminal.expect(request["id"].encode())
-                    terminal.send(b"a")
-                    terminal.expect(b"Password:")
-                    authentication_end = len(terminal.output)
-                    terminal.send(b"not-the-fixture-password\n")
-                    terminal.pump(lambda: b"\x1b[?1049h" in terminal.output[authentication_end:])
-                    status = rpc("permission.status", {"ids": [request["id"]]}, uid)
-                    assert status["result"]["statuses"][0]["status"] == "pending"
-                    terminal.expect(b"Polkit authentication failed or was refused")
-                    terminal.send(f"/approval {request['id']}".encode())
-                    time.sleep(0.2)
-                    terminal.send(b"\r")
-                    offset = len(terminal.output)
-                    terminal.pump(lambda: b"Approval" in terminal.output[offset:])
-                    offset = len(terminal.output)
-                    # Kitty repeat events must not start authorization in the detail panel.
-                    terminal.send(b"\x1b[97;1:2u")
-                    settled = time.monotonic() + 0.4
-                    terminal.pump(lambda: time.monotonic() >= settled, 1)
-                    assert b"Claw OS authorization" not in terminal.output[offset:]
-                    terminal.send(b"a")
-                    terminal.pump(lambda: b"Password:" in terminal.output[offset:])
-                    authentication_end = len(terminal.output)
-                    terminal.send(PASSWORD.encode() + b"\n")
-                    terminal.pump(lambda: b"\x1b[?1049h" in terminal.output[authentication_end:])
-                    status = rpc("permission.status", {"ids": [request["id"]]}, uid)
-                    assert status["result"]["statuses"][0]["status"] == "approved"
-                    assert not termios.tcgetattr(terminal.master)[3] & (termios.ICANON | termios.ECHO)
-                    assert PASSWORD.encode() not in terminal.output
+                    for answer, expected in (
+                        (b"not-the-fixture-password\n", "pending"),
+                        (b"\x03", "pending"),
+                        (PASSWORD.encode() + b"\n", "approved"),
+                    ):
+                        offset = len(terminal.output)
+                        terminal.send(f"/approval {request['id']}".encode())
+                        time.sleep(0.2)
+                        terminal.send(b"\r")
+                        terminal.pump(lambda: b"Approval" in terminal.output[offset:])
+                        offset = len(terminal.output)
+                        terminal.send(b"\x1b[97;1:2u")
+                        settled = time.monotonic() + 0.4
+                        terminal.pump(lambda: time.monotonic() >= settled, 1)
+                        assert b"Claw OS authorization" not in terminal.output[offset:]
+                        terminal.send(b"a")
+                        terminal.pump(lambda: b"Password:" in terminal.output[offset:])
+                        authentication_end = len(terminal.output)
+                        terminal.send(answer)
+                        terminal.pump(lambda: b"\x1b[?1049h" in terminal.output[authentication_end:])
+                        status = rpc("permission.status", {"ids": [request["id"]]}, uid)
+                        assert status["result"]["statuses"][0]["status"] == expected
+                        assert not termios.tcgetattr(terminal.master)[3] & (termios.ICANON | termios.ECHO)
+                        assert PASSWORD.encode() not in terminal.output
                     terminal.send(b"\x1b[27;1u")
                     time.sleep(0.2)
                     terminal.send(b"/quit\r")
@@ -480,6 +511,8 @@ def run(args):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--owner-command":
+        sys.exit(owner_command(sys.argv[2:]))
     if os.getpid() == 1:
         pid = os.fork()
         if pid:

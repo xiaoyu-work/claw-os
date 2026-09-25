@@ -317,7 +317,10 @@ seat/session; rejecting that category prevented even a password prompt.
 This permits authentication, not automatic approval: the helper still binds
 the decision to `PKEXEC_UID`, and the broker rejects another owner's request.
 Authorization is not cached (`auth_self_keep` and unconditional `yes` are not
-used). pkexec's built-in text agent handles headless terminals. Restart an
+used). TUI authentication uses an unprivileged `pkttyagent` bound to the
+frontend's PID/start time and stopped after each decision. This avoids the
+internal setuid agent's authentication-cookie mismatch on affected polkit
+versions. `polkitd` is a direct package dependency for that presenter. Restart an
 already-open TUI after upgrading so it also picks up the terminal-input handoff
 and improved failure diagnostics.
 

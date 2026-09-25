@@ -69,14 +69,14 @@ Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
 
-Agent also depends on `pkexec`, which brings the polkit runtime used by the
+Agent depends on `pkexec` and `polkitd`, which provide the polkit runtime used by the
 installed `claw-approval-helper`. Headless and WSL terminal installations need
 the same protected approval path as desktop installations; the Desktop package
 must not be the component that accidentally supplies it.
 
 The fixed helper action requires `auth_self` even without a local logind
 seat/session, as on WSL. This allows a password challenge but never automatic
-or cached authorization. Publication runs the installed TUI, pkexec's text
+or cached authorization. Publication runs the installed TUI, unprivileged text
 agent, real PAM and helper against a private broker in mount/PID/network
 namespaces, with synthetic accounts and no live PAM/polkit changes. It covers
 legacy policy refusal, wrong-password/cancel, exact owner decisions and retry;

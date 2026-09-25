@@ -1,5 +1,6 @@
 //! Claw-owned full-screen terminal presentation for the shared Agent backend.
 
+mod authorization;
 mod backend;
 mod commands;
 mod models;
