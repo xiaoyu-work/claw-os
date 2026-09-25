@@ -833,9 +833,9 @@ pub struct PermissionRequest {
 pub struct PermissionDecide {
     pub id: Token,
     pub decision: Token,
-    /// Honoured only for a root peer — the privileged approval helper
-    /// naming the desktop user it authenticated. A non-root peer is
-    /// refused by the route before this is read.
+    /// Honoured only for a root peer naming the desktop user it authenticated.
+    /// A non-root peer may deny its own request; an attended terminal may also
+    /// approve it once. Neither may supply this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_uid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

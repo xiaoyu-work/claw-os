@@ -134,9 +134,10 @@ contract, catalog labels and permission choices. Core projects both verified
 App requests and existing capability approvals. The target App's GUI metadata
 selects neither this presentation contract nor approval authority. Root-owned
 presentation revisions bind each action to the snapshot the user saw.
-The privileged helper accepts bounded typed decisions; owner cancellation
-needs no elevation. App confirmation cannot apply choices, and capability
-choices delegate to the existing scope/lifetime/revocation authority.
+The privileged helper accepts bounded typed decisions; owner cancellation and
+same-owner denial need no elevation because neither creates authority. App
+confirmation cannot apply choices, and capability grants delegate to the
+existing scope/lifetime/revocation authority.
 The fixed helper's polkit action requires fresh `auth_self` authentication in
 every session category, including WSL processes without a logind seat/session.
 No category gets implicit or cached authorization. Polkit owns the password
@@ -1459,6 +1460,10 @@ transport protocol, provider, tool registry, approval authority, audit log,
 task queue or canonical history store. It uses canonical `ses_*` session IDs
 directly. Verified message/task bindings allow retained history, fork, and
 rewind presentation without cloning grants or rolling back effects.
+An Agent TUI approval remains an inline decision, matching Codex interaction:
+the TUI never invokes `pkexec` or asks for an OS password. `clawd` derives the
+same-owner peer and controlling-terminal presence from the kernel, accepts only
+one exact request, and remains the authority that mints and consumes the grant.
 Noninteractive input and explicit `--plain` retain the line interface. See
 [`docs/agent-terminal.md`](docs/agent-terminal.md).
 
@@ -1593,8 +1598,9 @@ in-process model loop. Chat submits and streams durable tasks, Tasks lists and
 cancels those records and creates explicit retries, and Approvals can wake a
 waiting task without requiring the user to repeat the request. The user-owned
 Web process reads session lists and history from the owner-partitioned memory
-database; decisions cross the existing `pkexec` approval helper rather than
-granting the Web process direct decision authority. The Inbox is the
+database. Permission grants cross the existing `pkexec` approval helper;
+same-owner denial goes directly to `clawd`, creates no authority, and cannot
+select another owner. The Inbox is the
 Notification Service projection; raw `context.event` records remain available
 separately as System Events.
 

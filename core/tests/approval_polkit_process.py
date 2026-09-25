@@ -426,7 +426,7 @@ def run(args):
                 forged = rpc("permission.decide", {
                     "id": refused["id"], "decision": "approve", "owner_uid": uid,
                 }, uid)
-                assert not forged["ok"], "an ordinary peer must not decide its own request"
+                assert not forged["ok"], "an owner peer must not supply an owner selector"
                 for case, answer in (
                     ("wrong-password", b"not-the-fixture-password\n"),
                     ("cancelled-password", b"\x04"),
@@ -454,6 +454,31 @@ def run(args):
                 status = rpc("permission.status", {"ids": [refused["id"]]}, uid)
                 assert status["result"]["statuses"][0]["status"] == "denied"
                 print(json.dumps({"case": "real-helper-broker-denial", "completed": True}), flush=True)
+                owner_denial = rpc("permission.request", {
+                    "verb": "fs.meta", "scope": {"kind": "path", "value": "/**"},
+                    "session": "owner-denial-fixture", "reason": "Owner denial fixture",
+                }, uid)["result"]
+                denied = rpc("permission.decide", {
+                    "id": owner_denial["id"], "decision": "deny",
+                }, uid)
+                assert denied["ok"]
+                assert denied["result"]["decision"] == "denied"
+                status = rpc("permission.status", {"ids": [owner_denial["id"]]}, uid)
+                assert status["result"]["statuses"][0]["status"] == "denied"
+                owner_approval = rpc("permission.request", {
+                    "verb": "fs.meta", "scope": {"kind": "path", "value": "/**"},
+                    "session": "owner-approval-fixture", "reason": "Owner approval fixture",
+                }, uid)["result"]
+                refused_approval = rpc("permission.decide", {
+                    "id": owner_approval["id"], "decision": "approve", "duration": "once",
+                }, uid)
+                assert not refused_approval["ok"]
+                assert "attended local terminal" in refused_approval["error"]["message"]
+                status = rpc("permission.status", {"ids": [owner_approval["id"]]}, uid)
+                assert status["result"]["statuses"][0]["status"] == "pending"
+                print(json.dumps({
+                    "case": "owner-denial-without-grant-authority", "completed": True,
+                }), flush=True)
                 foreign = rpc("permission.request", {
                     "verb": "fs.meta", "scope": {"kind": "path", "value": "/**"},
                     "session": "foreign-approval-fixture", "reason": "Other owner fixture",
@@ -477,35 +502,35 @@ def run(args):
                     ["/usr/local/bin/cos", "agent", "chat", "--tui"], uid, uid, home,
                 )) as terminal:
                     terminal.expect(b"New Claw conversation")
-                    for answer, expected in (
-                        (b"not-the-fixture-password\n", "pending"),
-                        (b"\x03", "pending"),
-                        (PASSWORD.encode() + b"\n", "approved"),
-                    ):
-                        offset = len(terminal.output)
-                        terminal.send(f"/approval {request['id']}".encode())
-                        time.sleep(0.2)
-                        terminal.send(b"\r")
-                        terminal.pump(lambda: b"Approval" in terminal.output[offset:])
-                        offset = len(terminal.output)
-                        terminal.send(b"\x1b[97;1:2u")
-                        settled = time.monotonic() + 0.4
-                        terminal.pump(lambda: time.monotonic() >= settled, 1)
-                        assert b"Claw OS authorization" not in terminal.output[offset:]
-                        terminal.send(b"a")
-                        terminal.pump(lambda: b"Password:" in terminal.output[offset:])
-                        authentication_end = len(terminal.output)
-                        terminal.send(answer)
-                        terminal.pump(lambda: b"\x1b[?1049h" in terminal.output[authentication_end:])
-                        status = rpc("permission.status", {"ids": [request["id"]]}, uid)
-                        assert status["result"]["statuses"][0]["status"] == expected
-                        assert not termios.tcgetattr(terminal.master)[3] & (termios.ICANON | termios.ECHO)
-                        assert PASSWORD.encode() not in terminal.output
+                    offset = len(terminal.output)
+                    terminal.send(f"/approval {request['id']}".encode())
+                    time.sleep(0.2)
+                    terminal.send(b"\r")
+                    terminal.pump(lambda: b"Approval" in terminal.output[offset:])
+                    offset = len(terminal.output)
+                    terminal.send(b"\x1b[97;1:2u")
+                    settled = time.monotonic() + 0.4
+                    terminal.pump(lambda: time.monotonic() >= settled, 1)
+                    status = rpc("permission.status", {"ids": [request["id"]]}, uid)
+                    assert status["result"]["statuses"][0]["status"] == "pending"
+                    terminal.send(b"a")
+                    terminal.pump(
+                        lambda: rpc(
+                            "permission.status", {"ids": [request["id"]]}, uid
+                        )["result"]["statuses"][0]["status"] == "approved"
+                    )
+                    assert b"Claw OS authorization" not in terminal.output[offset:]
+                    assert b"Password:" not in terminal.output[offset:]
+                    assert not termios.tcgetattr(terminal.master)[3] & (
+                        termios.ICANON | termios.ECHO
+                    )
                     terminal.send(b"\x1b[27;1u")
                     time.sleep(0.2)
                     terminal.send(b"/quit\r")
                     terminal.require_exit(0)
-                print(json.dumps({"case": "real-tui-pam-broker-approval", "completed": True}), flush=True)
+                print(json.dumps({
+                    "case": "real-tui-inline-broker-approval", "completed": True,
+                }), flush=True)
             except BaseException:
                 for name, (log, process) in logs.items():
                     log.seek(0)

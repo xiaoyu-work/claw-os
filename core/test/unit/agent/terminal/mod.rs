@@ -1614,6 +1614,23 @@ fn approvals_have_one_explicit_terminal_decision() {
     assert!(app.confirmation.is_none());
     assert_eq!(app.current_approval().unwrap().id, "approval-1");
     assert_eq!(app.approval_choice, ReviewDecision::ApproveOnce);
+    assert!(!app.approval_choice_is_explicit());
+    for character in "/quit".chars() {
+        assert_eq!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE)
+            ),
+            InputAction::None
+        );
+    }
+    assert_eq!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ),
+        InputAction::None
+    );
     assert_eq!(
         handle_key(
             &mut app,
@@ -1625,6 +1642,7 @@ fn approvals_have_one_explicit_terminal_decision() {
         InputAction::None
     );
     assert_eq!(app.approval_choice, ReviewDecision::Deny);
+    assert!(app.approval_choice_is_explicit());
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER | KeyModifiers::SHIFT] {
         assert_eq!(
             handle_key(&mut app, KeyEvent::new(KeyCode::Char('a'), modifiers)),
@@ -1641,6 +1659,13 @@ fn approvals_have_one_explicit_terminal_decision() {
             ),
         ),
         InputAction::None
+    );
+    assert_eq!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ),
+        InputAction::Cancel
     );
     assert_eq!(
         handle_key(
@@ -1663,6 +1688,7 @@ fn approvals_have_one_explicit_terminal_decision() {
         .collect::<String>();
     assert!(output.contains("Authorize once"));
     assert!(output.contains("Left/Right choose"));
+    assert!(output.contains("Esc/Ctrl+C stop task"));
     app.resolve_approval("approval-1", true);
     assert!(app.current_approval().is_none());
     assert!(app.entries.iter().any(|entry| {
@@ -1681,25 +1707,6 @@ fn model_output_is_redacted_and_control_safe() {
     let cleaned = clean_text("token=ghp_abcdefghijklmnopqrstuvwxyz0123456789\u{1b}[31m");
     assert!(!cleaned.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
     assert!(!cleaned.contains('\u{1b}'));
-}
-
-#[test]
-fn approval_runtime_distinguishes_missing_pkexec_and_helper() {
-    let root = tempfile::tempdir().unwrap();
-    let pkexec = root.path().join("pkexec");
-    let helper = root.path().join("claw-approval-helper");
-
-    let error =
-        crate::agent::terminal::backend::ensure_approval_runtime(&pkexec, &helper).unwrap_err();
-    assert!(error.contains("pkexec"));
-
-    std::fs::write(&pkexec, b"fixture").unwrap();
-    let error =
-        crate::agent::terminal::backend::ensure_approval_runtime(&pkexec, &helper).unwrap_err();
-    assert!(error.contains("claw-approval-helper"));
-
-    std::fs::write(&helper, b"fixture").unwrap();
-    crate::agent::terminal::backend::ensure_approval_runtime(&pkexec, &helper).unwrap();
 }
 
 #[test]

@@ -1,6 +1,5 @@
 //! Claw-owned full-screen terminal presentation for the shared Agent backend.
 
-mod authorization;
 mod backend;
 mod commands;
 mod models;
@@ -223,32 +222,12 @@ async fn run_with_backend(
                 match event.map_err(|error| error.to_string())? {
                     Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                         let action = handle_key(&mut app, key);
-                        let interactive_authorization = matches!(
-                            &action,
-                            InputAction::Review(_) | InputAction::ApprovalReview(_, _)
-                        );
-                        if interactive_authorization {
-                            // The polkit agent must be the only reader of password input.
-                            drop(input);
-                            terminal.suspend_for_authorization()
-                                .map_err(|error| format!("Open OS authorization prompt: {error}"))?;
-                            apply_input_action(
-                                action,
-                                &mut app,
-                                backend.clone(),
-                                runtime_tx.clone(),
-                            ).await;
-                            terminal.resume_after_authorization()
-                                .map_err(|error| format!("Restore terminal after authorization: {error}"))?;
-                            input = EventStream::new();
-                        } else {
-                            apply_input_action(
-                                action,
-                                &mut app,
-                                backend.clone(),
-                                runtime_tx.clone(),
-                            ).await;
-                        }
+                        apply_input_action(
+                            action,
+                            &mut app,
+                            backend.clone(),
+                            runtime_tx.clone(),
+                        ).await;
                         if let Some(snapshot) = app.take_raw_scrollback() {
                             if let Err(error) = terminal.publish_scrollback(&snapshot) {
                                 app.push_error(&format!(
@@ -386,28 +365,40 @@ async fn connect_initial_conversation(
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
-    if (app.current_approval().is_some() || app.approval_detail.is_some())
-        && (key.kind != KeyEventKind::Press
-            || !key.modifiers.difference(KeyModifiers::SHIFT).is_empty())
-    {
-        return InputAction::None;
+    if app.current_approval().is_some() || app.approval_detail.is_some() {
+        let control_cancel =
+            key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL;
+        if key.kind != KeyEventKind::Press
+            || (!control_cancel && !key.modifiers.difference(KeyModifiers::SHIFT).is_empty())
+        {
+            return InputAction::None;
+        }
     }
     if app.current_approval().is_some() {
         return match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Left => {
+                app.select_approval_choice(ReviewDecision::ApproveOnce);
+                InputAction::None
+            }
+            KeyCode::Right => {
+                app.select_approval_choice(ReviewDecision::Deny);
+                InputAction::None
+            }
+            KeyCode::Tab => {
                 app.cycle_approval_choice();
                 InputAction::None
             }
-            KeyCode::Enter if key.kind == KeyEventKind::Press => {
+            KeyCode::Enter if app.approval_choice_is_explicit() => {
                 InputAction::Review(app.approval_choice)
             }
-            KeyCode::Char('a') | KeyCode::Char('A') if key.kind == KeyEventKind::Press => {
+            KeyCode::Char('a') | KeyCode::Char('A') => {
                 InputAction::Review(ReviewDecision::ApproveOnce)
             }
-            KeyCode::Char('d') | KeyCode::Char('D') if key.kind == KeyEventKind::Press => {
+            KeyCode::Char('d') | KeyCode::Char('D') => {
                 InputAction::Review(ReviewDecision::Deny)
             }
-            KeyCode::Esc if key.kind == KeyEventKind::Press => InputAction::Cancel,
+            KeyCode::Esc => InputAction::Cancel,
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => InputAction::Cancel,
             _ => InputAction::None,
         };
     }
@@ -1417,9 +1408,9 @@ async fn apply_input_action(
                         }
                     }
                     app.push_system(if approved {
-                        "Approval granted once through the protected OS helper."
+                        "Approval granted once from this attended terminal."
                     } else {
-                        "Approval denied through the protected OS helper."
+                        "Approval denied; no capability was granted."
                     });
                 }
                 Err(error) => {
@@ -1600,40 +1591,6 @@ impl TerminalSession {
         execute!(io::stdout(), SetTitle(title.unwrap_or_default()))?;
         self.last_title = title.map(str::to_string);
         Ok(())
-    }
-
-    fn suspend_for_authorization(&mut self) -> io::Result<()> {
-        self.terminal.show_cursor()?;
-        disable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            PopKeyboardEnhancementFlags,
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        )?;
-        let mut stdout = io::stdout();
-        writeln!(
-            stdout,
-            "\nClaw OS authorization: complete the protected system prompt below.\n"
-        )?;
-        stdout.flush()
-    }
-
-    fn resume_after_authorization(&mut self) -> io::Result<()> {
-        enable_raw_mode()?;
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-            )
-        )?;
-        self.terminal.clear()?;
-        self.terminal.hide_cursor()
     }
 
     fn publish_scrollback(&mut self, snapshot: &str) -> io::Result<()> {

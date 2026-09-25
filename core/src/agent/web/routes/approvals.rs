@@ -59,7 +59,8 @@ pub async fn approve(
             "unknown permission grant duration: {duration}"
         )));
     }
-    run_decision_helper(&id, "approve", Some(&duration), body.note)
+    validate_decision_input(&id, body.note.as_deref())?;
+    run_approval_helper(&id, &duration, body.note)
         .await
         .map(Json)
 }
@@ -76,40 +77,32 @@ pub async fn deny(
     body: Option<Json<DenyBody>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
-    run_decision_helper(&id, "deny", None, body.note)
+    validate_decision_input(&id, body.note.as_deref())?;
+    let mut params = json!({ "id": id, "decision": "deny" });
+    if let Some(note) = body.note.filter(|note| !note.trim().is_empty()) {
+        params["note"] = json!(note);
+    }
+    super::clawd::request(Command::PermissionDecide, params)
         .await
         .map(Json)
+        .map_err(super::clawd::RpcError::into_api_error)
 }
 
-async fn run_decision_helper(
+async fn run_approval_helper(
     id: &str,
-    decision: &str,
-    duration: Option<&str>,
+    duration: &str,
     note: Option<String>,
 ) -> Result<Value, (StatusCode, Json<Value>)> {
-    if id.is_empty()
-        || id.len() > 128
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(bad_request("invalid approval id".to_string()));
-    }
-    if note.as_ref().is_some_and(|note| note.len() > 1_024) {
-        return Err(bad_request("approval note is too long".to_string()));
-    }
-
     let mut command = tokio::process::Command::new("/usr/bin/pkexec");
     command
         .arg("/usr/local/bin/claw-approval-helper")
         .arg("--id")
         .arg(id)
         .arg("--decision")
-        .arg(decision)
+        .arg("approve")
+        .arg("--duration")
+        .arg(duration)
         .kill_on_drop(true);
-    if let Some(duration) = duration {
-        command.arg("--duration").arg(duration);
-    }
     if let Some(note) = note.filter(|note| !note.trim().is_empty()) {
         command.arg("--note").arg(note);
     }
@@ -132,6 +125,24 @@ async fn run_decision_helper(
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|error| internal(format!("invalid approval helper response: {error}")))
+}
+
+fn validate_decision_input(
+    id: &str,
+    note: Option<&str>,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(bad_request("invalid approval id".to_string()));
+    }
+    if note.is_some_and(|note| note.len() > 1_024) {
+        return Err(bad_request("approval note is too long".to_string()));
+    }
+    Ok(())
 }
 
 fn bad_request(msg: String) -> (StatusCode, Json<Value>) {

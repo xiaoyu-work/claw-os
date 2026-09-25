@@ -19,7 +19,8 @@ and agent tasks.
 - Expose one owner-scoped Activity lifecycle, task/session view, and read-only
   attention projection for terminal-only, Web, and native desktop clients.
 - Expose owner-scoped approval views used by the Agent Web control center;
-  permission decisions still cross the polkit helper.
+  an attended same-owner terminal may decide one exact one-shot request inline.
+  Reusable grants and system reviews retain their stronger helper boundaries.
 - Expose explicit owner-scoped learned-memory reset under the owner's
   filesystem identity. It refuses active tasks and retains conversation and
   execution evidence.

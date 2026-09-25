@@ -18,13 +18,12 @@ audit.
 | `stream.rs` | Durable task submission, identity/model acknowledgement and stream polling |
 | `ui.rs`, `ui/progress.rs` | ratatui layout, live execution animation, styling, Markdown-oriented transcript projection and cursor |
 | `presentation.rs` | Redacted model/tool/reasoning/progress projection |
-| `backend.rs` | Narrow typed consumer of canonical `clawd` routes and protected approval helper |
-| `authorization.rs` | Per-decision unprivileged polkit text agent, readiness and bounded teardown |
+| `backend.rs` | Narrow typed consumer of canonical `clawd` routes, including attended one-shot decisions |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
 | `../../../test/unit/agent/terminal/mod.rs` | State, rendering, privacy and option regression tests |
-| `../../../test/unit/agent/terminal/backend.rs` | Approval readback and bounded authorization diagnostics |
+| `../../../test/unit/agent/terminal/backend.rs` | Exact approval decision readback |
 | `../../../tests/agent_tui_pty.py` | Real-binary PTY completion/cancellation/plain scenarios |
-| `../../../tests/approval_polkit_process.py` | Private-namespace real TUI, polkit/PAM/helper and broker authorization, refusal and retry |
+| `../../../tests/approval_polkit_process.py` | Private-namespace real TUI inline approval plus polkit/PAM helper boundaries |
 
 ## Boundaries
 
@@ -58,11 +57,12 @@ audit.
   the runtime progress record proves dispatch, then animate **Running** with
   task/tool elapsed time. A disconnect or detached stream makes unfinished
   execution explicitly unconfirmed; it never preserves a false running claim.
-- Approval keys call the installed OS helper for one exact pending request;
-  no UI object or key press is permission.
+- Approval keys send one exact decision to `clawd`; the renderer itself remains
+  non-authoritative.
 - Approval browsing combines only owner-scoped pending and recent records.
-  Historical records are read-only; pending decisions still pass through the
-  same protected helper and post-decision status verification.
+  Historical records are read-only. The authenticated same-owner TUI may grant
+  one exact request only while its broker peer is kernel-verified as attended;
+  denial creates no authority. Both paths verify post-decision status.
 - Notification Inbox consumes only owner-scoped durable notification routes.
   Read, acknowledge, dismiss, channel and DND changes are explicit broker
   mutations; opening a notification is presentation only.
@@ -145,17 +145,15 @@ audit.
   remains unavailable until Desktop's bounded recorder/transcription boundary
   is shared with the TUI. Desktop consumes the same global binding first;
   terminal-only sessions receive it through enhanced keyboard reporting.
-- Active approvals render explicit Authorize once/Deny choices. Selection uses
-  Left/Right plus Enter (with `a`/`d` shortcuts), ignores key repeats, and
-  temporarily yields the terminal to the protected `pkexec` authentication
-  prompt before restoring the alternate screen. Drop the input event stream
-  during authentication so it cannot read password input. Register an
-  unprivileged `pkttyagent` against the exact TUI PID/start time, await its
-  readiness, and reap it after the helper returns. Disable pkexec's internal
-  agent to avoid its setuid/creator-UID cookie mismatch on affected systems.
-  Failures retain bounded diagnostics after the screen is restored. An exact
-  approved request already consumed by its task is still a confirmed decision,
-  not a failure or a new grant.
+- Active approvals start with no selected action: bare Enter is inert.
+  Left/Right plus Enter selects explicitly; `a`/`d` remain direct shortcuts,
+  key repeats are ignored, and Esc/Ctrl+C stops the task without deciding.
+  Both decisions remain inside the alternate-screen TUI: no `pkexec`, polkit,
+  password prompt or terminal handoff occurs. `clawd` derives owner and local
+  terminal presence from the kernel peer, accepts only `once`, and refuses
+  owner selectors or reusable duration. An exact approved request already
+  consumed by its task is still a confirmed decision, not a failure or a new
+  grant.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.

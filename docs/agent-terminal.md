@@ -137,21 +137,21 @@ Controls:
   through default/8/16/32. `p` toggles durable Plan mode.
 - `Ctrl-C` cancels active work, or exits while idle.
 - `Ctrl-D` exits while idle.
-- During an approval, `Left` / `Right` select **Authorize once** or **Deny**,
-  and `Enter` confirms; `a` / `d` remain direct shortcuts. Decision keys act
-  only on key press, never auto-repeat. The TUI temporarily returns the terminal
-  to the protected `pkexec` prompt, then restores the full-screen view. The
-  frontend response itself grants nothing. A per-decision unprivileged
-  `pkttyagent` supplies text authentication; type the Linux account password
-  there, not in the chat composer. WSL terminals without a logind session use
-  the same per-decision authentication. Failed authentication leaves approval
-  unconfirmed and its diagnostic visible.
+- During an approval, no action is selected initially and bare `Enter` does
+  nothing. `Left` / `Right` select **Authorize once** or **Deny**, then `Enter`
+  confirms; `a` / `d` remain direct shortcuts. `Esc` or `Ctrl-C` stops the
+  task without deciding. Decision keys act only on key press, never
+  auto-repeat. Both choices remain inside the full-screen TUI: no `pkexec`,
+  polkit or OS password prompt is opened. `clawd` derives the owner and local
+  terminal presence from the kernel peer; **Authorize once** is restricted to
+  that exact request and cannot become a session or reusable grant. **Deny**
+  grants nothing.
 - In a durable task detail, `c` cancels a non-terminal task, `r` retries a
   terminal task as a new durable task, and `Up` / `Down` scroll its bounded
   redacted result.
 - In Approval Center, `a` requests one-time approval and `d` requests denial
-  only while the selected request is still pending. Recent decisions are
-  read-only.
+  only while the selected request is still pending. Both stay inside the TUI;
+  recent decisions are read-only.
 - In Notification Inbox, `m` marks an unread record read, `a` acknowledges it
   and `d` dismisses it. Opening a detail does not mutate durable state.
 - In notification settings, `w`, `e`, `n` toggle Web, desktop and ntfy
@@ -282,8 +282,10 @@ rewrite task state.
 view of pending and recent approval records. Details show the exact capability,
 scope, risk, requester, session, reason and decision metadata. A historical
 approved, consumed or denied record cannot be decided again. Pending decisions
-use the installed privileged helper, verify pending state before authorization,
-and verify the resulting root-owned state afterward.
+stay inside the TUI. Approval is limited to one exact request from the
+kernel-verified same-owner attended terminal; denial creates no authority. The
+client verifies pending state before deciding and verifies the resulting
+root-owned state afterward.
 
 `/inbox` opens the newest 100 retained, non-dismissed owner notifications;
 `/inbox all` also includes dismissed records. Details show durable state,
@@ -399,9 +401,10 @@ sudo unshare --mount --pid --fork --mount-proc --net \
   --original-pid-namespace "$original_pid"
 ```
 
-It reproduces sessionless policy refusal, then exercises real password
-authentication, wrong-password/cancel, approve/deny, cross-owner refusal and
-TUI failure/retry/restoration. All accounts, PAM/polkit configuration, sockets
+It reproduces sessionless policy refusal and exercises the standalone
+privileged helper's real password authentication, wrong-password/cancel and
+cross-owner refusal. Separately, the real TUI proves one-shot approval remains
+inline with no password prompt. All accounts, PAM/polkit configuration, sockets
 and approval state are private to its namespaces; it neither reads real
 password material nor uses a `polkit.Result.YES` override.
 
@@ -417,9 +420,10 @@ slow-progress scenario holds a real task stream open after an authoritative
 tool-start record, verifies animated terminal writes and advancing elapsed
 time, then releases the result and completes the same task.
 The approval-center scenario browses pending and recent owner-scoped decisions
-and keeps historical records read-only. The approval-choice scenario renders
-explicit selectable actions, ignores decision-key repeats and cancels without
-invoking authorization. The notification scenario performs exact
+and keeps historical records read-only. The approval-choice scenario starts
+unselected, keeps bare Enter inert, ignores decision-key repeats, and approves
+one exact request through the attended owner-bound broker path without leaving
+the TUI. The notification scenario performs exact
 read, acknowledge and dismiss mutations and updates durable delivery/DND
 preferences without a desktop dependency. The Activity scenario exercises the
 shared list/detail/create/run/pause/reopen/complete/cancel/attention lifecycle.

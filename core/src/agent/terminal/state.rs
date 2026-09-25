@@ -180,6 +180,7 @@ pub(super) struct App {
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub approval_choice: ReviewDecision,
+    approval_choice_explicit: bool,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
     pub command_selection: usize,
@@ -275,6 +276,7 @@ impl App {
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             approval_choice: ReviewDecision::ApproveOnce,
+            approval_choice_explicit: false,
             input_history: Vec::new(),
             history_index: None,
             command_selection: 0,
@@ -343,6 +345,7 @@ impl App {
         self.tool_entries.clear();
         self.pending_approvals.clear();
         self.approval_choice = ReviewDecision::ApproveOnce;
+        self.approval_choice_explicit = false;
         self.seen_approvals.clear();
         self.active_assistant = None;
         self.provider_had_text = false;
@@ -513,6 +516,7 @@ impl App {
         }
         self.pending_approvals.clear();
         self.approval_choice = ReviewDecision::ApproveOnce;
+        self.approval_choice_explicit = false;
         if self
             .task_detail
             .as_ref()
@@ -652,6 +656,7 @@ impl App {
         }
         if was_empty && !self.pending_approvals.is_empty() {
             self.approval_choice = ReviewDecision::ApproveOnce;
+            self.approval_choice_explicit = false;
         }
         if !self.pending_approvals.is_empty() {
             self.status = RunStatus::WaitingApproval;
@@ -680,10 +685,24 @@ impl App {
     }
 
     pub fn cycle_approval_choice(&mut self) {
-        self.approval_choice = match self.approval_choice {
-            ReviewDecision::ApproveOnce => ReviewDecision::Deny,
-            ReviewDecision::Deny => ReviewDecision::ApproveOnce,
+        self.approval_choice = if self.approval_choice_explicit {
+            match self.approval_choice {
+                ReviewDecision::ApproveOnce => ReviewDecision::Deny,
+                ReviewDecision::Deny => ReviewDecision::ApproveOnce,
+            }
+        } else {
+            ReviewDecision::ApproveOnce
         };
+        self.approval_choice_explicit = true;
+    }
+
+    pub fn select_approval_choice(&mut self, decision: ReviewDecision) {
+        self.approval_choice = decision;
+        self.approval_choice_explicit = true;
+    }
+
+    pub fn approval_choice_is_explicit(&self) -> bool {
+        self.approval_choice_explicit
     }
 
     pub fn resolve_approval(&mut self, id: &str, approved: bool) {
@@ -711,6 +730,7 @@ impl App {
             RunStatus::Ready
         };
         self.approval_choice = ReviewDecision::ApproveOnce;
+        self.approval_choice_explicit = false;
     }
 
     pub fn push_system(&mut self, text: &str) {

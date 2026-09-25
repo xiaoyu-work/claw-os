@@ -130,6 +130,8 @@ class FixtureBroker:
         self.stream_disconnects = 0
         self.slow_progress_waiting = threading.Event()
         self.slow_progress_release = threading.Event()
+        self.approval_state = "pending"
+        self.approval_decided = threading.Event()
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
         self.workspace = str(self.home / "project")
         self.session_id = SESSION_ID
@@ -455,13 +457,29 @@ class FixtureBroker:
                     {
                         "id": approval_id,
                         "status": (
-                            "pending"
+                            self.approval_state
                             if approval_id == PENDING_APPROVAL_ID
                             else "consumed"
                         ),
                     }
                     for approval_id in params["ids"]
                 ]
+            }
+        if method == "permission.decide":
+            if (
+                self.case != "approval-choice"
+                or params != {
+                    "id": PENDING_APPROVAL_ID,
+                    "decision": "approve",
+                    "duration": "once",
+                }
+            ):
+                raise AssertionError("permission approval was not exact and owner-bound")
+            self.approval_state = "approved"
+            self.approval_decided.set()
+            return {
+                "id": PENDING_APPROVAL_ID,
+                "decision": "approved",
             }
         if method == "notification.list":
             return {
@@ -967,6 +985,8 @@ class FixtureBroker:
                 "reconnect",
                 "startup-reconnect",
             ) or (self.case == "slow-progress" and self.slow_progress_release.is_set()) or (
+                self.case == "approval-choice" and self.approval_decided.is_set()
+            ) or (
                 self.case == "durable-queue"
                 and (task_id == self.queued_task_id or self.queue_submitted.is_set())
             ) or self.cancelled.is_set()
@@ -2388,15 +2408,44 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
-                os.write(master, b"\x1b[C")
+                os.write(master, b"/quit\r")
+                quiet_until = time.monotonic() + 0.5
+                read_terminal(
+                    master,
+                    output,
+                    quiet_until + 2,
+                    lambda _data: time.monotonic() >= quiet_until,
+                )
+                if any(
+                    request["command"] == "permission.decide"
+                    for request in broker.requests
+                ):
+                    raise AssertionError("unselected Enter decided an approval")
+                os.write(master, b"\x1b[97;1:2u")
+                time.sleep(0.2)
+                if any(
+                    request["command"] == "permission.decide"
+                    for request in broker.requests
+                ):
+                    raise AssertionError("repeated approval shortcut was accepted")
+                os.write(master, b"\x1b[D")
                 time.sleep(0.3)
-                os.write(master, b"\x1b[27;1u")
+                os.write(master, b"\r")
                 read_terminal(
                     master,
                     output,
                     time.monotonic() + 15,
-                    lambda _data: broker.cancelled.is_set(),
+                    lambda _data: broker.approval_decided.is_set(),
                 )
+                settled = time.monotonic() + 0.5
+                read_terminal(
+                    master,
+                    output,
+                    settled + 2,
+                    lambda _data: time.monotonic() >= settled,
+                )
+                if b"Claw OS authorization" in output:
+                    raise AssertionError("TUI approval opened the password prompt")
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(

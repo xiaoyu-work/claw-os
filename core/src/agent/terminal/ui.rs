@@ -2344,7 +2344,9 @@ fn inline_spans(value: &str) -> Vec<Span<'static>> {
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let title = if app.vim_mode {
+    let title = if app.current_approval().is_some() {
+        " Permission "
+    } else if app.vim_mode {
         if app.vim_insert_mode {
             " Message - VIM INSERT "
         } else {
@@ -2362,7 +2364,10 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }))
         .title(title);
     if let Some(approval) = app.current_approval() {
-        let approve_style = if app.approval_choice == super::backend::ReviewDecision::ApproveOnce {
+        let choice_is_explicit = app.approval_choice_is_explicit();
+        let approve_style = if choice_is_explicit
+            && app.approval_choice == super::backend::ReviewDecision::ApproveOnce
+        {
             Style::default()
                 .fg(Color::White)
                 .bg(Color::Magenta)
@@ -2370,7 +2375,9 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        let deny_style = if app.approval_choice == super::backend::ReviewDecision::Deny {
+        let deny_selected =
+            choice_is_explicit && app.approval_choice == super::backend::ReviewDecision::Deny;
+        let deny_style = if deny_selected {
             Style::default()
                 .fg(Color::White)
                 .bg(Color::Red)
@@ -2390,7 +2397,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 Span::raw("  "),
                 Span::styled(" Deny ", deny_style),
                 Span::styled(
-                    "   Left/Right choose  Enter confirm  Esc stop task",
+                    "   Left/Right choose  Enter confirm  a/d direct  Esc/Ctrl+C stop task",
                     Style::default().fg(Color::DarkGray),
                 ),
             ]),

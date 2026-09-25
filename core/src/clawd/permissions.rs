@@ -92,11 +92,52 @@ pub fn status(params: Value, client: &ClientIdentity) -> Result<Value, String> {
 }
 
 pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
-    if client.require_uid()? != 0 {
-        return Err("permission decisions require the privileged approval helper".to_string());
-    }
+    let peer_uid = client.require_uid()?;
     let id = required_string(&params, "id")?;
-    let decision = required_string(&params, "decision")?;
+    let decision = required_string(&params, "decision")?
+        .trim()
+        .to_ascii_lowercase();
+    let note = params
+        .get("note")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    if peer_uid != 0 {
+        if params.get("owner_uid").is_some() {
+            return Err("owner decision cannot select another owner".to_string());
+        }
+        let decided_by = format!("uid:{peer_uid}");
+        return match decision.as_str() {
+            "deny" | "reject" => {
+                if params.get("duration").is_some() {
+                    return Err("owner denial cannot select a grant duration".to_string());
+                }
+                deny_request(&id, decided_by, note, Some(peer_uid))
+            }
+            "approve" | "allow" => {
+                if !client.attended_local {
+                    return Err(
+                        "permission approval requires an attended local terminal".to_string()
+                    );
+                }
+                let duration = duration_from_params(&params)?;
+                if duration != GrantDuration::Once {
+                    return Err(
+                        "owner terminal approval is limited to one exact request".to_string()
+                    );
+                }
+                approve_request(
+                    &id,
+                    duration,
+                    decided_by,
+                    note,
+                    Some(peer_uid),
+                )
+            }
+            other => Err(format!("unknown permission decision: {other}")),
+        };
+    }
+
     let owner_uid = params
         .get("owner_uid")
         .and_then(Value::as_u64)
@@ -105,50 +146,70 @@ pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let decided_by = owner_uid
         .map(|uid| format!("uid:{uid}"))
         .unwrap_or_else(|| "uid:0".to_string());
-    let note = params
-        .get("note")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
 
-    match decision.trim().to_ascii_lowercase().as_str() {
-        "approve" | "allow" => {
-            if let Some(request) = approvals::lookup_pending(&id) {
-                if request.session.starts_with(approvals::app_policy::SESSION_PREFIX) {
-                    super::app_permissions::validate_approval(&request)?;
-                }
-            }
-            let resolved = approvals::approve_for_owner(
-                &id,
-                duration_from_params(&params)?,
-                Some(decided_by),
-                note,
-                owner_uid,
-            )?;
-            Ok(json!({
-                "id": resolved.request.id,
-                "decision": "approved",
-                "duration": resolved.decision.duration,
-                "risk": resolved.request.risk,
-                "consent_context": resolved.request.context,
-                "expires_at": resolved.decision.grant.as_ref().map(|grant| grant.expires_at),
-                "uses_remaining": resolved.decision.grant.as_ref().map(|grant| grant.uses_remaining),
-                "restoration": resolved.decision.restoration.as_ref().map(|_| "until_revoked"),
-            }))
-        }
-        "deny" | "reject" => {
-            let resolved = approvals::deny_for_owner(&id, Some(decided_by), note, owner_uid)?;
-            Ok(json!({
-                "id": resolved.request.id,
-                "decision": "denied",
-            }))
-        }
+    match decision.as_str() {
+        "approve" | "allow" => approve_request(
+            &id,
+            duration_from_params(&params)?,
+            decided_by,
+            note,
+            owner_uid,
+        ),
+        "deny" | "reject" => deny_request(&id, decided_by, note, owner_uid),
         other => Err(format!("unknown permission decision: {other}")),
     }
+}
+
+fn approve_request(
+    id: &str,
+    duration: GrantDuration,
+    decided_by: String,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<Value, String> {
+    if let Some(request) = approvals::lookup_pending(id) {
+        if request.session.starts_with(approvals::app_policy::SESSION_PREFIX) {
+            super::app_permissions::validate_approval(&request)?;
+        }
+    }
+    let resolved =
+        approvals::approve_for_owner(id, duration, Some(decided_by), note, owner_uid)?;
+    Ok(json!({
+        "id": resolved.request.id,
+        "decision": "approved",
+        "duration": resolved.decision.duration,
+        "risk": resolved.request.risk,
+        "consent_context": resolved.request.context,
+        "expires_at": resolved.decision.grant.as_ref().map(|grant| grant.expires_at),
+        "uses_remaining": resolved.decision.grant.as_ref().map(|grant| grant.uses_remaining),
+        "restoration": resolved.decision.restoration.as_ref().map(|_| "until_revoked"),
+    }))
+}
+
+fn deny_request(
+    id: &str,
+    decided_by: String,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<Value, String> {
+    let resolved = approvals::deny_for_owner(id, Some(decided_by), note, owner_uid)?;
+    Ok(json!({
+        "id": resolved.request.id,
+        "decision": "denied",
+    }))
 }
 
 fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
     let uid = client.require_uid()?;
     Ok((uid != 0).then_some(uid))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/permissions.rs"
+    ));
 }
 
 /// Retire every reusable approval in a scope.

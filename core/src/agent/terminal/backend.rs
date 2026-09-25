@@ -1,22 +1,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::clawd::protocol::Request;
 use crate::clawd::routes::Command;
 use crate::config::CosConfig;
 
 pub(super) use crate::agent::memory::maintenance::LearnedMemoryReset;
-
-const PKEXEC_PATH: &str = "/usr/bin/pkexec";
-const APPROVAL_HELPER_PATH: &str = "/usr/local/bin/claw-approval-helper";
 
 #[derive(Clone, Debug)]
 pub(super) struct BackendInfo {
@@ -1436,8 +1431,12 @@ impl Backend for BrokerBackend {
             ReviewDecision::ApproveOnce => "approved",
             ReviewDecision::Deny => "denied",
         };
-        ensure_approval_runtime(Path::new(PKEXEC_PATH), Path::new(APPROVAL_HELPER_PATH))?;
-        let response = super::authorization::with_agent(run_approval_helper(id, decision)).await?;
+        let mut params = json!({ "id": id, "decision": "deny" });
+        if decision == ReviewDecision::ApproveOnce {
+            params["decision"] = json!("approve");
+            params["duration"] = json!("once");
+        }
+        let response = self.call(Command::PermissionDecide, params).await?;
         if response.get("id").and_then(Value::as_str) != Some(id)
             || response.get("decision").and_then(Value::as_str) != Some(expected)
         {
@@ -2009,72 +2008,6 @@ pub(super) fn parse_agent_hook_settings(value: Value) -> Result<AgentHookSetting
     })
 }
 
-async fn run_approval_helper(id: &str, decision: ReviewDecision) -> Result<Value, String> {
-    let mut command = tokio::process::Command::new(PKEXEC_PATH);
-    command
-        .arg("--disable-internal-agent")
-        .arg(APPROVAL_HELPER_PATH)
-        .arg("--id")
-        .arg(id)
-        .arg("--decision")
-        .arg(match decision {
-            ReviewDecision::ApproveOnce => "approve",
-            ReviewDecision::Deny => "deny",
-        })
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if decision == ReviewDecision::ApproveOnce {
-        command.arg("--duration").arg("once");
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not launch Claw approval authorization: {error}"))?;
-    let stdout = child.stdout.take().ok_or("approval helper stdout is unavailable")?;
-    let stderr = child.stderr.take().ok_or("approval helper stderr is unavailable")?;
-    let result = tokio::time::timeout(Duration::from_secs(120), async {
-        tokio::try_join!(
-            read_helper_output(stdout),
-            relay_authorization_diagnostics(stderr, tokio::io::stderr()),
-            async {
-                child.wait().await.map_err(|error| format!("wait for OS authorization: {error}"))
-            }
-        )
-    })
-    .await
-    .map_err(|_| "OS authorization timed out".to_string())
-    .and_then(|result| result);
-    let (stdout, stderr, status) = match result {
-        Ok(output) => output,
-        Err(error) => {
-            child.kill().await.map_err(|cleanup| format!("{error}; stop helper: {cleanup}"))?;
-            return Err(error);
-        }
-    };
-    if !status.success() {
-        return Err(authorization_failure(status.code(), &stderr));
-    }
-    serde_json::from_slice(&stdout)
-        .map_err(|_| "approval helper returned invalid JSON".to_string())
-}
-
-pub(super) fn ensure_approval_runtime(pkexec: &Path, helper: &Path) -> Result<(), String> {
-    if !pkexec.is_file() {
-        return Err(format!(
-            "Claw approval authorization is unavailable: {} is not installed",
-            pkexec.display()
-        ));
-    }
-    if !helper.is_file() {
-        return Err(format!(
-            "Claw approval authorization is unavailable: {} is not installed",
-            helper.display()
-        ));
-    }
-    Ok(())
-}
-
 async fn request(
     socket: &std::path::Path,
     command: Command,
@@ -2546,69 +2479,6 @@ fn approval_decision_confirmed(value: &Value, id: &str, decision: ReviewDecision
         }
         ReviewDecision::Deny => has_approval_status(value, id, "denied"),
     }
-}
-
-fn authorization_failure(code: Option<i32>, stderr: &[u8]) -> String {
-    let message = match code {
-        Some(126) => "OS authentication was cancelled",
-        Some(127) => "Polkit authentication failed or was refused",
-        Some(_) => "Claw approval helper failed",
-        None => "OS authorization process was interrupted",
-    };
-    let exit = code.map(|code| format!(" (exit {code})")).unwrap_or_default();
-    let diagnostic = super::state::clean_text(&String::from_utf8_lossy(stderr))
-        .chars()
-        .take(2_048)
-        .collect::<String>();
-    let diagnostic = diagnostic.trim();
-    if diagnostic.is_empty() {
-        format!("{message}{exit}. Approval was not confirmed.")
-    } else {
-        format!("{message}{exit}. Approval was not confirmed.\n{diagnostic}")
-    }
-}
-
-async fn relay_authorization_diagnostics(
-    mut reader: impl AsyncRead + Unpin,
-    mut terminal: impl AsyncWrite + Unpin,
-) -> Result<Vec<u8>, String> {
-    let mut output = Vec::new();
-    let mut buffer = [0u8; 1_024];
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("read OS authorization diagnostic: {error}"))?;
-        if count == 0 {
-            return Ok(output);
-        }
-        if output.len() + count > 16 * 1_024 {
-            return Err("OS authorization diagnostic exceeds its size limit".into());
-        }
-        terminal
-            .write_all(&buffer[..count])
-            .await
-            .map_err(|error| format!("display OS authorization diagnostic: {error}"))?;
-        terminal
-            .flush()
-            .await
-            .map_err(|error| format!("flush OS authorization diagnostic: {error}"))?;
-        output.extend_from_slice(&buffer[..count]);
-    }
-}
-
-async fn read_helper_output(reader: impl AsyncRead + Unpin) -> Result<Vec<u8>, String> {
-    const MAX_HELPER_BYTES: u64 = 16 * 1024;
-    let mut output = Vec::new();
-    reader
-        .take(MAX_HELPER_BYTES + 1)
-        .read_to_end(&mut output)
-        .await
-        .map_err(|_| "could not read approval helper response".to_string())?;
-    if output.len() > MAX_HELPER_BYTES as usize {
-        return Err("approval helper response exceeds its size limit".into());
-    }
-    Ok(output)
 }
 
 #[cfg(test)]
