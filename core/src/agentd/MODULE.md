@@ -181,7 +181,7 @@ rechecks the live revision independently of heartbeat renewal. Disabled,
 changed or newly introduced policies stop old attempts through normal
 cancellation and exact-child cleanup; admitted effects are not undone.
 
-Worker protocol v15 carries bounded broker-verified image attachments inline
+Worker protocol v15 introduced bounded broker-verified image attachments inline
 with the Job assignment; their bytes grant no path or device authority and are
 never accepted from worker-authored frames. Worker protocol v14 carries the broker-validated owner-home workspace used as
 the worker process context; it grants no filesystem capability. Worker
@@ -344,6 +344,12 @@ means a worker cannot outlive the daemon that leased it, so every task left in
 first claim.
 `CLAWD_AGENTD=off` disables supervision only; every other `clawd` primitive
 keeps working.
+
+Final-result evidence confidence uses finite decimal strings on the private
+worker wire and is restored to the shared `f64` evidence model after decoding.
+This avoids `serde_json` arbitrary-precision tagged-enum buffering turning
+otherwise valid JSON floats into maps; malformed or non-finite decimals fail
+the task as protocol faults.
 
 ## Configuration
 

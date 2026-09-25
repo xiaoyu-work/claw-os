@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -642,10 +642,135 @@ pub struct CompletedRun {
     pub turns_used: u32,
     pub provider: String,
     pub model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "evidence_wire"
+    )]
     pub evidence: Option<EvidenceReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<ProviderFallbackState>,
+}
+
+// `arbitrary_precision` buffers JSON floats as maps while decoding tagged
+// enums. Keep only the AgentD wire representation decimal-string based.
+mod evidence_wire {
+    use serde::de::Error as _;
+    use serde::ser::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::{Map, Number, Value};
+
+    use crate::agent::runtime::evidence::EvidenceReport;
+
+    const REPORT_CONFIDENCE_FIELDS: &[&str] = &["binding_confidence", "claim_confidence"];
+    const CLAIM_CONFIDENCE_FIELDS: &[&str] = &["declared_confidence", "effective_confidence"];
+    const MAX_CONFIDENCE_CHARS: usize = 64;
+
+    pub fn serialize<S>(report: &Option<EvidenceReport>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let Some(report) = report else {
+            return serializer.serialize_none();
+        };
+        let mut wire = serde_json::to_value(report).map_err(S::Error::custom)?;
+        encode_confidences(&mut wire).map_err(S::Error::custom)?;
+        serializer.serialize_some(&wire)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<EvidenceReport>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let Some(mut wire) = Option::<Value>::deserialize(deserializer)? else {
+            return Ok(None);
+        };
+        decode_confidences(&mut wire).map_err(D::Error::custom)?;
+        serde_json::from_value(wire)
+            .map(Some)
+            .map_err(D::Error::custom)
+    }
+
+    fn encode_confidences(report: &mut Value) -> Result<(), String> {
+        let report = report
+            .as_object_mut()
+            .ok_or_else(|| "evidence report is not an object".to_string())?;
+        for field in REPORT_CONFIDENCE_FIELDS {
+            encode_field(report, field)?;
+        }
+        for claim in claims_mut(report)? {
+            let claim = claim
+                .as_object_mut()
+                .ok_or_else(|| "evidence claim is not an object".to_string())?;
+            for field in CLAIM_CONFIDENCE_FIELDS {
+                encode_field(claim, field)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_confidences(report: &mut Value) -> Result<(), String> {
+        let report = report
+            .as_object_mut()
+            .ok_or_else(|| "evidence report is not an object".to_string())?;
+        for field in REPORT_CONFIDENCE_FIELDS {
+            decode_field(report, field)?;
+        }
+        for claim in claims_mut(report)? {
+            let claim = claim
+                .as_object_mut()
+                .ok_or_else(|| "evidence claim is not an object".to_string())?;
+            for field in CLAIM_CONFIDENCE_FIELDS {
+                decode_field(claim, field)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn claims_mut(report: &mut Map<String, Value>) -> Result<&mut Vec<Value>, String> {
+        report
+            .get_mut("claims")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| "evidence claims are not an array".to_string())
+    }
+
+    fn encode_field(object: &mut Map<String, Value>, field: &str) -> Result<(), String> {
+        let Some(value) = object.get_mut(field) else {
+            return Ok(());
+        };
+        let encoded = match value {
+            Value::Number(number) if number.as_f64().is_some_and(f64::is_finite) => {
+                number.to_string()
+            }
+            Value::Number(_) => return Err(format!("evidence {field} is not finite")),
+            _ => return Err(format!("evidence {field} is not numeric")),
+        };
+        *value = Value::String(encoded);
+        Ok(())
+    }
+
+    fn decode_field(object: &mut Map<String, Value>, field: &str) -> Result<(), String> {
+        let Some(value) = object.get_mut(field) else {
+            return Ok(());
+        };
+        let Value::String(encoded) = value else {
+            return Err(format!("evidence {field} is not a wire decimal"));
+        };
+        if encoded.len() > MAX_CONFIDENCE_CHARS {
+            return Err(format!("evidence {field} wire decimal is too long"));
+        }
+        let confidence = encoded
+            .parse::<f64>()
+            .map_err(|_| format!("evidence {field} is not a valid wire decimal"))?;
+        if !confidence.is_finite() {
+            return Err(format!("evidence {field} is not finite"));
+        }
+        *value = Value::Number(
+            Number::from_f64(confidence)
+                .ok_or_else(|| format!("evidence {field} is not finite"))?,
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

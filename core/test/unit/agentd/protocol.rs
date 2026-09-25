@@ -52,7 +52,7 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_MONETARY_BUDGET,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 15);
+    assert_eq!(PROTOCOL_VERSION, 16);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
@@ -96,10 +96,7 @@ fn requested_model_round_trips_in_the_worker_assignment() {
         decoded.requested_model.as_deref(),
         Some("provider/model-v2")
     );
-    assert_eq!(
-        decoded.requested_reasoning_effort.as_deref(),
-        Some("high")
-    );
+    assert_eq!(decoded.requested_reasoning_effort.as_deref(), Some("high"));
     assert_eq!(decoded.attachments, attachments);
 }
 
@@ -377,6 +374,82 @@ async fn frames_round_trip_through_the_reader() {
         .await
         .expect("eof")
         .is_none());
+}
+
+#[tokio::test]
+async fn completed_run_with_evidence_confidence_round_trips() {
+    let evidence = crate::agent::runtime::evidence::verify_answer(
+        "What is the largest file?",
+        "The largest file is the VM image. [evidence:tool-1 confidence=0.93]",
+        &[crate::agent::llm::types::Message {
+            role: crate::agent::llm::types::Role::Assistant,
+            content: vec![
+                crate::agent::llm::types::ContentBlock::ToolUse {
+                    id: "tool-1".into(),
+                    name: "cos_sysinfo".into(),
+                    input: serde_json::json!({}),
+                },
+                crate::agent::llm::types::ContentBlock::ToolResult {
+                    tool_use_id: "tool-1".into(),
+                    content: "largest file result".into(),
+                    is_error: false,
+                },
+            ],
+        }],
+    );
+    assert_eq!(evidence.binding_confidence, Some(1.0));
+    assert_eq!(evidence.claim_confidence, Some(0.93));
+    let frame = WorkerFrame::Result {
+        task_id: "task-evidence".into(),
+        outcome: Box::new(WorkerOutcome::Ok(Box::new(CompletedRun {
+            response: "The largest file is the VM image.".into(),
+            turns_used: 2,
+            provider: "copilot".into(),
+            model: "fixture".into(),
+            evidence: Some(evidence),
+            fallback: None,
+        }))),
+    };
+
+    let encoded = encode(&frame).expect("encode evidence result");
+    assert!(encoded.contains(r#""binding_confidence":"1.0""#));
+    assert!(encoded.contains(r#""claim_confidence":"0.93""#));
+    let mut reader = FrameReader::new(tokio::io::BufReader::new(encoded.as_bytes()));
+    let decoded: WorkerFrame = reader
+        .next_frame()
+        .await
+        .expect("decode evidence result")
+        .expect("frame");
+    assert_eq!(decoded.task_id(), Some("task-evidence"));
+    let WorkerFrame::Result { outcome, .. } = decoded else {
+        panic!("decoded another frame kind");
+    };
+    let WorkerOutcome::Ok(run) = *outcome else {
+        panic!("decoded another outcome");
+    };
+    let evidence = run.evidence.expect("evidence");
+    assert_eq!(evidence.binding_confidence, Some(1.0));
+    assert_eq!(evidence.claim_confidence, Some(0.93));
+    assert_eq!(evidence.claims[0].declared_confidence, Some(0.93));
+    assert_eq!(evidence.claims[0].effective_confidence, Some(0.93));
+}
+
+#[tokio::test]
+async fn evidence_confidence_wire_rejects_non_finite_values() {
+    let line = concat!(
+        r#"{"kind":"result","task_id":"task-evidence","outcome":{"status":"ok","#,
+        r#""response":"answer","turns_used":1,"provider":"fixture","model":"fixture","#,
+        r#""evidence":{"status":"verified","required":true,"binding_confidence":"NaN","#,
+        r#""verified_claims":0,"total_claims":0,"sources":[],"claims":[],"#,
+        r#""interpretation":"fixture"}}}"#,
+        "\n"
+    );
+    let mut reader = FrameReader::new(tokio::io::BufReader::new(line.as_bytes()));
+    let error = reader
+        .next_frame::<WorkerFrame>()
+        .await
+        .expect_err("non-finite confidence must fail");
+    assert!(error.contains("binding_confidence is not finite"));
 }
 
 #[tokio::test]
