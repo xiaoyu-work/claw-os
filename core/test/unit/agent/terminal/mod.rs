@@ -12,7 +12,7 @@ use crate::agent::terminal::backend::{
 use crate::agent::terminal::commands::{parse as parse_command, Command, NotificationChannel};
 use crate::agent::terminal::state::{
     clean_text, App, ApprovalStatus, ConfirmationAction, EntryKind, NotificationPreferenceAction,
-    PickerSelection, ToolStatus,
+    PickerSelection, RunStatus, ToolStatus,
 };
 use base64::Engine;
 use ratatui::backend::TestBackend;
@@ -649,6 +649,127 @@ fn stream_projection_keeps_private_payloads_out_of_the_transcript() {
         (app.usage_input, app.usage_output, app.usage_cached),
         (7, 3, 2)
     );
+}
+
+#[test]
+fn provider_tool_announcement_waits_for_authoritative_runtime_start() {
+    let mut app = app();
+    app.begin_task(&job("running"));
+    presentation::apply_record(
+        &mut app,
+        &json!({
+            "event": {
+                "kind": "tool_use",
+                "id": "tool-1",
+                "name": "cos_sysinfo",
+                "input": {"path": "/private"}
+            }
+        }),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        app.entries.last().map(|entry| &entry.kind),
+        Some(EntryKind::Tool {
+            status: ToolStatus::Preparing,
+            ..
+        })
+    ));
+    assert!(!app
+        .entries
+        .iter()
+        .any(|entry| entry.text.contains("/private")));
+
+    presentation::apply_record(
+        &mut app,
+        &json!({
+            "progress": {
+                "kind": "tool_start",
+                "id": "tool-1",
+                "name": "cos_sysinfo"
+            }
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        app.entries.last().map(|entry| &entry.kind),
+        Some(EntryKind::Tool {
+            status: ToolStatus::Running { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn detached_tool_is_unconfirmed_instead_of_still_running() {
+    let mut app = app();
+    app.begin_task(&job("running"));
+    app.tool_started("tool-1", "cos_sysinfo");
+
+    app.detach_task();
+
+    assert!(matches!(
+        app.entries.last().map(|entry| &entry.kind),
+        Some(EntryKind::Tool {
+            status: ToolStatus::Unfinished,
+            ..
+        })
+    ));
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(100, 28)).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("no result reported"));
+    assert!(!output.contains("running"));
+}
+
+#[test]
+fn reconnecting_tool_is_rendered_as_unconfirmed() {
+    let mut app = app();
+    app.begin_task(&job("running"));
+    app.tool_started("tool-1", "cos_sysinfo");
+    app.status = RunStatus::Reconnecting;
+
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(100, 28)).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let output = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(output.contains("execution status unconfirmed"));
+    assert!(!output.contains("Running cos_sysinfo"));
+}
+
+#[test]
+fn clearing_active_transcript_keeps_live_tool_identity() {
+    let mut app = app();
+    app.begin_task(&job("running"));
+    app.tool_started("tool-1", "cos_sysinfo");
+
+    app.clear_transcript();
+
+    assert!(app.entries.iter().any(|entry| {
+        entry.text == "cos_sysinfo"
+            && matches!(
+                entry.kind,
+                EntryKind::Tool {
+                    status: ToolStatus::Running { .. },
+                    ..
+                }
+            )
+    }));
+    assert!(app
+        .entries
+        .iter()
+        .any(|entry| entry.text.contains("Transcript view cleared")));
 }
 
 #[test]
@@ -1584,6 +1705,7 @@ fn approval_runtime_distinguishes_missing_pkexec_and_helper() {
 #[test]
 fn ratatui_frame_is_claw_owned_and_contains_core_state() {
     let mut app = app();
+    app.begin_task(&job("running"));
     app.push_assistant_delta("## Result\n\nClaw completed the work.");
     app.tool_started("tool-1", "cos_sysinfo");
     let backend = TestBackend::new(100, 28);
@@ -1599,6 +1721,8 @@ fn ratatui_frame_is_claw_owned_and_contains_core_state() {
     assert!(output.contains("Claw terminal test"));
     assert!(output.contains("Claw completed the work."));
     assert!(output.contains("cos_sysinfo"));
+    assert!(output.contains("Running cos_sysinfo"));
+    assert!(output.contains("waiting for result"));
     assert!(!output.contains("Codex"));
 }
 

@@ -40,21 +40,27 @@ frontend's flags after `--`.
 
 ## Presentation
 
-The UI has four stable regions:
+The UI has five stable regions while work is active:
 
 1. A Claw header with canonical conversation title, model, session and task
    state.
 2. A scrollable transcript with separate user, assistant, reasoning, tool,
    approval, system and error entries.
-3. A dynamically sized multiline composer with Unicode-safe editing, paste
+3. A live execution area showing the current stage, task/tool elapsed time and
+   cancellation control.
+4. A dynamically sized multiline composer with Unicode-safe editing, paste
    handling and prompt history.
-4. A status line with controls, durable-queue count, scroll position and token
+5. A status line with controls, durable-queue count, scroll position and token
    usage.
 
-Working tasks show an animated status and elapsed time. Tool rows retain their
-identity, outcome and reported duration without exposing arguments or successful
-result bodies. Markdown headings, lists, quotes, fenced code, bold text and
-inline code receive terminal-native styling.
+Working tasks show an animated stage and elapsed time. A model-declared tool is
+shown as **Preparing** until the runtime emits its authoritative start record;
+only then does it become **Running** with a tool timer. Reconnecting and
+transport-failure states explicitly mark execution as unconfirmed instead of
+claiming that a tool is still running. Tool rows retain identity, outcome and
+reported duration without exposing arguments or successful result bodies.
+Markdown headings, lists, quotes, fenced code, bold text and inline code receive
+terminal-native styling.
 
 Model text is control-character sanitized and passed through the shared secret
 redactor before rendering. Tool inputs, successful result bodies, encrypted
@@ -367,7 +373,7 @@ cargo test -p cos --lib agent::terminal:: -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete slow-progress cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \
@@ -407,8 +413,11 @@ canonical service, verifies rename/fork command routing, preserves bracketed
 multiline paste, requires archive/rewind confirmation and confirms plain mode
 never contacts the broker. The task-center scenario browses owner-scoped tasks,
 cancels one exact running task and retries one exact terminal task. The
-approval-center scenario browses pending and recent owner-scoped decisions and
-keeps historical records read-only. The approval-choice scenario renders
+slow-progress scenario holds a real task stream open after an authoritative
+tool-start record, verifies animated terminal writes and advancing elapsed
+time, then releases the result and completes the same task.
+The approval-center scenario browses pending and recent owner-scoped decisions
+and keeps historical records read-only. The approval-choice scenario renders
 explicit selectable actions, ignores decision-key repeats and cancels without
 invoking authorization. The notification scenario performs exact
 read, acknowledge and dismiss mutations and updates durable delivery/DND

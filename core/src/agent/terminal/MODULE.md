@@ -16,7 +16,7 @@ audit.
 | `state.rs` | Bounded transcript, composer, durable-task handles, approval and session state |
 | `commands.rs` | Closed Claw slash catalogue and canonical conversation/model/Skill actions |
 | `stream.rs` | Durable task submission, identity/model acknowledgement and stream polling |
-| `ui.rs` | ratatui layout, styling, Markdown-oriented transcript projection and cursor |
+| `ui.rs`, `ui/progress.rs` | ratatui layout, live execution animation, styling, Markdown-oriented transcript projection and cursor |
 | `presentation.rs` | Redacted model/tool/reasoning/progress projection |
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes and protected approval helper |
 | `authorization.rs` | Per-decision unprivileged polkit text agent, readiness and bounded teardown |
@@ -54,6 +54,10 @@ audit.
   presentation.
 - Display only shared redacted presentation data. Never expose tool arguments,
   successful result bodies, opaque reasoning state or credentials.
+- Treat provider tool-use events as declarations only. Show **Preparing** until
+  the runtime progress record proves dispatch, then animate **Running** with
+  task/tool elapsed time. A disconnect or detached stream makes unfinished
+  execution explicitly unconfirmed; it never preserves a false running claim.
 - Approval keys call the installed OS helper for one exact pending request;
   no UI object or key press is permission.
 - Approval browsing combines only owner-scoped pending and recent records.

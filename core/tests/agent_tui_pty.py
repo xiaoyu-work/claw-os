@@ -128,6 +128,8 @@ class FixtureBroker:
         self.requested_plan_only = False
         self.requested_workspace = None
         self.stream_disconnects = 0
+        self.slow_progress_waiting = threading.Event()
+        self.slow_progress_release = threading.Event()
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
         self.workspace = str(self.home / "project")
         self.session_id = SESSION_ID
@@ -910,6 +912,25 @@ class FixtureBroker:
                         }},
                     ])
                 self.cursors[task_id] = len(events)
+            elif self.case == "slow-progress":
+                self.slow_progress_waiting.set()
+                if not self.slow_progress_release.wait(timeout=10):
+                    raise AssertionError("slow progress fixture was not released")
+                events = [
+                    {"progress": {
+                        "kind": "tool_result", "id": "tool-1", "name": "cos_sysinfo",
+                        "ok": True, "latency_ms": 1234,
+                    }},
+                    {"event": {"kind": "text_delta", "text": "\n## Result\n\n" + ANSWER}},
+                    {"event": {
+                        "kind": "done", "finish": "stop",
+                        "usage": {
+                            "input_tokens": 20, "output_tokens": 10,
+                            "cache_read_tokens": 0, "cache_write_tokens": 0,
+                        },
+                    }},
+                ]
+                self.cursors[task_id] = params["cursor"] + len(events)
             terminal = self.case in (
                 "complete",
                 "resume",
@@ -945,7 +966,7 @@ class FixtureBroker:
                 "task-controls",
                 "reconnect",
                 "startup-reconnect",
-            ) or (
+            ) or (self.case == "slow-progress" and self.slow_progress_release.is_set()) or (
                 self.case == "durable-queue"
                 and (task_id == self.queued_task_id or self.queue_submitted.is_set())
             ) or self.cancelled.is_set()
@@ -1020,6 +1041,7 @@ class FixtureBroker:
 
     def close(self):
         self.stopped.set()
+        self.slow_progress_release.set()
         self.thread.join(timeout=5)
         self.listener.close()
         if self.thread.is_alive():
@@ -2228,6 +2250,35 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 else RUNNING
             )
+            if case == "slow-progress":
+                read_terminal(
+                    master,
+                    output,
+                    time.monotonic() + 15,
+                    lambda data: broker.slow_progress_waiting.is_set()
+                    and b"Running" in data
+                    and b"cos_sysinfo" in data,
+                )
+                animated_at = len(output)
+                first_tick_due = time.monotonic() + 0.35
+                read_terminal(
+                    master,
+                    output,
+                    first_tick_due + 2,
+                    lambda data: time.monotonic() >= first_tick_due
+                    and len(data) > animated_at,
+                )
+                first_tick_at = len(output)
+                second_tick_due = time.monotonic() + 0.75
+                read_terminal(
+                    master,
+                    output,
+                    second_tick_due + 2,
+                    lambda data: time.monotonic() >= second_tick_due
+                    and len(data) > first_tick_at,
+                )
+                broker.slow_progress_release.set()
+                marker = ANSWER
             if case == "reconnect":
                 read_terminal(
                     master,
@@ -2423,6 +2474,7 @@ if __name__ == "__main__":
         "--case",
         choices=(
             "complete",
+            "slow-progress",
             "cancel",
             "commands",
             "confirmations",

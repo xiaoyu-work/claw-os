@@ -336,9 +336,7 @@ async fn run_with_backend(
                         app.push_error(&format!(
                             "{error}. The durable task may still be running; use /session to retain its conversation id."
                         ));
-                        app.active_task = None;
-                        app.active_workspace = None;
-                        app.status = RunStatus::Ready;
+                        app.detach_task();
                     }
                 }
                 if let Some(job) = next_task {

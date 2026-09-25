@@ -5,11 +5,13 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+mod progress;
+
 use super::commands::suggestions;
 use super::state::{
-    clean_text, App, ApprovalStatus, Entry, EntryKind, PickerKind, RunStatus, TerminalTheme,
-    ToolStatus,
+    clean_text, App, ApprovalStatus, EntryKind, PickerKind, RunStatus, TerminalTheme,
 };
+use progress::spinner;
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
@@ -19,14 +21,16 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
+            Constraint::Length(if app.active_task.is_some() { 2 } else { 0 }),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
         .split(area);
     render_header(frame, chunks[0], app);
     render_transcript(frame, chunks[1], app);
-    render_composer(frame, chunks[2], app);
-    render_footer(frame, chunks[3], app);
+    progress::render(frame, chunks[2], app);
+    render_composer(frame, chunks[3], app);
+    render_footer(frame, chunks[4], app);
     render_command_palette(frame, chunks[1], app);
     render_picker(frame, area, app);
     render_task_controls(frame, area, app);
@@ -2132,10 +2136,6 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
-fn spinner(frame: u64) -> &'static str {
-    ["|", "/", "-", "\\"][(frame as usize) % 4]
-}
-
 fn elapsed(app: &App) -> String {
     app.task_elapsed()
         .map(|elapsed| format!("{:.1}s", elapsed.as_secs_f64()))
@@ -2143,7 +2143,7 @@ fn elapsed(app: &App) -> String {
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let lines = transcript_lines(&app.entries);
+    let lines = transcript_lines(app);
     let width = area.width.saturating_sub(2).max(1);
     let content_width = usize::from(width);
     let total = lines
@@ -2165,9 +2165,9 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
-fn transcript_lines(entries: &[Entry]) -> Vec<Line<'static>> {
+fn transcript_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for entry in entries {
+    for entry in &app.entries {
         match &entry.kind {
             EntryKind::User => {
                 for (index, text) in entry.text.lines().enumerate() {
@@ -2204,21 +2204,7 @@ fn transcript_lines(entries: &[Entry]) -> Vec<Line<'static>> {
                 }
             }
             EntryKind::Tool { status, .. } => {
-                let (mark, color, duration) = match status {
-                    ToolStatus::Running => ("*", Color::Cyan, None),
-                    ToolStatus::Succeeded { duration_ms } => ("+", Color::Green, *duration_ms),
-                    ToolStatus::Failed { duration_ms } => ("!", Color::Red, *duration_ms),
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{mark} "), Style::default().fg(color)),
-                    Span::styled(entry.text.clone(), Style::default().fg(Color::Gray)),
-                    Span::styled(
-                        duration
-                            .map(|duration| format!("  {duration}ms"))
-                            .unwrap_or_default(),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
+                lines.push(progress::tool_line(&entry.text, *status, app));
             }
             EntryKind::System => {
                 lines.extend(entry.text.lines().map(|line| {

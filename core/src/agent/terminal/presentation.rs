@@ -83,16 +83,16 @@ pub(super) fn apply_record(app: &mut App, record: &Value) -> Result<RecordOutcom
                     ContentBlock::Reasoning { id: _, summary, .. } => {
                         app.push_reasoning(&summary);
                     }
-                    ContentBlock::ToolUse { id, name, .. } => app.tool_started(&id, &name),
+                    ContentBlock::ToolUse { id, name, .. } => app.tool_announced(&id, &name),
                     _ => {}
                 }
             }
             for call in response.tool_calls {
-                app.tool_started(&call.id, &call.name);
+                app.tool_announced(&call.id, &call.name);
             }
         }
-        StreamEvent::ToolUseStart { id, name } => app.tool_started(&id, &name),
-        StreamEvent::ToolUse(call) => app.tool_started(&call.id, &call.name),
+        StreamEvent::ToolUseStart { id, name } => app.tool_announced(&id, &name),
+        StreamEvent::ToolUse(call) => app.tool_announced(&call.id, &call.name),
         StreamEvent::Reasoning { summary, .. } => app.push_reasoning(&summary),
         StreamEvent::ToolInputDelta { .. } | StreamEvent::ToolState { .. } => {}
         StreamEvent::Done { usage, .. } => {

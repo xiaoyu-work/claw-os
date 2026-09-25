@@ -27,9 +27,11 @@ pub(super) enum EntryKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ToolStatus {
-    Running,
+    Preparing,
+    Running { started_at: Instant },
     Succeeded { duration_ms: Option<u64> },
     Failed { duration_ms: Option<u64> },
+    Unfinished,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -431,25 +433,21 @@ impl App {
     }
 
     pub fn begin_task(&mut self, job: &Job) {
+        self.detach_task();
         self.active_task = Some(job.id.clone());
         self.active_workspace = job.workspace.clone();
         self.status = RunStatus::Working;
         self.task_started_at = Some(Instant::now());
-        self.active_assistant = None;
-        self.provider_had_text = false;
-        self.task_had_assistant_text = false;
         self.push_entry(EntryKind::User, clean_text(&job.prompt));
         self.scroll = 0;
     }
 
     pub fn resume_task(&mut self, job: &Job, queued_successors: usize) {
+        self.detach_task();
         self.active_task = Some(job.id.clone());
         self.active_workspace = job.workspace.clone();
         self.status = RunStatus::Working;
         self.task_started_at = Some(Instant::now());
-        self.active_assistant = None;
-        self.provider_had_text = false;
-        self.task_had_assistant_text = false;
         self.push_system(&format!(
             "Reattached durable task {}{}.",
             job.id,
@@ -505,13 +503,7 @@ impl App {
             "error" => self.push_error(job.error.as_deref().unwrap_or("Claw task failed.")),
             status => self.push_error(&format!("Task ended with unexpected status {status}.")),
         }
-        self.active_task = None;
-        self.active_workspace = None;
-        self.status = RunStatus::Ready;
-        self.task_started_at = None;
-        self.active_assistant = None;
-        self.provider_had_text = false;
-        self.task_had_assistant_text = false;
+        self.detach_task();
         for entry in &mut self.entries {
             if let EntryKind::Approval { status, .. } = &mut entry.kind {
                 if *status == ApprovalStatus::Pending {
@@ -527,6 +519,24 @@ impl App {
             .is_some_and(|task| task.id == job.id)
         {
             self.open_task_detail(job.clone());
+        }
+    }
+
+    pub fn detach_task(&mut self) {
+        self.active_task = None;
+        self.active_workspace = None;
+        self.status = RunStatus::Ready;
+        self.task_started_at = None;
+        self.active_assistant = None;
+        self.provider_had_text = false;
+        self.task_had_assistant_text = false;
+        self.tool_entries.clear();
+        for entry in &mut self.entries {
+            if let EntryKind::Tool { status, .. } = &mut entry.kind {
+                if matches!(status, ToolStatus::Preparing | ToolStatus::Running { .. }) {
+                    *status = ToolStatus::Unfinished;
+                }
+            }
         }
     }
 
@@ -571,25 +581,44 @@ impl App {
         );
     }
 
-    pub fn tool_started(&mut self, id: &str, name: &str) {
+    pub fn tool_announced(&mut self, id: &str, name: &str) {
         if let Some(index) = self.tool_entries.get(id).copied() {
-            self.entries[index].text = clean_text(name);
+            let text = bounded_clean_text(name, 128).replace(['\n', '\t'], " ");
+            self.transcript_bytes = self
+                .transcript_bytes
+                .saturating_sub(self.entries[index].text.len())
+                .saturating_add(text.len());
+            self.entries[index].text = text;
+            self.trim_transcript();
             return;
         }
         self.push_entry(
             EntryKind::Tool {
                 id: id.to_string(),
-                status: ToolStatus::Running,
+                status: ToolStatus::Preparing,
             },
-            clean_text(name),
+            bounded_clean_text(name, 128).replace(['\n', '\t'], " "),
         );
         if let Some(index) = self.entries.len().checked_sub(1) {
             self.tool_entries.insert(id.to_string(), index);
         }
     }
 
+    pub fn tool_started(&mut self, id: &str, name: &str) {
+        self.tool_announced(id, name);
+        if let Some(index) = self.tool_entries.get(id).copied() {
+            if let EntryKind::Tool { status, .. } = &mut self.entries[index].kind {
+                if !matches!(status, ToolStatus::Running { .. }) {
+                    *status = ToolStatus::Running {
+                        started_at: Instant::now(),
+                    };
+                }
+            }
+        }
+    }
+
     pub fn tool_finished(&mut self, id: &str, name: &str, success: bool, duration_ms: Option<u64>) {
-        self.tool_started(id, name);
+        self.tool_announced(id, name);
         if let Some(index) = self.tool_entries.get(id).copied() {
             if let EntryKind::Tool { status, .. } = &mut self.entries[index].kind {
                 *status = if success {
@@ -1055,9 +1084,11 @@ impl App {
                 EntryKind::Tool { id, status } if entry.text == "cos_delegate" => Some((
                     id.clone(),
                     match status {
-                        ToolStatus::Running => "running",
+                        ToolStatus::Preparing => "preparing",
+                        ToolStatus::Running { .. } => "running",
                         ToolStatus::Succeeded { .. } => "completed",
                         ToolStatus::Failed { .. } => "failed",
+                        ToolStatus::Unfinished => "unconfirmed",
                     },
                 )),
                 _ => None,
@@ -1361,9 +1392,24 @@ impl App {
     }
 
     pub fn clear_transcript(&mut self) {
-        self.entries.clear();
-        self.transcript_bytes = 0;
+        self.entries.retain(|entry| {
+            self.active_task.is_some()
+                && matches!(
+                    entry.kind,
+                    EntryKind::Tool {
+                        status: ToolStatus::Preparing | ToolStatus::Running { .. },
+                        ..
+                    }
+                )
+        });
+        self.transcript_bytes = self.entries.iter().map(|entry| entry.text.len()).sum();
+        self.active_assistant = None;
         self.tool_entries.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if let EntryKind::Tool { id, .. } = &entry.kind {
+                self.tool_entries.insert(id.clone(), index);
+            }
+        }
         self.push_system(
             "Transcript view cleared. Canonical conversation history was not deleted.",
         );
