@@ -89,7 +89,7 @@ class Terminal:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
         # pkexec authenticates its parent; that parent must also be the fixture user.
         owner_command = [
-            "/usr/bin/python3", str(Path(__file__).resolve()), "--owner-command",
+            "/usr/bin/python3", str(home.parent / "approval-driver.py"), "--owner-command",
             *args,
         ] if args[0] == "/usr/bin/pkexec" else args
         self.process = subprocess.Popen(
@@ -254,6 +254,9 @@ def run(args):
     with tempfile.TemporaryDirectory(prefix="claw-polkit-test-") as temporary:
         root = Path(temporary)
         root.chmod(0o755)
+        driver = root / "approval-driver.py"
+        driver.write_bytes(Path(__file__).read_bytes())
+        driver.chmod(0o644)
         with contextlib.ExitStack() as cleanup:
             for name in ("cos", "clawd", "helper", "policy"):
                 staged = root / name
