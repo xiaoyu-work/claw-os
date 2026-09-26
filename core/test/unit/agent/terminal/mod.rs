@@ -16,6 +16,7 @@ use crate::agent::terminal::state::{
 };
 use base64::Engine;
 use ratatui::backend::TestBackend;
+use ratatui::style::Color;
 use serde_json::json;
 
 fn parse(args: &[&str]) -> Result<ChatOptions, String> {
@@ -1588,7 +1589,7 @@ fn voice_center_uses_claw_media_models_without_claiming_realtime_capture() {
 }
 
 #[test]
-fn approvals_have_one_explicit_terminal_decision() {
+fn approvals_default_to_readable_authorize_once() {
     let mut app = app();
     app.open_platform_overview(PlatformOverview {
         presentation: "{}".into(),
@@ -1599,6 +1600,9 @@ fn approvals_have_one_explicit_terminal_decision() {
         id: "approval-1".into(),
         verb: "fs.write".into(),
         scope: json!({"path": "/home/claw/output"}),
+        label: "Create or modify files".into(),
+        description: "Write new files or change existing ones in the granted folder.".into(),
+        target: "/home/claw/output".into(),
         reason: "Write requested output".into(),
         status: "pending".into(),
         session: "ses_001953abcdef0_123456789abc".into(),
@@ -1614,23 +1618,46 @@ fn approvals_have_one_explicit_terminal_decision() {
     assert!(app.confirmation.is_none());
     assert_eq!(app.current_approval().unwrap().id, "approval-1");
     assert_eq!(app.approval_choice, ReviewDecision::ApproveOnce);
-    assert!(!app.approval_choice_is_explicit());
-    for character in "/quit".chars() {
-        assert_eq!(
-            handle_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE)
-            ),
-            InputAction::None
-        );
-    }
     assert_eq!(
         handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         ),
-        InputAction::None
+        InputAction::Review(ReviewDecision::ApproveOnce)
     );
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 20)).unwrap();
+    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let output = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    let needle = "Authorize once"
+        .chars()
+        .map(|character| character.to_string())
+        .collect::<Vec<_>>();
+    let authorize = buffer
+        .content()
+        .chunks(110)
+        .find_map(|row| {
+            row.windows(needle.len())
+                .position(|cells| {
+                    cells
+                        .iter()
+                        .zip(&needle)
+                        .all(|(cell, expected)| cell.symbol() == expected)
+                })
+                .map(|index| &row[index])
+        })
+        .unwrap();
+    assert_eq!(authorize.bg, Color::Magenta);
+    assert!(output.contains("Create or modify files"));
+    assert!(output.contains("Target: /home/claw/output"));
+    assert!(output.contains("Write new files or change existing ones"));
+    assert!(output.contains("Left/Right choose"));
+    assert!(output.contains("Esc/Ctrl+C stop task"));
+
     assert_eq!(
         handle_key(
             &mut app,
@@ -1642,7 +1669,6 @@ fn approvals_have_one_explicit_terminal_decision() {
         InputAction::None
     );
     assert_eq!(app.approval_choice, ReviewDecision::Deny);
-    assert!(app.approval_choice_is_explicit());
     for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER | KeyModifiers::SHIFT] {
         assert_eq!(
             handle_key(&mut app, KeyEvent::new(KeyCode::Char('a'), modifiers)),
@@ -1677,18 +1703,6 @@ fn approvals_have_one_explicit_terminal_decision() {
         ),
         InputAction::Review(ReviewDecision::Deny)
     );
-    let mut terminal = ratatui::Terminal::new(TestBackend::new(110, 20)).unwrap();
-    terminal.draw(|frame| ui::render(frame, &app)).unwrap();
-    let output = terminal
-        .backend()
-        .buffer()
-        .content()
-        .iter()
-        .map(|cell| cell.symbol())
-        .collect::<String>();
-    assert!(output.contains("Authorize once"));
-    assert!(output.contains("Left/Right choose"));
-    assert!(output.contains("Esc/Ctrl+C stop task"));
     app.resolve_approval("approval-1", true);
     assert!(app.current_approval().is_none());
     assert!(app.entries.iter().any(|entry| {
@@ -1921,6 +1935,9 @@ fn approval_center_keeps_history_read_only_and_pending_decisions_exact() {
         id: "approval-center-1".into(),
         verb: "fs.write".into(),
         scope: json!({"kind": "path", "value": "/home/claw/output"}),
+        label: "Create or modify files".into(),
+        description: "Write new files or change existing ones in the granted folder.".into(),
+        target: "/home/claw/output".into(),
         reason: "Write the requested output".into(),
         status: "pending".into(),
         session: "ses_001953abcdef0_123456789abc".into(),

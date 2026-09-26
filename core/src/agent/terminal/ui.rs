@@ -1664,7 +1664,14 @@ fn render_approval_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
             Span::raw("  "),
             Span::styled(approval.id.clone(), Style::default().fg(Color::DarkGray)),
         ]),
-        Line::raw(format!("capability: {}", approval.verb)),
+        Line::styled(
+            approval.label.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(approval.description.clone()),
+        Line::raw(format!("target: {}", approval.target)),
         Line::raw(format!(
             "risk: {}",
             approval.risk.as_deref().unwrap_or("unclassified")
@@ -1683,18 +1690,19 @@ fn render_approval_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "Scope",
+        "Technical details",
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     ));
+    lines.push(Line::raw(format!("capability: {}", approval.verb)));
     let scope = serde_json::to_string_pretty(&approval.scope)
         .map(|value| clean_text(&value))
         .unwrap_or_else(|_| "[scope unavailable]".into());
     lines.extend(scope.lines().map(|line| Line::raw(line.to_string())));
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "Reason",
+        "Why Claw requested this",
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -2364,10 +2372,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }))
         .title(title);
     if let Some(approval) = app.current_approval() {
-        let choice_is_explicit = app.approval_choice_is_explicit();
-        let approve_style = if choice_is_explicit
-            && app.approval_choice == super::backend::ReviewDecision::ApproveOnce
-        {
+        let approve_style = if app.approval_choice == super::backend::ReviewDecision::ApproveOnce {
             Style::default()
                 .fg(Color::White)
                 .bg(Color::Magenta)
@@ -2375,9 +2380,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        let deny_selected =
-            choice_is_explicit && app.approval_choice == super::backend::ReviewDecision::Deny;
-        let deny_style = if deny_selected {
+        let deny_style = if app.approval_choice == super::backend::ReviewDecision::Deny {
             Style::default()
                 .fg(Color::White)
                 .bg(Color::Red)
@@ -2388,10 +2391,26 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         let text = vec![
             Line::from(vec![
                 Span::styled(
-                    format!("{} {} ", approval.verb, approval.scope),
+                    approval.label.clone(),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
+                Span::styled(
+                    format!(
+                        "  [{}]",
+                        approval
+                            .risk
+                            .as_deref()
+                            .unwrap_or("unclassified")
+                            .to_uppercase()
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]),
+            Line::raw(format!("Target: {}", approval.target)),
+            Line::styled(
+                approval.description.clone(),
+                Style::default().fg(Color::Gray),
+            ),
             Line::from(vec![
                 Span::styled(" Authorize once ", approve_style),
                 Span::raw("  "),
@@ -2485,7 +2504,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn composer_height(width: u16, app: &App) -> u16 {
     if app.current_approval().is_some() {
-        return 4;
+        return 6;
     }
     let inner = width.saturating_sub(4).max(1);
     let rows = app

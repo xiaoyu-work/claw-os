@@ -388,9 +388,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 app.cycle_approval_choice();
                 InputAction::None
             }
-            KeyCode::Enter if app.approval_choice_is_explicit() => {
-                InputAction::Review(app.approval_choice)
-            }
+            KeyCode::Enter => InputAction::Review(app.approval_choice),
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 InputAction::Review(ReviewDecision::ApproveOnce)
             }

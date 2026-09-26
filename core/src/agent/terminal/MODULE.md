@@ -59,6 +59,9 @@ audit.
   execution explicitly unconfirmed; it never preserves a false running claim.
 - Approval keys send one exact decision to `clawd`; the renderer itself remains
   non-authoritative.
+- Approval presentation resolves every internal verb through the shared
+  capability catalog and renders its localized label, explanatory blurb and a
+  human target summary. Raw verb/scope JSON remains secondary technical detail.
 - Approval browsing combines only owner-scoped pending and recent records.
   Historical records are read-only. The authenticated same-owner TUI may grant
   one exact request only while its broker peer is kernel-verified as attended;
@@ -145,8 +148,8 @@ audit.
   remains unavailable until Desktop's bounded recorder/transcription boundary
   is shared with the TUI. Desktop consumes the same global binding first;
   terminal-only sessions receive it through enhanced keyboard reporting.
-- Active approvals start with no selected action: bare Enter is inert.
-  Left/Right plus Enter selects explicitly; `a`/`d` remain direct shortcuts,
+- Active approvals default-highlight Authorize once. Enter confirms the
+  highlighted action, Left/Right changes it, `a`/`d` remain direct shortcuts,
   key repeats are ignored, and Esc/Ctrl+C stops the task without deciding.
   Both decisions remain inside the alternate-screen TUI: no `pkexec`, polkit,
   password prompt or terminal handoff occurs. `clawd` derives owner and local

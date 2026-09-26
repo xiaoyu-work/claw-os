@@ -419,15 +419,23 @@ class FixtureBroker:
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
         if method == "permission.pending" and self.case in ("approval-center", "approval-choice"):
+            metadata = self.case == "approval-choice"
             return {
                 "requests": [{
                     "id": PENDING_APPROVAL_ID,
-                    "verb": "fs.write",
-                    "scope": {"kind": "path", "value": "/home/claw/report.md"},
+                    "verb": "fs.meta" if metadata else "fs.write",
+                    "scope": {
+                        "kind": "path",
+                        "value": "/**" if metadata else "/home/claw/report.md",
+                    },
                     "session": self.session_id,
-                    "reason": "Write the requested report",
+                    "reason": (
+                        "Inspect file details: path:/**"
+                        if metadata
+                        else "Write the requested report"
+                    ),
                     "requested_at": 1767225600,
-                    "risk": "high",
+                    "risk": "low" if metadata else "high",
                     "requester": "Claw Agent",
                 }]
             }
@@ -2402,25 +2410,15 @@ def run(cos, case, transcript, original_namespace, trace):
                     output,
                     time.monotonic() + 15,
                     lambda data: b"Authorize once" in data
+                    and b"Inspect file details" in data
+                    and b"All files and folders" in data
+                    and b"without reading the contents" in data
                     and b"Left/Right choose" in data
                     and any(
                         request["command"] == "permission.pending"
                         for request in broker.requests
                     ),
                 )
-                os.write(master, b"/quit\r")
-                quiet_until = time.monotonic() + 0.5
-                read_terminal(
-                    master,
-                    output,
-                    quiet_until + 2,
-                    lambda _data: time.monotonic() >= quiet_until,
-                )
-                if any(
-                    request["command"] == "permission.decide"
-                    for request in broker.requests
-                ):
-                    raise AssertionError("unselected Enter decided an approval")
                 os.write(master, b"\x1b[97;1:2u")
                 time.sleep(0.2)
                 if any(
@@ -2428,8 +2426,6 @@ def run(cos, case, transcript, original_namespace, trace):
                     for request in broker.requests
                 ):
                     raise AssertionError("repeated approval shortcut was accepted")
-                os.write(master, b"\x1b[D")
-                time.sleep(0.3)
                 os.write(master, b"\r")
                 read_terminal(
                     master,

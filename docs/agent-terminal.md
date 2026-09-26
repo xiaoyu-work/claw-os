@@ -137,15 +137,20 @@ Controls:
   through default/8/16/32. `p` toggles durable Plan mode.
 - `Ctrl-C` cancels active work, or exits while idle.
 - `Ctrl-D` exits while idle.
-- During an approval, no action is selected initially and bare `Enter` does
-  nothing. `Left` / `Right` select **Authorize once** or **Deny**, then `Enter`
-  confirms; `a` / `d` remain direct shortcuts. `Esc` or `Ctrl-C` stops the
-  task without deciding. Decision keys act only on key press, never
+- During an approval, **Authorize once** is highlighted by default.
+  `Left` / `Right` switch between it and **Deny**, and `Enter` confirms the
+  highlighted action; `a` / `d` remain direct shortcuts. `Esc` or `Ctrl-C`
+  stops the task without deciding. Decision keys act only on key press, never
   auto-repeat. Both choices remain inside the full-screen TUI: no `pkexec`,
   polkit or OS password prompt is opened. `clawd` derives the owner and local
   terminal presence from the kernel peer; **Authorize once** is restricted to
   that exact request and cannot become a session or reusable grant. **Deny**
   grants nothing.
+- Permission prompts lead with the catalog's human action, target and effect,
+  for example **Inspect file details**, **All files and folders**, and
+  **See file names, sizes, and timestamps without reading the contents**.
+  Internal identifiers such as `fs.meta` and raw scope JSON appear only in the
+  Approval Center's secondary **Technical details** section.
 - In a durable task detail, `c` cancels a non-terminal task, `r` retries a
   terminal task as a new durable task, and `Up` / `Down` scroll its bounded
   redacted result.
@@ -420,10 +425,10 @@ slow-progress scenario holds a real task stream open after an authoritative
 tool-start record, verifies animated terminal writes and advancing elapsed
 time, then releases the result and completes the same task.
 The approval-center scenario browses pending and recent owner-scoped decisions
-and keeps historical records read-only. The approval-choice scenario starts
-unselected, keeps bare Enter inert, ignores decision-key repeats, and approves
-one exact request through the attended owner-bound broker path without leaving
-the TUI. The notification scenario performs exact
+and keeps historical records read-only. The approval-choice scenario verifies
+catalog-backed human text, default-highlighted Authorize once, ignored
+decision-key repeats, and one exact approval through the attended owner-bound
+broker path without leaving the TUI. The notification scenario performs exact
 read, acknowledge and dismiss mutations and updates durable delivery/DND
 preferences without a desktop dependency. The Activity scenario exercises the
 shared list/detail/create/run/pause/reopen/complete/cancel/attention lifecycle.

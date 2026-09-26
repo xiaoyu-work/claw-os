@@ -180,7 +180,6 @@ pub(super) struct App {
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub approval_choice: ReviewDecision,
-    approval_choice_explicit: bool,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
     pub command_selection: usize,
@@ -276,7 +275,6 @@ impl App {
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             approval_choice: ReviewDecision::ApproveOnce,
-            approval_choice_explicit: false,
             input_history: Vec::new(),
             history_index: None,
             command_selection: 0,
@@ -345,7 +343,6 @@ impl App {
         self.tool_entries.clear();
         self.pending_approvals.clear();
         self.approval_choice = ReviewDecision::ApproveOnce;
-        self.approval_choice_explicit = false;
         self.seen_approvals.clear();
         self.active_assistant = None;
         self.provider_had_text = false;
@@ -516,7 +513,6 @@ impl App {
         }
         self.pending_approvals.clear();
         self.approval_choice = ReviewDecision::ApproveOnce;
-        self.approval_choice_explicit = false;
         if self
             .task_detail
             .as_ref()
@@ -646,17 +642,17 @@ impl App {
                     status: ApprovalStatus::Pending,
                 },
                 format!(
-                    "{} on {}\n{}",
-                    clean_text(&approval.verb),
-                    clean_text(&approval.scope.to_string()),
-                    clean_text(&approval.reason)
+                    "{}\nTarget: {}\n{}\nWhy: {}",
+                    clean_text(&approval.label),
+                    clean_text(&approval.target),
+                    clean_text(&approval.description),
+                    clean_text(&approval.reason),
                 ),
             );
             self.pending_approvals.push_back(approval);
         }
         if was_empty && !self.pending_approvals.is_empty() {
             self.approval_choice = ReviewDecision::ApproveOnce;
-            self.approval_choice_explicit = false;
         }
         if !self.pending_approvals.is_empty() {
             self.status = RunStatus::WaitingApproval;
@@ -685,24 +681,14 @@ impl App {
     }
 
     pub fn cycle_approval_choice(&mut self) {
-        self.approval_choice = if self.approval_choice_explicit {
-            match self.approval_choice {
-                ReviewDecision::ApproveOnce => ReviewDecision::Deny,
-                ReviewDecision::Deny => ReviewDecision::ApproveOnce,
-            }
-        } else {
-            ReviewDecision::ApproveOnce
+        self.approval_choice = match self.approval_choice {
+            ReviewDecision::ApproveOnce => ReviewDecision::Deny,
+            ReviewDecision::Deny => ReviewDecision::ApproveOnce,
         };
-        self.approval_choice_explicit = true;
     }
 
     pub fn select_approval_choice(&mut self, decision: ReviewDecision) {
         self.approval_choice = decision;
-        self.approval_choice_explicit = true;
-    }
-
-    pub fn approval_choice_is_explicit(&self) -> bool {
-        self.approval_choice_explicit
     }
 
     pub fn resolve_approval(&mut self, id: &str, approved: bool) {
@@ -730,7 +716,6 @@ impl App {
             RunStatus::Ready
         };
         self.approval_choice = ReviewDecision::ApproveOnce;
-        self.approval_choice_explicit = false;
     }
 
     pub fn push_system(&mut self, text: &str) {
@@ -1708,7 +1693,7 @@ impl App {
                         label: format!(
                             "{} {}",
                             approval.status.to_uppercase(),
-                            bounded_clean_text(&approval.verb, 80)
+                            bounded_clean_text(&approval.label, 80)
                         ),
                         detail: format!(
                             "{} | {} | {}",
@@ -1727,6 +1712,9 @@ impl App {
 
     pub fn open_approval_detail(&mut self, mut approval: ApprovalRequest) {
         approval.verb = bounded_clean_text(&approval.verb, 256).replace('\n', " ");
+        approval.label = bounded_clean_text(&approval.label, 256).replace('\n', " ");
+        approval.description = bounded_clean_text(&approval.description, 1_024);
+        approval.target = bounded_clean_text(&approval.target, 1_024).replace('\n', " ");
         approval.reason = bounded_clean_text(&approval.reason, 8_192);
         approval.session = bounded_clean_text(&approval.session, 512).replace('\n', " ");
         approval.requester = approval

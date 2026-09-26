@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::caps::{catalog, Scope, Verb};
 use crate::clawd::protocol::Request;
 use crate::clawd::routes::Command;
 use crate::config::CosConfig;
@@ -308,6 +309,9 @@ pub(super) struct ApprovalRequest {
     pub id: String,
     pub verb: String,
     pub scope: Value,
+    pub label: String,
+    pub description: String,
+    pub target: String,
     pub reason: String,
     pub status: String,
     pub session: String,
@@ -2206,13 +2210,24 @@ fn parse_task_summary(value: &Value) -> Result<TaskSummary, String> {
 
 fn parse_approval(value: &Value, status: &str) -> Result<ApprovalRequest, String> {
     let decision = value.get("decision").filter(|value| value.is_object());
+    let verb = required_string(value, "verb")?;
+    let parsed_verb =
+        Verb::parse(&verb).ok_or_else(|| format!("approval request has unknown verb {verb}"))?;
+    let metadata = catalog::lookup(parsed_verb)
+        .ok_or_else(|| format!("approval request has no catalog entry for {verb}"))?;
+    let scope = value
+        .get("scope")
+        .cloned()
+        .ok_or("approval request omitted scope")?;
+    let parsed_scope = serde_json::from_value::<Scope>(scope.clone())
+        .map_err(|error| format!("approval request has invalid scope: {error}"))?;
     Ok(ApprovalRequest {
         id: required_string(value, "id")?,
-        verb: required_string(value, "verb")?,
-        scope: value
-            .get("scope")
-            .cloned()
-            .ok_or("approval request omitted scope")?,
+        verb,
+        scope,
+        label: metadata.label.current().to_string(),
+        description: metadata.blurb.current().to_string(),
+        target: approval_target(&parsed_scope),
         reason: required_string(value, "reason")?,
         status: status.to_string(),
         session: required_string(value, "session")?,
@@ -2228,6 +2243,25 @@ fn parse_approval(value: &Value, status: &str) -> Result<ApprovalRequest, String
         duration: decision.and_then(|decision| optional_string(decision, "duration")),
         note: decision.and_then(|decision| optional_string(decision, "note")),
     })
+}
+
+fn approval_target(scope: &Scope) -> String {
+    match scope {
+        Scope::Path(path) if matches!(path.as_str(), "/" | "/**" | "**") => {
+            "All files and folders on this computer".to_string()
+        }
+        Scope::Path(path) if path == "~/**" => {
+            "Your home folder and everything inside it".to_string()
+        }
+        Scope::Path(path) => path
+            .strip_suffix("/**")
+            .map_or_else(|| path.clone(), |root| format!("{root} and everything inside it")),
+        Scope::Host(host) => host.clone(),
+        Scope::Name(name) => name.clone(),
+        Scope::SelfRef(reference) if reference == "self" => "This Agent session".to_string(),
+        Scope::SelfRef(reference) => format!("This Agent's {reference} resource"),
+        Scope::Wild => "All resources".to_string(),
+    }
 }
 
 fn parse_notification(value: &Value) -> Result<NotificationItem, String> {
