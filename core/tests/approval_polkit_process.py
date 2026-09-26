@@ -143,6 +143,13 @@ class Terminal:
     def expect(self, text, seconds=15):
         self.pump(lambda: text in self.output, seconds)
 
+    def expect_password(self, seconds=15):
+        self.pump(
+            lambda: b"Password:" in self.output
+            and not termios.tcgetattr(self.master)[3] & termios.ECHO,
+            seconds,
+        )
+
     def send(self, data):
         os.write(self.master, data)
 
@@ -388,7 +395,7 @@ def run(args):
                 with contextlib.closing(Terminal(
                     ["/usr/bin/pkexec", str(HELPER), "--help"], uid, uid, home, True
                 )) as terminal:
-                    terminal.expect(b"Password:")
+                    terminal.expect_password()
                     terminal.send(PASSWORD.encode() + b"\n")
                     terminal.require_exit(0)
                     assert b"usage: claw-approval-helper" in terminal.stdout
@@ -411,7 +418,7 @@ def run(args):
                      "--decision", "approve", "--duration", "once"],
                     uid, uid, home, True,
                 )) as terminal:
-                    terminal.expect(b"Password:")
+                    terminal.expect_password()
                     terminal.send(PASSWORD.encode() + b"\n")
                     terminal.require_exit(0)
                     result = json.loads(terminal.stdout)
@@ -436,7 +443,7 @@ def run(args):
                          "--decision", "approve", "--duration", "once"],
                         uid, uid, home, True,
                     )) as terminal:
-                        terminal.expect(b"Password:")
+                        terminal.expect_password()
                         terminal.send(answer)
                         assert terminal.finish() in (126, 127)
                         assert not terminal.stdout
@@ -447,7 +454,7 @@ def run(args):
                     ["/usr/bin/pkexec", str(HELPER), "--id", refused["id"], "--decision", "deny"],
                     uid, uid, home, True,
                 )) as terminal:
-                    terminal.expect(b"Password:")
+                    terminal.expect_password()
                     terminal.send(PASSWORD.encode() + b"\n")
                     terminal.require_exit(0)
                     assert json.loads(terminal.stdout)["decision"] == "denied"
@@ -487,7 +494,7 @@ def run(args):
                     ["/usr/bin/pkexec", str(HELPER), "--id", foreign["id"],
                      "--decision", "approve", "--duration", "once"], uid, uid, home, True,
                 )) as terminal:
-                    terminal.expect(b"Password:")
+                    terminal.expect_password()
                     terminal.send(PASSWORD.encode() + b"\n")
                     terminal.require_exit(1)
                     assert not terminal.stdout
