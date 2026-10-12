@@ -487,6 +487,16 @@ fn activity_request(
     versioned_request(request, endpoint)
 }
 
+pub async fn memory_request<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+    endpoint: BridgeEndpoint, action: &str, body: T,
+) -> Result<R> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::POST, &["memory", action])?;
+    let response = request.json(&body).send().await.context("requesting owner memory")?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() { return Err(response_error(response, "owner memory").await); }
+    response.json().await.context("decoding owner memory")
+}
+
 async fn activity_response<T: serde::de::DeserializeOwned>(
     request: reqwest::RequestBuilder,
     selected: ProtocolVersion,

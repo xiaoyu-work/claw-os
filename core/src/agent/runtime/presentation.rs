@@ -117,6 +117,9 @@ struct UserVisibleProgressSink {
 }
 
 impl ProgressSink for UserVisibleProgressSink {
+    fn on_memory_access(&self, id: &str, name: &str, sources: &[crate::agent::memory::access::MemoryAccess]) {
+        self.inner.on_memory_access(id, name, sources);
+    }
     fn wait_ready(&self) -> Option<ProgressReady<'_>> {
         self.inner.wait_ready()
     }

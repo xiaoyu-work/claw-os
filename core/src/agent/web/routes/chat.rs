@@ -514,6 +514,13 @@ fn project_progress(progress: &Value) -> Vec<String> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     match progress.get("kind").and_then(Value::as_str) {
+        Some("memory_sources") => {
+            let sources = progress.get("sources").cloned().unwrap_or(Value::Null);
+            match serde_json::from_value::<Vec<crate::agent::memory::access::MemoryAccess>>(sources) {
+                Ok(sources) if sources.len() <= 16 => vec![sse::encode_event("memory_sources", &json!({"id":id,"name":name,"sources":sources}))],
+                _ => vec![warning_frame("Memory source references are unavailable for this read.")],
+            }
+        }
         Some("tool_start") => vec![sse::encode_event(
             "tool_start",
             &json!({ "id": id, "name": name }),

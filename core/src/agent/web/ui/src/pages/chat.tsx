@@ -831,6 +831,14 @@ function Message({ m }: { m: Msg }) {
       )}
       {m.usage && <UsageSummary usage={m.usage} />}
       {m.evidence && <ChatEvidence evidence={m.evidence} />}
+      {!!m.memorySources?.length && <details className="rounded border border-muted px-3 py-2 text-xs">
+        <summary className="cursor-pointer">Memory retrieved by this task ({m.memorySources.length})</summary>
+        <div className="mt-2 grid gap-2">
+          {m.memorySources.map((source) => <p key={`${source.source}-${source.revision}`} className="break-all">{source.source} &middot; revision {source.revision}</p>)}
+          <p className="text-muted-foreground">Retrieved references do not prove that the answer used them correctly or that remembered state is current.</p>
+          <Button size="sm" variant="outline" onClick={() => navigate("/memory")}>Open Memory</Button>
+        </div>
+      </details>}
     </div>
   );
 }

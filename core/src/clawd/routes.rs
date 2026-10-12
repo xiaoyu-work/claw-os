@@ -1005,6 +1005,46 @@ routes! {
         audit: &[("confirm", FieldRule::Flag)],
         run: |c| memory::reset(c.params, c.client).map_err(BrokerError::from),
     }
+    MemoryInspect {
+        name: "memory.inspect",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Context),
+        body: body::MemoryInspect,
+        audit: &[("kind", FieldRule::Token), ("query", FieldRule::Size), ("limit", FieldRule::Count)],
+        run: |c| memory::inspection::inspect(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    MemoryRead {
+        name: "memory.read",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Context),
+        body: body::MemoryRead,
+        audit: &[("reference", FieldRule::Size)],
+        run: |c| memory::inspection::read(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    MemoryUpdate {
+        name: "memory.update",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Context),
+        body: body::MemoryUpdate,
+        audit: &[("name", FieldRule::Token), ("revision", FieldRule::Token), ("content", FieldRule::Size)],
+        run: |c| memory::inspection::update(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    MemoryForget {
+        name: "memory.forget",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Context),
+        body: body::MemoryForget,
+        audit: &[("reference", FieldRule::Size), ("revision", FieldRule::Token), ("confirm", FieldRule::Flag)],
+        run: |c| memory::inspection::forget(c.params, c.client).await.map_err(BrokerError::from),
+    }
     AgentHooksGet {
         name: "agent.hooks.get",
         access: Access::User,

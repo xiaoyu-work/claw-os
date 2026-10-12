@@ -23,6 +23,7 @@ import { EventsPage } from "@/pages/inbox";
 import { NotificationsPage } from "@/pages/notifications";
 import { SystemPage } from "@/pages/system";
 import { SettingsPage } from "@/pages/settings";
+import { MemoryPage } from "@/pages/memory";
 
 export default function App() {
   const [meta, setMeta] = useState<any>(null);
@@ -81,6 +82,7 @@ function routeTitle(route: string): string {
   if (route.startsWith("/events")) return "System Events";
   if (route.startsWith("/system")) return "System";
   if (route.startsWith("/settings")) return "Settings";
+  if (route.startsWith("/memory")) return "Memory";
   return "Chat";
 }
 
@@ -94,5 +96,6 @@ function Router({ meta }: { meta: any }) {
   if (route.startsWith("/events")) return <EventsPage />;
   if (route.startsWith("/system")) return <SystemPage />;
   if (route.startsWith("/settings")) return <SettingsPage meta={meta} />;
+  if (route.startsWith("/memory")) return <MemoryPage />;
   return <ChatPage meta={meta} />;
 }

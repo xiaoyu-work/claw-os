@@ -10,6 +10,10 @@ presentation identifiers only; canonical session identity, verified replay
 boundaries and all ownership checks remain in `clawd`.
 
 The inventory includes `memory.reset`, but the client supplies only transport.
+It also names `memory.inspect/read/update/forget` for the owner Memory center.
+These routes use the existing stores under owner filesystem identity and
+preserve immutable conversation evidence; model workers use guarded tools
+instead of the human mutation surface.
 The broker requires explicit confirmation, refuses active tasks and Root
 owners, performs mutation under the authenticated owner identity, and preserves
 conversation and execution evidence.

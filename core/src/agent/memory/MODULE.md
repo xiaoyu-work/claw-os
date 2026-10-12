@@ -35,6 +35,8 @@ results, and curates durable notes from completed work.
 | `history.rs` | Conversation history queries and versioned UTF-8-safe read windows |
 | `conversations.rs` | Bounded owner-facing history plus atomic, provenance-preserving conversation snapshots |
 | `app_memory.rs` | App-scoped memory definition |
+| `inspection.rs` | Bounded owner-facing notes/App/interaction/index inspection and checked learned-memory edits; original evidence stays immutable |
+| `access.rs` | Content-free references recovered only from successful built-in memory reads |
 
 ## Dependencies
 
@@ -71,6 +73,13 @@ The system prompt and tool descriptions require continued retrieval/refinement
 when memory is incomplete, stale, off-topic or conflicting. The main model
 selects those reads, including current authoritative App/OS observations.
 Neither a search score nor a remembered command authorizes an action.
+Owner memory management uses the same stores under the authenticated owner's
+filesystem identity. Note replacement/deletion carries its exact revision;
+App forgetting also removes its derived index entry and reports failures.
+Conversation evidence and derived-index inspection are read-only. Corrections
+to reported/derived data are separate owner notes, not forged App provenance.
+UI mutations refuse active Agent tasks. Model workers still use guarded memory
+tools; the human management routes confer no model authority.
 Injected packet data is recorded without the ordinary message-preview
 truncation and is excluded from conversation replay and curation.
 

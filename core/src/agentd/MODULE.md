@@ -25,6 +25,13 @@ executes neither.
 
 ## Key Files
 
+Private worker protocol v17 adds bounded, content-free memory source references
+and preserves returned-byte counts plus re-redacted failure previews in tool
+progress. These are presentation records, not grants or claims of factual truth.
+The paired broker/worker must upgrade together; release-security policy tracks
+the same version. Evidence confidence remains a finite decimal-string private
+wire representation.
+
 | Path | Role |
 | --- | --- |
 | `guard.rs` | Process-wide broker flag; every runtime surface fails closed inside `clawd` |

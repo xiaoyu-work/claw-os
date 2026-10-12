@@ -28,6 +28,8 @@ Core and `claw-semantic` depend on `claw-embed`; the primitives crate does not
 import daemon or core orchestration. Core depends on crate APIs; focused crates
 do not import core orchestration.
 `claw-embed::SemanticStore::get` reads a namespace/key without an embedding call.
+`SemanticStore::open_read_only` permits owner inspection without creating a
+database, migrating schema or constructing an embedder.
 Its model-backed search checks model identity, dimensions and vector integrity
 before returning similarity-ranked candidates; raw precomputed-vector queries
 retain the caller-managed vector-space contract.

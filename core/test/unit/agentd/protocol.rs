@@ -52,7 +52,7 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_MONETARY_BUDGET,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 16);
+    assert_eq!(PROTOCOL_VERSION, 17);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
@@ -341,11 +341,14 @@ fn progress_is_persisted_in_the_existing_stream_shape() {
         name: "cos_fs".to_string(),
         ok: true,
         latency_ms: 12,
+        bytes_returned: 512,
+        error_preview: None,
     }
     .to_stream_value();
     assert_eq!(value["kind"], "tool_result");
     assert_eq!(value["ok"], true);
     assert_eq!(value["latency_ms"], 12);
+    assert_eq!(value["bytes_returned"], 512);
 }
 
 #[test]

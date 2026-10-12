@@ -16,6 +16,8 @@ use crate::agentd::spawn::ROOT_OWNER_REFUSAL;
 
 use super::client_identity::{ClientIdentity, FsIdentityGuard};
 
+pub(super) mod inspection;
+
 const DEFAULT_LIMIT: usize = 500;
 const MAX_LIMIT: usize = 2000;
 const DEFAULT_SESSION_LIMIT: usize = 200;

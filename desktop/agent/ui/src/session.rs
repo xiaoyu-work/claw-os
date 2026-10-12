@@ -36,6 +36,7 @@ pub(crate) struct ChatMessage {
     pub(crate) task_id: Option<String>,
     pub(crate) attachments: Vec<cos_agent_protocol::AttachmentMetadata>,
     pub(crate) evidence: Option<EvidencePresentation>,
+    pub(crate) memory_sources: Vec<cos_agent_protocol::MemoryAccess>,
     pub(crate) warnings: Vec<String>,
     pub(crate) error: Option<String>,
     pub(crate) parsed_markdown: Option<Vec<widget::markdown::Item>>,
@@ -80,6 +81,7 @@ impl ChatMessage {
             && self.usage.is_none()
             && self.attachments.is_empty()
             && self.evidence.is_none()
+            && self.memory_sources.is_empty()
             && self.warnings.is_empty()
             && self.error.is_none()
     }
@@ -502,6 +504,7 @@ impl SessionState {
                 messages[index].warnings.push(diagnostic.clone());
             }
             messages[index].evidence = presentation.evidence.clone();
+            messages[index].memory_sources = presentation.memory_sources.clone();
             if !presentation.available {
                 if presentation.diagnostic.is_none() {
                     messages[index].warnings.push(

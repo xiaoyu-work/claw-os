@@ -571,6 +571,45 @@ pub struct MemoryReset {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MemoryInspect {
+    pub kind: crate::agent::memory::inspection::MemoryKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<Text<1024>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MemoryReference {
+    Note { name: Name },
+    App { id: Token },
+    Message { id: Token },
+    Semantic { namespace: Text<256>, key: Text<256> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryRead { pub reference: MemoryReference }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryUpdate {
+    pub name: Name,
+    pub revision: Text<64>,
+    pub content: Text<1048576>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryForget {
+    pub reference: MemoryReference,
+    pub revision: Text<64>,
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentHooksSet {
     pub kind: Token<32>,
     pub enabled: bool,

@@ -24,6 +24,9 @@ and agent tasks.
 - Expose explicit owner-scoped learned-memory reset under the owner's
   filesystem identity. It refuses active tasks and retains conversation and
   execution evidence.
+- Expose bounded owner memory inspection and checked note edits/App forgetting
+  through `memory.inspect/read/update/forget`, with no owner/path selector,
+  worker access or second memory authority.
 - Expose owner-scoped notification publication, subscription, state, and
   delivery-leasing RPC.
 - Supervise unprivileged `claw-agentd` workers and task-owned

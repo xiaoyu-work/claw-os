@@ -16,6 +16,7 @@ use crate::state::AppState;
 mod activities;
 mod chat;
 mod models;
+mod memory;
 mod sessions;
 mod voice;
 
@@ -28,6 +29,10 @@ const CHAT_MAX_HTTP_BYTES: usize = 1024 * 1024;
 pub fn api() -> Router<AppState> {
     Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/memory/inspect", post(memory::inspect))
+        .route("/memory/read", post(memory::read))
+        .route("/memory/update", post(memory::update))
+        .route("/memory/forget", post(memory::forget))
         .route(
             "/chat",
             post(chat::stream_chat).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),

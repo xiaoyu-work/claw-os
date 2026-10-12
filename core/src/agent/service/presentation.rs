@@ -86,6 +86,8 @@ pub struct TaskPresentation {
     pub usage: Option<UsageTotals>,
     pub tools: Vec<ToolPresentation>,
     pub attachments: Vec<AttachmentMetadata>,
+    #[serde(default)]
+    pub memory_sources: Vec<crate::agent::memory::access::MemoryAccess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidencePresentation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,6 +189,18 @@ fn project_record(
     }
     if let Some(progress) = record.get("progress") {
         match progress.get("kind").and_then(Value::as_str) {
+            Some("memory_sources") => {
+                let sources: Vec<crate::agent::memory::access::MemoryAccess> = serde_json::from_value(
+                    progress.get("sources").cloned().ok_or("memory progress omitted its sources")?,
+                ).map_err(|error| format!("invalid memory source progress: {error}"))?;
+                if sources.len() > 16 { return Err("memory source progress exceeds its item bound".into()); }
+                for source in sources {
+                    if !presentation.memory_sources.iter().any(|existing| existing.source == source.source && existing.revision == source.revision) {
+                        if presentation.memory_sources.len() >= 128 { return Err("retained memory source references exceed their bound".into()); }
+                        presentation.memory_sources.push(source);
+                    }
+                }
+            }
             Some("tool_start" | "tool_result") => {
                 let id = progress
                     .get("id")

@@ -115,6 +115,10 @@ Verified canonical history also includes retained Job presentation, so
 reasoning, cumulative usage, tool metrics and image metadata survive reopening.
 The bridge still removes tool bodies and re-redacts failures. Missing stream
 details or bounded-read refusals are disclosed rather than invented.
+The native Memory center consumes the same owner-scoped broker inspection,
+checked notes and explicit learned-entry forgetting as Web. It has no private
+memory store; conversation/derived evidence remains read-only and reported
+source corrections are separate owner notes.
 
 Within the UI, lifecycle state is split by invariant owner. `main.rs` routes
 typed messages among session, stream, bridge, voice, and overlay state;

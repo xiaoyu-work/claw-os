@@ -1316,6 +1316,14 @@ struct ChannelProgressSink {
 }
 
 impl ProgressSink for ChannelProgressSink {
+    fn on_memory_access(&self, id: &str, name: &str, sources: &[crate::agent::memory::access::MemoryAccess]) {
+        if let Err(error) = self.tx.send(WorkerFrame::Progress {
+            task_id:self.task_id.clone(), progress:ProgressRecord::MemorySources {
+                id:id.into(), name:name.into(),
+                sources:super::protocol::MemorySourceList(sources.to_vec()),
+            },
+        }) { tracing::warn!(%error, "failed to send memory source references"); }
+    }
     fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
         let _ = self.tx.send(WorkerFrame::Progress {
             task_id: self.task_id.clone(),
@@ -1332,8 +1340,8 @@ impl ProgressSink for ChannelProgressSink {
         name: &str,
         ok: bool,
         latency_ms: u64,
-        _bytes_returned: usize,
-        _content_preview: &str,
+        bytes_returned: usize,
+        content_preview: &str,
     ) {
         let _ = self.tx.send(WorkerFrame::Progress {
             task_id: self.task_id.clone(),
@@ -1342,6 +1350,8 @@ impl ProgressSink for ChannelProgressSink {
                 name: name.to_string(),
                 ok,
                 latency_ms,
+                bytes_returned: bytes_returned as u64,
+                error_preview: (!ok && !content_preview.is_empty()).then(|| content_preview.to_string()),
             },
         });
     }

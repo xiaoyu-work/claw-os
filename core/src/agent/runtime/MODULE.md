@@ -41,6 +41,9 @@ through model turns, tools, hooks, progress, and final records.
   configuration. Broker changes affect future tasks and never introduce
   arbitrary command hooks.
 - Record conversation, prompt injection, usage, and error state.
+- Emit content-free source/revision references after successful built-in
+  memory reads. These record retrieval, not factual correctness or a claim
+  that the answer used the source.
 - Carry the durable Job id into persistence so every task-owned prompt,
   assistant response, and tool-result row is transactionally bound to the same
   canonical execution attempt.

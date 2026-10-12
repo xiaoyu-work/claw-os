@@ -97,6 +97,14 @@ pub enum Command {
     MemoryHistory,
     #[serde(rename = "memory.reset")]
     MemoryReset,
+    #[serde(rename = "memory.inspect")]
+    MemoryInspect,
+    #[serde(rename = "memory.read")]
+    MemoryRead,
+    #[serde(rename = "memory.update")]
+    MemoryUpdate,
+    #[serde(rename = "memory.forget")]
+    MemoryForget,
     #[serde(rename = "agent.hooks.get")]
     AgentHooksGet,
     #[serde(rename = "agent.hooks.set")]
@@ -141,7 +149,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 56] = [
+    pub const ALL: [Self; 60] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -183,6 +191,10 @@ impl Command {
         Self::MemorySessions,
         Self::MemoryHistory,
         Self::MemoryReset,
+        Self::MemoryInspect,
+        Self::MemoryRead,
+        Self::MemoryUpdate,
+        Self::MemoryForget,
         Self::AgentHooksGet,
         Self::AgentHooksSet,
         Self::AgentAccountGet,
@@ -243,6 +255,10 @@ impl Command {
             Self::MemorySessions => "memory.sessions",
             Self::MemoryHistory => "memory.history",
             Self::MemoryReset => "memory.reset",
+            Self::MemoryInspect => "memory.inspect",
+            Self::MemoryRead => "memory.read",
+            Self::MemoryUpdate => "memory.update",
+            Self::MemoryForget => "memory.forget",
             Self::AgentHooksGet => "agent.hooks.get",
             Self::AgentHooksSet => "agent.hooks.set",
             Self::AgentAccountGet => "agent.account.get",

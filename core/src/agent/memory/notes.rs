@@ -110,6 +110,32 @@ impl NotesStore {
         filelock::write_locked(&p, content)
     }
 
+    pub fn write_checked(&self, name: &str, revision: &str, content: &str) -> Result<(), String> {
+        let path = self.path_of(name)?;
+        self.ensure_dir()?;
+        filelock::update_locked(&path, |current| {
+            let actual = current.as_deref().map(super::history::text_revision)
+                .unwrap_or_else(|| "new".to_string());
+            if actual != revision {
+                return Err("note changed; refresh and review before saving".to_string());
+            }
+            Ok(content.to_string())
+        }).map_err(|error| error.to_string())
+    }
+
+    pub fn delete_checked(&self, name: &str, revision: &str) -> Result<(), String> {
+        let path = self.path_of(name)?;
+        filelock::with_exclusive_path_lock(&path, || {
+            let content = fs::read_to_string(&path).map_err(|error| format!("read note for deletion: {error}"))?;
+            if super::history::text_revision(&content) != revision {
+                return Err("note changed; refresh and review before deleting".to_string());
+            }
+            fs::remove_file(&path).map_err(|error| format!("delete note: {error}"))?;
+            fs::File::open(&self.dir).and_then(|directory| directory.sync_all())
+                .map_err(|error| format!("sync note deletion: {error}"))
+        })
+    }
+
     /// Read-modify-write a note while holding one exclusive lock.
     pub(crate) fn update<F>(&self, name: &str, transform: F) -> Result<(), String>
     where

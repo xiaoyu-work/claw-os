@@ -24,6 +24,7 @@ mod bridge;
 mod bridge_state;
 mod effects;
 mod localize;
+mod memory_center;
 mod overlay;
 mod recorder;
 mod session;
@@ -69,6 +70,7 @@ impl CosmicFlags for Flags {
 #[derive(Debug, Clone)]
 pub enum Message {
     Activities(activities::Message),
+    Memory(memory_center::Message),
     OpenActivitySession(String),
     CopyActivityObjectOperation(String),
     CopyActivityContinuity,
@@ -138,6 +140,7 @@ pub struct App {
     overlay: OverlayState,
     bridge: BridgeState,
     activities: activities::Activities,
+    memory: memory_center::MemoryCenter,
     sessions: SessionState,
     stream: StreamState,
     input: text_editor::Content,
@@ -180,6 +183,7 @@ impl Application for App {
             overlay: OverlayState::new(flags.overlay, flags.context.clone(), flags.query.is_some()),
             bridge: BridgeState::connecting(),
             activities: activities::Activities::default(),
+            memory: memory_center::MemoryCenter::default(),
             sessions: SessionState::default(),
             stream: StreamState::default(),
             input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
@@ -229,6 +233,11 @@ impl Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Memory(message) => {
+                if self.flags.overlay { return Task::none(); }
+                if matches!(message, memory_center::Message::Show) { self.activities.hide(); }
+                self.memory.update(message, self.bridge.endpoint().cloned())
+            }
             Message::Activities(message) => self.update_activities(message),
             Message::OpenActivitySession(id) => self.open_activity_session(id),
             Message::CopyActivityObjectOperation(reference) => {
@@ -470,6 +479,7 @@ impl Application for App {
                 focus_editor()
             }
             Message::SelectSession(index) => {
+                self.memory.hide();
                 if self.stream.is_cancelling() || self.queue_pending {
                     return Task::none();
                 }
@@ -499,6 +509,7 @@ impl Application for App {
                 Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
             }
             Message::NewSession => {
+                self.memory.hide();
                 if self.stream.is_cancelling() || self.queue_pending {
                     return Task::none();
                 }
@@ -907,6 +918,7 @@ impl Application for App {
 
 impl App {
     fn update_activities(&mut self, message: activities::Message) -> Task<Message> {
+        if matches!(message, activities::Message::Show) { self.memory.hide(); }
         if self.flags.overlay
             || (matches!(message, activities::Message::Show)
                 && (self.stream.is_active() || self.voice.is_active()))

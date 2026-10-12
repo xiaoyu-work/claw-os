@@ -32,6 +32,10 @@ pub fn build_app(state: AppState) -> Router {
         // JSON API.
         .route("/api/auth/token", post(routes::auth::token))
         .route("/api/meta", get(routes::meta::handler))
+        .route("/api/memory/inspect", post(routes::memory::inspect))
+        .route("/api/memory/read", post(routes::memory::read))
+        .route("/api/memory/update", post(routes::memory::update))
+        .route("/api/memory/forget", post(routes::memory::forget))
         .route(
             "/api/chat",
             post(routes::chat::handler).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),

@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -515,6 +515,11 @@ pub struct WorkerHello {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProgressRecord {
+    MemorySources {
+        id: String,
+        name: String,
+        sources: MemorySourceList,
+    },
     ToolStart {
         id: String,
         name: String,
@@ -524,7 +529,27 @@ pub enum ProgressRecord {
         name: String,
         ok: bool,
         latency_ms: u64,
+        bytes_returned: u64,
+        error_preview: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct MemorySourceList(pub Vec<crate::agent::memory::access::MemoryAccess>);
+
+impl<'de> Deserialize<'de> for MemorySourceList {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let sources = Vec::<crate::agent::memory::access::MemoryAccess>::deserialize(deserializer)?;
+        if sources.len() > 16 || sources.iter().any(|source| {
+            source.source.len() > 512 || source.revision.len() != 64 ||
+                !source.revision.bytes().all(|byte| byte.is_ascii_hexdigit()) ||
+                serde_json::to_vec(&source.reference).map_or(true, |bytes| bytes.len() > 1024)
+        }) {
+            return Err(serde::de::Error::custom("memory source progress exceeds its closed bounds"));
+        }
+        Ok(Self(sources))
+    }
 }
 
 impl ProgressRecord {
@@ -533,6 +558,9 @@ impl ProgressRecord {
     /// cannot inflate the persisted record.
     pub fn to_stream_value(&self) -> Value {
         match self {
+            ProgressRecord::MemorySources { id, name, sources } => json!({
+                "kind":"memory_sources", "id":clamp(id), "name":clamp(name), "sources":sources,
+            }),
             ProgressRecord::ToolStart { id, name } => json!({
                 "kind": "tool_start",
                 "id": clamp(id),
@@ -543,12 +571,21 @@ impl ProgressRecord {
                 name,
                 ok,
                 latency_ms,
+                bytes_returned,
+                error_preview,
             } => json!({
                 "kind": "tool_result",
                 "id": clamp(id),
                 "name": clamp(name),
                 "ok": ok,
                 "latency_ms": latency_ms,
+                "bytes_returned": bytes_returned,
+                "error_preview": if *ok { None } else {
+                    error_preview.as_ref().map(|preview| crate::agent::runtime::progress::preview_with_limit(
+                        &crate::agent::safety::redact::Redactor::default_set().redact(preview),
+                        crate::agent::runtime::progress::DEFAULT_PREVIEW_BYTES,
+                    ))
+                },
             }),
         }
     }

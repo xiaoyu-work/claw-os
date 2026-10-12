@@ -326,6 +326,10 @@ and improved failure diagnostics.
 
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
 are replaced together. Package configuration creates the dedicated
+The private Agent worker protocol is v17: memory-read references and safe tool
+metrics travel without result bodies or credentials. Mixed broker/worker
+versions fail closed, so restart a retained process after upgrading rather
+than falling back to the old progress format. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user
 memberships are not changed.
 The package now provisions locked accounts `cos-ext-00..63` at fixed UIDs

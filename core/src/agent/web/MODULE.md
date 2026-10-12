@@ -8,6 +8,8 @@ web UI.
 ## Responsibilities
 
 - Authenticate local browser/desktop requests.
+- Present the broker-owned Memory center, including source/revision/time,
+  checked notes, explicit App forgetting and read-only conversation/index views.
 - Present task-linked capability reviews inline through the protected shared
   OS review DTO, preserving displayed revisions and controller-supported
   choices; App confirmation remains in the OS review presenter.
@@ -52,6 +54,7 @@ web UI.
 | Path | Role |
 | --- | --- |
 | `routes/` | HTTP and SSE endpoint handlers |
+| `routes/memory.rs`, `ui/src/pages/memory.tsx` | Same-owner memory inspection, checked learned-note editing and explicit forgetting through the shared broker |
 | `routes/approvals/presentation.rs`, `ui/src/components/chat-approvals.tsx` | Shared readable capability-review projection, same-task discovery, exact displayed-revision decisions and helper delegation |
 | `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |

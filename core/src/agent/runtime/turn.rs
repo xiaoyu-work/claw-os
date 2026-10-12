@@ -1062,6 +1062,10 @@ async fn dispatch_one(
         bytes,
         &preview,
     );
+    if ok {
+        let sources = crate::agent::memory::access::references(&effective_call.name, &result.content);
+        if !sources.is_empty() { progress.on_memory_access(&effective_call.id, &effective_call.name, &sources); }
+    }
     check_interrupted(interrupt)?;
 
     Ok(DispatchOutcome {

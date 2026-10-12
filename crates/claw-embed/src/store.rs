@@ -103,6 +103,11 @@ pub struct SemanticStore {
 }
 
 impl SemanticStore {
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, SemanticError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(Self { conn: Arc::new(Mutex::new(conn)), embedder: None })
+    }
+
     /// Open (or create) the store at `path`, attaching `embedder` for
     /// `index`/`search` calls. Pass `None` to open in *query-only*
     /// mode (e.g. for tooling that just enumerates rows).

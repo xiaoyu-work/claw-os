@@ -65,6 +65,7 @@ pub type ProgressReady<'a> =
 /// pairs; runtime cancellation may stop a tool after `on_tool_start`
 /// without emitting `on_tool_result`.
 pub trait ProgressSink: Send + Sync {
+    fn on_memory_access(&self, _id: &str, _name: &str, _sources: &[crate::agent::memory::access::MemoryAccess]) {}
     /// Wait until the sink can accept another progress event. Bounded
     /// network sinks override this so a slow consumer back-pressures
     /// tool dispatch instead of growing an unbounded queue.
@@ -122,6 +123,9 @@ struct RecordingProgressSink {
 }
 
 impl ProgressSink for RecordingProgressSink {
+    fn on_memory_access(&self, id: &str, name: &str, sources: &[crate::agent::memory::access::MemoryAccess]) {
+        self.inner.on_memory_access(id, name, sources);
+    }
     fn wait_ready(&self) -> Option<ProgressReady<'_>> {
         self.inner.wait_ready()
     }

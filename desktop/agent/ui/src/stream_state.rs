@@ -181,6 +181,16 @@ impl StreamState {
                 }
                 StreamReduction::Applied
             }
+            StreamEvent::MemorySources(payload) => {
+                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    for source in payload.sources {
+                        if !message.memory_sources.iter().any(|existing| existing.source == source.source && existing.revision == source.revision) {
+                            message.memory_sources.push(source);
+                        }
+                    }
+                }
+                StreamReduction::Applied
+            }
             StreamEvent::ToolUseStart(payload) => {
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
                     message.upsert_tool_call(ToolCallView {

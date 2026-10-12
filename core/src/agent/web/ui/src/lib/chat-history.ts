@@ -37,6 +37,7 @@ export type ChatMessage = {
   error?: string;
   taskId?: string;
   evidence?: EvidencePresentation;
+  memorySources?: MemoryAccess[];
 };
 
 export type RetainedTask = {
@@ -56,6 +57,7 @@ export type RetainedTask = {
     attachments: { name: string; media_type: string; bytes: number; sha256: string }[];
     diagnostic?: string | null;
     evidence?: EvidencePresentation | null;
+    memory_sources?: MemoryAccess[];
   } | null;
 };
 
@@ -239,6 +241,10 @@ export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): 
       }));
     }
     if (!assistant) continue;
+    if (presentation.memory_sources) {
+      try { assistant.memorySources = readMemorySources(presentation.memory_sources); }
+      catch (error: unknown) { assistant.warnings.push(error instanceof Error ? error.message : "Retained memory references are unavailable."); }
+    }
     if (presentation.evidence) {
       try {
         assistant.evidence = readEvidence(presentation.evidence);
@@ -268,3 +274,4 @@ export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): 
   return restored;
 }
 import { readEvidence, type EvidencePresentation } from "./chat-evidence";
+import { readMemorySources, type MemoryAccess } from "./memory";

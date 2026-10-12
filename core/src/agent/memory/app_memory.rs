@@ -579,6 +579,40 @@ pub fn forget_source(
 }
 
 /// Delete one row by id. Returns `true` if a row was removed.
+pub fn forget_row_checked(
+    db: &MemoryDb,
+    store: Option<&Arc<SemanticStore>>,
+    id: i64,
+    revision: &str,
+) -> Result<bool, MemoryError> {
+    let mut conn = db.lock_conn()?;
+    let transaction = conn.transaction()?;
+    let mut statement = transaction.prepare(
+        "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
+         FROM messages WHERE id = ? AND role = 'app' AND session_id LIKE 'app:%'",
+    )?;
+    let mut rows = statement.query_map(rusqlite::params![id], super::sqlite_fts::row_to_message)?;
+    let row = match rows.next() {
+        Some(row) => AppMemoryRow::from_row(row?, None),
+        None => return Ok(false),
+    };
+    drop(rows);
+    drop(statement);
+    if super::history::text_revision(&row.text) != revision {
+        return Err(MemoryError::Poisoned("App memory changed; refresh before forgetting".into()));
+    }
+    if let Some(store) = store {
+        store.remove(&semantic_namespace_for(&row.source), &id.to_string())
+            .map_err(|error| MemoryError::Poisoned(format!("forget derived App memory: {error}")))?;
+    }
+    let removed = transaction.execute(
+        "DELETE FROM messages WHERE id = ? AND role = 'app' AND session_id LIKE 'app:%'",
+        rusqlite::params![id],
+    )?;
+    transaction.commit()?;
+    Ok(removed == 1)
+}
+
 pub fn forget_row(
     db: &MemoryDb,
     store: Option<&Arc<SemanticStore>>,

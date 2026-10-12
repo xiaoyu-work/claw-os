@@ -1583,7 +1583,20 @@ Existing turn/token/authorization limits still apply; unresolved gaps are
 reported explicitly rather than filled with invented memories.
 
 `cos_memory search` searches literal text within notes selected by the model;
-it is not a pre-request task classifier. The terminal equivalent is
+it is not a pre-request task classifier.
+Owner-facing Web/native Memory centers inspect these same stores through
+`memory.inspect/read/update/forget`, under the kernel-authenticated owner's
+filesystem identity. Checked note revisions and explicit App forgetting mutate
+learned data only; original interaction/execution evidence and derived-index
+inspection remain read-only. Corrections are owner notes, never forged App
+reports or system policy. Worker access to these human routes is refused;
+model-directed guarded retrieval and bounded pinned context are unchanged.
+Successful built-in reads emit bounded source/revision references without
+queries or contents. Presentation labels them retrieval, not evidence of
+current truth or correct use by the answer. Worker protocol v17 preserves
+these references and safe tool metrics through the supervised process seam.
+
+The terminal equivalent is
 `cos agent notes search <query> [name] [limit]`. `cos_recall show` expands one
 recorded message (`cos agent recall --message <id>` in the terminal).
 `cos_recall_semantic read` expands a namespace/key and supplies an original
@@ -1597,10 +1610,10 @@ The embedded Agent Web app uses this same queue rather than running an
 in-process model loop. Chat submits and streams durable tasks, Tasks lists and
 cancels those records and creates explicit retries, and Approvals can wake a
 waiting task without requiring the user to repeat the request. The user-owned
-Web process reads session lists and history from the owner-partitioned memory
-database. Permission grants cross the existing `pkexec` approval helper;
+Web process fetches session lists and history through the owner-scoped broker
+projection. Permission grants cross the existing `pkexec` approval helper;
 same-owner denial goes directly to `clawd`, creates no authority, and cannot
-select another owner. The Inbox is the
+select another owner.
 Chat and Approvals share readable OS-owned capability-review cards. Linked
 request ids come only from the owner-checked Job, and protected review
 snapshots supply catalog labels, human targets and supported choices. Each
@@ -1608,6 +1621,8 @@ decision carries the revision actually displayed, transported as a decimal
 string to preserve `u64` precision. Positive choices use the existing
 `--system-review-json` helper; owner-only cancellation denies without minting
 authority. App confirmation remains a separate protected OS presentation. The Inbox is the
+
+The Inbox is the The Inbox is the
 Notification Service projection; raw `context.event` records remain available
 separately as System Events.
 

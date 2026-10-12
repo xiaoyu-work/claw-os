@@ -103,6 +103,12 @@ let conversationNumber = 0;
 let reattachStreamRequests = 0;
 let runtimeProgressObserved = false;
 let inlineApprovalDecided = false;
+const memoryNotes = new Map([["USER.md", "Prefer concise replies."], ["MEMORY.md", "OS and Agent experience."]]);
+const noteEntry = (name) => ({
+  reference:{kind:"note",name}, source:`notes/${name}`, category:"owner_note",
+  recorded_at_ms:Date.now(), revision:createHash("sha256").update(memoryNotes.get(name)).digest("hex"),
+  content:memoryNotes.get(name),editable:true,deletable:true,provenance:"Owner/Agent note; not OS policy.",
+});
 const approvalView = (id, reason = "Review the release notes") => ({
   id, revision: "3", status: "pending", label: "Read selected files",
   description: "Read the specified resource without changing it.",
@@ -376,6 +382,29 @@ async function fixture(req, res) {
   assert.ok(!Object.hasOwn(body, "owner_uid"), "Web must not submit owner identity");
   if (url.pathname === "/api/meta") {
     return reply(req, res, { hostname: "activity-test", provider: "test", model: "fixture", ready: true });
+  }
+  if (url.pathname === "/api/memory/inspect") {
+    assert.equal(req.method,"POST");
+    const entries = body.kind === "notes" ? [...memoryNotes.keys()].map(noteEntry)
+      .filter((entry) => !body.query || entry.content.includes(body.query) || entry.source.includes(body.query)) : [];
+    return reply(req,res,{entries,has_more:false,coverage:"Bounded owner memory."});
+  }
+  if (url.pathname === "/api/memory/read") {
+    assert.equal(body.reference.kind,"note");
+    return reply(req,res,noteEntry(body.reference.name));
+  }
+  if (url.pathname === "/api/memory/update") {
+    const expected = memoryNotes.has(body.name) ? noteEntry(body.name).revision : "new";
+    if (body.revision !== expected) return reply(req,res,{error:"note changed; refresh before saving"},409);
+    memoryNotes.set(body.name,body.content);
+    return reply(req,res,noteEntry(body.name));
+  }
+  if (url.pathname === "/api/memory/forget") {
+    assert.equal(body.confirm,true);
+    assert.equal(body.reference.kind,"note");
+    assert.equal(body.revision,noteEntry(body.reference.name).revision);
+    memoryNotes.delete(body.reference.name);
+    return reply(req,res,{forgotten:true,conversations_preserved:true});
   }
   if (url.pathname === "/api/notifications/stream") {
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -1268,15 +1297,19 @@ try {
       if (await evaluate(expression)) return;
       await delay(100);
     }
-    throw new Error(`UI did not complete: ${label}\n${await evaluate("document.body.innerText")}`);
+    throw new Error(`UI did not complete: ${label}\nMutations: ${JSON.stringify(requests.filter(request => request.method === "POST" && request.path.startsWith("/api/activities")).slice(-5))}\nStates: ${JSON.stringify([...activities].map(([id, activity]) => [id, activity.state]))}\n${await evaluate("document.body.innerText")}`);
   };
   const buttonExpression = (text) =>
     `Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim() === ${JSON.stringify(text)})`;
   const click = async (expression) => {
     await wait(`(() => { const el = ${expression}; return el && !el.matches(':disabled'); })()`, "button enabled");
-    const point = await evaluate(`(() => {
-      const el = ${expression}; el.scrollIntoView({block: 'center'});
+    const point = await evaluate(`(async () => {
+      const el = ${expression}; el.scrollIntoView({block: 'center', behavior: 'instant'});
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const rect = el.getBoundingClientRect();
+      if (document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('button') !== el && el.tagName === 'BUTTON') {
+        throw new Error('Button is obscured after scrolling');
+      }
       return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
     })()`);
     await send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
@@ -1498,6 +1531,32 @@ try {
   await wait("document.body.innerText.includes('Source binding verified')", "retained evidence survives reload");
   assert.equal(reattachStreamRequests, 2, "completed history never starts a new stream or task");
   console.log("PASS retained presentation survives reload without persisting raw images or tool bodies");
+  const validateMemoryCenter = async () => {
+  await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/memory` });
+  await wait("document.body.innerText.includes('notes/USER.md')", "owner-scoped memory inventory");
+  await click(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('notes/USER.md'))`);
+  await wait("!!document.querySelector('[aria-label=\"Memory source details\"]')", "full memory source with provenance and revision");
+  await clickText("Edit memory note");
+  await fill("Memory note content","Prefer short, clear replies.");
+  await clickText("Save memory note");
+  await wait("document.body.innerText.includes('Prefer short, clear replies.') && !document.querySelector('[aria-label=\"Memory note editor\"]')", "checked memory edit acknowledged and refreshed");
+  await send("Page.reload");
+  await wait("document.body.innerText.includes('Prefer short, clear replies.')", "memory edit survives reload");
+  assert.equal(memoryNotes.get("USER.md"),"Prefer short, clear replies.");
+  await clickText("New memory note");
+  await fill("Memory note name","OS-EXPERIENCE.md");
+  await fill("Memory note content","A durable Agent resolution.");
+  await clickText("Save memory note");
+  await wait("document.body.innerText.includes('notes/OS-EXPERIENCE.md')", "new memory note persists");
+  await click(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('notes/OS-EXPERIENCE.md'))`);
+  await wait("document.body.innerText.includes('Forget learned entry')", "exact source deletion available");
+  await clickText("Forget learned entry");
+  await wait("document.body.innerText.includes('Conversation and execution evidence will be preserved')", "explicit deletion disclosure");
+  await clickText("Confirm forget");
+  await wait("!document.body.innerText.includes('notes/OS-EXPERIENCE.md')", "checked learned memory deletion");
+  assert.equal(memoryNotes.has("OS-EXPERIENCE.md"),false);
+  console.log("PASS memory source inspection, checked note edits, reload persistence and explicit forgetting");
+  };
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
@@ -2438,6 +2497,7 @@ try {
   console.log("PASS deterministic continuity export Blob, bounded explicit local import, inert paused result, conflicts and late-selection safety");
 
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
+  await validateMemoryCenter();
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);
   assert.deepEqual(failedResponses.map((response) => ({

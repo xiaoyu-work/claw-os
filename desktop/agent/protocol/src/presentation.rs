@@ -78,6 +78,8 @@ pub struct TaskPresentation {
     pub usage: Option<RetainedUsage>,
     pub tools: Vec<RetainedTool>,
     pub attachments: Vec<AttachmentMetadata>,
+    #[serde(default)]
+    pub memory_sources: Vec<crate::MemoryAccess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EvidencePresentation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

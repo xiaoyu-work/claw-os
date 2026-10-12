@@ -46,7 +46,9 @@ fn fluent_count(value: u64) -> i64 {
 impl App {
     pub(super) fn view_standalone(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let main: Element<'_, Message> = if self.activities.is_visible() {
+        let main: Element<'_, Message> = if self.memory.is_visible() {
+            self.memory.view()
+        } else if self.activities.is_visible() {
             self.activities.view(self.bridge.endpoint().is_some())
         } else {
             Column::new()
@@ -533,6 +535,13 @@ impl App {
                 if let Some(usage) = &message.usage {
                     column = column.push(Self::usage_summary(usage));
                 }
+                if !message.memory_sources.is_empty() {
+                    column = column.push(text(fl!("memory-retrieved")).size(11.0));
+                    for source in &message.memory_sources {
+                        column = column.push(text(format!("{} · {}",source.source,source.revision)).size(10.0));
+                    }
+                    column = column.push(text(fl!("memory-retrieved-caveat")).size(10.0));
+                }
                 if let Some(evidence) = &message.evidence
                     && (evidence.required
                         || evidence.status != EvidenceStatus::NotRequired
@@ -982,6 +991,7 @@ impl App {
         }
         let header = Row::new()
             .push(text(fl!("sessions").to_uppercase()).size(11.0))
+            .push(button::text(fl!("memory-center")).on_press(Message::Memory(crate::memory_center::Message::Show)))
             .push(widget::space::horizontal())
             .push(Self::symbolic_button(
                 "list-add-symbolic",

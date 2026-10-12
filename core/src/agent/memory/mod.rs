@@ -18,3 +18,5 @@ pub mod ontology;
 pub mod recovery;
 pub mod semantic;
 pub mod sqlite_fts;
+pub mod inspection;
+pub(crate) mod access;

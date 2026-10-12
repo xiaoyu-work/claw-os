@@ -1,5 +1,6 @@
 import { record } from "./api-shapes";
 import { readEvidence } from "./chat-evidence";
+import { readMemorySources } from "./memory";
 import { accumulateTurnUsage, appendReasoningSummary, type ChatMessage, type ToolCall } from "./chat-history";
 
 function warning(message: ChatMessage, text: string) {
@@ -83,6 +84,15 @@ export function applyFrame(message: ChatMessage, event: string, data: unknown) {
     case "reasoning": appendReasoningSummary(message, data); break;
     case "turn_done": accumulateTurnUsage(message, data); break;
     case "evidence": evidence(message, data); break;
+    case "memory_sources":
+      try {
+        const existing = message.memorySources || [];
+        for (const source of readMemorySources(payload.sources)) {
+          if (!existing.some((read) => read.source === source.source && read.revision === source.revision)) existing.push(source);
+        }
+        message.memorySources = existing;
+      } catch (error: unknown) { warning(message, error instanceof Error ? error.message : "Memory references are unavailable."); }
+      break;
     case "warning": warning(message, stringifyServerMessage(data, "warning")); break;
     case "done":
       if (payload.evidence != null) evidence(message, payload.evidence);

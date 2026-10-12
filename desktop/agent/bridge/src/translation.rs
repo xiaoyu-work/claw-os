@@ -169,6 +169,8 @@ struct CoreProgress {
     bytes_returned: Option<u64>,
     #[serde(default)]
     error_preview: Option<String>,
+    #[serde(default)]
+    sources: Vec<cos_agent_protocol::MemoryAccess>,
 }
 
 const MAX_ERROR_PREVIEW_BYTES: usize = 2 * 1024;
@@ -400,6 +402,9 @@ fn tool_use_event(call: CoreToolCall) -> StreamEvent {
 
 fn progress_event(progress: CoreProgress) -> Option<StreamEvent> {
     match progress.kind.as_str() {
+        "memory_sources" if progress.sources.len() <= 16 => Some(StreamEvent::MemorySources(
+            cos_agent_protocol::MemorySourcesPayload { id:progress.id, name:progress.name, sources:progress.sources },
+        )),
         "tool_start" => Some(StreamEvent::ToolStart(ToolStartPayload {
             kind: Some(progress.kind),
             id: progress.id,

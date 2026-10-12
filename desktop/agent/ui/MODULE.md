@@ -21,6 +21,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
 | `src/effects.rs` | Async bridge, history, new/existing Job streams, durable follow-up, and cancellation effects that emit typed UI messages |
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
+| `src/memory_center.rs` | Generation-safe fetched memory sources, checked note drafts and explicit learned-entry forgetting; no local memory store or authority |
 | `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
 | `src/views.rs` | Read-only widget composition for reasoning summaries, cumulative usage, safe tool status/metrics, selected-image metadata, and other presentation state |
 | `src/styles.rs` | Presentation styles |
@@ -59,6 +60,11 @@ reasoning, aggregate usage and tool metrics appear once, and the outer user
 message carries image metadata only. Active tasks replay rather than applying
 the same totals twice. Source gaps and bounded-read failures stay visible;
 Desktop owns neither a presentation store nor the retained stream files.
+The native Memory center consumes `memory.inspect/read/update/forget` through
+the versioned bridge. Source references, provenance and record/index times stay
+distinct from current OS truth. Note edits/deletes carry the read revision;
+reported-source corrections are new owner notes. Conversation evidence stays
+read-only, and background tasks prevent mutations rather than being cancelled.
 Provider tool announcements mean Preparing; only runtime `tool_start` means
 Running. Missing results, transport loss and detachment cannot infer completion.
 Evidence cards describe source bindings and result digests only, not semantic

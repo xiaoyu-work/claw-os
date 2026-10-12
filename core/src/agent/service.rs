@@ -4160,6 +4160,12 @@ fn clip_progress_text(value: &str, max_chars: usize) -> String {
 }
 
 impl crate::agent::runtime::progress::ProgressSink for JobProgressSink {
+    fn on_memory_access(&self, id: &str, name: &str, sources: &[crate::agent::memory::access::MemoryAccess]) {
+        if let Err(error) = Store::open_default().and_then(|store| store.append_stream_progress(&self.job_id,
+            json!({"kind":"memory_sources","id":id,"name":name,"sources":sources}))) {
+            tracing::warn!(task_id=%self.job_id, %error, "failed to retain memory source references");
+        }
+    }
     fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
         let progress = json!({
             "kind": "tool_start",
