@@ -131,6 +131,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks/{id}/stop", post(routes::tasks::stop))
         .route("/api/tasks/{id}/resume", post(routes::tasks::resume))
         .route("/api/approvals/pending", get(routes::approvals::pending))
+        .route("/api/approvals/reviews", get(routes::approvals::pending_reviews))
+        .route("/api/approvals/reviews/recent", get(routes::approvals::recent_reviews))
+        .route("/api/tasks/{id}/approvals", get(routes::approvals::task_reviews))
+        .route("/api/approvals/{id}/decision", post(routes::approvals::decide_review))
         .route("/api/approvals/recent", get(routes::approvals::recent))
         .route(
             "/api/approvals/{id}/approve",

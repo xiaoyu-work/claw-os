@@ -37,6 +37,9 @@ separate description from system authority.
 Capability definitions are stable inputs to `clawd`, app discovery, sessions,
 and agent tools. Validation occurs before side effects. Consumers request the
 narrowest scope and do not reinterpret scope strings independently.
+`Scope::human_target` is a shared presentation-only summary. It performs no
+resolution, containment check or authorization and does not replace canonical
+scope data.
 
 Activity boundaries consume `ActivityService` and pin an execution's owner,
 session and policy revision. They are constraints, not capabilities: deny

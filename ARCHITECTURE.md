@@ -1601,6 +1601,13 @@ Web process reads session lists and history from the owner-partitioned memory
 database. Permission grants cross the existing `pkexec` approval helper;
 same-owner denial goes directly to `clawd`, creates no authority, and cannot
 select another owner. The Inbox is the
+Chat and Approvals share readable OS-owned capability-review cards. Linked
+request ids come only from the owner-checked Job, and protected review
+snapshots supply catalog labels, human targets and supported choices. Each
+decision carries the revision actually displayed, transported as a decimal
+string to preserve `u64` precision. Positive choices use the existing
+`--system-review-json` helper; owner-only cancellation denies without minting
+authority. App confirmation remains a separate protected OS presentation. The Inbox is the
 Notification Service projection; raw `context.event` records remain available
 separately as System Events.
 

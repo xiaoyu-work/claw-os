@@ -87,6 +87,27 @@ impl Scope {
         }
     }
 
+    /// Presentation only: does not resolve a path or evaluate authority.
+    pub fn human_target(&self) -> String {
+        match self {
+            Scope::Path(path) if matches!(path.as_str(), "/" | "/**" | "**") => {
+                "All files and folders on this computer".to_string()
+            }
+            Scope::Path(path) if path == "~/**" => {
+                "Your home folder and everything inside it".to_string()
+            }
+            Scope::Path(path) => path.strip_suffix("/**").map_or_else(
+                || path.clone(),
+                |root| format!("{root} and everything inside it"),
+            ),
+            Scope::Host(host) => host.clone(),
+            Scope::Name(name) => name.clone(),
+            Scope::SelfRef(reference) if reference == "self" => "This Agent session".to_string(),
+            Scope::SelfRef(reference) => format!("This Agent's {reference} resource"),
+            Scope::Wild => "All resources".to_string(),
+        }
+    }
+
     /// Does this scope (held by the session) cover the requested scope?
     pub fn covers(&self, requested: &Scope) -> bool {
         if matches!(self, Scope::Wild) {
@@ -427,9 +448,7 @@ fn host_match(pat: &str, target: &str) -> bool {
     if pl.len() != tl.len() {
         return false;
     }
-    pl.iter()
-        .zip(tl.iter())
-        .all(|(p, t)| segment_match(p, t))
+    pl.iter().zip(tl.iter()).all(|(p, t)| segment_match(p, t))
 }
 
 // ---------------------------------------------------------------------------

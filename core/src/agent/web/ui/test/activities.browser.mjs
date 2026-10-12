@@ -102,6 +102,13 @@ let jobNumber = 0;
 let conversationNumber = 0;
 let reattachStreamRequests = 0;
 let runtimeProgressObserved = false;
+let inlineApprovalDecided = false;
+const approvalView = (id, reason = "Review the release notes") => ({
+  id, revision: "3", status: "pending", label: "Read selected files",
+  description: "Read the specified resource without changing it.",
+  target: "/tmp/report.txt", reason, risk: "medium", choices: ["deny", "allow_once"],
+  verb: "fs.read", details: [], diagnostic: null,
+});
 const evidenceFixture = {
   status: "verified", required: true, verified_claims: 1, total_claims: 1,
   source_count: 1, sources: [{
@@ -658,6 +665,33 @@ async function fixture(req, res) {
       }))) });
   }
   if (url.pathname === "/api/approvals/recent") return reply(req, res, { entries: [] });
+  if (/^\/api\/tasks\/[^/]+\/approvals$/.test(url.pathname)) {
+    const taskId = url.pathname.split("/")[3];
+    const job = jobs.get(taskId);
+    const reviews = taskId === "job-chat" && !inlineApprovalDecided
+      ? [approvalView("inline-approval", "Inspect this task's system information")]
+      : job?.status === "waiting_approval" ? job.waiting_on.map((id) => approvalView(id)) : [];
+    return reply(req, res, { task_id: taskId, reviews, app_reviews: [] });
+  }
+  if (url.pathname === "/api/approvals/reviews") {
+    return reply(req, res, {
+      reviews: [...jobs.values()].filter((job) => job.status === "waiting_approval")
+        .flatMap((job) => job.waiting_on.map((id) => approvalView(id))),
+      app_reviews: [],
+    });
+  }
+  if (url.pathname === "/api/approvals/reviews/recent") return reply(req, res, { reviews: [], app_reviews: [] });
+  if (/^\/api\/approvals\/[^/]+\/decision$/.test(url.pathname)) {
+    const id = url.pathname.split("/")[3];
+    assert.deepEqual(body, { revision: "3", choice: "allow_once" }, "decision carries the displayed revision and no owner or scope");
+    if (id === "inline-approval") inlineApprovalDecided = true;
+    for (const job of jobs.values()) {
+      if (job.waiting_on.includes(id)) Object.assign(job, {
+        status: "ok", waiting_on: [], finished_at: timestamp(), response: "Release draft reviewed.", approved: true,
+      });
+    }
+    return reply(req, res, { ...approvalView(id), status: "completed", choices: [] });
+  }
   if (url.pathname === "/api/activities/capability-policy-catalog") {
     assert.equal(req.method, "GET");
     assert.deepEqual([...url.searchParams], []);
@@ -1375,6 +1409,12 @@ try {
   assert.equal(await evaluate("location.hash"), "#/chat/chat-browser");
   console.log("PASS live reasoning summary and accumulated provider usage presentation");
   await wait("document.querySelector('[data-tool-id=\"live-tool\"]')?.innerText.includes('preparing')", "provider preparation is not runtime execution");
+  await wait("!!document.querySelector('[aria-label=\"Current task approvals\"]')", "task-scoped inline approvals");
+  await wait("document.body.innerText.includes('Read selected files') && document.body.innerText.includes('/tmp/report.txt')", "readable OS permission target");
+  await click(`Array.from(document.querySelectorAll('[aria-label="Current task approvals"] button')).find(button => button.textContent === 'Authorize once')`);
+  await wait("!document.querySelector('[aria-label=\"Current task approvals\"]')", "inline decision followed by an OS refresh");
+  assert.equal(inlineApprovalDecided, true);
+  console.log("PASS task-scoped readable inline authorization with exact displayed revision");
 
   await evaluate(`(() => {
     const input = document.querySelector('textarea');
@@ -1671,8 +1711,8 @@ try {
   await expectDetail("4 grouped updates");
   await clickText("Open Approvals");
   await wait("location.hash === '#/approvals' && document.body.innerText.includes('Review the release notes')", "existing approvals page");
-  await clickText("Approve");
-  await wait("document.body.innerText.includes('No pending approvals.')", "existing approval action");
+  await clickText("Authorize once");
+  await wait("document.body.innerText.includes('No approval records in this view.')", "existing approval action");
   assert.equal(firstJob.status, "ok");
   assert.equal(activities.get("activity-1").state, "active", "successful jobs never auto-complete a goal");
   await clickText("Activities");

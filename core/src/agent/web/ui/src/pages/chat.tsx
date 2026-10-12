@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { applyFrame, markToolsUnconfirmed } from "@/lib/chat-presentation";
 import { ChatEvidence } from "@/components/chat-evidence";
+import { ApprovalViews } from "@/components/chat-approvals";
 import {
   streamDurableTask,
   taskReplay,
@@ -630,6 +631,11 @@ export function ChatPage({ meta }: { meta: any }) {
       </div>
       <div className="border-t bg-background/80 px-4 py-3 backdrop-blur">
         <div className="mx-auto max-w-3xl">
+          {busy && (messages[messages.length - 1]?.taskId || taskIdRef.current) && (
+            <div className="mb-3 max-h-72 overflow-y-auto">
+              <ApprovalViews compact taskId={messages[messages.length - 1]?.taskId || taskIdRef.current} />
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
               {attachments.map((attachment) => (

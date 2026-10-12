@@ -265,6 +265,10 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
     };
     let mut context = vec![
         ReviewDetail {
+            label: "Technical scope".into(),
+            value: capability.scope.to_string(),
+        },
+        ReviewDetail {
             label: "Session".into(),
             value: request.session.clone(),
         },
@@ -331,7 +335,7 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
                 risk: risk(current_risk),
                 scope: ReviewScope {
                     kind: ScopeKind::Fixed,
-                    description: capability.scope.to_string(),
+                    description: capability.scope.human_target(),
                 },
                 condition: None,
                 uses,

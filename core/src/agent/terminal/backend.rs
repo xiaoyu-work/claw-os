@@ -2246,22 +2246,7 @@ fn parse_approval(value: &Value, status: &str) -> Result<ApprovalRequest, String
 }
 
 fn approval_target(scope: &Scope) -> String {
-    match scope {
-        Scope::Path(path) if matches!(path.as_str(), "/" | "/**" | "**") => {
-            "All files and folders on this computer".to_string()
-        }
-        Scope::Path(path) if path == "~/**" => {
-            "Your home folder and everything inside it".to_string()
-        }
-        Scope::Path(path) => path
-            .strip_suffix("/**")
-            .map_or_else(|| path.clone(), |root| format!("{root} and everything inside it")),
-        Scope::Host(host) => host.clone(),
-        Scope::Name(name) => name.clone(),
-        Scope::SelfRef(reference) if reference == "self" => "This Agent session".to_string(),
-        Scope::SelfRef(reference) => format!("This Agent's {reference} resource"),
-        Scope::Wild => "All resources".to_string(),
-    }
+    scope.human_target()
 }
 
 fn parse_notification(value: &Value) -> Result<NotificationItem, String> {

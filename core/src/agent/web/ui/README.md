@@ -48,6 +48,16 @@ authenticated Chat request submits the bounded inline Job snapshot; no browser
 attachment store or path authority exists. Approval decisions invoke the
 installed polkit helper; the Web process never gains direct
 permission-decision authority.
+Chat and Approvals use the same OS-owned capability cards. Task cards derive
+their request ids from owner-checked Job `waiting_on` state. Human labels,
+targets and supported lifetimes come from `system.review.*`; decisions carry
+the exact displayed revision, with decimal-string transport for full `u64`
+precision. Positive choices use the installed helper's bounded
+`--system-review-json` input. Denial uses owner-only `system.review.cancel` and
+grants nothing. Stale/error outcomes require refresh and are never retried
+automatically. Headless authorization retains `cos review approve <id>` in an
+attended OS terminal (`show` remains read-only inspection);
+Web never collects an OS password or supplies attendance/owner authority.
 
 ## Activities
 
