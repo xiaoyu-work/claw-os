@@ -50,14 +50,21 @@ pub struct CoreJob {
     pub cancel_requested: bool,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<cos_agent_protocol::EvidencePresentation>,
 }
 
 impl CoreJob {
     pub fn into_done(self) -> Result<DonePayload, String> {
-        if self.status == "error" {
-            return Err(self
-                .error
-                .unwrap_or_else(|| "agent task failed".to_string()));
+        match self.status.as_str() {
+            "ok" => {}
+            "error" => {
+                return Err(self
+                    .error
+                    .unwrap_or_else(|| "agent task failed".to_string()));
+            }
+            "cancelled" => return Err("agent task was cancelled".to_string()),
+            status => return Err(format!("unexpected terminal task state: {status}")),
         }
         let answer = self.response.clone();
         Ok(DonePayload {
@@ -69,6 +76,7 @@ impl CoreJob {
             turns_used: self.turns_used,
             provider: self.provider,
             model: self.model,
+            evidence: self.evidence.map(evidence),
         })
     }
 
@@ -170,6 +178,10 @@ fn safe_error_preview(ok: Option<bool>, preview: Option<String>) -> Option<Strin
         return None;
     }
     let preview = preview.filter(|preview| !preview.is_empty())?;
+    Some(bounded_redacted_text(preview))
+}
+
+fn bounded_redacted_text(preview: String) -> String {
     static REDACTORS: OnceLock<Vec<Regex>> = OnceLock::new();
     let mut redacted = preview;
     for pattern in REDACTORS.get_or_init(|| {
@@ -194,7 +206,23 @@ fn safe_error_preview(ok: Option<bool>, preview: Option<String>) -> Option<Strin
     }) {
         redacted = pattern.replace_all(&redacted, "[REDACTED]").into_owned();
     }
-    Some(truncate_utf8(&redacted, MAX_ERROR_PREVIEW_BYTES))
+    truncate_utf8(&redacted, MAX_ERROR_PREVIEW_BYTES)
+}
+
+pub fn evidence(
+    mut report: cos_agent_protocol::EvidencePresentation,
+) -> cos_agent_protocol::EvidencePresentation {
+    if report.source_count == 0 {
+        report.source_count = report.sources.len() as u64;
+    }
+    report.truncated |= report.sources.len() > 128 || report.warnings.len() > 32;
+    report.sources.truncate(128);
+    report.warnings.truncate(32);
+    report.interpretation = bounded_redacted_text(report.interpretation);
+    for warning in &mut report.warnings {
+        *warning = bounded_redacted_text(std::mem::take(warning));
+    }
+    report
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {
@@ -290,6 +318,7 @@ pub fn sanitize_history_messages(messages: &mut [HistoryMessage]) {
 pub fn sanitize_task_presentations(jobs: &mut [cos_agent_protocol::ConversationJob]) {
     for job in jobs {
         if let Some(presentation) = job.presentation.as_mut() {
+            presentation.evidence = presentation.evidence.take().map(evidence);
             for tool in &mut presentation.tools {
                 tool.error_preview = safe_error_preview(tool.ok, tool.error_preview.take());
             }

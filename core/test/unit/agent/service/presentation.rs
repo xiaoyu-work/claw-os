@@ -57,3 +57,24 @@ fn retained_failures_are_redacted_and_summary_limits_are_explicit() {
     )
     .is_err());
 }
+
+#[test]
+fn evidence_projection_excludes_model_claims_and_confidence_and_discloses_coverage() {
+    let report = EvidenceReport {
+        status: EvidenceStatus::Partial,
+        required: true,
+        binding_confidence: Some(0.9),
+        claim_confidence: Some(0.9),
+        interpretation: "Source binding does not establish semantic correctness.".into(),
+        warnings: vec!["warning".to_string(); 33],
+        ..EvidenceReport::default()
+    };
+    let presented = EvidencePresentation::from(&report);
+    let encoded = serde_json::to_value(&presented).unwrap();
+    assert_eq!(presented.status, EvidenceStatus::Partial);
+    assert!(presented.truncated);
+    assert_eq!(presented.warnings.len(), 32);
+    assert!(encoded.get("claim_confidence").is_none());
+    assert!(encoded.get("binding_confidence").is_none());
+    assert!(encoded.get("claims").is_none());
+}

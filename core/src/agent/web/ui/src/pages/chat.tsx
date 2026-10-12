@@ -29,6 +29,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
+import { applyFrame, markToolsUnconfirmed } from "@/lib/chat-presentation";
+import { ChatEvidence } from "@/components/chat-evidence";
 import {
   streamDurableTask,
   taskReplay,
@@ -42,8 +44,6 @@ import {
   type PendingImageAttachment,
 } from "@/lib/chat-attachments";
 import {
-  accumulateTurnUsage,
-  appendReasoningSummary,
   restoreForActiveTask,
   restoreHistoryMessages,
   type ChatMessage,
@@ -106,6 +106,16 @@ export function ChatPage({ meta }: { meta: any }) {
     if (signal.aborted) return;
     setMessages(restoreForActiveTask(history.messages || [], job, history.jobs || []));
     taskIdRef.current = task.taskId;
+  }, []);
+
+  const recoveringNotice = useCallback((notice: string) => {
+    setReconnecting(notice);
+    setMessages((current) => {
+      const copy = current.slice();
+      const last = copy[copy.length - 1];
+      if (last?.role === "assistant") markToolsUnconfirmed(last);
+      return copy;
+    });
   }, []);
 
   useEffect(() => () => {
@@ -214,7 +224,7 @@ export function ChatPage({ meta }: { meta: any }) {
           task: { taskId: activeTask.id, sessionId: sessionFromRoute },
           signal: controller.signal,
           onReplay: (task) => replayTask(task, controller.signal),
-          onRecovering: setReconnecting,
+          onRecovering: recoveringNotice,
           onFrame: (event, data) => {
             if (cancelled) return;
             setReconnecting(null);
@@ -248,6 +258,7 @@ export function ChatPage({ meta }: { meta: any }) {
             if (last?.role === "assistant" && last.status === "streaming") {
               last.status = "interrupted";
               last.error = "stopped";
+              markToolsUnconfirmed(last);
             }
             return copy;
           });
@@ -258,6 +269,7 @@ export function ChatPage({ meta }: { meta: any }) {
           const last = copy[copy.length - 1];
           if (last?.role === "assistant" && last.status === "streaming") {
             last.status = "error";
+            markToolsUnconfirmed(last);
             last.error = error?.message || "Failed to restore live task";
             return copy;
           }
@@ -294,7 +306,7 @@ export function ChatPage({ meta }: { meta: any }) {
         taskIdRef.current = "";
       }
     };
-  }, [sessionFromRoute, restoreVersion, replayTask]);
+  }, [sessionFromRoute, restoreVersion, replayTask, recoveringNotice]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -398,7 +410,7 @@ export function ChatPage({ meta }: { meta: any }) {
         },
         signal: ac.signal,
         onReplay: (task) => replayTask(task, ac.signal),
-        onRecovering: setReconnecting,
+        onRecovering: recoveringNotice,
         onFrame: (event, data) => {
           if (ac.signal.aborted) return;
           setReconnecting(null);
@@ -448,6 +460,7 @@ export function ChatPage({ meta }: { meta: any }) {
         const last = copy[copy.length - 1];
         if (last && last.role === "assistant") {
           last.status = ac.signal.aborted ? "interrupted" : "error";
+          markToolsUnconfirmed(last);
           last.error = ac.signal.aborted ? "stopped" : e?.message || "stream error";
         }
         return copy;
@@ -471,6 +484,7 @@ export function ChatPage({ meta }: { meta: any }) {
     route,
     cancelTask,
     replayTask,
+    recoveringNotice,
   ]);
 
   const watchPredecessor = useCallback((predecessorId: string, expectedSessionId: string) => {
@@ -749,101 +763,6 @@ export function ChatPage({ meta }: { meta: any }) {
   );
 }
 
-function applyFrame(msg: Msg, event: string, data: any) {
-  switch (event) {
-    case "text":
-      msg.text += typeof data === "string" ? data : data?.delta || "";
-      break;
-    case "tool_use_start":
-      upsertTool(msg, data);
-      break;
-    case "tool_input_delta":
-      break;
-    case "tool_use":
-      upsertTool(msg, data);
-      break;
-    case "tool_result": {
-      const t = upsertTool(msg, data);
-      t.isError = !!data?.is_error || data?.ok === false;
-      t.finished = true;
-      if (Number.isSafeInteger(data?.latency_ms) && data.latency_ms >= 0) {
-        t.latencyMs = data.latency_ms;
-      }
-      if (
-        Number.isSafeInteger(data?.bytes_returned) &&
-        data.bytes_returned >= 0
-      ) {
-        t.bytesReturned = data.bytes_returned;
-      }
-      if (t.isError && typeof data?.error_preview === "string") {
-        t.errorPreview = data.error_preview;
-      }
-      break;
-    }
-    case "tool_start":
-      upsertTool(msg, data);
-      break;
-    case "reasoning":
-      appendReasoningSummary(msg, data);
-      break;
-    case "warning":
-      msg.warnings.push(stringifyServerMessage(data, "warning"));
-      break;
-    case "turn_done":
-      accumulateTurnUsage(msg, data);
-      break;
-    case "done":
-      msg.status = "done";
-      break;
-    case "error":
-      msg.status = "error";
-      msg.error = stringifyServerMessage(data, "stream error");
-      break;
-  }
-}
-
-function upsertTool(msg: Msg, data: any): ToolCall {
-  const id = String(data?.id || uid());
-  const existing = msg.tools.find((tool) => tool.id === id);
-  if (existing) {
-    existing.name = String(data?.name || existing.name || "tool");
-    return existing;
-  }
-  const tool = {
-    id,
-    name: String(data?.name || "tool"),
-    finished: false,
-  };
-  msg.tools.push(tool);
-  return tool;
-}
-
-// The agent server emits errors as
-// `{ "error": "<short>", "details": "<long>", "fix": "<command>" }`
-// (see core/src/agent/setup.rs is_ready) and warnings as
-// `{ "message": "..." }`. Plus there's the catch-all in chat.rs that
-// stringifies the original error into `{ "error": "..." }`. Reach into
-// all of those shapes — naively calling `String(data)` on the object
-// produced the dreaded `[object Object]` users were seeing.
-function stringifyServerMessage(data: any, fallback: string): string {
-  if (typeof data === "string") return data;
-  if (!data || typeof data !== "object") return fallback;
-  if (typeof data.message === "string" && data.message) return data.message;
-  if (typeof data.error === "string" && data.error) {
-    const detail = typeof data.details === "string" ? data.details : "";
-    const fix = typeof data.fix === "string" ? data.fix : "";
-    return [data.error, detail, fix ? `Fix: ${fix}` : ""]
-      .filter(Boolean)
-      .join(" — ");
-  }
-  if (typeof data.details === "string" && data.details) return data.details;
-  try {
-    return JSON.stringify(data);
-  } catch {
-    return fallback;
-  }
-}
-
 function Message({ m }: { m: Msg }) {
   if (m.role === "user") {
     return (
@@ -905,6 +824,7 @@ function Message({ m }: { m: Msg }) {
         <p className="text-xs text-destructive">{m.error}</p>
       )}
       {m.usage && <UsageSummary usage={m.usage} />}
+      {m.evidence && <ChatEvidence evidence={m.evidence} />}
     </div>
   );
 }
@@ -956,7 +876,7 @@ function ToolCard({ t }: { t: ToolCall }) {
     t.bytesReturned === undefined ? null : formatBytes(t.bytesReturned),
   ].filter((value): value is string => value !== null);
   return (
-    <Card className="border-muted px-3 py-2 text-xs">
+    <Card data-tool-id={t.id} className="border-muted px-3 py-2 text-xs">
       <div className="flex w-full items-center justify-between gap-2">
         <span className="flex items-center gap-2">
           <Wrench className={cn("h-3.5 w-3.5", t.isError && "text-destructive")} />
@@ -969,7 +889,7 @@ function ToolCard({ t }: { t: ToolCall }) {
               {metrics.join(" · ")}
             </span>
           )}
-          {!t.finished && <Loader2 className="h-3 w-3 animate-spin" />}
+          {(t.phase === "preparing" || t.phase === "running") && <Loader2 className="h-3 w-3 animate-spin" />}
         </span>
       </div>
       {t.errorPreview && (

@@ -107,6 +107,7 @@ fn endpoint_response_dtos_round_trip() {
                 input: serde_json::json!({"path": "file"}),
                 partial_json: String::new(),
                 in_progress: false,
+                phase: None,
             }],
             tool_results: vec![ToolResultView {
                 id: "tool-1".into(),

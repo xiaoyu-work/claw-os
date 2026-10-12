@@ -229,3 +229,11 @@ fn history_drops_raw_content_and_system_rows() {
         "[REDACTED] failed"
     );
 }
+
+#[test]
+fn cancellation_and_nonterminal_states_never_become_successful_done_events() {
+    for status in ["cancelled", "running", "pending", "waiting_approval", "unknown"] {
+        let job: CoreJob = serde_json::from_value(json!({"id":"task-1","status":status})).unwrap();
+        assert!(job.into_done().is_err());
+    }
+}

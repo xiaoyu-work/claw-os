@@ -6,7 +6,9 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{Column, Row, button, container, scrollable, text};
 use cosmic::{Element, theme, widget};
 
-use crate::bridge::{ModelsResponse, ToolCallView, ToolResultView};
+use crate::bridge::{
+    EvidencePresentation, EvidenceStatus, ModelsResponse, ToolCallView, ToolPhase, ToolResultView,
+};
 use crate::fl;
 use crate::session::{ChatMessage, ChatRole, HistoryState, LocalSession, TokenUsage};
 use crate::styles;
@@ -531,6 +533,13 @@ impl App {
                 if let Some(usage) = &message.usage {
                     column = column.push(Self::usage_summary(usage));
                 }
+                if let Some(evidence) = &message.evidence
+                    && (evidence.required
+                        || evidence.status != EvidenceStatus::NotRequired
+                        || evidence.source_count > 0)
+                {
+                    column = column.push(Self::evidence_card(evidence));
+                }
                 if !message.content.is_empty() && !message.in_progress {
                     column = column.push(
                         Row::new()
@@ -583,12 +592,23 @@ impl App {
                     .filter(|name| !name.is_empty())
             })
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| fl!("tool-running"));
-        let status = match result {
-            Some(result) if result.is_error => fl!("tool-failed"),
-            Some(_) => fl!("tool-completed"),
-            None if call.is_some_and(|call| call.in_progress) => fl!("tool-running"),
-            None => fl!("tool-requested"),
+            .unwrap_or_else(|| fl!("tool-unnamed"));
+        let phase = result
+            .map(|result| {
+                if result.is_error {
+                    ToolPhase::Failed
+                } else {
+                    ToolPhase::Completed
+                }
+            })
+            .or_else(|| call.and_then(|call| call.phase))
+            .unwrap_or(ToolPhase::Unconfirmed);
+        let status = match phase {
+            ToolPhase::Preparing => fl!("tool-preparing"),
+            ToolPhase::Running => fl!("tool-running"),
+            ToolPhase::Completed => fl!("tool-completed"),
+            ToolPhase::Failed => fl!("tool-failed"),
+            ToolPhase::Unconfirmed => fl!("tool-unconfirmed"),
         };
         let mut details = vec![status];
         if let Some(latency_ms) = result.and_then(|result| result.latency_ms) {
@@ -648,6 +668,46 @@ impl App {
         container(text(parts.join(" · ")).size(10.0))
             .padding([spacing.space_xxs, spacing.space_s])
             .class(theme::Container::custom(styles::tool_card))
+            .into()
+    }
+
+    fn evidence_card(report: &EvidencePresentation) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let status = match report.status {
+            EvidenceStatus::NotRequired => fl!("evidence-not-required"),
+            EvidenceStatus::Verified => fl!("evidence-verified"),
+            EvidenceStatus::Partial => fl!("evidence-partial"),
+            EvidenceStatus::Missing => fl!("evidence-missing"),
+            EvidenceStatus::Invalid => fl!("evidence-invalid"),
+        };
+        let mut content = Column::new()
+            .spacing(spacing.space_xxs)
+            .push(text(format!("{}: {status}", fl!("evidence-summary"))).size(11.0))
+            .push(
+                text(fl!(
+                    "evidence-citations",
+                    bound = fluent_count(report.verified_claims),
+                    total = fluent_count(report.total_claims)
+                ))
+                .size(11.0),
+            )
+            .push(text(&report.interpretation).size(11.0))
+            .push(text(fl!("evidence-caveat")).size(11.0));
+        for source in &report.sources {
+            content = content
+                .push(text(format!("{} · {}", source.tool_name, source.tool_call_id)).size(11.0))
+                .push(text(format!("SHA-256: {}", source.result_sha256)).size(10.0));
+        }
+        for warning in &report.warnings {
+            content = content.push(Self::warning_card(warning));
+        }
+        if report.truncated {
+            content = content.push(text(fl!("evidence-truncated")).size(11.0));
+        }
+        container(content)
+            .padding([spacing.space_xxs, spacing.space_s])
+            .class(theme::Container::custom(styles::tool_card))
+            .width(Length::Fill)
             .into()
     }
 

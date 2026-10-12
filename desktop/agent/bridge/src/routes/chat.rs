@@ -185,6 +185,9 @@ pub async fn stream_chat(
             }
         };
 
+        if let Some(evidence) = result.evidence.clone() {
+            yield Ok(protocol_event(StreamEvent::Evidence(translation::evidence(evidence))));
+        }
         let payload = match result.into_done() {
             Ok(payload) => payload,
             Err(error) => {
@@ -268,6 +271,9 @@ pub async fn stream_task(
                 break frame.job;
             }
         };
+        if let Some(evidence) = result.evidence.clone() {
+            yield Ok(protocol_event(StreamEvent::Evidence(translation::evidence(evidence))));
+        }
         let payload = match result.into_done() {
             Ok(payload) => payload,
             Err(error) => {

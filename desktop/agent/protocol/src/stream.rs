@@ -6,6 +6,7 @@ pub const TASK_EVENT: &str = "task";
 pub const DELTA_EVENT: &str = "delta";
 pub const TEXT_EVENT_ALIAS: &str = "text";
 pub const REASONING_EVENT: &str = "reasoning";
+pub const EVIDENCE_EVENT: &str = "evidence";
 pub const TOOL_USE_START_EVENT: &str = "tool_use_start";
 pub const TOOL_INPUT_DELTA_EVENT: &str = "tool_input_delta";
 pub const TOOL_USE_EVENT: &str = "tool_use";
@@ -21,6 +22,7 @@ pub enum StreamEvent {
     TaskStarted(TaskStarted),
     Delta(DeltaPayload),
     Reasoning(ReasoningPayload),
+    Evidence(crate::EvidencePresentation),
     ToolUseStart(ToolUseStartPayload),
     ToolInputDelta(ToolInputDeltaPayload),
     ToolUse(ToolUsePayload),
@@ -38,6 +40,7 @@ impl StreamEvent {
             Self::TaskStarted(_) => TASK_EVENT,
             Self::Delta(_) => DELTA_EVENT,
             Self::Reasoning(_) => REASONING_EVENT,
+            Self::Evidence(_) => EVIDENCE_EVENT,
             Self::ToolUseStart(_) => TOOL_USE_START_EVENT,
             Self::ToolInputDelta(_) => TOOL_INPUT_DELTA_EVENT,
             Self::ToolUse(_) => TOOL_USE_EVENT,
@@ -55,6 +58,7 @@ impl StreamEvent {
             Self::TaskStarted(payload) => serde_json::to_string(payload),
             Self::Delta(payload) => serde_json::to_string(payload),
             Self::Reasoning(payload) => serde_json::to_string(payload),
+            Self::Evidence(payload) => serde_json::to_string(payload),
             Self::ToolUseStart(payload) => serde_json::to_string(payload),
             Self::ToolInputDelta(payload) => serde_json::to_string(payload),
             Self::ToolUse(payload) => serde_json::to_string(payload),
@@ -80,6 +84,7 @@ impl StreamEvent {
                 Self::Delta(DeltaPayload::new(alias.delta))
             }
             REASONING_EVENT => Self::Reasoning(decode(data)?),
+            EVIDENCE_EVENT => Self::Evidence(decode(data)?),
             TOOL_USE_START_EVENT => Self::ToolUseStart(decode(data)?),
             TOOL_INPUT_DELTA_EVENT => Self::ToolInputDelta(decode(data)?),
             TOOL_USE_EVENT => Self::ToolUse(decode(data)?),
@@ -202,6 +207,9 @@ pub struct ToolResultPayload {
 }
 
 impl ToolResultPayload {
+    pub fn presented_outcome(&self) -> Option<bool> {
+        self.ok.or_else(|| self.is_error.map(|is_error| !is_error))
+    }
     pub fn presented_is_error(&self) -> bool {
         self.is_error.unwrap_or_else(|| !self.ok.unwrap_or(true))
     }
@@ -259,6 +267,8 @@ pub struct DonePayload {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::EvidencePresentation>,
 }
 
 impl DonePayload {

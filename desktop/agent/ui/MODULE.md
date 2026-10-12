@@ -59,6 +59,10 @@ reasoning, aggregate usage and tool metrics appear once, and the outer user
 message carries image metadata only. Active tasks replay rather than applying
 the same totals twice. Source gaps and bounded-read failures stay visible;
 Desktop owns neither a presentation store nor the retained stream files.
+Provider tool announcements mean Preparing; only runtime `tool_start` means
+Running. Missing results, transport loss and detachment cannot infer completion.
+Evidence cards describe source bindings and result digests only, not semantic
+truth, confirmed effects, capabilities or goal achievement.
 
 The fixed attention section renders the same broker-owned projection used by
 terminal and Agent Web clients: retained Job counts, exact decision records,

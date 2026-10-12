@@ -101,6 +101,15 @@ let activityNumber = 0;
 let jobNumber = 0;
 let conversationNumber = 0;
 let reattachStreamRequests = 0;
+let runtimeProgressObserved = false;
+const evidenceFixture = {
+  status: "verified", required: true, verified_claims: 1, total_claims: 1,
+  source_count: 1, sources: [{
+    tool_call_id: "reattach-tool", tool_name: "cos_sysinfo", is_error: false,
+    result_sha256: "0".repeat(64), result_bytes: 2048,
+  }],
+  warnings: [], interpretation: "One citation is bound to its retained tool result.", truncated: false,
+};
 let chatFollowUpQueued = false;
 let chatPrimaryDone = false;
 let chatFollowUpStreamRequests = 0;
@@ -398,6 +407,7 @@ async function fixture(req, res) {
       ["task", { task_id: "job-chat", session_id: "chat-browser" }],
       ["session", { session_id: "chat-browser" }],
       ["reasoning", { summary: ["Compared the available Agent context."] }],
+      ["tool_use_start", { id: "live-tool", name: "cos_sysinfo" }],
       ["text", { delta: "Presentation complete." }],
       ["turn_done", {
         finish: "stop",
@@ -414,6 +424,11 @@ async function fixture(req, res) {
     const deadline = Date.now() + 12_000;
     while (!chatFollowUpQueued && Date.now() < deadline) await delay(20);
     assert.equal(chatFollowUpQueued, true, "busy Chat submitted a durable follow-up");
+    res.write('event: tool_start\ndata: {"id":"live-tool","name":"cos_sysinfo"}\n\n');
+    const progressDeadline = Date.now() + 12_000;
+    while (!runtimeProgressObserved && Date.now() < progressDeadline) await delay(20);
+    assert.equal(runtimeProgressObserved, true, "runtime execution was rendered separately from provider preparation");
+    res.write('event: tool_result\ndata: {"id":"live-tool","name":"cos_sysinfo","ok":true,"latency_ms":42,"bytes_returned":128}\n\n');
     res.write(`event: done\ndata: ${JSON.stringify({ session_id: "chat-browser" })}\n\n`);
     chatPrimaryDone = true;
     res.end();
@@ -542,6 +557,7 @@ async function fixture(req, res) {
       }],
       ["done", { session_id: "session-reattach" }],
     ]) {
+      if (event === "done") res.write(`event: evidence\ndata: ${JSON.stringify(evidenceFixture)}\n\n`);
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     }
     res.end();
@@ -595,6 +611,7 @@ async function fixture(req, res) {
                 latency_ms: 42, bytes_returned: 2048, error_preview: null,
               }],
               attachments: [{ name: "retained-screen.png", media_type: "image/png", bytes: 32, sha256: "digest" }],
+              evidence: evidenceFixture,
             },
           }],
           task_bindings_complete: true, jobs_truncated: false,
@@ -1357,6 +1374,7 @@ try {
   await wait("document.body.innerText.includes('Compared the available Agent context.')", "reasoning summary presentation");
   assert.equal(await evaluate("location.hash"), "#/chat/chat-browser");
   console.log("PASS live reasoning summary and accumulated provider usage presentation");
+  await wait("document.querySelector('[data-tool-id=\"live-tool\"]')?.innerText.includes('preparing')", "provider preparation is not runtime execution");
 
   await evaluate(`(() => {
     const input = document.querySelector('textarea');
@@ -1364,6 +1382,8 @@ try {
     input.dispatchEvent(new Event('input', {bubbles: true}));
   })()`);
   await click(`document.querySelector('button[title="Queue follow-up"]')`);
+  await wait("document.querySelector('[data-tool-id=\"live-tool\"]')?.innerText.includes('running')", "runtime tool dispatch is running");
+  runtimeProgressObserved = true;
   await wait("document.body.innerText.includes('Queued follow-up complete.')", "queued follow-up execution");
   assert.equal(chatFollowUpStreamRequests, 1);
   assert.ok(requests.some((request) =>
@@ -1426,12 +1446,16 @@ try {
   await wait("document.body.innerText.includes('permission denied: [REDACTED:bearer]')", "bounded redacted tool failure");
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Recovered the durable task stream.')", "reattached reasoning summary");
+  await wait("document.body.innerText.includes('Source binding verified')", "live evidence provenance");
+  await click(`Array.from(document.querySelectorAll('details summary')).find(el => el.textContent.includes('Evidence provenance'))`);
+  await wait("document.body.innerText.includes('does not prove factual correctness') && document.body.innerText.includes('Result SHA-256')", "evidence non-goal-completion caveat");
   console.log("PASS verified automatic recovery of the same durable task after premature EOF");
   await send("Page.reload");
   await wait("document.body.innerText.includes('Resumed after refresh.') && document.body.innerText.includes('retained-screen.png')", "completed task attachment metadata restored");
   await wait("document.body.innerText.includes('42 ms') && document.body.innerText.includes('9 in')", "completed task metrics and usage restored");
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Recovered the durable task stream.')", "completed reasoning restored");
+  await wait("document.body.innerText.includes('Source binding verified')", "retained evidence survives reload");
   assert.equal(reattachStreamRequests, 2, "completed history never starts a new stream or task");
   console.log("PASS retained presentation survives reload without persisting raw images or tool bodies");
 

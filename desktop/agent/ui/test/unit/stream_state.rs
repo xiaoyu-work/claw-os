@@ -50,7 +50,7 @@ fn detach_aborts_only_the_local_stream_and_rejects_late_events() {
         &mut sessions,
     );
 
-    assert_eq!(stream.detach(), Some(0));
+    assert_eq!(stream.detach(&mut sessions), Some(0));
     assert!(!stream.is_active());
     assert_eq!(
         stream.reduce(
@@ -81,6 +81,7 @@ fn done_is_terminal_and_finalizes_the_assistant() {
             turns_used: None,
             provider: None,
             model: None,
+            evidence: None,
         }),
         &mut sessions,
     );
@@ -222,4 +223,21 @@ fn cancellation_waits_for_task_identity_then_rejects_late_events() {
     );
     assert_eq!(stream.cancel_finished(0, 1, Ok(()), &mut sessions), Some(0));
     assert!(!stream.is_cancelling());
+}
+
+#[test]
+fn provider_preparation_and_runtime_dispatch_have_distinct_truthful_phases() {
+    let (mut stream, mut sessions, generation) = active_stream();
+    stream.reduce(generation, StreamEvent::ToolUseStart(cos_agent_protocol::ToolUseStartPayload {
+        id:"tool-1".into(), name:"observe".into(),
+    }), &mut sessions);
+    assert_eq!(sessions.active().unwrap().messages.last().unwrap().tool_calls[0].phase, Some(ToolPhase::Preparing));
+    stream.reduce(generation, StreamEvent::ToolStart(ToolStartPayload {
+        kind:Some("tool_start".into()), id:"tool-1".into(), name:"observe".into(), input:None,
+    }), &mut sessions);
+    assert_eq!(sessions.active().unwrap().messages.last().unwrap().tool_calls[0].phase, Some(ToolPhase::Running));
+    stream.transport_failed(generation, "disconnected".into(), &mut sessions);
+    let message = sessions.active().unwrap().messages.last().unwrap();
+    assert_eq!(message.tool_calls[0].phase, Some(ToolPhase::Unconfirmed));
+    assert!(message.tool_results.is_empty());
 }

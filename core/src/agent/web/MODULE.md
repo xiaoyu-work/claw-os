@@ -24,6 +24,9 @@ web UI.
 - Read immutable caller-reported receipts, keeping report outcomes and result
   summaries separate from matched App declarations and OS-confirmed evidence.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
+- Keep provider preparation distinct from runtime dispatch and unconfirmed
+  outcomes; display bounded evidence provenance without treating it as effect
+  verification or goal completion.
 - Present generic tool lifecycle, latency and result size; only failed tools
   may expose a bounded, redacted error preview, never successful result bodies.
 - Reattach Chat to an owner-scoped durable task stream after navigation or
@@ -50,6 +53,7 @@ web UI.
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
 | `ui/` | TypeScript/React source and generated distribution assets |
 | `ui/src/lib/chat-stream.ts` | Terminal-event validation and bounded same-Job transport recovery through verified history replay |
+| `ui/src/lib/chat-presentation.ts`, `ui/src/components/chat-evidence.tsx` | Truthful tool-phase reduction and inert evidence/source presentation |
 | `ui/src/pages/activities.tsx`, `ui/src/components/activity-*.tsx` | Fixed Activity list, planning forms, detail cards, and existing task/approval/session navigation |
 | `ui/src/lib/activities.ts`, `ui/src/hooks/use-activities.ts` | Validated fetched views and abortable, selection-safe refreshes |
 | `ui/src/components/activity-objects.tsx` | Typed object attachment, declaration-only status, inert references, and structured invocation metadata |

@@ -11,6 +11,12 @@ fn every_event_has_a_round_trip_codec() {
         StreamEvent::Reasoning(ReasoningPayload {
             summary: vec!["Checking context".into()],
         }),
+        StreamEvent::Evidence(crate::EvidencePresentation {
+            status: crate::EvidenceStatus::Verified,
+            required: true, verified_claims: 1, total_claims: 1,
+            source_count: 0, sources: vec![], warnings: vec![],
+            interpretation: "Source binding only.".into(), truncated: false,
+        }),
         StreamEvent::ToolUseStart(ToolUseStartPayload {
             id: "tool-1".into(),
             name: "fs.read".into(),
@@ -64,6 +70,7 @@ fn every_event_has_a_round_trip_codec() {
             turns_used: Some(1),
             provider: Some("provider".into()),
             model: Some("model".into()),
+            evidence: None,
         }),
         StreamEvent::Error(StreamError::new("failed")),
     ];

@@ -544,14 +544,18 @@ the prior non-disruptive `start` behavior.
 | `POST /api/voice/upload` | Raw audio request; `VoiceResponse` / `ErrorEnvelope` |
 
 The chat stream covers `task`, `delta` (`text` remains a decode alias),
-`reasoning`, `tool_use_start`, `tool_use`, `tool_start`, `tool_result`,
+`reasoning`, `evidence`, `tool_use_start`, `tool_use`, `tool_start`, `tool_result`,
 `warning`, `turn_done`, `done`, and `error`. The shared decoder also retains
 the `tool_input_delta` compatibility event, while the bridge continues
 suppressing live tool arguments. Tool results expose status, latency and
 returned-byte count; only failed tools may carry a secondarily redacted,
 2-KiB-bounded error preview. Successful result bodies remain inside the Agent
 runtime/history trajectory. Unknown future event names are ignored by v3
-clients; malformed known events fail decoding.
+clients; malformed known events fail decoding. Provider announcements are
+Preparing, runtime dispatch is Running, and unmatched/unfinished outcomes
+remain Unconfirmed. Cancelled or nonterminal Jobs cannot become successful
+`done` events. Evidence metadata binds citations to tool results; it never
+proves factual correctness, execution effects or Activity goal completion.
 
 Activity endpoints use the same bearer authentication, v3 negotiation, and
 typed error envelopes as chat. Request DTOs accept no owner or capability

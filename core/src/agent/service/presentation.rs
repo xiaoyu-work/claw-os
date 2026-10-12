@@ -10,12 +10,55 @@ use serde_json::Value;
 use super::{Job, Store};
 use crate::agent::attachments::{AttachmentMetadata, ImageAttachment};
 use crate::agent::llm::{ContentBlock, StreamEvent, Usage};
+use crate::agent::runtime::evidence::{EvidenceReport, EvidenceSource, EvidenceStatus};
 use crate::agent::safety::redact::Redactor;
 
 pub(crate) const MAX_SCAN_BYTES: usize = 32 * 1024 * 1024;
 const MAX_TASK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SUMMARY_BYTES: usize = 16 * 1024;
 const MAX_TOOLS: usize = 128;
+static REDACTOR: OnceLock<Redactor> = OnceLock::new();
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EvidencePresentation {
+    pub status: EvidenceStatus,
+    pub required: bool,
+    pub verified_claims: usize,
+    pub total_claims: usize,
+    pub source_count: usize,
+    pub sources: Vec<EvidenceSource>,
+    pub warnings: Vec<String>,
+    pub interpretation: String,
+    pub truncated: bool,
+}
+
+impl From<&EvidenceReport> for EvidencePresentation {
+    fn from(report: &EvidenceReport) -> Self {
+        let redactor = REDACTOR.get_or_init(Redactor::default_set);
+        let preview = |text: &str| {
+            crate::agent::runtime::progress::preview_with_limit(
+                &redactor.redact(text),
+                crate::agent::runtime::progress::DEFAULT_PREVIEW_BYTES,
+            )
+        };
+        Self {
+            status: report.status,
+            required: report.required,
+            verified_claims: report.verified_claims,
+            total_claims: report.total_claims,
+            source_count: report.sources.len(),
+            sources: report.sources.iter().take(MAX_TOOLS).cloned().collect(),
+            warnings: report
+                .warnings
+                .iter()
+                .take(32)
+                .map(|warning| preview(warning))
+                .collect(),
+            interpretation: preview(&report.interpretation),
+            truncated: report.sources.len() > MAX_TOOLS || report.warnings.len() > 32,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct UsageTotals {
@@ -44,6 +87,8 @@ pub struct TaskPresentation {
     pub tools: Vec<ToolPresentation>,
     pub attachments: Vec<AttachmentMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EvidencePresentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostic: Option<String>,
 }
 
@@ -55,6 +100,7 @@ impl TaskPresentation {
                 .iter()
                 .map(ImageAttachment::metadata)
                 .collect(),
+            evidence: job.evidence.as_ref().map(EvidencePresentation::from),
             diagnostic,
             ..Self::default()
         }
@@ -94,16 +140,8 @@ fn read_checked(
             return Err("retained task presentation exceeds its bounded read budget".to_string());
         }
         *remaining -= size;
-        let mut presentation = TaskPresentation {
-            available: true,
-            attachments: job
-                .attachments
-                .iter()
-                .map(ImageAttachment::metadata)
-                .collect(),
-            ..TaskPresentation::default()
-        };
-        static REDACTOR: OnceLock<Redactor> = OnceLock::new();
+        let mut presentation = TaskPresentation::unavailable(job, None);
+        presentation.available = true;
         let redactor = REDACTOR.get_or_init(Redactor::default_set);
         for line in BufReader::new(file.take(size as u64)).lines() {
             let line = line.map_err(|error| format!("read retained task record: {error}"))?;
@@ -162,6 +200,12 @@ fn project_record(
                     .to_string();
                 let result = tool(presentation, id, name)?;
                 result.started = true;
+                if progress.get("kind").and_then(Value::as_str) == Some("tool_start") {
+                    result.ok = None;
+                    result.latency_ms = None;
+                    result.bytes_returned = None;
+                    result.error_preview = None;
+                }
                 if progress.get("kind").and_then(Value::as_str) == Some("tool_result") {
                     let ok = progress
                         .get("ok")

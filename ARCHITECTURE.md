@@ -1634,6 +1634,13 @@ returned-byte count. Successful result bodies remain inside the Agent
 runtime/history trajectory; failed tools may include only the user-visible
 projection's bounded, redacted error preview, which each presentation adapter
 redacts and bounds again.
+Provider tool announcements are preparation rather than execution. Web/native
+presentations mark Running only from runtime dispatch, require an explicit
+tool outcome to mark completion, and show unmatched or disconnected outcomes
+as unconfirmed. Bounded evidence cards use the core verifier's source binding
+status and result digests. Model confidence and claim prose are not promoted
+into these cards, and neither binding verification nor Job completion proves
+semantic truth, effects or Activity goal achievement.
 
 `task.workspace.resolve` is the only presentation-facing workspace resolver.
 `clawd` derives the owner from peer credentials, resolves relative paths under

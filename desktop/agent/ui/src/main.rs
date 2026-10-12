@@ -483,7 +483,7 @@ impl Application for App {
                     {
                         return Task::none();
                     }
-                    if let Some(previous) = self.stream.detach() {
+                    if let Some(previous) = self.stream.detach(&mut self.sessions) {
                         self.sessions.invalidate_history(previous);
                     }
                 }
@@ -512,7 +512,7 @@ impl Application for App {
                     {
                         return Task::none();
                     }
-                    if let Some(previous) = self.stream.detach() {
+                    if let Some(previous) = self.stream.detach(&mut self.sessions) {
                         self.sessions.invalidate_history(previous);
                     }
                 }

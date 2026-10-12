@@ -240,7 +240,7 @@ pub struct SessionUpdateRequest {
 /// runtime and are not part of the desktop presentation protocol.
 pub type ToolInput = serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ToolCallView {
     #[serde(default)]
     pub id: String,
@@ -251,6 +251,8 @@ pub struct ToolCallView {
     pub partial_json: String,
     #[serde(default)]
     pub in_progress: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<crate::ToolPhase>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

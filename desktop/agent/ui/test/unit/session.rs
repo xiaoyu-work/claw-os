@@ -114,6 +114,7 @@ fn active_history_rebuilds_one_task_and_preserves_the_bound_user_prompt() {
                             input: serde_json::Value::Null,
                             partial_json: String::new(),
                             in_progress: false,
+                            phase: None,
                         }],
                         ..HistoryMessage::default()
                     },

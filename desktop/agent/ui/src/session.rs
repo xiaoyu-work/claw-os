@@ -3,8 +3,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use cosmic::widget;
 
 use crate::bridge::{
-    ConversationJob, HistoryMessage, HistoryResponse, SessionSummary, ToolCallView, ToolResultView,
-    Usage,
+    ConversationJob, EvidencePresentation, HistoryMessage, HistoryResponse, SessionSummary,
+    ToolCallView, ToolPhase, ToolResultView, Usage,
 };
 use crate::fl;
 
@@ -35,6 +35,7 @@ pub(crate) struct ChatMessage {
     pub(crate) usage: Option<TokenUsage>,
     pub(crate) task_id: Option<String>,
     pub(crate) attachments: Vec<cos_agent_protocol::AttachmentMetadata>,
+    pub(crate) evidence: Option<EvidencePresentation>,
     pub(crate) warnings: Vec<String>,
     pub(crate) error: Option<String>,
     pub(crate) parsed_markdown: Option<Vec<widget::markdown::Item>>,
@@ -78,6 +79,7 @@ impl ChatMessage {
             && self.reasoning.is_empty()
             && self.usage.is_none()
             && self.attachments.is_empty()
+            && self.evidence.is_none()
             && self.warnings.is_empty()
             && self.error.is_none()
     }
@@ -499,6 +501,7 @@ impl SessionState {
             if let Some(diagnostic) = &presentation.diagnostic {
                 messages[index].warnings.push(diagnostic.clone());
             }
+            messages[index].evidence = presentation.evidence.clone();
             if !presentation.available {
                 if presentation.diagnostic.is_none() {
                     messages[index].warnings.push(
@@ -530,6 +533,11 @@ impl SessionState {
                     input: serde_json::Value::Null,
                     partial_json: String::new(),
                     in_progress: false,
+                    phase: Some(match tool.ok {
+                        Some(true) => ToolPhase::Completed,
+                        Some(false) => ToolPhase::Failed,
+                        None => ToolPhase::Unconfirmed,
+                    }),
                 });
                 if let Some(ok) = tool.ok {
                     message.upsert_tool_result(ToolResultView {
@@ -700,6 +708,16 @@ impl SessionState {
             message.warnings.push(fl!("interrupted"));
         }
         message.in_progress = false;
+        for call in &mut message.tool_calls {
+            if !message
+                .tool_results
+                .iter()
+                .any(|result| !call.id.is_empty() && result.id == call.id)
+            {
+                call.in_progress = false;
+                call.phase = Some(ToolPhase::Unconfirmed);
+            }
+        }
         message.refresh_markdown();
         if message.is_visibly_empty() {
             session.messages.pop();

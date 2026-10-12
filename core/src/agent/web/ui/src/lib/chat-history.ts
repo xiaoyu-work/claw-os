@@ -36,6 +36,7 @@ export type ChatMessage = {
   status: "streaming" | "done" | "error" | "interrupted";
   error?: string;
   taskId?: string;
+  evidence?: EvidencePresentation;
 };
 
 export type RetainedTask = {
@@ -54,6 +55,7 @@ export type RetainedTask = {
     }[];
     attachments: { name: string; media_type: string; bytes: number; sha256: string }[];
     diagnostic?: string | null;
+    evidence?: EvidencePresentation | null;
   } | null;
 };
 
@@ -184,15 +186,11 @@ export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): 
       ) {
         const previous = restored[restoredIndex];
         if (previous.role !== "assistant") continue;
-        const tool =
-          (requestedId &&
-            previous.tools.find(
-              (candidate) => candidate.id === requestedId,
-            )) ||
-          previous.tools.find((candidate) => !candidate.finished);
+        const tool = requestedId ? previous.tools.find((candidate) => candidate.id === requestedId) : undefined;
         if (tool) {
           tool.isError = result?.is_error === true;
           tool.finished = true;
+          tool.phase = tool.isError ? "failed" : "completed";
           break;
         }
       }
@@ -221,10 +219,11 @@ export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): 
     });
   }
 
-  // A restored transcript is no longer executing. Legacy rows may omit a
-  // matching result, but showing those calls as "running…" forever is wrong.
+  // Missing legacy result identities are unconfirmed, never inferred success.
   for (const message of restored) {
-    for (const tool of message.tools) tool.finished = true;
+    for (const tool of message.tools) {
+      if (!tool.finished) tool.phase = "unconfirmed";
+    }
   }
 
   for (const job of jobs) {
@@ -240,6 +239,13 @@ export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): 
       }));
     }
     if (!assistant) continue;
+    if (presentation.evidence) {
+      try {
+        assistant.evidence = readEvidence(presentation.evidence);
+      } catch (error: unknown) {
+        assistant.warnings.push(error instanceof Error ? error.message : "Retained evidence is unavailable.");
+      }
+    }
     if (presentation.diagnostic) assistant.warnings.push(presentation.diagnostic);
     if (!presentation.available) {
       if (!presentation.diagnostic) assistant.warnings.push("Extended presentation details were not retained for this task.");
@@ -261,3 +267,4 @@ export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): 
 
   return restored;
 }
+import { readEvidence, type EvidencePresentation } from "./chat-evidence";

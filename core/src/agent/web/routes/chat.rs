@@ -368,6 +368,23 @@ async fn relay_task_stream(
         }
     };
 
+    let evidence = final_job
+        .get("evidence")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<crate::agent::runtime::evidence::EvidenceReport>(value.clone())
+                .map(|report| {
+                    crate::agent::service::presentation::EvidencePresentation::from(&report)
+                })
+                .map_err(|error| format!("invalid task evidence report: {error}"))
+        })
+        .transpose()?;
+    if let Some(evidence) = &evidence {
+        if !send_frame(tx, sse::encode_event("evidence", evidence)).await {
+            return Ok(());
+        }
+    }
+
     match final_job.get("status").and_then(Value::as_str) {
         Some("ok") => {}
         Some("cancelled") => return Err("agent task was cancelled".to_string()),
@@ -389,11 +406,6 @@ async fn relay_task_stream(
     if !emitted_text && !answer.is_empty() && !send_frame(tx, text_frame(answer)).await {
         return Ok(());
     }
-    if let Some(evidence) = final_job.get("evidence").filter(|value| !value.is_null()) {
-        if !send_frame(tx, sse::encode_event("evidence", evidence)).await {
-            return Ok(());
-        }
-    }
     let done = json!({
         "session_id": final_job
             .get("session_id")
@@ -403,7 +415,7 @@ async fn relay_task_stream(
         "provider": final_job.get("provider").cloned().unwrap_or(Value::Null),
         "turns": final_job.get("turns_used").cloned().unwrap_or(Value::Null),
         "answer": final_job.get("response").cloned().unwrap_or(Value::Null),
-        "evidence": final_job.get("evidence").cloned().unwrap_or(Value::Null),
+        "evidence": evidence,
         "fallback": final_job.get("fallback").cloned().unwrap_or(Value::Null),
         "finish": last_finish,
     });
@@ -511,7 +523,7 @@ fn project_progress(progress: &Value) -> Vec<String> {
             &json!({
                 "id": id,
                 "name": name,
-                "ok": progress.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                "ok": progress.get("ok").and_then(Value::as_bool),
                 "latency_ms": progress.get("latency_ms").and_then(Value::as_u64),
                 "bytes_returned": progress.get("bytes_returned").and_then(Value::as_u64),
                 "error_preview": visible_error_preview(progress),

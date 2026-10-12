@@ -43,8 +43,8 @@ describe("restoreHistoryMessages", () => {
       {
         id: "3-0",
         name: "cos_sysinfo",
-        isError: false,
-        finished: true,
+        finished: false,
+        phase: "unconfirmed",
       },
     ]);
     expect(JSON.stringify(messages)).not.toContain("skills_catalog");

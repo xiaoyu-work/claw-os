@@ -1,6 +1,6 @@
 use futures::future::AbortHandle;
 
-use crate::bridge::{StreamEvent, ToolCallView, ToolResultView};
+use crate::bridge::{StreamEvent, ToolCallView, ToolPhase, ToolResultView};
 use crate::fl;
 use crate::session::SessionState;
 
@@ -92,7 +92,7 @@ impl StreamState {
         }
     }
 
-    pub(crate) fn detach(&mut self) -> Option<usize> {
+    pub(crate) fn detach(&mut self, sessions: &mut SessionState) -> Option<usize> {
         let StreamPhase::Active(mut active) = std::mem::replace(&mut self.phase, StreamPhase::Idle)
         else {
             return None;
@@ -100,6 +100,7 @@ impl StreamState {
         if let Some(abort) = active.abort.take() {
             abort.abort();
         }
+        sessions.finalize_stream(active.session_index, None, false);
         self.next_generation = self.next_generation.wrapping_add(1);
         Some(active.session_index)
     }
@@ -156,6 +157,9 @@ impl StreamState {
         match event {
             StreamEvent::TaskStarted(started) => {
                 active.task_id = (!started.task_id.is_empty()).then_some(started.task_id);
+                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    message.task_id = active.task_id.clone();
+                }
                 sessions.capture_provisional(session_index, started.session_id.as_deref());
                 StreamReduction::Applied
             }
@@ -171,6 +175,12 @@ impl StreamState {
                 }
                 StreamReduction::Applied
             }
+            StreamEvent::Evidence(report) => {
+                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    message.evidence = Some(report);
+                }
+                StreamReduction::Applied
+            }
             StreamEvent::ToolUseStart(payload) => {
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
                     message.upsert_tool_call(ToolCallView {
@@ -179,6 +189,7 @@ impl StreamState {
                         input: serde_json::Value::Null,
                         partial_json: String::new(),
                         in_progress: true,
+                        phase: Some(ToolPhase::Preparing),
                     });
                 }
                 StreamReduction::Applied
@@ -192,13 +203,15 @@ impl StreamState {
                     {
                         call.partial_json.push_str(&payload.delta);
                         call.in_progress = true;
+                        call.phase = Some(ToolPhase::Preparing);
                     } else {
                         message.upsert_tool_call(ToolCallView {
                             id: payload.id,
-                            name: fl!("tool-running"),
+                            name: fl!("tool-unnamed"),
                             input: serde_json::Value::Null,
                             partial_json: payload.delta,
                             in_progress: true,
+                            phase: Some(ToolPhase::Preparing),
                         });
                     }
                 }
@@ -212,23 +225,45 @@ impl StreamState {
                         input: payload.input.unwrap_or(serde_json::Value::Null),
                         partial_json: String::new(),
                         in_progress: false,
+                        phase: Some(ToolPhase::Preparing),
                     });
                 }
                 StreamReduction::Applied
             }
             StreamEvent::ToolStart(payload) => {
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    message
+                        .tool_results
+                        .retain(|result| result.id != payload.id);
                     message.upsert_tool_call(ToolCallView {
                         id: payload.id,
                         name: payload.name,
                         input: payload.input.unwrap_or(serde_json::Value::Null),
                         partial_json: String::new(),
                         in_progress: true,
+                        phase: Some(ToolPhase::Running),
                     });
                 }
                 StreamReduction::Applied
             }
             StreamEvent::ToolResult(payload) => {
+                let Some(ok) = payload.presented_outcome() else {
+                    if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                        message
+                            .tool_results
+                            .retain(|result| result.id != payload.id);
+                        if let Some(call) = message
+                            .tool_calls
+                            .iter_mut()
+                            .find(|call| call.id == payload.id)
+                        {
+                            call.in_progress = false;
+                            call.phase = Some(ToolPhase::Unconfirmed);
+                        }
+                        message.warnings.push(fl!("tool-outcome-unknown"));
+                    }
+                    return StreamReduction::Applied;
+                };
                 let is_error = payload.presented_is_error();
                 let error_preview = payload.presented_error_preview();
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
@@ -238,6 +273,11 @@ impl StreamState {
                         .find(|call| !payload.id.is_empty() && call.id == payload.id)
                     {
                         call.in_progress = false;
+                        call.phase = Some(if ok {
+                            ToolPhase::Completed
+                        } else {
+                            ToolPhase::Failed
+                        });
                     }
                     message.upsert_tool_result(ToolResultView {
                         id: payload.id,
@@ -266,6 +306,11 @@ impl StreamState {
                 StreamReduction::Applied
             }
             StreamEvent::Done(done) => {
+                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    if done.evidence.is_some() {
+                        message.evidence = done.evidence.clone();
+                    }
+                }
                 sessions.capture_remote(session_index, done.session_id.as_deref());
                 sessions.finalize_stream(session_index, done.presented_answer(), false);
                 self.phase = StreamPhase::Terminal;
