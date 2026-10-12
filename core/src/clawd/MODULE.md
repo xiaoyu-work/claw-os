@@ -85,6 +85,12 @@ and agent tasks.
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
 
+Verified conversation bindings also scope retained Job presentation. The
+shared projector reads bounded stream snapshots for summaries, aggregate
+usage and exact tool metrics, and derives image metadata from the owned Job.
+Unavailable/pruned details and byte-budget refusals stay explicit; this
+enrichment never changes canonical bindings, memory replay or task authority.
+
 The trusted Mail Native Messaging host derives its standing capabilities from
 the same MCP-only manifest as Agent calls. Its compiled ceiling allows only
 untrusted-content AI and `mail-ai`-scoped memory writes. Conditional,

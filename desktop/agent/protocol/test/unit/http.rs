@@ -126,6 +126,7 @@ fn endpoint_response_dtos_round_trip() {
             prompt: "hello".into(),
             session_id: "session-1".into(),
             created_at: "2026-09-22T12:00:00Z".into(),
+            ..ConversationJob::default()
         }],
         task_bindings_complete: true,
         ..HistoryResponse::default()

@@ -455,6 +455,17 @@ impl App {
         match message.role() {
             ChatRole::User => {
                 let mut column = Column::new().spacing(spacing.space_xxs);
+                for attachment in &message.attachments {
+                    column = column.push(
+                        text(format!(
+                            "{} · {} · {}",
+                            attachment.name,
+                            attachment.media_type,
+                            format_bytes(attachment.bytes),
+                        ))
+                        .size(11.0),
+                    );
+                }
                 if !message.content.trim().is_empty() {
                     column = column.push(
                         container(

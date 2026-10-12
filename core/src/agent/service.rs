@@ -53,6 +53,7 @@ use crate::paths::agent_jobs_dir;
 
 mod activity_context;
 pub(crate) mod execution_limits;
+pub(crate) mod presentation;
 use activity_context::build as activity_execution_context;
 
 /// Maximum number of times a job may be recovered from `running/` after

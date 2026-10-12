@@ -290,13 +290,15 @@ pub struct HistoryMessage {
     pub is_user_prompt: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationJob {
     pub id: String,
     pub status: String,
     pub prompt: String,
     pub session_id: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::TaskPresentation>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -314,6 +316,8 @@ pub struct HistoryResponse {
     pub task_bindings_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_bindings_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

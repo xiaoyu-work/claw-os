@@ -27,6 +27,25 @@ pub struct ImageAttachment {
     pub sha256: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct AttachmentMetadata {
+    pub name: String,
+    pub media_type: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+impl ImageAttachment {
+    pub fn metadata(&self) -> AttachmentMetadata {
+        AttachmentMetadata {
+            name: self.name.clone(),
+            media_type: self.media_type.clone(),
+            bytes: self.bytes,
+            sha256: self.sha256.clone(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedAttachment {

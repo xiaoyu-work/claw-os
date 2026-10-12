@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::agent::service::presentation::{self, TaskPresentation};
 use crate::agent::service::{Job, JobStatus, Store};
 use crate::session::SessionId;
 
@@ -28,6 +29,8 @@ pub(super) struct ConversationJob {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) after_task_id: Option<String>,
     pub(super) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) presentation: Option<TaskPresentation>,
 }
 
 #[derive(Debug, Serialize)]
@@ -38,6 +41,8 @@ pub(super) struct ConversationJobs {
     pub(super) task_bindings_complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) task_bindings_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) presentation_error: Option<String>,
 }
 
 impl Default for ConversationJobs {
@@ -48,6 +53,7 @@ impl Default for ConversationJobs {
             jobs_truncated: false,
             task_bindings_complete: false,
             task_bindings_error: Some(UNVERIFIED_BINDINGS.to_string()),
+            presentation_error: None,
         }
     }
 }
@@ -159,6 +165,7 @@ fn bounded_projection(jobs: Vec<Job>, sid: &SessionId) -> Result<ConversationJob
             workspace: job.workspace,
             after_task_id: job.after_task_id,
             error: job.error,
+            presentation: None,
         };
         let separator = usize::from(!jobs.is_empty());
         let job_bytes = serde_json::to_vec(&projected)
@@ -218,6 +225,7 @@ pub(super) fn project_retained(jobs: Vec<Job>) -> Result<ConversationJobs, Strin
             workspace: job.workspace,
             after_task_id: job.after_task_id,
             error: job.error,
+            presentation: None,
         };
         let separator = usize::from(!projected_jobs.is_empty());
         let job_bytes = serde_json::to_vec(&projected)
@@ -241,7 +249,49 @@ pub(super) fn project_retained(jobs: Vec<Job>) -> Result<ConversationJobs, Strin
         jobs_truncated: false,
         task_bindings_complete: true,
         task_bindings_error: None,
+        presentation_error: None,
     })
+}
+
+pub(super) fn enrich_presentations(
+    execution: &mut ConversationJobs,
+    owner_uid: u32,
+) -> Result<(), String> {
+    if !execution.task_bindings_complete || execution.jobs.is_empty() {
+        return Ok(());
+    }
+    let store = Store::open_default().map_err(|error| error.to_string())?;
+    let metadata_bytes = serde_json::to_vec(execution)
+        .map_err(|error| format!("encode retained job metadata: {error}"))?
+        .len();
+    let mut response_budget = MAX_JOB_BYTES.saturating_sub(metadata_bytes.saturating_add(256));
+    let mut scan_budget = presentation::MAX_SCAN_BYTES;
+    for projected in &mut execution.jobs {
+        let Some((_, job)) = store
+            .locate_for_owner(&projected.id, Some(owner_uid))
+            .map_err(|error| error.to_string())?
+        else {
+            execution.presentation_error =
+                Some("retained Job presentation is no longer available".to_string());
+            break;
+        };
+        if job.session_id.as_deref() != Some(projected.session_id.as_str()) {
+            return Err("retained Job presentation changed its source session".to_string());
+        }
+        let presentation = presentation::read(&store, &job, &mut scan_budget);
+        let size = serde_json::to_vec(&presentation)
+            .map_err(|error| format!("encode retained job presentation: {error}"))?
+            .len()
+            + 32;
+        if size > response_budget {
+            execution.presentation_error =
+                Some("retained Job presentation exceeds the response byte budget".to_string());
+            break;
+        }
+        response_budget -= size;
+        projected.presentation = Some(presentation);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

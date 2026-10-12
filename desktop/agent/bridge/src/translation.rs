@@ -287,6 +287,16 @@ pub fn sanitize_history_messages(messages: &mut [HistoryMessage]) {
     }
 }
 
+pub fn sanitize_task_presentations(jobs: &mut [cos_agent_protocol::ConversationJob]) {
+    for job in jobs {
+        if let Some(presentation) = job.presentation.as_mut() {
+            for tool in &mut presentation.tools {
+                tool.error_preview = safe_error_preview(tool.ok, tool.error_preview.take());
+            }
+        }
+    }
+}
+
 pub fn stream_events(
     record: CoreStreamRecord,
     turn_emitted_text: &mut bool,

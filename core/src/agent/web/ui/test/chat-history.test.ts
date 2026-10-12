@@ -54,6 +54,30 @@ describe("restoreHistoryMessages", () => {
 });
 
 describe("live chat presentation", () => {
+  test("restores retained reasoning, aggregate usage, attachments and exact tool metrics", () => {
+    const messages = restoreHistoryMessages([
+      { id: 1, role: "user", text: "Inspect this", task_id: "job-1", is_user_prompt: true },
+      { id: 2, role: "assistant", text: "Saved answer", task_id: "job-1" },
+    ], [{
+      id: "job-1", status: "ok",
+      presentation: {
+        available: true, reasoning: ["Retained reasoning"],
+        usage: { input_tokens: 130, output_tokens: 30, cache_read_tokens: 40, cache_write_tokens: 5 },
+        tools: [{
+          id: "tool-1", name: "cos_sysinfo", started: true, ok: true,
+          latency_ms: 42, bytes_returned: 2048, error_preview: null,
+        }],
+        attachments: [{ name: "screen.png", media_type: "image/png", bytes: 32, sha256: "digest" }],
+      },
+    }]);
+    expect(messages[0].attachments[0].name).toBe("screen.png");
+    expect(messages[1].reasoning).toEqual(["Retained reasoning"]);
+    expect(messages[1].usage?.inputTokens).toBe(130);
+    expect(messages[1].tools[0].latencyMs).toBe(42);
+    expect(messages[1].tools[0].phase).toBe("completed");
+    expect(JSON.stringify(messages)).not.toContain("data:image");
+  });
+
   test("rebuilds an active task without duplicating persisted tool rows", () => {
     const messages = restoreForActiveTask(
       [

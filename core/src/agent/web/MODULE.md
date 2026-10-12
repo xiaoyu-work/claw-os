@@ -75,6 +75,11 @@ lineage remain broker-owned; browser search is only a filter over the returned
 bounded inventory. Older memory-only sessions remain discoverable through the
 read-only `memory.*` broker routes and are visibly non-manageable.
 Conversation history projects bounded Job metadata from the same broker view.
+Verified Jobs include bounded retained reasoning, cumulative usage, tool
+identity/outcome/metrics and image metadata. Chat folds each snapshot into its
+exact task-bound rows once; live tasks replay instead of adding the snapshot
+again. Missing or over-budget details remain explicit, and raw images,
+opaque provider state and successful tool bodies are not part of this view.
 When its task bindings are complete, Chat keeps the active outer user prompt,
 removes that task's already-persisted intermediate presentation rows, and
 replays the owner-checked task stream from a cursor. Incomplete bindings remain

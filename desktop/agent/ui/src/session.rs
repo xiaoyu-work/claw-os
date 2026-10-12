@@ -33,6 +33,8 @@ pub(crate) struct ChatMessage {
     pub(crate) tool_results: Vec<ToolResultView>,
     pub(crate) reasoning: Vec<String>,
     pub(crate) usage: Option<TokenUsage>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) attachments: Vec<cos_agent_protocol::AttachmentMetadata>,
     pub(crate) warnings: Vec<String>,
     pub(crate) error: Option<String>,
     pub(crate) parsed_markdown: Option<Vec<widget::markdown::Item>>,
@@ -75,6 +77,7 @@ impl ChatMessage {
             && self.tool_results.is_empty()
             && self.reasoning.is_empty()
             && self.usage.is_none()
+            && self.attachments.is_empty()
             && self.warnings.is_empty()
             && self.error.is_none()
     }
@@ -401,13 +404,30 @@ impl SessionState {
                     .filter(|row| row.role != "system")
                     .map(Self::history_message)
                     .collect();
+                if response.task_bindings_complete {
+                    Self::restore_task_presentations(
+                        &mut session.messages,
+                        &response.jobs,
+                        current.as_ref().map(|task| task.id.as_str()),
+                    );
+                }
+                if let Some(error) = response.presentation_error
+                    && let Some(message) = session.messages.last_mut()
+                {
+                    message.warnings.push(error);
+                }
                 if let Some(task) = current {
                     if !prompt_retained {
-                        session
-                            .messages
-                            .push(ChatMessage::user(task.prompt.clone()));
+                        let mut user = ChatMessage::user(task.prompt.clone());
+                        user.task_id = Some(task.id.clone());
+                        if let Some(presentation) = &task.presentation {
+                            user.attachments = presentation.attachments.clone();
+                        }
+                        session.messages.push(user);
                     }
-                    session.messages.push(ChatMessage::assistant_streaming());
+                    let mut assistant = ChatMessage::assistant_streaming();
+                    assistant.task_id = Some(task.id.clone());
+                    session.messages.push(assistant);
                     session.message_count = session.messages.len() as i64;
                     session.history = HistoryState::Loaded;
                     return Some(ReattachTask {
@@ -443,12 +463,87 @@ impl SessionState {
             content: row.text,
             tool_calls: row.tool_calls,
             tool_results: row.tool_results,
+            task_id: row.task_id,
             ..ChatMessage::default()
         };
         if role == ChatRole::Assistant {
             message.refresh_markdown();
         }
         message
+    }
+
+    fn restore_task_presentations(
+        messages: &mut [ChatMessage],
+        jobs: &[ConversationJob],
+        replaying: Option<&str>,
+    ) {
+        for job in jobs {
+            let Some(presentation) = &job.presentation else {
+                continue;
+            };
+            if let Some(user) = messages.iter_mut().find(|message| {
+                message.task_id.as_deref() == Some(job.id.as_str())
+                    && message.role() == ChatRole::User
+            }) {
+                user.attachments = presentation.attachments.clone();
+            }
+            if replaying == Some(job.id.as_str()) {
+                continue;
+            }
+            let Some(index) = messages.iter().rposition(|message| {
+                message.task_id.as_deref() == Some(job.id.as_str())
+                    && message.role() == ChatRole::Assistant
+            }) else {
+                continue;
+            };
+            if let Some(diagnostic) = &presentation.diagnostic {
+                messages[index].warnings.push(diagnostic.clone());
+            }
+            if !presentation.available {
+                if presentation.diagnostic.is_none() {
+                    messages[index].warnings.push(
+                        "Extended presentation details were not retained for this task."
+                            .to_string(),
+                    );
+                }
+                continue;
+            }
+            for message in messages
+                .iter_mut()
+                .filter(|message| message.task_id.as_deref() == Some(job.id.as_str()))
+            {
+                message.tool_calls.clear();
+                message.tool_results.clear();
+            }
+            let message = &mut messages[index];
+            message.append_reasoning(presentation.reasoning.clone());
+            message.usage = presentation.usage.as_ref().map(|usage| TokenUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_write_tokens: usage.cache_write_tokens,
+            });
+            for tool in &presentation.tools {
+                message.upsert_tool_call(ToolCallView {
+                    id: tool.id.clone(),
+                    name: tool.name.clone(),
+                    input: serde_json::Value::Null,
+                    partial_json: String::new(),
+                    in_progress: false,
+                });
+                if let Some(ok) = tool.ok {
+                    message.upsert_tool_result(ToolResultView {
+                        id: tool.id.clone(),
+                        name: tool.name.clone(),
+                        is_error: !ok,
+                        latency_ms: tool.latency_ms,
+                        bytes_returned: tool.bytes_returned,
+                        error_preview: tool.error_preview.clone(),
+                        ..ToolResultView::default()
+                    });
+                }
+            }
+        }
     }
 
     pub(crate) fn history_ready(&self) -> bool {

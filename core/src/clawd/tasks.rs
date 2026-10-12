@@ -778,14 +778,7 @@ fn job_value(job: Job) -> Value {
     let attachment_summaries = job
         .attachments
         .iter()
-        .map(|attachment| {
-            json!({
-                "name": attachment.name,
-                "media_type": attachment.media_type,
-                "bytes": attachment.bytes,
-                "sha256": attachment.sha256,
-            })
-        })
+        .map(crate::agent::attachments::ImageAttachment::metadata)
         .collect::<Vec<_>>();
     let mut value = match serde_json::to_value(job) {
         Ok(value) => value,

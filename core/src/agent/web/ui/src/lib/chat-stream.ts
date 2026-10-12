@@ -1,7 +1,8 @@
 import { api, ApiError, ApiTransportError, streamSse } from "./api";
+import type { RetainedTask } from "./chat-history";
 
 export type TaskIdentity = { taskId: string; sessionId: string };
-export type ConversationTask = { id: string; status: string; prompt: string };
+export type ConversationTask = RetainedTask & { prompt: string };
 export type ChatHistoryResponse = {
   session_id?: string;
   messages?: unknown[];
@@ -9,6 +10,7 @@ export type ChatHistoryResponse = {
   jobs_truncated?: boolean;
   task_bindings_complete?: boolean;
   task_bindings_error?: string | null;
+  presentation_error?: string | null;
 };
 
 export class TaskStreamError extends Error {

@@ -89,6 +89,7 @@ surfaces.
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `service.rs`, `../activities/scheduling_policy.rs` | Shared pending admission ordering from current owner Activity policy, with 30-minute bounded aging and standalone FIFO compatibility |
 | `service/activity_context.rs` | Bounded untrusted Activity planning/object-state snapshots, recorded at task claim and refreshed on retry |
+| `service/presentation.rs` | Bounded retained-stream projection of reasoning summaries, cumulative usage, exact tool metrics and image metadata; never provider state or successful tool bodies |
 | `service/execution_limits.rs` | Shared live Activity-policy and monotonic-expiry guard for supervised and standalone job execution |
 | `../caps/activity_boundary.rs` | Shared Activity capability constraints used by worker mediation, standalone execution and root App plans |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |

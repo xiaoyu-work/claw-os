@@ -54,6 +54,12 @@ an explicit `task.cancel`. Busy composer submissions create durable
 `after_task_id` follow-ups through a bridge route that derives the session from
 the owner-checked predecessor; UI queue counts are presentation state only.
 
+Completed history folds retained Job presentation into exact task-bound rows:
+reasoning, aggregate usage and tool metrics appear once, and the outer user
+message carries image metadata only. Active tasks replay rather than applying
+the same totals twice. Source gaps and bounded-read failures stay visible;
+Desktop owns neither a presentation store nor the retained stream files.
+
 The fixed attention section renders the same broker-owned projection used by
 terminal and Agent Web clients: retained Job counts, exact decision records,
 prioritized issues, and task-linked notifications with durable grouped

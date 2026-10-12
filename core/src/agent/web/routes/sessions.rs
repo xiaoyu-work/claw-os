@@ -66,6 +66,8 @@ struct ConversationJob {
     prompt: String,
     created_at: String,
     session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    presentation: Option<crate::agent::service::presentation::TaskPresentation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +83,8 @@ struct Conversation {
     task_bindings_complete: bool,
     #[serde(default)]
     task_bindings_error: Option<String>,
+    #[serde(default)]
+    presentation_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +138,7 @@ pub async fn detail(
                 "jobs_truncated": conversation.jobs_truncated,
                 "task_bindings_complete": conversation.task_bindings_complete,
                 "task_bindings_error": conversation.task_bindings_error,
+                "presentation_error": conversation.presentation_error,
                 "manageable": true,
                 "legacy": false,
             })))
@@ -158,6 +163,7 @@ pub async fn history(
             "jobs_truncated": conversation.jobs_truncated,
             "task_bindings_complete": conversation.task_bindings_complete,
             "task_bindings_error": conversation.task_bindings_error,
+            "presentation_error": conversation.presentation_error,
         }))),
         Err(error) => legacy_history(&id).await.or(Err(error)),
     }

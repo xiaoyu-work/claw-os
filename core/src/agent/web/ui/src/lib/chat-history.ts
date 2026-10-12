@@ -6,6 +6,7 @@ export type ToolCall = {
   latencyMs?: number;
   bytesReturned?: number;
   errorPreview?: string;
+  phase?: "preparing" | "running" | "completed" | "failed" | "unconfirmed";
 };
 
 export type TokenUsage = {
@@ -20,6 +21,7 @@ export type ChatAttachment = {
   mediaType: string;
   bytes: number;
   dataUrl?: string;
+  sha256?: string;
 };
 
 export type ChatMessage = {
@@ -33,6 +35,26 @@ export type ChatMessage = {
   warnings: string[];
   status: "streaming" | "done" | "error" | "interrupted";
   error?: string;
+  taskId?: string;
+};
+
+export type RetainedTask = {
+  id: string;
+  status: string;
+  presentation?: {
+    available: boolean;
+    reasoning: string[];
+    usage: {
+      input_tokens: number; output_tokens: number;
+      cache_read_tokens: number; cache_write_tokens: number;
+    } | null;
+    tools: {
+      id: string; name: string; started: boolean; ok: boolean | null;
+      latency_ms: number | null; bytes_returned: number | null; error_preview: string | null;
+    }[];
+    attachments: { name: string; media_type: string; bytes: number; sha256: string }[];
+    diagnostic?: string | null;
+  } | null;
 };
 
 export type ActiveConversationTask = {
@@ -87,11 +109,12 @@ function tokenCount(value: unknown): number {
 export function restoreForActiveTask(
   rows: any[],
   task: ActiveConversationTask,
+  jobs: RetainedTask[] = [],
 ): ChatMessage[] {
   const retained = rows.filter(
     (row) => row?.task_id !== task.id || row?.is_user_prompt === true,
   );
-  const restored = restoreHistoryMessages(retained);
+  const restored = restoreHistoryMessages(retained, jobs.filter((job) => job.id !== task.id));
   const promptRetained = rows.some(
     (row) => row?.task_id === task.id && row?.is_user_prompt === true,
   );
@@ -105,7 +128,16 @@ export function restoreForActiveTask(
       reasoning: [],
       warnings: [],
       status: "done",
+      taskId: task.id,
     });
+  }
+  const presentation = jobs.find((job) => job.id === task.id)?.presentation;
+  const user = restored.find((message) => message.taskId === task.id && message.role === "user");
+  if (user && presentation) {
+    user.attachments = presentation.attachments.map((attachment) => ({
+      name: attachment.name, mediaType: attachment.media_type,
+      bytes: attachment.bytes, sha256: attachment.sha256,
+    }));
   }
   restored.push({
     id: `task-assistant-${task.id}`,
@@ -116,11 +148,12 @@ export function restoreForActiveTask(
     reasoning: [],
     warnings: [],
     status: "streaming",
+    taskId: task.id,
   });
   return restored;
 }
 
-export function restoreHistoryMessages(rows: any[]): ChatMessage[] {
+export function restoreHistoryMessages(rows: any[], jobs: RetainedTask[] = []): ChatMessage[] {
   const restored: ChatMessage[] = [];
 
   for (let index = 0; index < rows.length; index++) {
@@ -184,6 +217,7 @@ export function restoreHistoryMessages(rows: any[]): ChatMessage[] {
       reasoning: [],
       warnings: [],
       status: "done",
+      ...(typeof row?.task_id === "string" ? { taskId: row.task_id } : {}),
     });
   }
 
@@ -191,6 +225,38 @@ export function restoreHistoryMessages(rows: any[]): ChatMessage[] {
   // matching result, but showing those calls as "running…" forever is wrong.
   for (const message of restored) {
     for (const tool of message.tools) tool.finished = true;
+  }
+
+  for (const job of jobs) {
+    const presentation = job.presentation;
+    if (!presentation) continue;
+    const bound = restored.filter((message) => message.taskId === job.id);
+    const user = bound.find((message) => message.role === "user");
+    const assistant = bound.slice().reverse().find((message) => message.role === "assistant");
+    if (user && Array.isArray(presentation.attachments)) {
+      user.attachments = presentation.attachments.map((attachment) => ({
+        name: attachment.name, mediaType: attachment.media_type,
+        bytes: attachment.bytes, sha256: attachment.sha256,
+      }));
+    }
+    if (!assistant) continue;
+    if (presentation.diagnostic) assistant.warnings.push(presentation.diagnostic);
+    if (!presentation.available) {
+      if (!presentation.diagnostic) assistant.warnings.push("Extended presentation details were not retained for this task.");
+      continue;
+    }
+    for (const message of bound) message.tools = [];
+    assistant.tools = presentation.tools.map((tool) => ({
+      id: tool.id, name: tool.name,
+      finished: tool.ok !== null,
+      isError: tool.ok === false,
+      phase: tool.ok === true ? "completed" : tool.ok === false ? "failed" : "unconfirmed",
+      ...(tool.latency_ms !== null ? { latencyMs: tool.latency_ms } : {}),
+      ...(tool.bytes_returned !== null ? { bytesReturned: tool.bytes_returned } : {}),
+      ...(tool.ok === false && tool.error_preview ? { errorPreview: tool.error_preview } : {}),
+    }));
+    appendReasoningSummary(assistant, { summary: presentation.reasoning });
+    if (presentation.usage) accumulateTurnUsage(assistant, { usage: presentation.usage });
   }
 
   return restored;

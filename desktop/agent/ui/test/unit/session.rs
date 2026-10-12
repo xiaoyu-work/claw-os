@@ -125,6 +125,7 @@ fn active_history_rebuilds_one_task_and_preserves_the_bound_user_prompt() {
                         prompt: "Continue after reconnect".into(),
                         session_id: "remote-1".into(),
                         created_at: "2026-09-22T12:00:00Z".into(),
+                        ..ConversationJob::default()
                     },
                     ConversationJob {
                         id: "job-next".into(),
@@ -132,6 +133,7 @@ fn active_history_rebuilds_one_task_and_preserves_the_bound_user_prompt() {
                         prompt: "Then summarize".into(),
                         session_id: "remote-1".into(),
                         created_at: "2026-09-22T12:01:00Z".into(),
+                        ..ConversationJob::default()
                     },
                 ],
                 task_bindings_complete: true,
@@ -168,6 +170,7 @@ fn active_history_uses_the_job_prompt_when_the_bound_row_is_not_persisted_yet() 
                     prompt: "Persist me once".into(),
                     session_id: "remote-1".into(),
                     created_at: "2026-09-22T12:00:00Z".into(),
+                    ..ConversationJob::default()
                 }],
                 task_bindings_complete: true,
                 ..HistoryResponse::default()
@@ -197,6 +200,7 @@ fn active_history_refuses_incomplete_task_bindings() {
                 prompt: "Do not guess".into(),
                 session_id: "remote-1".into(),
                 created_at: "2026-09-22T12:00:00Z".into(),
+                ..ConversationJob::default()
             }],
             task_bindings_complete: false,
             task_bindings_error: Some("verified bindings unavailable".into()),
@@ -221,6 +225,7 @@ fn retry_and_branch_context_keep_recent_turns_within_limit() {
             "x".repeat(3_000)
         )));
     }
+
     let context = build_branch_context(&messages).unwrap();
     assert!(context.chars().count() <= MAX_BRANCH_CONTEXT_CHARS);
     assert!(context.contains("turn-19"));
@@ -234,6 +239,36 @@ fn retry_and_branch_context_keep_recent_turns_within_limit() {
     ];
     assert_eq!(state.retry_branch(1).unwrap().1, "first");
     assert_eq!(state.retry_branch(3).unwrap().1, "second");
+}
+
+#[test]
+fn completed_history_restores_retained_presentation_without_a_second_authority() {
+    let mut state = SessionState::default();
+    state.apply_remote_summary(summary("remote-1", "Remote", 2), true);
+    let job: ConversationJob = serde_json::from_value(serde_json::json!({
+        "id":"job-1", "status":"ok", "prompt":"Inspect", "session_id":"remote-1",
+        "created_at":"2026-09-22T12:00:00Z",
+        "presentation": {
+            "available":true, "reasoning":["Retained reasoning"],
+            "usage":{"input_tokens":130,"output_tokens":30,"cache_read_tokens":40,"cache_write_tokens":5},
+            "tools":[{"id":"tool-1","name":"observe","started":true,"ok":true,"latency_ms":42,"bytes_returned":2048,"error_preview":null}],
+            "attachments":[{"name":"screen.png","media_type":"image/png","bytes":32,"sha256":"digest"}]
+        }
+    })).unwrap();
+    state.apply_history("remote-1", Ok(HistoryResponse {
+        session_id:"remote-1".into(),
+        messages:vec![
+            HistoryMessage { role:"user".into(), text:"Inspect".into(), task_id:Some("job-1".into()), ..Default::default() },
+            HistoryMessage { role:"assistant".into(), text:"Saved answer".into(), task_id:Some("job-1".into()), ..Default::default() },
+        ],
+        jobs:vec![job], task_bindings_complete:true, ..Default::default()
+    }));
+    let session = state.active().unwrap();
+    assert_eq!(session.messages[0].attachments[0].name, "screen.png");
+    assert_eq!(session.messages[1].reasoning, ["Retained reasoning"]);
+    assert_eq!(session.messages[1].usage.unwrap().input_tokens, 130);
+    assert_eq!(session.messages[1].tool_results[0].latency_ms, Some(42));
+    assert!(session.messages[1].tool_results[0].text.is_empty());
 }
 
 #[test]

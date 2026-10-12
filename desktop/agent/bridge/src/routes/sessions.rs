@@ -59,6 +59,8 @@ struct Conversation {
     task_bindings_complete: bool,
     #[serde(default)]
     task_bindings_error: Option<String>,
+    #[serde(default)]
+    presentation_error: Option<String>,
 }
 
 pub async fn list(
@@ -201,15 +203,18 @@ pub async fn history(
     match get_conversation(&state, &id, 500).await {
         Ok(conversation) => {
             let mut messages = conversation.messages;
+            let mut jobs = conversation.jobs;
             translation::sanitize_history_messages(&mut messages);
+            translation::sanitize_task_presentations(&mut jobs);
             Ok(Json(HistoryResponse {
                 session_id: conversation.id,
                 n: messages.len(),
                 messages,
-                jobs: conversation.jobs,
+                jobs,
                 jobs_truncated: conversation.jobs_truncated,
                 task_bindings_complete: conversation.task_bindings_complete,
                 task_bindings_error: conversation.task_bindings_error,
+                presentation_error: conversation.presentation_error,
             }))
         }
         Err(primary) => {

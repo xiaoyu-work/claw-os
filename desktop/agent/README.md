@@ -111,6 +111,10 @@ rename, archive/restore and fork cross the bridge as typed requests and remain
 broker mutations under the idle-session lock. Memory-only legacy sessions are
 merged into the list as visibly read-only entries and continue through
 `memory.history`; Desktop never opens the Agent database.
+Verified canonical history also includes retained Job presentation, so
+reasoning, cumulative usage, tool metrics and image metadata survive reopening.
+The bridge still removes tool bodies and re-redacts failures. Missing stream
+details or bounded-read refusals are disclosed rather than invented.
 
 Within the UI, lifecycle state is split by invariant owner. `main.rs` routes
 typed messages among session, stream, bridge, voice, and overlay state;

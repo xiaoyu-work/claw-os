@@ -1615,6 +1615,13 @@ presentation rows, and replays its owner-scoped `task.stream` from a cursor. It
 refuses to guess this split when task bindings are incomplete. Multiple viewers
 do not become task owners, and reattachment neither resubmits work nor changes
 capabilities.
+For completed tasks, the conversation broker also projects retained Job
+presentation under the verified source-session/task bindings. Bounded stream
+snapshots supply reasoning summaries, cumulative provider usage and exact tool
+metrics; attachments contribute metadata only. Web/native clients merge this
+projection once into its bound rows, without reading or storing another
+trajectory. Missing/pruned details and budget refusals are explicit and never
+invalidate or upgrade canonical task membership.
 Agent Web also recovers transient connection loss without repeating
 `task.submit`: after a premature EOF or transport failure, it performs a
 bounded, navigation-abortable retry of the same known Job. Verified history

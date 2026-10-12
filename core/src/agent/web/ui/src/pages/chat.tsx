@@ -104,7 +104,7 @@ export function ChatPage({ meta }: { meta: any }) {
   const replayTask = useCallback(async (task: TaskIdentity, signal: AbortSignal) => {
     const { history, job } = await taskReplay(task, signal);
     if (signal.aborted) return;
-    setMessages(restoreForActiveTask(history.messages || [], job));
+    setMessages(restoreForActiveTask(history.messages || [], job, history.jobs || []));
     taskIdRef.current = task.taskId;
   }, []);
 
@@ -167,9 +167,14 @@ export function ChatPage({ meta }: { meta: any }) {
           ACTIVE_TASK_STATUSES.has(job.status),
         );
         const activeTask = activeTasks[0];
+        const retainedJobs = !Array.isArray(response) && response.task_bindings_complete === true ? jobs : [];
         setRestoring(false);
         if (!activeTask) {
-          setMessages(restoreHistoryMessages(rows));
+          const restored = restoreHistoryMessages(rows, retainedJobs);
+          if (!Array.isArray(response) && response.presentation_error) {
+            restored[restored.length - 1]?.warnings.push(response.presentation_error);
+          }
+          setMessages(restored);
           return;
         }
         queueTailTaskIdRef.current =
@@ -199,7 +204,7 @@ export function ChatPage({ meta }: { meta: any }) {
           return;
         }
 
-        setMessages(restoreForActiveTask(rows, activeTask));
+        setMessages(restoreForActiveTask(rows, activeTask, retainedJobs));
         setBusy(true);
         abortRef.current = controller;
         taskIdRef.current = activeTask.id;
@@ -945,7 +950,7 @@ function UsageSummary({ usage }: { usage: TokenUsage }) {
 }
 
 function ToolCard({ t }: { t: ToolCall }) {
-  const status = t.isError ? "failed" : t.finished ? "completed" : "running…";
+  const status = t.phase || (t.isError ? "failed" : t.finished ? "completed" : "running…");
   const metrics = [
     t.latencyMs === undefined ? null : formatDuration(t.latencyMs),
     t.bytesReturned === undefined ? null : formatBytes(t.bytesReturned),

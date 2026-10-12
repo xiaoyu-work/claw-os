@@ -143,6 +143,15 @@ fn conversation_verifies_and_annotates_canonical_task_history() {
             "bound answer",
         )
         .unwrap();
+    let store = Store::open_default().unwrap();
+    store.append_stream_event(&job.id, &crate::agent::llm::StreamEvent::Reasoning {
+        id: "rs1".to_string(), summary: vec!["Retained reasoning".to_string()],
+        encrypted_content: Some("PRIVATE_PROVIDER_STATE".to_string()),
+    }).unwrap();
+    store.append_stream_event(&job.id, &crate::agent::llm::StreamEvent::Done {
+        finish: crate::agent::llm::FinishReason::Stop,
+        usage: crate::agent::llm::Usage { input_tokens: 10, output_tokens: 2, ..Default::default() },
+    }).unwrap();
 
     let value = get(json!({"id": id}), &fixture.client).unwrap()["conversation"].clone();
     assert_eq!(value["task_bindings_complete"], true);
@@ -155,6 +164,9 @@ fn conversation_verifies_and_annotates_canonical_task_history() {
     assert_eq!(value["messages"][1]["id"], answer_id);
     assert_eq!(value["messages"][1]["task_id"], job.id);
     assert_eq!(value["messages"][1]["is_user_prompt"], false);
+    assert_eq!(value["jobs"][0]["presentation"]["reasoning"], json!(["Retained reasoning"]));
+    assert_eq!(value["jobs"][0]["presentation"]["usage"]["input_tokens"], 10);
+    assert!(!serde_json::to_string(&value).unwrap().contains("PRIVATE_PROVIDER_STATE"));
 }
 
 #[test]

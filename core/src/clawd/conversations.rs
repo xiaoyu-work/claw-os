@@ -302,7 +302,7 @@ fn conversation_response(
     owner_uid: u32,
 ) -> Result<Value, String> {
     let mut history = view.history;
-    let execution = match bindings::verify(
+    let mut execution = match bindings::verify(
         meta,
         &presentation,
         &history.bindings,
@@ -319,6 +319,7 @@ fn conversation_response(
             execution
         }
     };
+    jobs::enrich_presentations(&mut execution, owner_uid)?;
     let metadata = presentation_metadata(meta, presentation, view.metadata)?;
     response(ConversationResponse {
         conversation: Conversation {

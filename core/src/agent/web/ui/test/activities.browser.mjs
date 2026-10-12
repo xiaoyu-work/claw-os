@@ -577,6 +577,29 @@ async function fixture(req, res) {
       });
     }
     if (sessionId === "session-reattach") {
+      if (reattachStreamRequests >= 2) {
+        return reply(req, res, {
+          session_id: sessionId,
+          messages: [
+            { id: 3, role: "user", text: "Continue after refresh", task_id: "job-reattach", is_user_prompt: true },
+            { id: 5, role: "assistant", text: "Resumed after refresh.", task_id: "job-reattach" },
+          ],
+          jobs: [{
+            id: "job-reattach", status: "ok", prompt: "Continue after refresh",
+            session_id: sessionId, created_at: timestamp(),
+            presentation: {
+              available: true, reasoning: ["Recovered the durable task stream."],
+              usage: { input_tokens: 9, output_tokens: 4, cache_read_tokens: 0, cache_write_tokens: 0 },
+              tools: [{
+                id: "reattach-tool", name: "cos_sysinfo", started: true, ok: true,
+                latency_ms: 42, bytes_returned: 2048, error_preview: null,
+              }],
+              attachments: [{ name: "retained-screen.png", media_type: "image/png", bytes: 32, sha256: "digest" }],
+            },
+          }],
+          task_bindings_complete: true, jobs_truncated: false,
+        });
+      }
       return reply(req, res, {
         session_id: sessionId,
         messages: [
@@ -1404,6 +1427,13 @@ try {
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Recovered the durable task stream.')", "reattached reasoning summary");
   console.log("PASS verified automatic recovery of the same durable task after premature EOF");
+  await send("Page.reload");
+  await wait("document.body.innerText.includes('Resumed after refresh.') && document.body.innerText.includes('retained-screen.png')", "completed task attachment metadata restored");
+  await wait("document.body.innerText.includes('42 ms') && document.body.innerText.includes('9 in')", "completed task metrics and usage restored");
+  await click(`document.querySelector('details summary')`);
+  await wait("document.body.innerText.includes('Recovered the durable task stream.')", "completed reasoning restored");
+  assert.equal(reattachStreamRequests, 2, "completed history never starts a new stream or task");
+  console.log("PASS retained presentation survives reload without persisting raw images or tool bodies");
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
