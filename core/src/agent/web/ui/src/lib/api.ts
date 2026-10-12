@@ -75,6 +75,8 @@ export class ApiError extends Error {
   }
 }
 
+export class ApiTransportError extends Error {}
+
 async function request<T = any>(
   path: string,
   opts: ApiOpts = {},
@@ -85,7 +87,10 @@ async function request<T = any>(
   if (opts.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, { ...opts, headers });
+  const res = await fetch(path, { ...opts, headers }).catch((error: unknown) => {
+    if (opts.signal?.aborted) throw error;
+    throw new ApiTransportError(error instanceof Error ? error.message : "Connection failed");
+  });
   if (!res.ok) {
     if (res.status === 401) {
       clearToken();
@@ -134,6 +139,9 @@ export async function streamSse(
     },
     body: JSON.stringify(body),
     signal,
+  }).catch((error: unknown) => {
+    if (signal?.aborted) throw error;
+    throw new ApiTransportError(error instanceof Error ? error.message : "Stream connection failed");
   });
   if (!res.ok || !res.body) {
     if (res.status === 401) {
@@ -152,17 +160,29 @@ export async function streamSse(
   const decoder = new TextDecoder();
   let buf = "";
   while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
+    const { value, done } = await reader.read().catch((error: unknown) => {
+      if (signal?.aborted) throw error;
+      throw new ApiTransportError(error instanceof Error ? error.message : "Stream disconnected");
+    });
+    buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
+    buf = buf.replace(/\r\n/g, "\n");
     // SSE frames are separated by blank lines (\n\n).
     let idx = buf.indexOf("\n\n");
     while (idx >= 0) {
       const raw = buf.slice(0, idx);
+      if (raw.length > 1024 * 1024) throw new Error("SSE event exceeded 1 MiB");
       buf = buf.slice(idx + 2);
       const frame = parseSseFrame(raw);
       if (frame) on(frame.event, frame.data);
       idx = buf.indexOf("\n\n");
+    }
+    if (buf.length > 1024 * 1024) throw new Error("SSE event exceeded 1 MiB");
+    if (done) {
+      if (buf.trim()) {
+        const frame = parseSseFrame(buf);
+        if (frame) on(frame.event, frame.data);
+      }
+      return;
     }
   }
 }

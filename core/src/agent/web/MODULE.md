@@ -28,6 +28,9 @@ web UI.
   may expose a bounded, redacted error preview, never successful result bodies.
 - Reattach Chat to an owner-scoped durable task stream after navigation or
   reload, using verified conversation task bindings to avoid replay duplicates.
+- Recover transient stream loss through bounded, abortable same-Job replay,
+  including explicit detection of EOF before a terminal event; never retry
+  submission when its outcome is unknown.
 - Queue busy-time Chat follow-ups as ordinary durable Jobs linked by
   `after_task_id`; browser component state is never the queue authority.
 - Accept bounded image selection, paste and drop, then submit the same
@@ -46,6 +49,7 @@ web UI.
 | `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
 | `ui/` | TypeScript/React source and generated distribution assets |
+| `ui/src/lib/chat-stream.ts` | Terminal-event validation and bounded same-Job transport recovery through verified history replay |
 | `ui/src/pages/activities.tsx`, `ui/src/components/activity-*.tsx` | Fixed Activity list, planning forms, detail cards, and existing task/approval/session navigation |
 | `ui/src/lib/activities.ts`, `ui/src/hooks/use-activities.ts` | Validated fetched views and abortable, selection-safe refreshes |
 | `ui/src/components/activity-objects.tsx` | Typed object attachment, declaration-only status, inert references, and structured invocation metadata |
@@ -76,6 +80,11 @@ removes that task's already-persisted intermediate presentation rows, and
 replays the owner-checked task stream from a cursor. Incomplete bindings remain
 visible as an explicit reconstruction error rather than being guessed from
 text or timestamps.
+`ui/src/lib/chat-stream.ts` owns bounded Web transport recovery. Each retry
+fetches verified bindings and replaces partial presentation before replay from
+zero, so text, usage and tool events cannot be double-counted. A missing task
+identity, incompatible binding or exhausted retry budget remains explicit;
+manual reconnect and Tasks stay available without automatic resubmission.
 Tool progress reaches Web only after the runtime's user-visible projection has
 removed inputs and successful result bodies. The durable stream retains
 identity, status, latency, byte count and an optional bounded/redacted failure

@@ -1615,6 +1615,12 @@ presentation rows, and replays its owner-scoped `task.stream` from a cursor. It
 refuses to guess this split when task bindings are incomplete. Multiple viewers
 do not become task owners, and reattachment neither resubmits work nor changes
 capabilities.
+Agent Web also recovers transient connection loss without repeating
+`task.submit`: after a premature EOF or transport failure, it performs a
+bounded, navigation-abortable retry of the same known Job. Verified history
+replaces partial presentation before cursor-zero replay, preventing duplicate
+text and usage. A terminal event is required before the stream is treated as
+complete; unknown submission outcomes and unavailable bindings remain visible.
 Generic Agent Web and native Desktop tool cards consume the same durable
 progress stream but receive only tool identity, lifecycle status, latency and
 returned-byte count. Successful result bodies remain inside the Agent

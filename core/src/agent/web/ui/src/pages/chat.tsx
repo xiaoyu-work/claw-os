@@ -28,7 +28,14 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, streamSse } from "@/lib/api";
+import { api } from "@/lib/api";
+import {
+  streamDurableTask,
+  taskReplay,
+  TaskStreamError,
+  type TaskIdentity,
+  type ChatHistoryResponse,
+} from "@/lib/chat-stream";
 import {
   formatAttachmentBytes,
   readImageAttachments,
@@ -52,18 +59,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 type Msg = ChatMessage;
 
-type ConversationTask = {
-  id: string;
-  status: string;
-  prompt: string;
-};
-
-type HistoryResponse = {
-  messages?: any[];
-  jobs?: ConversationTask[];
-  task_bindings_complete?: boolean;
-  task_bindings_error?: string | null;
-};
+type HistoryResponse = ChatHistoryResponse;
 
 const ACTIVE_TASK_STATUSES = new Set([
   "pending",
@@ -89,6 +85,7 @@ export function ChatPage({ meta }: { meta: any }) {
   const [queueing, setQueueing] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
   const [restoreVersion, setRestoreVersion] = useState(0);
+  const [reconnecting, setReconnecting] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const taskIdRef = useRef<string>("");
@@ -104,9 +101,35 @@ export function ChatPage({ meta }: { meta: any }) {
   // effect can recognise it and skip the reload.
   const skipReloadFor = useRef<string>("");
 
+  const replayTask = useCallback(async (task: TaskIdentity, signal: AbortSignal) => {
+    const { history, job } = await taskReplay(task, signal);
+    if (signal.aborted) return;
+    setMessages(restoreForActiveTask(history.messages || [], job));
+    taskIdRef.current = task.taskId;
+  }, []);
+
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    for (const watcher of queueWatchersRef.current.values()) watcher.abort();
+    queueWatchersRef.current.clear();
+  }, []);
+
   useEffect(() => {
     setSessionId(sessionFromRoute);
     setBlockedByTask(null);
+    if (skipReloadFor.current === sessionFromRoute && sessionFromRoute) {
+      skipReloadFor.current = "";
+      setRestoring(false);
+      return;
+    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    taskIdRef.current = "";
+    stopRequestedRef.current = false;
+    setBusy(false);
+    setReconnecting(null);
+    for (const watcher of queueWatchersRef.current.values()) watcher.abort();
+    queueWatchersRef.current.clear();
     if (!sessionFromRoute) {
       setRestoring(false);
       setAttachments([]);
@@ -115,11 +138,6 @@ export function ChatPage({ meta }: { meta: any }) {
       queueTailTaskIdRef.current = "";
       queuedTaskIdsRef.current = [];
       setMessages([]);
-      return;
-    }
-    if (skipReloadFor.current === sessionFromRoute) {
-      skipReloadFor.current = "";
-      setRestoring(false);
       return;
     }
     setAttachments([]);
@@ -137,7 +155,7 @@ export function ChatPage({ meta }: { meta: any }) {
           { signal: controller.signal },
         );
         if (cancelled) return;
-        const rows: any[] = Array.isArray(response)
+        const rows = Array.isArray(response)
           ? response
           : response?.messages || [];
         const jobs = Array.isArray(response)
@@ -185,11 +203,16 @@ export function ChatPage({ meta }: { meta: any }) {
         setBusy(true);
         abortRef.current = controller;
         taskIdRef.current = activeTask.id;
-        await streamSse(
-          `/api/tasks/${encodeURIComponent(activeTask.id)}/stream`,
-          { cursor: 0 },
-          (event, data) => {
+        await streamDurableTask({
+          path: `/api/tasks/${encodeURIComponent(activeTask.id)}/stream`,
+          body: { cursor: 0 },
+          task: { taskId: activeTask.id, sessionId: sessionFromRoute },
+          signal: controller.signal,
+          onReplay: (task) => replayTask(task, controller.signal),
+          onRecovering: setReconnecting,
+          onFrame: (event, data) => {
             if (cancelled) return;
+            setReconnecting(null);
             setMessages((current) => {
               const copy = current.slice();
               const last = copy[copy.length - 1];
@@ -198,8 +221,7 @@ export function ChatPage({ meta }: { meta: any }) {
               return copy;
             });
           },
-          controller.signal,
-        );
+        });
         if (
           !cancelled &&
           !controller.signal.aborted &&
@@ -210,6 +232,9 @@ export function ChatPage({ meta }: { meta: any }) {
         }
       } catch (error: any) {
         if (cancelled) return;
+        if (error instanceof TaskStreamError && error.task) {
+          setBlockedByTask(error.task.taskId);
+        }
         setRestoring(false);
         if (controller.signal.aborted) {
           setMessages((current) => {
@@ -249,6 +274,7 @@ export function ChatPage({ meta }: { meta: any }) {
       } finally {
         if (!cancelled && abortRef.current === controller) {
           setBusy(false);
+          setReconnecting(null);
           abortRef.current = null;
           taskIdRef.current = "";
         }
@@ -263,7 +289,7 @@ export function ChatPage({ meta }: { meta: any }) {
         taskIdRef.current = "";
       }
     };
-  }, [sessionFromRoute, restoreVersion]);
+  }, [sessionFromRoute, restoreVersion, replayTask]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -350,9 +376,9 @@ export function ChatPage({ meta }: { meta: any }) {
     abortRef.current = ac;
 
     try {
-      await streamSse(
-        "/api/chat",
-        {
+      await streamDurableTask({
+        path: "/api/chat",
+        body: {
           prompt: text,
           session_id: sessionId || undefined,
           ...(submittedAttachments.length
@@ -365,7 +391,12 @@ export function ChatPage({ meta }: { meta: any }) {
               }
             : {}),
         },
-        (event, data) => {
+        signal: ac.signal,
+        onReplay: (task) => replayTask(task, ac.signal),
+        onRecovering: setReconnecting,
+        onFrame: (event, data) => {
+          if (ac.signal.aborted) return;
+          setReconnecting(null);
           if (event === "task" && data?.task_id) {
             const taskId = String(data.task_id);
             taskIdRef.current = taskId;
@@ -400,9 +431,10 @@ export function ChatPage({ meta }: { meta: any }) {
             return copy;
           });
         },
-        ac.signal,
-      );
+      });
     } catch (e: any) {
+      if (abortRef.current !== ac) return;
+      if (e instanceof TaskStreamError && e.task) setBlockedByTask(e.task.taskId);
       if (!taskIdRef.current) {
         setAttachments(submittedAttachments);
       }
@@ -416,10 +448,13 @@ export function ChatPage({ meta }: { meta: any }) {
         return copy;
       });
     } finally {
-      setBusy(false);
-      abortRef.current = null;
-      taskIdRef.current = "";
-      stopRequestedRef.current = false;
+      if (abortRef.current === ac) {
+        setBusy(false);
+        setReconnecting(null);
+        abortRef.current = null;
+        taskIdRef.current = "";
+        stopRequestedRef.current = false;
+      }
     }
   }, [
     input,
@@ -430,6 +465,7 @@ export function ChatPage({ meta }: { meta: any }) {
     sessionId,
     route,
     cancelTask,
+    replayTask,
   ]);
 
   const watchPredecessor = useCallback((predecessorId: string, expectedSessionId: string) => {
@@ -550,6 +586,20 @@ export function ChatPage({ meta }: { meta: any }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {reconnecting && (
+        <p role="status" className="border-b px-4 py-2 text-xs text-amber-600 dark:text-amber-400">
+          {reconnecting}
+        </p>
+      )}
+      {blockedByTask && !busy && (
+        <div role="alert" className="flex items-center gap-2 border-b px-4 py-2 text-xs">
+          <span>The task is still available. No work was resubmitted.</span>
+          <Button variant="outline" size="sm" onClick={() => setRestoreVersion((version) => version + 1)}>
+            Reconnect
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/tasks")}>Open Tasks</Button>
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-6 py-8">
           {messages.length === 0 ? (

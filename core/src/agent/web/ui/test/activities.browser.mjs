@@ -506,6 +506,10 @@ async function fixture(req, res) {
     assert.deepEqual(body, { cursor: 0 });
     reattachStreamRequests += 1;
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    if (reattachStreamRequests === 1) {
+      res.end('event: text\ndata: {"delta":"UNCONFIRMED_STREAM_FRAGMENT"}\n\n');
+      return;
+    }
     for (const [event, data] of [
       ["task", { task_id: "job-reattach", session_id: "session-reattach", reattached: true }],
       ["session", { session_id: "session-reattach" }],
@@ -1389,7 +1393,8 @@ try {
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/chat/session-reattach` });
   await wait("document.body.innerText.includes('Resumed after refresh.')", "reattached durable task output");
-  assert.equal(reattachStreamRequests, 1);
+  assert.equal(reattachStreamRequests, 2);
+  assert.equal(await evaluate("document.body.innerText.includes('UNCONFIRMED_STREAM_FRAGMENT')"), false);
   assert.equal(await evaluate("(document.body.innerText.match(/Continue after refresh/g) || []).length"), 1);
   assert.equal(await evaluate("(document.body.innerText.match(/cos_sysinfo/g) || []).length"), 1);
   assert.equal(await evaluate("document.body.innerText.includes('persisted_duplicate')"), false);
@@ -1398,7 +1403,7 @@ try {
   await wait("document.body.innerText.includes('permission denied: [REDACTED:bearer]')", "bounded redacted tool failure");
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Recovered the durable task stream.')", "reattached reasoning summary");
-  console.log("PASS active task history deduplication and durable stream reattachment");
+  console.log("PASS verified automatic recovery of the same durable task after premature EOF");
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
