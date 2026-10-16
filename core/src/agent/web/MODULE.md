@@ -41,6 +41,9 @@ web UI.
   submission when its outcome is unknown.
 - Queue busy-time Chat follow-ups as ordinary durable Jobs linked by
   `after_task_id`; browser component state is never the queue authority.
+- Show bounded per-Job follow-up previews and explicit individual/selected
+  cancellations separately from stopping current work. Selected cancellation
+  snapshots exclude the current task and later queue arrivals.
 - Accept bounded image selection, paste and drop, then submit the same
   broker-verified Job attachment contract used by native Desktop.
 - Subscribe to owner-scoped notifications and expose live unread,

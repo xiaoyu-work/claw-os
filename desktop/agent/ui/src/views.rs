@@ -163,7 +163,7 @@ impl App {
             } else {
                 Self::symbolic_button(
                     "media-playback-stop-symbolic",
-                    fl!("stop"),
+                    fl!("stop-current-task"),
                     Some(Message::ToggleMic),
                     true,
                 )
@@ -801,14 +801,7 @@ impl App {
                     text_editor::Binding::from_key_press(press)
                 }
             });
-        let status: Element<'_, Message> = if self.queued_followups > 0 {
-            text(fl!(
-                "queued-followups",
-                count = (self.queued_followups as i64)
-            ))
-            .size(11.0)
-            .into()
-        } else if let Some(metrics) = self.voice.metrics() {
+        let status: Element<'_, Message> = if let Some(metrics) = self.voice.metrics() {
             text(format!(
                 "{} · {}",
                 fl!("recording"),
@@ -917,6 +910,7 @@ impl App {
             );
         }
         content = content.push(editor).push(bottom);
+        if self.stream.is_active() { content=content.push(self.queue.view()); }
         container(content)
             .padding(spacing.space_s)
             .class(theme::Container::custom(styles::input_card))

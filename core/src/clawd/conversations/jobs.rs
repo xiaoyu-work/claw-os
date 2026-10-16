@@ -256,6 +256,7 @@ pub(super) fn project_retained(jobs: Vec<Job>) -> Result<ConversationJobs, Strin
 pub(super) fn enrich_presentations(
     execution: &mut ConversationJobs,
     owner_uid: u32,
+    visible_tasks: &std::collections::BTreeSet<String>,
 ) -> Result<(), String> {
     if !execution.task_bindings_complete || execution.jobs.is_empty() {
         return Ok(());
@@ -267,6 +268,9 @@ pub(super) fn enrich_presentations(
     let mut response_budget = MAX_JOB_BYTES.saturating_sub(metadata_bytes.saturating_add(256));
     let mut scan_budget = presentation::MAX_SCAN_BYTES;
     for projected in &mut execution.jobs {
+        if !visible_tasks.contains(&projected.id) {
+            continue;
+        }
         let Some((_, job)) = store
             .locate_for_owner(&projected.id, Some(owner_uid))
             .map_err(|error| error.to_string())?

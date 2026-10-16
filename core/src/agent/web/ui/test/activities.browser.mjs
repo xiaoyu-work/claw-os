@@ -126,6 +126,8 @@ const evidenceFixture = {
 let chatFollowUpQueued = false;
 let chatPrimaryDone = false;
 let chatFollowUpStreamRequests = 0;
+let discardedFollowUpQueued = false;
+let discardedFollowUpCancelled = false;
 let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
 let invalidReceiptsOnce = null;
@@ -526,6 +528,27 @@ async function fixture(req, res) {
       status: chatPrimaryDone ? "ok" : "running",
       session_id: "chat-browser",
     });
+  }
+  if (url.pathname === "/api/tasks/job-chat-followup") {
+    return reply(req,res,{id:"job-chat-followup",status:chatFollowUpStreamRequests ? "ok" : "pending",session_id:"chat-browser"});
+  }
+  if (url.pathname === "/api/tasks/job-chat-followup/follow-up") {
+    assert.equal(body.prompt,"Discard this queued follow-up");
+    discardedFollowUpQueued=true;
+    return reply(req,res,{id:"job-chat-discard",status:"pending",session_id:"chat-browser",after_task_id:"job-chat-followup"});
+  }
+  if (/^\/api\/tasks\/[^/]+\/queue$/.test(url.pathname)) {
+    const taskId=url.pathname.split("/")[3];
+    const tasks=taskId==="job-chat" && !chatPrimaryDone ? [{
+      id:"job-chat-followup",prompt:"Queued refinement",status:"pending",after_task_id:"job-chat",created_at:timestamp(),
+    },...(discardedFollowUpQueued && !discardedFollowUpCancelled ? [{
+      id:"job-chat-discard",prompt:"Discard this queued follow-up",status:"pending",after_task_id:"job-chat-followup",created_at:timestamp(),
+    }] : [])].filter((task)=>chatFollowUpQueued) : [];
+    return reply(req,res,{task_id:taskId,session_id:taskId==="job-reattach"?"session-reattach":"chat-browser",tasks,truncated:false});
+  }
+  if (url.pathname === "/api/tasks/job-chat-discard/stop") {
+    discardedFollowUpCancelled=true;
+    return reply(req,res,{cancelled:true,cancel_requested:false});
   }
   if (url.pathname === "/api/tasks/job-chat-followup/stream") {
     assert.equal(req.method, "POST");
@@ -1456,6 +1479,19 @@ try {
   })()`);
   await click(`document.querySelector('button[title="Queue follow-up"]')`);
   await wait("document.querySelector('[data-tool-id=\"live-tool\"]')?.innerText.includes('running')", "runtime tool dispatch is running");
+  await evaluate(`(() => {
+    const input=document.querySelector('textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Discard this queued follow-up');
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  await click(`document.querySelector('button[title="Queue follow-up"]')`);
+  await wait("!!document.querySelector('[aria-label=\"Durable follow-up queue\"]')", "durable follow-up list");
+  await click(`document.querySelector('[aria-label="Durable follow-up queue"] summary')`);
+  await wait("document.body.innerText.includes('Discard this queued follow-up')", "individual queued prompt preview");
+  await click(`Array.from(document.querySelectorAll('[aria-label="Durable follow-up queue"] button')).find(button => button.closest('.border-t')?.innerText.includes('Discard this queued follow-up'))`);
+  await wait("!document.querySelector('[aria-label=\"Durable follow-up queue\"]')?.innerText.includes('Discard this queued follow-up')", "individual cancellation refreshed from durable queue");
+  assert.equal(discardedFollowUpCancelled,true);
+  assert.equal(requests.some(request=>request.path==="/api/tasks/job-chat/stop"),false,"queued cancellation never stops current work");
   runtimeProgressObserved = true;
   await wait("document.body.innerText.includes('Queued follow-up complete.')", "queued follow-up execution");
   assert.equal(chatFollowUpStreamRequests, 1);

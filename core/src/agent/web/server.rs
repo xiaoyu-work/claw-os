@@ -128,6 +128,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks", get(routes::tasks::list))
         .route("/api/tasks/{id}", get(routes::tasks::show))
         .route("/api/tasks/{id}/stream", post(routes::chat::attach))
+        .route("/api/tasks/{id}/queue", get(routes::tasks::queue))
         .route(
             "/api/tasks/{id}/follow-up",
             post(routes::tasks::follow_up).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),

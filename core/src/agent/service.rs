@@ -52,6 +52,7 @@ use crate::activities::{Activity, ActivitySchedulingPriority, ActivityService, A
 use crate::paths::agent_jobs_dir;
 
 mod activity_context;
+mod dependencies;
 pub(crate) mod execution_limits;
 pub(crate) mod presentation;
 use activity_context::build as activity_execution_context;
@@ -1098,36 +1099,19 @@ impl Store {
                 )?;
                 continue;
             }
-            if let Some(predecessor_id) = job.after_task_id.clone() {
-                let predecessor = self.locate(&predecessor_id)?;
-                let Some((_, predecessor)) = predecessor else {
+            match dependencies::state(self, &job)? {
+                dependencies::Dependency::Invalid(error) => {
                     self.fail_waiting_job(
                         &src,
                         &id,
                         job,
-                        format!("queued predecessor task is unavailable: {predecessor_id}"),
-                        "clawd.task.queue-dependency-failed",
-                    )?;
-                    continue;
-                };
-                if predecessor.owner_uid != job.owner_uid
-                    || predecessor.session_id != job.session_id
-                {
-                    self.fail_waiting_job(
-                        &src,
-                        &id,
-                        job,
-                        "queued predecessor has a different owner or conversation".into(),
+                        error,
                         "clawd.task.queue-dependency-failed",
                     )?;
                     continue;
                 }
-                if !matches!(
-                    predecessor.status,
-                    JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
-                ) {
-                    continue;
-                }
+                dependencies::Dependency::Blocked => continue,
+                dependencies::Dependency::Ready => {}
             }
             let activity = match job.activity_id.as_deref() {
                 Some(activity_id) => {

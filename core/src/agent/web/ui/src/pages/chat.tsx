@@ -32,6 +32,7 @@ import { api } from "@/lib/api";
 import { applyFrame, markToolsUnconfirmed } from "@/lib/chat-presentation";
 import { ChatEvidence } from "@/components/chat-evidence";
 import { ApprovalViews } from "@/components/chat-approvals";
+import { FollowUpQueuePanel } from "@/components/followup-queue";
 import {
   streamDurableTask,
   taskReplay,
@@ -731,7 +732,7 @@ export function ChatPage({ meta }: { meta: any }) {
                     )}
                   </Button>
                 )}
-                <Button size="icon" variant="destructive" onClick={stop} title="Stop">
+                <Button size="icon" variant="destructive" onClick={stop} title="Stop current task (keeps queued follow-ups)">
                   <Square className="h-4 w-4" />
                 </Button>
               </>
@@ -757,13 +758,10 @@ export function ChatPage({ meta }: { meta: any }) {
               {attachmentError}
             </p>
           )}
+          {busy && (messages[messages.length - 1]?.taskId || taskIdRef.current) && (
+            <FollowUpQueuePanel key={messages[messages.length - 1]?.taskId || taskIdRef.current} taskId={messages[messages.length - 1]?.taskId || taskIdRef.current} version={queuedCount} />
+          )}
         </div>
-        {queuedCount > 0 && (
-          <p className="mx-auto mt-2 max-w-3xl text-xs text-muted-foreground">
-            {queuedCount} follow-up{queuedCount === 1 ? "" : "s"} queued in this
-            conversation.
-          </p>
-        )}
       </div>
     </div>
   );

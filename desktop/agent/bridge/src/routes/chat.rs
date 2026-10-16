@@ -368,6 +368,63 @@ pub async fn cancel_chat(
         .map_err(ApiError::bad_gateway)
 }
 
+pub async fn queue(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<cos_agent_protocol::FollowUpQueue>, ApiError> {
+    let current = state
+        .clawd
+        .call(Command::TaskGet, json!({"id":id}))
+        .await
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    if current.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+        return Err(ApiError::bad_gateway("Queue belongs to a different task"));
+    }
+    let session = current
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::bad_gateway("Task has no conversation"))?;
+    let value = state
+        .clawd
+        .call(
+            Command::AgentConversationGet,
+            json!({"id":session,"limit":1}),
+        )
+        .await
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    let conversation = value
+        .get("conversation")
+        .ok_or_else(|| ApiError::bad_gateway("Queue response omitted conversation"))?;
+    let jobs = conversation
+        .get("jobs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::bad_gateway("Queue response omitted Jobs"))?;
+    let tasks = jobs
+        .iter()
+        .filter(|job| {
+            job.get("session_id").and_then(Value::as_str) == Some(session)
+                && job.get("id").and_then(Value::as_str) != Some(id.as_str())
+                && job.get("after_task_id").and_then(Value::as_str).is_some()
+                && matches!(
+                    job.get("status").and_then(Value::as_str),
+                    Some("pending" | "running" | "waiting_approval")
+                )
+        })
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<cos_agent_protocol::FollowUp>, _>>()
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    Ok(Json(cos_agent_protocol::FollowUpQueue {
+        task_id: id,
+        session_id: session.into(),
+        tasks,
+        truncated: conversation
+            .get("jobs_truncated")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| ApiError::bad_gateway("Queue coverage is unavailable"))?,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     include!(concat!(

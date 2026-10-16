@@ -319,7 +319,8 @@ fn conversation_response(
             execution
         }
     };
-    jobs::enrich_presentations(&mut execution, owner_uid)?;
+    let visible_tasks = history.messages.iter().filter_map(|message| message.task_id.clone()).collect();
+    jobs::enrich_presentations(&mut execution, owner_uid, &visible_tasks)?;
     let metadata = presentation_metadata(meta, presentation, view.metadata)?;
     response(ConversationResponse {
         conversation: Conversation {

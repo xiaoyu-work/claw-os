@@ -440,6 +440,55 @@ pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> 
     Ok(())
 }
 
+pub async fn fetch_followups(
+    endpoint: BridgeEndpoint,
+    task_id: &str,
+) -> Result<cos_agent_protocol::FollowUpQueue> {
+    let url = bridge_url(&endpoint, &format!("/api/chat/{task_id}/queue"));
+    let selected = selected_protocol_version(&endpoint)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?
+        .get(&url)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        return Err(response_error(response, &url).await);
+    }
+    let queue: cos_agent_protocol::FollowUpQueue = response.json().await?;
+    if queue.task_id != task_id || queue.tasks.iter().any(|task| task.id == task_id) {
+        return Err(anyhow!("Follow-up queue identity mismatch"));
+    }
+    Ok(queue)
+}
+
+pub async fn cancel_followup(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> {
+    let url = bridge_url(&endpoint, &format!("/api/chat/{task_id}/cancel"));
+    let selected = selected_protocol_version(&endpoint)?;
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?
+        .post(&url)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
+        .bearer_auth(&endpoint.token)
+        .send()
+        .await?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        return Err(response_error(response, &url).await);
+    }
+    let result: CancelResponse = response.json().await?;
+    if result.id != task_id || (!result.cancelled && !result.cancel_requested) {
+        return Err(anyhow!(
+            "Follow-up cancellation was not acknowledged; refresh before deciding again"
+        ));
+    }
+    Ok(())
+}
+
 pub async fn queue_follow_up(
     endpoint: BridgeEndpoint,
     predecessor_id: &str,
@@ -488,12 +537,21 @@ fn activity_request(
 }
 
 pub async fn memory_request<T: serde::Serialize, R: serde::de::DeserializeOwned>(
-    endpoint: BridgeEndpoint, action: &str, body: T,
+    endpoint: BridgeEndpoint,
+    action: &str,
+    body: T,
 ) -> Result<R> {
-    let (request, selected) = activity_request(&endpoint, reqwest::Method::POST, &["memory", action])?;
-    let response = request.json(&body).send().await.context("requesting owner memory")?;
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::POST, &["memory", action])?;
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .context("requesting owner memory")?;
     validate_response_protocol(&response, selected)?;
-    if !response.status().is_success() { return Err(response_error(response, "owner memory").await); }
+    if !response.status().is_success() {
+        return Err(response_error(response, "owner memory").await);
+    }
     response.json().await.context("decoding owner memory")
 }
 

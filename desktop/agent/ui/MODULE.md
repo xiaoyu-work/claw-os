@@ -22,6 +22,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/effects.rs` | Async bridge, history, new/existing Job streams, durable follow-up, and cancellation effects that emit typed UI messages |
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
 | `src/memory_center.rs` | Generation-safe fetched memory sources, checked note drafts and explicit learned-entry forgetting; no local memory store or authority |
+| `src/queue_panel.rs` | Fetched per-Job follow-up previews, individual cancellation and exact selected-list confirmation; no local queue or cancellation authority |
 | `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
 | `src/views.rs` | Read-only widget composition for reasoning summaries, cumulative usage, safe tool status/metrics, selected-image metadata, and other presentation state |
 | `src/styles.rs` | Presentation styles |
@@ -54,6 +55,10 @@ replays the existing task from cursor zero without resubmission. Stop remains
 an explicit `task.cancel`. Busy composer submissions create durable
 `after_task_id` follow-ups through a bridge route that derives the session from
 the owner-checked predecessor; UI queue counts are presentation state only.
+Web/native queue controls cancel only explicitly listed Jobs through the
+existing task cancellation route. Stopping current work keeps its successors.
+Selected-list confirmations freeze their task ids and exclude later arrivals;
+failures disclose partial cancellation rather than retrying mutations.
 
 Completed history folds retained Job presentation into exact task-bound rows:
 reasoning, aggregate usage and tool metrics appear once, and the outer user

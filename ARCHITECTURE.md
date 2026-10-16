@@ -1681,6 +1681,12 @@ dependent pending record until its predecessor is `ok`, `error`, or
 explicitly. This orders execution without granting authority, inferring
 success, persisting attendance, or coupling queue lifetime to a terminal
 connection.
+Admission checks the bounded predecessor chain, not just its last link: a
+cancelled intermediate follow-up cannot bypass an earlier unfinished task.
+Web/native clients expose per-Job previews and individual or exact
+selected-list cancellation. The current task and later arrivals are excluded
+from a selected-list confirmation; partial errors stay visible and mutations
+are not automatically retried.
 Agent Web and native Desktop use the same contract when the user submits while
 Chat is busy. Each adapter derives the canonical session from the
 owner-checked predecessor instead of accepting one from presentation input,

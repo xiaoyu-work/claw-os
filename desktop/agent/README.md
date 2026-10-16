@@ -512,6 +512,7 @@ the prior non-disruptive `start` behavior.
 | `GET /api/health` | Plain-text `ok`; version is negotiated in headers |
 | `POST /api/chat` | `ChatRequest`; typed SSE events below |
 | `POST /api/chat/:task_id/stream` | Replays the existing owner-scoped Job as typed SSE without resubmitting or cancelling on disconnect |
+| `GET /api/chat/:task_id/queue` | Owner-derived same-conversation follow-up previews; individual/selected-list cancellation uses the existing explicit cancel route |
 | `POST /api/chat/:task_id/follow-up` | `ChatRequest` → `TaskStarted`; derives the canonical session from the owner-checked predecessor and persists `after_task_id` |
 | `POST /api/chat/:task_id/cancel` | `CancelResponse` / `ErrorEnvelope` |
 | `GET /api/activities?state=…&limit=…` | `ActivityListQuery` → `ActivityListResponse`; `activity.list` |

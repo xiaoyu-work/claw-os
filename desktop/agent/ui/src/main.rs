@@ -25,6 +25,7 @@ mod bridge_state;
 mod effects;
 mod localize;
 mod memory_center;
+mod queue_panel;
 mod overlay;
 mod recorder;
 mod session;
@@ -71,6 +72,8 @@ impl CosmicFlags for Flags {
 pub enum Message {
     Activities(activities::Message),
     Memory(memory_center::Message),
+    Queue(queue_panel::Message),
+    QueueTick,
     OpenActivitySession(String),
     CopyActivityObjectOperation(String),
     CopyActivityContinuity,
@@ -141,6 +144,7 @@ pub struct App {
     bridge: BridgeState,
     activities: activities::Activities,
     memory: memory_center::MemoryCenter,
+    queue: queue_panel::QueuePanel,
     sessions: SessionState,
     stream: StreamState,
     input: text_editor::Content,
@@ -184,6 +188,7 @@ impl Application for App {
             bridge: BridgeState::connecting(),
             activities: activities::Activities::default(),
             memory: memory_center::MemoryCenter::default(),
+            queue: queue_panel::QueuePanel::default(),
             sessions: SessionState::default(),
             stream: StreamState::default(),
             input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
@@ -233,6 +238,8 @@ impl Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Queue(message) => self.queue.update(message,self.bridge.endpoint().cloned()),
+            Message::QueueTick => self.queue.update(queue_panel::Message::Poll(self.stream.task_id().map(str::to_string)),self.bridge.endpoint().cloned()),
             Message::Memory(message) => {
                 if self.flags.overlay { return Task::none(); }
                 if matches!(message, memory_center::Message::Show) { self.activities.hide(); }
@@ -685,7 +692,10 @@ impl Application for App {
                 self.overlay.consume_stream_context();
                 self.error = None;
                 if self.stream.is_active() || self.stream.is_cancelling() {
-                    focus_editor()
+                    Task::batch([
+                        focus_editor(),
+                        Task::done(cosmic::Action::App(Message::QueueTick)),
+                    ])
                 } else {
                     let session_index = self.sessions.active_index();
                     self.sessions.invalidate_history(session_index);
@@ -872,6 +882,7 @@ impl Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = Vec::new();
+        if self.stream.is_active() { subscriptions.push(cosmic::iced::time::every(Duration::from_secs(3)).map(|_|Message::QueueTick)); }
         if self.flags.overlay {
             subscriptions.push(event::listen_with(|event, _, _| match event {
                 cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
@@ -1091,9 +1102,10 @@ impl App {
             ..ChatRequest::default()
         };
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        let queue_reset = self.queue.update(queue_panel::Message::Poll(None), None);
         let generation = self.stream.start(stream_session.index, abort_handle);
         let stream_task = effects::open_stream(endpoint, request, generation, abort_registration);
-        Task::batch([cancel_voice, stream_task, scroll_to_bottom()])
+        Task::batch([cancel_voice, stream_task, queue_reset, scroll_to_bottom()])
     }
 
     fn queue_follow_up(&mut self, prompt: String) -> Task<Message> {
@@ -1180,6 +1192,10 @@ impl App {
                     scroll_to_bottom()
                 }
             }
+            StreamReduction::Applied if task_started => Task::batch([
+                scroll_to_bottom(),
+                Task::done(cosmic::Action::App(Message::QueueTick)),
+            ]),
             StreamReduction::Applied => scroll_to_bottom(),
             StreamReduction::Cancelled | StreamReduction::Stale => Task::none(),
         }

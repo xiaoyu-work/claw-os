@@ -123,6 +123,67 @@ fn follow_up_params(predecessor: &Value, request: FollowUpRequest) -> Result<Val
     Ok(params)
 }
 
+pub async fn queue(Path(id): Path<String>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let current = super::clawd::request(Command::TaskGet, json!({"id":id}))
+        .await
+        .map_err(super::clawd::RpcError::into_api_error)?;
+    if current.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+        return Err(invalid_task_response(
+            "queue belongs to a different task".into(),
+        ));
+    }
+    let session = current
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_task_response("task has no conversation".into()))?;
+    let value = super::clawd::request(
+        Command::AgentConversationGet,
+        json!({"id":session,"limit":1}),
+    )
+    .await
+    .map_err(super::clawd::RpcError::into_api_error)?;
+    let conversation = value
+        .get("conversation")
+        .ok_or_else(|| invalid_task_response("missing conversation queue".into()))?;
+    let tasks = queue_projection(conversation, session, &id).map_err(invalid_task_response)?;
+    let truncated = conversation
+        .get("jobs_truncated")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| invalid_task_response("queue coverage is unavailable".into()))?;
+    Ok(Json(
+        json!({"task_id":id,"session_id":session,"tasks":tasks,"truncated":truncated}),
+    ))
+}
+
+fn queue_projection(
+    conversation: &Value,
+    session: &str,
+    current: &str,
+) -> Result<Vec<Value>, String> {
+    let jobs = conversation
+        .get("jobs")
+        .and_then(Value::as_array)
+        .ok_or("queue projection omitted Jobs")?;
+    Ok(jobs
+        .iter()
+        .filter(|job| {
+            job.get("session_id").and_then(Value::as_str) == Some(session)
+                && job.get("id").and_then(Value::as_str) != Some(current)
+                && job.get("after_task_id").and_then(Value::as_str).is_some()
+                && matches!(
+                    job.get("status").and_then(Value::as_str),
+                    Some("pending" | "running" | "waiting_approval")
+                )
+        })
+        .map(|job| {
+            json!({
+                "id":job.get("id"),"prompt":job.get("prompt"),"status":job.get("status"),
+                "after_task_id":job.get("after_task_id"),"created_at":job.get("created_at"),
+            })
+        })
+        .collect())
+}
+
 fn invalid_task_response(message: String) -> (StatusCode, Json<Value>) {
     (
         StatusCode::BAD_GATEWAY,
