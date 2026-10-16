@@ -45,6 +45,7 @@ persistence, and structured primitive dispatch.
 | `src/activities/scheduling_policy.rs`, `src/clawd/activity_scheduling_policy.rs`, `src/agent/service.rs` | Owner-controlled Activity pending admission priority, terminal/broker controls and bounded-aging shared queue ordering |
 | `src/caps/activity_boundary.rs`, `src/clawd/activity_capability_policy.rs` | Live Activity capability constraints, root-held policy bindings and owner-scoped controls |
 | `src/triggers.rs`, `src/clawd/scheduler.rs` | Deterministic event-driven work, existing scheduler authority and bounded Activity task/session associations |
+| `src/activities/work.rs`, `src/triggers/work.rs`, `src/clawd/activity_work.rs` | Explicit owner-controlled automatic Activity progression, durable handoffs, existing scheduler delegation and conservative recovery |
 | `src/objects/`, `src/router/object_commands.rs` | Verified App object catalogue and explicit resolution through ordinary App dispatch |
 | `src/operations/`, `src/clawd/operation_previews.rs` | Shared, non-executing previews of App-declared effects and requested targets |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |

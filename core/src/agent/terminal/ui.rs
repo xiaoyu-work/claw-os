@@ -1099,6 +1099,13 @@ fn render_activity_controls(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         "Capability policy (constraints, never grants)",
         controls.capability_policy.as_ref(),
     );
+    append_activity_control(
+        &mut lines,
+        "Automatic work (explicit opt-in; handoffs are caller reports)",
+        controls.work.as_ref(),
+    );
+    lines.push(Line::raw("W: configure/start/stop automatic work. Review/held work needs an explicit next task and review note."));
+    lines.push(Line::raw("The work 'running' phase means a reserved/in-flight Job; inspect its actual task status."));
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(lines)

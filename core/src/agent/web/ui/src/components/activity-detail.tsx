@@ -11,6 +11,8 @@ import { ActivityCapabilityPolicyPanel } from "@/components/activity-capability-
 import { ActivityAttentionPanel } from "@/components/activity-attention";
 import { ActivityReceiptsPanel } from "@/components/activity-receipts";
 import { ActivityWork } from "@/components/activity-work";
+import { ActivityAutoWorkPanel } from "@/components/activity-auto-work";
+import { useActivityAutoWork } from "@/hooks/use-activities";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -44,6 +46,7 @@ export function ActivityDetailPanel({
   const schedulingPriority = useActivitySchedulingPriority(id);
   const capabilityPolicy = useActivityCapabilityPolicy(id);
   const attention = useActivityAttention(id);
+  const automaticWork = useActivityAutoWork(id);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
@@ -76,6 +79,7 @@ export function ActivityDetailPanel({
       void schedulingPriority.refresh();
       void capabilityPolicy.refresh();
       void attention.refresh();
+      void automaticWork.refresh();
       const [fresh] = await Promise.all([view.refresh(), changed.current()]);
       if (!mounted.current) return false;
       setNotice(message);
@@ -233,6 +237,9 @@ export function ActivityDetailPanel({
               "Object reference attached. No App code was executed.",
             )} />
           <ActivityWork detail={detail} disabled={disabled} mutate={mutate} />
+          <ActivityAutoWorkPanel key={`automatic-work-${id}`} activityId={id} ownerUid={activity.owner_uid}
+            active={activity.state === "active"} editable={editable} disabled={disabled}
+            view={automaticWork} mutate={mutate} />
           <ActivityAttentionPanel view={attention} />
           <ActivityExecutionLimitsPanel key={`limits-${id}`} activityId={id} ownerUid={activity.owner_uid}
             editable={editable} disabled={disabled} view={executionLimits} mutate={mutate} />

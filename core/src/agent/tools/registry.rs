@@ -386,6 +386,7 @@ pub struct ToolRegistry {
     guardrails: Guardrails,
     approval: ApprovalGate,
     catalog_generation: Arc<AtomicU64>,
+    activity_work: Option<Arc<super::activity_work::WorkCheckpointSlot>>,
 }
 
 impl Default for ToolRegistry {
@@ -395,6 +396,7 @@ impl Default for ToolRegistry {
             guardrails: Guardrails::permissive(),
             approval: ApprovalGate::default(),
             catalog_generation: Arc::new(AtomicU64::new(0)),
+            activity_work: None,
         }
     }
 }
@@ -402,6 +404,15 @@ impl Default for ToolRegistry {
 impl ToolRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn set_activity_work(&mut self, slot: Arc<super::activity_work::WorkCheckpointSlot>) {
+        self.register(Arc::new(super::activity_work::ActivityCheckpoint(slot.clone())));
+        self.activity_work = Some(slot);
+    }
+
+    pub(crate) fn activity_work(&self) -> Option<&Arc<super::activity_work::WorkCheckpointSlot>> {
+        self.activity_work.as_ref()
     }
 
     /// Register a tool. Last write wins for duplicate names.
@@ -572,6 +583,7 @@ impl ToolRegistry {
             guardrails: self.guardrails.clone(),
             approval: self.approval.clone(),
             catalog_generation: Arc::new(AtomicU64::new(0)),
+            activity_work: None,
         }
     }
 
@@ -783,6 +795,20 @@ impl ToolRegistry {
         context: &ToolExposureContext,
         call: &ToolCall,
     ) -> ResolvedToolCall {
+        if let Some(slot) = &self.activity_work {
+            match slot.permits(&call.name) {
+                Ok(true) => {}
+                decision => {
+                    return ResolvedToolCall {
+                        call: call.clone(),
+                        kind: ResolvedToolKind::Rejected(match decision {
+                            Err(error) => error,
+                            _ => "Activity segment is closing; only an initial handoff is permitted.".into(),
+                        }),
+                    };
+                }
+            }
+        }
         if progressive::is_bridge_tool(&call.name)
             && self.approval.config().auto_deny.contains(&call.name)
         {

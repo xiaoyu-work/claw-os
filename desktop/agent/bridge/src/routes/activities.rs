@@ -6,6 +6,7 @@ pub(super) mod continuity;
 pub(super) mod execution_limits;
 pub(super) mod monetary_budget;
 pub(super) mod scheduling_priority;
+pub(super) mod automatic_work;
 
 use axum::{
     Json,

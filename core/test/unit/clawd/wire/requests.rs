@@ -2,6 +2,23 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn activity_work_controls_cannot_carry_progress_authority_or_dispatch_identity() {
+    let id="00000000-0000-4000-8000-000000000001";
+    let config=json!({"id":id,"expected_revision":null,"work":{
+        "task":"Prepare a report","check_interval_secs":3600,"wake_event":null,
+    }});
+    assert!(serde_json::from_value::<ActivityWorkSet>(config.clone()).is_ok());
+    let enable=json!({"id":id,"expected_revision":1,"enabled":true});
+    assert!(serde_json::from_value::<ActivityWorkEnabled>(enable.clone()).is_ok());
+    for field in ["owner_uid","capabilities","job_id","generation","used_attempts","checkpoint","completed"] {
+        let mut forged=config.clone();forged[field]=json!(true);
+        assert!(serde_json::from_value::<ActivityWorkSet>(forged).is_err(),"{field}");
+        let mut forged=enable.clone();forged[field]=json!(true);
+        assert!(serde_json::from_value::<ActivityWorkEnabled>(forged).is_err(),"{field}");
+    }
+}
+
+#[test]
 fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
     let request = json!({
         "source": "/home/user/downloads/app",

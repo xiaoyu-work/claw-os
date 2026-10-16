@@ -45,6 +45,7 @@ const objectStateRecords = new Map();
 const executionLimitRecords = new Map();
 const monetaryBudgetRecords = new Map();
 const schedulingPriorityRecords = new Map();
+const automaticWorkRecords = new Map();
 const capabilityPolicyRecords = new Map();
 const continuityImports = new Set();
 const requests = [];
@@ -944,6 +945,55 @@ async function fixture(req, res) {
     };
     monetaryBudgetRecords.set(item.id, policy);
     return reply(req, res, policy);
+  }
+  const automaticWorkRoute = /^\/api\/activities\/([^/]+)\/work(?:\/(enabled))?$/.exec(url.pathname);
+  if (automaticWorkRoute) {
+    const item = activities.get(decodeURIComponent(automaticWorkRoute[1]));
+    assert.ok(item);
+    assert.deepEqual([...url.searchParams], []);
+    const current = automaticWorkRecords.get(item.id);
+    if (req.method === "GET") {
+      assert.equal(automaticWorkRoute[2], undefined);
+      return reply(req, res, { schema: 1, activity_id: item.id, work: current ?? null, history: [] });
+    }
+    assert.equal(req.method, "POST");
+    assert.equal(body.expected_revision, current?.revision ?? null);
+    const next = (BigInt(current?.revision ?? "0") + 1n).toString();
+    if (automaticWorkRoute[2] === "enabled") {
+      assert.deepEqual(Object.keys(body).sort(), ["enabled", "expected_revision", "next_task", "review_note"]);
+      assert.ok(current);
+      if (body.enabled) {
+        assert.equal(item.state, "active");
+        assert.equal(executionLimitRecords.get(item.id)?.enabled, true);
+        if (["held", "review"].includes(current.phase)) {
+          assert.ok(body.next_task?.trim());
+          assert.ok(body.review_note?.trim());
+        }
+      }
+      const work = {
+        ...current, revision: next, enabled: body.enabled,
+        generation: body.enabled ? randomUUID() : current.generation,
+        next_task: body.next_task ?? current.next_task,
+        phase: body.enabled ? "ready" : current.phase,
+        message: body.review_note ?? current.message,
+        updated_at: timestamp(),
+      };
+      automaticWorkRecords.set(item.id, work);
+      return reply(req, res, work);
+    }
+    assert.deepEqual(Object.keys(body).sort(), ["expected_revision", "work"]);
+    assert.deepEqual(Object.keys(body.work).sort(), ["check_interval_secs", "task", "wake_event"]);
+    assert.ok(body.work.task.trim());
+    assert.ok(body.work.check_interval_secs >= 60 && body.work.check_interval_secs <= 86400);
+    const work = {
+      activity_id: item.id, owner_uid: item.owner_uid, revision: next, config: body.work,
+      enabled: false, generation: current?.generation ?? null, phase: "ready", next_task: body.work.task,
+      next_wake_at: null, event_after: "0", current: null, last_checkpoint: null,
+      stagnant_segments: 0, message: null,
+      created_at: current?.created_at ?? timestamp(), updated_at: timestamp(),
+    };
+    automaticWorkRecords.set(item.id, work);
+    return reply(req, res, work);
   }
   const schedulingRoute = /^\/api\/activities\/([^/]+)\/scheduling-priority$/.exec(url.pathname);
   if (schedulingRoute) {
@@ -2501,7 +2551,7 @@ try {
   await expectDetail(maliciousTitle);
   await expectDetail("Resume activity");
   assert.equal(activities.get(importedId).state, "paused");
-  assert.equal(await evaluate(`document.querySelector('[aria-label="Activity detail"]').querySelectorAll('img,script,a').length`), 0);
+  assert.equal(await evaluate(`document.querySelector('[aria-label="Activity detail"]').querySelectorAll('img,script,a:not([href="#/approvals"])').length`), 0);
   assert.equal(await evaluate("window.continuityExecuted"), undefined);
   assert.deepEqual(activities.get("activity-1"), sourceBeforeContinuity);
   assert.deepEqual([...jobs.values()], workBeforeContinuity);
@@ -2536,6 +2586,67 @@ try {
   assert.deepEqual(activities.get("activity-1"), sourceBeforeContinuity);
   assert.deepEqual([...jobs.values()], workBeforeContinuity);
   console.log("PASS deterministic continuity export Blob, bounded explicit local import, inert paused result, conflicts and late-selection safety");
+
+  const autoWorkId = "aaaaaaaa-1111-4111-8111-111111111111";
+  activities.set(autoWorkId, {
+    ...structuredClone(activities.get("activity-1")), id: autoWorkId,
+    title: "Automatic research", state: "active", completion_note: null, resources: [],
+  });
+  executionLimitRecords.set(autoWorkId, {
+    activity_id: autoWorkId, owner_uid: 1000, revision: 1, enabled: true,
+    limits: { max_attempts: 10, max_turns_per_attempt: 5, expires_at: "2099-01-01T00:00:00Z" },
+    used_attempts: 0, created_at: timestamp(), updated_at: timestamp(),
+  });
+  await evaluate(`location.hash = '#/activities/${autoWorkId}'`);
+  await expectDetail("Automatic progression is not configured or enabled.");
+  const autoPostsBefore = requests.filter((request) =>
+    request.method === "POST" && request.path.includes(`/${autoWorkId}/work`)).length;
+  await clickText("Configure automatic work");
+  await fill("Owner task", "Research one source at a time and request review of the draft.");
+  await clickText("Save stopped configuration");
+  await expectDetail("Automatic progression stopped");
+  assert.equal(automaticWorkRecords.get(autoWorkId).enabled, false);
+  await clickText("Start automatic work");
+  await expectDetail("Automatic progression enabled");
+  assert.equal(automaticWorkRecords.get(autoWorkId).enabled, true);
+  await send("Page.reload", { ignoreCache: true });
+  await expectDetail("Automatic progression enabled");
+  await clickText("Stop automatic progression");
+  await expectDetail("Automatic progression stopped");
+  let automatic = automaticWorkRecords.get(autoWorkId);
+  automaticWorkRecords.set(autoWorkId, {
+    ...automatic, revision: "9007199254740993", phase: "held",
+    message: "Inspect the previous result before continuing.",
+  });
+  await clickText("Refresh automatic work");
+  await expectDetail("9007199254740993");
+  await clickText("Review and resume work");
+  assert.equal(await evaluate(`${buttonExpression("Resume inspected work")}.disabled`), true);
+  await fill("Safe next task", "Verify the existing draft without repeating any submission.");
+  await fill("Work review note", "Inspected the result and checked the destination.");
+  await clickText("Resume inspected work");
+  await expectDetail("Automatic progression enabled");
+  automatic = automaticWorkRecords.get(autoWorkId);
+  assert.equal(automatic.revision, "9007199254740994");
+  assert.equal(activities.get(autoWorkId).state, "active", "reported work does not complete the goal");
+  const automaticPosts = requests.filter((request) =>
+    request.method === "POST" && request.path.includes(`/${autoWorkId}/work`));
+  assert.equal(automaticPosts.length - autoPostsBefore, 4, "each control requires one explicit user mutation");
+  for (const request of automaticPosts) {
+    for (const field of ["owner_uid", "job_id", "generation", "checkpoint", "capabilities"]) {
+      assert.equal(Object.hasOwn(request.body, field), false, field);
+    }
+  }
+  const lateWorkRead = holdRequest("GET", `/api/activities/${autoWorkId}/work`);
+  await clickText("Refresh automatic work");
+  await lateWorkRead.seen;
+  await evaluate("location.hash = '#/activities/activity-1'");
+  await expectDetail("Automatic progression is not configured or enabled.");
+  lateWorkRead.release();
+  await delay(300);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
+  assert.deepEqual([...jobs.values()], workBeforeContinuity);
+  console.log("PASS explicit stopped work configuration, start/stop, exact large-CAS reviewed resume, reload and late-selection safety");
 
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   await validateMemoryCenter();

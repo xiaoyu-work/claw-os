@@ -761,6 +761,25 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 InputAction::ActivityControls(controls.activity_id)
             }
+            KeyCode::Char('w') | KeyCode::Char('W') => {
+                let command = match (controls.work_revision(),controls.work_enabled()) {
+                    (Some(revision),Some(enabled)) => {
+                        let reviewed = controls.work.as_ref().and_then(|work|work.get("phase"))
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|phase|matches!(phase,"review"|"held"));
+                        if !enabled && reviewed {
+                            format!("/activity-work-enable {} on {} | {{\"next_task\":\"Describe the safe next step\",\"review_note\":\"Describe what you inspected\"}}",controls.activity_id,revision)
+                        } else {
+                            format!("/activity-work-enable {} {} {}",controls.activity_id,
+                                if enabled {"off"} else {"on"},revision)
+                        }
+                    }
+                    _ => format!("/activity-work-set {} new | {{\"task\":\"Describe the owner goal\",\"check_interval_secs\":3600,\"wake_event\":null}}",controls.activity_id),
+                };
+                app.close_activity_controls();
+                app.prefill_input(command);
+                InputAction::None
+            }
             KeyCode::Char('l') | KeyCode::Char('L') => {
                 let command = match (
                     controls.execution_revision(),

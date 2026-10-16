@@ -68,6 +68,10 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("disable-capability-policy", "Block all controlled capability checks without deleting the policy"),
                 ("priority", "Read owner-selected pending Activity admission priority"),
                 ("set-priority", "Set foreground, standard, or background pending admission priority"),
+                ("work", "Inspect shared automatic-work state and reported handoffs"),
+                ("set-work", "Configure a bounded Activity work loop, initially stopped"),
+                ("start-work", "Explicitly enable automatic progression through scheduler consent"),
+                ("stop-work", "Stop future automatic work without cancelling a current Job"),
             ],
         ),
         (

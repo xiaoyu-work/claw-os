@@ -201,7 +201,13 @@ fn run_scheduler_command(
         "command": command,
         "args": args,
     });
-    match scheduler_request(&params) {
+    request_with_scheduler_consent(Command::SchedulerRun,params)
+}
+
+pub(crate) fn request_with_scheduler_consent(
+    command: Command, params: Value,
+) -> Result<Value,String> {
+    match scheduler_route_request(command,&params) {
         Ok(result) => Ok(result),
         Err(error) => {
             let ids = scheduler_approval_requests(&error);
@@ -213,7 +219,7 @@ fn run_scheduler_command(
             // identity on the follow-up call, so no decision, token or
             // session string has to travel between processes.
             wait_for_scheduler_approvals(&ids)?;
-            scheduler_request(&params).map_err(|error| error.message)
+            scheduler_route_request(command,&params).map_err(|error| error.message)
         }
     }
 }
@@ -225,8 +231,8 @@ struct SchedulerCallError {
     data: Option<Value>,
 }
 
-fn scheduler_request(params: &Value) -> Result<Value, SchedulerCallError> {
-    let request = crate::clawd::protocol::Request::build(Command::SchedulerRun, params.clone());
+fn scheduler_route_request(command: Command, params: &Value) -> Result<Value, SchedulerCallError> {
+    let request = crate::clawd::protocol::Request::build(command, params.clone());
     let response =
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
             .map_err(|error| SchedulerCallError {

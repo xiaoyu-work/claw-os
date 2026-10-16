@@ -316,6 +316,7 @@ fn assignment(
             record_activity_receipts: false,
             activity_capability_checks: false,
             activity_monetary_checks: false,
+            activity_work: false,
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
             workspace: home.to_string_lossy().into_owned(),

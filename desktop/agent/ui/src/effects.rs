@@ -161,6 +161,15 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                         .await
                         .map(ActivityResponse::SchedulingPriority)
                 }
+                ActivityAction::GetAutomaticWork(id) =>
+                    bridge::fetch_activity_auto_work(endpoint,&id).await
+                        .map(|response|ActivityResponse::AutomaticWork(Box::new(response))),
+                ActivityAction::SetAutomaticWork {activity_id,request} =>
+                    bridge::set_activity_auto_work(endpoint,&activity_id,request).await
+                        .map(|work|ActivityResponse::AutomaticWorkSaved(Box::new(work))),
+                ActivityAction::EnableAutomaticWork {activity_id,request} =>
+                    bridge::enable_activity_auto_work(endpoint,&activity_id,request).await
+                        .map(|work|ActivityResponse::AutomaticWorkSaved(Box::new(work))),
                 ActivityAction::SetSchedulingPriority {
                     activity_id,
                     request,

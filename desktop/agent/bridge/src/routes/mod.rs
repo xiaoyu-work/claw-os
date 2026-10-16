@@ -104,6 +104,9 @@ pub fn api() -> Router<AppState> {
         )
         .route("/activities/:id/transition", post(activities::transition))
         .route("/activities/:id/run", post(activities::run))
+        .route("/activities/:id/work",
+            get(activities::automatic_work::get).post(activities::automatic_work::set))
+        .route("/activities/:id/work/enabled",post(activities::automatic_work::enabled))
         .route("/tasks/:task_id/retry", post(activities::retry_job))
         .route("/sessions", get(sessions::list))
         .route(

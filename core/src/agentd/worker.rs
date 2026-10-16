@@ -1212,13 +1212,17 @@ async fn execute(
 
     let home = std::path::PathBuf::from(&job.owner_home);
     let config = crate::config::load_for_home(&home);
+    let work = job.activity_work.then(|| Arc::new(
+        crate::agent::tools::activity_work::WorkCheckpointSlot::default()
+    ));
     // Keep the large runtime future out of each task-local wrapper's stack frame.
-    let scoped = Box::pin(crate::agent::service::execute_job_with_hooks_and_budget(
+    let scoped = Box::pin(crate::agent::service::execute_job_with_hooks_budget_and_work(
         request,
         stream_sink,
         progress_sink,
         hooks,
         monetary_budget,
+        work.clone(),
     ));
     let scoped = reporting::with_recorder(recorder, scoped);
     let scoped = with_session(assignment.session, scoped);
@@ -1270,6 +1274,10 @@ async fn execute(
             model,
             evidence: *evidence,
             fallback: *fallback,
+            work_checkpoint: match work.as_ref().map(|slot| slot.checkpoint()).transpose() {
+                Ok(checkpoint) => checkpoint.flatten(),
+                Err(message) => return WorkerOutcome::Error { message },
+            },
         })),
         FinishOutcome::Error(message) => WorkerOutcome::Error { message },
         FinishOutcome::Indeterminate(message) => WorkerOutcome::Error { message },

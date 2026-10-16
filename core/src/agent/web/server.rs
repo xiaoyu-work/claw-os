@@ -58,6 +58,10 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::activities::transition),
         )
         .route("/api/activities/{id}/run", post(routes::activities::run))
+        .route("/api/activities/{id}/work",
+            get(routes::activities::work::get).post(routes::activities::work::set))
+        .route("/api/activities/{id}/work/enabled",
+            post(routes::activities::work::enabled))
         .route(
             "/api/activities/{id}/objects",
             get(routes::activities::objects).post(routes::activities::attach_object),

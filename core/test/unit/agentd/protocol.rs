@@ -52,7 +52,7 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_MONETARY_BUDGET,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 18);
+    assert_eq!(PROTOCOL_VERSION, 19);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
@@ -86,6 +86,7 @@ fn requested_model_round_trips_in_the_worker_assignment() {
         record_activity_receipts: false,
         activity_capability_checks: false,
         activity_monetary_checks: false,
+        activity_work: false,
     };
     let document = serde_json::to_value(spec).unwrap();
     assert_eq!(document["requested_model"], "provider/model-v2");
@@ -423,6 +424,7 @@ async fn completed_run_with_evidence_confidence_round_trips() {
             model: "fixture".into(),
             evidence: Some(evidence),
             fallback: None,
+            work_checkpoint: None,
         }))),
     };
 
@@ -509,6 +511,7 @@ fn a_reported_outcome_maps_onto_the_queue_outcome() {
         model: "gpt".to_string(),
         evidence: None,
         fallback: None,
+        work_checkpoint: None,
     }))
     .into();
     assert!(matches!(

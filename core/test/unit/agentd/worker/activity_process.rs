@@ -171,6 +171,7 @@ fn activity_extension_worker_child() {
                             model: "no-model".into(),
                             evidence: None,
                             fallback: None,
+                            work_checkpoint: None,
                         }))
                     }
                     Case::Stateful {
@@ -221,6 +222,7 @@ fn activity_extension_worker_child() {
                             model: "no-model".into(),
                             evidence: None,
                             fallback: None,
+                            work_checkpoint: None,
                         }))
                     }
                     Case::Denied { tool, arguments } => {

@@ -327,7 +327,9 @@ and improved failure diagnostics.
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
 are replaced together.
 
-The private Agent worker protocol is v18: bounded image assignments may use
+The private Agent worker protocol is v19: automatic Activity segments add a
+bounded optional caller-reported handoff and a Root-derived reporting hint.
+They do not carry scheduler authority or complete an Activity. Bounded image assignments may use
 32-MiB frames for up to four originals totalling 20 MiB decoded. Existing
 memory-read references and safe tool metrics still travel without result
 bodies or credentials. Mixed broker/worker versions fail closed, so restart
@@ -569,6 +571,15 @@ existing receipt string field. Older cores may reject these identifiers while
 validating stored schema-2 receipts. Keep `cos`, `clawd` and `claw-agentd`
 paired, preserve receipt data, and use a consistent pre-upgrade backup if
 rolling back to a core that predates session receipts.
+
+Activity database schema 9 adds local automatic-work controls and immutable
+reported handoff history. Existing Activities remain unchanged and do not opt
+into automation on upgrade. Keep the Agent binaries paired for worker protocol
+19. Preserve `activities.db` when recovering an interrupted upgrade; older
+schema-8 cores refuse the new database. A missing or uncertain automatic Job
+is held for inspection, never silently republished. These execution records and
+scheduler bindings are excluded from portable continuity. See
+[long-running Activity work](activity-work.md).
 
 ### App data moves into per-App directories
 

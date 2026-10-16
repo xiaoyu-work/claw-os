@@ -1181,6 +1181,35 @@ effects, or Activity completion. Missing or mismatched approval details fail
 closed without exposing capability metadata. Notification state, text, and
 acknowledgement never become consent or execution authority.
 
+### Long-running Activity work
+
+An Activity can explicitly opt into automatic progression through
+`activity.work.get/set/enabled`. Configuration is initially stopped;
+enablement settles the existing scheduler delegation and creates a managed
+Activity trigger binding. The Activity database supplies state, not authority.
+The existing heartbeat/trigger loop reconciles exact in-flight Job identity,
+checks finite limits and current lifecycle, then reserves one segment before
+publishing it to the ordinary queue. Job completion wakes that same loop;
+waiting uses a bounded next-check time or a configured, same-owner-visible
+event after its durable watermark. Idle scans never invoke a model.
+
+The worker exposes a reporting-only handoff tool only for Root-bound automatic
+segments. A handoff must be the sole tool call in its response and ends
+operational dispatch; the final allowed turn permits only that report. Root
+re-derives the Activity/owner/Job/session/generation before staging it, and
+applies it only after durable Job success and verified containment retirement.
+Generated next-step text enters the next segment as labelled untrusted data,
+not a replacement owner instruction or policy. Step labels and artifacts
+remain caller reports; owner confirmation still completes the goal.
+
+Schema 9 adds local work state and immutable bounded handoff history without
+changing Activity lifecycle or portable continuity. Missing/uncertain dispatch,
+execution failure, absent handoff and repeated reported stagnation hold for
+inspection instead of publishing replacement work or replaying effects.
+Terminal/TUI, Web and native adapters consume the same backend; none owns a
+second daemon, scheduler, execution store or authority. See
+[`docs/activity-work.md`](docs/activity-work.md).
+
 ### Activity execution limits
 
 Finite Activity policies constrain attempts, turns per attempt and expiry

@@ -75,6 +75,10 @@ audit.
 - Activity controls display canonical finite limits, configured monetary
   accounting, pending priority and capability constraints. Mutations carry an
   explicit fetched revision (or `new`) and never retry a stale CAS.
+- The same controls include automatic work. `W` prepares stopped configuration
+  or an explicit start/stop; review holds prepare a safe-next-task/review-note
+  form. `/activity-work-set` and `/activity-work-enable` retain exact revisions.
+  Starting still needs scheduler consent and does not grant App capabilities.
 - Activity Evidence aggregates authenticated object declarations, immutable
   reported receipts and object-state annotations without resolving App data.
   Operation previews stay metadata-only and file plans stay App-owned.

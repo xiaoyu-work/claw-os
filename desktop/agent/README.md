@@ -43,6 +43,16 @@ desktop/agent/
     └── assets/             #   brand PNGs baked into binary
 ```
 
+## Automatic Activity work
+
+Activities also expose the shared [automatic-work contract](../../docs/activity-work.md).
+The native card loads broker-owned state, configures initially stopped work,
+explicitly starts/stops progression, and requires a safe next task plus an
+inspection note after a review/uncertain hold. The bridge derives ownership
+locally and validates the closed DTO and exact revision acknowledgement.
+It neither runs a background loop nor restores authority. Reported handoffs
+are not verified effects, and goal completion remains explicit.
+
 ## Runtime topology
 
 ```

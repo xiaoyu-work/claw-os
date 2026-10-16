@@ -7,6 +7,7 @@ mod execution_limits;
 mod monetary_budget;
 mod object_state;
 mod scheduling_priority;
+mod automatic_work;
 
 pub use capability_policy::Message as CapabilityPolicyMessage;
 pub use continuity::Message as ContinuityMessage;
@@ -14,6 +15,7 @@ pub use execution_limits::Message as ExecutionLimitsMessage;
 pub use monetary_budget::Message as MonetaryBudgetMessage;
 pub use object_state::Message as ObjectStateMessage;
 pub use scheduling_priority::Message as SchedulingPriorityMessage;
+pub use automatic_work::Message as AutomaticWorkMessage;
 
 use cos_agent_protocol::{
     ActivityAttentionDecision, ActivityAttentionIssue, ActivityAttentionNotification,
@@ -72,6 +74,7 @@ pub enum Message {
     ExecutionLimits(ExecutionLimitsMessage),
     MonetaryBudget(MonetaryBudgetMessage),
     SchedulingPriority(SchedulingPriorityMessage),
+    AutomaticWork(AutomaticWorkMessage),
     ObjectState(ObjectStateMessage),
     Tick,
     Filter(Option<ActivityState>),
@@ -146,6 +149,15 @@ pub(crate) enum Action {
         previous: Box<ActivityMonetaryBudget>,
     },
     GetSchedulingPriority(String),
+    GetAutomaticWork(String),
+    SetAutomaticWork {
+        activity_id: String,
+        request: cos_agent_protocol::AutoWorkSetRequest,
+    },
+    EnableAutomaticWork {
+        activity_id: String,
+        request: cos_agent_protocol::AutoWorkEnabledRequest,
+    },
     SetSchedulingPriority {
         activity_id: String,
         request: ActivitySchedulingPrioritySetRequest,
@@ -195,6 +207,8 @@ pub enum Response {
     MonetaryBudgetSaved(Box<ActivityMonetaryBudget>),
     SchedulingPriority(ActivitySchedulingPriorityResponse),
     SchedulingPrioritySaved(Box<ActivitySchedulingPolicy>),
+    AutomaticWork(Box<cos_agent_protocol::ActivityAutoWorkResponse>),
+    AutomaticWorkSaved(Box<cos_agent_protocol::ActivityAutoWork>),
     ObjectState(ActivityObjectStateResponse),
     ObjectStateRecorded(Box<ObjectStateEntry>),
     Objects(ActivityObjectsResponse),
@@ -219,6 +233,7 @@ pub(crate) struct Activities {
     execution_limits: execution_limits::State,
     monetary_budget: monetary_budget::State,
     scheduling_priority: scheduling_priority::State,
+    automatic_work: automatic_work::State,
     object_state: object_state::State,
     form: Option<ActivityCreateRequest>,
     object_form: Option<ActivityObjectAttachRequest>,
@@ -255,6 +270,7 @@ impl Activities {
             && self.monetary_budget.form.is_none()
             && self.scheduling_priority.form.is_none()
             && self.capability_policy.form.is_none()
+            && !self.automatic_work.is_editing()
             && self.prompt.is_empty()
             && self.completion_note.is_empty()
             && self.error.is_none()
@@ -267,6 +283,7 @@ impl Activities {
         self.execution_limits.response = None;
         self.monetary_budget.response = None;
         self.scheduling_priority.response = None;
+        self.automatic_work.response = None;
         self.capability_policy.response = None;
         self.object_state.entries = None;
         self.operation_preview = None;
@@ -277,6 +294,7 @@ impl Activities {
             self.execution_limits.form = None;
             self.monetary_budget.form = None;
             self.scheduling_priority.form = None;
+            self.automatic_work.form = None;
             self.capability_policy.form = None;
         }
         self.invalidate();
@@ -293,6 +311,7 @@ impl Activities {
                     | Action::GetExecutionLimits(_)
                     | Action::GetMonetaryBudget(_)
                     | Action::GetSchedulingPriority(_)
+                    | Action::GetAutomaticWork(_)
                     | Action::GetCapabilityPolicy(_)
                     | Action::ObjectStateList { .. }
                     | Action::Objects(_)
@@ -442,6 +461,7 @@ impl Activities {
         self.execution_limits = execution_limits::State::default();
         self.monetary_budget = monetary_budget::State::default();
         self.scheduling_priority = scheduling_priority::State::default();
+        self.automatic_work = automatic_work::State::default();
         self.capability_policy = capability_policy::State::default();
         self.form = None;
         self.object_form = None;
@@ -456,6 +476,12 @@ impl Activities {
     }
 
     pub(crate) fn update(&mut self, message: Message, connected: bool) -> Option<Request> {
+        if self.automatic_work.is_editing() && !matches!(&message,
+            Message::AutomaticWork(_) | Message::Loaded {..} | Message::Back | Message::Open(_)
+                | Message::Show | Message::New)
+        {
+            return None;
+        }
         match message {
             Message::Loaded { generation, result } => {
                 return self.loaded(generation, result, connected);
@@ -516,6 +542,7 @@ impl Activities {
                     return self.update_scheduling_priority(message, connected);
                 }
             }
+            Message::AutomaticWork(message) => return self.update_automatic_work(message,connected),
             Message::ObjectState(message) => {
                 if self.execution_limits.form.is_none()
                     && self.monetary_budget.form.is_none()
@@ -923,6 +950,15 @@ impl Activities {
             (Action::GetSchedulingPriority(id), Response::SchedulingPriority(response)) => {
                 self.scheduling_priority_loaded(&id, response);
             }
+            (Action::GetAutomaticWork(id),Response::AutomaticWork(response)) => {
+                self.automatic_work_loaded(&id,*response);
+            }
+            (Action::SetAutomaticWork {activity_id,request},Response::AutomaticWorkSaved(work)) => {
+                return self.automatic_work_configured(&activity_id,&request,*work,connected);
+            }
+            (Action::EnableAutomaticWork {activity_id,request},Response::AutomaticWorkSaved(work)) => {
+                return self.automatic_work_enabled(&activity_id,&request,*work,connected);
+            }
             (
                 Action::SetSchedulingPriority {
                     activity_id,
@@ -970,6 +1006,9 @@ impl Activities {
                 self.detail = Some(*detail);
                 if self.refresh_objects_after_detail {
                     return self.begin(Action::Objects(id), connected);
+                }
+                if self.automatic_work.response.is_some() && !self.automatic_work.is_editing() {
+                    return self.refresh_automatic_work(connected);
                 }
             }
             (Action::Objects(id), Response::Objects(objects)) if objects.activity_id == id => {
@@ -1251,6 +1290,11 @@ impl Activities {
         available: bool,
     ) -> Element<'a, AppMessage> {
         let activity = &detail.activity;
+        let automatic_work_available = available && self.object_state.form.is_none()
+            && self.execution_limits.form.is_none() && self.monetary_budget.form.is_none()
+            && self.scheduling_priority.form.is_none() && self.capability_policy.form.is_none()
+            && !self.continuity.is_editing();
+        let available = available && !self.automatic_work.is_editing();
         let capability_policy_available = available
             && self.object_state.form.is_none()
             && self.execution_limits.form.is_none()
@@ -1375,6 +1419,7 @@ impl Activities {
             .push(self.execution_limits_view(detail, execution_limits_available))
             .push(self.monetary_budget_view(detail, monetary_budget_available))
             .push(self.scheduling_priority_view(detail, scheduling_priority_available))
+            .push(self.automatic_work_view(detail, automatic_work_available))
             .push(self.capability_policy_view(detail, capability_policy_available))
             .push(text(fl!("activity-work")).size(18.0))
             .push(text(fl!("activity-work-hint")).size(12.0));

@@ -172,6 +172,9 @@ pub struct Job {
     pub after_task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
+    /// Root-created automatic-work correlation, never accepted in task.submit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_work_generation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_reservation: Option<crate::activities::ExecutionReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,6 +319,7 @@ impl Job {
             session_id,
             after_task_id: None,
             activity_id: None,
+            activity_work_generation: None,
             execution_reservation: None,
             max_turns,
             requested_model: None,
@@ -1146,6 +1150,14 @@ impl Store {
                 }
                 None => None,
             };
+            if job.activity_work_generation.is_some() {
+                if let Err(error) = crate::triggers::work::admit_job(&job) {
+                    self.fail_waiting_job(
+                        &src, &id, job, error, "clawd.task.activity-work-blocked",
+                    )?;
+                    continue;
+                }
+            }
             if let Some(activity) = &activity {
                 let attempt_id = uuid::Uuid::new_v4().to_string();
                 let reserved = crate::activities::open_default().and_then(|service| {
@@ -2681,6 +2693,7 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.workspace == right.workspace
         && left.session_id == right.session_id
         && left.after_task_id == right.after_task_id
+        && left.activity_work_generation == right.activity_work_generation
         && left.max_turns == right.max_turns
         && left.requested_model == right.requested_model
         && left.requested_reasoning_effort == right.requested_reasoning_effort
@@ -3929,6 +3942,19 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
         Arc<dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController>,
     >,
 ) -> FinishOutcome {
+    execute_job_with_hooks_budget_and_work(
+        job, stream_sink, progress_sink, hooks, monetary_budget, None,
+    ).await
+}
+
+pub(crate) async fn execute_job_with_hooks_budget_and_work(
+    job: JobExecution,
+    stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
+    progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+    hooks: crate::agent::runtime::hooks::HookRegistry,
+    monetary_budget: Option<Arc<dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController>>,
+    work: Option<Arc<crate::agent::tools::activity_work::WorkCheckpointSlot>>,
+) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
     if let Err(error) = crate::agentd::guard::ensure_agent_runtime_allowed("agent job execution") {
@@ -3970,6 +3996,9 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
         runtime_deps = runtime_deps.with_monetary_budget(controller);
     }
     let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
+    if let Some(slot) = work {
+        tools.set_activity_work(slot);
+    }
     tools.set_guardrails(guardrails);
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     let _mcp_handles = if job.plan_only {

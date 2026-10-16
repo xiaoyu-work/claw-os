@@ -638,6 +638,16 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
         )));
     }
 
+    if let Some(slot) = tools.activity_work() {
+        if let Some(checkpoint) = slot.checkpoint().map_err(super::loop_::AgentError::Internal)? {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text { text: checkpoint.summary.clone() }],
+            });
+            return Ok(TurnReport { outcome: TurnOutcome::Final(checkpoint.summary), usage });
+        }
+    }
+
     // If the provider explicitly said Stop despite producing tool_use blocks,
     // honour that — but typical providers signal `ToolUse` here.
     let outcome = match response.finish_reason {
@@ -1099,7 +1109,20 @@ async fn dispatch_calls(
     check_interrupted(interrupt)?;
     let resolved = tool_calls
         .iter()
-        .map(|call| tools.resolve_model_call(exposure, call))
+        .map(|call| {
+            if tool_calls.len() > 1
+                && call.name == crate::agent::tools::activity_work::CHECKPOINT_TOOL
+            {
+                ResolvedToolCall {
+                    call: call.clone(),
+                    kind: ResolvedToolKind::Rejected(
+                        "An Activity handoff must be the only tool call in its response.".into(),
+                    ),
+                }
+            } else {
+                tools.resolve_model_call(exposure, call)
+            }
+        })
         .collect::<Vec<_>>();
 
     // Partition into parallel-safe vs serial groups, preserving the

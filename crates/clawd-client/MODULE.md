@@ -31,6 +31,10 @@ The inventory also includes `activity.monetary_budget.get/set/enabled` and
 only expose existing broker services; the client owns neither Activity identity
 nor monetary/scheduling policy state.
 
+`activity.work.get/set/enabled` also names the shared automatic-work controls.
+The client creates no scheduler delegation, execution loop or progress store;
+Root settles enablement through the existing scheduler authority.
+
 It also includes `activity.continuity.export/import`. The command enum only
 names the broker routes; exact portable-document validation and native
 presentation live in `desktop/agent/protocol` and `desktop/agent/ui`. The

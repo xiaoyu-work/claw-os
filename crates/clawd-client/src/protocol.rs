@@ -50,6 +50,12 @@ pub enum Command {
     ActivitySchedulingPolicyGet,
     #[serde(rename = "activity.scheduling_policy.set")]
     ActivitySchedulingPolicySet,
+    #[serde(rename = "activity.work.get")]
+    ActivityWorkGet,
+    #[serde(rename = "activity.work.set")]
+    ActivityWorkSet,
+    #[serde(rename = "activity.work.enabled")]
+    ActivityWorkEnabled,
     #[serde(rename = "activity.capability_policy.get")]
     ActivityCapabilityPolicyGet,
     #[serde(rename = "activity.capability_policy.set")]
@@ -150,7 +156,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 60] = [
+    pub const ALL: [Self; 63] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -168,6 +174,9 @@ impl Command {
         Self::ActivityMonetaryBudgetEnabled,
         Self::ActivitySchedulingPolicyGet,
         Self::ActivitySchedulingPolicySet,
+        Self::ActivityWorkGet,
+        Self::ActivityWorkSet,
+        Self::ActivityWorkEnabled,
         Self::ActivityCapabilityPolicyGet,
         Self::ActivityCapabilityPolicySet,
         Self::ActivityCapabilityPolicyEnabled,
@@ -232,6 +241,9 @@ impl Command {
             Self::ActivityMonetaryBudgetEnabled => "activity.monetary_budget.enabled",
             Self::ActivitySchedulingPolicyGet => "activity.scheduling_policy.get",
             Self::ActivitySchedulingPolicySet => "activity.scheduling_policy.set",
+            Self::ActivityWorkGet => "activity.work.get",
+            Self::ActivityWorkSet => "activity.work.set",
+            Self::ActivityWorkEnabled => "activity.work.enabled",
             Self::ActivityCapabilityPolicyGet => "activity.capability_policy.get",
             Self::ActivityCapabilityPolicySet => "activity.capability_policy.set",
             Self::ActivityCapabilityPolicyEnabled => "activity.capability_policy.enabled",

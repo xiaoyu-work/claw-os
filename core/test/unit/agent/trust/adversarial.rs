@@ -73,6 +73,15 @@ fn mcp_tool_result_injection_is_contained() {
 }
 
 #[test]
+fn activity_work_handoff_cannot_become_policy_or_escape_its_fence() {
+    let rendered = crate::triggers::work::handoff_segment(ESCALATION,None).unwrap()
+        .render_fenced(crate::agent::trust::envelope::process_seal());
+    assert_contained(&rendered, "activity_work_checkpoint");
+    assert_eq!(SourceKind::ActivityWorkCheckpoint.class(), TrustClass::UntrustedExternalContent);
+    assert_eq!(SourceKind::ActivityWorkCheckpoint.projection(), Projection::UserChannelEnvelope);
+}
+
+#[test]
 fn mcp_tool_description_injection_stays_extension_metadata() {
     // A remote server's *description* is metadata, not policy, and it
     // reaches the model as a tool definition, so it is bounded and

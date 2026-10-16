@@ -490,6 +490,13 @@ pub(super) fn portable(
     Ok(load_state(conn, activity)?.map(|state| (state.policy.enabled, state.policy.limits)))
 }
 
+pub(super) fn work_policy(
+    conn: &Connection,
+    activity: &Activity,
+) -> Result<Option<ActivityExecutionLimits>, ActivityError> {
+    Ok(load_state(conn, activity)?.map(|state| state.policy))
+}
+
 struct PolicyRow {
     activity_id: String,
     owner_uid: i64,

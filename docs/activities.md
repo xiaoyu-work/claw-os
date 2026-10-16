@@ -270,6 +270,12 @@ worker controls.
 
 ## Event-driven work
 
+For an explicitly enabled goal that advances across multiple bounded Jobs,
+see [long-running Activity work](activity-work.md). It reuses this scheduler,
+persists structured handoffs, waits without holding a worker and stops for
+inspection rather than replaying uncertain effects. `active` alone does not
+enable automatic progression.
+
 An owner can create an event trigger associated with an Activity. Configure
 enabled, unexpired [execution limits](activity-execution-limits.md) first, then
 select an actual context-event producer and event type:

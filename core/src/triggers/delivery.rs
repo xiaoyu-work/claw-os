@@ -419,6 +419,7 @@ pub(super) fn tick() -> Result<Value, String> {
         Err(error) => return Err(format!("read context event log: {error}")),
     };
     let lines: Vec<&str> = content.lines().collect();
+    scan_automatic_work(lines.len() as u64,&mut skipped_events);
     if cursor.next_line > lines.len() {
         cursor.next_line = lines.len();
         cursor.delivered_rules.clear();
@@ -523,6 +524,19 @@ pub(super) fn tick() -> Result<Value, String> {
                         .push(json!({ "rule": rule.id, "status": "blocked", "error": error }));
                     continue;
                 }
+                if rule.activity_work {
+                    if !crate::clawd::context_events::event_visible_to(&event,rule.owner_uid) {
+                        continue;
+                    }
+                    if let Err(error) = work::on_event(rule,line_index as u64) {
+                        activity::record(rule,TriggerDeliveryStatus::Blocked,None,None,&error)?;
+                        unavailable_rules.insert(rule.id.clone());
+                        skipped_events.push(json!({"rule":rule.id,"status":"blocked","error":error}));
+                    }
+                    consume(&mut cursor, &rule.id, Some(line_index));
+                    write_cursor(&cursor)?;
+                    continue;
+                }
                 if rule.activity_id.is_some() {
                     let outcome = dispatch_activity(
                         &mut cursor,
@@ -571,6 +585,7 @@ pub(super) fn tick() -> Result<Value, String> {
         cursor.delivered_rules.clear();
         write_cursor(&cursor)?;
     }
+    scan_automatic_work(lines.len() as u64,&mut skipped_events);
     Ok(json!({
         "processed": cursor.next_line.saturating_sub(started_at),
         "cursor": cursor.next_line,
@@ -578,6 +593,13 @@ pub(super) fn tick() -> Result<Value, String> {
         "skipped": skipped_events,
         "pending": cursor.pending.len(),
     }))
+}
+
+fn scan_automatic_work(event_after: u64,diagnostics: &mut Vec<Value>) {
+    if let Err(error)=work::tick_all(event_after) {
+        tracing::warn!(%error,"automatic Activity work is unavailable; unrelated triggers remain runnable");
+        diagnostics.push(json!({"activity_work":"unavailable","status":"blocked","error":error}));
+    }
 }
 
 #[cfg(test)]

@@ -728,6 +728,9 @@ async fn supervise(
     );
     let outcome = apply_containment_cleanup(outcome, extension_cleanup);
     let resulting_status = finish_task_outcome(&store, &job, outcome);
+    if job.activity_work_generation.is_some() {
+        crate::clawd::heartbeat::wake_activity_work();
+    }
     if resulting_status != Some(crate::agent::service::JobStatus::WaitingApproval) {
         if let Some(session_id) = job.session_id.as_deref() {
             if let Err(error) = crate::approvals::invalidate_pending_for_execution(
@@ -1227,6 +1230,7 @@ async fn pump(
             record_activity_receipts: job.activity_id.is_some(),
             activity_capability_checks: job.activity_id.is_some(),
             activity_monetary_checks: job.activity_id.is_some(),
+            activity_work: job.activity_work_generation.is_some(),
         },
         consent_context: lease.consent_context,
         session,
@@ -1595,6 +1599,15 @@ async fn pump(
                                     return TaskOutcome::Failed(
                                         "worker reported more turns than its Activity reservation permits".to_string(),
                                     );
+                                }
+                            }
+                            if let WorkerOutcome::Ok(run) = outcome.as_ref() {
+                                if let Some(checkpoint) = &run.work_checkpoint {
+                                    if let Err(error) = crate::triggers::work::stage_checkpoint(job, checkpoint.clone()) {
+                                        return TaskOutcome::Indeterminate(format!(
+                                            "could not persist the exact Activity work handoff: {error}"
+                                        ));
+                                    }
                                 }
                             }
                             return TaskOutcome::Reported(outcome);

@@ -2,6 +2,17 @@
 
 ## 0.2.0
 
+### Long-running Activity work
+
+- Added explicit owner-controlled automatic progression through the existing
+  scheduler, Job queue and worker, with initially stopped configuration.
+- Activity database schema 9 stores exact dispatch identity, reported handoffs,
+  waiting state and immutable bounded history. No automatic work or authority
+  is exported by continuity.
+- Private worker protocol 19 carries a reporting hint and bounded handoff;
+  paired broker/worker upgrades remain required. Public `ActivityService` work
+  methods have compatibility defaults; ordinary Job execution is unchanged.
+
 ### Activity continuity
 
 - Added strict `claw_os.activity_continuity` schema 1 export/import through

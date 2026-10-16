@@ -153,6 +153,30 @@ pub struct ActivityRun {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ActivityWorkGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityWorkSet {
+    pub id: Token,
+    pub expected_revision: Option<u64>,
+    pub work: crate::activities::ActivityWorkDraft,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityWorkEnabled {
+    pub id: Token,
+    pub expected_revision: u64,
+    pub enabled: bool,
+    pub next_task: Option<Text<8192>>,
+    pub review_note: Option<Text<2048>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActivityContinuityExport {
     pub id: Token,
 }

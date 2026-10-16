@@ -1,5 +1,7 @@
 //! Authenticated HTTP presentation of the shared, owner-scoped Activity broker.
 
+pub mod work;
+
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Extension, Path, Query};
 use axum::http::StatusCode;

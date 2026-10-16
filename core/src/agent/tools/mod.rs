@@ -6,6 +6,7 @@
 //! adds the cos-primitive proxies (fs/exec/proc/net/web/etc.).
 
 pub mod app_gateway;
+pub(crate) mod activity_work;
 pub mod builtin;
 pub mod clarify;
 pub mod cos_apps_session;

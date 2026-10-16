@@ -4,6 +4,7 @@ mod execution_limits;
 mod monetary_budget;
 mod object_state;
 mod scheduling_policy;
+mod work;
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -167,6 +168,10 @@ impl SqliteActivityService {
             continuity::migrate(&tx)?;
         }
         continuity::validate_schema(&tx)?;
+        if version < 9 {
+            tx.execute_batch(work::MIGRATE_TO_V9)?;
+        }
+        work::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -199,6 +204,23 @@ impl SqliteActivityService {
 }
 
 impl ActivityService for SqliteActivityService {
+    fn work(&self, owner_uid: u32, activity_id: &str) -> Result<Option<super::ActivityWork>, ActivityError> {
+        work::get(self, owner_uid, activity_id)
+    }
+
+    fn change_work(
+        &self, owner_uid: u32, activity_id: &str, expected_revision: Option<u64>,
+        change: super::ActivityWorkChange,
+    ) -> Result<super::ActivityWork, ActivityError> {
+        work::change(self, owner_uid, activity_id, expected_revision, change)
+    }
+
+    fn work_history(
+        &self, owner_uid: u32, activity_id: &str, limit: usize,
+    ) -> Result<Vec<super::ActivityWorkRecord>, ActivityError> {
+        work::history(self, owner_uid, activity_id, limit)
+    }
+
     fn create(&self, owner_uid: u32, draft: ActivityDraft) -> Result<Activity, ActivityError> {
         let draft = draft.normalized()?;
         let resources_json = serde_json::to_string(&draft.resources)?;
@@ -711,7 +733,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1..=7 => {}
+        1..=8 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

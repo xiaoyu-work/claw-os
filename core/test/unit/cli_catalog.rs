@@ -44,7 +44,7 @@ fn activity_commands_are_discoverable_without_model_authority() {
         command_names("activity").unwrap(),
         vec![
             "create", "list", "show", "attention", "update", "run", "pause", "resume", "complete",
-            "cancel", "objects", "attach-object", "receipts", "record-receipt", "object-state",
+            "cancel", "export", "import", "objects", "attach-object", "receipts", "record-receipt", "object-state",
             "observe", "relate", "retract-object-state", "record-object-state", "execution-limits",
             "set-execution-limits", "enable-execution-limits", "disable-execution-limits",
             "monetary-budget", "set-monetary-budget", "enable-monetary-budget",
@@ -53,6 +53,10 @@ fn activity_commands_are_discoverable_without_model_authority() {
             "disable-capability-policy",
             "priority",
             "set-priority",
+            "work",
+            "set-work",
+            "start-work",
+            "stop-work",
         ]
     );
     for command in command_names("activity").unwrap() {

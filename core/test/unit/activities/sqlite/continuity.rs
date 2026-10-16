@@ -282,7 +282,7 @@ fn migrate_legacy_document(
         service.create(owner_uid, semantic_draft()).unwrap().id
     };
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE activity_continuity;")
+    conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE activity_work_history; DROP TABLE activity_work; DROP TABLE activity_continuity;")
         .unwrap();
     conn.execute(
         "UPDATE activities SET id = ?1 WHERE owner_uid = ?2 AND id = ?3",
@@ -329,7 +329,7 @@ fn schema_seven_migration_assigns_stable_deterministic_identities() {
     let mut expected = None;
     for _ in 0..2 {
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("DROP TABLE activity_continuity; PRAGMA user_version = 7;")
+        conn.execute_batch("DROP TABLE activity_work_history; DROP TABLE activity_work; DROP TABLE activity_continuity; PRAGMA user_version = 7;")
             .unwrap();
         drop(conn);
         let service = SqliteActivityService::open(&path).unwrap();
@@ -364,7 +364,7 @@ fn corrupt_schema_seven_rows_roll_back_identity_migration_and_version() {
         let activity = service.create(77, semantic_draft()).unwrap();
         drop(service);
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE activity_continuity;")
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE activity_work_history; DROP TABLE activity_work; DROP TABLE activity_continuity;")
             .unwrap();
         conn.execute(
             "UPDATE activities SET id = 'not-a-canonical-uuid' WHERE id = ?1",

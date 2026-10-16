@@ -26,11 +26,13 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::caps::{Cap, CapSet, Role, Scope, Verb};
+use crate::activities::ActivityService;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod activity;
 mod delivery;
+pub(crate) mod work;
 
 pub(crate) use activity::validate_activity_trigger;
 pub use activity::{TriggerDeliveryDiagnostic, TriggerDeliveryStatus};
@@ -60,6 +62,8 @@ pub struct TriggerRule {
     pub max_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub activity_work: bool,
     /// Root-generated incarnation, changed when the owner re-arms a rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<String>,
@@ -124,6 +128,7 @@ fn ensure_seeded() -> Result<(), String> {
             prompt: LOW_MEMORY_PROMPT.into(),
             max_turns: Some(8),
             activity_id: None,
+            activity_work: false,
             generation: None,
             last_delivery: None,
             last_fired_ms: None,
@@ -143,6 +148,7 @@ fn ensure_seeded() -> Result<(), String> {
             prompt: HIGH_LOAD_PROMPT.into(),
             max_turns: Some(8),
             activity_id: None,
+            activity_work: false,
             generation: None,
             last_delivery: None,
             last_fired_ms: None,
@@ -290,6 +296,10 @@ fn validate_arguments(command: &str, args: &[String]) -> Result<(), String> {
             "contains",
             "max-turns",
             "activity",
+            "activity-work",
+            "work-revision",
+            "work-next-task",
+            "work-review-note",
         ],
         "list" => &["activity"],
         "remove" | "rm" | "enable" | "disable" | "run" => &["id"],
@@ -328,6 +338,16 @@ fn validate_arguments(command: &str, args: &[String]) -> Result<(), String> {
                         .filter(|turns| *turns > 0)
                         .ok_or_else(|| "--max-turns must be a positive integer".to_string())?;
                 }
+                "activity-work" if value != "true" => {
+                    return Err("--activity-work requires true".into());
+                }
+                "work-revision" => {
+                    value.parse::<u64>().ok().filter(|revision| *revision > 0)
+                        .ok_or("--work-revision requires a positive revision")?;
+                }
+                "work-next-task" | "work-review-note" if value.trim().is_empty() => {
+                    return Err(format!("{arg} must not be empty"));
+                }
                 "prompt" if value.trim().is_empty() => {
                     return Err("--prompt must not be empty".to_string());
                 }
@@ -347,6 +367,14 @@ fn validate_arguments(command: &str, args: &[String]) -> Result<(), String> {
     }
     if command == "add" && (!seen.contains("id") || !seen.contains("prompt")) {
         return Err("usage: cos triggers add --id <id> --prompt <text> [--source S] [--event-type T] [--contains STR] [--max-turns N] [--activity UUID]".to_string());
+    }
+    if seen.iter().any(|name| name.starts_with("work-"))
+        && !seen.contains("activity-work")
+    {
+        return Err("work flags require --activity-work true".into());
+    }
+    if seen.contains("activity-work") && (!seen.contains("activity") || !seen.contains("work-revision")) {
+        return Err("automatic work requires --activity and --work-revision".into());
     }
     if accepts_id && positional.is_none() && !seen.contains("id") {
         return Err(format!("usage: cos triggers {command} <id>"));
@@ -376,6 +404,9 @@ pub(crate) fn preflight_activity_command(
             if command == "add" {
                 validate_activity_trigger(owner_uid, &activity_id)?;
                 delivery::check_activity_progress()?;
+                if flag(args, "activity-work").is_some() {
+                    work::preflight_enable(owner_uid, &activity_id, args)?;
+                }
             }
         }
     } else if matches!(command, "enable" | "run") {
@@ -398,6 +429,9 @@ pub(crate) fn preflight_activity_command(
         };
         if command != "enable" || !is_unclaimed_seed(&rule) {
             require_rule_owner(&rule, owner_uid)?;
+        }
+        if rule.activity_work {
+            return Err("use Activity work controls to start or resume automatic work".into());
         }
         if command == "run" {
             activity::require_not_held(&rule)?;
@@ -779,6 +813,19 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
     let activity_id = activity_flag(args)?
         .map(|id| validate_activity_trigger(owner.uid, &id))
         .transpose()?;
+    let activity_work = flag(args, "activity-work").is_some();
+    if activity_work {
+        let activity_id = activity_id.as_deref().ok_or("--activity-work requires an Activity")?;
+        if id != work::rule_id(activity_id) {
+            return Err("automatic work requires the Activity-owned rule identifier".into());
+        }
+        let state = crate::activities::open_default().map_err(|error| error.to_string())?
+            .work(owner.uid, activity_id).map_err(|error| error.to_string())?
+            .ok_or("configure Activity work first")?;
+        if prompt != state.config.task {
+            return Err("automatic work prompt must match the configured owner task".into());
+        }
+    }
     if activity_id.is_some() {
         delivery::check_activity_progress()?;
     }
@@ -796,6 +843,7 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         prompt,
         max_turns,
         activity_id,
+        activity_work,
         generation: Some(uuid::Uuid::new_v4().to_string()),
         last_delivery: None,
         last_fired_ms: None,
@@ -809,6 +857,30 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
         if let Some(activity_id) = rule.activity_id.as_deref() {
             validate_activity_trigger(owner.uid, activity_id)?;
             delivery::initialize_activity_progress()?;
+        }
+        if rule.activity_work {
+            let activity_id = rule.activity_id.as_deref().ok_or("work Activity is missing")?;
+            work::preflight_enable(owner.uid, activity_id, args)?;
+            if let Some(existing) = work::binding(owner.uid, activity_id)? {
+                update_rule(&existing.id, |current| {
+                    require_rule_owner(&current, owner.uid)?;
+                    if !current.activity_work {
+                        return Err("existing rule is not automatic work".into());
+                    }
+                    Ok(rule.clone())
+                })?;
+            } else {
+                create_rule(&rule)?;
+            }
+            let expected_revision = flag(args, "work-revision").ok_or("work revision is missing")?
+                .parse::<u64>().map_err(|_| "invalid work revision")?;
+            let state = crate::activities::open_default().map_err(|error| error.to_string())?
+                .change_work(owner.uid, activity_id, Some(expected_revision),
+                    crate::activities::ActivityWorkChange::Enable {
+                        generation:rule.generation.clone().ok_or("work generation is missing")?,
+                        next_task:flag(args,"work-next-task"),review_note:flag(args,"work-review-note"),
+                    }).map_err(|error| error.to_string())?;
+            return Ok(json!({"ok":true,"id":id,"work":state}));
         }
         create_rule(&rule)?;
         Ok(json!({ "ok": true, "id": id, "rule": rule }))
@@ -927,6 +999,9 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
             delivery::check_activity_progress()?;
         }
         crate::caps::require(Verb::AGENT_SPAWN, Scope::Wild).map_err(|denial| denial.summary())?;
+        if rule.activity_work {
+            return Err("use Activity work controls to resume automatic work".into());
+        }
         if rule.activity_id.is_some() {
             return delivery::manual(&rule);
         }

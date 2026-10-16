@@ -222,6 +222,7 @@ pub(super) struct ActivityControls {
     pub monetary_budget: Option<Value>,
     pub scheduling_policy: Option<Value>,
     pub capability_policy: Option<Value>,
+    pub work: Option<Value>,
 }
 
 impl ActivityControls {
@@ -259,6 +260,9 @@ impl ActivityControls {
     pub fn capability_enabled(&self) -> Option<bool> {
         policy_enabled(&self.capability_policy)
     }
+
+    pub fn work_revision(&self) -> Option<u64> { policy_revision(&self.work) }
+    pub fn work_enabled(&self) -> Option<bool> { policy_enabled(&self.work) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,6 +270,7 @@ pub(super) enum ActivityControlPolicy {
     ExecutionLimits,
     MonetaryBudget,
     CapabilityPolicy,
+    AutomaticWork,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -555,6 +560,12 @@ pub(super) trait Backend: Send + Sync {
         expected_revision: Option<u64>,
         priority: &str,
     ) -> Result<ActivityControls, String>;
+    async fn set_activity_work_enabled(
+        &self, _id: &str, _revision: u64, _enabled: bool,
+        _next_task: Option<String>, _review_note: Option<String>,
+    ) -> Result<ActivityControls, String> {
+        Err("Activity automatic work controls are unavailable".into())
+    }
     async fn activity_evidence(&self, id: &str) -> Result<ActivityEvidence, String>;
     async fn activity_review(&self, id: &str) -> Result<ActivityReview, String>;
     async fn activity_operation_preview(
@@ -1119,9 +1130,18 @@ impl Backend for BrokerBackend {
         let capability = self
             .call(Command::ActivityCapabilityPolicyGet, json!({ "id": id }))
             .await?;
-        for response in [&execution, &monetary, &scheduling, &capability] {
+        let work = self.call(Command::ActivityWorkGet,json!({"id":id})).await?;
+        for response in [&execution, &monetary, &scheduling, &capability, &work] {
             if response.get("activity_id").and_then(Value::as_str) != Some(id) {
                 return Err("Claw returned controls for another Activity".into());
+            }
+            if let Some(state) = work.get("work").filter(|state|!state.is_null()) {
+                let state: crate::activities::ActivityWork = serde_json::from_value(state.clone())
+                    .map_err(|error|format!("invalid Activity work state: {error}"))?;
+                state.validate().map_err(|error|error.to_string())?;
+                if state.owner_uid != self.owner_uid || state.activity_id != id {
+                    return Err("Activity work owner or identity differs".into());
+                }
             }
         }
         Ok(ActivityControls {
@@ -1130,6 +1150,7 @@ impl Backend for BrokerBackend {
             monetary_budget: optional_object(&monetary, "monetary_budget")?,
             scheduling_policy: optional_object(&scheduling, "scheduling_policy")?,
             capability_policy: optional_object(&capability, "capability_policy")?,
+            work: optional_object(&work,"work")?,
         })
     }
 
@@ -1149,6 +1170,7 @@ impl Backend for BrokerBackend {
             ActivityControlPolicy::CapabilityPolicy => {
                 (Command::ActivityCapabilityPolicySet, "policy")
             }
+            ActivityControlPolicy::AutomaticWork => (Command::ActivityWorkSet,"work"),
         };
         let mut params = json!({ "id": id });
         params[field] = draft;
@@ -1172,6 +1194,7 @@ impl Backend for BrokerBackend {
             ActivityControlPolicy::ExecutionLimits => Command::ActivityExecutionLimitsEnabled,
             ActivityControlPolicy::MonetaryBudget => Command::ActivityMonetaryBudgetEnabled,
             ActivityControlPolicy::CapabilityPolicy => Command::ActivityCapabilityPolicyEnabled,
+            ActivityControlPolicy::AutomaticWork => Command::ActivityWorkEnabled,
         };
         let value = self
             .call(
@@ -1184,6 +1207,27 @@ impl Backend for BrokerBackend {
             )
             .await?;
         verify_activity_policy_ack(&value, id)?;
+        self.activity_controls(id).await
+    }
+
+    async fn set_activity_work_enabled(
+        &self, id: &str, revision: u64, enabled: bool,
+        next_task: Option<String>, review_note: Option<String>,
+    ) -> Result<ActivityControls,String> {
+        validate_token(id,"Activity id")?;
+        let value = self.call(Command::ActivityWorkEnabled,json!({
+            "id":id,"expected_revision":revision,"enabled":enabled,
+            "next_task":next_task,"review_note":review_note,
+        })).await?;
+        let state: crate::activities::ActivityWork = serde_json::from_value(value)
+            .map_err(|error|format!("invalid work acknowledgement: {error}"))?;
+        state.validate().map_err(|error|error.to_string())?;
+        if state.activity_id != id || state.owner_uid != self.owner_uid
+            || state.revision != revision.checked_add(1).ok_or("work revision exhausted")?
+            || state.enabled != enabled
+        {
+            return Err("Activity work acknowledgement differs".into());
+        }
         self.activity_controls(id).await
     }
 

@@ -75,6 +75,9 @@ ownership, and work submission. The authenticated adapters are:
 | `POST /api/activities` | `activity.create` |
 | `GET /api/activities/{id}?limit=100` | `activity.get` |
 | `GET /api/activities/{id}/attention?limit=50` | `activity.attention` |
+| `GET /api/activities/{id}/work` | `activity.work.get` |
+| `POST /api/activities/{id}/work` | `activity.work.set` |
+| `POST /api/activities/{id}/work/enabled` | `activity.work.enabled` |
 | `POST /api/activities/{id}/update` | `activity.update` |
 | `POST /api/activities/{id}/transition` | `activity.transition` |
 | `POST /api/activities/{id}/run` | `activity.run` |
@@ -121,6 +124,16 @@ without undoing or stopping current effects; use Tasks to cancel a job.
 Completed/cancelled goals must be explicitly reopened before editing or running.
 Boundaries are planning text, not enforced permissions; ordinary capabilities
 and approval checks remain in force.
+
+### Automatic work
+
+The **Automatic work** card configures initially stopped bounded progression,
+explicit start/stop and reviewed resumption through the shared broker. It
+keeps unsaved drafts at their displayed revision, uses decimal-string
+revisions, and never retries stale or ambiguous writes. It displays reports,
+not verified effects or goal completion; stopping future segments does not
+cancel a current Job. Scheduler permission is decided through the existing
+approval surface. See [long-running Activity work](../../../../../docs/activity-work.md).
 
 ### App object references
 

@@ -15,6 +15,7 @@ fn rule(source: Option<&str>, etype: Option<&str>, contains: Option<&str>) -> Tr
         prompt: "do it".into(),
         max_turns: None,
         activity_id: None,
+        activity_work: false,
         generation: None,
         last_delivery: None,
         last_fired_ms: None,

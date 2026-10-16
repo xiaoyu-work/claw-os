@@ -2111,7 +2111,17 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         project_context,
         recorder,
     )?;
-    let system = projection.system_text();
+    let mut system = projection.system_text();
+    let activity_work = tools.activity_work();
+    if activity_work.is_some() {
+        let instructions = crate::agent::tools::activity_work::WORK_INSTRUCTIONS;
+        if let Some((db, sid)) = recorder {
+            db.record_injected(sid, "activity_work_policy", instructions)
+                .map_err(|error| AgentError::MemoryIntegrity(error.to_string()))?;
+        }
+        system.push_str("\n\n");
+        system.push_str(instructions);
+    }
 
     let budget = crate::agent::context::budget::ContextBudget::from_config(cfg)?;
     let llm_tools = if cfg.progressive_tools_enabled {
@@ -2119,6 +2129,13 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     } else {
         tools.direct_llm_tools_for(exposure)
     };
+    if activity_work.is_some() && !llm_tools.iter().any(|tool|
+        tool.name == crate::agent::tools::activity_work::CHECKPOINT_TOOL)
+    {
+        return Err(AgentError::Internal(
+            "Automatic Activity work requires cos_activity_checkpoint to be allowed by the configured tool policy.".into()
+        ));
+    }
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     // Register this session in the global interrupt registry. When the
@@ -2148,7 +2165,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
             transient_context,
             tools,
             exposure: Some(exposure),
-            llm_tools: if cfg.max_turns <= 1 { &[] } else { &llm_tools },
+            llm_tools: if cfg.max_turns <= 1 && activity_work.is_none() { &[] } else { &llm_tools },
             redactor: redactor.as_ref(),
         },
     )?;
@@ -2201,9 +2218,29 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     let turn_limit = cfg.max_turns.max(1);
     for turn in 1..=turn_limit {
         let force_finalize = turn == turn_limit;
+        let finalization_prompt = if activity_work.is_some() {
+            crate::agent::tools::activity_work::WORK_FINALIZATION
+        } else {
+            TURN_LIMIT_FINALIZATION_PROMPT
+        };
         let finalization_system =
-            force_finalize.then(|| format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}"));
+            force_finalize.then(|| format!("{system}\n\n{finalization_prompt}"));
         let turn_system = finalization_system.as_deref().unwrap_or(&system);
+        let closing_tools = if force_finalize && activity_work.is_some() {
+            if let Some(slot) = activity_work {
+                slot.begin_finalization();
+            }
+            llm_tools.iter().filter(|tool|
+                tool.name == crate::agent::tools::activity_work::CHECKPOINT_TOOL
+            ).cloned().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let turn_tools = if force_finalize && activity_work.is_some() {
+            &closing_tools
+        } else {
+            &llm_tools
+        };
 
         if interrupt_handle.check() {
             return Err(AgentError::Interrupted(
@@ -2230,7 +2267,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                 if let Err(e) = db.record_injected(
                     sid,
                     "turn_limit_finalization",
-                    TURN_LIMIT_FINALIZATION_PROMPT,
+                    finalization_prompt,
                 ) {
                     tracing::warn!("memory: failed to record turn-limit finalization: {e}");
                 }
@@ -2288,10 +2325,10 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
             "model request after context selection/compression",
             turn_system,
             &messages,
-            if force_finalize { &[] } else { &llm_tools },
+            if force_finalize && activity_work.is_none() { &[] } else { turn_tools },
         )?;
         let len_before = messages.len();
-        let outcome_result = match (&output, force_finalize) {
+        let outcome_result = match (&output, force_finalize && activity_work.is_none()) {
             (LifecycleOutput::Buffered, true) => {
                 super::turn::run_final_turn_interruptible_with_reasoning(
                     provider.clone(),
@@ -2321,7 +2358,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     &mut messages,
                     tools,
                     exposure,
-                    &llm_tools,
+                    turn_tools,
                     cfg.max_tokens,
                     cfg.temperature,
                     cfg.reasoning_effort.as_deref(),
@@ -2363,7 +2400,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     &mut messages,
                     tools,
                     exposure,
-                    &llm_tools,
+                    turn_tools,
                     cfg.max_tokens,
                     cfg.temperature,
                     cfg.reasoning_effort.as_deref(),
@@ -2436,7 +2473,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                 if matches!(&e, AgentError::Interrupted(_)) {
                     return Err(e);
                 }
-                if force_finalize {
+                if force_finalize && activity_work.is_none() {
                     tracing::warn!("turn-limit finalization failed; using fallback: {e}");
                     let answer = append_turn_limit_fallback(&mut messages);
                     output.emit_fallback(&answer);

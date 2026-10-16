@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::Engine;
-use serde_json::Value;
+use serde_json::{json, Value};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -131,6 +131,10 @@ pub(super) enum Command {
         id: String,
         priority: String,
         expected_revision: Option<u64>,
+    },
+    ActivityWorkEnabled {
+        id: String, revision: u64, enabled: bool,
+        next_task: Option<String>, review_note: Option<String>,
     },
     ActivityEvidence(String),
     ActivityPreview {
@@ -274,6 +278,48 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "activity-priority" => {
             parse_activity_priority(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
         }
+        "activity-work-set" => {
+            parse_activity_control_set(rest,ActivityControlPolicy::AutomaticWork)
+                .unwrap_or_else(||Command::Unknown(value.to_string()))
+        }
+        "activity-work-enable" => {
+            let parsed = (|| {
+                let (head,options) = rest.split_once('|').map_or((rest,None),|(head,tail)|(head,Some(tail)));
+                let mut parts = head.split_whitespace();
+                let id = parts.next()?.to_string();
+                crate::activities::validate_id(&id).ok()?;
+                let enabled = match parts.next()? { "on"=>true,"off"=>false,_=>return None };
+                let revision = parts.next()?.parse::<u64>().ok().filter(|revision|*revision>0)?;
+                if parts.next().is_some() { return None; }
+                let mut request = json!({
+                    "id":id,"expected_revision":revision,"enabled":enabled,
+                    "next_task":null,"review_note":null,
+                });
+                if let Some(text) = options {
+                    #[derive(serde::Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct WorkResume {
+                        next_task: Option<String>,
+                        review_note: Option<String>,
+                    }
+                    let options: WorkResume = serde_json::from_str(text).ok()?;
+                    request["next_task"] = json!(options.next_task);
+                    request["review_note"] = json!(options.review_note);
+                }
+                serde_json::from_value::<crate::clawd::wire::requests::ActivityWorkEnabled>(
+                    request.clone()
+                ).ok()?;
+                Some((request,id,revision,enabled))
+            })();
+            match parsed {
+                Some((request,id,revision,enabled)) => Command::ActivityWorkEnabled {
+                    id,revision,enabled,
+                    next_task:request.get("next_task").and_then(Value::as_str).map(str::to_string),
+                    review_note:request.get("review_note").and_then(Value::as_str).map(str::to_string),
+                },
+                None => Command::Unknown(value.to_string()),
+            }
+        }
         "activity-evidence" if !rest.is_empty() => Command::ActivityEvidence(rest.to_string()),
         "activity-preview" => {
             parse_activity_preview(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
@@ -341,6 +387,8 @@ fn takes_argument(command: &str) -> bool {
             | "/activity-budget-set"
             | "/activity-budget-enable"
             | "/activity-priority"
+            | "/activity-work-set"
+            | "/activity-work-enable"
             | "/activity-capability-set"
             | "/activity-capability-enable"
             | "/activity-evidence"
@@ -390,6 +438,7 @@ pub(super) async fn execute(
                 | Command::ActivityControls(_)
                 | Command::ActivityControlSet { .. }
                 | Command::ActivityControlEnabled { .. }
+                | Command::ActivityWorkEnabled { .. }
                 | Command::ActivityPriority { .. }
                 | Command::ActivityEvidence(_)
                 | Command::ActivityPreview { .. }
@@ -760,6 +809,10 @@ pub(super) async fn execute(
             let controls = backend
                 .set_activity_priority(&id, expected_revision, &priority)
                 .await?;
+            app.open_activity_controls(controls);
+        }
+        Command::ActivityWorkEnabled { id,revision,enabled,next_task,review_note } => {
+            let controls = backend.set_activity_work_enabled(&id,revision,enabled,next_task,review_note).await?;
             app.open_activity_controls(controls);
         }
         Command::ActivityEvidence(id) => {

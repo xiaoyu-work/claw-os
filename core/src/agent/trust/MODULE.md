@@ -16,6 +16,8 @@ per-segment metadata field, so role alone cannot tell those apart.
 ## Responsibilities
 
 - Define a closed, ordered trust lattice independent of chat role.
+- Label resumed Activity work handoffs as `ActivityWorkCheckpoint`: untrusted
+  caller reports in a fenced user prelude, never policy or a fresh owner command.
 - Enumerate every model-input source and its declared behaviour in one place.
 - Guarantee trust never rises under concatenation, summarisation, truncation,
   storage, replay or re-serialisation.

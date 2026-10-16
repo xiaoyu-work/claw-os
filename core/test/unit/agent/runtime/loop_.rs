@@ -1062,6 +1062,41 @@ async fn turn_limit_reserves_final_no_tool_summary() {
 }
 
 #[tokio::test]
+async fn activity_turn_limit_offers_only_the_handoff_and_records_its_report() {
+    let mut cfg=cfg();
+    cfg.max_turns=1;
+    let mock=Arc::new(MockProvider::new(&cfg.model,&cfg));
+    mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+        id:"handoff".into(),name:crate::agent::tools::activity_work::CHECKPOINT_TOOL.into(),
+        input:serde_json::json!({
+            "summary":"Collected the first result","made_progress":true,
+            "completed_steps":["Inspected source"],"artifacts":[],
+            "next":{"kind":"continue","task":"Check a different source"}
+        }),
+    }]));
+    let slot=Arc::new(crate::agent::tools::activity_work::WorkCheckpointSlot::default());
+    let mut tools=builtin_only_registry();
+    tools.set_activity_work(slot.clone());
+    let result=ask_with(mock.clone(),&cfg,"Prepare the report",&tools).await.unwrap();
+    assert_eq!(result.turns,1);
+    assert_eq!(result.answer,"Collected the first result");
+    assert!(slot.checkpoint().unwrap().is_some());
+    let request=mock.last_request().unwrap();
+    assert_eq!(request.tools.len(),1);
+    assert_eq!(request.tools[0].name,crate::agent::tools::activity_work::CHECKPOINT_TOOL);
+    assert!(!slot.permits("echo").unwrap());
+
+    let failure=Arc::new(MockProvider::new(&cfg.model,&cfg));
+    failure.push_response(MockResponse::Error(llm::LlmError::from(
+        llm::ProviderInfrastructureError::StatePoisoned {component:"work-finalization-fixture"},
+    )));
+    let mut tools=builtin_only_registry();
+    tools.set_activity_work(Arc::new(crate::agent::tools::activity_work::WorkCheckpointSlot::default()));
+    assert!(ask_with(failure,&cfg,"Prepare the report",&tools).await.is_err(),
+        "automatic finalization errors must not become successful fallback answers");
+}
+
+#[tokio::test]
 async fn turn_limit_returns_fallback_if_provider_ignores_no_tools() {
     let mut cfg = cfg();
     cfg.max_turns = 2;

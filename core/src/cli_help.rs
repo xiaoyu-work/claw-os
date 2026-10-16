@@ -904,6 +904,40 @@ fn activity_schemas() -> Vec<CommandSchema> {
             example: "cos activity execution-limits 00000000-0000-4000-8000-000000000001",
         },
         CommandSchema {
+            command: "work",
+            description: "Read automatic progression and bounded caller-reported handoff history; never verified effects or goal completion",
+            params: vec![id()],
+            example: "cos activity work 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-work",
+            description: "Configure an initially stopped Activity loop; finite execution limits and scheduler consent are required before starting",
+            params: vec![
+                id(), Param::flag("--task","string",true,"Owner instruction for bounded work segments"),
+                Param::flag("--check-interval-secs","integer",false,"60-86400 seconds between waiting checks; default 3600"),
+                Param::flag("--wake-source","string",false,"Exact existing context-event source; pair with --wake-event"),
+                Param::flag("--wake-event","string",false,"Exact existing event type; no watcher is installed"),
+                Param::flag("--expected-revision","integer",false,"Current work revision when replacing configuration"),
+            ],
+            example: r#"cos activity set-work 00000000-0000-4000-8000-000000000001 --task "Research and prepare a draft; ask before publishing""#,
+        },
+        CommandSchema {
+            command: "start-work",
+            description: "Explicitly enable automatic work under existing scheduler consent and finite Activity constraints; never grant App permissions",
+            params: vec![
+                id(), Param::flag("--expected-revision","integer",true,"Exact current work revision"),
+                Param::flag("--next-task","string",false,"Explicit safe next task, required when resuming reviewed/uncertain work"),
+                Param::flag("--review-note","string",false,"Owner inspection note, required after a review or indeterminate stop"),
+            ],
+            example: "cos activity start-work 00000000-0000-4000-8000-000000000001 --expected-revision 1",
+        },
+        CommandSchema {
+            command: "stop-work",
+            description: "Durably stop future automatic segments; cancel any existing Job separately through task controls",
+            params: vec![id(),Param::flag("--expected-revision","integer",true,"Exact current work revision")],
+            example: "cos activity stop-work 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+        },
+        CommandSchema {
             command: "set-execution-limits",
             description: "Create or revise finite Activity limits without resetting usage or enabling a disabled policy",
             params: vec![

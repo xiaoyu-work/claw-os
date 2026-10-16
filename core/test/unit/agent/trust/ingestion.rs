@@ -381,6 +381,7 @@ fn every_source_kind_is_produced_by_a_real_builder() {
     from_model_output(&mut observed);
     from_replay(&mut observed);
     from_root_policy(&mut observed);
+    record(&mut observed,crate::triggers::work::handoff_segment(HOSTILE,None).unwrap());
 
     let missing: Vec<_> = SourceKind::ALL
         .iter()

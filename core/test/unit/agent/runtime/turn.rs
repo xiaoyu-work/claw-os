@@ -20,6 +20,37 @@ fn cfg() -> AgentConfig {
     }
 }
 
+#[tokio::test]
+async fn activity_handoff_is_terminal_and_cannot_share_a_response_with_other_tools() {
+        let config = cfg();
+        let mock = Arc::new(MockProvider::new(&config.model,&config));
+        let checkpoint = serde_json::json!({
+            "summary":"Segment ready for review","made_progress":true,
+            "completed_steps":["Prepared a draft"],"artifacts":[],
+            "next":{"kind":"review","reason":"Owner must verify the draft"}
+        });
+        let slot = Arc::new(crate::agent::tools::activity_work::WorkCheckpointSlot::default());
+        let mut tools = builtin_only_registry();
+        tools.set_activity_work(slot.clone());
+        let mut messages = vec![Message {role:Role::User,content:vec![ContentBlock::Text{text:"Prepare draft".into()}]}];
+        for mixed in [true,false] {
+            let mut calls = vec![ToolCall {id:"checkpoint".into(),
+                name:crate::agent::tools::activity_work::CHECKPOINT_TOOL.into(),input:checkpoint.clone()}];
+            if mixed { calls.push(ToolCall{id:"other".into(),name:"echo".into(),input:serde_json::json!({"text":"other"})}); }
+            mock.push_response(MockResponse::ToolUse(calls));
+            let result = run_turn(mock.clone(),&config.model,"sys",&mut messages,&tools,&tools.as_llm_tools(),
+                config.max_tokens,config.temperature,None,None,None,progress::null_progress()).await.unwrap();
+            if mixed {
+                assert!(slot.checkpoint().unwrap().is_none());
+                assert!(matches!(result.outcome,TurnOutcome::ContinueWithTools));
+            } else {
+                assert!(slot.checkpoint().unwrap().is_some());
+                assert!(matches!(result.outcome,TurnOutcome::Final(_)));
+            }
+        }
+    assert!(!slot.permits("echo").unwrap());
+}
+
 fn ctx() -> HookContext {
     HookContext::new("turn-tests".to_string(), "mock", "mock-model".to_string())
 }

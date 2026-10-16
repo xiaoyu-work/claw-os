@@ -5,6 +5,7 @@
 //! this contract before data crosses the loopback HTTP boundary.
 
 mod activities;
+mod automatic_work;
 mod capability_policy;
 mod continuity;
 mod execution_limits;
@@ -19,6 +20,7 @@ mod stream;
 mod version;
 
 pub use activities::*;
+pub use automatic_work::*;
 pub use capability_policy::*;
 pub use continuity::*;
 pub use execution_limits::*;

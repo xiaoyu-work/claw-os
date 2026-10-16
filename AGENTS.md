@@ -44,6 +44,7 @@ editing additional surfaces.
 | Activity execution priority or shared queue admission | `core/src/activities/scheduling_policy.rs`, `core/src/agent/service.rs`, `docs/activities.md` | Owner-scoped SQLite CAS policy, authenticated broker and terminal controls, dynamic `Store::claim_one` ordering and bounded aging; never a Job field, authority grant, preemption or model decision |
 | Activity capability or confirmation boundaries | `core/src/caps/activity_boundary.rs`, `core/src/clawd/activity_capability_policy.rs`, `docs/activity-capability-policies.md` | Shared policy storage, root Job/lease identity, capability/approval gates, App grant bindings, live revocation and terminal/Web/native controls; policy never supplies permission |
 | Activity event-triggered work | `core/src/triggers.rs`, `core/src/clawd/scheduler.rs`, `docs/activities.md` | Owner/lifecycle/finite-limit preflight before consent, unattended task/session associations, durable delivery correlation and existing Activity result views; no model polling or serialized grants |
+| Activity long-running automatic work | `core/src/activities/work.rs`, `core/src/triggers/work.rs`, `docs/activity-work.md` | Explicit scheduler-authorized enablement, same-owner event/time/completion wakeups, exact reserved Job/generation, caller-reported handoffs and conservative holds; shared CLI/TUI/Web/native state, never a new daemon or portable authority |
 | Activity attention or decision summary | `core/src/clawd/activity_attention.rs`, `core/src/notifications/`, `docs/activities.md` | Protected approval reads, associated Job issues/counts, task-linked notification projection, terminal/Web/native presentation; acknowledgement is never consent |
 | App object contract or Activity object reference | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `docs/app-objects.md` | SDK wire/types/helpers, `clawd/activity_objects.rs`, ordinary App dispatch, Web/native presentations |
 | Activity object observations, relations or corrections | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs`, `docs/object-state.md` | Shared SQLite history, owner/receipt/reference binding, CLI/Web/native presentations and recorded untrusted task context; no App data copy or inferred authority |
@@ -296,6 +297,13 @@ associations backward compatible; an execution completing never proves that
 the Activity goal was achieved. Preserve explicit completion confirmation and
 the existing capability, approval, task-cancellation and audit boundaries.
 Update [`docs/activities.md`](docs/activities.md) with user-facing changes.
+
+Automatic work is explicit opt-in through the existing scheduler delegation
+boundary, not a consequence of `active`. Persist the exact dispatch identity
+before publication and apply handoffs only after durable Job success and
+checked containment retirement. Keep generated next-step text untrusted,
+preserve finite limits and budget checks, and hold uncertain outcomes without
+automatic replay. Work state/history and scheduler authority are never portable.
 
 Portable continuity changes must keep one shared backend and a closed,
 versioned, bounded document. Carry only semantic intent/references and rules

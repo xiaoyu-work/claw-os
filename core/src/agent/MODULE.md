@@ -51,6 +51,10 @@ surfaces.
 - Persist bounded, broker-verified image attachments as Job request data,
   carry them over the worker protocol, and add them only to the current owner
   message. Memory and task responses retain metadata rather than image bytes.
+- Execute Root-bound automatic Activity segments with a task-local reporting
+  tool. A sole handoff closes tool admission, and the last allowed turn offers
+  only that report. Operational limits, consent and billing remain unchanged;
+  only the supervisor can persist handoffs or admit another segment.
 - Treat file and directory fsync as mandatory queue barriers. Cross-bucket
   moves sync both directories, and recovery deduplicates resurrected records
   by conservative execution-phase dominance before any mutation.
@@ -89,6 +93,7 @@ surfaces.
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `service.rs`, `../activities/scheduling_policy.rs` | Shared pending admission ordering from current owner Activity policy, with 30-minute bounded aging and standalone FIFO compatibility |
 | `service/activity_context.rs` | Bounded untrusted Activity planning/object-state snapshots, recorded at task claim and refreshed on retry |
+| `tools/activity_work.rs`, `../triggers/work.rs` | Task-local bounded handoff reports and Root-owned cross-Job progression using the existing scheduler |
 | `service/presentation.rs` | Bounded retained-stream projection of reasoning summaries, cumulative usage, exact tool metrics and image metadata; never provider state or successful tool bodies |
 | `service/dependencies.rs` | Bounded same-owner/session predecessor-chain admission; cancelled intermediate Jobs cannot bypass unfinished ancestors |
 | `service/execution_limits.rs` | Shared live Activity-policy and monotonic-expiry guard for supervised and standalone job execution |

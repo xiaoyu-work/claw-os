@@ -11,6 +11,7 @@ mod execution_limits;
 mod monetary_budget;
 mod object_state;
 mod scheduling_policy;
+mod work;
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     if matches!(command, "export" | "import") {
@@ -32,6 +33,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         );
     }
     let (route, params) = parse(command, args)?;
+    if route == Command::ActivityWorkEnabled && params.get("enabled") == Some(&json!(true)) {
+        return crate::router::request_with_scheduler_consent(route, params);
+    }
     if route == Command::ActivityObjectStateRecord {
         return object_state::submit(params);
     }
@@ -48,6 +52,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
+    if matches!(command,"work" | "set-work" | "start-work" | "stop-work") {
+        return work::parse(command,args);
+    }
     if matches!(
         command,
         "capability-policy"

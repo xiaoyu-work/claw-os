@@ -25,11 +25,13 @@ executes neither.
 
 ## Key Files
 
-Private worker protocol v18 retains v17's bounded, content-free memory source
-references and safe tool metrics, and raises the frame ceiling to 32 MiB for
-verified image assignments. Tasks accept at most four originals totalling
-20 MiB decoded. These are request/presentation data, not grants or claims of
-factual truth.
+Private worker protocol v19 adds an automatic-Activity reporting hint and a
+bounded optional handoff on a completed result. Root derives the actual work
+binding from its own Job and stages reports before finishing the Job; neither
+the hint nor a report supplies permission or goal completion. The protocol
+retains the 32-MiB frame ceiling for verified image assignments, bounded
+content-free memory references and safe tool metrics. Tasks accept at most
+four originals totalling 20 MiB decoded.
 The paired broker/worker must upgrade together; release-security policy tracks
 the same version. Evidence confidence remains a finite decimal-string private
 wire representation.

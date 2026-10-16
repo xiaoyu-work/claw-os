@@ -30,6 +30,7 @@ pub use cos_agent_protocol::{
     ToolPhase, ToolResultView, Usage, validate_chat_attachments,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
+use cos_agent_protocol::{ActivityAutoWork,ActivityAutoWorkResponse,AutoWorkSetRequest,AutoWorkEnabledRequest};
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
 
@@ -864,6 +865,27 @@ fn scheduling_priority_get_request(
         reqwest::Method::GET,
         &["activities", id, "scheduling-priority"],
     )
+}
+
+pub async fn fetch_activity_auto_work(endpoint: BridgeEndpoint,id: &str) -> Result<ActivityAutoWorkResponse> {
+    let (request,selected) = activity_request(&endpoint,reqwest::Method::GET,&["activities",id,"work"])?;
+    activity_response(request,selected).await
+}
+
+pub async fn set_activity_auto_work(
+    endpoint: BridgeEndpoint,id: &str,body: AutoWorkSetRequest,
+) -> Result<ActivityAutoWork> {
+    body.validate().map_err(|error|anyhow!(error))?;
+    let (request,selected) = activity_request(&endpoint,reqwest::Method::POST,&["activities",id,"work"])?;
+    activity_response(request.json(&body),selected).await
+}
+
+pub async fn enable_activity_auto_work(
+    endpoint: BridgeEndpoint,id: &str,body: AutoWorkEnabledRequest,
+) -> Result<ActivityAutoWork> {
+    body.validate().map_err(|error|anyhow!(error))?;
+    let (request,selected) = activity_request(&endpoint,reqwest::Method::POST,&["activities",id,"work","enabled"])?;
+    activity_response(request.json(&body),selected).await
 }
 
 pub async fn fetch_activity_scheduling_priority(

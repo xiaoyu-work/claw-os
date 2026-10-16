@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -391,6 +391,8 @@ pub struct JobSpec {
     /// Reporting hint only; Root derives owner, Activity, Job and session.
     #[serde(default)]
     pub activity_monetary_checks: bool,
+    #[serde(default)]
+    pub activity_work: bool,
 }
 
 fn default_true() -> bool {
@@ -687,6 +689,8 @@ pub struct CompletedRun {
     pub evidence: Option<EvidenceReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<ProviderFallbackState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_checkpoint: Option<crate::activities::ActivityWorkCheckpoint>,
 }
 
 // `arbitrary_precision` buffers JSON floats as maps while decoding tagged
@@ -830,6 +834,7 @@ impl From<WorkerOutcome> for FinishOutcome {
                     model,
                     evidence,
                     fallback,
+                    work_checkpoint: _,
                 } = *run;
                 FinishOutcome::Ok {
                     response,

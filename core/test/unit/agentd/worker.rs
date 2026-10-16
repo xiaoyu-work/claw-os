@@ -92,6 +92,7 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
             record_activity_receipts: false,
             activity_capability_checks: false,
             activity_monetary_checks: false,
+            activity_work: false,
         },
         consent_context: ConsentContext::Unattended,
         session: None,

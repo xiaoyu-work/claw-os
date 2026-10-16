@@ -24,6 +24,9 @@ and the owner-scoped broker contract; only their presentations differ.
   settlements without becoming an invoice or authorization mechanism.
 - Store owner-selected pending admission priority with exact revision/CAS
   updates, without adding authority, preemption or priority fields to Jobs.
+- Persist explicit automatic-work controls, one reserved Job, reported handoffs,
+  waiting watermarks and review holds; scheduler delegation remains outside
+  this metadata service and no work state enters portable continuity.
 - Export and import a closed, bounded continuity-v1 document containing only
   portable intent, canonical App object references, finite execution bounds
   and scheduling preference. Imports are explicit-local, atomic, paused and
@@ -50,6 +53,7 @@ and the owner-scoped broker contract; only their presentations differ.
 | `sqlite/scheduling_policy.rs` | Owner-scoped policy CAS, lifecycle checks, corruption validation and schema-7 migration |
 | `continuity.rs` | Strict deterministic continuity-v1 document, bounds, snapshot digest and explicit local placement |
 | `sqlite/continuity.rs` | Schema-8 stable identity/revision, deterministic legacy migration and atomic paused import/export |
+| `work.rs`, `sqlite/work.rs` | Closed bounded work state/handoffs, schema-9 storage, exact revision transitions and immutable local history |
 | `capability_policy.rs` | Strict capability-rule DTOs, canonicalization and pure constraint decisions |
 | `sqlite/capability_policy.rs` | Owner-scoped capability policy CAS, revocation and schema-5 migration |
 | `../clawd/activities.rs` | Owner-scoped broker consumer and execution projections |
@@ -79,7 +83,7 @@ parent directories are rejected.
 Disk connections require WAL journaling, `synchronous=FULL`, and a five-second
 busy timeout. Creation, partial updates, transitions, receipt appends and
 object-state appends, execution and monetary reservations, settlements and policy changes
-use immediate transactions. A new empty database receives schema version 8
+use immediate transactions. A new empty database receives schema version 9
 through explicit sequential migrations. Schema 1 first adds
 the schema-2 `activity_receipts` ledger; schema 2 then adds
 `activity_object_state` and the receipt composite index needed for
@@ -97,6 +101,11 @@ Existing rows receive deterministic UUIDs inside the migration transaction;
 no retryable SQL expression generates randomness. Portable edits advance the
 revision, while lifecycle, execution usage, monetary accounting, capability
 policy, receipts and object-state history do not.
+Schema 9 adds owner-scoped work state and immutable handoff history, preserving
+all existing goals and counters. New configuration is stopped. Dispatch
+reservation precedes queue publication; staging never advances work until
+the exact Job's durable successful completion. Uncertain or stalled work
+requires an explicit next task and owner review note rather than replay.
 These migrations do not rewrite Activity rows, resources, lifecycle state,
 timestamps, completion confirmations, receipts, object-state history,
 execution policies or reservations.
@@ -109,7 +118,7 @@ than initializing a replacement database over them. Reads validate stored
 metadata rather than silently repairing it. The in-memory provider is for
 tests and uses SQLite's in-memory journal instead of WAL.
 
-`DATABASE_SCHEMA_VERSION = 8` controls SQLite `user_version` and migration.
+`DATABASE_SCHEMA_VERSION = 9` controls SQLite `user_version` and migration.
 The broker independently owns `clawd::activities::WIRE_SCHEMA_VERSION = 1`
 for `activity.list` and `activity.get`; it does not emit the database version.
 The existing public `activities::SCHEMA_VERSION = 1` is retained for wire

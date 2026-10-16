@@ -2181,6 +2181,7 @@ fn activity_controls_expose_exact_revisions_before_mutation() {
             "revision": 2,
             "priority": "foreground",
         })),
+        work: None,
         capability_policy: Some(json!({
             "activity_id": "00000000-0000-4000-8000-000000000001",
             "revision": 4,

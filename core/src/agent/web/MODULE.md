@@ -17,6 +17,9 @@ web UI.
 - Present owner-scoped conversation inventory, metadata, history and
   presentation mutations through `agent.conversation.*`; Web never opens or
   mutates Agent memory as a separate authority.
+- Present explicit Activity automatic-work configuration, scheduler-authorized
+  start/stop and inspected resumption. Revisions use decimal strings; handoffs
+  remain caller reports and the browser owns no loop or durable execution state.
 - Present the shared Activity broker's goals, planning metadata, explicit state
   changes, and associated job/session views without a Web-owned store or lifecycle.
 - Export and import the broker's closed portable Activity continuity document
@@ -61,6 +64,7 @@ web UI.
 | `routes/approvals/presentation.rs`, `ui/src/components/chat-approvals.tsx` | Shared readable capability-review projection, same-task discovery, exact displayed-revision decisions and helper delegation |
 | `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
+| `routes/activities/work.rs`, `ui/src/components/activity-auto-work.tsx` | Shared automatic-work controls and bounded reported handoffs, without local scheduling or permission authority |
 | `ui/` | TypeScript/React source and generated distribution assets |
 | `ui/src/lib/chat-stream.ts` | Terminal-event validation and bounded same-Job transport recovery through verified history replay |
 | `ui/src/lib/chat-presentation.ts`, `ui/src/components/chat-evidence.tsx` | Truthful tool-phase reduction and inert evidence/source presentation |

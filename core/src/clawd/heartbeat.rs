@@ -42,12 +42,22 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
 use super::client_identity::ClientIdentity;
 use crate::caps::{Cap, CapSet, Role, Scope, Verb};
+
+fn work_wakeup() -> &'static tokio::sync::Notify {
+    static WAKEUP: OnceLock<tokio::sync::Notify> = OnceLock::new();
+    WAKEUP.get_or_init(tokio::sync::Notify::new)
+}
+
+pub(crate) fn wake_activity_work() {
+    work_wakeup().notify_one();
+}
 
 /// Source tag stamped on every heartbeat-emitted `context.event`. Trigger
 /// rules match on this to react to system conditions.
@@ -472,7 +482,14 @@ async fn run_scheduler_subsystem(
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        ticker.tick().await;
+        if subsystem == "triggers" {
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = work_wakeup().notified() => {}
+            }
+        } else {
+            ticker.tick().await;
+        }
         if shutdown.load(Ordering::Relaxed) {
             break;
         }

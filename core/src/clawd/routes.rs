@@ -32,6 +32,7 @@ use super::activity_continuity;
 use super::activity_execution_limits;
 use super::activity_monetary_budget;
 use super::activity_scheduling_policy;
+use super::activity_work;
 use crate::audit_policy::FieldRule;
 
 use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
@@ -713,6 +714,36 @@ routes! {
         body: body::ActivityObjects,
         audit: &[("id", FieldRule::Token)],
         run: |c| activity_objects::list(c.params, c.client),
+    }
+    ActivityWorkGet {
+        name: "activity.work.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityWorkGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_work::get(c.params,c.client),
+    }
+    ActivityWorkSet {
+        name: "activity.work.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityWorkSet,
+        audit: &[("id", FieldRule::Token),("expected_revision", FieldRule::Count),("work",FieldRule::Size)],
+        run: |c| activity_work::set(c.params,c.client),
+    }
+    ActivityWorkEnabled {
+        name: "activity.work.enabled",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityWorkEnabled,
+        audit: &[("id", FieldRule::Token),("expected_revision", FieldRule::Count),("enabled", FieldRule::Flag)],
+        run: |c| activity_work::enabled(c.params,c.client).await,
     }
     ActivityObjectAttach {
         name: "activity.object.attach",

@@ -4,6 +4,7 @@ import { monetaryBudgetApi } from "@/lib/monetary-budget";
 import { capabilityPolicyApi } from "@/lib/capability-policy";
 import { activityAttentionApi } from "@/lib/activity-attention";
 import { schedulingPriorityApi } from "@/lib/scheduling-priority";
+import { autoWorkApi } from "@/lib/activity-auto-work";
 
 import {
   activityApi,
@@ -121,6 +122,11 @@ export function useActivityMonetaryBudget(id: string) {
 
 export function useActivitySchedulingPriority(id: string) {
   const read = useCallback((signal: AbortSignal) => schedulingPriorityApi.get(id, signal), [id]);
+  return useActivityView(read, listInterval);
+}
+
+export function useActivityAutoWork(id: string) {
+  const read = useCallback((signal: AbortSignal) => autoWorkApi.get(id, signal), [id]);
   return useActivityView(read, listInterval);
 }
 

@@ -171,6 +171,8 @@ pub enum SourceKind {
     LegacyStoredRow,
     /// A source the runtime could not name.
     Unknown,
+    /// A previous bounded Activity segment's caller-reported handoff.
+    ActivityWorkCheckpoint,
 }
 
 impl SourceKind {
@@ -209,6 +211,7 @@ impl SourceKind {
         SourceKind::ModelReasoning,
         SourceKind::LegacyStoredRow,
         SourceKind::Unknown,
+        SourceKind::ActivityWorkCheckpoint,
     ];
 
     /// Dense index into [`SourceKind::ALL`].
@@ -252,6 +255,7 @@ impl SourceKind {
             Self::ModelReasoning => 30,
             Self::LegacyStoredRow => 31,
             Self::Unknown => 32,
+            Self::ActivityWorkCheckpoint => 33,
         }
     }
 
@@ -497,6 +501,13 @@ impl SourceKind {
                 RequestLocal,
                 UserChannelEnvelope,
                 LabelAndDigest,
+            ),
+            Self::ActivityWorkCheckpoint => (
+                "activity_work_checkpoint",
+                UntrustedExternalContent,
+                InjectedAuditRow,
+                UserChannelEnvelope,
+                ContentRef,
             ),
         };
 

@@ -12,6 +12,7 @@ mod object_state;
 mod receipts;
 mod scheduling_policy;
 mod sqlite;
+mod work;
 
 use serde::{Deserialize, Serialize};
 
@@ -44,11 +45,17 @@ pub use receipts::{
 };
 pub use scheduling_policy::{ActivitySchedulingPolicy, ActivitySchedulingPriority};
 pub use sqlite::SqliteActivityService;
+pub use work::{
+    ActivityWork, ActivityWorkChange, ActivityWorkCheckpoint, ActivityWorkDraft,
+    ActivityWorkEvent, ActivityWorkNext, ActivityWorkOutcome, ActivityWorkPhase,
+    ActivityWorkRecord, ActivityWorkSegment, MAX_STAGNANT_WORK_SEGMENTS,
+    MAX_WORK_CHECKPOINT_BYTES, MAX_WORK_HISTORY,
+};
 
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 8;
+pub const DATABASE_SCHEMA_VERSION: u32 = 9;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -263,6 +270,29 @@ pub struct Activity {
 }
 
 pub trait ActivityService: Send + Sync {
+    fn work(&self, _owner_uid: u32, _activity_id: &str) -> Result<Option<ActivityWork>, ActivityError> {
+        Err(ActivityError::Invalid("Activity work is unsupported by this service".into()))
+    }
+
+    fn change_work(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _expected_revision: Option<u64>,
+        _change: ActivityWorkChange,
+    ) -> Result<ActivityWork, ActivityError> {
+        Err(ActivityError::Invalid("Activity work is unsupported by this service".into()))
+    }
+
+    fn work_history(
+        &self,
+        _owner_uid: u32,
+        _activity_id: &str,
+        _limit: usize,
+    ) -> Result<Vec<ActivityWorkRecord>, ActivityError> {
+        Err(ActivityError::Invalid("Activity work is unsupported by this service".into()))
+    }
+
     fn create(&self, owner_uid: u32, draft: ActivityDraft) -> Result<Activity, ActivityError>;
 
     fn get(&self, owner_uid: u32, id: &str) -> Result<Activity, ActivityError>;
@@ -522,6 +552,10 @@ pub fn open_default() -> Result<SqliteActivityService, ActivityError> {
 /// returned by a lookup when associating other records with an Activity.
 pub fn validate_id(value: &str) -> Result<(), ActivityError> {
     parse_id(value).map(|_| ())
+}
+
+pub(crate) fn validate_work_task(value: &str) -> Result<(), ActivityError> {
+    validate_text("work task", value, 8192, false, true)
 }
 
 fn parse_id(value: &str) -> Result<String, ActivityError> {
