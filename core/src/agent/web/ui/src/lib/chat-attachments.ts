@@ -1,5 +1,5 @@
 export const MAX_IMAGE_ATTACHMENTS = 4;
-export const MAX_IMAGE_ATTACHMENT_BYTES = 256 * 1024;
+export const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/png",
@@ -55,6 +55,7 @@ export async function readImageAttachments(
 
 export function formatAttachmentBytes(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`;
+  if (bytes >= 1_024 * 1_024) return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
   return `${(bytes / 1_024).toFixed(bytes < 10 * 1_024 ? 1 : 0)} KiB`;
 }
 

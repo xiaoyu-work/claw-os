@@ -56,4 +56,12 @@ fn count_and_total_size_are_bounded() {
     let mut oversized = b"\x89PNG\r\n\x1a\n".to_vec();
     oversized.resize(MAX_TOTAL_BYTES + 1, 0);
     assert!(normalize(vec![input("large.png", "image/png", &oversized)]).is_err());
+
+    oversized.pop();
+    let accepted = normalize(vec![input("limit.png", "image/png", &oversized)]).unwrap();
+    assert_eq!(accepted[0].bytes, MAX_TOTAL_BYTES as u64);
+    assert!(normalize(vec![
+        input("limit.png", "image/png", &oversized),
+        input("extra.png", "image/png", png),
+    ]).is_err());
 }

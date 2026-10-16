@@ -910,6 +910,7 @@ impl App {
             );
         }
         content = content.push(editor).push(bottom);
+        content = content.push(text(fl!("image-attachment-limits")).size(10.0));
         if self.stream.is_active() { content=content.push(self.queue.view()); }
         container(content)
             .padding(spacing.space_s)

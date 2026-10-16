@@ -81,6 +81,8 @@ export function ChatPage({ meta }: { meta: any }) {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<PendingImageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [readingAttachments, setReadingAttachments] = useState(false);
+  const attachmentRead = useRef({ generation: 0, busy: false });
   const [restoring, setRestoring] = useState(false);
   const [blockedByTask, setBlockedByTask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121,6 +123,7 @@ export function ChatPage({ meta }: { meta: any }) {
   }, []);
 
   useEffect(() => () => {
+    attachmentRead.current.generation += 1;
     abortRef.current?.abort();
     for (const watcher of queueWatchersRef.current.values()) watcher.abort();
     queueWatchersRef.current.clear();
@@ -134,6 +137,8 @@ export function ChatPage({ meta }: { meta: any }) {
       setRestoring(false);
       return;
     }
+    attachmentRead.current = { generation: attachmentRead.current.generation + 1, busy: false };
+    setReadingAttachments(false);
     abortRef.current?.abort();
     abortRef.current = null;
     taskIdRef.current = "";
@@ -343,20 +348,35 @@ export function ChatPage({ meta }: { meta: any }) {
   const addAttachments = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
+      if (attachmentRead.current.busy || queueing || restoring) {
+        setAttachmentError("Wait for the current image read or submission before adding more images.");
+        return;
+      }
+      const generation = attachmentRead.current.generation;
+      attachmentRead.current.busy = true;
+      setReadingAttachments(true);
       try {
         const added = await readImageAttachments(files, attachments);
+        if (generation !== attachmentRead.current.generation) return;
         setAttachments((current) => [...current, ...added]);
         setAttachmentError(null);
       } catch (error: any) {
-        setAttachmentError(error?.message || "Failed to attach image");
+        if (generation === attachmentRead.current.generation) {
+          setAttachmentError(error?.message || "Failed to attach image");
+        }
+      } finally {
+        if (generation === attachmentRead.current.generation) {
+          attachmentRead.current.busy = false;
+          setReadingAttachments(false);
+        }
       }
     },
-    [attachments],
+    [attachments, queueing, restoring],
   );
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || busy || restoring || blockedByTask) return;
+    if (!text || busy || restoring || blockedByTask || attachmentRead.current.busy) return;
     setInput("");
     setQueuedCount(0);
     queueTailTaskIdRef.current = "";
@@ -545,7 +565,7 @@ export function ChatPage({ meta }: { meta: any }) {
     const text = input.trim();
     const predecessorId =
       queueTailTaskIdRef.current || taskIdRef.current;
-    if (!text || !busy || !predecessorId || queueing) return;
+    if (!text || !busy || !predecessorId || queueing || attachmentRead.current.busy) return;
 
     setQueueing(true);
     try {
@@ -692,8 +712,8 @@ export function ChatPage({ meta }: { meta: any }) {
               size="icon"
               variant="ghost"
               onClick={() => fileInputRef.current?.click()}
-              disabled={restoring || queueing}
-              title="Attach images"
+              disabled={restoring || queueing || readingAttachments}
+              title="Attach up to 4 original images, 20 MiB total"
             >
               <Paperclip className="h-4 w-4" />
             </Button>
@@ -722,7 +742,7 @@ export function ChatPage({ meta }: { meta: any }) {
                     size="icon"
                     variant="secondary"
                     onClick={() => void queueFollowUp()}
-                    disabled={queueing}
+                    disabled={queueing || readingAttachments}
                     title="Queue follow-up"
                   >
                     {queueing ? (
@@ -740,7 +760,7 @@ export function ChatPage({ meta }: { meta: any }) {
               <Button
                 size="icon"
                 onClick={send}
-                disabled={!input.trim() || restoring || blockedByTask !== null}
+                disabled={!input.trim() || restoring || blockedByTask !== null || readingAttachments}
                 title={
                   restoring
                     ? "Restoring conversation"
@@ -753,6 +773,9 @@ export function ChatPage({ meta }: { meta: any }) {
               </Button>
             )}
           </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {readingAttachments ? "Reading original images..." : "Up to 4 images, 20 MiB total. Original bytes are preserved."}
+          </p>
           {attachmentError && (
             <p role="alert" className="mt-2 text-xs text-destructive">
               {attachmentError}

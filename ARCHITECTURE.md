@@ -1436,7 +1436,8 @@ CLI / web UI / bridge
 
 Agent image attachments are bounded request data, not filesystem references or
 capabilities. Web and native Desktop accept up to four PNG/JPEG/GIF/WebP
-images, with 256 KiB decoded in total. `task.submit` revalidates canonical
+images, with 20 MiB decoded in total and no mandatory resizing or compression.
+`task.submit` revalidates canonical
 base64, names, MIME/magic agreement and aggregate size before persisting the
 inline bytes in the owner-scoped Job. Worker protocol v15 introduced that
 verified snapshot to `claw-agentd`; the runtime adds image blocks only to the
@@ -1444,6 +1445,14 @@ owner message. Conversation memory records MIME, size and digest, never image
 bytes or a client path. Task JSON responses expose the same metadata without
 base64. No temporary file, path-derived authority or App integration is
 created.
+Image-bearing Chat and follow-up requests allow 32 MiB of encoded HTTP/broker
+data. Ordinary broker requests and App argument limits remain at 1 MiB; only
+`task.submit` may use the larger frame, and at most two oversized socket
+requests are retained concurrently from before body allocation through
+dispatch. Worker protocol v18 carries the larger assignment within a 32-MiB
+frame. Provider image limits and Activity monetary/execution policy still
+apply; transport base64 is not counted as literal model text by context
+estimation, and images are never silently compressed to satisfy a provider.
 
 Interactive `cos agent chat` adds only a Claw-owned presentation path in front
 of this same task flow:

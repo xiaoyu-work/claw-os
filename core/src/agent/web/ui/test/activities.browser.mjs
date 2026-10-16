@@ -14,6 +14,8 @@ const profile = path.resolve(".activity-validation", `browser-${randomUUID()}`);
 const downloads = path.join(profile, "downloads");
 const bootstrap = "0".repeat(64);
 const accessToken = "activity-browser-regression";
+const originalImage = Buffer.alloc(3 * 1024 * 1024);
+originalImage.set([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,1,2,3]);
 const activities = new Map();
 const jobs = new Map();
 const conversations = new Map([
@@ -355,9 +357,11 @@ async function reply(req, res, value, status = 200) {
 
 async function requestBody(req) {
   let text = "";
+  const imageRequest = req.url === "/api/chat" || /^\/api\/tasks\/[^/]+\/follow-up$/.test(req.url);
+  const maximum = (imageRequest ? 32 : 1) * 1024 * 1024;
   for await (const chunk of req) {
     text += chunk;
-    assert.ok(text.length <= 1024 * 1024, "bounded test request");
+    assert.ok(Buffer.byteLength(text) <= maximum, "bounded test request");
   }
   return text ? JSON.parse(text) : {};
 }
@@ -429,7 +433,7 @@ async function fixture(req, res) {
     assert.equal(body.attachments[0].media_type, "image/png");
     assert.deepEqual(
       Buffer.from(body.attachments[0].data, "base64"),
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]),
+      originalImage,
     );
     conversations.set("chat-browser", {
       id: "chat-browser",
@@ -1444,13 +1448,14 @@ try {
   await evaluate(`(() => {
     const input = document.querySelector('[aria-label="Attach images"]');
     const transfer = new DataTransfer();
-    transfer.items.add(new File([
-      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
-    ], 'screen.png', {type: 'image/png'}));
+    const original = new Uint8Array(${originalImage.length});
+    original.set([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,1,2,3]);
+    transfer.items.add(new File([original], 'screen.png', {type: 'image/png'}));
     input.files = transfer.files;
     input.dispatchEvent(new Event('change', {bubbles: true}));
   })()`);
   await wait("!!document.querySelector('[aria-label=\"Attached images\"] img[alt=\"screen.png\"]')", "attached image preview");
+  await wait("document.querySelector('[aria-label=\"Attached images\"]')?.innerText.includes('3.0 MiB')", "large original image size preview");
   await evaluate(`(() => {
     const input = document.querySelector('textarea');
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Show live presentation');

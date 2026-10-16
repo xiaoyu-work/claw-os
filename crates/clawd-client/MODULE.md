@@ -37,6 +37,10 @@ presentation live in `desktop/agent/protocol` and `desktop/agent/ui`. The
 client supplies no owner selector, placement default, filesystem access,
 authority restoration, persistence or live synchronization.
 
+The ordinary request ceiling remains 1 MiB. `task.submit` alone may use a
+32-MiB request for bounded inline original images. An explicit lower client
+configuration still wins, and the response ceiling is unchanged.
+
 ## System review contract
 
 [`src/system_review.rs`](src/system_review.rs) defines the closed version-1

@@ -96,6 +96,49 @@ async fn filesystem_business_text_roundtrips_the_typed_socket_without_app_dispat
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn original_image_submission_crosses_the_authenticated_broker_socket() {
+    use base64::Engine;
+    let bound = bind();
+    let path = bound.path.clone();
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.resize(2 * 1024 * 1024, 0);
+    let expected = image.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = bound.listener.accept().await.unwrap();
+        let mut peer_stream = PeerStream::new(stream).unwrap();
+        let ReadOutcome::Frame(frame) = peer_stream
+            .read_request(cos::clawd::wire::MAX_TASK_SUBMIT_BYTES).await.unwrap()
+        else { panic!("expected original image request"); };
+        assert_eq!(frame.credentials.uid, unsafe { libc::getuid() });
+        assert!(peer::verify(frame.credentials).is_some());
+        let request: InboundRequest = serde_json::from_slice(&frame.body).unwrap();
+        assert_eq!(request.command.as_str(), "task.submit");
+        let params = (Command::TaskSubmit.route().decode)(request.params).unwrap();
+        let inputs = serde_json::from_value(params["attachments"].clone()).unwrap();
+        let attachments = cos::agent::attachments::normalize(inputs).unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.decode(&attachments[0].data).unwrap(),
+            expected,
+        );
+        let response = Response::ok(request.id, json!({"attachments":[attachments[0].metadata()]}));
+        peer_stream.write_response(&encode_response(&response).unwrap()).await.unwrap();
+    });
+    let request = Request::build(Command::TaskSubmit, json!({
+        "prompt":"Inspect original screenshot",
+        "attachments":[{
+            "name":"original.png","media_type":"image/png",
+            "data":base64::engine::general_purpose::STANDARD.encode(&image),
+        }],
+    }));
+    let response = cos::clawd::client::request(path, request).await.unwrap();
+    assert!(response.ok);
+    let value = response.result.unwrap();
+    assert_eq!(value["attachments"][0]["bytes"], image.len());
+    assert!(value["attachments"][0].get("data").is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message() {
     let bound = bind();
     let path = bound.path.clone();

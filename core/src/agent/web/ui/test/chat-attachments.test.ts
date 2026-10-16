@@ -3,11 +3,13 @@ import { describe, expect, test } from "bun:test";
 import {
   MAX_IMAGE_ATTACHMENT_BYTES,
   readImageAttachments,
+  formatAttachmentBytes,
 } from "../src/lib/chat-attachments";
 
 describe("chat image attachments", () => {
   test("encodes supported images without changing their bytes", async () => {
-    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const bytes = new Uint8Array(MAX_IMAGE_ATTACHMENT_BYTES);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
     const file = new File([bytes], "screen.png", { type: "image/png" });
     const attachments = await readImageAttachments([file], []);
 
@@ -15,6 +17,8 @@ describe("chat image attachments", () => {
     expect(attachments[0].name).toBe("screen.png");
     expect(attachments[0].mediaType).toBe("image/png");
     expect(attachments[0].bytes).toBe(bytes.length);
+    expect(atob(attachments[0].data).length).toBe(MAX_IMAGE_ATTACHMENT_BYTES);
+    expect(formatAttachmentBytes(attachments[0].bytes)).toBe("20.0 MiB");
     expect(attachments[0].dataUrl).toBe(
       `data:image/png;base64,${attachments[0].data}`,
     );

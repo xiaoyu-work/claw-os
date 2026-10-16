@@ -9,6 +9,7 @@ pub const KIND_REQUEST: u8 = 0x01;
 pub const KIND_RESPONSE: u8 = 0x02;
 pub const HEADER_BYTES: usize = 10;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+pub const MAX_TASK_SUBMIT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_REQUEST_ID_BYTES: usize = 64;
 

@@ -42,6 +42,32 @@ fn an_oversized_declared_length_is_refused_before_any_allocation() {
     );
 }
 
+#[tokio::test]
+async fn large_image_frames_are_credentialed_and_admission_bounded() {
+    let (mut server, mut client) = peer_pair();
+    let body = vec![b'x'; 2 * MAX_REQUEST_BYTES];
+    let frame = encode_frame(KIND_REQUEST, &body);
+    let write = tokio::spawn(async move { write_all(&mut client, &frame).await; client });
+    let ReadOutcome::Frame(received) = server.read_request(crate::clawd::wire::MAX_TASK_SUBMIT_BYTES).await.unwrap() else {
+        panic!("expected large framed request");
+    };
+    let _client = write.await.unwrap();
+    assert_eq!(received.body, body);
+    assert_eq!(received.credentials.pid, std::process::id());
+    assert!(received._large_request_permit.is_some());
+    assert_eq!(LARGE_REQUESTS.available_permits(), 1);
+    let second_slot = LARGE_REQUESTS.try_acquire().unwrap();
+    let (mut refused, mut other_client) = peer_pair();
+    write_all(&mut other_client, &header(KIND_REQUEST, 0, body.len() as u32)).await;
+    assert_eq!(
+        refused.read_request(crate::clawd::wire::MAX_TASK_SUBMIT_BYTES).await.err(),
+        Some(Fault::TooManyRequests),
+    );
+    drop(second_slot);
+    drop(received);
+    assert_eq!(LARGE_REQUESTS.available_permits(), 2);
+}
+
 #[test]
 fn a_foreign_magic_kind_or_flag_is_refused() {
     let mut wrong_magic = header(KIND_REQUEST, 0, 0);

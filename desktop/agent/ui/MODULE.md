@@ -234,11 +234,14 @@ The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
 read composed application state and emit messages, but transport orchestration
 belongs to `src/effects.rs` and lifecycle owners.
 
-Image selection reads one explicit file into the bounded protocol-v2
+Image selection reads one explicit file into the bounded protocol-v3
 `ChatAttachment`; the shared protocol checks magic/MIME and aggregate limits.
 The bridge and core broker revalidate it. Selected paths are never sent, shown
 as prompt instructions or treated as authority, and accepted attachments are
 cleared only after the durable task identity is observed.
+The aggregate decoded limit is 20 MiB across at most four originals, with no
+mandatory recompression. The chooser bounds the actual read as well as file
+metadata, and Chat/follow-up HTTP frames allow 32 MiB for encoded transport.
 
 The broker client also serves the separate
 [OS system-review presenter](../../../crates/clawd-client/MODULE.md).

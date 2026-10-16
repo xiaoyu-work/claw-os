@@ -18,6 +18,7 @@ use cosmic::{Application, Element, executor, theme, widget};
 use futures::future::AbortHandle;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use tokio::io::AsyncReadExt;
 
 mod activities;
 mod bridge;
@@ -326,9 +327,12 @@ impl Application for App {
                                     .and_then(|name| name.to_str())
                                     .ok_or_else(|| fl!("attachment-error"))?
                                     .to_string();
-                                let bytes = tokio::fs::read(&path)
+                                let file = tokio::fs::File::open(&path)
                                     .await
                                     .map_err(|error| error.to_string())?;
+                                let mut bytes = Vec::new();
+                                file.take(MAX_CHAT_ATTACHMENT_BYTES as u64 + 1)
+                                    .read_to_end(&mut bytes).await.map_err(|error| error.to_string())?;
                                 ChatAttachment::from_bytes(name, &bytes)
                                     .map(Some)
                                     .map_err(str::to_string)

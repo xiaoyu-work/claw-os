@@ -36,6 +36,17 @@ fn chat_image_attachments_are_bounded_and_self_validating() {
         )
         .is_err()
     );
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.resize(MAX_CHAT_ATTACHMENT_BYTES, 0);
+    let large = ChatAttachment::from_bytes("large.png".into(), &image).unwrap();
+    validate_chat_attachments(std::slice::from_ref(&large)).unwrap();
+    assert_eq!(large.decoded_len().unwrap(), MAX_CHAT_ATTACHMENT_BYTES);
+    let body = serde_json::to_vec(&ChatRequest {
+        prompt:Some("inspect".into()),attachments:vec![large],..Default::default()
+    }).unwrap();
+    assert!(body.len() < MAX_CHAT_REQUEST_BYTES);
+    image.push(0);
+    assert!(ChatAttachment::from_bytes("too-large.png".into(), &image).is_err());
 }
 
 #[test]

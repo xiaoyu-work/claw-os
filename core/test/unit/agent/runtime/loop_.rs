@@ -883,11 +883,13 @@ async fn runtime_sends_verified_images_and_records_only_attachment_metadata() {
     let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
     mock.push_response(MockResponse::Text("image answer".into()));
     let provider: Arc<dyn Provider> = mock.clone();
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.resize(2 * 1024 * 1024, 0);
     let attachments =
         crate::agent::attachments::normalize(vec![crate::agent::attachments::AttachmentInput {
             name: "screen.png".to_string(),
             media_type: "image/png".to_string(),
-            data: base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture"),
+            data: base64::engine::general_purpose::STANDARD.encode(&image),
         }])
         .unwrap();
     let deps = RuntimeDeps::compatibility(true);

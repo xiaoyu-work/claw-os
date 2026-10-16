@@ -113,7 +113,11 @@ predecessor Job, persist through `task.submit.after_task_id`, and chain each
 later follow-up after the previously returned Job. Chat then discovers and
 attaches the next runnable Job through the same conversation projection.
 The browser keeps selected image bytes only in composer state and the
-authenticated request. `task.submit` remains the validation/persistence
+authenticated request.
+Up to four originals may total 20 MiB decoded, within 32-MiB Chat/follow-up
+HTTP frames. Concurrent reads are serialized and navigation rejects late file
+reads; no resizing or lossy compression is required. Provider limits can still
+reject a request explicitly. `task.submit` remains the validation/persistence
 authority; Web creates no attachment filesystem, path authority or long-lived
 copy. Owner-scoped task responses disclose attachment metadata only.
 Activity adapters retain Main's authenticated owner transport and local/remote

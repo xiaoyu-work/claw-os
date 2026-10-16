@@ -52,18 +52,20 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_MONETARY_BUDGET,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 17);
+    assert_eq!(PROTOCOL_VERSION, 18);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
 
 #[test]
 fn requested_model_round_trips_in_the_worker_assignment() {
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.resize(crate::agent::attachments::MAX_TOTAL_BYTES, 0);
     let attachments =
         crate::agent::attachments::normalize(vec![crate::agent::attachments::AttachmentInput {
             name: "screen.png".to_string(),
             media_type: "image/png".to_string(),
-            data: base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture"),
+            data: base64::engine::general_purpose::STANDARD.encode(&image),
         }])
         .unwrap();
     let spec = JobSpec {
@@ -98,6 +100,16 @@ fn requested_model_round_trips_in_the_worker_assignment() {
     );
     assert_eq!(decoded.requested_reasoning_effort.as_deref(), Some("high"));
     assert_eq!(decoded.attachments, attachments);
+    let frame = BrokerFrame::Prepare(Box::new(Assignment {
+        protocol: PROTOCOL_VERSION, grant: signed_grant(), job: decoded,
+        consent_context: unattended_consent(), session: None, presence: None, extension: None,
+    }));
+    let encoded = encode(&frame).unwrap();
+    assert!(encoded.len() > 8 * 1024 * 1024);
+    assert!(encoded.len() <= MAX_FRAME_BYTES);
+    let decoded: BrokerFrame = serde_json::from_str(encoded.trim_end()).unwrap();
+    let BrokerFrame::Prepare(assignment) = decoded else { panic!("expected preparation"); };
+    assert_eq!(assignment.job.attachments[0].bytes, image.len() as u64);
 }
 
 #[test]

@@ -27,7 +27,7 @@ impl Default for ClientConfig {
             connect_timeout: Duration::from_secs(5),
             write_timeout: Duration::from_secs(5),
             read_timeout: Duration::from_secs(30),
-            max_request_bytes: MAX_REQUEST_BYTES,
+            max_request_bytes: crate::MAX_TASK_SUBMIT_BYTES,
             max_response_bytes: MAX_RESPONSE_BYTES,
         }
     }
@@ -119,7 +119,12 @@ async fn exchange_on_stream(
     }
 
     let body = serde_json::to_vec(&request).map_err(ClientError::Encode)?;
-    let maximum = config.max_request_bytes.min(u32::MAX as usize);
+    let route_limit = if request.command == Command::TaskSubmit {
+        crate::MAX_TASK_SUBMIT_BYTES
+    } else {
+        MAX_REQUEST_BYTES
+    };
+    let maximum = config.max_request_bytes.min(route_limit);
     if body.len() > maximum {
         return Err(ClientError::RequestTooLarge {
             actual: body.len(),

@@ -24,7 +24,7 @@ mod voice;
 /// easily exceeds axum's 2 MiB default body limit, so raise it on this route.
 const VOICE_MAX_BYTES: usize = 25 * 1024 * 1024;
 const CONTINUITY_IMPORT_MAX_HTTP_BYTES: usize = 512 * 1024;
-const CHAT_MAX_HTTP_BYTES: usize = 1024 * 1024;
+const CHAT_MAX_HTTP_BYTES: usize = cos_agent_protocol::MAX_CHAT_REQUEST_BYTES;
 
 pub fn api() -> Router<AppState> {
     Router::new()

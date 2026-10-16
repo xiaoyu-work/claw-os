@@ -155,10 +155,14 @@ owner-checked predecessor rather than from UI input.
 
 Native image attachment uses desktop presentation protocol v3. The file chooser
 reads only an explicitly selected PNG/JPEG/GIF/WebP image, enforces the shared
-four-image/256-KiB bounds, and sends inline data through the bridge to the
-canonical `task.submit` attachment contract. It no longer inserts a local path
+four-image/20-MiB decoded-total bounds, and sends original inline bytes through
+32-MiB Chat/follow-up frames to the canonical `task.submit` attachment contract.
+It no longer inserts a local path
 marker into the prompt. The bridge owns no attachment store and derives no file
 authority from the selected path.
+The file read itself is bounded, including if the selected file grows after
+metadata inspection. Provider limits remain explicit errors rather than a
+reason to silently resize the owner's image.
 
 Voice uploads are staged as private runtime files and transcribed via
 the configured `cos model transcribe` provider. App/window context is handed to the UI through an inherited AF_UNIX socketpair

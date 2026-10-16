@@ -103,6 +103,31 @@ mod unix {
     }
 
     #[tokio::test]
+    async fn image_submission_uses_the_large_frame_allowance_without_widening_other_routes() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let request = Request::new(Command::TaskSubmit, json!({"prompt":"inspect","attachments":[{
+            "name":"large.png","media_type":"image/png","data":"A".repeat(2 * MAX_REQUEST_BYTES),
+        }]}));
+        let server_task = async {
+            let received = read_request(&mut server).await;
+            assert!(received.params["attachments"][0]["data"].as_str().unwrap().len() > MAX_REQUEST_BYTES);
+            write_response(&mut server, &Response {
+                v:PROTOCOL_VERSION,id:received.id,ok:true,result:Some(json!({"id":"large-task"})),error:None,
+            }).await;
+        };
+        let ((), response) = tokio::join!(
+            server_task, exchange_on_stream(client, request, ClientConfig::default()),
+        );
+        assert!(response.unwrap().ok);
+
+        let (client, _server) = UnixStream::pair().unwrap();
+        let error = exchange_on_stream(client, Request::new(Command::MemoryUpdate, json!({
+            "content":"x".repeat(2 * MAX_REQUEST_BYTES),
+        })), ClientConfig::default()).await.unwrap_err();
+        assert!(matches!(error, ClientError::RequestTooLarge { maximum:MAX_REQUEST_BYTES, .. }));
+    }
+
+    #[tokio::test]
     async fn remote_error_keeps_stable_code_and_data() {
         let (client, mut server) = UnixStream::pair().unwrap();
         let request = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));

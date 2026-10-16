@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::{ProtocolMetadata, ProtocolVersion};
 
 pub const MAX_CHAT_ATTACHMENTS: usize = 4;
-pub const MAX_CHAT_ATTACHMENT_BYTES: usize = 256 * 1024;
+pub const MAX_CHAT_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
+pub const MAX_CHAT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CHAT_ATTACHMENT_BASE64_BYTES: usize = MAX_CHAT_ATTACHMENT_BYTES.div_ceil(3) * 4;
 pub const MAX_CHAT_ATTACHMENT_NAME_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +120,9 @@ impl ChatAttachment {
 
     pub fn decoded_len(&self) -> Result<usize, &'static str> {
         validate_attachment_name(&self.name)?;
+        if self.data.len() > MAX_CHAT_ATTACHMENT_BASE64_BYTES {
+            return Err("Image attachment exceeds the encoded size limit.");
+        }
         let bytes = STANDARD
             .decode(self.data.as_bytes())
             .map_err(|_| "Image attachment is not valid base64.")?;

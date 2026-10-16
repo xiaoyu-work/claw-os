@@ -5,8 +5,9 @@ use base64::Engine;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub const MAX_ATTACHMENTS: usize = 4;
-pub const MAX_TOTAL_BYTES: usize = 256 * 1024;
+pub const MAX_TOTAL_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_BASE64_BYTES: usize = ((MAX_TOTAL_BYTES + 2) / 3) * 4;
+pub const MAX_SUBMIT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_NAME_BYTES: usize = 256;
 const MAX_NAME_CHARS: usize = 128;
 

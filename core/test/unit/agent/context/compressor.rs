@@ -546,4 +546,14 @@ fn estimate_image_block_charges_baseline_overhead() {
     // Should be at least the 256 baseline + 4 message overhead.
     let t = estimate_message_tokens(&m);
     assert!(t >= 260);
+    let large = Message {
+        role: Role::User,
+        content: vec![ContentBlock::Image {
+            media_type: "image/png".into(),
+            data: "A".repeat(crate::agent::attachments::MAX_BASE64_BYTES),
+        }],
+    };
+    let large_tokens = estimate_message_tokens(&large);
+    assert!(large_tokens >= t);
+    assert!(large_tokens <= 16_384 + 256 + 4);
 }

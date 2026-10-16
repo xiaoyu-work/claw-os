@@ -17,6 +17,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 
 use tokio::io::{AsyncWriteExt, Interest};
 use tokio::net::UnixStream;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::super::wire::{
     looks_like_legacy_request, Fault, HEADER_BYTES, KIND_REQUEST, KIND_RESPONSE, MAGIC,
@@ -25,6 +26,7 @@ use super::peer::{self, Credentials};
 
 /// Largest chunk one `recvmsg` is asked for while filling a body.
 const READ_CHUNK: usize = 64 * 1024;
+static LARGE_REQUESTS: Semaphore = Semaphore::const_new(2);
 
 /// Build one frame.
 pub fn encode_frame(kind: u8, body: &[u8]) -> Vec<u8> {
@@ -60,6 +62,7 @@ pub fn parse_header(
 pub struct RequestFrame {
     pub body: Vec<u8>,
     pub credentials: Credentials,
+    _large_request_permit: Option<SemaphorePermit<'static>>,
 }
 
 /// What the reader saw when a frame could not be produced.
@@ -121,6 +124,11 @@ impl PeerStream {
             return Ok(ReadOutcome::Legacy);
         }
         let len = parse_header(&header, KIND_REQUEST, max)?;
+        let large_request_permit = if len > super::super::wire::MAX_REQUEST_BYTES {
+            Some(LARGE_REQUESTS.try_acquire().map_err(|_| Fault::TooManyRequests)?)
+        } else {
+            None
+        };
         let mut body = vec![0u8; len];
         if len > 0 {
             match self.fill(&mut body).await? {
@@ -129,7 +137,9 @@ impl PeerStream {
             }
         }
         let credentials = self.credentials.ok_or(Fault::MissingCredentials)?;
-        Ok(ReadOutcome::Frame(RequestFrame { body, credentials }))
+        Ok(ReadOutcome::Frame(RequestFrame {
+            body, credentials, _large_request_permit: large_request_permit,
+        }))
     }
 
     /// Whether the peer already queued another frame.

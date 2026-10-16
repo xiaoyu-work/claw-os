@@ -395,7 +395,7 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
     let limits = admission.limits();
     let read = tokio::time::timeout(
         limits.read_deadline,
-        peer_stream.read_request(MAX_REQUEST_BYTES),
+        peer_stream.read_request(super::wire::MAX_TASK_SUBMIT_BYTES),
     )
     .await;
 
@@ -597,6 +597,9 @@ pub(crate) async fn admit(
 ) -> Result<Admitted, Refusal> {
     let refuse =
         |fault: Fault, id: RequestId, command: Option<&'static str>| Refusal { fault, id, command };
+    if body.len() > super::wire::MAX_TASK_SUBMIT_BYTES {
+        return Err(refuse(Fault::FrameTooLarge, RequestId::unknown(), None));
+    }
 
     let envelope = serde_json::from_slice::<InboundRequest>(body).map_err(|error| {
         let fault = match error.classify() {
@@ -616,6 +619,9 @@ pub(crate) async fn admit(
         return Err(refuse(Fault::UnknownCommand, envelope.id, None));
     };
     let route = command.route();
+    if body.len() > MAX_REQUEST_BYTES && command != Command::TaskSubmit {
+        return Err(refuse(Fault::FrameTooLarge, envelope.id, Some(route.name)));
+    }
 
     // Typed decode first: an unknown field, an oversized string or a
     // wrong JSON type is refused before the access class is even

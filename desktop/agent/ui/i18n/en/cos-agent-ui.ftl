@@ -38,6 +38,7 @@ reconnect = Reconnect
 attach-file = Attach file
 attachment-error = File could not be attached
 attached-images = Attached images
+image-attachment-limits = Up to 4 original images, 20 MiB total. Provider limits still apply.
 clear-attachments = Clear attachments
 search-sessions = Search conversations
 show-archived-sessions = Archived conversations

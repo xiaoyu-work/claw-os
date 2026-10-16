@@ -231,10 +231,9 @@ pub fn estimate_message_tokens(msg: &Message) -> u32 {
                     .saturating_add(8)
             }
             ContentBlock::Image { data, .. } => {
-                // Base64 image: charge a flat large cost; exact cost is
-                // provider-specific (Anthropic charges by tile, OpenAI
-                // by pixel area). Better to over-estimate than under.
-                estimate_text_tokens(data) / 4 + 256
+                // Transport base64 is not model text. Cap this heuristic per
+                // image; exact vision tokens remain provider-specific.
+                (estimate_text_tokens(data) / 4).min(16_384) + 256
             }
         });
     }

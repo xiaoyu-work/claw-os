@@ -325,11 +325,14 @@ already-open TUI after upgrading so it also picks up the terminal-input handoff
 and improved failure diagnostics.
 
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
-are replaced together. Package configuration creates the dedicated
-The private Agent worker protocol is v17: memory-read references and safe tool
-metrics travel without result bodies or credentials. Mixed broker/worker
-versions fail closed, so restart a retained process after upgrading rather
-than falling back to the old progress format. Package configuration creates the dedicated
+are replaced together.
+
+The private Agent worker protocol is v18: bounded image assignments may use
+32-MiB frames for up to four originals totalling 20 MiB decoded. Existing
+memory-read references and safe tool metrics still travel without result
+bodies or credentials. Mixed broker/worker versions fail closed, so restart
+a retained process after upgrading rather than falling back to old framing.
+Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user
 memberships are not changed.
 The package now provisions locked accounts `cos-ext-00..63` at fixed UIDs

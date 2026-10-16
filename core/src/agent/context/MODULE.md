@@ -40,6 +40,10 @@ and must refine insufficient or unreliable retrieval. Truncation retains the
 source label, while required data that exceeds a fence/input limit fails
 explicitly. Durable compaction and its source/origin tracking remain the
 runtime's persistence authority.
+Image transport base64 is not literal prompt text. The provider-neutral image
+estimate is capped per image so a larger original does not falsely become
+millions of text tokens; provider context rejection and the conservative
+serialized-byte Activity monetary reservation remain authoritative.
 
 ## Tests
 

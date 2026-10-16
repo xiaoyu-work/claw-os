@@ -12,7 +12,7 @@ use crate::agent::web::routes;
 use crate::agent::web::state::AppState;
 
 const CONTINUITY_IMPORT_MAX_HTTP_BYTES: usize = 256 * 1024;
-const CHAT_MAX_HTTP_BYTES: usize = 1024 * 1024;
+const CHAT_MAX_HTTP_BYTES: usize = crate::agent::attachments::MAX_SUBMIT_BYTES;
 
 pub fn build_app(state: AppState) -> Router {
     let cors = CorsLayer::new()

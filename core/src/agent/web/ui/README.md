@@ -45,9 +45,12 @@ build below and integrate regenerated distribution files deliberately.
 Chat, conversations, Tasks, approvals, and Inbox use owner-scoped `clawd`
 routes. Selected PNG/JPEG/GIF/WebP images stay in composer memory until the
 authenticated Chat request submits the bounded inline Job snapshot; no browser
-attachment store or path authority exists. Approval decisions invoke the
-installed polkit helper; the Web process never gains direct
-permission-decision authority.
+attachment store or path authority exists.
+Chat accepts up to four PNG/JPEG/GIF/WebP originals totalling 20 MiB, without
+re-encoding or forced compression. HTTP and task-submit transport allow
+32 MiB for base64 and bounded request metadata; provider limits still apply.
+Approval decisions invoke the installed polkit helper; the Web process never
+gains direct permission-decision authority.
 Chat and Approvals use the same OS-owned capability cards. Task cards derive
 their request ids from owner-checked Job `waiting_on` state. Human labels,
 targets and supported lifetimes come from `system.review.*`; decisions carry

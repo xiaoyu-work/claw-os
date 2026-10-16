@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -41,7 +41,7 @@ pub const CHANNEL_FD_ENV: &str = "COS_AGENTD_CHANNEL_FD";
 /// Hard cap on a single frame. Streaming deltas and final answers are
 /// far below this; anything larger is treated as a protocol fault and
 /// closes the channel.
-pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_FRAME_BYTES: usize = crate::agent::attachments::MAX_SUBMIT_BYTES;
 
 /// Bound on the identifiers a worker may echo back into persisted
 /// progress records.

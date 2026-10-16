@@ -475,6 +475,14 @@ impl<'de> Deserialize<'de> for TaskAttachments {
                 "image attachment list exceeds its maximum length",
             ));
         }
+        let encoded_bytes = attachments.iter().try_fold(0usize, |total, attachment| {
+            total.checked_add(attachment.data.as_str().len())
+        }).ok_or_else(|| serde::de::Error::custom("image attachment size overflow"))?;
+        if encoded_bytes > crate::agent::attachments::MAX_BASE64_BYTES
+            + 4 * crate::agent::attachments::MAX_ATTACHMENTS
+        {
+            return Err(serde::de::Error::custom("image attachments exceed the aggregate encoded size limit"));
+        }
         Ok(Self(attachments))
     }
 }

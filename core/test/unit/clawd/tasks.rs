@@ -83,7 +83,9 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
     let root = activity_task_root();
     let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());
     let client = activity_task_client(owner_uid);
-    let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture");
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.resize(2 * 1024 * 1024, 0);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&image);
     let submitted = submit(
         json!({
             "prompt": "inspect the screenshot",
@@ -101,6 +103,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
     .unwrap();
     assert_eq!(submitted["attachments"][0]["name"], "screen.png");
     assert!(submitted["attachments"][0].get("data").is_none());
+    assert_eq!(submitted["attachments"][0]["bytes"], image.len());
 
     let store = Store::open_default().unwrap();
     let id = submitted["id"].as_str().unwrap();

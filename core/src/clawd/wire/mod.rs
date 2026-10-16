@@ -59,10 +59,12 @@ pub const KIND_RESPONSE: u8 = 0x02;
 /// Fixed header: magic, kind, flags, length.
 pub const HEADER_BYTES: usize = 10;
 
-/// Largest request body the daemon will read. Comfortably above the
-/// biggest real request (an agent prompt plus context) and far below
-/// anything that could pressure the broker.
+/// Ordinary request ceiling. App argument and business-payload limits
+/// remain independent of the larger image-submission frame allowance.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+
+/// Only `task.submit` may exceed the ordinary request ceiling.
+pub const MAX_TASK_SUBMIT_BYTES: usize = crate::agent::attachments::MAX_SUBMIT_BYTES;
 
 /// Largest response body the daemon will write. `task.result` and
 /// `system.operations` are the wide ones; a response above this is

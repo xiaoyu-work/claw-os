@@ -93,6 +93,11 @@ shared projector reads bounded stream snapshots for summaries, aggregate
 usage and exact tool metrics, and derives image metadata from the owned Job.
 Unavailable/pruned details and byte-budget refusals stay explicit; this
 enrichment never changes canonical bindings, memory replay or task authority.
+Broker framing retains a 1-MiB ordinary request limit and the existing App
+argument bound. Only `task.submit` may use the 32-MiB image frame allowance.
+Before allocating an oversized body, the transport reserves one of two
+oversized-request slots, held through dispatch. Typed image validation still
+enforces four originals and 20 MiB decoded total before task side effects.
 
 The trusted Mail Native Messaging host derives its standing capabilities from
 the same MCP-only manifest as Agent calls. Its compiled ceiling allows only

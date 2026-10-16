@@ -62,6 +62,19 @@ async fn a_well_formed_request_is_admitted_with_its_typed_body() {
 }
 
 #[tokio::test]
+async fn large_request_allowance_is_limited_to_image_task_submissions() {
+    assert_eq!(super::super::wire::MAX_TASK_SUBMIT_BYTES, clawd_client::MAX_TASK_SUBMIT_BYTES);
+    let params = json!({"prompt":"inspect", "attachments":[{
+        "name":"large.png","media_type":"image/png","data":"A".repeat(2 * MAX_REQUEST_BYTES),
+    }]});
+    let allowed = envelope("large-task", "task.submit", params.clone());
+    assert!(admit(&allowed, &peer(1000), &admission()).await.is_ok());
+    let refused = envelope("large-other", "memory.history", params);
+    assert_eq!(admit(&refused, &peer(1000), &admission()).await.err().expect("large ordinary request refused").fault, Fault::FrameTooLarge);
+    assert_eq!(super::super::wire::bounded::APP_ARGS_STDIN_MAX_BYTES, MAX_REQUEST_BYTES - 16 * 1024);
+}
+
+#[tokio::test]
 async fn a_privileged_provider_request_without_a_grant_is_refused() {
     // Naming a session is not authority: with no grant behind the id,
     // the request never reaches the provider.
