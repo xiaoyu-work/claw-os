@@ -21,6 +21,8 @@ shared build helpers.
 | `lib/package-version.sh` | Monotonic Debian package version |
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
+| `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
+| `ci/test-boundaries.sh` | App bind, Calendar, extension, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
 | `app_platform.py` | Reproducible, versioned SDK/runtime/toolkit development artifact; excludes App helpers and OS providers |
 | `app_sources.py` | Resolve current App `main` into an immutable build snapshot and stage explicitly kinded product/capability assets |
 | `app_sources.py --write-lock <path>` | Record the selected SHA for later build steps through `CLAW_APP_SOURCE_LOCK`; never changes the repository selection |

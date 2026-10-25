@@ -63,7 +63,10 @@ dispatched and reusable test/publication pipelines.
 ## Dependencies
 
 Workflow commands call repository scripts that remain the implementation source
-of truth. Secrets are referenced by name only. Package publication requires the
+of truth. Long privileged test steps live in `scripts/ci/test-boundaries.sh`;
+the workflow keeps their original names and order, and the packaging contract
+checks both the invocation and the extracted implementation.
+Secrets are referenced by name only. Package publication requires the
 signing key and never produces an unsigned fallback. Trigger documentation
 must match each `on:` block.
 
