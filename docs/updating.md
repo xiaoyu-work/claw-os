@@ -1065,35 +1065,33 @@ The file should reference the signed repository:
 deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg check-valid-until=yes allow-insecure=no allow-weak=no allow-downgrade-to-insecure=no by-hash=yes] https://xiaoyu-work.github.io/claw-os trixie main
 ```
 
-`check-valid-until=yes` makes APT refuse an index whose signed `Valid-Until` has
-passed, so a frozen mirror cannot keep offering a superseded release; the
-`allow-*` options refuse the insecure fallbacks that would otherwise accept it.
-The same defaults are asserted in `/etc/apt/apt.conf.d/50claw-os-repository`.
+Claw OS repository indexes intentionally omit `Valid-Until`: an infrequently
+updated repository does not expire or require scheduled re-signing.
+`check-valid-until=yes` remains enabled, so an older or other index that
+declares an expiry must still respect it. The `allow-*` options continue to
+refuse insecure fallbacks. The same defaults are asserted in
+`/etc/apt/apt.conf.d/50claw-os-repository`.
 
-That bound only helps if the metadata is renewed before it expires. A
-scheduled workflow, `.github/workflows/refresh-apt-metadata.yml`, re-signs
-`Release`/`InRelease` weekly — well inside the 30-day window — without
-rebuilding or changing any package bytes. It preserves and re-verifies the
-release-security baseline, and fails loudly rather than publishing unsigned
-metadata if the signing key is unavailable. A repository that publishes
-packages rarely therefore does not silently expire and cut installed systems
-off from security updates.
+This applies only to APT index metadata. Signing-key validity and the signed
+release-security manifests inside packages retain their independent rules;
+an unexpired index does not bypass package verification or the security floor.
 
 The publisher applies the same scepticism in the other direction. Before it
 believes what the current `InRelease` says about the published state, it
-verifies the signature, refuses an index dated in the future, refuses one whose
-`Valid-Until` has passed, refuses one older than its freshness policy, and
+verifies the signature, refuses an index dated in the future or whose declared
+`Valid-Until` has passed, imposes no maximum index age, and
 requests everything with cache-busting, no-cache headers. Each preserved
 release-security file is then cross-checked against the SHA-256 recorded for it
 in that signed index, so an origin cannot pair a current index with an older,
 separately signed manifest.
 
 The residual risk is worth stating plainly: an attacker who controls the entire
-origin can serve a *consistent* older snapshot that is still inside its
-`Valid-Until` window, and no client-side check can distinguish that from the
-truth. The defences against it are the short `Valid-Until`, the scheduled
-refresh that keeps it short, and the per-machine security floor — not the
-publisher.
+origin can indefinitely serve a *consistent*, correctly signed older index
+without an expiry. There is no time-based freeze/replay protection for that
+index. The per-machine security floor still refuses releases below a state
+the machine has already observed, but cannot detect newer updates it has
+never seen. Non-expiring indexes deliberately trade this freshness protection
+for lower publication maintenance.
 
 The keyring should also exist:
 

@@ -424,10 +424,8 @@ grep -q "established baseline" "$WORK/legacy.err" \
 ok "a manifest-less artifact is refused once a baseline exists"
 
 # ---------------------------------------------------------------------------
-# 7. Repository freshness metadata.
+# 7. Repository integrity metadata.
 # ---------------------------------------------------------------------------
-grep -Fq 'Valid-Until:' "$BUILD_REPO" \
-    || fail "build-repo.sh must set a Release Valid-Until"
 grep -Fq 'Acquire-By-Hash' "$BUILD_REPO" \
     || fail "build-repo.sh must publish by-hash indexes"
 grep -Fq 'verify-release-security.sh' "$BUILD_REPO" \
@@ -436,7 +434,7 @@ grep -Fq 'Claw-Os-Release-Security-Baseline: 1' "$BUILD_REPO" \
     || fail "build-repo.sh must advertise the release-security baseline in Release"
 grep -Fq 'XB-Claw-Os-Security-Epoch' "$SYNC" \
     || fail "the merge step must compare security epochs"
-ok "the repository build wires freshness metadata and verification"
+ok "the repository build wires integrity metadata and verification"
 
 # ---------------------------------------------------------------------------
 # 8. Retrieving the published state is fail-closed.
@@ -587,8 +585,7 @@ grep -q "does not verify" "$WORK/sync-badsig.log" \
     || { cat "$WORK/sync-badsig.log" >&2; fail "the signature refusal was not explained"; }
 ok "an InRelease that does not verify is fatal"
 
-# The `Valid-Until` insertion must be exact and must survive whatever
-# this apt version emits, so run the real transformation.
+# Indexes retain their signed date and by-hash declarations without expiry.
 RELEASE_DIR="$WORK/release-check"
 mkdir -p "$RELEASE_DIR/dists/$SUITE/$COMPONENT/binary-amd64"
 printf 'Package: x\n' > "$RELEASE_DIR/dists/$SUITE/$COMPONENT/binary-amd64/Packages"
@@ -601,19 +598,18 @@ APT::FTPArchive::Release::Components "$COMPONENT";
 APT::FTPArchive::Release::Date "$(date -u -R)";
 APT::FTPArchive::Release::Acquire-By-Hash "yes";
 EOF
-VALID_UNTIL="$(date -u -R -d '+30 days')"
 ( cd "$RELEASE_DIR" && apt-ftparchive -c=release.conf release "dists/$SUITE" \
     > "dists/$SUITE/Release" )
-awk -v valid_until="$VALID_UNTIL" '
+awk '
     /^Valid-Until:/ { next }
     { print }
-    /^Date:/ { printf "Valid-Until: %s\n", valid_until }
 ' "$RELEASE_DIR/dists/$SUITE/Release" > "$RELEASE_DIR/Release.out"
-[ "$(grep -c '^Valid-Until:' "$RELEASE_DIR/Release.out")" = "1" ] \
-    || fail "the published Release must carry exactly one Valid-Until"
+if grep -q '^Valid-Until:' "$RELEASE_DIR/Release.out"; then
+    fail "the published Release must not expire"
+fi
 grep -q '^Acquire-By-Hash: yes' "$RELEASE_DIR/Release.out" \
     || fail "the published Release must advertise by-hash indexes"
-ok "the published Release carries a Valid-Until bound and by-hash indexes"
+ok "the published Release has no expiry and advertises by-hash indexes"
 
 # ---------------------------------------------------------------------------
 # 18. End-to-end: build -> signed Release/InRelease -> sync -> publish again.
@@ -732,6 +728,9 @@ grep -q '^Claw-Os-Release-Security-Baseline:' "$CYCLE/repo-pre/dists/$SUITE/Rele
     && fail "an unprotected repository must not publish a release-security directory"
 test -s "$CYCLE/repo-pre/dists/$SUITE/InRelease" \
     || fail "the pre-protection repository was not signed"
+if grep -q '^Valid-Until:' "$CYCLE/repo-pre/dists/$SUITE/Release"; then
+    fail "the real repository build published an expiring index"
+fi
 ok "a pre-protection pool publishes signed metadata and claims no baseline"
 ok "an ordinary build cannot publish a repository that has no baseline"
 
@@ -817,7 +816,7 @@ stop_server
 ok "a protected origin that stops serving its baseline is fatal"
 
 # ---------------------------------------------------------------------------
-# 19. Index freshness: a signature is not recency.
+# 19. Signed time fields: no index age limit, but declared expiry is binding.
 # ---------------------------------------------------------------------------
 FRESH="$PROJECT_DIR/packaging/apt-repo/check-index-freshness.py"
 release_fixture() {
@@ -847,20 +846,18 @@ if "$FRESH" "$WORK/fresh-expired" >/dev/null 2>"$WORK/fresh-expired.err"; then
     fail "an expired index was accepted"
 fi
 
-release_fixture "$WORK/fresh-stale" "$(date -u -R -d '-40 days')" \
-    "$(date -u -R -d '+30 days')"
-if "$FRESH" "$WORK/fresh-stale" >/dev/null 2>"$WORK/fresh-stale.err"; then
-    fail "an index far beyond the freshness policy was accepted"
-fi
-grep -q "freshness policy" "$WORK/fresh-stale.err" \
-    || fail "the staleness refusal was not explained"
+release_fixture "$WORK/fresh-old" "$(date -u -R -d '-400 days')" ""
+"$FRESH" "$WORK/fresh-old" >/dev/null 2>"$WORK/fresh-old.err" \
+    || fail "an old index without an expiry must be accepted"
+test ! -s "$WORK/fresh-old.err" \
+    || fail "an intentional non-expiring index must not produce an expiry warning"
 
 release_fixture "$WORK/fresh-nodate" "" ""
 sed -i '/^Date:/d' "$WORK/fresh-nodate"
 if "$FRESH" "$WORK/fresh-nodate" >/dev/null 2>&1; then
     fail "an undated index was accepted"
 fi
-ok "the publisher refuses a future-dated, expired, stale or undated index"
+ok "the publisher accepts old non-expiring indexes and refuses invalid time fields"
 
 # ---------------------------------------------------------------------------
 # 20. The signing passphrase never reaches argv.
@@ -898,38 +895,12 @@ unset ARGV_LOG REAL_GPG
 ok "the signing passphrase is passed on a descriptor, never in argv"
 
 # ---------------------------------------------------------------------------
-# 21. Workflow contracts that keep the published metadata fresh and the
-#     signing passphrase private.
+# 21. Workflow contracts keep signing private without scheduled index renewal.
 # ---------------------------------------------------------------------------
 WORKFLOWS="$PROJECT_DIR/.github/workflows"
-REFRESH="$WORKFLOWS/refresh-apt-metadata.yml"
-[ -s "$REFRESH" ] || fail "there is no scheduled metadata refresh workflow"
-python3 - "$REFRESH" <<'PY'
-import sys
-
-import yaml
-
-document = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-# PyYAML reads the unquoted `on:` key as the boolean True.
-triggers = document.get("on", document.get(True))
-assert triggers and "schedule" in triggers, "the refresh must be scheduled"
-minute, hour, day, month, weekday = triggers["schedule"][0]["cron"].split()
-assert day == "*" and month == "*", "the refresh must not be monthly or later"
-assert weekday != "*" or day != "*", "the refresh must have a fixed cadence"
-
-body = open(sys.argv[1], encoding="utf-8").read()
-assert "CLAW_OS_APT_SIGNING_PRIVATE_KEY" in body, "the refresh must sign"
-assert "exit 1" in body, "a missing signing secret must fail the refresh"
-assert "build-repo.sh" in body, "the refresh must rebuild and re-sign metadata"
-assert "build-debs.sh" not in body, "a metadata refresh must not build packages"
-assert "COS_RELEASE_SECURITY_BOOTSTRAP: \"0\"" in body, (
-    "a refresh must never be able to run the one-time migration"
-)
-assert "Claw-Os-Release-Security-Baseline: 1" in body, (
-    "the refresh must verify that it preserved the baseline"
-)
-PY
-ok "a scheduled workflow re-signs repository metadata without rebuilding packages"
+[ ! -e "$WORKFLOWS/refresh-apt-metadata.yml" ] \
+    || fail "non-expiring indexes must not retain the scheduled refresh workflow"
+ok "non-expiring indexes need no scheduled metadata refresh"
 
 # The signing passphrase must never be handed to another process on a
 # command line, including through sudo.
