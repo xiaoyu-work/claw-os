@@ -50,15 +50,26 @@ dispatched and reusable test/publication pipelines.
 | Path | Role |
 | --- | --- |
 | `test.yml` | Pull-request, manual, and reusable test/clippy workflow |
-| `build-docker-and-wsl.yml` | Shared rootfs, GHCR image, WSL artifacts/releases |
-| `publish-agent-package.yml` | Independent Agent build, Ubuntu smoke test, and publication |
-| `publish-base-package.yml` | Independent Claw OS Base build and publication |
-| `publish-desktop-package.yml` | Independent full-rootfs Desktop build and publication |
-| `publish-website.yml` | Website-only manual publication |
-| `publish-apt-repo.yml` | Internal web/APT artifact composition and Pages deployment |
+| `release.yml` | Manual `agent`, `base`, `desktop`, `images`, `website` or `all` release; shared package builds, one website/APT composition and Pages deployment |
 | `publish-sdk-release.yml` | GitHub SDK artifacts and synchronized language tags |
 | `publish-app-platform.yml` | Manually published versioned SDK/runtime/toolkit development artifact for independent App builds |
-| `release.yml` | Umbrella test + all publication channels |
+| `../actionlint.yaml` | Dedicated runner labels and compatibility with GitHub's queued concurrency |
+| `../../scripts/ci/` | Release planning, signing-key import, package checks and installed Agent/privileged test scripts |
+
+There are four workflow entry points. `release.yml` freezes one commit-derived
+package version and, when Apps are needed, one App-main snapshot for the whole
+run. `all` calls `test.yml` with that snapshot before building. Targeted releases
+retain their component checks without rerunning the full shared suite.
+Agent/Base packages are built once and downloaded by the image matrix; image
+jobs never compile the shared Rust binaries. Docker and WSL consume the same
+stamped rootfs per architecture. Desktop retains its dedicated full-rootfs
+build and native source graph.
+
+Release runs queue without cancelling one another. Selected packages are merged
+with the authenticated existing pool only once, alongside one independent web
+build, then signed and deployed once. `images` builds signed Agent/Base inputs
+without publishing those packages to APT. `website` preserves the existing
+signed package pool. Non-expiring indexes need no scheduled refresh.
 
 ## Dependencies
 

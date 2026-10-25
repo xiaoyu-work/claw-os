@@ -1,54 +1,596 @@
-name: Release everything (test + Docker + WSL + APT)
+name: Release Claw OS
 
-# Umbrella pipeline: runs the test suite, then publishes every distribution
-# channel from one dispatch. Each called workflow can also be run on its own
-# from the Actions tab when you only need one artifact.
-#
-# Publishes:
-#   - Docker multi-arch image  -> ghcr.io/<repo>
-#   - WSL .wsl packages        -> GitHub Release (wsl-latest / v* tag)
-#   - Signed APT repo          -> GitHub Pages
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Component to publish; all runs the shared test suite first"
+        required: true
+        default: all
+        type: choice
+        options:
+          - agent
+          - base
+          - desktop
+          - images
+          - website
+          - all
+      release_security_bootstrap:
+        description: "One-time migration for a package repository without a release-security baseline"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: claw-os-release
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      agent: ${{ steps.plan.outputs.agent }}
+      base: ${{ steps.plan.outputs.base }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      images: ${{ steps.plan.outputs.images }}
+      pages: ${{ steps.plan.outputs.pages }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Freeze release version and App sources
+        id: plan
+        env:
+          RELEASE_TARGET: ${{ inputs.target }}
+          RELEASE_SECURITY_BOOTSTRAP: ${{ inputs.release_security_bootstrap && '1' || '0' }}
+        run: bash scripts/ci/prepare-release.sh
+
+      - name: Import signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: bash scripts/ci/import-signing-key.sh
+
+      - name: Export the image and repository public key
+        run: install -m 0644 "$CLAW_OS_RELEASE_SECURITY_KEYRING" build/release/claw-os-archive-keyring.gpg
+
+      - name: Retain same-run release inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-release-inputs
+          path: build/release
+          if-no-files-found: error
+          overwrite: true
+
   test:
+    needs: prepare
+    if: inputs.target == 'all'
     uses: ./.github/workflows/test.yml
+    with:
+      app_source_artifact: claw-os-release-inputs
 
-  docker-image-and-wsl-package:
-    needs: test
-    uses: ./.github/workflows/build-docker-and-wsl.yml
+  # Unselected jobs may be skipped; failed or cancelled prerequisites never
+  # admit a build or publication.
+  build-agent:
+    needs: [prepare, test]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.agent == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            musl_target: x86_64-unknown-linux-musl
+            gnu_target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            musl_target: aarch64-unknown-linux-musl
+            gnu_target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      CLAW_APP_SOURCE_LOCK: ${{ github.workspace }}/build/release/app-sources.json
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-release-inputs
+          path: build/release
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.musl_target }},${{ matrix.gnu_target }}
+
+      - name: Install host build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools dpkg-dev fakeroot libpam0g-dev
+
+      - name: Import signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: bash scripts/ci/import-signing-key.sh
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-release-
+            ${{ runner.os }}-${{ runner.arch }}-agent-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-build-
+
+      - name: Build shared Agent binaries
+        run: |
+          source scripts/lib/arch.sh
+          cargo build --release --locked -p cos --target "$RUST_TARGET"
+          cargo build --release --locked \
+            --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+            --bin claw-calendar-reader --target "$RUST_TARGET" \
+            --target-dir "$GITHUB_WORKSPACE/target"
+          cargo build --release --locked -p claw-display-login --target "${RUST_TARGET/-musl/-gnu}"
+          cargo build --release --locked -p cos-browser --target "${RUST_TARGET/-musl/-gnu}"
+          cargo build --release --locked -p claw-semantic --target "${RUST_TARGET/-musl/-gnu}"
+
+      - name: Build Agent package
+        env:
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+        run: bash packaging/deb/build-debs.sh agent
+
+      - name: Exercise the Claw-owned Agent TUI
+        run: bash scripts/ci/test-agent-package.sh tui
+
+      - name: Verify Agent payload, snapshot and signed release manifest
+        run: bash scripts/ci/verify-package.sh agent
+
+      - name: Install and reinstall Agent on Ubuntu
+        run: bash scripts/ci/test-agent-package.sh installed
+
+      - name: Upload Agent package
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-agent-${{ matrix.arch }}
+          path: build/debs/claw-os-agent_*_${{ matrix.arch }}.deb
+          if-no-files-found: error
+          overwrite: true
+
+  build-base:
+    needs: [prepare, test]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.base == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install package build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y dpkg-dev fakeroot
+
+      - name: Import signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: bash scripts/ci/import-signing-key.sh
+
+      - name: Build Base package
+        env:
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+        run: bash packaging/deb/build-debs.sh base
+
+      - name: Verify Base payload and signed release manifest
+        run: bash scripts/ci/verify-package.sh base
+
+      - name: Upload Base package
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-base
+          path: build/debs/claw-os-base_*_all.deb
+          if-no-files-found: error
+          overwrite: true
+
+  build-desktop:
+    needs: [prepare, test]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.desktop == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: claw-os-desktop-amd64
+          - arch: arm64
+            runner: claw-os-desktop-arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      CLAW_APP_SOURCE_LOCK: ${{ github.workspace }}/build/release/app-sources.json
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-release-inputs
+          path: build/release
+
+      - name: Install host build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg git-lfs
+
+      - name: Import signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: bash scripts/ci/import-signing-key.sh
+
+      - name: Build Desktop package in its Debian rootfs
+        env:
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+        run: |
+          sudo --preserve-env=GNUPGHOME,CLAW_OS_RELEASE_SECURITY_KEY_ID,GPG_PASSPHRASE,COS_PACKAGE_VERSION,CLAW_APP_SOURCE_LOCK \
+            env ARCH="$ARCH" DESKTOP_PACKAGE_ONLY=1 \
+            ./rootfs/build.sh --features base,desktop
+
+      - name: Verify Desktop payload, snapshot and signed release manifest
+        run: bash scripts/ci/verify-package.sh desktop
+
+      - name: Upload Desktop package
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-desktop-${{ matrix.arch }}
+          path: build/debs/claw-os-desktop_*_${{ matrix.arch }}.deb
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+  build-website:
+    needs: [prepare, test]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.pages == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build website once
+        run: |
+          npm ci --prefix web --no-audit --no-fund \
+            --registry=https://registry.npmjs.org \
+            --replace-registry-host=always
+          npm run build --prefix web
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-website
+          path: web/dist
+          if-no-files-found: error
+          overwrite: true
+
+  build-images:
+    needs: [prepare, build-agent, build-base]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.images == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write   # WSL rolling release
-      packages: write   # Docker push to GHCR
-    secrets: inherit
+      contents: read
+      packages: write
+    env:
+      ARCH: ${{ matrix.arch }}
+      COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      CLAW_APP_SOURCE_LOCK: ${{ github.workspace }}/build/release/app-sources.json
+      COS_APT_PUBLIC_KEY_FILE: ${{ github.workspace }}/build/release/claw-os-archive-keyring.gpg
+      CLAW_OS_RELEASE_SECURITY_KEYRING: ${{ github.workspace }}/build/release/claw-os-archive-keyring.gpg
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-  agent-package:
-    needs: test
-    uses: ./.github/workflows/publish-agent-package.yml
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-release-inputs
+          path: build/release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-agent-${{ matrix.arch }}
+          path: build/debs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-base
+          path: build/debs
+
+      - name: Install image build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y debootstrap curl ca-certificates python3 gnupg dpkg-dev
+
+      - name: Verify same-run image packages
+        run: |
+          bash scripts/ci/verify-package.sh agent
+          bash scripts/ci/verify-package.sh base
+
+      - name: Select the shared headless profile
+        run: |
+          source scripts/lib/image-profiles.sh
+          echo "ROOTFS_FEATURES=$IMAGE_FEATURES_HEADLESS_RUNTIME" >> "$GITHUB_ENV"
+
+      - name: Build one rootfs from the prepared Agent and Base packages
+        run: |
+          sudo --preserve-env=COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_SOURCE_LOCK \
+            env ARCH="$ARCH" ./rootfs/build.sh --features "$ROOTFS_FEATURES"
+
+      - name: Verify the shared rootfs has no human account
+        run: |
+          sudo bash -c '
+            source scripts/lib/image-identity.sh
+            assert_no_human_login_users build/claw-os-rootfs "shared $1 rootfs"
+          ' image-identity "$ARCH"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push the architecture image
+        env:
+          DOCKER_LABELS: ${{ steps.meta.outputs.labels }}
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}-${{ matrix.arch }}
+        run: |
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "$label" ] && label_args+=(--label "$label")
+          done <<< "$DOCKER_LABELS"
+          sudo tar --numeric-owner -cf - \
+            targets/docker/Dockerfile targets/docker/container-entrypoint.sh \
+            build/claw-os-rootfs \
+            | docker buildx build --platform "$PLATFORM" \
+                --file targets/docker/Dockerfile \
+                --build-arg ROOTFS_DIR=build/claw-os-rootfs \
+                --tag "$REGISTRY/$IMAGE_NAME:$IMAGE_TAG" \
+                "${label_args[@]}" --push -
+
+      - name: Remove Docker build cache
+        if: always()
+        run: docker buildx prune --all --force || true
+
+      - name: Package WSL from the same stamped rootfs
+        run: |
+          sudo --preserve-env=COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_SOURCE_LOCK \
+            env ARCH="$ARCH" FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
+
+      - name: Compute WSL checksums
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" build
+          cd build
+          sha256sum "claw-os-wsl-${ARCH}.wsl" > "claw-os-wsl-${ARCH}.wsl.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-wsl-${{ matrix.arch }}
+          path: |
+            build/claw-os-wsl-${{ matrix.arch }}.wsl
+            build/claw-os-wsl-${{ matrix.arch }}.wsl.sha256
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+  publish-pages:
+    needs: [prepare, build-agent, build-base, build-desktop, build-website]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.pages == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claw-os-apt-pages
+      cancel-in-progress: false
+      queue: max
     permissions:
       actions: read
       contents: read
       pages: write
       id-token: write
-    secrets: inherit
+    environment:
+      name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
 
-  base-package:
-    needs: test
-    uses: ./.github/workflows/publish-base-package.yml
-    permissions:
-      actions: read
-      contents: read
-      pages: write
-      id-token: write
-    secrets: inherit
+      - uses: actions/download-artifact@v4
+        with:
+          name: claw-os-website
+          path: build/web-dist
 
-  desktop-package:
-    needs: test
-    uses: ./.github/workflows/publish-desktop-package.yml
+      - name: Download new Agent packages
+        if: needs.prepare.outputs.agent == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: claw-os-agent-*
+          path: build/debs
+          merge-multiple: true
+
+      - name: Download new Base package
+        if: needs.prepare.outputs.base == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-base
+          path: build/debs
+
+      - name: Download new Desktop packages
+        if: needs.prepare.outputs.desktop == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: claw-os-desktop-*
+          path: build/debs
+          merge-multiple: true
+
+      - name: Install repository tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq apt-utils gnupg
+
+      - name: Import signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: bash scripts/ci/import-signing-key.sh
+
+      - name: Merge and sign the repository once
+        env:
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+          CLAW_OS_WEB_DIST_DIR: ${{ github.workspace }}/build/web-dist
+          COS_RELEASE_SECURITY_BOOTSTRAP: ${{ inputs.release_security_bootstrap && '1' || '0' }}
+        run: |
+          EXISTING_APT_REPO_URL="https://xiaoyu-work.github.io/claw-os" \
+            APT_PUBLIC_KEYRING="$CLAW_OS_RELEASE_SECURITY_KEYRING" \
+            bash packaging/apt-repo/sync-existing-packages.sh
+          bash packaging/apt-repo/build-repo.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          name: github-pages
+          path: build/apt-repo
+
+      - name: Deploy GitHub Pages once
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+
+  publish-docker:
+    needs: [prepare, build-images]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.images == 'true' }}
+    runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
-      pages: write
-      id-token: write
-    secrets: inherit
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Publish the multi-architecture manifest
+        env:
+          SOURCE_TAG: ${{ github.sha }}-${{ github.run_id }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            docker buildx imagetools create --tag "$tag" \
+              "$REGISTRY/$IMAGE_NAME:$SOURCE_TAG-amd64" \
+              "$REGISTRY/$IMAGE_NAME:$SOURCE_TAG-arm64"
+          done <<< "$TAGS"
+          first_tag="$(printf '%s\n' "$TAGS" | sed -n '1p')"
+          docker buildx imagetools inspect "$first_tag"
+
+  publish-wsl:
+    needs: [prepare, build-images]
+    if: >-
+      ${{ !failure() && !cancelled() && needs.prepare.outputs.images == 'true' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: claw-os-wsl-*
+          path: build
+          merge-multiple: true
+
+      - name: Compute release metadata
+        id: artifact
+        run: |
+          cd build
+          for arch in amd64 arm64; do
+            sha256sum --check "claw-os-wsl-${arch}.wsl.sha256"
+            sha="$(cut -d' ' -f1 "claw-os-wsl-${arch}.wsl.sha256")"
+            size="$(du -h "claw-os-wsl-${arch}.wsl" | cut -f1)"
+            echo "${arch}_sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "${arch}_size=$size" >> "$GITHUB_OUTPUT"
+            echo "- claw-os-wsl-${arch}.wsl ($size): \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Publish WSL release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref == 'refs/heads/main' && 'wsl-latest' || github.ref_name }}
+          name: ${{ github.ref == 'refs/heads/main' && 'WSL rolling build (main)' || format('Claw OS {0}', github.ref_name) }}
+          prerelease: ${{ github.ref == 'refs/heads/main' }}
+          target_commitish: ${{ github.sha }}
+          body: |
+            Claw OS WSL2 distributions.
+
+            **Commit:** ${{ github.sha }}
+
+            | Architecture | File | SHA-256 | Size |
+            |---|---|---|---|
+            | amd64 | `claw-os-wsl-amd64.wsl` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.wsl` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
+
+            Download the package matching your Windows CPU architecture:
+
+            ```powershell
+            $package = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.wsl" } else { ".\claw-os-wsl-amd64.wsl" }
+            wsl --install --from-file $package --name claw-os --location C:\WSL\claw-os --version 2
+            ```
+
+            First launch asks you to create the UNIX username and password.
+          files: |
+            build/claw-os-wsl-amd64.wsl
+            build/claw-os-wsl-amd64.wsl.sha256
+            build/claw-os-wsl-arm64.wsl
+            build/claw-os-wsl-arm64.wsl.sha256
+
+      - name: Move the rolling tag to the published commit
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/wsl-latest" \
+            -f sha="$GITHUB_SHA" -F force=true

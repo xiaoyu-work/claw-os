@@ -910,7 +910,7 @@ for workflow in "$WORKFLOWS"/*.yml; do
         fail "$(basename "$workflow") passes the passphrase through sudo argv"
     fi
 done
-grep -q -- '--preserve-env=.*GPG_PASSPHRASE' "$WORKFLOWS/publish-desktop-package.yml" \
+grep -q -- '--preserve-env=.*GPG_PASSPHRASE' "$WORKFLOWS/release.yml" \
     || fail "the desktop build must inherit the passphrase, not pass it in argv"
 ok "no workflow places the signing passphrase on a command line"
 

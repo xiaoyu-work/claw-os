@@ -23,6 +23,10 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, extension, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
+| `ci/prepare-release.sh` | Select release jobs, freeze the monotonic package version and resolve one immutable App-main snapshot |
+| `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
+| `ci/verify-package.sh` | Check package identity, payload, same-run App snapshot and signed release manifest before upload or image composition |
+| `ci/test-agent-package.sh` | Preserve the Agent TUI scenarios and real Ubuntu install/reinstall, PAM, broker and cgroup checks |
 | `app_platform.py` | Reproducible, versioned SDK/runtime/toolkit development artifact; excludes App helpers and OS providers |
 | `app_sources.py` | Resolve current App `main` into an immutable build snapshot and stage explicitly kinded product/capability assets |
 | `app_sources.py --write-lock <path>` | Record the selected SHA for later build steps through `CLAW_APP_SOURCE_LOCK`; never changes the repository selection |
@@ -34,6 +38,12 @@ shared build helpers.
 Rootfs, targets, and packaging source these helpers rather than reimplementing
 their logic. Scripts must be LF-only, non-interactive in CI, and safe when run
 under sudo.
+
+CI scripts run from `GITHUB_WORKSPACE` and use `RUNNER_TEMP` for private scratch
+state. Release preparation writes outputs through `GITHUB_OUTPUT`; signing-key
+import writes only paths and key identifiers through `GITHUB_ENV`, never the
+private key or passphrase. Desktop rootfs builds inherit signing environment
+variables through `sudo --preserve-env`, not process arguments.
 
 ## Tests
 

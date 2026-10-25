@@ -146,13 +146,23 @@ installed targets.
 
 ### `apt` repository
 
-`claw-os-agent`, `claw-os-base`, and `claw-os-desktop` each have an independent
-manually dispatched build/publication workflow. Agent and Base are assembled
-from source-tree assets and compiled binaries without a rootfs; Desktop is
-staged by its rootfs feature. Each workflow merges only its new package into
-the existing signed APT repository and preserves the other package families.
-The umbrella **Release everything (test + Docker + WSL + APT)** workflow invokes
-all package channels when a coordinated release is wanted.
+The manually dispatched **Release Claw OS** workflow (`release.yml`) accepts
+`agent`, `base`, `desktop`, `images`, `website`, or `all`. Package targets remain
+independently publishable. Agent and Base use source assets and compiled
+binaries without a rootfs; Desktop retains its dedicated rootfs build.
+`all` first calls the shared test workflow with the same immutable App snapshot
+used by every package build. Headless images consume the prepared signed
+Agent/Base packages instead of compiling their binaries again.
+
+Selected packages merge once into the authenticated APT pool, preserving other
+package families. The website builds once and Pages deploys once per
+publication. `images` does not publish its input packages to APT; `website`
+preserves all published packages. Non-expiring indexes require no weekly CI.
+Release runs are serialized without cancellation.
+
+Only four workflows remain: `test.yml` (PR/manual/reusable validation),
+`release.yml` (manual OS publication), `publish-sdk-release.yml`, and
+`publish-app-platform.yml` (independent versioned developer releases).
 The repository is consumable as:
 
 ```bash

@@ -90,7 +90,7 @@ route.
 | Migrated App products | Product UI, business implementation, MCP and upstream source live in a separate repository; Mail native build and product cutover remain in progress | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` |
 | Shared-capability clients | Legacy facades are explicitly separate from business products; Document Engine owns `doc` and Storage SDK owns `db`, while privileged providers and SDK stay in the OS | External `clawos-app/capabilities/`, `packaging/apps.lock.json` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
-| Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
+| Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/release.yml` (`website` target) |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
 
 ## Dependency Rules
@@ -2314,29 +2314,37 @@ assigned by trusted code paths; remote text never selects an audit action.
 ### Image and package publication
 
 ```text
-source + compiled binaries
-  + image profile
-  -> rootfs/build.sh
-  -> shared rootfs
-  -> Docker image + WSL package
-
-source + compiled binaries
+one OS commit + package version + immutable App snapshot
+  -> shared tests for a full release
+  -> one Agent build per architecture + one Base package
   -> packaging/deb/build-debs.sh
-  -> amd64/arm64 .deb artifacts
-  -> signed APT repository artifact
+  -> signed Agent/Base .deb artifacts
+       -> rootfs/build.sh + shared headless profile
+       -> one stamped rootfs per architecture
+       -> Docker image + WSL package
+
+the same App snapshot + dedicated desktop rootfs build
+  -> signed Desktop .deb artifacts
 
 web source
   -> npm run build
-  -> independent web artifact
+  -> one independent web artifact
 
-signed APT repository artifact + web artifact
-  -> Pages composition
+selected .deb artifacts + authenticated existing pool + web artifact
+  -> one signed APT/Pages composition
   -> GitHub Pages
 ```
 
 `test.yml` runs on pull requests and remains manually dispatchable/reusable.
-Publication workflows are manually dispatched; `release.yml` runs tests and
-fans out to the combined Docker/WSL channel and the independent APT channel.
+The other three workflows are manually dispatched: `release.yml` selects
+`agent`, `base`, `desktop`, `images`, `website` or `all`; SDK and App development
+platform releases retain independent versions and entry points. `all` runs the
+shared tests first. Component targets retain their existing build/install
+checks. Same-run artifacts bind the image packages and App snapshot rather
+than treating Cargo caches or an older run as release output.
+Release runs queue without cancellation; selected packages merge and deploy
+to Pages once. APT indexes intentionally have no expiry or scheduled refresh;
+signature, package-manifest validity and downgrade checks remain enforced.
 
 ## Entry Points
 
@@ -2360,9 +2368,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | Debian package build | `packaging/deb/build-debs.sh` | Installed package artifacts |
 | APT repository build | `packaging/apt-repo/build-repo.sh` | Signed repository assembly |
 | Web desktop | `web/src/App.tsx` | Browser-based Linux desktop composition |
-| Website publication | `.github/workflows/publish-website.yml` | Independent web build and Pages composition |
+| Website publication | `.github/workflows/release.yml` (`website` target) | Independent web build and Pages composition |
 | CI test workflow | `.github/workflows/test.yml` | Pull-request/manual/reusable test workflow |
-| Full release workflow | `.github/workflows/release.yml` | Manual umbrella publication |
+| OS release workflow | `.github/workflows/release.yml` | Manual component selection or full publication |
 
 ## Cross-Cutting Constraints
 

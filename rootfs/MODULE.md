@@ -31,6 +31,11 @@ Installed Claw OS binaries arrive through packages built from the current
 source. Reuse is allowed only when the complete stamp, artifacts, environment,
 architecture, and feature list match.
 
+The release workflow downloads its same-run, signed Agent/Base packages before
+headless image composition. `cos-core/install.sh` looks up the exact version,
+including Debian's `%3a` filename encoding for the security epoch, so existing
+artifacts satisfy composition without a second binary/package build.
+
 Desktop builds resolve App `main` once and prepare its native inputs on the host, then
 bind `build/native-apps` at the matching relative dependency path inside the
 chroot. The shell, shared services and forked toolkit stay OS-owned; the App
