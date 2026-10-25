@@ -15,6 +15,7 @@ PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 BUILD_DEBS="$PROJECT_DIR/packaging/deb/build-debs.sh"
 UNIT="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system/clawd.service"
 TEST_WORKFLOW="$PROJECT_DIR/.github/workflows/test.yml"
+TEST_BOUNDARIES="$PROJECT_DIR/scripts/ci/test-boundaries.sh"
 CARGO_TOML="$PROJECT_DIR/core/Cargo.toml"
 SYSUSERS="$PROJECT_DIR/packaging/deb/claw-os-agent/claw-os-agent.sysusers"
 PREINST="$PROJECT_DIR/packaging/deb/claw-os-agent/preinst"
@@ -109,11 +110,13 @@ PY
 assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
     'cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}' \
     "the Agent build must produce the native GNU PAM library"
-assert_contains "$TEST_WORKFLOW" 'crates/claw-display-login/test/fixtures/bootstrap.sh' \
+assert_contains "$TEST_WORKFLOW" 'bash scripts/ci/test-boundaries.sh display' \
+    "CI must invoke the authenticated display checks"
+assert_contains "$TEST_BOUNDARIES" 'crates/claw-display-login/test/fixtures/bootstrap.sh' \
     "CI must retain the private authenticated display fixture"
-assert_contains "$TEST_WORKFLOW" '"$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session"' \
+assert_contains "$TEST_BOUNDARIES" '"$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session"' \
     "the private fixture must receive the actual session binary as input twelve"
-assert_contains "$TEST_WORKFLOW" 'private_deferred_retirement_reclaims_the_exact_slot_and_workload' \
+assert_contains "$TEST_BOUNDARIES" 'private_deferred_retirement_reclaims_the_exact_slot_and_workload' \
     "CI must exercise deferred display retirement and slot reclamation"
 assert_contains "$BUILD_DEBS" 'ensure_bin claw-agentd cos' \
     "claw-os-agent must build the agent worker"
@@ -145,7 +148,9 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-cale
     "Agent must provide the Calendar read service"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-calendar-read-v1' \
     "Desktop must depend on the Calendar read service"
-assert_contains "$TEST_WORKFLOW" 'calendar_mcp_to_broker_reader_and_public_sdk' \
+assert_contains "$TEST_WORKFLOW" 'bash scripts/ci/test-boundaries.sh calendar' \
+    "CI must invoke the owner-scoped Calendar checks"
+assert_contains "$TEST_BOUNDARIES" 'calendar_mcp_to_broker_reader_and_public_sdk' \
     "CI must cover actual Calendar data reaching the public SDK"
 assert_contains "$BUILD_DEBS" 'extension-identities.sh' \
     "maintainer scripts must embed the shared identity policy"
@@ -225,19 +230,21 @@ grep -Eq '^Environment=CLAWD_SOCKET_GROUP=sudo$' "$UNIT" ||
 
 assert_contains "$TEST_WORKFLOW" 'Run privileged extension boundaries' \
     "CI must execute the root extension boundary suites"
-assert_contains "$TEST_WORKFLOW" 'install -o root -g root -m 0755' \
+assert_contains "$TEST_WORKFLOW" 'bash scripts/ci/test-boundaries.sh extensions' \
+    "CI must invoke the root extension boundary checks"
+assert_contains "$TEST_BOUNDARIES" 'install -o root -g root -m 0755' \
     "privileged test binaries must use root-owned non-writable fixtures"
-assert_contains "$TEST_WORKFLOW" 'COS_PRIVILEGED_EXTENSION_HOST_BIN' \
+assert_contains "$TEST_BOUNDARIES" 'COS_PRIVILEGED_EXTENSION_HOST_BIN' \
     "installed-system tests must use the root-owned extension host fixture"
-assert_contains "$TEST_WORKFLOW" '"$root/extension_host_boundary" --test-threads=1' \
+assert_contains "$TEST_BOUNDARIES" '"$root/extension_host_boundary" --test-threads=1' \
     "CI must run the repaired extension-host lifecycle test"
-assert_contains "$TEST_WORKFLOW" 'COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1' \
+assert_contains "$TEST_BOUNDARIES" 'COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1' \
     "CI must fail when a root-gated child-isolation test skips"
-assert_contains "$TEST_WORKFLOW" 'extension_host::child_isolation::tests' \
+assert_contains "$TEST_BOUNDARIES" 'extension_host::child_isolation::tests' \
     "CI must run the root-gated child-isolation library tests"
-assert_contains "$TEST_WORKFLOW" 'expected_privileged_child_tests=19' \
+assert_contains "$TEST_BOUNDARIES" 'expected_privileged_child_tests=19' \
     "CI must explicitly account for every privileged child-isolation test"
-assert_contains "$TEST_WORKFLOW" '"$lib_test" "$root/cos_lib_tests"' \
+assert_contains "$TEST_BOUNDARIES" '"$lib_test" "$root/cos_lib_tests"' \
     "CI must copy the lib test binary into the root-owned fixture"
 bash "$SCRIPT_DIR/test-extension-identities.sh"
 
