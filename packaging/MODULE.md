@@ -12,8 +12,8 @@ Debian packages and a signed multi-architecture APT repository.
 - Preserve conffiles and run service-safe maintainer scripts.
 - Bind each release to a signed release-security manifest so an installed
   system can refuse a superseded — but still validly signed — release.
-- Build and sign Debian repository metadata for amd64 and arm64, with a
-  `Valid-Until` freshness bound.
+- Build and sign non-expiring Debian repository indexes for amd64 and arm64;
+  preserve package release-security validity and downgrade protection.
 - Compose an independently built web artifact into the final Pages directory
   alongside `dists/` and `pool/`.
 
@@ -39,7 +39,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `release-security/verify-package-manifest.sh` | Single shared check binding a built `.deb` to its embedded manifest; run by every publish workflow |
 | `release-security/sign-manifest.sh` | Fail-closed signing key resolution and manifest emission shared by both package builds |
 | `release-security/gpg-sign.sh` | Signing helpers that keep the passphrase off `argv` |
-| `apt-repo/check-index-freshness.py` | Refuse a future-dated, expired or stale published index |
+| `apt-repo/check-index-freshness.py` | Refuse future-dated indexes and expired declared validity; no maximum index age |
 | `apt-repo/sync-existing-packages.sh` | Merge local artifacts without replacing equal or newer signed candidates |
 | `apt-repo/verify-release-security.sh` | Refuse a publication that regresses, is incoherent, or has no authenticated baseline |
 | `apt-repo/tests/test-sync-existing-packages.sh` | Package merge and first-publication regression scenarios |
@@ -51,12 +51,11 @@ Debian packages and a signed multi-architecture APT repository.
 | `../crates/claw-display-login/MODULE.md`, `../core/src/display_session/MODULE.md` | Native GNU PAM/display helpers, OS-only Agent-to-Desktop interface, private installation fixture and logout boundary |
 | `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |
 | `deb/tests/test-remove-home-overlay.sh` | Merged-tree, metadata, whiteout, and opaque-directory removal regression tests |
-| `apt-repo/build-repo.sh` | Multi-arch index, Release, `Valid-Until`, by-hash, and GPG signatures |
+| `apt-repo/build-repo.sh` | Multi-arch non-expiring Release, by-hash indexes, and GPG signatures |
 | [`../web/`](../web/) | Independent web source; `dist/` is consumed during Pages composition |
 | [`README.md`](README.md) | Package contract and manual commands |
 | `../.github/workflows/publish-*-package.yml` | Independent package build/publication workflows |
 | `../.github/workflows/publish-apt-repo.yml` | Internal reusable signed-repository publisher |
-| `../.github/workflows/refresh-apt-metadata.yml` | Scheduled re-signing of repository metadata so `Valid-Until` never lapses |
 
 ## Dependencies
 

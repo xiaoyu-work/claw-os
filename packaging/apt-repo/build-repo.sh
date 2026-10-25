@@ -181,13 +181,9 @@ else
     arch_list="${binary_arches[*]} all"
 fi
 
-# Freshness of the index itself. `Valid-Until` bounds how long a mirror
-# may keep serving this snapshot; APT refuses an expired Release unless
-# a client explicitly disables the check, which the Claw OS apt source
-# and the shipped apt.conf.d snippet both forbid.
-RELEASE_VALID_DAYS="${COS_APT_RELEASE_VALID_DAYS:-30}"
+# Repository indexes intentionally have no expiry. Signed package manifests
+# retain their independent validity and installed security-floor checks.
 release_date="$(date -u -R)"
-valid_until="$(date -u -R -d "+${RELEASE_VALID_DAYS} days")"
 
 cat > "$REPO_DIR/apt-ftparchive-release.conf" <<EOF
 APT::FTPArchive::Release::Origin "Claw OS";
@@ -218,27 +214,19 @@ apt-ftparchive -c="$REPO_DIR/apt-ftparchive-release.conf" \
 
 rm -f "$REPO_DIR/apt-ftparchive-release.conf"
 
-# `apt-ftparchive` does not emit `Valid-Until` on every apt version, and
-# publishing without it would silently drop the freshness bound that
-# stops a mirror serving this snapshot forever. Insert it beside `Date:`
-# ourselves, before the file is signed, and refuse to continue if it is
-# not there afterwards.
-awk -v valid_until="$valid_until" -v baseline="$baseline_published" '
+# Keep the no-expiry policy independent of apt-ftparchive defaults and bind
+# the baseline advertisement to the metadata actually verified above.
+awk -v baseline="$baseline_published" '
     /^Valid-Until:/ { next }
     /^Claw-Os-Release-Security-Baseline:/ { next }
     { print }
     /^Date:/ {
-        printf "Valid-Until: %s\n", valid_until
         if (baseline == "1") {
             print "Claw-Os-Release-Security-Baseline: 1"
         }
     }
 ' "dists/$SUITE/Release" > "dists/$SUITE/Release.tmp"
 mv "dists/$SUITE/Release.tmp" "dists/$SUITE/Release"
-if [ "$(grep -c '^Valid-Until:' "dists/$SUITE/Release")" != "1" ]; then
-    echo "error: Release must carry exactly one Valid-Until field" >&2
-    exit 1
-fi
 # The baseline field is what tells the *next* publication that this
 # repository already guarantees release-security metadata, so a fetch
 # failure can never be mistaken for a fresh repository. It is asserted

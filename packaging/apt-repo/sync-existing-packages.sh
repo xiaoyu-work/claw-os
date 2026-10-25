@@ -116,16 +116,9 @@ if ! gpgv --keyring "$APT_PUBLIC_KEYRING" --output "$tmp/Release" \
     exit 1
 fi
 
-# Freshness of what we just authenticated. A signature proves origin,
-# not recency: an origin or CDN replaying a months-old signed snapshot
-# would otherwise let this publication "not regress" a repository state
-# that no longer exists.
-#
-# Residual, stated plainly: an attacker controlling the whole origin can
-# serve a consistently old but still-valid snapshot inside its
-# Valid-Until window, and no client-side check here can see that. The
-# defences against that are the short Valid-Until, the scheduled
-# metadata refresh, and the installed floor on each machine.
+# Check signed time fields, including expiry on an older index that still
+# declares it. Indexes without Valid-Until have no age limit; authenticity
+# and the installed security floor do not prove that an origin is current.
 "$PROJECT_DIR/packaging/apt-repo/check-index-freshness.py" "$tmp/Release"
 
 baseline_field="$(awk -F': *' '

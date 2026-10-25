@@ -25,7 +25,7 @@ packaging/
 └── apt-repo/
     ├── sync-existing-packages.sh  Merge local and signed candidates safely
     ├── verify-release-security.sh Refuse a regressing or incoherent release set
-    ├── check-index-freshness.py   Refuse a stale or future-dated signed index
+    ├── check-index-freshness.py   Check signed dates and any declared expiry
     ├── build-repo.sh              Assemble build/apt-repo/ from build/debs/
     └── tests/
         ├── test-sync-existing-packages.sh      Package merge and first-publication cases
@@ -481,26 +481,24 @@ release-security metadata publishes honestly *without* the field, and only
 under the explicit migration input — so the repository can never end up in a
 signed state that claims a guarantee no artifact backs.
 
-The published `Release` carries a `Valid-Until` bound and advertises
-`Acquire-By-Hash`, and the indexes are mirrored under `by-hash/SHA256/`, so a
-stale mirror cannot serve an old snapshot indefinitely. `Release` also lists
+The published `Release` intentionally omits `Valid-Until`, so an infrequently
+updated repository needs no scheduled re-signing. It advertises
+`Acquire-By-Hash`, and indexes are mirrored under `by-hash/SHA256/` to retrieve
+the exact index named by a signed snapshot. `Release` also lists
 the SHA-256 of every `release-security/` file, which binds that metadata to the
 snapshot it was published with: the next publication cross-checks what it
 downloads against the signed index, so an origin cannot pair a current index
 with an older, separately signed manifest.
 
-`Valid-Until` is only a protection while it keeps being renewed.
-`.github/workflows/refresh-apt-metadata.yml` re-signs the repository metadata
-weekly without changing package bytes, preserves and re-verifies the baseline,
-and fails loudly if the signing secret is unavailable.
-
 Before trusting the current `InRelease`, the publisher verifies its signature,
-refuses an index dated in the future or past its `Valid-Until`, refuses one
-older than `COS_PUBLISH_MAX_INDEX_AGE_HOURS` (30 days by default), and fetches
+refuses an index dated in the future or past any declared `Valid-Until`, and fetches
 everything with cache-busting, no-cache requests. An attacker who controls the
-whole origin can still serve a consistent, still-valid older snapshot; that
-residual is documented in `docs/updating.md` and is answered by the short
-`Valid-Until`, the scheduled refresh and the per-machine floor.
+whole origin can indefinitely replay a consistent, correctly signed
+non-expiring index. This maintenance tradeoff is documented in
+`docs/updating.md`: the per-machine floor prevents observed-state regression,
+not withholding an update the machine has never seen. Indexes have no maximum
+age; signing keys and package release-security manifests retain their
+independent validity rules.
 
 The signing passphrase is never placed on a command line. Every signing path
 goes through `release-security/gpg-sign.sh`, which hands it to `gpg` on a pipe
