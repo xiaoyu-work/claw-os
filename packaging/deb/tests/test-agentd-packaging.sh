@@ -16,6 +16,8 @@ BUILD_DEBS="$PROJECT_DIR/packaging/deb/build-debs.sh"
 UNIT="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system/clawd.service"
 TEST_WORKFLOW="$PROJECT_DIR/.github/workflows/test.yml"
 TEST_BOUNDARIES="$PROJECT_DIR/scripts/ci/test-boundaries.sh"
+RELEASE_WORKFLOW="$PROJECT_DIR/.github/workflows/release.yml"
+AGENT_PACKAGE_TESTS="$PROJECT_DIR/scripts/ci/test-agent-package.sh"
 CARGO_TOML="$PROJECT_DIR/core/Cargo.toml"
 SYSUSERS="$PROJECT_DIR/packaging/deb/claw-os-agent/claw-os-agent.sysusers"
 PREINST="$PROJECT_DIR/packaging/deb/claw-os-agent/preinst"
@@ -85,9 +87,11 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'polkitd' \
     "Agent must install the unprivileged pkttyagent authentication presenter"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-display-session-v1' \
     "Desktop must require the Agent display runtime"
-assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" 'libpam0g-dev' \
+assert_contains "$RELEASE_WORKFLOW" 'libpam0g-dev' \
     "the native package build must install PAM development inputs"
-assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
+assert_contains "$RELEASE_WORKFLOW" 'bash scripts/ci/test-agent-package.sh installed' \
+    "the Agent release must invoke the installed-package checks"
+assert_contains "$AGENT_PACKAGE_TESTS" \
     'python3 -B core/tests/approval_polkit_process.py' \
     "the installed package must exercise actual PAM authentication, not a YES override"
 python3 - "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" <<'PY'
@@ -107,8 +111,8 @@ assert {
     "org.freedesktop.policykit.exec.path": "/usr/local/bin/claw-approval-helper",
 }
 PY
-assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
-    'cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}' \
+assert_contains "$RELEASE_WORKFLOW" \
+    'cargo build --release --locked -p claw-display-login --target "${RUST_TARGET/-musl/-gnu}"' \
     "the Agent build must produce the native GNU PAM library"
 assert_contains "$TEST_WORKFLOW" 'bash scripts/ci/test-boundaries.sh display' \
     "CI must invoke the authenticated display checks"

@@ -697,20 +697,24 @@ grep -q "Debian epoch" "$WORK/verify-no-epoch.log" \
 ok "the shared verifier refuses a security epoch APT could not act on"
 
 # ---------------------------------------------------------------------------
-# 6. The publication workflows use that one script and keep no copy.
+# 6. Every package job uses the shared verifier and keeps no copy.
 # ---------------------------------------------------------------------------
-for workflow in publish-agent-package publish-base-package publish-desktop-package; do
-    file="$PROJECT_DIR/.github/workflows/$workflow.yml"
-    grep -Fq 'packaging/release-security/verify-package-manifest.sh' "$file" \
-        || fail "$workflow does not call the shared manifest verifier"
-    grep -Fq 'set -euo pipefail' "$file" \
-        || fail "$workflow has no strict-mode verification step"
-    ! grep -q 'manifest is not in canonical encoding' "$file" \
-        || fail "$workflow still carries an inline copy of the manifest checks"
-    ! grep -q 'manifest_extrac[^t]' "$file" \
-        || fail "$workflow still references a mistyped extraction directory"
+RELEASE_WORKFLOW="$PROJECT_DIR/.github/workflows/release.yml"
+PACKAGE_CHECK="$PROJECT_DIR/scripts/ci/verify-package.sh"
+SIGNING_KEY_IMPORT="$PROJECT_DIR/scripts/ci/import-signing-key.sh"
+grep -Fq 'packaging/release-security/verify-package-manifest.sh' "$PACKAGE_CHECK" \
+    || fail "package verification does not call the shared manifest verifier"
+grep -Fq 'set -euo pipefail' "$PACKAGE_CHECK" \
+    || fail "package verification has no strict mode"
+if grep -q 'manifest is not in canonical encoding\|manifest_extrac[^t]' \
+    "$RELEASE_WORKFLOW" "$PACKAGE_CHECK"; then
+    fail "publication duplicates manifest checks or uses a mistyped extraction directory"
+fi
+for component in agent base desktop; do
+    grep -Fq "bash scripts/ci/verify-package.sh $component" "$RELEASE_WORKFLOW" \
+        || fail "$component does not invoke shared package verification"
 done
-ok "all three publication workflows share one manifest verifier"
+ok "all three package jobs share one manifest verifier"
 
 # ---------------------------------------------------------------------------
 # 7. A higher security epoch actually wins APT's own candidate selection.
@@ -869,52 +873,35 @@ fakeroot dpkg-deb -Znone --root-owner-group --build "$ABI_OK_DIR" "$ABI_OK_DEB" 
 ok "the ABI relationship is matched token-exactly, not by substring"
 
 # ---------------------------------------------------------------------------
-# 9. Publication workflows demand a verified signature before upload.
+# 9. Package jobs demand a verified signature before upload.
 # ---------------------------------------------------------------------------
-for workflow in publish-agent-package publish-base-package publish-desktop-package; do
-    file="$PROJECT_DIR/.github/workflows/$workflow.yml"
-    grep -Fq -- '--require-signature' "$file" \
-        || fail "$workflow does not require a signed release manifest"
-    grep -Fq -- '--keyring "$CLAW_OS_RELEASE_SECURITY_KEYRING"' "$file" \
-        || fail "$workflow does not pin the verification keyring"
-    grep -Fq 'CLAW_OS_RELEASE_SECURITY_KEYRING=' "$file" \
-        || fail "$workflow does not export the intended verification keyring"
-    # The keyring must come from the key that was just imported for
-    # signing, not from whatever the runner happens to trust.
-    grep -Fq 'gpg --batch --export "$key_id" > "$keyring"' "$file" \
-        || fail "$workflow does not derive the keyring from the imported key"
-    python3 - "$file" <<'PY'
+grep -Fq -- '--require-signature' "$PACKAGE_CHECK" \
+    || fail "package verification does not require a signed release manifest"
+grep -Fq -- '--keyring "$CLAW_OS_RELEASE_SECURITY_KEYRING"' "$PACKAGE_CHECK" \
+    || fail "package verification does not pin the verification keyring"
+grep -Fq 'CLAW_OS_RELEASE_SECURITY_KEYRING=' "$SIGNING_KEY_IMPORT" \
+    || fail "signing key import does not export the intended verification keyring"
+grep -Fq 'gpg --batch --export "$key_id" > "$keyring"' "$SIGNING_KEY_IMPORT" \
+    || fail "the verification keyring must come from the imported signing key"
+python3 - "$RELEASE_WORKFLOW" <<'PY'
 import sys
 
 import yaml
 
 document = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-for job in (document.get("jobs") or {}).values():
-    steps = job.get("steps") or []
-    for index, step in enumerate(steps):
-        script = step.get("run") or ""
-        if "verify-package-manifest.sh" not in script:
-            continue
-        assert "set -euo pipefail" in script, (
-            f"{step.get('name')} runs the verifier without strict mode"
-        )
-        assert "--require-signature" in script, (
-            f"{step.get('name')} runs the verifier without --require-signature"
-        )
-        uploads = [
-            later
-            for later in steps[index + 1 :]
-            if "upload-artifact" in (later.get("uses") or "")
-        ]
-        assert uploads, f"{step.get('name')} does not precede an artifact upload"
-        break
-    else:
-        continue
-    break
-else:
-    raise SystemExit("no job verifies the package manifest before upload")
+for component in ("agent", "base", "desktop"):
+    job = document["jobs"][f"build-{component}"]
+    steps = job["steps"]
+    imported = next(index for index, step in enumerate(steps)
+                    if step.get("run") == "bash scripts/ci/import-signing-key.sh")
+    checked = next(index for index, step in enumerate(steps)
+                   if step.get("run") == f"bash scripts/ci/verify-package.sh {component}")
+    uploaded = next(index for index, step in enumerate(steps)
+                    if "upload-artifact" in step.get("uses", ""))
+    assert imported < checked < uploaded, component
+    assert not steps[checked].get("continue-on-error"), component
+    assert not job.get("continue-on-error"), component
 PY
-done
-ok "every publication workflow verifies a signed manifest before upload"
+ok "every package job verifies a signed manifest before upload"
 
 printf '\n%d checks passed\n' "$PASS"

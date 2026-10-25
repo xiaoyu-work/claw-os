@@ -4,6 +4,12 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      app_source_artifact:
+        description: "Same-run immutable App snapshot prepared by release.yml"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   test:
@@ -68,8 +74,22 @@ jobs:
       - name: Clippy lint (cos)
         run: cd core && cargo clippy -- -D warnings
 
+      - name: Download prepared release inputs
+        if: inputs.app_source_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.app_source_artifact }}
+          path: build/release
+
       - name: Resolve App main into immutable test inputs
-        run: python3 scripts/app_sources.py
+        env:
+          APP_SOURCE_ARTIFACT: ${{ inputs.app_source_artifact }}
+        run: |
+          if [ -n "$APP_SOURCE_ARTIFACT" ]; then
+            export CLAW_APP_SOURCE_LOCK="$GITHUB_WORKSPACE/build/release/app-sources.json"
+            echo "CLAW_APP_SOURCE_LOCK=$CLAW_APP_SOURCE_LOCK" >> "$GITHUB_ENV"
+          fi
+          python3 scripts/app_sources.py
 
       - name: Run cos tests
         # `--test-threads=1` because many tests in `cos` mutate process-wide

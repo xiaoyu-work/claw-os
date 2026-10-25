@@ -54,8 +54,8 @@ Debian packages and a signed multi-architecture APT repository.
 | `apt-repo/build-repo.sh` | Multi-arch non-expiring Release, by-hash indexes, and GPG signatures |
 | [`../web/`](../web/) | Independent web source; `dist/` is consumed during Pages composition |
 | [`README.md`](README.md) | Package contract and manual commands |
-| `../.github/workflows/publish-*-package.yml` | Independent package build/publication workflows |
-| `../.github/workflows/publish-apt-repo.yml` | Internal reusable signed-repository publisher |
+| `../.github/workflows/release.yml` | Independent package targets or full release; one signed APT/Pages composition |
+| `../scripts/ci/verify-package.sh` | Shared pre-upload payload, snapshot and signed manifest checks |
 
 ## Dependencies
 
@@ -63,6 +63,12 @@ Package assembly consumes compiled binaries and source files; it does not need
 a rootfs except for the separately staged desktop package. Rootfs features
 install the resulting packages. Package dependencies express runtime layering
 without forcing synchronized versions or publication schedules.
+
+One release run freezes a package version and App snapshot. Its image matrix
+consumes the same signed Agent/Base `.deb` artifacts rather than rebuilding
+their binaries. Desktop keeps its separate native rootfs build but consumes
+that same App snapshot. The APT publisher merges all selected package families
+once, preserving the authenticated candidates for families not rebuilt.
 
 Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;

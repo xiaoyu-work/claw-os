@@ -13,8 +13,9 @@ set -euo pipefail
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 
-AGENT_DEB="$DEBS_DIR/claw-os-agent_${COS_VERSION}_${DEB_ARCH:-amd64}.deb"
-BASE_DEB="$DEBS_DIR/claw-os-base_${COS_VERSION}_all.deb"
+FILE_VERSION="${COS_VERSION//:/%3a}"
+AGENT_DEB="$DEBS_DIR/claw-os-agent_${FILE_VERSION}_${DEB_ARCH:-amd64}.deb"
+BASE_DEB="$DEBS_DIR/claw-os-base_${FILE_VERSION}_all.deb"
 # Build this exact version if missing — stale packages from an earlier local
 # build must never satisfy the check.
 if [ ! -f "$AGENT_DEB" ] || [ ! -f "$BASE_DEB" ]; then

@@ -1169,21 +1169,21 @@ re-verifies the artifact it activates.
 
 Pushing a commit does not immediately make it available to existing
 installations. Publication workflows are manually dispatched. A maintainer can
-publish each package independently:
+publish each package independently through **Release Claw OS** (`release.yml`):
+select `agent`, `base`, or `desktop`. Desktop still requires dedicated Linux
+runners labeled `claw-os-desktop-amd64` and `claw-os-desktop-arm64` with at least
+50 GB free. `images` publishes Docker/WSL from one headless rootfs per
+architecture, using the same run's signed Agent/Base packages without
+publishing those packages to APT. `website` updates the website while preserving
+the signed package pool. `all` runs shared tests and publishes every channel.
 
-- **Publish Agent package** builds, installs, and publishes only
-  `claw-os-agent`.
-- **Publish Base package** builds and publishes only `claw-os-base`.
-- **Publish Desktop package** builds and publishes only `claw-os-desktop`; it
-  requires dedicated Linux runners labeled `claw-os-desktop-amd64` and
-  `claw-os-desktop-arm64` with at least 50 GB free.
-- **Release everything (test + Docker + WSL + APT)** invokes all distribution
-  channels when a coordinated full release is wanted.
-
-Each package workflow requires the repository Actions secret
+Every run freezes one OS package version and, when needed, one immutable App
+snapshot shared by its tests and package builds. Each release requires the repository Actions secret
 `CLAW_OS_APT_SIGNING_PRIVATE_KEY`. Set
 `CLAW_OS_APT_SIGNING_PASSPHRASE` only when that private key is encrypted. The
-shared internal publisher restores the other packages from the current signed
-repository, merges only the package built by the caller, signs the new
-multi-architecture indexes, and deploys GitHub Pages. Publications are
-serialized so independent package workflows cannot overwrite each other.
+publisher restores other packages from the current signed repository, merges
+all selected packages once, signs the new multi-architecture indexes, and
+deploys GitHub Pages once alongside one website build. Publications queue
+without cancellation so release runs cannot overwrite each other's state.
+Non-expiring APT indexes require no scheduled re-signing; key and package
+manifest validity remain independent.

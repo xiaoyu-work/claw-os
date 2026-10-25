@@ -1,0 +1,11 @@
+self-hosted-runner:
+  labels:
+    - claw-os-desktop-amd64
+    - claw-os-desktop-arm64
+
+paths:
+  .github/workflows/*.yml:
+    ignore:
+      # GitHub supports queue: max; actionlint 1.7.12 does not yet model it.
+      # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+      - 'unexpected key "queue" for "concurrency" section'

@@ -437,23 +437,33 @@ channel.
 
 ## Independent publication
 
-Each package has its own manually dispatched CI:
+The **Release Claw OS** workflow (`release.yml`) has one target selector:
 
-| Workflow | Builds and publishes |
+| Target | Builds and publishes |
 | --- | --- |
-| **Publish Agent package** | `claw-os-agent` for amd64 and arm64 |
-| **Publish Base package** | `claw-os-base` (`Architecture: all`) |
-| **Publish Desktop package** | `claw-os-desktop` for amd64 and arm64 |
+| `agent` | `claw-os-agent` for amd64 and arm64, with TUI and Ubuntu install/reinstall checks |
+| `base` | `claw-os-base` (`Architecture: all`) |
+| `desktop` | `claw-os-desktop` for amd64 and arm64, using dedicated rootfs runners |
+| `images` | Shared-rootfs Docker/WSL images; consumes same-run signed Agent/Base packages without publishing them to APT |
+| `website` | Website and Pages composition; preserves every existing package |
+| `all` | Shared tests, all packages, Docker/WSL and one Pages publication |
 
-Every package workflow calls the internal reusable APT publisher. The publisher
+Each run freezes one commit-derived package version and, when needed, one
+immutable App-main snapshot. The shared test suite in `all`, Agent packaging
+and Desktop native preparation all consume that snapshot. Package checks bind
+the embedded App selection back to it before upload. Images download the
+signed Agent/Base packages instead of rebuilding the common binaries; Docker
+and WSL share one stamped rootfs per architecture.
+
+One publisher gathers every selected package and one website artifact. It
 reads the current signed repository, restores the latest packages not rebuilt
 by the caller, and compares each locally built package with the signed candidate
 for that package and architecture. Only a strictly newer local version replaces
 the existing candidate; equal or older artifacts are discarded before the
 indexes are regenerated, signed, and deployed to Pages. A build that carries a
 *lower security epoch* is refused outright, even when its Debian version sorts
-higher. A fixed non-cancelling concurrency group serializes this
-read/merge/publish operation, while package builds remain independent.
+higher. A non-cancelling release queue serializes publication runs; architecture
+and component builds within a run remain parallel.
 
 Before the indexes are signed, `apt-repo/verify-release-security.sh` checks the
 whole pool: every Claw OS package must carry a canonical release manifest that
@@ -468,7 +478,7 @@ publication must retrieve and verify that marker and every published
 per-package manifest. A `curl` failure, a non-200 status, a missing manifest or
 a signature failure is fatal — never "there is no repository yet". Establishing
 the baseline for a repository that predates downgrade protection is a
-deliberate, one-time migration: run a package publication workflow with its
+deliberate, one-time migration: select a package target in `release.yml` with its
 `release_security_bootstrap` input enabled. It is rejected once the marker
 exists, and no ordinary build can set it.
 
@@ -505,8 +515,9 @@ goes through `release-security/gpg-sign.sh`, which hands it to `gpg` on a pipe
 under `--passphrase-fd 0`, so it cannot be read out of `/proc` by another local
 process.
 
-No workflow run IDs or bootstrap flags are exchanged between package
-workflows. A missing repository is treated automatically as first publication.
+Artifacts are downloaded from the same workflow run, never selected from an
+older successful run. The one-time bootstrap remains an explicit package
+publication input. A missing repository is treated automatically as first publication.
 Desktop publication requires Linux runners labeled `claw-os-desktop-amd64`
 and `claw-os-desktop-arm64`, each with at least 50 GB free.
 
