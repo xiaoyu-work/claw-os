@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=io.github.t4t5.Owly
+Exec=/bin/false
+User=root
+SystemdService=claw-nearby-radio.service

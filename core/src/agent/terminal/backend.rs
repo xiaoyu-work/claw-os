@@ -540,6 +540,9 @@ pub(super) trait Backend: Send + Sync {
     ) -> Result<Job, String>;
     async fn activity_attention(&self, id: &str) -> Result<ActivityAttention, String>;
     async fn activity_controls(&self, id: &str) -> Result<ActivityControls, String>;
+    async fn nearby(&self,_action:Option<clawd_client::nearby::NearbyAction>)->Result<clawd_client::nearby::NearbyView,String> {
+        Err("Nearby sharing is unavailable".into())
+    }
     async fn set_activity_control(
         &self,
         id: &str,
@@ -1135,6 +1138,7 @@ impl Backend for BrokerBackend {
             if response.get("activity_id").and_then(Value::as_str) != Some(id) {
                 return Err("Claw returned controls for another Activity".into());
             }
+
             if let Some(state) = work.get("work").filter(|state|!state.is_null()) {
                 let state: crate::activities::ActivityWork = serde_json::from_value(state.clone())
                     .map_err(|error|format!("invalid Activity work state: {error}"))?;
@@ -1152,6 +1156,23 @@ impl Backend for BrokerBackend {
             capability_policy: optional_object(&capability, "capability_policy")?,
             work: optional_object(&work,"work")?,
         })
+    }
+
+    async fn nearby(&self,action:Option<clawd_client::nearby::NearbyAction>)->Result<clawd_client::nearby::NearbyView,String> {
+        let view=match action {
+            None=>serde_json::from_value(self.call(Command::NearbyStatus,json!({})).await?)
+                .map_err(|error|format!("invalid nearby view: {error}"))?,
+            Some(action)=>{
+                action.validate()?;
+                let response:clawd_client::nearby::NearbyResponse=serde_json::from_value(
+                    self.call(Command::NearbyControl,json!({"request":action})).await?
+                ).map_err(|error|format!("invalid nearby acknowledgement: {error}"))?;
+                response.validate(self.owner_uid,&action)?;
+                response.view
+            }
+        };
+        clawd_client::nearby::NearbyView::validate(&view,self.owner_uid)?;
+        Ok(view)
     }
 
     async fn set_activity_control(

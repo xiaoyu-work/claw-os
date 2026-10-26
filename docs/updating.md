@@ -1187,3 +1187,30 @@ deploys GitHub Pages once alongside one website build. Publications queue
 without cancellation so release runs cannot overwrite each other's state.
 Non-expiring APT indexes require no scheduled re-signing; key and package
 manifest validity remain independent.
+## Nearby sharing updates
+
+Agent now provides `claw-os-nearby-v1`, the fixed non-root
+`/usr/lib/cos/bin/claw-nearby-worker` and dedicated
+`/usr/lib/cos/bin/claw-nearby-radio`. Both belong to the signed component
+inventory. Desktop's new sharing center depends on that service interface,
+not an exact Agent package version. Publish/install the compatible Agent
+before a targeted Desktop update, or use the coordinated release target.
+
+The radio is D-Bus activated and never enabled as a boot-time receive window.
+Only Root may acquire it; installing the package does not copy Owly's
+active-user acquisition policy, open the WAN firewall, enable Bluetooth, or
+replace a headless machine's network manager. The standalone `owly` package
+conflicts because it owns the same D-Bus name.
+
+Upgrade/removal stops the broker and radio before changing their binaries.
+`PartOf=clawd.service`, checked stop, and preserved Root-owned radio recovery
+state prevent an old helper from silently remaining the active implementation.
+Post-install reloads service/D-Bus/interface policy; it does not start sharing.
+An interrupted window/send becomes unconfirmed rather than being replayed.
+Imported owner inbox files are not deleted during update.
+
+Only checked `Backend::down` can acknowledge radio restoration. The limited
+MIT `owlyd` fork refuses success/idle on retirement or startup-recovery failure;
+do not replace it with the unpatched 0.4.1 service or a binary-only hot-swap.
+The actual card, phone and normal Wi-Fi recovery still need physical
+acceptance. See [Nearby Sharing](nearby-sharing.md).

@@ -59,6 +59,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_evidence(frame, area, app);
     render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
+    super::nearby::render(frame,area,app);
     render_confirmation(frame, area, app);
 }
 

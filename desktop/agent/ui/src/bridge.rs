@@ -556,6 +556,29 @@ pub async fn memory_request<T: serde::Serialize, R: serde::de::DeserializeOwned>
     response.json().await.context("decoding owner memory")
 }
 
+pub async fn nearby_request(endpoint:BridgeEndpoint,action:Option<cos_agent_protocol::nearby::NearbyAction>)
+    ->Result<cos_agent_protocol::nearby::NearbyView> {
+    use cos_agent_protocol::nearby::*;
+    let owner={
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata("/proc/self").context("inspecting nearby sharing owner")?.uid()
+    };
+    let view=match action {
+        None=>{
+            let (request,selected)=activity_request(&endpoint,reqwest::Method::GET,&["nearby"])?;
+            activity_response::<NearbyView>(request,selected).await?
+        }
+        Some(action)=>{
+            action.validate().map_err(|error|anyhow!(error))?;
+            let (request,selected)=activity_request(&endpoint,reqwest::Method::POST,&["nearby","control"])?;
+            let response:NearbyResponse=activity_response(request.timeout(Duration::from_secs(75)).json(&NearbyRequest{request:action.clone()}),selected).await?;
+            response.validate(owner,&action).map_err(|error|anyhow!(error))?;
+            response.view
+        }
+    };
+    view.validate(owner).map_err(|error|anyhow!(error))?;Ok(view)
+}
+
 async fn activity_response<T: serde::de::DeserializeOwned>(
     request: reqwest::RequestBuilder,
     selected: ProtocolVersion,

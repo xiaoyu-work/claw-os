@@ -110,6 +110,9 @@ jobs:
       - name: Test ordinary App bind gate
         run: bash scripts/ci/test-boundaries.sh app-bind
 
+      - name: Test nearby transport and owner-file boundaries without wireless hardware
+        run: bash scripts/ci/test-boundaries.sh nearby
+
       - name: Test owner-scoped Calendar reads
         run: bash scripts/ci/test-boundaries.sh calendar
 

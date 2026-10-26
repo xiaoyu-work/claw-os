@@ -143,6 +143,9 @@ jobs:
             --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
             --bin claw-calendar-reader --target "$RUST_TARGET" \
             --target-dir "$GITHUB_WORKSPACE/target"
+          cargo build --release --locked \
+            --manifest-path crates/claw-nearby/Cargo.toml --bins \
+            --target "${RUST_TARGET/-musl/-gnu}" --target-dir "$GITHUB_WORKSPACE/target"
           cargo build --release --locked -p claw-display-login --target "${RUST_TARGET/-musl/-gnu}"
           cargo build --release --locked -p cos-browser --target "${RUST_TARGET/-musl/-gnu}"
           cargo build --release --locked -p claw-semantic --target "${RUST_TARGET/-musl/-gnu}"

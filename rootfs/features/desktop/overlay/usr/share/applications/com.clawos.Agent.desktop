@@ -12,3 +12,9 @@ StartupNotify=true
 StartupWMClass=ClawOS-Agent
 Keywords=ai;agent;chat;assistant;copilot;
 X-GNOME-UsesNotifications=true
+Actions=Nearby;
+
+[Desktop Action Nearby]
+Name=Nearby Sharing
+Exec=/usr/local/bin/cos-agent-ui --nearby
+Icon=network-transmit-receive

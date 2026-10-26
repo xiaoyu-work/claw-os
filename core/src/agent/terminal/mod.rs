@@ -4,6 +4,7 @@ mod actions;
 mod backend;
 mod commands;
 mod models;
+mod nearby;
 mod presentation;
 mod requests;
 mod state;
@@ -166,6 +167,7 @@ pub(super) fn run(_options: ChatOptions) -> Result<Value, String> {
 #[derive(Debug, Eq, PartialEq)]
 enum InputAction {
     None,
+    Nearby(Option<clawd_client::nearby::NearbyAction>),
     Submit(String),
     Cancel,
     Review(ReviewDecision),
@@ -207,6 +209,9 @@ async fn run_with_backend(
     let mut terminal = TerminalSession::enter().map_err(|error| error.to_string())?;
     let mut input = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut nearby_tick=tokio::time::interval(Duration::from_secs(1));
+    let (nearby_tx,mut nearby_rx)=mpsc::channel(2);
+    let mut nearby_polling=false;
 
     while !app.should_quit || requests.must_settle() {
         if !requests.busy() && !app.should_quit {
@@ -236,6 +241,7 @@ async fn run_with_backend(
                 match event.map_err(|error| error.to_string())? {
                     Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                         let action = if requests.busy()
+                            && !app.nearby_open
                             && key.kind == KeyEventKind::Press
                             && (key.code == KeyCode::Esc
                                 || (key.code == KeyCode::Char('c')
@@ -270,6 +276,7 @@ async fn run_with_backend(
                             && app.activity_detail.is_none()
                             && app.activity_attention.is_none()
                             && app.activity_controls.is_none()
+                            && !app.nearby_open
                             && app.activity_evidence.is_none()
                             && app.activity_review.is_none()
                             && app.activity_operation_preview.is_none()
@@ -292,6 +299,20 @@ async fn run_with_backend(
                     }
                     Event::Resize(_, _) | Event::FocusGained | Event::FocusLost | Event::Mouse(_) => {}
                     Event::Key(_) => {}
+                }
+            }
+            _=nearby_tick.tick(),if app.nearby_open && !nearby_polling && !requests.busy() && app.nearby_error.is_none()=>{
+                nearby_polling=true;
+                let backend=backend.clone();let sender=nearby_tx.clone();let generation=app.nearby_generation;
+                tokio::spawn(async move {let _=sender.send((generation,backend.nearby(None).await)).await;});
+            }
+            Some((generation,result))=nearby_rx.recv()=>{
+                nearby_polling=false;
+                if app.nearby_open && generation==app.nearby_generation {
+                    match result {
+                        Ok(view)=>{app.nearby_view=Some(view);app.nearby_error=None;}
+                        Err(error)=>app.nearby_error=Some(error),
+                    }
                 }
             }
             Some(event) = runtime_rx.recv() => {
@@ -401,6 +422,7 @@ async fn connect_initial_conversation(
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
+    if let Some(action)=nearby::key(app,key) {return action;}
     if app.current_approval().is_some() || app.approval_detail.is_some() {
         let control_cancel =
             key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL;

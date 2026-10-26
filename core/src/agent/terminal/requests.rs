@@ -87,7 +87,8 @@ impl Requests {
 
     pub fn defer(&mut self, app: &mut App, action: InputAction) {
         match action {
-            InputAction::Review(_) | InputAction::ApprovalReview(_, _) => {}
+            InputAction::Review(_) | InputAction::ApprovalReview(_, _) | InputAction::Nearby(_) => {
+            }
             InputAction::Submit(input) => {
                 app.prefill_input(input);
                 app.push_system("A request is pending. Your input was retained in the composer.");

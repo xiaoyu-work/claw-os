@@ -180,6 +180,18 @@ pub const COMPONENTS: &[Component] = &[
         critical: true,
     },
     Component {
+        name: "claw-nearby-worker",
+        path: "/usr/lib/cos/bin/claw-nearby-worker",
+        package: "claw-os-agent",
+        critical: true,
+    },
+    Component {
+        name: "claw-nearby-radio",
+        path: "/usr/lib/cos/bin/claw-nearby-radio",
+        package: "claw-os-agent",
+        critical: true,
+    },
+    Component {
         name: "claw-security-floor",
         path: "/usr/lib/cos/bin/claw-security-floor",
         package: "claw-os-agent",

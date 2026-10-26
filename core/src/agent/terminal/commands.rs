@@ -55,6 +55,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/notify-severity", "set a channel minimum severity"),
     ("/dnd", "set or disable the UTC DND window"),
     ("/activity", "browse, open, or create an Activity"),
+    ("/share", "nearby AirDrop sharing, independent of Agent tasks"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -63,6 +64,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Command {
+    Nearby(String),
     Help,
     New,
     Sessions,
@@ -350,6 +352,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
             parse_activity_preview(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
         }
         "session" => Command::Session,
+        "share" => Command::Nearby(rest.to_string()),
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
         "quit" | "exit" | "q" => Command::Quit,
@@ -430,6 +433,7 @@ pub(super) fn execute(
         && !matches!(
             command,
             Command::Help
+                | Command::Nearby(_)
                 | Command::Tasks
                 | Command::Task(_)
                 | Command::Workspace(_)
@@ -476,6 +480,9 @@ pub(super) fn execute(
         return Ok(None);
     }
     match command {
+        Command::Nearby(rest) => {
+            return Ok(Some(super::nearby::command(app, backend, rest)));
+        }
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
              /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\
