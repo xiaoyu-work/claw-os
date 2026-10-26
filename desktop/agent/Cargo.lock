@@ -876,6 +876,7 @@ dependencies = [
 name = "clawd-client"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1111,6 +1112,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "chrono",
+ "clawd-client",
  "serde",
  "serde_json",
  "sha2",

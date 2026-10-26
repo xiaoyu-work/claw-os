@@ -54,6 +54,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/notify-severity", "set a channel minimum severity"),
     ("/dnd", "set or disable the UTC DND window"),
     ("/activity", "browse, open, or create an Activity"),
+    ("/share", "nearby AirDrop sharing, independent of Agent tasks"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -62,6 +63,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Command {
+    Nearby(String),
     Help,
     New,
     Sessions,
@@ -325,6 +327,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
             parse_activity_preview(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
         }
         "session" => Command::Session,
+        "share" => Command::Nearby(rest.to_string()),
         "clear" => Command::Clear,
         "cancel" | "stop" => Command::Cancel,
         "quit" | "exit" | "q" => Command::Quit,
@@ -405,6 +408,7 @@ pub(super) async fn execute(
         && !matches!(
             command,
             Command::Help
+                | Command::Nearby(_)
                 | Command::Tasks
                 | Command::Task(_)
                 | Command::Workspace(_)
@@ -451,6 +455,24 @@ pub(super) async fn execute(
         return Ok(());
     }
     match command {
+        Command::Nearby(rest)=>{
+            app.nearby_generation=app.nearby_generation.wrapping_add(1);
+            let mut parts=rest.splitn(2,char::is_whitespace);
+            let verb=parts.next().unwrap_or("").trim();
+            let tail=parts.next().unwrap_or("").trim();
+            let action=if verb.is_empty() || verb=="status" {None}else{
+                let view=match &app.nearby_view {Some(view)=>view.clone(),None=>backend.nearby(None).await?};
+                let args=if verb=="send" {
+                    let (peer,files)=tail.split_once('|').ok_or("Use /share send PEER_ID | [\"/absolute/file\"]")?;
+                    let files:Vec<String>=serde_json::from_str(files).map_err(|e|e.to_string())?;
+                    let mut args=vec![peer.trim().to_string()];args.extend(files);args
+                }else{tail.split_whitespace().map(str::to_string).collect()};
+                Some(crate::nearby::parse(verb,&args,&view)?)
+            };
+            app.nearby_view=Some(backend.nearby(action).await?);
+            app.nearby_open=true;app.nearby_scroll=0;
+            app.nearby_error=None;
+        }
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
              /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\

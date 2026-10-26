@@ -32,6 +32,17 @@ case "$component" in
             usr/local/bin/claw-extension-host
             usr/lib/cos/bin/claw-calendar-reader
             usr/share/doc/claw-os-agent/calendar-reader.LICENSE
+            usr/lib/cos/bin/claw-nearby-worker
+            usr/lib/cos/bin/claw-nearby-radio
+            usr/share/doc/claw-os-agent/nearby-owly.LICENSE
+            usr/share/doc/claw-os-agent/nearby-PROVENANCE.md
+            usr/share/doc/claw-os-agent/vendor/owlyd/PROVENANCE.md
+            usr/share/doc/claw-os-agent/vendor/owlyd/LICENSE
+            usr/lib/systemd/system/claw-nearby-radio.service
+            usr/share/dbus-1/system-services/io.github.t4t5.Owly.service
+            usr/share/dbus-1/system.d/io.github.t4t5.Owly.conf
+            usr/lib/NetworkManager/conf.d/90-claw-nearby-unmanaged.conf
+            usr/lib/systemd/network/10-claw-nearby-awdl0.link
             usr/local/bin/claw-gui-runner
             usr/local/bin/claw-display-session
             usr/lib/cos/bin/claw-display-host
@@ -49,6 +60,7 @@ case "$component" in
             etc/apt/apt.conf.d/50claw-os-security-floor
         )
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-calendar-read-v1
+        dpkg-deb -f "$deb" Provides | grep -qw claw-os-nearby-v1
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-display-session-v1
         if grep -Fxq './etc/cos/oauth.conf' "$files" \
             || grep -q '/apps/panel-calendar/' "$files"; then

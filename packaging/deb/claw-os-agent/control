@@ -5,8 +5,9 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Provides: claw-os-abi-__ABI__, claw-os-display-session-v1, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1
+Provides: claw-os-abi-__ABI__, claw-os-display-session-v1, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1, claw-os-nearby-v1
 Breaks: claw-os-base (<< __MIN_BASE__), claw-os-desktop (<< __MIN_DESKTOP__)
+Conflicts: owly
 XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
 XB-Claw-Os-Abi: __ABI__
 Depends: bash, coreutils, libc-bin, ca-certificates, bubblewrap (>= 0.8.0), curl, python3,
@@ -18,7 +19,7 @@ Depends: bash, coreutils, libc-bin, ca-certificates, bubblewrap (>= 0.8.0), curl
  fonts-liberation, xdg-utils
 Recommends: chromium | chromium-browser | google-chrome-stable,
  nodejs, python3-pip, git, ripgrep, jq, sqlite3
-Suggests: systemd-coredump
+Suggests: systemd-coredump, network-manager, bluez, hostapd, iw, iproute2
 Description: reusable Claw OS system agent for Debian and Ubuntu
  Installs the complete headless Claw OS agent stack: `cos`, `clawd`,
  `claw-agentd`, `claw-extension-host`, the Claw-owned terminal UI, browser and

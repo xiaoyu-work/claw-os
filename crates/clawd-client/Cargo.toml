@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Unprivileged typed client for the Claw OS clawd broker"
 
 [dependencies]
+chrono = {version="0.4",default-features=false,features=["std"]}
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -264,8 +264,10 @@ fn main_routes_survive_activity_inventory_merge() {
         ),
         (Command::NotificationAcknowledge, "notification.acknowledge"),
         (Command::NotificationDismiss, "notification.dismiss"),
+        (Command::NearbyStatus,"nearby.status"),
+        (Command::NearbyControl,"nearby.control"),
     ];
-    assert_eq!(Command::ALL.len(), 63);
+    assert_eq!(Command::ALL.len(), 65);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

@@ -41,6 +41,7 @@ pub mod ipc;
 pub mod model;
 pub mod netfilter;
 pub mod notifications;
+pub mod nearby;
 pub mod objects;
 pub mod operations;
 pub mod paths;

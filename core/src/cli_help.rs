@@ -256,6 +256,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
             "Owner-scoped goals shared by terminal, Web, and desktop",
             activity_schemas(),
         ),
+        ("share","Nearby AirDrop file sharing independent of the Agent",share_schemas()),
         (
             "object",
             "Authenticated App object contracts and explicit resolution",
@@ -713,6 +714,44 @@ fn trigger_schemas() -> Vec<CommandSchema> {
         });
     }
     schemas
+}
+
+fn share_schemas()->Vec<CommandSchema> {
+    ["status","doctor","open","receive","browse","send","accept","decline","cancel","stop","watch","delete-upload"]
+        .into_iter().map(|command|CommandSchema {
+            command,
+            description:match command {
+                "open"|"receive"=>"Open a 30-600 second window. Exclusive/active-monitor modes require explicit --allow-wifi-disruption; receiving still confirms each offer",
+                "send"=>"Send 1-16 exact files (128 MiB each, 512 MiB total) to a current discovered peer; never auto-retry uncertain delivery",
+                "accept"|"decline"=>"Decide the exact current offer before its 15-second protocol deadline; device names are not authenticated contacts",
+                "stop"|"cancel"=>"Stop the exact local window/transfer; no remote effect rollback is promised",
+                _=>"Read the same owner-scoped nearby service used by TUI, native Desktop and Web; no phone App or model is required",
+            },
+            params:match command {
+                "open"|"receive"=>vec![
+                    Param::flag("--seconds","integer",false,"30-600 seconds; default 300"),
+                    Param::flag("--allow-wifi-disruption","boolean",false,"Explicitly acknowledge that this mode may disconnect the current Wi-Fi uplink"),
+                ],
+                "send"=>vec![Param::positional("peer_id","string",true,"Exact temporary ID from browse"),
+                    Param::positional("files","string[]",true,"Explicit file paths; directories are not accepted")],
+                "accept"|"decline"|"cancel"|"delete-upload"=>vec![Param::positional("id","string",true,"Exact offer, transfer or upload ID from status")],
+                _=>Vec::new(),
+            },
+            example:match command {
+                "receive"=>"cos share receive --seconds 300",
+                "open"=>"cos share open --seconds 300",
+                "send"=>"cos share send PEER_ID /home/user/report.pdf",
+                "accept"=>"cos share accept OFFER_ID",
+                "decline"=>"cos share decline OFFER_ID",
+                "cancel"=>"cos share cancel TRANSFER_ID",
+                "stop"=>"cos share stop",
+                "browse"=>"cos share browse",
+                "watch"=>"cos share watch",
+                "delete-upload"=>"cos share delete-upload UPLOAD_ID",
+                "doctor"=>"cos share doctor",
+                _=>"cos share status",
+            },
+        }).collect()
 }
 
 fn activity_schemas() -> Vec<CommandSchema> {

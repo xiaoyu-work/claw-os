@@ -560,3 +560,21 @@ Agent packages and publication workflows never accept or embed Google or
 Microsoft client identities. Apps or users configure provider clients through
 the Claw OS credential store or runtime environment before starting OAuth
 login.
+## Nearby transport package boundary
+
+Agent builds [`claw-nearby`](../crates/claw-nearby/MODULE.md) through its own
+manifest and lock with `--locked`, then installs the two fixed binaries,
+Root-only D-Bus policy, D-Bus activation service, NetworkManager device section
+and awdl0 link policy. `claw-os-nearby-v1` is a service-presence contract, not
+hardware certification. Desktop depends on it for its sharing center.
+
+The radio alone receives raw/network-admin privileges; `clawd.service` is not
+broadened. The unsigned/active-user upstream radio policy is not installed.
+The required optional physical-radio tools remain explicit for headless users,
+without automatically replacing their network manager. Rootfs profiles and
+targets consume this package rather than duplicating its payload.
+
+The limited MIT lease-service fork and notices are described in
+[`../crates/claw-nearby/PROVENANCE.md`](../crates/claw-nearby/PROVENANCE.md).
+[`docs/updating.md`](../docs/updating.md#nearby-sharing-updates) covers checked
+retirement and interrupted-window behavior.

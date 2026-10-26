@@ -35,6 +35,8 @@ const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
 
+pub use clawd_client::nearby::NearbyRequest as NearbyControl;
+
 pub use crate::clawd::regional_settings::Request as RegionalSettingsControl;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

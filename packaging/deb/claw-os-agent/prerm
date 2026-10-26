@@ -16,6 +16,13 @@ case "$1" in
         if [ -z "$DPKG_ROOT" ]; then
             if [ -d /run/systemd/system ]; then
                 deb-systemd-invoke stop clawd.service >/dev/null || true
+                if systemctl --quiet is-active claw-nearby-radio.service; then
+                    deb-systemd-invoke stop claw-nearby-radio.service >/dev/null
+                    if systemctl --quiet is-active claw-nearby-radio.service; then
+                        echo "claw-os-agent: nearby radio did not retire before removal" >&2
+                        exit 1
+                    fi
+                fi
                 deb-systemd-invoke stop cos-browser.service >/dev/null || true
             fi
             if [ -x /usr/bin/deb-systemd-helper ]; then

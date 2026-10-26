@@ -25,7 +25,7 @@ pub fn publish(params: Value, client: &ClientIdentity) -> Result<Value, String> 
     if owner_uid != 0
         && (source.starts_with("app:") || matches!(
             source.as_str(),
-            "agent" | "approval" | "cron" | "heartbeat" | "nudge" | "trigger"
+            "agent" | "approval" | "cron" | "heartbeat" | "nudge" | "trigger" | "nearby"
         ))
     {
         return Err(format!("reserved notification source: {source}"));

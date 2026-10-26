@@ -77,6 +77,7 @@ route.
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner/source-scoped user-attention records, bounded native intent, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs` |
+| Nearby sharing | Owner-scoped file sharing independent of Agent tasks, one bounded radio window, exact per-offer consent, private staging and owner inbox; non-root AirDrop parser and dedicated checked radio lease service | `core/src/clawd/nearby/`, `crates/clawd-client/src/nearby.rs`, `crates/claw-nearby/`, `docs/nearby-sharing.md` |
 | Notification presentation definition | Renderer-independent private presentation contract with bounded text/pixels; no grants, product configuration or durable notification state | `claw-os-sdk/rust/notification-presentation/`, `claw-os-sdk/wire/v1/notification-presentation.md` |
 | App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
 | App/adapter integration | Provenance-gated manifest binding, authenticated App Host/bridge and protocol adapter integration | `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs`, `core/src/worker/` |
@@ -94,6 +95,17 @@ route.
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
 
 ## Dependency Rules
+
+Nearby sharing follows `clawd-client::nearby` definition -> broker provider ->
+CLI/TUI/Web/native consumers. The broker keeps the only owner/window/transfer
+state and capability decisions; clients keep presentation state only. The
+namespaced non-root file worker has no home or bus access. A separate Root
+Owly radio process, not `clawd` or the model worker, holds raw/network-admin
+privileges. Its limited MIT lease-service fork propagates failed network
+retirement; Root never infers recovery from a vanished UI or successful Job.
+Received content is not opened, executed or ingested into Agent context.
+The detailed contract and physical acceptance limits are in
+[`docs/nearby-sharing.md`](docs/nearby-sharing.md).
 
 Dependencies point from entry points and orchestration toward stable
 definitions, then to providers; authorization and persistence remain explicit

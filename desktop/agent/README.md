@@ -43,6 +43,17 @@ desktop/agent/
     └── assets/             #   brand PNGs baked into binary
 ```
 
+## Nearby Sharing
+
+The standalone sidebar also exposes
+[Nearby Sharing](../../docs/nearby-sharing.md), without an Agent task or model
+configuration. `cos-agent-ui --nearby` and the Agent desktop action open that
+center directly. The native file picker, exact per-offer accept/decline,
+progress, cancel and stop all consume `nearby.status/control` through the
+authenticated versioned bridge. Closing the center/window only detaches.
+Unverified names and disruptive radio modes remain explicit; no file is
+automatically opened or sent to a model.
+
 ## Automatic Activity work
 
 Activities also expose the shared [automatic-work contract](../../docs/activity-work.md).
