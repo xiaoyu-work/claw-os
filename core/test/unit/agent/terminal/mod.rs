@@ -1657,6 +1657,47 @@ fn approvals_default_to_readable_authorize_once() {
     assert!(output.contains("Write new files or change existing ones"));
     assert!(output.contains("Left/Right choose"));
     assert!(output.contains("Esc/Ctrl+C stop task"));
+    assert!(!output.contains("Enter send"));
+
+    let request = app.pending_approvals.front_mut().unwrap();
+    request.target = format!("/home/claw/{}/ report-tail.txt", "long-directory".repeat(12));
+    request.scope = json!({"kind": "path", "value": request.target});
+    for (width, height) in [(80, 18), (40, 12), (24, 8)] {
+        app.approval_scroll = 0;
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut saw_target_tail = false;
+        let mut saw_effect_tail = false;
+        for _ in 0..64 {
+            terminal.draw(|frame| ui::render(frame, &app)).unwrap();
+            let output = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(output.contains("Authorize once"), "{width}x{height}: {output}");
+            assert!(output.contains("Deny"), "{width}x{height}: {output}");
+            assert!(!output.contains("Enter send"));
+            saw_target_tail |= output.contains("report-tail.txt");
+            saw_effect_tail |= output.contains("granted folder.");
+            if saw_target_tail && saw_effect_tail {
+                break;
+            }
+            assert_eq!(
+                handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                InputAction::None,
+            );
+        }
+        assert!(
+            saw_target_tail && saw_effect_tail,
+            "{width}x{height} clipped permission details"
+        );
+    }
+    assert!(!ui::approval_review_available(
+        ratatui::layout::Rect::new(0, 0, 23, 8),
+        &app
+    ));
 
     assert_eq!(
         handle_key(

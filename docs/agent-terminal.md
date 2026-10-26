@@ -166,6 +166,12 @@ Controls:
   **See file names, sizes, and timestamps without reading the contents**.
   Internal identifiers such as `fs.meta` and raw scope JSON appear only in the
   Approval Center's secondary **Technical details** section.
+- Narrow permission prompts wrap rather than cutting off the target or effect.
+  Use `Up` / `Down` or `PageUp` / `PageDown` to scroll the details; the selected
+  decision stays visible at the bottom. The footer describes approval keys,
+  not chat submission. Inline review needs at least 24 columns by 8 rows;
+  the full detail panel needs 40 by 16. Smaller views ask for a resize and
+  cannot accept a decision.
 - In a durable task detail, `c` cancels a non-terminal task, `r` retries a
   terminal task as a new durable task, and `Up` / `Down` scroll its bounded
   redacted result.
@@ -395,7 +401,7 @@ cargo test -p cos --lib agent::terminal:: -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete slow-progress slow-submit slow-review slow-panel cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice approval-external approval-resumed approval-failure attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete slow-progress slow-submit slow-review slow-panel cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice approval-external approval-resumed approval-failure approval-narrow attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \

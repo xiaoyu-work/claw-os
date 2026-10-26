@@ -230,10 +230,19 @@ async fn run_with_backend(
         terminal
             .update_title(app.terminal_title().as_deref())
             .map_err(|error| error.to_string())?;
+        let mut displayed_area = ratatui::layout::Rect::default();
         terminal
             .terminal
-            .draw(|frame| ui::render(frame, &app))
+            .draw(|frame| {
+                displayed_area = frame.area();
+                ui::render(frame, &app);
+            })
             .map_err(|error| error.to_string())?;
+        if app.current_approval().is_some() {
+            app.approval_scroll = app
+                .approval_scroll
+                .min(ui::approval_scroll_limit(displayed_area, &app));
+        }
         tokio::select! {
             event = input.next(), if !app.should_quit => {
                 let Some(event) = event else {
@@ -253,13 +262,19 @@ async fn run_with_backend(
                         } else {
                             handle_key(&mut app, key)
                         };
-                        apply_input_action(
-                            action,
-                            &mut app,
-                            &mut requests,
-                            backend.clone(),
-                            runtime_tx.clone(),
-                        );
+                        if matches!(action, InputAction::Review(_) | InputAction::ApprovalReview(_, _))
+                            && !ui::approval_review_available(displayed_area, &app)
+                        {
+                            app.push_system("Enlarge the terminal to review the complete permission prompt.");
+                        } else {
+                            apply_input_action(
+                                action,
+                                &mut app,
+                                &mut requests,
+                                backend.clone(),
+                                runtime_tx.clone(),
+                            );
+                        }
                         if let Some(snapshot) = app.take_raw_scrollback() {
                             if let Err(error) = terminal.publish_scrollback(&snapshot) {
                                 app.push_error(&format!(
@@ -433,6 +448,22 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     }
     if app.current_approval().is_some() {
         return match key.code {
+            KeyCode::Up => {
+                app.approval_scroll = app.approval_scroll.saturating_sub(1);
+                InputAction::None
+            }
+            KeyCode::Down => {
+                app.approval_scroll = app.approval_scroll.saturating_add(1);
+                InputAction::None
+            }
+            KeyCode::PageUp => {
+                app.approval_scroll = app.approval_scroll.saturating_sub(5);
+                InputAction::None
+            }
+            KeyCode::PageDown => {
+                app.approval_scroll = app.approval_scroll.saturating_add(5);
+                InputAction::None
+            }
             KeyCode::Left => {
                 app.select_approval_choice(ReviewDecision::ApproveOnce);
                 InputAction::None

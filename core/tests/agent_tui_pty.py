@@ -435,7 +435,7 @@ class FixtureBroker:
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
         if method == "permission.pending" and self.case in (
             "approval-center", "approval-choice", "slow-review",
-            "approval-external", "approval-resumed", "approval-failure",
+            "approval-external", "approval-resumed", "approval-failure", "approval-narrow",
         ):
             metadata = self.case != "approval-center"
             return {
@@ -444,7 +444,11 @@ class FixtureBroker:
                     "verb": "fs.meta" if metadata else "fs.write",
                     "scope": {
                         "kind": "path",
-                        "value": "/**" if metadata else "/home/claw/report.md",
+                        "value": (
+                            "/home/claw/" + "long-directory/" * 20 + " report-tail.txt"
+                            if self.case == "approval-narrow"
+                            else "/**" if metadata else "/home/claw/report.md"
+                        ),
                     },
                     "session": self.session_id,
                     "reason": (
@@ -493,7 +497,7 @@ class FixtureBroker:
             }
         if method == "permission.decide":
             if (
-                self.case not in ("approval-choice", "slow-review")
+                self.case not in ("approval-choice", "slow-review", "approval-narrow")
                 or params != {
                     "id": PENDING_APPROVAL_ID,
                     "decision": "approve",
@@ -914,7 +918,7 @@ class FixtureBroker:
                 ]
                 if self.case in (
                     "approval-choice", "slow-review", "approval-external",
-                    "approval-resumed", "approval-failure",
+                    "approval-resumed", "approval-failure", "approval-narrow",
                 ):
                     events.append({
                         "progress": {
@@ -1041,7 +1045,7 @@ class FixtureBroker:
                 "reconnect",
                 "startup-reconnect",
             ) or (self.case == "slow-progress" and self.slow_progress_release.is_set()) or (
-                self.case == "approval-choice" and self.approval_decided.is_set()
+                self.case in ("approval-choice", "approval-narrow") and self.approval_decided.is_set()
             ) or (
                 self.case == "durable-queue"
                 and (task_id == self.queued_task_id or self.queue_submitted.is_set())
@@ -1326,7 +1330,8 @@ def run(cos, case, transcript, original_namespace, trace):
         broker_path = root / "clawd.sock"
         broker = None if case == "startup-reconnect" else FixtureBroker(broker_path, case)
         master, slave = pty.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 110, 0, 0))
+        dimensions = (12, 40) if case == "approval-narrow" else (36, 110)
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *dimensions, 0, 0))
         environment = {
             **os.environ,
             "TERM": "xterm-256color",
@@ -2531,7 +2536,7 @@ def run(cos, case, transcript, original_namespace, trace):
                 time.sleep(0.3)
             if case in (
                 "approval-choice", "slow-review", "approval-external",
-                "approval-resumed", "approval-failure",
+                "approval-resumed", "approval-failure", "approval-narrow",
             ):
                 read_terminal(
                     master,
@@ -2539,14 +2544,54 @@ def run(cos, case, transcript, original_namespace, trace):
                     time.monotonic() + 15,
                     lambda data: b"Authorize once" in data
                     and b"Inspect file details" in data
-                    and b"All files and folders" in data
-                    and b"without reading the contents" in data
-                    and b"Left/Right choose" in data
+                    and (
+                        case == "approval-narrow"
+                        or (
+                            b"All files and folders" in data
+                            and b"without reading the contents" in data
+                            and b"Left/Right" in data
+                            and b"choose" in data
+                        )
+                    )
                     and any(
                         request["command"] == "permission.pending"
                         for request in broker.requests
                     ),
                 )
+                if case == "approval-narrow":
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 8, 23, 0, 0))
+                    os.kill(process.pid, signal.SIGWINCH)
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda data: b"Enlarge" in data,
+                    )
+                    os.write(master, b"\r")
+                    settled = time.monotonic() + 0.4
+                    read_terminal(
+                        master, output, settled + 2,
+                        lambda _: time.monotonic() >= settled,
+                    )
+                    if any(
+                        request["command"] == "permission.decide" for request in broker.requests
+                    ):
+                        raise AssertionError("an undisplayed permission was accepted")
+                    restored_at = len(output)
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+                    os.kill(process.pid, signal.SIGWINCH)
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda data: b"Authorize once" in data[restored_at:],
+                    )
+                    os.write(master, b"\x1b[6~")
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda data: b"report-tail.txt" in data,
+                    )
+                    os.write(master, b"\x1b[6~")
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda data: b"without reading the contents" in data,
+                    )
                 if case == "approval-failure":
                     broker.approval_failure.set()
                     read_terminal(
@@ -2711,6 +2756,7 @@ if __name__ == "__main__":
             "approval-external",
             "approval-resumed",
             "approval-failure",
+            "approval-narrow",
             "attachments",
             "appearance",
             "agents",

@@ -182,6 +182,7 @@ pub(super) struct App {
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub approval_choice: ReviewDecision,
+    pub approval_scroll: u16,
     pub approval_watch: ApprovalWatch,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
@@ -285,6 +286,7 @@ impl App {
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             approval_choice: ReviewDecision::ApproveOnce,
+            approval_scroll: 0,
             approval_watch: ApprovalWatch::default(),
             input_history: Vec::new(),
             history_index: None,
@@ -660,6 +662,7 @@ impl App {
         }
         if was_empty && !self.pending_approvals.is_empty() {
             self.approval_choice = ReviewDecision::ApproveOnce;
+            self.approval_scroll = 0;
         }
         if was_empty && !self.pending_approvals.is_empty() {
             if !matches!(self.status, RunStatus::Cancelling | RunStatus::Reconnecting) {
@@ -728,6 +731,7 @@ impl App {
             RunStatus::Ready
         };
         self.approval_choice = ReviewDecision::ApproveOnce;
+        self.approval_scroll = 0;
     }
 
     pub fn push_system(&mut self, text: &str) {
@@ -2215,7 +2219,11 @@ impl App {
 }
 
 pub(super) fn clean_text(value: &str) -> String {
-    let redacted = crate::agent::safety::redact::Redactor::default_set().redact(value);
+    static REDACTOR: std::sync::OnceLock<crate::agent::safety::redact::Redactor> =
+        std::sync::OnceLock::new();
+    let redacted = REDACTOR
+        .get_or_init(crate::agent::safety::redact::Redactor::default_set)
+        .redact(value);
     redacted
         .chars()
         .map(|character| {

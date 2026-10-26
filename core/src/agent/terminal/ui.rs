@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+mod permission;
 mod progress;
 
 use super::commands::suggestions;
@@ -15,21 +16,27 @@ use progress::spinner;
 
 pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    let composer_height = composer_height(area.width, app);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(5),
-            Constraint::Length(if app.active_task.is_some() || app.pending_request.is_some() {
-                2
-            } else {
-                0
-            }),
-            Constraint::Length(composer_height),
-            Constraint::Length(1),
-        ])
-        .split(area);
+    if (app.current_approval().is_some() || app.approval_detail.is_some())
+        && !approval_review_available(area, app)
+    {
+        frame.render_widget(
+            Paragraph::new("Enlarge the terminal to review this permission request.")
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        if area.height > 1 {
+            frame.render_widget(
+                Paragraph::new(if app.current_approval().is_some() {
+                    "Esc stop task"
+                } else {
+                    "Esc close"
+                }),
+                Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            );
+        }
+        return;
+    }
+    let chunks = layout(area, app);
     render_header(frame, chunks[0], app);
     render_transcript(frame, chunks[1], app);
     progress::render(frame, chunks[2], app);
@@ -61,6 +68,56 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_operation_preview(frame, area, app);
     super::nearby::render(frame,area,app);
     render_confirmation(frame, area, app);
+}
+
+pub(super) fn approval_review_available(area: Rect, app: &App) -> bool {
+    if app.current_approval().is_some() {
+        area.width >= 24 && area.height >= 8
+    } else {
+        area.width >= 40 && area.height >= 16
+    }
+}
+
+fn layout(area: Rect, app: &App) -> [Rect; 5] {
+    let compact_permission = app.current_approval().is_some() && area.height < 18;
+    let header_height = if compact_permission { 0 } else { 3 };
+    let progress_height = if !compact_permission
+        && (app.active_task.is_some() || app.pending_request.is_some())
+    {
+        2
+    } else {
+        0
+    };
+    let composer_height = if app.current_approval().is_some() {
+        composer_height(area.width, app).min(
+            area.height
+                .saturating_sub(header_height + progress_height + 1),
+        )
+    } else {
+        composer_height(area.width, app)
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(if app.current_approval().is_some() {
+                0
+            } else {
+                5
+            }),
+            Constraint::Length(progress_height),
+            Constraint::Length(composer_height),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    [chunks[0], chunks[1], chunks[2], chunks[3], chunks[4]]
+}
+
+pub(super) fn approval_scroll_limit(area: Rect, app: &App) -> u16 {
+    if app.current_approval().is_none() || !approval_review_available(area, app) {
+        return 0;
+    }
+    permission::scroll_limit(layout(area, app)[3], app)
 }
 
 fn render_platform_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
@@ -2387,57 +2444,8 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
             accent(app)
         }))
         .title(title);
-    if let Some(approval) = app.current_approval() {
-        let approve_style = if app.approval_choice == super::backend::ReviewDecision::ApproveOnce {
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::Magenta)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let deny_style = if app.approval_choice == super::backend::ReviewDecision::Deny {
-            Style::default()
-                .fg(Color::White)
-                .bg(Color::Red)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let text = vec![
-            Line::from(vec![
-                Span::styled(
-                    approval.label.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "  [{}]",
-                        approval
-                            .risk
-                            .as_deref()
-                            .unwrap_or("unclassified")
-                            .to_uppercase()
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]),
-            Line::raw(format!("Target: {}", approval.target)),
-            Line::styled(
-                approval.description.clone(),
-                Style::default().fg(Color::Gray),
-            ),
-            Line::from(vec![
-                Span::styled(" Authorize once ", approve_style),
-                Span::raw("  "),
-                Span::styled(" Deny ", deny_style),
-                Span::styled(
-                    "   Left/Right choose  Enter confirm  a/d direct  Esc/Ctrl+C stop task",
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]),
-        ];
-        frame.render_widget(Paragraph::new(text).block(block), area);
+    if app.current_approval().is_some() {
+        permission::render(frame, area, app, block);
         return;
     }
 
@@ -2474,6 +2482,36 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let contextual = if app.pending_request.is_some() {
+        Some(if area.width >= 60 {
+            " Waiting for broker confirmation | Esc stop "
+        } else {
+            " Waiting | Esc stop "
+        })
+    } else if app.current_approval().is_some() {
+        Some(if area.width >= 100 {
+            " Left/Right choose  Enter confirm  a/d direct  Esc/Ctrl+C stop task  PgUp/PgDn details "
+        } else if area.width >= 40 {
+            " Enter confirm | a/d | Esc stop | PgDn "
+        } else {
+            " Enter OK a/d Esc PgDn "
+        })
+    } else if let Some(detail) = &app.approval_detail {
+        Some(if detail.status == "pending" {
+            " a authorize once | d deny | Esc close "
+        } else {
+            " Read-only approval | Esc close "
+        })
+    } else {
+        None
+    };
+    if let Some(controls) = contextual {
+        frame.render_widget(
+            Paragraph::new(controls).style(Style::default().fg(Color::DarkGray)),
+            area,
+        );
+        return;
+    }
     let queue = if app.queued_tasks.is_empty() {
         String::new()
     } else {
@@ -2520,7 +2558,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn composer_height(width: u16, app: &App) -> u16 {
     if app.current_approval().is_some() {
-        return 6;
+        return permission::height(width, app);
     }
     let inner = width.saturating_sub(4).max(1);
     let rows = app
