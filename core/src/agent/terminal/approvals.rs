@@ -45,6 +45,7 @@ impl App {
         self.approval_watch.invalidate();
         self.pending_approvals.clear();
         self.approval_choice = ReviewDecision::ApproveOnce;
+        self.approval_scroll = 0;
         for entry in &mut self.entries {
             if let EntryKind::Approval { status, .. } = &mut entry.kind {
                 if *status == ApprovalStatus::Pending {
@@ -112,6 +113,7 @@ impl App {
         self.add_approvals(pending);
         if current_id.as_deref() != self.current_approval().map(|request| request.id.as_str()) {
             self.approval_choice = ReviewDecision::ApproveOnce;
+            self.approval_scroll = 0;
         }
         self.status = match previous {
             RunStatus::Cancelling | RunStatus::Reconnecting => previous,

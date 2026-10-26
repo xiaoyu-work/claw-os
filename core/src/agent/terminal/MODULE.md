@@ -17,7 +17,7 @@ audit.
 | `state.rs` | Bounded transcript, composer, durable-task handles, approval and session state |
 | `commands.rs` | Closed Claw slash catalogue and canonical conversation/model/Skill actions |
 | `stream.rs` | Durable task submission, identity/model acknowledgement and stream polling |
-| `ui.rs`, `ui/progress.rs` | ratatui layout, live execution animation, styling, Markdown-oriented transcript projection and cursor |
+| `ui.rs`, `ui/progress.rs`, `ui/permission.rs` | ratatui layout, live execution animation, wrapped permission viewport, styling, transcript projection and cursor |
 | `presentation.rs` | Redacted model/tool/reasoning/progress projection |
 | `approvals.rs` | Exact owner-scoped status refresh, stale-read generations and modal lifecycle cleanup |
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes, including attended one-shot decisions |
@@ -180,6 +180,11 @@ audit.
   owner selectors or reusable duration. An exact approved request already
   consumed by its task is still a confirmed decision, not a failure or a new
   grant.
+- Permission content wraps by terminal display width. Up/Down and PgUp/PgDn
+  scroll long targets/effects while decision buttons remain pinned. Compact
+  prompts hide nonessential chrome and use an approval-specific footer.
+  Below 24x8 (or the detail panel's 40x16 minimum), show a resize notice and
+  refuse decision keys until a readable permission view has been rendered.
 - Keep prompt, transcript, queue, event and catalogue sizes bounded.
 - Do not launch, embed, fetch or package another product's TUI or compatibility
   protocol. External interfaces may inform interaction design only.
