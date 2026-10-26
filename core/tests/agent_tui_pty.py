@@ -132,6 +132,9 @@ class FixtureBroker:
         self.slow_progress_release = threading.Event()
         self.approval_state = "pending"
         self.approval_decided = threading.Event()
+        self.approval_changed = threading.Event()
+        self.approval_failure = threading.Event()
+        self.approval_resumed_sent = False
         self.request_waiting = threading.Event()
         self.request_release = threading.Event()
         self.workers = []
@@ -430,8 +433,11 @@ class FixtureBroker:
             }
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
-        if method == "permission.pending" and self.case in ("approval-center", "approval-choice", "slow-review"):
-            metadata = self.case in ("approval-choice", "slow-review")
+        if method == "permission.pending" and self.case in (
+            "approval-center", "approval-choice", "slow-review",
+            "approval-external", "approval-resumed", "approval-failure",
+        ):
+            metadata = self.case != "approval-center"
             return {
                 "requests": [{
                     "id": PENDING_APPROVAL_ID,
@@ -879,6 +885,14 @@ class FixtureBroker:
             if self.case == "reconnect" and self.stream_disconnects < 2:
                 self.stream_disconnects += 1
                 raise ConnectionAbortedError("fixture broker restart")
+            if self.case == "approval-failure" and self.approval_failure.is_set():
+                wrong_job = self.job("running", task_id=self.queued_task_id)
+                return {
+                    "cursor": params.get("cursor", 0),
+                    "events": [],
+                    "terminal": False,
+                    "job": wrong_job,
+                }
             events = []
             if params.get("cursor", 0) == 0:
                 tool_name = "cos_delegate" if self.case == "agents" else "cos_sysinfo"
@@ -898,7 +912,10 @@ class FixtureBroker:
                     }},
                     {"progress": {"kind": "tool_start", "id": "tool-1", "name": tool_name}},
                 ]
-                if self.case in ("approval-choice", "slow-review"):
+                if self.case in (
+                    "approval-choice", "slow-review", "approval-external",
+                    "approval-resumed", "approval-failure",
+                ):
                     events.append({
                         "progress": {
                             "kind": "waiting_approval",
@@ -956,6 +973,19 @@ class FixtureBroker:
                         }},
                     ])
                 self.cursors[task_id] = len(events)
+            elif (
+                self.case == "approval-resumed"
+                and self.approval_changed.is_set()
+                and not self.approval_resumed_sent
+            ):
+                self.approval_resumed_sent = True
+                events = [{
+                    "progress": {
+                        "kind": "approval_resumed",
+                        "request_ids": [PENDING_APPROVAL_ID],
+                    },
+                }]
+                self.cursors[task_id] = params["cursor"] + 1
             elif self.case == "slow-progress":
                 self.slow_progress_waiting.set()
                 if not self.slow_progress_release.wait(timeout=10):
@@ -1155,6 +1185,44 @@ def require_live_wait(master, output):
             master, output, due + 2,
             lambda data: time.monotonic() >= due and len(data) > previous,
         )
+
+
+def complete_inline_approval(master, output, broker, case):
+    os.write(master, b"\x1b[97;1:2u")
+    time.sleep(0.2)
+    if any(
+        request["command"] == "permission.decide"
+        for request in broker.requests
+    ):
+        raise AssertionError("repeated approval shortcut was accepted")
+    os.write(master, b"\r")
+    if case == "slow-review":
+        read_terminal(
+            master, output, time.monotonic() + 5,
+            lambda _: broker.request_waiting.is_set(),
+        )
+        require_live_wait(master, output)
+        os.write(master, b"\r\x1b[27;1u")
+        read_terminal(
+            master, output, time.monotonic() + 3,
+            lambda _: broker.cancelled.is_set(),
+        )
+        if sum(
+            request["command"] == "permission.decide" for request in broker.requests
+        ) != 1:
+            raise AssertionError("pending permission mutation was replayed")
+        broker.request_release.set()
+    read_terminal(
+        master, output, time.monotonic() + 15,
+        lambda _: broker.approval_decided.is_set(),
+    )
+    settled = time.monotonic() + 0.5
+    read_terminal(
+        master, output, settled + 2,
+        lambda _: time.monotonic() >= settled,
+    )
+    if b"Claw OS authorization" in output:
+        raise AssertionError("TUI approval opened the password prompt")
 
 
 def terminal_child():
@@ -2461,7 +2529,10 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"\x1b")
                 time.sleep(0.3)
-            if case in ("approval-choice", "slow-review"):
+            if case in (
+                "approval-choice", "slow-review", "approval-external",
+                "approval-resumed", "approval-failure",
+            ):
                 read_terminal(
                     master,
                     output,
@@ -2476,45 +2547,56 @@ def run(cos, case, transcript, original_namespace, trace):
                         for request in broker.requests
                     ),
                 )
-                os.write(master, b"\x1b[97;1:2u")
-                time.sleep(0.2)
-                if any(
-                    request["command"] == "permission.decide"
-                    for request in broker.requests
-                ):
-                    raise AssertionError("repeated approval shortcut was accepted")
-                os.write(master, b"\r")
-                if case == "slow-review":
+                if case == "approval-failure":
+                    broker.approval_failure.set()
+                    read_terminal(
+                        master, output, time.monotonic() + 10,
+                        lambda data: b"changed task identity" in data,
+                    )
+                    os.write(master, b"\x03")
                     read_terminal(
                         master, output, time.monotonic() + 5,
-                        lambda _: broker.request_waiting.is_set(),
+                        lambda _: process.poll() is not None,
+                        exit_process=process,
                     )
-                    require_live_wait(master, output)
-                    os.write(master, b"\r\x1b[27;1u")
+                    if process.wait(timeout=5) != 0 or broker.cancelled.is_set():
+                        raise AssertionError("failed stream trapped input or implicitly cancelled work")
+                    if broker.errors:
+                        raise AssertionError("; ".join(broker.errors))
+                    print(json.dumps({
+                        "case": case, "task_submissions": 1, "completed": True,
+                    }))
+                    return
+                if case in ("approval-external", "approval-resumed"):
+                    if case == "approval-external":
+                        broker.approval_state = "approved"
+                    broker.approval_changed.set()
+                    settled = time.monotonic() + 2.5
                     read_terminal(
-                        master, output, time.monotonic() + 3,
+                        master, output, settled + 3,
+                        lambda _: time.monotonic() >= settled,
+                    )
+                    send_prompt(master, output, "/session")
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda data: b"provider: ollama" in data,
+                    )
+                    if any(
+                        request["command"] == "permission.decide"
+                        for request in broker.requests
+                    ):
+                        raise AssertionError("read-only approval synchronization issued a decision")
+                    os.write(master, b"\x1b[27;1u")
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
                         lambda _: broker.cancelled.is_set(),
                     )
-                    if sum(
-                        request["command"] == "permission.decide" for request in broker.requests
-                    ) != 1:
-                        raise AssertionError("pending permission mutation was replayed")
-                    broker.request_release.set()
-                read_terminal(
-                    master,
-                    output,
-                    time.monotonic() + 15,
-                    lambda _data: broker.approval_decided.is_set(),
-                )
-                settled = time.monotonic() + 0.5
-                read_terminal(
-                    master,
-                    output,
-                    settled + 2,
-                    lambda _data: time.monotonic() >= settled,
-                )
-                if b"Claw OS authorization" in output:
-                    raise AssertionError("TUI approval opened the password prompt")
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda data: b"Task cancelled." in data,
+                    )
+                else:
+                    complete_inline_approval(master, output, broker, case)
             if case == "slow-panel":
                 send_prompt(master, output, "/tasks")
                 read_terminal(
@@ -2626,6 +2708,9 @@ if __name__ == "__main__":
             "multiline-key",
             "approval-center",
             "approval-choice",
+            "approval-external",
+            "approval-resumed",
+            "approval-failure",
             "attachments",
             "appearance",
             "agents",

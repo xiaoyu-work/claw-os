@@ -12,9 +12,14 @@ const MAX_QUEUED_TASKS: usize = 64;
 const MAX_STREAM_RECONNECT_ATTEMPTS: u32 = 60;
 const STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
-pub(super) enum RuntimeEvent {
+pub(super) struct RuntimeEvent {
+    pub task_id: String,
+    pub kind: RuntimeEventKind,
+}
+
+pub(super) enum RuntimeEventKind {
     Record(Value),
-    Finished(Job),
+    Finished(Box<Job>),
     Reconnecting(String),
     Reconnected,
     Failed(String),
@@ -314,6 +319,12 @@ async fn load_conversation(
 
 fn spawn(backend: Arc<dyn Backend>, runtime_tx: mpsc::UnboundedSender<RuntimeEvent>, job: Job) {
     tokio::spawn(async move {
+        let send = |kind| {
+            runtime_tx.send(RuntimeEvent {
+                task_id: job.id.clone(),
+                kind,
+            })
+        };
         let mut cursor = 0;
         let mut reconnect_attempts = 0;
         loop {
@@ -323,34 +334,34 @@ fn spawn(backend: Arc<dyn Backend>, runtime_tx: mpsc::UnboundedSender<RuntimeEve
                     if reconnect_attempts < MAX_STREAM_RECONNECT_ATTEMPTS =>
                 {
                     if reconnect_attempts == 0 {
-                        let _ = runtime_tx.send(RuntimeEvent::Reconnecting(error));
+                        let _ = send(RuntimeEventKind::Reconnecting(error));
                     }
                     reconnect_attempts += 1;
                     tokio::time::sleep(STREAM_RECONNECT_DELAY).await;
                     continue;
                 }
                 Err(StreamError::Retryable(error)) => {
-                    let _ = runtime_tx.send(RuntimeEvent::Failed(format!(
+                    let _ = send(RuntimeEventKind::Failed(format!(
                         "Claw broker task stream did not recover after \
                          {MAX_STREAM_RECONNECT_ATTEMPTS} attempts: {error}"
                     )));
                     return;
                 }
                 Err(StreamError::Fatal(error)) => {
-                    let _ = runtime_tx.send(RuntimeEvent::Failed(error));
+                    let _ = send(RuntimeEventKind::Failed(error));
                     return;
                 }
             };
             if reconnect_attempts > 0 {
                 reconnect_attempts = 0;
-                let _ = runtime_tx.send(RuntimeEvent::Reconnected);
+                let _ = send(RuntimeEventKind::Reconnected);
             }
             cursor = frame.cursor;
             for record in frame.records {
-                let _ = runtime_tx.send(RuntimeEvent::Record(record));
+                let _ = send(RuntimeEventKind::Record(record));
             }
             if frame.terminal {
-                let _ = runtime_tx.send(RuntimeEvent::Finished(frame.job));
+                let _ = send(RuntimeEventKind::Finished(Box::new(frame.job)));
                 return;
             }
         }

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
+use super::approvals::ApprovalWatch;
 
 use super::backend::{
     AccountOverview, Activity, ActivityAttention, ActivityControls, ActivityDetail,
@@ -181,6 +182,7 @@ pub(super) struct App {
     pub queued_tasks: VecDeque<Job>,
     pub pending_approvals: VecDeque<ApprovalRequest>,
     pub approval_choice: ReviewDecision,
+    pub approval_watch: ApprovalWatch,
     pub input_history: Vec<String>,
     pub history_index: Option<usize>,
     pub command_selection: usize,
@@ -283,6 +285,7 @@ impl App {
             queued_tasks: VecDeque::new(),
             pending_approvals: VecDeque::new(),
             approval_choice: ReviewDecision::ApproveOnce,
+            approval_watch: ApprovalWatch::default(),
             input_history: Vec::new(),
             history_index: None,
             command_selection: 0,
@@ -357,6 +360,7 @@ impl App {
         self.tool_entries.clear();
         self.pending_approvals.clear();
         self.approval_choice = ReviewDecision::ApproveOnce;
+        self.clear_approval_ui();
         self.seen_approvals.clear();
         self.active_assistant = None;
         self.provider_had_text = false;
@@ -518,15 +522,6 @@ impl App {
             status => self.push_error(&format!("Task ended with unexpected status {status}.")),
         }
         self.detach_task();
-        for entry in &mut self.entries {
-            if let EntryKind::Approval { status, .. } = &mut entry.kind {
-                if *status == ApprovalStatus::Pending {
-                    *status = ApprovalStatus::Closed;
-                }
-            }
-        }
-        self.pending_approvals.clear();
-        self.approval_choice = ReviewDecision::ApproveOnce;
         if self
             .task_detail
             .as_ref()
@@ -537,6 +532,8 @@ impl App {
     }
 
     pub fn detach_task(&mut self) {
+        self.clear_approval_ui();
+        self.seen_approvals.clear();
         self.active_task = None;
         self.active_workspace = None;
         self.status = RunStatus::Ready;
@@ -647,29 +644,27 @@ impl App {
     pub fn add_approvals(&mut self, approvals: Vec<ApprovalRequest>) {
         let was_empty = self.pending_approvals.is_empty();
         for approval in approvals {
-            if !self.seen_approvals.insert(approval.id.clone()) {
-                continue;
+            if self.seen_approvals.insert(approval.id.clone()) {
+                self.push_entry(
+                    EntryKind::Approval { id: approval.id.clone(), status: ApprovalStatus::Pending },
+                    format!(
+                        "{}\nTarget: {}\n{}\nWhy: {}",
+                        clean_text(&approval.label), clean_text(&approval.target),
+                        clean_text(&approval.description), clean_text(&approval.reason),
+                    ),
+                );
             }
-            self.push_entry(
-                EntryKind::Approval {
-                    id: approval.id.clone(),
-                    status: ApprovalStatus::Pending,
-                },
-                format!(
-                    "{}\nTarget: {}\n{}\nWhy: {}",
-                    clean_text(&approval.label),
-                    clean_text(&approval.target),
-                    clean_text(&approval.description),
-                    clean_text(&approval.reason),
-                ),
-            );
-            self.pending_approvals.push_back(approval);
+            if !self.pending_approvals.iter().any(|pending| pending.id == approval.id) {
+                self.pending_approvals.push_back(approval);
+            }
         }
         if was_empty && !self.pending_approvals.is_empty() {
             self.approval_choice = ReviewDecision::ApproveOnce;
         }
-        if !self.pending_approvals.is_empty() {
-            self.status = RunStatus::WaitingApproval;
+        if was_empty && !self.pending_approvals.is_empty() {
+            if !matches!(self.status, RunStatus::Cancelling | RunStatus::Reconnecting) {
+                self.status = RunStatus::WaitingApproval;
+            }
             self.picker = None;
             self.confirmation = None;
             self.appearance_open = false;
@@ -706,6 +701,7 @@ impl App {
     }
 
     pub fn resolve_approval(&mut self, id: &str, approved: bool) {
+        self.approval_watch.resolve(id);
         self.pending_approvals.retain(|approval| approval.id != id);
         for entry in &mut self.entries {
             if let EntryKind::Approval {
@@ -722,7 +718,9 @@ impl App {
                 }
             }
         }
-        self.status = if !self.pending_approvals.is_empty() {
+        self.status = if matches!(self.status, RunStatus::Cancelling | RunStatus::Reconnecting) {
+            self.status
+        } else if !self.pending_approvals.is_empty() {
             RunStatus::WaitingApproval
         } else if self.active_task.is_some() {
             RunStatus::Working
@@ -1725,6 +1723,7 @@ impl App {
     }
 
     pub fn open_approval_detail(&mut self, mut approval: ApprovalRequest) {
+        self.approval_watch.invalidate();
         approval.verb = bounded_clean_text(&approval.verb, 256).replace('\n', " ");
         approval.label = bounded_clean_text(&approval.label, 256).replace('\n', " ");
         approval.description = bounded_clean_text(&approval.description, 1_024);
@@ -1751,6 +1750,7 @@ impl App {
     }
 
     pub fn close_approval_detail(&mut self) {
+        self.approval_watch.invalidate();
         self.approval_detail = None;
         self.approval_detail_scroll = 0;
     }
