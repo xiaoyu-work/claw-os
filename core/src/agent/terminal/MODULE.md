@@ -20,6 +20,7 @@ audit.
 | `presentation.rs` | Redacted model/tool/reasoning/progress projection |
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes, including attended one-shot decisions |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
+| `nearby.rs` | Model-independent `/share` center over the shared nearby service, stable exact offer selection, progress, refresh and detach-only close |
 | `../../../test/unit/agent/terminal/mod.rs` | State, rendering, privacy and option regression tests |
 | `../../../test/unit/agent/terminal/backend.rs` | Exact approval decision readback |
 | `../../../tests/agent_tui_pty.py` | Real-binary PTY completion/cancellation/plain scenarios |
@@ -69,6 +70,11 @@ audit.
 - Notification Inbox consumes only owner-scoped durable notification routes.
   Read, acknowledge, dismiss, channel and DND changes are explicit broker
   mutations; opening a notification is presentation only.
+- Nearby Sharing uses the same owner-scoped backend as CLI/Web/native.
+  `Left`/`Right` selects a stable exact offer before `A` accepts or `N`
+  declines; expiry never selects a replacement. `Esc` detaches rather than
+  stopping the radio. Protected approvals/confirmations retain input and
+  rendering priority. No model setup or Agent task is required.
 - Activity views consume the shared owner-scoped Activity backend. Execution
   results never complete a goal; completion and cancellation use explicit
   confirmation and never imply task cancellation or effect rollback.

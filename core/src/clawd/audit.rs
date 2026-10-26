@@ -146,6 +146,51 @@ pub fn record_request(
     append_jsonl(&audit)
 }
 
+#[derive(Serialize)]
+struct NearbyAudit<'a> {
+    ts:chrono::DateTime<Utc>,
+    event:&'static str,
+    action:&'static str,
+    owner_uid:u32,
+    window_id:Option<&'a str>,
+    peer_id:Option<&'a str>,
+    offer_id:Option<&'a str>,
+    transfer_id:Option<&'a str>,
+    accepted:Option<bool>,
+    file_count:usize,
+    session_phase:Option<clawd_client::nearby::SessionPhase>,
+    transfer_phase:Option<clawd_client::nearby::TransferPhase>,
+    request:Option<TextDigest>,
+}
+
+pub fn record_nearby_control(
+    action:&clawd_client::nearby::NearbyAction,view:&clawd_client::nearby::NearbyView,
+)->Result<(),String> {
+    use clawd_client::nearby::NearbyAction;
+    let (window,peer,offer,transfer,accepted,count)=match action {
+        NearbyAction::Open{..}=>(view.session.as_ref().map(|s|s.id.as_str()),None,None,None,None,0),
+        NearbyAction::Discover{session_id}|NearbyAction::Stop{session_id}=>(Some(session_id.as_str()),None,None,None,None,0),
+        NearbyAction::Send{session_id,peer_id,paths,uploads}=>(Some(session_id.as_str()),Some(peer_id.as_str()),None,
+            view.session.as_ref().and_then(|s|s.transfers.last()).map(|t|t.id.as_str()),None,paths.len()+uploads.len()),
+        NearbyAction::Decide{session_id,offer_id,accept}=>(Some(session_id.as_str()),None,Some(offer_id.as_str()),None,Some(*accept),0),
+        NearbyAction::Cancel{session_id,transfer_id}=>(Some(session_id.as_str()),None,None,Some(transfer_id.as_str()),None,0),
+        _=>(None,None,None,None,None,0),
+    };
+    let serialized=serde_json::to_string(action).map_err(|e|e.to_string())?;
+    append_jsonl(&NearbyAudit{ts:Utc::now(),event:"clawd.nearby.control",action:action.name(),owner_uid:view.owner_uid,
+        window_id:window,peer_id:peer,offer_id:offer,transfer_id:transfer,accepted,file_count:count,
+        session_phase:view.session.as_ref().map(|s|s.phase),transfer_phase:None,
+        request:Some(audit_policy::text_digest(&serialized))})
+}
+
+pub fn record_nearby_transfer(
+    owner:u32,window:&str,transfer:&clawd_client::nearby::NearbyTransfer,
+)->Result<(),String> {
+    append_jsonl(&NearbyAudit{ts:Utc::now(),event:"clawd.nearby.transfer",action:"terminal",owner_uid:owner,
+        window_id:Some(window),peer_id:None,offer_id:None,transfer_id:Some(&transfer.id),accepted:None,
+        file_count:transfer.files.len(),session_phase:None,transfer_phase:Some(transfer.phase),request:None})
+}
+
 pub fn record_protocol_failure(
     request: &ProtocolFailureFacts,
     outcome: &ResponseFacts,

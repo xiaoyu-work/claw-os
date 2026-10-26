@@ -16,6 +16,13 @@ case "$1" in
                 echo "claw-os-agent: clawd.service did not stop before identity migration" >&2
                 exit 1
             fi
+            if systemctl --quiet is-active claw-nearby-radio.service; then
+                deb-systemd-invoke stop claw-nearby-radio.service >/dev/null
+                if systemctl --quiet is-active claw-nearby-radio.service; then
+                    echo "claw-os-agent: nearby radio did not retire before upgrade" >&2
+                    exit 1
+                fi
+            fi
         fi
         ;;
     abort-upgrade)

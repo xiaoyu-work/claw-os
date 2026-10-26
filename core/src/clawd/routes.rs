@@ -33,6 +33,7 @@ use super::activity_execution_limits;
 use super::activity_monetary_budget;
 use super::activity_scheduling_policy;
 use super::activity_work;
+use super::nearby;
 use crate::audit_policy::FieldRule;
 
 use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
@@ -1045,6 +1046,26 @@ routes! {
         body: body::MemoryInspect,
         audit: &[("kind", FieldRule::Token), ("query", FieldRule::Size), ("limit", FieldRule::Count)],
         run: |c| memory::inspection::inspect(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    NearbyStatus {
+        name: "nearby.status",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::SystemService),
+        body: body::NoBody,
+        audit: &[],
+        run: |c| nearby::status(c.params,c.client).await,
+    }
+    NearbyControl {
+        name: "nearby.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::SystemService),
+        body: body::NearbyControl,
+        audit: &[("request",FieldRule::Size)],
+        run: |c| nearby::control(c.params,c.client).await,
     }
     MemoryRead {
         name: "memory.read",

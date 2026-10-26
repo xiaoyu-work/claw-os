@@ -107,6 +107,11 @@ let reattachStreamRequests = 0;
 let runtimeProgressObserved = false;
 let inlineApprovalDecided = false;
 const memoryNotes = new Map([["USER.md", "Prefer concise replies."], ["MEMORY.md", "OS and Agent experience."]]);
+const nearby = {
+  schema: 1, owner_uid: 1000, inbox: "/home/user/Downloads/Claw Nearby", uploads: [],
+  probe: { available: true, mode: "exclusive", driver: "synthetic-radio", diagnostics: [] }, session: null,
+};
+let providerReady = true;
 const noteEntry = (name) => ({
   reference:{kind:"note",name}, source:`notes/${name}`, category:"owner_note",
   recorded_at_ms:Date.now(), revision:createHash("sha256").update(memoryNotes.get(name)).digest("hex"),
@@ -388,7 +393,77 @@ async function fixture(req, res) {
   assert.equal(req.headers.authorization, `Bearer ${accessToken}`, "every adapter call must be authenticated");
   assert.ok(!Object.hasOwn(body, "owner_uid"), "Web must not submit owner identity");
   if (url.pathname === "/api/meta") {
-    return reply(req, res, { hostname: "activity-test", provider: "test", model: "fixture", ready: true });
+    return reply(req, res, { hostname: "activity-test", provider: "test", model: "fixture", ready: providerReady });
+  }
+  if (url.pathname === "/api/nearby") {
+    await delay(1700);
+    return reply(req, res, nearby);
+  }
+  if (url.pathname === "/api/nearby/control") {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(Object.keys(body), ["request"]);
+    const action = body.request;
+    for (const field of ["owner_uid", "capabilities", "executable", "interface", "auto_accept"]) {
+      assert.ok(!Object.hasOwn(action, field));
+    }
+    let upload = null;
+    switch (action.action) {
+      case "upload_begin":
+        upload = { id: randomUUID(), name: action.name, bytes: action.bytes, written: 0, ready: false };
+        nearby.uploads.push(upload); break;
+      case "upload_chunk":
+        upload = nearby.uploads.find((item) => item.id === action.upload_id);
+        assert.ok(upload); assert.equal(action.offset, upload.written);
+        assert.ok(Buffer.from(action.data, "base64").length <= 192 * 1024);
+        upload.written += Buffer.from(action.data, "base64").length; break;
+      case "upload_finish":
+        upload = nearby.uploads.find((item) => item.id === action.upload_id);
+        assert.ok(upload); assert.equal(upload.written, upload.bytes); upload.ready = true; break;
+      case "open":
+        assert.equal(action.expected_mode, "exclusive"); assert.equal(action.allow_disruption, true);
+        assert.equal(action.receive, true); assert.ok(nearby.uploads.some((item) => item.ready));
+        nearby.session = { id: randomUUID(), phase: "ready", mode: "exclusive", receive: true,
+          expires_at: new Date(Date.now() + 300_000).toISOString(), peers: [], offers: [], transfers: [],
+          discovering: false, message: "Synthetic radio; no physical hardware is exercised." };
+        break;
+      case "discover":
+        assert.equal(action.session_id, nearby.session.id);
+        nearby.session.peers = [{ id: randomUUID(), name: "Fixture iPhone",
+          discovered_at: new Date().toISOString() }]; break;
+      case "send": {
+        assert.equal(action.session_id, nearby.session.id);
+        assert.equal(action.peer_id, nearby.session.peers[0].id);
+        assert.deepEqual(action.paths, []); assert.equal(action.uploads.length, 1);
+        const selected = nearby.uploads.find((item) => item.id === action.uploads[0]);
+        assert.ok(selected?.ready);
+        const transfer = { id: randomUUID(), incoming: false, peer: "Fixture iPhone",
+          files: [{ name: selected.name, bytes: selected.bytes }], phase: "sending",
+          bytes: 0, total_bytes: selected.bytes, received_paths: [], message: null };
+        nearby.session.transfers.push(transfer);
+        setTimeout(() => { transfer.phase = "delivered"; transfer.bytes = selected.bytes; }, 100);
+        break;
+      }
+      case "decide": {
+        assert.equal(action.session_id, nearby.session.id);
+        const offer = nearby.session.offers.find((item) => item.id === action.offer_id);
+        assert.ok(offer); assert.ok(Date.parse(offer.expires_at) > Date.now());
+        offer.phase = action.accept ? "accepted" : "declined";
+        if (action.accept) {
+          const transfer = { id: offer.id, incoming: true, peer: offer.sender, files: offer.files,
+            phase: "accepted", bytes: 0, total_bytes: null, received_paths: [], message: null };
+          nearby.session.transfers.push(transfer);
+          setTimeout(() => {
+            offer.phase = "received"; transfer.phase = "received"; transfer.bytes = 3; transfer.total_bytes = 3;
+            transfer.received_paths = [`${nearby.inbox}/${offer.id}/incoming.txt`];
+          }, 100);
+        }
+        break;
+      }
+      case "stop":
+        assert.equal(action.session_id, nearby.session.id); nearby.session.phase = "ended"; break;
+      default: throw new Error(`unexpected nearby fixture action: ${action.action}`);
+    }
+    return reply(req, res, { view: nearby, upload });
   }
   if (url.pathname === "/api/memory/inspect") {
     assert.equal(req.method,"POST");
@@ -1649,6 +1724,58 @@ try {
   console.log("PASS memory source inspection, checked note edits, reload persistence and explicit forgetting");
   };
 
+  const validateNearbySharing = async () => {
+  const jobsBeforeNearby = jobs.size;
+  const nearbyStart = requests.length;
+  providerReady = false;
+  await clickText("Nearby Sharing");
+  await wait("document.body.innerText.includes('synthetic-radio')", "nearby center without provider setup");
+  assert.equal(await evaluate(`${buttonExpression("Receive files for this window")}?.disabled`), true,
+    "disruptive radio needs a separate explicit acknowledgement");
+  await evaluate(`(() => {
+    const input = document.querySelector('[aria-label="Files for nearby sharing"]');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([new Uint8Array(192 * 1024 + 17)], 'browser.bin'));
+    input.files = transfer.files; input.dispatchEvent(new Event('change', {bubbles:true}));
+  })()`);
+  await wait("document.body.innerText.includes('196625/196625 bytes') && document.body.innerText.includes('ready')",
+    "chunked browser file is fully staged before Wi-Fi interruption");
+  await click(fieldExpression("I acknowledge possible Wi-Fi interruption"));
+  await clickText("Receive files for this window");
+  await wait("document.body.innerText.includes('Window ready')", "explicit receive window opened");
+  await clickText("Discover nearby receivers");
+  await wait("document.body.innerText.includes('Fixture iPhone')", "discovered receiver");
+  await click("document.querySelector('input[name=\"nearby-peer\"]')");
+  await clickText("Send selected files to selected device");
+  await wait("document.body.innerText.includes('delivered')", "outgoing transfer progress and acknowledgement");
+  const offered = { id: randomUUID(), sender: '<img src=x onerror="window.nearbyMetadataExecuted=true">',
+    files: [{ name: "incoming.txt", bytes: 3 }], expires_at: new Date(Date.now() + 15_000).toISOString(), phase: "offered" };
+  const expired = { ...offered, id: randomUUID(), sender: "Expired fixture",
+    expires_at: new Date(Date.now() - 1000).toISOString() };
+  nearby.session.offers.push(offered, expired);
+  await wait(`document.body.innerText.includes(${JSON.stringify(offered.sender)})`, "untrusted offer is shown as inert text");
+  assert.equal(await evaluate("window.nearbyMetadataExecuted"), undefined);
+  assert.equal(await evaluate(`${buttonExpression("Accept from Expired fixture")}?.disabled`), true);
+  await clickText(`Accept from ${offered.sender}`);
+  await wait("document.body.innerText.includes('/incoming.txt')", "exact offer decision and persisted receive result");
+  const currentWindow = nearby.session.id;
+  providerReady = true;
+  await clickText("Activities");
+  await wait("document.body.innerText.includes('Persistent goals, shared with the terminal and native desktop.')", "leave sharing without stopping it");
+  assert.equal(nearby.session.phase, "ready");
+  await clickText("Nearby Sharing");
+  await wait("document.body.innerText.includes('/incoming.txt')", "same sharing window survives frontend detachment");
+  assert.equal(nearby.session.id, currentWindow);
+  assert.equal(requests.slice(nearbyStart).filter((request) => request.body?.request?.action === "open").length, 1);
+  await clickText("Stop sharing and restore radio");
+  await wait("document.body.innerText.includes('Window ended')", "checked explicit window stop");
+  nearby.probe = { available: false, mode: null, driver: null, diagnostics: ["No supported physical radio"] };
+  await clickText("Refresh nearby sharing");
+  await wait("document.body.innerText.includes('No supported physical radio')", "unavailable hardware is explicit");
+  assert.equal(jobs.size, jobsBeforeNearby, "sharing does not submit Agent work");
+  console.log("PASS nearby staging, explicit Wi-Fi warning, discovery, send, exact receive, expiry, detachment and unavailable hardware");
+  };
+
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
   const navigationButtons = await evaluate(
@@ -2650,6 +2777,7 @@ try {
 
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   await validateMemoryCenter();
+  await validateNearbySharing();
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);
   assert.deepEqual(failedResponses.map((response) => ({

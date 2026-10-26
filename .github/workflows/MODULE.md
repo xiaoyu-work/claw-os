@@ -40,6 +40,9 @@ dispatched and reusable test/publication pipelines.
 - Exercise real staged Calendar MCP writes and public SDK reads through the
   owner-scoped broker and standalone reader, including live WAL visibility,
   wrong scopes, single-use grants and physical read-only mounts.
+- Exercise the independent nearby transport's actual TLS loopback, private
+  D-Bus lease/failed-retirement cases and Root-only temporary-file/sandbox
+  boundaries without acquiring wireless hardware; see `scripts/ci/test-boundaries.sh nearby`.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

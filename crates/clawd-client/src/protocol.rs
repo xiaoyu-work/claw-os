@@ -106,6 +106,10 @@ pub enum Command {
     MemoryReset,
     #[serde(rename = "memory.inspect")]
     MemoryInspect,
+    #[serde(rename = "nearby.status")]
+    NearbyStatus,
+    #[serde(rename = "nearby.control")]
+    NearbyControl,
     #[serde(rename = "memory.read")]
     MemoryRead,
     #[serde(rename = "memory.update")]
@@ -156,7 +160,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 65] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -202,6 +206,8 @@ impl Command {
         Self::MemoryHistory,
         Self::MemoryReset,
         Self::MemoryInspect,
+        Self::NearbyStatus,
+        Self::NearbyControl,
         Self::MemoryRead,
         Self::MemoryUpdate,
         Self::MemoryForget,
@@ -269,6 +275,8 @@ impl Command {
             Self::MemoryHistory => "memory.history",
             Self::MemoryReset => "memory.reset",
             Self::MemoryInspect => "memory.inspect",
+            Self::NearbyStatus => "nearby.status",
+            Self::NearbyControl => "nearby.control",
             Self::MemoryRead => "memory.read",
             Self::MemoryUpdate => "memory.update",
             Self::MemoryForget => "memory.forget",

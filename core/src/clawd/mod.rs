@@ -53,6 +53,7 @@ pub mod journal;
 pub mod location;
 pub mod media_player;
 pub mod memory;
+pub mod nearby;
 pub mod network;
 pub mod network_diagnostics;
 pub mod notifications;

@@ -20,6 +20,7 @@ fn catalogue_contains_every_public_router_namespace() {
     assert_eq!(
         namespace_names(),
         vec![
+            "share",
             "review",
             "activity",
             "object",
@@ -36,6 +37,13 @@ fn catalogue_contains_every_public_router_namespace() {
             "engine",
         ]
     );
+}
+
+#[test]
+fn nearby_is_a_human_os_surface_not_an_implicit_model_tool() {
+    let help=command_help("share","receive").unwrap();
+    assert_eq!(help["model_callable"],false);
+    assert!(help["model_tool"].is_null());
 }
 
 #[test]

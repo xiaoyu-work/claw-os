@@ -9,6 +9,7 @@ mod discovery;
 mod error;
 mod protocol;
 pub mod system_review;
+pub mod nearby;
 
 pub use client::{Client, ClientConfig};
 pub use discovery::{

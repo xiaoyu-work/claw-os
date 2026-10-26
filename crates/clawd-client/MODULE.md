@@ -45,6 +45,16 @@ The ordinary request ceiling remains 1 MiB. `task.submit` alone may use a
 32-MiB request for bounded inline original images. An explicit lower client
 configuration still wins, and the response ceiling is unchanged.
 
+## Nearby sharing contract
+
+`src/nearby.rs` defines the closed schema-1 owner/window/offer/transfer and
+bounded upload DTOs shared by `nearby.status/control`, the four human
+presentations and the fixed private file-worker pipe. Owner, executable,
+interface and capabilities are never request selectors. It validates canonical
+IDs, timestamps, byte/count/serialized bounds and action-specific acknowledgements.
+These definitions grant nothing and contain no transport provider or local
+transfer loop. See [`../../docs/nearby-sharing.md`](../../docs/nearby-sharing.md).
+
 ## System review contract
 
 [`src/system_review.rs`](src/system_review.rs) defines the closed version-1

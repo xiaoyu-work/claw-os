@@ -17,6 +17,7 @@ mod activities;
 mod chat;
 mod models;
 mod memory;
+mod nearby;
 mod sessions;
 mod voice;
 
@@ -29,6 +30,8 @@ const CHAT_MAX_HTTP_BYTES: usize = cos_agent_protocol::MAX_CHAT_REQUEST_BYTES;
 pub fn api() -> Router<AppState> {
     Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/nearby",get(nearby::status))
+        .route("/nearby/control",post(nearby::control))
         .route("/memory/inspect", post(memory::inspect))
         .route("/memory/read", post(memory::read))
         .route("/memory/update", post(memory::update))

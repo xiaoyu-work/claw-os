@@ -96,6 +96,33 @@ async fn filesystem_business_text_roundtrips_the_typed_socket_without_app_dispat
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn nearby_upload_chunks_use_the_ordinary_authenticated_typed_socket() {
+    use base64::Engine;
+    use clawd_client::nearby::{NearbyAction,UPLOAD_CHUNK_BYTES};
+    let bound=bind();
+    let path=bound.path.clone();
+    let data=base64::engine::general_purpose::STANDARD.encode(vec![0x42;UPLOAD_CHUNK_BYTES]);
+    let expected=data.clone();
+    let server=tokio::spawn(serve_once(bound.listener,move |envelope| {
+        let decode=Command::NearbyControl.route().decode;
+        let decoded=decode(envelope.params.clone()).expect("closed nearby upload");
+        assert_eq!(decoded["request"]["data"],expected);
+        let mut forged=envelope.params;
+        forged["owner_uid"]=json!(1001);
+        assert!(decode(forged).is_err(),"the transport never supplies an owner selector");
+        Response::ok(envelope.id,json!({"recorded_bytes":UPLOAD_CHUNK_BYTES}))
+    }));
+    let request=Request::build(Command::NearbyControl,json!({"request":NearbyAction::UploadChunk {
+        upload_id:"11111111-1111-4111-8111-111111111111".into(),offset:0,data,
+    }}));
+    let response=tokio::task::spawn_blocking(move||cos::clawd::client::request_blocking(&path,request))
+        .await.expect("client task").expect("ordinary upload response");
+    assert!(response.ok);
+    let (_,envelope)=server.await.expect("server task");
+    assert_eq!(envelope.command.as_str(),"nearby.control");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn original_image_submission_crosses_the_authenticated_broker_socket() {
     use base64::Engine;
     let bound = bind();
