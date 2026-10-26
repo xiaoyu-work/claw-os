@@ -5,6 +5,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::backend::{Backend, Job, StreamError};
+use super::requests::Request;
 use super::state::{App, MAX_PROMPT_BYTES};
 
 const MAX_QUEUED_TASKS: usize = 64;
@@ -19,7 +20,7 @@ pub(super) enum RuntimeEvent {
     Failed(String),
 }
 
-pub(super) async fn start_prompt(
+pub(super) fn start_prompt(
     app: &mut App,
     backend: Arc<dyn Backend>,
     runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
@@ -27,69 +28,67 @@ pub(super) async fn start_prompt(
     max_turns: Option<u32>,
     prompt: String,
     workspace: String,
-) {
+) -> Result<Request, String> {
     if app.conversation.archived {
-        app.push_error("This conversation is archived. Use /new or /resume another session.");
-        return;
+        return Err("This conversation is archived. Use /new or /resume another session.".into());
     }
     if prompt.len() > MAX_PROMPT_BYTES {
-        app.push_error("Prompt exceeds the 64 KiB terminal limit.");
-        return;
+        return Err("Prompt exceeds the 64 KiB terminal limit.".into());
     }
-    match backend
-        .submit(
-            &prompt,
-            app.pending_attachments(),
-            &app.conversation.id,
-            &workspace,
-            None,
-            use_memory,
-            max_turns,
-            &app.selected_model,
-            app.task_reasoning_effort.as_deref(),
-            app.task_plan_only,
-        )
-        .await
-    {
-        Ok(job)
-            if job.session_id == app.conversation.id
-                && job.requested_model.as_deref() == Some(app.selected_model.as_str())
-                && job.workspace.as_deref() == Some(workspace.as_str()) =>
-        {
+    let session_id = app.conversation.id.clone();
+    let model = app.selected_model.clone();
+    let effort = app.task_reasoning_effort.clone();
+    let plan_only = app.task_plan_only;
+    let attachments = app.pending_attachments().to_vec();
+    let worker_backend = backend.clone();
+    Ok(Request::new(
+        "Submitting task",
+        async move {
+            let job = worker_backend
+                .submit(
+                    &prompt,
+                    &attachments,
+                    &session_id,
+                    &workspace,
+                    None,
+                    use_memory,
+                    max_turns,
+                    &model,
+                    effort.as_deref(),
+                    plan_only,
+                )
+                .await?;
+            if job.session_id != session_id
+                || job.requested_model.as_deref() != Some(model.as_str())
+                || job.workspace.as_deref() != Some(workspace.as_str())
+            {
+                return reject_submission(worker_backend.as_ref(), &job).await;
+            }
+            Ok(job)
+        },
+        move |app, job| {
             app.begin_task(&job);
             app.consume_attachments();
             spawn(backend, runtime_tx, job);
-        }
-        Ok(job) if job.session_id != app.conversation.id => {
-            let _ = backend.cancel(&job.id).await;
-            app.push_error("Claw submitted the task under another conversation.");
-        }
-        Ok(job) if job.workspace.as_deref() != Some(workspace.as_str()) => {
-            let _ = backend.cancel(&job.id).await;
-            app.push_error("Claw did not acknowledge the broker-validated task workspace.");
-        }
-        Ok(job) => {
-            let _ = backend.cancel(&job.id).await;
-            app.push_error("Claw did not acknowledge the selected per-task model.");
-        }
-        Err(error) => app.push_error(&error),
-    }
+            Ok(())
+        },
+    )
+    .submission())
 }
 
-pub(super) async fn queue_prompt(
+pub(super) fn queue_prompt(
     app: &mut App,
     backend: Arc<dyn Backend>,
+    runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
     use_memory: bool,
     max_turns: Option<u32>,
     prompt: String,
-) {
+) -> Result<Request, String> {
     if prompt.len() > MAX_PROMPT_BYTES {
-        app.push_error("Prompt exceeds the 64 KiB terminal limit.");
-        return;
+        return Err("Prompt exceeds the 64 KiB terminal limit.".into());
     }
     if app.queued_tasks.len() >= MAX_QUEUED_TASKS {
-        app.push_error("The terminal durable queue is limited to 64 tasks.");
-        return;
+        return Err("The terminal durable queue is limited to 64 tasks.".into());
     }
     let predecessor = app
         .queued_tasks
@@ -97,41 +96,62 @@ pub(super) async fn queue_prompt(
         .map(|job| job.id.clone())
         .or_else(|| app.active_task.clone());
     let Some(predecessor) = predecessor else {
-        app.push_error("No active task is available to anchor queued work.");
-        return;
+        return Err("No active task is available to anchor queued work.".into());
     };
     let workspace = app.selected_workspace.clone();
-    match backend
-        .submit(
-            &prompt,
-            app.pending_attachments(),
-            &app.conversation.id,
-            &workspace,
-            Some(&predecessor),
-            use_memory,
-            max_turns,
-            &app.selected_model,
-            app.task_reasoning_effort.as_deref(),
-            app.task_plan_only,
-        )
-        .await
-    {
-        Ok(job)
-            if job.session_id == app.conversation.id
-                && job.workspace.as_deref() == Some(workspace.as_str())
-                && job.after_task_id.as_deref() == Some(predecessor.as_str())
-                && job.requested_model.as_deref() == Some(app.selected_model.as_str())
-                && job.status == "pending" =>
-        {
-            app.queue_task(job);
+    let session_id = app.conversation.id.clone();
+    let model = app.selected_model.clone();
+    let effort = app.task_reasoning_effort.clone();
+    let plan_only = app.task_plan_only;
+    let attachments = app.pending_attachments().to_vec();
+    let worker_backend = backend.clone();
+    Ok(Request::new(
+        "Queuing follow-up task",
+        async move {
+            let job = worker_backend
+                .submit(
+                    &prompt,
+                    &attachments,
+                    &session_id,
+                    &workspace,
+                    Some(&predecessor),
+                    use_memory,
+                    max_turns,
+                    &model,
+                    effort.as_deref(),
+                    plan_only,
+                )
+                .await?;
+            if job.session_id != session_id
+                || job.workspace.as_deref() != Some(workspace.as_str())
+                || job.after_task_id.as_deref() != Some(predecessor.as_str())
+                || job.requested_model.as_deref() != Some(model.as_str())
+                || job.status != "pending"
+            {
+                return reject_submission(worker_backend.as_ref(), &job).await;
+            }
+            Ok(job)
+        },
+        move |app, job| {
+            if app.active_task.is_none() && app.queued_tasks.is_empty() {
+                attach_queued(app, backend, runtime_tx, job);
+            } else {
+                app.queue_task(job);
+            }
             app.consume_attachments();
-        }
-        Ok(job) => {
-            let _ = backend.cancel(&job.id).await;
-            app.push_error("Claw did not acknowledge the durable queue dependency.");
-        }
-        Err(error) => app.push_error(&error),
-    }
+            Ok(())
+        },
+    )
+    .mutation())
+}
+
+async fn reject_submission(backend: &dyn Backend, job: &Job) -> Result<Job, String> {
+    let error = "Claw did not acknowledge the task's conversation, model, workspace or dependency";
+    backend
+        .cancel(&job.id)
+        .await
+        .map_err(|cleanup| format!("{error}; stop mismatched task {}: {cleanup}", job.id))?;
+    Err(error.into())
 }
 
 pub(super) fn attach_queued(
@@ -144,13 +164,90 @@ pub(super) fn attach_queued(
     spawn(backend, runtime_tx, job);
 }
 
-pub(super) async fn restore_conversation(
+pub(super) fn restore_conversation(
     app: &mut App,
     backend: Arc<dyn Backend>,
     runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
-) {
+) -> Option<Request> {
     let conversation_id = app.conversation.id.clone();
     let references = app.take_conversation_jobs();
+    if references.is_empty() {
+        return None;
+    }
+    let loader = backend.clone();
+    Some(Request::new(
+        "Restoring conversation tasks",
+        async move { Ok(load_conversation(loader, conversation_id, references).await) },
+        move |app, restored| {
+            for error in restored.errors {
+                app.push_error(&error);
+            }
+            app.restore_selected_model(
+                restored
+                    .latest_job
+                    .as_ref()
+                    .and_then(|job| job.requested_model.as_deref()),
+            );
+            app.restore_reasoning_effort(
+                restored
+                    .latest_job
+                    .as_ref()
+                    .and_then(|job| job.requested_reasoning_effort.as_deref()),
+            );
+            app.restore_plan_mode(
+                restored
+                    .latest_job
+                    .as_ref()
+                    .is_some_and(|job| job.plan_only),
+            );
+            let mut jobs = restored.jobs;
+            if jobs.is_empty() {
+                return Ok(());
+            }
+            if jobs.len() > MAX_QUEUED_TASKS {
+                return Err(
+                    "Conversation has too many active durable tasks to restore in the terminal."
+                        .into(),
+                );
+            }
+            let head = jobs.remove(0);
+            let mut tail = head.id.clone();
+            let mut queued = Vec::new();
+            let mut skipped = 0usize;
+            for job in jobs {
+                if job.after_task_id.as_deref() == Some(tail.as_str()) {
+                    tail = job.id.clone();
+                    queued.push(job);
+                } else {
+                    skipped += 1;
+                }
+            }
+            if skipped > 0 {
+                app.push_system(&format!(
+                    "{skipped} other active conversation task(s) remain available through /tasks."
+                ));
+            }
+            app.resume_task(&head, queued.len());
+            for job in queued {
+                app.restore_queued_task(job);
+            }
+            spawn(backend, runtime_tx, head);
+            Ok(())
+        },
+    ))
+}
+
+struct RestoredConversation {
+    latest_job: Option<Job>,
+    jobs: Vec<Job>,
+    errors: Vec<String>,
+}
+
+async fn load_conversation(
+    backend: Arc<dyn Backend>,
+    conversation_id: String,
+    references: Vec<super::backend::ConversationJob>,
+) -> RestoredConversation {
     let latest_id = references
         .iter()
         .rev()
@@ -158,6 +255,7 @@ pub(super) async fn restore_conversation(
         .map(|job| job.id.clone());
     let mut latest_job = None;
     let mut jobs = Vec::new();
+    let mut errors = Vec::new();
     for reference in references
         .into_iter()
         .filter(|job| {
@@ -174,14 +272,14 @@ pub(super) async fn restore_conversation(
                 jobs.push(job);
             }
             Ok(job) if job.session_id != conversation_id => {
-                app.push_error(&format!(
+                errors.push(format!(
                     "Durable task {} belongs to another conversation; it was not restored.",
                     job.id
                 ));
             }
             Ok(_) => {}
             Err(error) => {
-                app.push_error(&format!(
+                errors.push(format!(
                     "Could not restore durable task {}: {error}",
                     reference.id
                 ));
@@ -193,66 +291,25 @@ pub(super) async fn restore_conversation(
             match backend.get_task(&latest_id).await {
                 Ok(job) if job.session_id == conversation_id => latest_job = Some(job),
                 Ok(job) => {
-                    app.push_error(&format!(
+                    errors.push(format!(
                         "Latest durable task {} belongs to another conversation; \
                          its model selection was not restored.",
                         job.id
                     ));
                 }
                 Err(error) => {
-                    app.push_error(&format!(
+                    errors.push(format!(
                         "Could not restore the conversation's latest model selection: {error}"
                     ));
                 }
             }
         }
     }
-    app.restore_selected_model(
-        latest_job
-            .as_ref()
-            .and_then(|job| job.requested_model.as_deref()),
-    );
-    app.restore_reasoning_effort(
-        latest_job
-            .as_ref()
-            .and_then(|job| job.requested_reasoning_effort.as_deref()),
-    );
-    app.restore_plan_mode(
-        latest_job
-            .as_ref()
-            .is_some_and(|job| job.plan_only),
-    );
-    if jobs.is_empty() {
-        return;
+    RestoredConversation {
+        latest_job,
+        jobs,
+        errors,
     }
-    if jobs.len() > MAX_QUEUED_TASKS {
-        app.push_error("Conversation has too many active durable tasks to restore in the terminal.");
-        return;
-    }
-
-    let head = jobs.remove(0);
-    let mut tail = head.id.clone();
-    let mut queued = Vec::new();
-    let mut skipped = 0usize;
-    for job in jobs {
-        if job.after_task_id.as_deref() == Some(tail.as_str()) {
-            tail = job.id.clone();
-            queued.push(job);
-        } else {
-            skipped += 1;
-        }
-    }
-    if skipped > 0 {
-        app.push_system(&format!(
-            "{skipped} other active conversation task(s) remain available through /tasks."
-        ));
-    }
-    let queued_count = queued.len();
-    app.resume_task(&head, queued_count);
-    for job in queued {
-        app.restore_queued_task(job);
-    }
-    spawn(backend, runtime_tx, head);
 }
 
 fn spawn(backend: Arc<dyn Backend>, runtime_tx: mpsc::UnboundedSender<RuntimeEvent>, job: Job) {

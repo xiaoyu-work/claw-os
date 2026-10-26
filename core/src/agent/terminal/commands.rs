@@ -8,7 +8,8 @@ use serde_json::{json, Value};
 use std::os::unix::fs::OpenOptionsExt;
 
 use super::backend::{ActivityControlPolicy, Backend};
-use super::state::{App, ConfirmationAction, RunStatus};
+use super::requests::Request;
+use super::state::{App, ConfirmationAction};
 
 pub(super) struct WorkspaceFiles {
     pub paths: Vec<String>,
@@ -133,8 +134,11 @@ pub(super) enum Command {
         expected_revision: Option<u64>,
     },
     ActivityWorkEnabled {
-        id: String, revision: u64, enabled: bool,
-        next_task: Option<String>, review_note: Option<String>,
+        id: String,
+        revision: u64,
+        enabled: bool,
+        next_task: Option<String>,
+        review_note: Option<String>,
     },
     ActivityEvidence(String),
     ActivityPreview {
@@ -279,18 +283,30 @@ pub(super) fn parse(value: &str) -> Option<Command> {
             parse_activity_priority(rest).unwrap_or_else(|| Command::Unknown(value.to_string()))
         }
         "activity-work-set" => {
-            parse_activity_control_set(rest,ActivityControlPolicy::AutomaticWork)
-                .unwrap_or_else(||Command::Unknown(value.to_string()))
+            parse_activity_control_set(rest, ActivityControlPolicy::AutomaticWork)
+                .unwrap_or_else(|| Command::Unknown(value.to_string()))
         }
         "activity-work-enable" => {
             let parsed = (|| {
-                let (head,options) = rest.split_once('|').map_or((rest,None),|(head,tail)|(head,Some(tail)));
+                let (head, options) = rest
+                    .split_once('|')
+                    .map_or((rest, None), |(head, tail)| (head, Some(tail)));
                 let mut parts = head.split_whitespace();
                 let id = parts.next()?.to_string();
                 crate::activities::validate_id(&id).ok()?;
-                let enabled = match parts.next()? { "on"=>true,"off"=>false,_=>return None };
-                let revision = parts.next()?.parse::<u64>().ok().filter(|revision|*revision>0)?;
-                if parts.next().is_some() { return None; }
+                let enabled = match parts.next()? {
+                    "on" => true,
+                    "off" => false,
+                    _ => return None,
+                };
+                let revision = parts
+                    .next()?
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|revision| *revision > 0)?;
+                if parts.next().is_some() {
+                    return None;
+                }
                 let mut request = json!({
                     "id":id,"expected_revision":revision,"enabled":enabled,
                     "next_task":null,"review_note":null,
@@ -307,15 +323,24 @@ pub(super) fn parse(value: &str) -> Option<Command> {
                     request["review_note"] = json!(options.review_note);
                 }
                 serde_json::from_value::<crate::clawd::wire::requests::ActivityWorkEnabled>(
-                    request.clone()
-                ).ok()?;
-                Some((request,id,revision,enabled))
+                    request.clone(),
+                )
+                .ok()?;
+                Some((request, id, revision, enabled))
             })();
             match parsed {
-                Some((request,id,revision,enabled)) => Command::ActivityWorkEnabled {
-                    id,revision,enabled,
-                    next_task:request.get("next_task").and_then(Value::as_str).map(str::to_string),
-                    review_note:request.get("review_note").and_then(Value::as_str).map(str::to_string),
+                Some((request, id, revision, enabled)) => Command::ActivityWorkEnabled {
+                    id,
+                    revision,
+                    enabled,
+                    next_task: request
+                        .get("next_task")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    review_note: request
+                        .get("review_note")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                 },
                 None => Command::Unknown(value.to_string()),
             }
@@ -396,11 +421,11 @@ fn takes_argument(command: &str) -> bool {
     )
 }
 
-pub(super) async fn execute(
+pub(super) fn execute(
     app: &mut App,
     backend: Arc<dyn Backend>,
     command: Command,
-) -> Result<(), String> {
+) -> Result<Option<Request>, String> {
     if app.active_task.is_some()
         && !matches!(
             command,
@@ -448,7 +473,7 @@ pub(super) async fn execute(
         )
     {
         app.push_system("That command requires the current task to finish. Use /cancel first.");
-        return Ok(());
+        return Ok(None);
     }
     match command {
         Command::Help => app.push_system(
@@ -472,47 +497,80 @@ pub(super) async fn execute(
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
         Command::New => {
-            let conversation = backend.create_conversation().await?;
-            app.replace_conversation(conversation);
+            return Ok(Some(Request::new(
+                "Creating conversation",
+                async move { backend.create_conversation().await },
+                |app, conversation| {
+                    app.replace_conversation(conversation);
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Sessions => {
-            let page = backend.list_conversations().await?;
-            if page.conversations.is_empty() {
-                app.push_system("No conversations.");
-            } else {
-                if page.truncated {
-                    app.push_system("Session picker shows only the newest 100 conversations.");
-                }
-                app.open_session_picker(page.conversations);
-            }
+            return Ok(Some(Request::new(
+                "Loading conversations",
+                async move { backend.list_conversations().await },
+                |app, page| {
+                    if page.conversations.is_empty() {
+                        app.push_system("No conversations.");
+                    } else {
+                        if page.truncated {
+                            app.push_system("Session picker shows only the newest 100 conversations.");
+                        }
+                        app.open_session_picker(page.conversations);
+                    }
+                    Ok(())
+                },
+            )));
         }
         Command::Resume(id) => {
-            let conversation = backend.get_conversation(&id).await?;
-            app.replace_conversation(conversation);
+            return Ok(Some(Request::new(
+                "Opening conversation",
+                async move { backend.get_conversation(&id).await },
+                |app, conversation| {
+                    app.replace_conversation(conversation);
+                    Ok(())
+                },
+            )));
         }
         Command::Rename(title) => {
-            let conversation = backend
-                .update_conversation(&app.conversation.id, Some(&title), None)
-                .await?;
-            app.conversation.title = conversation.title;
-            app.push_system("Conversation renamed.");
+            let id = app.conversation.id.clone();
+            return Ok(Some(Request::new(
+                "Renaming conversation",
+                async move { backend.update_conversation(&id, Some(&title), None).await },
+                |app, conversation| {
+                    app.conversation.title = conversation.title;
+                    app.push_system("Conversation renamed.");
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Archive => {
             app.confirm_archive();
         }
         Command::Unarchive => {
-            let conversation = backend
-                .update_conversation(&app.conversation.id, None, Some(false))
-                .await?;
-            app.conversation.archived = conversation.archived;
-            app.push_system("Conversation restored from the archive.");
+            let id = app.conversation.id.clone();
+            return Ok(Some(Request::new(
+                "Restoring conversation",
+                async move { backend.update_conversation(&id, None, Some(false)).await },
+                |app, conversation| {
+                    app.conversation.archived = conversation.archived;
+                    app.push_system("Conversation restored from the archive.");
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Fork => {
-            let conversation = backend
-                .fork_conversation(&app.conversation.id, None)
-                .await?;
-            app.replace_conversation(conversation);
-            app.push_system("Forked into a new canonical Claw conversation.");
+            let id = app.conversation.id.clone();
+            return Ok(Some(Request::new(
+                "Forking conversation",
+                async move { backend.fork_conversation(&id, None).await },
+                |app, conversation| {
+                    app.replace_conversation(conversation);
+                    app.push_system("Forked into a new canonical Claw conversation.");
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Rewind(user_turns) => {
             app.confirm_rewind(user_turns);
@@ -531,10 +589,16 @@ pub(super) async fn execute(
             app.selected_workspace
         )),
         Command::Workspace(Some(path)) => {
-            let workspace = backend
-                .resolve_workspace((path != "home").then_some(path.as_str()))
-                .await?;
-            app.set_workspace(workspace);
+            return Ok(Some(Request::new(
+                "Resolving workspace",
+                async move {
+                    backend.resolve_workspace((path != "home").then_some(path.as_str())).await
+                },
+                |app, workspace| {
+                    app.set_workspace(workspace);
+                    Ok(())
+                },
+            )));
         }
         Command::Attach(path) => match path.as_deref() {
             None => app.describe_attachments(),
@@ -543,25 +607,40 @@ pub(super) async fn execute(
                 let home = app.info.home.clone();
                 let workspace = PathBuf::from(&app.selected_workspace);
                 let path = path.to_string();
-                let attachment = tokio::task::spawn_blocking(move || {
-                    load_image_attachment(&path, &home, &workspace)
-                })
-                .await
-                .map_err(|_| "image attachment reader failed".to_string())??;
-                app.add_attachment(attachment)?;
+                return Ok(Some(Request::new(
+                    "Reading image attachment",
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            load_image_attachment(&path, &home, &workspace)
+                        }).await.map_err(|_| "image attachment reader failed".to_string())?
+                    },
+                    App::add_attachment,
+                )));
             }
         },
         Command::Review(None) => {
-            let activities = backend.list_activities(None).await?;
-            if activities.is_empty() {
-                app.push_system("No Activities are available for staged-file review.");
-            } else {
-                app.open_activity_review_picker(activities);
-            }
+            return Ok(Some(Request::new(
+                "Loading staged-file reviews",
+                async move { backend.list_activities(None).await },
+                |app, activities| {
+                    if activities.is_empty() {
+                        app.push_system("No Activities are available for staged-file review.");
+                    } else {
+                        app.open_activity_review_picker(activities);
+                    }
+                    Ok(())
+                },
+            )));
         }
         Command::Review(Some(id)) => {
-            let review = backend.activity_review(&id).await?;
-            app.open_activity_review(review);
+            return Ok(Some(Request::new(
+                "Loading staged-file review",
+                async move { backend.activity_review(&id).await },
+                |app, review| {
+                    app.open_activity_review(review);
+                    Ok(())
+                },
+            )));
         }
         Command::Copy => {
             let text = app
@@ -579,12 +658,18 @@ pub(super) async fn execute(
             let markdown = app.export_markdown()?;
             let home = app.info.home.clone();
             let workspace = PathBuf::from(&app.selected_workspace);
-            let path = tokio::task::spawn_blocking(move || {
-                write_markdown_export(&path, &home, &workspace, &markdown)
-            })
-            .await
-            .map_err(|_| "conversation export writer failed".to_string())??;
-            app.push_system(&format!("Exported visible conversation text to {}.", path.display()));
+            return Ok(Some(Request::new(
+                "Exporting conversation",
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        write_markdown_export(&path, &home, &workspace, &markdown)
+                    }).await.map_err(|_| "conversation export writer failed".to_string())?
+                },
+                |app, path| {
+                    app.push_system(&format!("Exported visible conversation text to {}.", path.display()));
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Raw => app.request_raw_scrollback(),
         Command::Appearance => app.open_appearance(),
@@ -599,171 +684,240 @@ pub(super) async fn execute(
                 return Err("Already in a side conversation. Use /side return first.".into());
             }
             let parent_id = app.conversation.id.clone();
-            let conversation = backend.fork_conversation(&parent_id, None).await?;
-            let side_id = conversation.id.clone();
-            app.replace_conversation(conversation);
-            app.begin_side_conversation(parent_id, side_id);
-            app.push_system(
-                "Side conversation started as a checked durable fork. \
-                 Use /side return to archive it and return to the parent.",
-            );
+            let id = parent_id.clone();
+            return Ok(Some(Request::new(
+                "Starting side conversation",
+                async move { backend.fork_conversation(&id, None).await },
+                move |app, conversation| {
+                    let side_id = conversation.id.clone();
+                    app.replace_conversation(conversation);
+                    app.begin_side_conversation(parent_id, side_id);
+                    app.push_system(
+                        "Side conversation started as a checked durable fork. \
+                         Use /side return to archive it and return to the parent.",
+                    );
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Side(true) => {
             let (parent_id, side_id) = app
                 .side_conversation()
                 .map(|(parent, side)| (parent.to_string(), side.to_string()))
                 .ok_or("This terminal is not in a side conversation.")?;
-            backend
-                .update_conversation(&side_id, None, Some(true))
-                .await?;
-            let parent = backend.get_conversation(&parent_id).await?;
-            app.replace_conversation(parent);
-            app.push_system("Returned from the archived side conversation.");
+            return Ok(Some(Request::new(
+                "Returning to parent conversation",
+                async move {
+                    backend.update_conversation(&side_id, None, Some(true)).await?;
+                    backend.get_conversation(&parent_id).await
+                },
+                |app, parent| {
+                    app.replace_conversation(parent);
+                    app.push_system("Returned from the archived side conversation.");
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::Platform => {
-            let overview = backend.platform_overview().await?;
-            app.open_platform_overview(overview);
+            return Ok(Some(Request::new(
+                "Loading platform",
+                async move { backend.platform_overview().await },
+                |app, overview| {
+                    app.open_platform_overview(overview);
+                    Ok(())
+                },
+            )));
         }
-        Command::Skills => match backend.skills().await {
-            Ok(skills) if skills.is_empty() => app.push_system("No enabled Claw Skills."),
-            Ok(skills) => app.push_system(
-                &skills
-                    .into_iter()
-                    .map(|skill| {
-                        format!(
-                            "{} [{}]{}",
-                            skill.id,
-                            skill.origin,
-                            if skill.description.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" - {}", skill.description)
-                            }
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
-            Err(error) => app.push_error(&error),
-        },
+        Command::Skills => {
+            return Ok(Some(Request::new(
+                "Loading Skills",
+                async move { backend.skills().await },
+                |app, skills| {
+                    if skills.is_empty() {
+                        app.push_system("No enabled Claw Skills.");
+                    } else {
+                        app.push_system(&skills.into_iter().map(|skill| {
+                            format!("{} [{}]{}", skill.id, skill.origin,
+                                if skill.description.is_empty() { String::new() }
+                                else { format!(" - {}", skill.description) })
+                        }).collect::<Vec<_>>().join("\n"));
+                    }
+                    Ok(())
+                },
+            )));
+        }
         Command::Tasks => {
-            let tasks = backend.list_tasks().await?;
-            if tasks.is_empty() {
-                app.push_system("No durable Agent tasks.");
-            } else {
-                app.open_task_picker(tasks);
-            }
+            return Ok(Some(Request::new(
+                "Loading tasks",
+                async move { backend.list_tasks().await },
+                |app, tasks| {
+                    if tasks.is_empty() { app.push_system("No durable Agent tasks."); }
+                    else { app.open_task_picker(tasks); }
+                    Ok(())
+                },
+            )));
         }
         Command::Task(id) => {
-            let task = backend.get_task(&id).await?;
-            app.open_task_detail(task);
+            return Ok(Some(Request::new(
+                "Loading task",
+                async move { backend.get_task(&id).await },
+                |app, task| { app.open_task_detail(task); Ok(()) },
+            )));
         }
         Command::Approvals => {
-            let approvals = backend.list_approvals().await?;
-            if approvals.is_empty() {
-                app.push_system("No pending or recent approvals.");
-            } else {
-                app.open_approval_picker(approvals);
-            }
+            return Ok(Some(Request::new(
+                "Loading approvals",
+                async move { backend.list_approvals().await },
+                |app, approvals| {
+                    if approvals.is_empty() { app.push_system("No pending or recent approvals."); }
+                    else { app.open_approval_picker(approvals); }
+                    Ok(())
+                },
+            )));
         }
         Command::Approval(id) => {
-            let approval = backend
-                .list_approvals()
-                .await?
-                .into_iter()
-                .find(|approval| approval.id == id)
-                .ok_or_else(|| format!("Approval {id} is not pending or recent."))?;
-            app.open_approval_detail(approval);
+            return Ok(Some(Request::new(
+                "Loading approval",
+                async move {
+                    backend.list_approvals().await?.into_iter().find(|approval| approval.id == id)
+                        .ok_or_else(|| format!("Approval {id} is not pending or recent."))
+                },
+                |app, approval| { app.open_approval_detail(approval); Ok(()) },
+            )));
         }
         Command::Notifications(include_dismissed) => {
-            let page = backend.list_notifications(include_dismissed).await?;
-            if page.notifications.is_empty() {
-                app.push_system("Notification Inbox is empty.");
-            } else {
-                app.open_notification_picker(page);
-            }
+            return Ok(Some(Request::new(
+                "Loading notifications",
+                async move { backend.list_notifications(include_dismissed).await },
+                |app, page| {
+                    if page.notifications.is_empty() { app.push_system("Notification Inbox is empty."); }
+                    else { app.open_notification_picker(page); }
+                    Ok(())
+                },
+            )));
         }
         Command::Notification(id) => {
-            let notification = backend
-                .list_notifications(true)
-                .await?
-                .notifications
-                .into_iter()
-                .find(|notification| notification.id == id)
-                .ok_or_else(|| format!("Notification {id} is not retained."))?;
-            app.open_notification_detail(notification);
+            return Ok(Some(Request::new(
+                "Loading notification",
+                async move {
+                    backend.list_notifications(true).await?.notifications.into_iter()
+                        .find(|notification| notification.id == id)
+                        .ok_or_else(|| format!("Notification {id} is not retained."))
+                },
+                |app, notification| { app.open_notification_detail(notification); Ok(()) },
+            )));
         }
         Command::NotificationSettings => {
-            let preferences = backend.notification_preferences().await?;
-            app.open_notification_preferences(preferences);
+            return Ok(Some(Request::new(
+                "Loading notification settings",
+                async move { backend.notification_preferences().await },
+                |app, preferences| { app.open_notification_preferences(preferences); Ok(()) },
+            )));
         }
         Command::NotifyChannel(channel, enabled) => {
-            let mut preferences = backend.notification_preferences().await?;
-            match channel {
-                NotificationChannel::Web => preferences.web_enabled = enabled,
-                NotificationChannel::Desktop => preferences.desktop_enabled = enabled,
-                NotificationChannel::Ntfy => preferences.ntfy_enabled = enabled,
-            }
-            let preferences = backend.set_notification_preferences(&preferences).await?;
-            app.open_notification_preferences(preferences);
+            return Ok(Some(Request::new(
+                "Saving notification settings",
+                async move {
+                    let mut preferences = backend.notification_preferences().await?;
+                    match channel {
+                        NotificationChannel::Web => preferences.web_enabled = enabled,
+                        NotificationChannel::Desktop => preferences.desktop_enabled = enabled,
+                        NotificationChannel::Ntfy => preferences.ntfy_enabled = enabled,
+                    }
+                    backend.set_notification_preferences(&preferences).await
+                },
+                |app, preferences| { app.open_notification_preferences(preferences); Ok(()) },
+            ).mutation()));
         }
         Command::NotifySeverity(channel, severity) => {
-            let mut preferences = backend.notification_preferences().await?;
-            match channel {
-                NotificationChannel::Web => preferences.web_min_severity = severity,
-                NotificationChannel::Desktop => preferences.desktop_min_severity = severity,
-                NotificationChannel::Ntfy => preferences.ntfy_min_severity = severity,
-            }
-            let preferences = backend.set_notification_preferences(&preferences).await?;
-            app.open_notification_preferences(preferences);
+            return Ok(Some(Request::new(
+                "Saving notification severity",
+                async move {
+                    let mut preferences = backend.notification_preferences().await?;
+                    match channel {
+                        NotificationChannel::Web => preferences.web_min_severity = severity,
+                        NotificationChannel::Desktop => preferences.desktop_min_severity = severity,
+                        NotificationChannel::Ntfy => preferences.ntfy_min_severity = severity,
+                    }
+                    backend.set_notification_preferences(&preferences).await
+                },
+                |app, preferences| { app.open_notification_preferences(preferences); Ok(()) },
+            ).mutation()));
         }
         Command::Dnd(window) => {
-            let mut preferences = backend.notification_preferences().await?;
-            (
-                preferences.dnd_start_minute_utc,
-                preferences.dnd_end_minute_utc,
-            ) = window
-                .map(|(start, end)| (Some(start), Some(end)))
-                .unwrap_or((None, None));
-            let preferences = backend.set_notification_preferences(&preferences).await?;
-            app.open_notification_preferences(preferences);
+            return Ok(Some(Request::new(
+                "Saving DND settings",
+                async move {
+                    let mut preferences = backend.notification_preferences().await?;
+                    (preferences.dnd_start_minute_utc, preferences.dnd_end_minute_utc) =
+                        window.map(|(start, end)| (Some(start), Some(end))).unwrap_or((None, None));
+                    backend.set_notification_preferences(&preferences).await
+                },
+                |app, preferences| { app.open_notification_preferences(preferences); Ok(()) },
+            ).mutation()));
         }
         Command::Activities(state) => {
-            let activities = backend.list_activities(state.as_deref()).await?;
-            if activities.is_empty() {
-                app.push_system("No Activities match this view.");
-            } else {
-                app.open_activity_picker(activities);
-            }
+            return Ok(Some(Request::new(
+                "Loading Activities",
+                async move { backend.list_activities(state.as_deref()).await },
+                |app, activities| {
+                    if activities.is_empty() { app.push_system("No Activities match this view."); }
+                    else { app.open_activity_picker(activities); }
+                    Ok(())
+                },
+            )));
         }
         Command::Activity(id) => {
-            let detail = backend.get_activity(&id).await?;
-            app.open_activity_detail(detail);
+            return Ok(Some(Request::new(
+                "Loading Activity",
+                async move { backend.get_activity(&id).await },
+                |app, detail| { app.open_activity_detail(detail); Ok(()) },
+            )));
         }
         Command::ActivityCreate { title, goal } => {
-            let activity = backend.create_activity(&title, &goal).await?;
-            let detail = backend.get_activity(&activity.id).await?;
-            app.open_activity_detail(detail);
+            return Ok(Some(Request::new(
+                "Creating Activity",
+                async move {
+                    let activity = backend.create_activity(&title, &goal).await?;
+                    backend.get_activity(&activity.id).await
+                },
+                |app, detail| { app.open_activity_detail(detail); Ok(()) },
+            ).mutation()));
         }
         Command::ActivityRun { id, prompt } => {
-            let job = backend
-                .run_activity(&id, prompt.as_deref(), &app.selected_workspace)
-                .await?;
-            let task_id = job.id.clone();
-            app.open_task_detail(job);
-            app.push_system(&format!(
-                "Activity work was submitted as durable task {task_id}."
-            ));
+            let workspace = app.selected_workspace.clone();
+            return Ok(Some(Request::new(
+                "Submitting Activity task",
+                async move { backend.run_activity(&id, prompt.as_deref(), &workspace).await },
+                |app, job| {
+                    let task_id = job.id.clone();
+                    app.open_task_detail(job);
+                    app.push_system(&format!("Activity work was submitted as durable task {task_id}."));
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::ActivityPause(id) => {
-            let activity = backend.transition_activity(&id, "paused", None).await?;
-            app.update_activity(activity);
-            app.push_system("Activity paused. In-flight tasks were not cancelled.");
+            return Ok(Some(Request::new(
+                "Pausing Activity",
+                async move { backend.transition_activity(&id, "paused", None).await },
+                |app, activity| {
+                    app.update_activity(activity);
+                    app.push_system("Activity paused. In-flight tasks were not cancelled.");
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::ActivityResume(id) => {
-            let activity = backend.transition_activity(&id, "active", None).await?;
-            app.update_activity(activity);
-            app.push_system("Activity is active.");
+            return Ok(Some(Request::new(
+                "Resuming Activity",
+                async move { backend.transition_activity(&id, "active", None).await },
+                |app, activity| {
+                    app.update_activity(activity);
+                    app.push_system("Activity is active.");
+                    Ok(())
+                },
+            ).mutation()));
         }
         Command::ActivityComplete { id, note } => {
             app.confirm_activity_complete(id, note);
@@ -772,12 +926,18 @@ pub(super) async fn execute(
             app.confirm_activity_cancel(id);
         }
         Command::ActivityAttention(id) => {
-            let attention = backend.activity_attention(&id).await?;
-            app.open_activity_attention(attention);
+            return Ok(Some(Request::new(
+                "Loading Activity attention",
+                async move { backend.activity_attention(&id).await },
+                |app, attention| { app.open_activity_attention(attention); Ok(()) },
+            )));
         }
         Command::ActivityControls(id) => {
-            let controls = backend.activity_controls(&id).await?;
-            app.open_activity_controls(controls);
+            return Ok(Some(Request::new(
+                "Loading Activity controls",
+                async move { backend.activity_controls(&id).await },
+                |app, controls| { app.open_activity_controls(controls); Ok(()) },
+            )));
         }
         Command::ActivityControlSet {
             id,
@@ -785,10 +945,11 @@ pub(super) async fn execute(
             expected_revision,
             draft,
         } => {
-            let controls = backend
-                .set_activity_control(&id, policy, expected_revision, draft)
-                .await?;
-            app.open_activity_controls(controls);
+            return Ok(Some(Request::new(
+                "Saving Activity control",
+                async move { backend.set_activity_control(&id, policy, expected_revision, draft).await },
+                |app, controls| { app.open_activity_controls(controls); Ok(()) },
+            ).mutation()));
         }
         Command::ActivityControlEnabled {
             id,
@@ -796,28 +957,36 @@ pub(super) async fn execute(
             revision,
             enabled,
         } => {
-            let controls = backend
-                .set_activity_control_enabled(&id, policy, revision, enabled)
-                .await?;
-            app.open_activity_controls(controls);
+            return Ok(Some(Request::new(
+                "Saving Activity control",
+                async move { backend.set_activity_control_enabled(&id, policy, revision, enabled).await },
+                |app, controls| { app.open_activity_controls(controls); Ok(()) },
+            ).mutation()));
         }
         Command::ActivityPriority {
             id,
             priority,
             expected_revision,
         } => {
-            let controls = backend
-                .set_activity_priority(&id, expected_revision, &priority)
-                .await?;
-            app.open_activity_controls(controls);
+            return Ok(Some(Request::new(
+                "Saving Activity priority",
+                async move { backend.set_activity_priority(&id, expected_revision, &priority).await },
+                |app, controls| { app.open_activity_controls(controls); Ok(()) },
+            ).mutation()));
         }
         Command::ActivityWorkEnabled { id,revision,enabled,next_task,review_note } => {
-            let controls = backend.set_activity_work_enabled(&id,revision,enabled,next_task,review_note).await?;
-            app.open_activity_controls(controls);
+            return Ok(Some(Request::new(
+                "Saving automatic Activity work",
+                async move { backend.set_activity_work_enabled(&id, revision, enabled, next_task, review_note).await },
+                |app, controls| { app.open_activity_controls(controls); Ok(()) },
+            ).mutation()));
         }
         Command::ActivityEvidence(id) => {
-            let evidence = backend.activity_evidence(&id).await?;
-            app.open_activity_evidence(evidence);
+            return Ok(Some(Request::new(
+                "Loading Activity evidence",
+                async move { backend.activity_evidence(&id).await },
+                |app, evidence| { app.open_activity_evidence(evidence); Ok(()) },
+            )));
         }
         Command::ActivityPreview {
             id,
@@ -825,10 +994,11 @@ pub(super) async fn execute(
             operation,
             args,
         } => {
-            let preview = backend
-                .activity_operation_preview(&id, &app_id, &operation, &args)
-                .await?;
-            app.open_activity_operation_preview(preview);
+            return Ok(Some(Request::new(
+                "Loading operation preview",
+                async move { backend.activity_operation_preview(&id, &app_id, &operation, &args).await },
+                |app, preview| { app.open_activity_operation_preview(preview); Ok(()) },
+            )));
         }
         Command::Session => app.push_system(&format!(
             "session: {}\nmodel: {}\nprovider: {}\nreasoning effort: {}\nmode: {}\nworkspace: {}\nmemory: {}\nmax turns: {}",
@@ -851,13 +1021,7 @@ pub(super) async fn execute(
         )),
         Command::Clear => app.clear_transcript(),
         Command::Cancel => {
-            if let Some(task_id) = app.active_task.clone() {
-                app.status = RunStatus::Cancelling;
-                if let Err(error) = backend.cancel(&task_id).await {
-                    app.push_error(&error);
-                    app.status = RunStatus::Working;
-                }
-            } else {
+            if app.active_task.is_none() {
                 app.push_system("No active task.");
             }
         }
@@ -866,7 +1030,7 @@ pub(super) async fn execute(
             app.push_error(&format!("Unknown command /{command}. Type /help."));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 pub(super) fn load_image_attachment(
@@ -1230,66 +1394,103 @@ fn parse_activity_preview(value: &str) -> Option<Command> {
     })
 }
 
-pub(super) async fn confirm(
+pub(super) fn confirm(
     app: &mut App,
     backend: Arc<dyn Backend>,
     action: ConfirmationAction,
-) -> Result<(), String> {
+) -> Request {
     match action {
         ConfirmationAction::Archive => {
-            backend
-                .update_conversation(&app.conversation.id, None, Some(true))
-                .await?;
-            app.conversation.archived = true;
-            app.push_system(
-                "Conversation archived. Canonical history and task evidence were retained.",
-            );
+            let id = app.conversation.id.clone();
+            Request::new(
+                "Archiving conversation",
+                async move { backend.update_conversation(&id, None, Some(true)).await },
+                |app, conversation| {
+                    app.conversation.archived = conversation.archived;
+                    app.push_system(
+                        "Conversation archived. Canonical history and task evidence were retained.",
+                    );
+                    Ok(())
+                },
+            )
+            .mutation()
         }
         ConfirmationAction::Rewind(user_turns) => {
-            let conversation = backend
-                .revert_conversation(&app.conversation.id, user_turns)
-                .await?;
-            app.replace_conversation(conversation);
-            app.push_system("Conversation replay was rewound; external effects were not undone.");
+            let id = app.conversation.id.clone();
+            Request::new(
+                "Rewinding conversation",
+                async move { backend.revert_conversation(&id, user_turns).await },
+                |app, conversation| {
+                    app.replace_conversation(conversation);
+                    app.push_system(
+                        "Conversation replay was rewound; external effects were not undone.",
+                    );
+                    Ok(())
+                },
+            )
+            .mutation()
         }
-        ConfirmationAction::ActivityComplete { id, note } => {
-            let activity = backend
-                .transition_activity(&id, "completed", Some(&note))
-                .await?;
-            app.update_activity(activity);
-            app.push_system("Activity explicitly completed with the supplied confirmation note.");
-        }
-        ConfirmationAction::ActivityCancel { id } => {
-            let activity = backend.transition_activity(&id, "cancelled", None).await?;
-            app.update_activity(activity);
-            app.push_system(
-                "Activity cancelled. In-flight tasks and admitted effects were not changed.",
-            );
-        }
+        ConfirmationAction::ActivityComplete { id, note } => Request::new(
+            "Completing Activity",
+            async move {
+                backend
+                    .transition_activity(&id, "completed", Some(&note))
+                    .await
+            },
+            |app, activity| {
+                app.update_activity(activity);
+                app.push_system(
+                    "Activity explicitly completed with the supplied confirmation note.",
+                );
+                Ok(())
+            },
+        )
+        .mutation(),
+        ConfirmationAction::ActivityCancel { id } => Request::new(
+            "Cancelling Activity",
+            async move { backend.transition_activity(&id, "cancelled", None).await },
+            |app, activity| {
+                app.update_activity(activity);
+                app.push_system(
+                    "Activity cancelled. In-flight tasks and admitted effects were not changed.",
+                );
+                Ok(())
+            },
+        )
+        .mutation(),
         ConfirmationAction::MemoryReset => {
             app.close_memory_center();
             app.close_platform_overview();
-            let report = backend.reset_memories().await?;
-            app.push_system(&format!(
-                "Reset learned memory: {} note(s), {} App memory row(s), and {} semantic row(s) removed. Conversation history and execution evidence were preserved.",
-                report.notes_deleted,
-                report.app_memories_deleted,
-                report.semantic_rows_deleted,
-            ));
+            Request::new(
+                "Resetting learned memory",
+                async move { backend.reset_memories().await },
+                |app, report| {
+                    app.push_system(&format!(
+                        "Reset learned memory: {} note(s), {} App memory row(s), and {} semantic row(s) removed. Conversation history and execution evidence were preserved.",
+                        report.notes_deleted, report.app_memories_deleted, report.semantic_rows_deleted,
+                    ));
+                    Ok(())
+                },
+            ).mutation()
         }
         ConfirmationAction::AccountLogout => {
             app.close_account_overview();
             app.close_platform_overview();
-            let result = backend.account_logout().await?;
-            if app.info.provider == result.provider {
-                app.info.provider_ready = false;
-            }
-            app.push_system(if result.was_present {
-                "Copilot credential revoked. Provider configuration and conversation history were retained."
-            } else {
-                "No Copilot credential was present. Provider configuration and conversation history were retained."
-            });
+            Request::new(
+                "Revoking Copilot credential",
+                async move { backend.account_logout().await },
+                |app, result| {
+                    if app.info.provider == result.provider {
+                        app.info.provider_ready = false;
+                    }
+                    app.push_system(if result.was_present {
+                        "Copilot credential revoked. Provider configuration and conversation history were retained."
+                    } else {
+                        "No Copilot credential was present. Provider configuration and conversation history were retained."
+                    });
+                    Ok(())
+                },
+            ).mutation()
         }
     }
-    Ok(())
 }
