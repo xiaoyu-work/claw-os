@@ -45,6 +45,18 @@
     },
     {
       "critical": true,
+      "name": "claw-nearby-worker",
+      "package": "claw-os-agent",
+      "path": "/usr/lib/cos/bin/claw-nearby-worker"
+    },
+    {
+      "critical": true,
+      "name": "claw-nearby-radio",
+      "package": "claw-os-agent",
+      "path": "/usr/lib/cos/bin/claw-nearby-radio"
+    },
+    {
+      "critical": true,
       "name": "cos",
       "package": "claw-os-agent",
       "path": "/usr/local/bin/cos"

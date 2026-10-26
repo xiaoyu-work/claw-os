@@ -26,6 +26,7 @@ mod bridge_state;
 mod effects;
 mod localize;
 mod memory_center;
+mod nearby;
 mod queue_panel;
 mod overlay;
 mod recorder;
@@ -53,6 +54,8 @@ static OVERLAY_ID: LazyLock<SurfaceId> = LazyLock::new(SurfaceId::unique);
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Flags {
     pub overlay: bool,
+    #[serde(default)]
+    pub nearby: bool,
     pub voice: bool,
     pub query: Option<String>,
     pub context: Option<String>,
@@ -73,6 +76,8 @@ impl CosmicFlags for Flags {
 pub enum Message {
     Activities(activities::Message),
     Memory(memory_center::Message),
+    Nearby(nearby::Message),
+    NearbyTick,
     Queue(queue_panel::Message),
     QueueTick,
     OpenActivitySession(String),
@@ -145,6 +150,7 @@ pub struct App {
     bridge: BridgeState,
     activities: activities::Activities,
     memory: memory_center::MemoryCenter,
+    nearby: nearby::Nearby,
     queue: queue_panel::QueuePanel,
     sessions: SessionState,
     stream: StreamState,
@@ -189,6 +195,7 @@ impl Application for App {
             bridge: BridgeState::connecting(),
             activities: activities::Activities::default(),
             memory: memory_center::MemoryCenter::default(),
+            nearby: nearby::Nearby::default(),
             queue: queue_panel::QueuePanel::default(),
             sessions: SessionState::default(),
             stream: StreamState::default(),
@@ -205,6 +212,7 @@ impl Application for App {
             voice: VoiceState::default(),
         };
         let mut tasks = vec![effects::connect_bridge()];
+        if flags.nearby {app.nearby.show();}
         if flags.overlay {
             tasks.push(app.overlay.open(*OVERLAY_ID));
         } else {
@@ -239,11 +247,17 @@ impl Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Nearby(message)=>{
+                if self.flags.overlay {return Task::none();}
+                if matches!(message,nearby::Message::Show) {self.activities.hide();self.memory.hide();}
+                self.nearby.update(message,self.bridge.endpoint().cloned())
+            }
+            Message::NearbyTick=>self.nearby.update(nearby::Message::Poll,self.bridge.endpoint().cloned()),
             Message::Queue(message) => self.queue.update(message,self.bridge.endpoint().cloned()),
             Message::QueueTick => self.queue.update(queue_panel::Message::Poll(self.stream.task_id().map(str::to_string)),self.bridge.endpoint().cloned()),
             Message::Memory(message) => {
                 if self.flags.overlay { return Task::none(); }
-                if matches!(message, memory_center::Message::Show) { self.activities.hide(); }
+                if matches!(message, memory_center::Message::Show) { self.activities.hide();self.nearby.hide(); }
                 self.memory.update(message, self.bridge.endpoint().cloned())
             }
             Message::Activities(message) => self.update_activities(message),
@@ -491,6 +505,7 @@ impl Application for App {
             }
             Message::SelectSession(index) => {
                 self.memory.hide();
+                self.nearby.hide();
                 if self.stream.is_cancelling() || self.queue_pending {
                     return Task::none();
                 }
@@ -521,6 +536,7 @@ impl Application for App {
             }
             Message::NewSession => {
                 self.memory.hide();
+                self.nearby.hide();
                 if self.stream.is_cancelling() || self.queue_pending {
                     return Task::none();
                 }
@@ -815,6 +831,9 @@ impl Application for App {
             Message::BridgeConnected(Ok(endpoint)) => {
                 self.bridge.connected(endpoint.clone());
                 let mut tasks = vec![effects::fetch_models_task(endpoint.clone())];
+                if self.nearby.is_visible() {
+                    tasks.push(self.nearby.update(nearby::Message::Refresh,Some(endpoint.clone())));
+                }
                 if !self.flags.overlay {
                     tasks.push(effects::fetch_sessions_task(
                         endpoint,
@@ -886,6 +905,7 @@ impl Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = Vec::new();
+        if self.nearby.is_visible() {subscriptions.push(cosmic::iced::time::every(Duration::from_millis(1500)).map(|_|Message::NearbyTick));}
         if self.stream.is_active() { subscriptions.push(cosmic::iced::time::every(Duration::from_secs(3)).map(|_|Message::QueueTick)); }
         if self.flags.overlay {
             subscriptions.push(event::listen_with(|event, _, _| match event {
@@ -933,7 +953,7 @@ impl Application for App {
 
 impl App {
     fn update_activities(&mut self, message: activities::Message) -> Task<Message> {
-        if matches!(message, activities::Message::Show) { self.memory.hide(); }
+        if matches!(message, activities::Message::Show) { self.memory.hide();self.nearby.hide(); }
         if self.flags.overlay
             || (matches!(message, activities::Message::Show)
                 && (self.stream.is_active() || self.voice.is_active()))
@@ -1291,16 +1311,25 @@ fn open_uri(uri: &str) -> std::io::Result<()> {
         .map(|_| ())
 }
 
-fn parse_arguments() -> cos_runtime::ask_claw::UiArguments {
-    let parsed = cos_runtime::ask_claw::parse_ui_arguments(env::args().skip(1));
+fn parse_arguments() -> (cos_runtime::ask_claw::UiArguments,bool) {
+    let mut parsed = cos_runtime::ask_claw::parse_ui_arguments(env::args().skip(1));
+    let count=parsed.unknown.iter().filter(|argument|argument.as_str()=="--nearby").count();
+    if count>1 || count>0 && (parsed.overlay || parsed.voice || parsed.query.is_some()
+        || parsed.context.is_some() || parsed.context_socket) {
+        eprintln!("--nearby opens a standalone sharing center and cannot be combined with chat/overlay activation.");
+        std::process::exit(2);
+    }
+    let nearby=count==1;
+    parsed.unknown.retain(|argument|argument!="--nearby");
     if parsed.help {
         eprintln!("{}", cos_runtime::ask_claw::UI_USAGE);
+        eprintln!("cos-agent-ui --nearby  Open Nearby Sharing without starting an Agent task");
         std::process::exit(0);
     }
     for argument in &parsed.unknown {
         eprintln!("warning: ignoring unknown flag: {argument}");
     }
-    parsed
+    (parsed,nearby)
 }
 
 fn flags_from_arguments(parsed: cos_runtime::ask_claw::UiArguments) -> Flags {
@@ -1325,6 +1354,7 @@ fn flags_from_arguments(parsed: cos_runtime::ask_claw::UiArguments) -> Flags {
         .or(parsed.context);
     Flags {
         overlay: parsed.overlay,
+        nearby:false,
         voice,
         query,
         context,
@@ -1372,7 +1402,7 @@ fn overlay_settings(exit_on_close: bool) -> Settings {
 }
 
 fn main() -> cosmic::iced::Result {
-    let parsed = parse_arguments();
+    let (parsed,nearby) = parse_arguments();
     let launch_mode = UiLaunchMode::from_arguments(&parsed);
     let settings = match launch_mode {
         UiLaunchMode::Window => {
@@ -1382,7 +1412,8 @@ fn main() -> cosmic::iced::Result {
             overlay_settings(launch_mode.exits_on_close())
         }
     };
-    let flags = flags_from_arguments(parsed);
+    let mut flags = flags_from_arguments(parsed);
+    flags.nearby=nearby;
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(

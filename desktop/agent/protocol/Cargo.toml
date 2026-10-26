@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Versioned presentation protocol shared by the ClawOS desktop Agent UI and bridge."
 
 [dependencies]
+clawd-client = { path = "../../../crates/clawd-client" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

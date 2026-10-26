@@ -33,3 +33,4 @@ pub use presentation::*;
 pub use scheduling_priority::*;
 pub use stream::*;
 pub use version::*;
+pub use clawd_client::nearby;

@@ -22,6 +22,7 @@ pub(super) fn prepare(
             return Ok(None);
         }
         InputAction::Cancel => return Ok(None),
+        InputAction::Nearby(action) => super::nearby::request(app, backend, action),
         InputAction::OpenAgentHooks => Request::new(
             "Loading hooks",
             async move { Ok(backend.agent_hooks().await) },

@@ -130,6 +130,17 @@ case "$1" in
             if [ -d /run/systemd/system ]; then
                 systemctl --system daemon-reload >/dev/null || true
                 systemctl --global daemon-reload >/dev/null 2>&1 || true
+                deb-systemd-invoke reload dbus.service >/dev/null ||
+                    echo "claw-os-agent: reload the system D-Bus configuration before using Nearby Sharing" >&2
+                if command -v udevadm >/dev/null 2>&1; then
+                    udevadm control --reload >/dev/null 2>&1 ||
+                        echo "claw-os-agent: reload udev rules before using Nearby Sharing" >&2
+                fi
+                if systemctl --quiet is-active NetworkManager.service &&
+                    command -v nmcli >/dev/null 2>&1; then
+                    nmcli general reload conf >/dev/null 2>&1 ||
+                        echo "claw-os-agent: run nmcli general reload conf before using Nearby Sharing" >&2
+                fi
                 if security_set_is_runnable; then
                     if [ -n "$2" ]; then
                         # preinst deliberately stopped clawd before identity

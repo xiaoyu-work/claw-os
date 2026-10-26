@@ -344,3 +344,22 @@ success. A crash in between leaves an orphan `start` with no
 matching `end`, which is detectable and explicitly treated as such
 (`agent::memory::curator::CurationLog::orphaned_runs`). Do not
 record "the operation finished" before the durable write returns.
+## Nearby sharing development
+
+The file/radio helper is an independent workspace, not another core member.
+From the repository root on Linux/WSL:
+
+```sh
+cargo test -p clawd-client --lib --locked
+cargo test -p cos --lib nearby -- --test-threads=1
+cargo test --manifest-path crates/claw-nearby/Cargo.toml --locked
+cargo test --manifest-path crates/claw-nearby/vendor/owlyd/Cargo.toml --test service --locked
+python3 -B packaging/deb/tests/test_nearby.py
+```
+
+CI's `scripts/ci/test-boundaries.sh nearby` additionally executes the ignored
+owner-file and namespace cases as Root, using only generated temporary data
+and a private network namespace. TLS loopback and private D-Bus cases require
+no radio; neither they nor a successful build certify a physical Wi-Fi/iPhone
+transfer. See [Nearby Sharing](docs/nearby-sharing.md) for the four clients and
+target-device acceptance checklist.

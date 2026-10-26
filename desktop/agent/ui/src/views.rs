@@ -46,7 +46,9 @@ fn fluent_count(value: u64) -> i64 {
 impl App {
     pub(super) fn view_standalone(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let main: Element<'_, Message> = if self.memory.is_visible() {
+        let main: Element<'_, Message> = if self.nearby.is_visible() {
+            self.nearby.view()
+        } else if self.memory.is_visible() {
             self.memory.view()
         } else if self.activities.is_visible() {
             self.activities.view(self.bridge.endpoint().is_some())
@@ -952,7 +954,9 @@ impl App {
             .push(Self::brand_symbol(16.0))
             .push(text(fl!("app-name")).size(13.0))
             .push(text("/").size(13.0))
-            .push(text(if self.activities.is_visible() {
+            .push(text(if self.nearby.is_visible() {
+                fl!("nearby-title")
+            } else if self.activities.is_visible() {
                 fl!("activities")
             } else {
                 self.active_session()
@@ -1019,7 +1023,7 @@ impl App {
             }
             list = list.push(Self::session_row(
                 session,
-                !self.activities.is_visible() && index == self.sessions.active_index(),
+                !self.activities.is_visible() && !self.nearby.is_visible() && index == self.sessions.active_index(),
                 index,
                 self.stream.is_active() && self.stream.session_index() == Some(index),
             ));
@@ -1029,6 +1033,7 @@ impl App {
         }
         let mut sidebar = Column::new()
             .push(activities)
+            .push(button::text(fl!("nearby-title")).on_press(Message::Nearby(crate::nearby::Message::Show)))
             .push(container(header).padding([
                 0u16,
                 spacing.space_xs,

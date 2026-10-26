@@ -18,6 +18,18 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 }
 
+nearby() {
+    cargo test --manifest-path crates/claw-nearby/Cargo.toml --locked
+    cargo clippy --manifest-path crates/claw-nearby/Cargo.toml --all-targets --locked -- -D warnings
+    cargo test --manifest-path crates/claw-nearby/vendor/owlyd/Cargo.toml --test service --locked
+    cargo test -p cos --lib --locked --no-run --message-format=json \
+        > "$RUNNER_TEMP/nearby-tests.jsonl"
+    test_binary="$(cos_test_binary "$RUNNER_TEMP/nearby-tests.jsonl")"
+    sudo timeout 60 unshare --mount --net --fork \
+        "$test_binary" clawd::nearby:: --include-ignored --test-threads=1
+    python3 -B packaging/deb/tests/test_nearby.py
+}
+
 app_bind() {
     cargo build -p cos --bin claw-app-runner --locked
     COS_CAPTURED_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
@@ -244,12 +256,13 @@ PY
 
 case "${1:-}" in
     app-bind) app_bind ;;
+    nearby) nearby ;;
     calendar) calendar ;;
     extensions) extensions ;;
     display) display ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-bind|calendar|extensions|display|applets}" >&2
+        echo "usage: $0 {app-bind|nearby|calendar|extensions|display|applets}" >&2
         exit 2
         ;;
 esac

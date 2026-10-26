@@ -263,6 +263,19 @@ ensure_calendar_reader() {
     find_bin claw-calendar-reader
 }
 
+ensure_nearby_bin() {
+    local bin="$1" path target="${RUST_TARGET/-musl/-gnu}"
+    if path="$(find_bin "$bin")"; then
+        echo "$path"
+        return 0
+    fi
+    ensure_cargo
+    ( cd "$PROJECT_DIR" && cargo build --release --locked --target "$target" \
+        --target-dir "$PROJECT_DIR/target" \
+        --manifest-path crates/claw-nearby/Cargo.toml --bins ) >&2
+    find_bin "$bin"
+}
+
 ###############################################################################
 # Helper: render control file with __VERSION__ and __ARCH__ substituted.
 ###############################################################################
@@ -443,6 +456,10 @@ EXTENSION_HOST_BIN="$(ensure_bin claw-extension-host cos)" || {
     echo "error: claw-extension-host binary not built" >&2; exit 1; }
 CALENDAR_READER_BIN="$(ensure_calendar_reader)" || {
     echo "error: claw-calendar-reader binary not built" >&2; exit 1; }
+NEARBY_WORKER_BIN="$(ensure_nearby_bin claw-nearby-worker)" || {
+    echo "error: claw-nearby-worker binary not built" >&2; exit 1; }
+NEARBY_RADIO_BIN="$(ensure_nearby_bin claw-nearby-radio)" || {
+    echo "error: claw-nearby-radio binary not built" >&2; exit 1; }
 APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
     echo "error: claw-approval-helper binary not built" >&2; exit 1; }
 APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
@@ -480,6 +497,16 @@ install -m 755 "$CLAWD_BIN" "$AGENT_STAGE/usr/local/bin/clawd"
 install -m 755 "$AGENTD_BIN" "$AGENT_STAGE/usr/local/bin/claw-agentd"
 install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-host"
 install -Dm0755 "$CALENDAR_READER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-calendar-reader"
+install -Dm0755 "$NEARBY_WORKER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-nearby-worker"
+install -Dm0755 "$NEARBY_RADIO_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-nearby-radio"
+install -Dm0644 "$PROJECT_DIR/crates/claw-nearby/OWLY-LICENSE" \
+    "$AGENT_STAGE/usr/share/doc/claw-os-agent/nearby-owly.LICENSE"
+install -Dm0644 "$PROJECT_DIR/crates/claw-nearby/PROVENANCE.md" \
+    "$AGENT_STAGE/usr/share/doc/claw-os-agent/nearby-PROVENANCE.md"
+install -Dm0644 "$PROJECT_DIR/crates/claw-nearby/vendor/owlyd/PROVENANCE.md" \
+    "$AGENT_STAGE/usr/share/doc/claw-os-agent/vendor/owlyd/PROVENANCE.md"
+install -Dm0644 "$PROJECT_DIR/crates/claw-nearby/vendor/owlyd/LICENSE" \
+    "$AGENT_STAGE/usr/share/doc/claw-os-agent/vendor/owlyd/LICENSE"
 install -Dm0644 "$PROJECT_DIR/desktop/applets/LICENSE" \
     "$AGENT_STAGE/usr/share/doc/claw-os-agent/calendar-reader.LICENSE"
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
@@ -594,6 +621,17 @@ install -m 644 "$SYSTEM_UNITS_SRC/clawd.service" \
     "$AGENT_STAGE/usr/lib/systemd/system/clawd.service"
 install -m 644 "$SYSTEM_UNITS_SRC/cos-browser.service" \
     "$AGENT_STAGE/usr/lib/systemd/system/cos-browser.service"
+NEARBY_ASSETS="$SCRIPT_DIR/claw-os-agent/nearby"
+install -Dm0644 "$NEARBY_ASSETS/claw-nearby-radio.service" \
+    "$AGENT_STAGE/usr/lib/systemd/system/claw-nearby-radio.service"
+install -Dm0644 "$NEARBY_ASSETS/io.github.t4t5.Owly.service" \
+    "$AGENT_STAGE/usr/share/dbus-1/system-services/io.github.t4t5.Owly.service"
+install -Dm0644 "$NEARBY_ASSETS/io.github.t4t5.Owly.conf" \
+    "$AGENT_STAGE/usr/share/dbus-1/system.d/io.github.t4t5.Owly.conf"
+install -Dm0644 "$NEARBY_ASSETS/90-claw-nearby-unmanaged.conf" \
+    "$AGENT_STAGE/usr/lib/NetworkManager/conf.d/90-claw-nearby-unmanaged.conf"
+install -Dm0644 "$NEARBY_ASSETS/10-claw-nearby-awdl0.link" \
+    "$AGENT_STAGE/usr/lib/systemd/network/10-claw-nearby-awdl0.link"
 install -m 644 "$USER_UNITS_SRC/claw-recoll-index.service" \
     "$AGENT_STAGE/usr/lib/systemd/user/claw-recoll-index.service"
 install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \

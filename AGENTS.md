@@ -65,6 +65,7 @@ editing additional surfaces.
 | Owner Memory center or learned-source edit/forget | `core/src/agent/memory/inspection.rs`, `core/src/clawd/memory/inspection.rs` | `memory.inspect/read/update/forget` wire/client inventory, Web/native presentations, exact revisions, original-source provenance and preserved conversation evidence |
 | Session journal or mutation bracketing | `core/src/session/journal/`, `core/src/clawd/journal.rs` | `core/src/clawd/server.rs` dispatch, `core/src/agentd/supervisor.rs`, authority audit, packaging modes |
 | Proactive notification | `core/src/notifications/`, `core/src/clawd/notifications.rs` | cron/triggers/heartbeat/nudges, Agent task lifecycle, Agent Web UI, desktop Agent bridge |
+| Nearby/AirDrop file sharing | `docs/nearby-sharing.md`, `core/src/clawd/nearby/MODULE.md`, `crates/claw-nearby/MODULE.md` | One owner-scoped service for CLI/TUI/Web/native, exact offer decisions, isolated non-root transport, checked Root radio retirement and signed package components; no Agent prerequisite or automatic file execution |
 | `clawd` RPC or privileged operation | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` | client RPC, caps, audit, the owning `clawd` module |
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |

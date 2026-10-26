@@ -80,6 +80,7 @@ const NAV_ITEMS: Array<{
   { key: "tasks", label: "Tasks", icon: ListTodo, href: "/tasks" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "memory", label: "Memory", icon: Brain, href: "/memory" },
+  { key: "nearby", label: "Nearby Sharing", icon: Archive, href: "/nearby" },
   { key: "inbox", label: "Inbox", icon: Inbox, href: "/inbox" },
   { key: "events", label: "System Events", icon: Activity, href: "/events" },
   { key: "settings", label: "Settings", icon: Settings, href: "/settings" },

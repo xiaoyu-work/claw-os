@@ -6,6 +6,7 @@ mod clawd;
 pub mod inbox;
 pub mod meta;
 pub mod memory;
+pub mod nearby;
 pub mod notifications;
 pub mod sessions;
 pub mod setup;

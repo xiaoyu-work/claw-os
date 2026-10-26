@@ -24,6 +24,7 @@ import { NotificationsPage } from "@/pages/notifications";
 import { SystemPage } from "@/pages/system";
 import { SettingsPage } from "@/pages/settings";
 import { MemoryPage } from "@/pages/memory";
+import { NearbyPage } from "@/pages/nearby";
 
 export default function App() {
   const [meta, setMeta] = useState<any>(null);
@@ -74,6 +75,7 @@ function Header() {
 }
 
 function routeTitle(route: string): string {
+  if (route.startsWith("/nearby")) return "Nearby Sharing";
   if (route.startsWith("/activities")) return "Activities";
   if (route.startsWith("/tasks")) return "Tasks";
   if (route.startsWith("/approvals")) return "Approvals";
@@ -88,6 +90,7 @@ function routeTitle(route: string): string {
 
 function Router({ meta }: { meta: any }) {
   const route = useRoute();
+  if (route.startsWith("/nearby")) return <NearbyPage />;
   if (route.startsWith("/activities")) return <ActivitiesPage />;
   if (route.startsWith("/tasks")) return <TasksPage />;
   if (route.startsWith("/approvals")) return <ApprovalsPage />;

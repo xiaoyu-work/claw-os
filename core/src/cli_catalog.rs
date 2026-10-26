@@ -19,6 +19,20 @@ pub const APP_STDIO_DESCRIPTION: &str =
 /// aliases.
 pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
     vec![
+        ("share","Nearby AirDrop file sharing; no Agent task required",vec![
+            ("status","Inspect hardware, current window, offers and transfers"),
+            ("doctor","Inspect the nearby radio and availability diagnostics"),
+            ("open","Open a bounded send/discovery window"),
+            ("receive","Open a bounded per-offer-confirmed receiving window"),
+            ("browse","Discover receivers in the current window"),
+            ("send","Send explicit files to an exact discovered peer"),
+            ("accept","Accept one exact unexpired incoming offer"),
+            ("decline","Decline one exact incoming offer"),
+            ("cancel","Interrupt one outgoing transfer without claiming rollback"),
+            ("stop","Close the owner's current sharing window and restore the radio"),
+            ("watch","Watch the shared status; Ctrl-C only detaches"),
+            ("delete-upload","Remove one unused owner upload"),
+        ]),
         (
             "review",
             "OS-owned App confirmations and explicit system permission choices",
