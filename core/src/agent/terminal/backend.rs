@@ -328,6 +328,17 @@ pub(super) struct ApprovalRequest {
     pub note: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct ApprovalState {
+    pub id: String,
+    pub status: crate::approvals::RequestStatus,
+}
+
+pub(super) struct ApprovalSnapshot {
+    pub pending: Vec<ApprovalRequest>,
+    pub states: Vec<ApprovalState>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SkillSummary {
     pub id: String,
@@ -578,7 +589,7 @@ pub(super) trait Backend: Send + Sync {
         operation: &str,
         args: &[String],
     ) -> Result<ActivityOperationPreview, String>;
-    async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String>;
+    async fn approvals(&self, ids: &[String]) -> Result<ApprovalSnapshot, String>;
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String>;
     async fn review(&self, id: &str, decision: ReviewDecision) -> Result<(), String>;
     async fn skills(&self) -> Result<Vec<SkillSummary>, String>;
@@ -1408,7 +1419,7 @@ impl Backend for BrokerBackend {
         })
     }
 
-    async fn approvals(&self, ids: &[String]) -> Result<Vec<ApprovalRequest>, String> {
+    async fn approvals(&self, ids: &[String]) -> Result<ApprovalSnapshot, String> {
         let value = self
             .call(Command::PermissionPending, json!({ "limit": 1_000 }))
             .await?;
@@ -1416,15 +1427,19 @@ impl Backend for BrokerBackend {
             .get("requests")
             .and_then(Value::as_array)
             .ok_or("Claw approval list omitted requests")?;
-        ids.iter()
-            .map(|id| {
-                let request = requests
-                    .iter()
-                    .find(|request| request.get("id").and_then(Value::as_str) == Some(id))
-                    .ok_or_else(|| format!("approval {id} is no longer pending"))?;
+        let status = self
+            .call(Command::PermissionStatus, json!({ "ids": ids }))
+            .await?;
+        let states = parse_approval_states(&status, ids)?;
+        let pending = states.iter()
+            .filter(|state| state.status == crate::approvals::RequestStatus::Pending)
+            .map(|state| {
+                let request = requests.iter()
+                    .find(|request| request.get("id").and_then(Value::as_str) == Some(state.id.as_str()))
+                    .ok_or_else(|| format!("approval {} has no verified pending details", state.id))?;
                 parse_approval(request, "pending")
-            })
-            .collect()
+            }).collect::<Result<Vec<_>, String>>()?;
+        Ok(ApprovalSnapshot { pending, states })
     }
 
     async fn list_approvals(&self) -> Result<Vec<ApprovalRequest>, String> {
@@ -2308,6 +2323,18 @@ fn parse_approval(value: &Value, status: &str) -> Result<ApprovalRequest, String
         duration: decision.and_then(|decision| optional_string(decision, "duration")),
         note: decision.and_then(|decision| optional_string(decision, "note")),
     })
+}
+
+fn parse_approval_states(value: &Value, ids: &[String]) -> Result<Vec<ApprovalState>, String> {
+    let states: Vec<ApprovalState> = serde_json::from_value(
+        value.get("statuses").cloned().ok_or("Claw omitted approval statuses")?
+    ).map_err(|error| format!("invalid approval statuses: {error}"))?;
+    if states.len() != ids.len()
+        || ids.iter().any(|id| states.iter().filter(|state| &state.id == id).count() != 1)
+    {
+        return Err("Claw approval statuses changed the requested identities".into());
+    }
+    Ok(states)
 }
 
 fn approval_target(scope: &Scope) -> String {

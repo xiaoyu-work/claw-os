@@ -70,6 +70,13 @@ task ID. Mutations are never automatically retried, and quitting waits for
 their bounded confirmation instead of silently abandoning an unknown outcome.
 Text submitted while a foreground request is pending stays in the composer.
 
+Pending permissions refresh from the owner's exact broker request IDs.
+Approving or denying elsewhere updates this view without requiring another
+decision. Resuming work removes obsolete approval choices. If the task stream
+fails, its cached approval panel closes so it cannot trap keyboard input; the
+task remains unconfirmed, not implicitly stopped, and the diagnostic gives its
+exact ID for inspection or reattachment.
+
 Model text is control-character sanitized and passed through the shared secret
 redactor before rendering. Tool inputs, successful result bodies, encrypted
 reasoning, thought signatures and raw provider payloads never enter the
@@ -388,7 +395,7 @@ cargo test -p cos --lib agent::terminal:: -- --test-threads=1
 
 cargo build -p cos --bin cos
 original_namespace="$(readlink /proc/self/ns/mnt)"
-for scenario in complete slow-progress slow-submit slow-review slow-panel cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
+for scenario in complete slow-progress slow-submit slow-review slow-panel cancel commands confirmations durable-queue task-center task-controls approval-center approval-choice approval-external approval-resumed approval-failure attachments appearance agents side platform memory-center hooks-center mcp-center extensions-center usage-center debug-center account-center voice-settings file-mentions copy-export raw-scrollback vim backtrack notification-inbox activity-lifecycle activity-controls activity-evidence activity-review workspace multiline multiline-key reconnect startup-reconnect resume resume-running plain; do
   unshare --user --map-current-user --keep-caps --mount --net \
     python3 -B core/tests/agent_tui_pty.py \
     --cos target/debug/cos \

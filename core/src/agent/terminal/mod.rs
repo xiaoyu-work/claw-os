@@ -1,6 +1,7 @@
 //! Claw-owned full-screen terminal presentation for the shared Agent backend.
 
 mod actions;
+mod approvals;
 mod backend;
 mod commands;
 mod models;
@@ -36,8 +37,8 @@ use self::backend::{
 use self::state::{
     App, ConfirmationAction, NotificationPreferenceAction, PickerSelection, RunStatus,
 };
-use self::stream::RuntimeEvent;
-use self::requests::{Request, Requests};
+use self::stream::{RuntimeEvent, RuntimeEventKind};
+use self::requests::Requests;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum Mode {
@@ -209,6 +210,7 @@ async fn run_with_backend(
     let mut terminal = TerminalSession::enter().map_err(|error| error.to_string())?;
     let mut input = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut approval_tick = tokio::time::interval(Duration::from_secs(1));
     let mut nearby_tick=tokio::time::interval(Duration::from_secs(1));
     let (nearby_tx,mut nearby_rx)=mpsc::channel(2);
     let mut nearby_polling=false;
@@ -233,7 +235,7 @@ async fn run_with_backend(
             .draw(|frame| ui::render(frame, &app))
             .map_err(|error| error.to_string())?;
         tokio::select! {
-            event = input.next() => {
+            event = input.next(), if !app.should_quit => {
                 let Some(event) = event else {
                     app.should_quit = true;
                     continue;
@@ -316,38 +318,29 @@ async fn run_with_backend(
                 }
             }
             Some(event) = runtime_rx.recv() => {
+                if app.active_task.as_deref() != Some(event.task_id.as_str()) {
+                    continue;
+                }
                 let mut next_task = None;
-                match event {
-                    RuntimeEvent::Record(record) => {
+                match event.kind {
+                    RuntimeEventKind::Record(record) => {
                         match presentation::apply_record(&mut app, &record) {
                             Ok(outcome) => {
                                 if !outcome.approvals.is_empty() {
-                                    let task_id = app.active_task.clone();
-                                    let loader = backend.clone();
-                                    let request = Request::new(
-                                        "Loading task permissions",
-                                        async move { loader.approvals(&outcome.approvals).await },
-                                        move |app, approvals| {
-                                            if app.active_task == task_id {
-                                                app.add_approvals(approvals);
-                                            }
-                                            Ok(())
-                                        },
-                                    );
-                                    requests.observe(&app, request);
+                                    app.wait_for_approvals(outcome.approvals);
                                 }
                                 if outcome.resumed {
-                                    app.status = RunStatus::Working;
+                                    app.clear_approval_ui();
                                 }
                             }
                             Err(error) => app.push_error(&error),
                         }
                     }
-                    RuntimeEvent::Finished(job) => {
+                    RuntimeEventKind::Finished(job) => {
                         app.finish_task(&job);
                         next_task = app.queued_tasks.pop_front();
                     }
-                    RuntimeEvent::Reconnecting(error) => {
+                    RuntimeEventKind::Reconnecting(error) => {
                         if app.status != RunStatus::Cancelling {
                             app.status = RunStatus::Reconnecting;
                         }
@@ -355,9 +348,9 @@ async fn run_with_backend(
                             "Broker connection interrupted; reconnecting to the durable task: {error}"
                         ));
                     }
-                    RuntimeEvent::Reconnected => {
+                    RuntimeEventKind::Reconnected => {
                         if app.status == RunStatus::Reconnecting {
-                            app.status = if app.current_approval().is_some() {
+                            app.status = if app.awaiting_approval() {
                                 RunStatus::WaitingApproval
                             } else {
                                 RunStatus::Working
@@ -365,9 +358,10 @@ async fn run_with_backend(
                         }
                         app.push_system("Reconnected to the durable task.");
                     }
-                    RuntimeEvent::Failed(error) => {
+                    RuntimeEventKind::Failed(error) => {
                         app.push_error(&format!(
-                            "{error}. The durable task may still be running; use /session to retain its conversation id."
+                            "{error}. Task {} is unconfirmed; inspect /task {} or reattach with /resume {}.",
+                            event.task_id, event.task_id, app.conversation.id,
                         ));
                         app.detach_task();
                     }
@@ -383,6 +377,11 @@ async fn run_with_backend(
             }
             completion = requests.next() => {
                 requests.complete(&mut app, completion, backend.clone());
+            }
+            _ = approval_tick.tick(), if !app.should_quit => {
+                if let Some(request) = approvals::refresh(&app, backend.clone()) {
+                    requests.observe(&app, request);
+                }
             }
             _ = tick.tick() => app.tick(),
         }

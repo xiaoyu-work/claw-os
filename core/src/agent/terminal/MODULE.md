@@ -19,6 +19,7 @@ audit.
 | `stream.rs` | Durable task submission, identity/model acknowledgement and stream polling |
 | `ui.rs`, `ui/progress.rs` | ratatui layout, live execution animation, styling, Markdown-oriented transcript projection and cursor |
 | `presentation.rs` | Redacted model/tool/reasoning/progress projection |
+| `approvals.rs` | Exact owner-scoped status refresh, stale-read generations and modal lifecycle cleanup |
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes, including attended one-shot decisions |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
 | `nearby.rs` | Model-independent `/share` center over the shared nearby service, stable exact offer selection, progress, refresh and detach-only close |
@@ -74,6 +75,11 @@ audit.
   Historical records are read-only. The authenticated same-owner TUI may grant
   one exact request only while its broker peer is kernel-verified as attended;
   denial creates no authority. Both paths verify post-decision status.
+- While waiting, refresh only the known request IDs through the same broker.
+  External decisions and durable resume records retire stale choices without
+  issuing decisions. Async results are bound to task/conversation identity and
+  the current approval generation. A failed stream closes local approval UI,
+  leaves the durable task unconfirmed, and retains its exact inspection ID.
 - Notification Inbox consumes only owner-scoped durable notification routes.
   Read, acknowledge, dismiss, channel and DND changes are explicit broker
   mutations; opening a notification is presentation only.
