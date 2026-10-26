@@ -1,9 +1,11 @@
 //! Claw-owned full-screen terminal presentation for the shared Agent backend.
 
+mod actions;
 mod backend;
 mod commands;
 mod models;
 mod presentation;
+mod requests;
 mod state;
 mod stream;
 mod ui;
@@ -34,6 +36,7 @@ use self::state::{
     App, ConfirmationAction, NotificationPreferenceAction, PickerSelection, RunStatus,
 };
 use self::stream::RuntimeEvent;
+use self::requests::{Request, Requests};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum Mode {
@@ -200,12 +203,23 @@ async fn run_with_backend(
     let mut app = App::new(backend.info().clone(), conversation);
     app.set_task_defaults(!options.no_memory, options.max_turns);
     let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
-    stream::restore_conversation(&mut app, backend.clone(), runtime_tx.clone()).await;
+    let mut requests = Requests::default();
     let mut terminal = TerminalSession::enter().map_err(|error| error.to_string())?;
     let mut input = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
 
-    while !app.should_quit {
+    while !app.should_quit || requests.must_settle() {
+        if !requests.busy() && !app.should_quit {
+            if let Some(action) = requests.take_deferred() {
+                apply_input_action(
+                    action, &mut app, &mut requests, backend.clone(), runtime_tx.clone(),
+                );
+            } else if let Some(request) =
+                stream::restore_conversation(&mut app, backend.clone(), runtime_tx.clone())
+            {
+                requests.start(&mut app, request);
+            }
+        }
         terminal
             .update_title(app.terminal_title().as_deref())
             .map_err(|error| error.to_string())?;
@@ -221,13 +235,23 @@ async fn run_with_backend(
                 };
                 match event.map_err(|error| error.to_string())? {
                     Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-                        let action = handle_key(&mut app, key);
+                        let action = if requests.busy()
+                            && key.kind == KeyEventKind::Press
+                            && (key.code == KeyCode::Esc
+                                || (key.code == KeyCode::Char('c')
+                                    && key.modifiers == KeyModifiers::CONTROL))
+                        {
+                            InputAction::Cancel
+                        } else {
+                            handle_key(&mut app, key)
+                        };
                         apply_input_action(
                             action,
                             &mut app,
+                            &mut requests,
                             backend.clone(),
                             runtime_tx.clone(),
-                        ).await;
+                        );
                         if let Some(snapshot) = app.take_raw_scrollback() {
                             if let Err(error) = terminal.publish_scrollback(&snapshot) {
                                 app.push_error(&format!(
@@ -277,10 +301,19 @@ async fn run_with_backend(
                         match presentation::apply_record(&mut app, &record) {
                             Ok(outcome) => {
                                 if !outcome.approvals.is_empty() {
-                                    match backend.approvals(&outcome.approvals).await {
-                                        Ok(approvals) => app.add_approvals(approvals),
-                                        Err(error) => app.push_error(&error),
-                                    }
+                                    let task_id = app.active_task.clone();
+                                    let loader = backend.clone();
+                                    let request = Request::new(
+                                        "Loading task permissions",
+                                        async move { loader.approvals(&outcome.approvals).await },
+                                        move |app, approvals| {
+                                            if app.active_task == task_id {
+                                                app.add_approvals(approvals);
+                                            }
+                                            Ok(())
+                                        },
+                                    );
+                                    requests.observe(&app, request);
                                 }
                                 if outcome.resumed {
                                     app.status = RunStatus::Working;
@@ -326,6 +359,9 @@ async fn run_with_backend(
                         job,
                     );
                 }
+            }
+            completion = requests.next() => {
+                requests.complete(&mut app, completion, backend.clone());
             }
             _ = tick.tick() => app.tick(),
         }
@@ -1234,321 +1270,36 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
     }
 }
 
-async fn apply_input_action(
+fn apply_input_action(
     action: InputAction,
     app: &mut App,
+    requests: &mut Requests,
     backend: Arc<dyn Backend>,
     runtime_tx: mpsc::UnboundedSender<RuntimeEvent>,
 ) {
-    match action {
-        InputAction::None => {}
-        InputAction::Quit => app.should_quit = true,
-        InputAction::OpenAgentHooks => match backend.agent_hooks().await {
-            Ok(settings) => app.open_agent_hooks(settings),
-            Err(error) => {
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-        },
-        InputAction::ToggleAgentHook(kind) => {
-            let Some(enabled) = app.agent_hook_enabled(kind) else {
-                app.set_agent_hook_error("Agent hook settings changed; reopen the panel.");
-                return;
-            };
-            match backend.set_agent_hook(kind, !enabled).await {
-                Ok(settings) => app.open_agent_hooks(settings),
-                Err(error) => app.set_agent_hook_error(&error),
-            }
-        }
-        InputAction::OpenMcpOverview => match backend.mcp_overview().await {
-            Ok(overview) => app.open_mcp_overview(overview),
-            Err(error) => {
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-        },
-        InputAction::OpenExtensionsOverview => match backend.extensions_overview().await {
-            Ok(overview) => app.open_extensions_overview(overview),
-            Err(error) => {
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-        },
-        InputAction::OpenUsageOverview(period) => match backend.usage_overview(period).await {
-            Ok(overview) => app.open_usage_overview(overview),
-            Err(error) if app.usage_overview.is_some() => {
-                app.close_usage_overview();
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-            Err(error) => {
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-        },
-        InputAction::OpenDebugOverview => match backend.debug_overview().await {
-            Ok(overview) => app.open_debug_overview(overview),
-            Err(error) => {
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-        },
-        InputAction::OpenAccountOverview => match backend.account_overview().await {
-            Ok(overview) => app.open_account_overview(overview),
-            Err(error) => {
-                app.close_platform_overview();
-                app.push_error(&error);
-            }
-        },
-        InputAction::OpenVoiceOverview => match backend.voice_overview().await {
-            Ok(overview) => app.open_voice_overview(overview),
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::Cancel => {
-            let Some(task_id) = app.active_task.clone() else {
-                return;
-            };
-            app.status = RunStatus::Cancelling;
-            if let Err(error) = backend.cancel(&task_id).await {
-                app.push_error(&error);
-                app.status = RunStatus::Working;
-            }
-        }
-        InputAction::Review(decision) => {
-            let Some(approval) = app.current_approval().cloned() else {
-                return;
-            };
-            match backend.review(&approval.id, decision).await {
-                Ok(()) => {
-                    app.resolve_approval(&approval.id, decision == ReviewDecision::ApproveOnce)
-                }
-                Err(error) => app.push_error(&error),
-            }
-        }
-        InputAction::Picker(selection) => match selection {
-            PickerSelection::Model(model) => {
-                app.selected_model = model.clone();
-                app.push_system(&format!("Future tasks will use {model}."));
-            }
-            PickerSelection::Session(id) => match backend.get_conversation(&id).await {
-                Ok(conversation) => {
-                    app.replace_conversation(conversation);
-                    stream::restore_conversation(app, backend, runtime_tx).await;
-                }
-                Err(error) => app.push_error(&error),
-            },
-            PickerSelection::History {
-                before_user_turn,
-                prompt,
-            } => match backend
-                .fork_conversation(&app.conversation.id, Some(before_user_turn))
-                .await
-            {
-                Ok(conversation) => {
-                    app.replace_conversation(conversation);
-                    app.prefill_input(prompt);
-                    app.push_system(
-                        "Forked before the selected prompt. Files, processes, approvals, \
-                         and other admitted effects were not rolled back.",
-                    );
-                    stream::restore_conversation(app, backend, runtime_tx).await;
-                }
-                Err(error) => app.push_error(&error),
-            },
-            PickerSelection::File(path) => app.insert_file_mention(&path),
-            PickerSelection::Task(id) => match backend.get_task(&id).await {
-                Ok(task) => app.open_task_detail(task),
-                Err(error) => app.push_error(&error),
-            },
-            PickerSelection::Approval(approval) => app.open_approval_detail(approval),
-            PickerSelection::Notification(notification) => {
-                app.open_notification_detail(notification)
-            }
-            PickerSelection::Activity(id) => match backend.get_activity(&id).await {
-                Ok(detail) => app.open_activity_detail(detail),
-                Err(error) => app.push_error(&error),
-            },
-            PickerSelection::ActivityReview(id) => match backend.activity_review(&id).await {
-                Ok(review) => app.open_activity_review(review),
-                Err(error) => app.push_error(&error),
-            },
-        },
-        InputAction::Confirm(action) => {
-            if let Err(error) = commands::confirm(app, backend, action).await {
-                app.push_error(&error);
-            }
-        }
-        InputAction::TaskCancel(task_id) => match backend.cancel(&task_id).await {
-            Ok(()) => {
-                if app.active_task.as_deref() == Some(task_id.as_str()) {
-                    app.status = RunStatus::Cancelling;
-                }
-                match backend.get_task(&task_id).await {
-                    Ok(task) => app.open_task_detail(task),
-                    Err(error) => app.push_error(&error),
-                }
-            }
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::TaskRetry(task_id) => match backend.retry_task(&task_id).await {
-            Ok(task) => {
-                let new_id = task.id.clone();
-                app.open_task_detail(task);
-                app.push_system(&format!("Retried as durable task {new_id}."));
-            }
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::FileMentions => {
-            let workspace = std::path::PathBuf::from(&app.selected_workspace);
-            match tokio::task::spawn_blocking(move || {
-                commands::list_workspace_files(&workspace)
-            })
-            .await
-            {
-                Ok(Ok(files)) => app.open_file_picker(files),
-                Ok(Err(error)) => app.push_error(&error),
-                Err(_) => app.push_error("workspace file mention reader failed"),
-            }
-        }
-        InputAction::ApprovalReview(approval_id, decision) => {
-            match backend.review(&approval_id, decision).await {
-                Ok(()) => {
-                    let approved = decision == ReviewDecision::ApproveOnce;
-                    app.resolve_approval(&approval_id, approved);
-                    if let Some(approval) = &mut app.approval_detail {
-                        if approval.id == approval_id {
-                            approval.status = if approved {
-                                "approved".into()
-                            } else {
-                                "denied".into()
-                            };
-                        }
-                    }
-                    app.push_system(if approved {
-                        "Approval granted once from this attended terminal."
-                    } else {
-                        "Approval denied; no capability was granted."
-                    });
-                }
-                Err(error) => {
-                    app.close_approval_detail();
-                    app.push_error(&error);
-                }
-            }
-        }
-        InputAction::MutateNotification(id, mutation) => {
-            match backend.mutate_notification(&id, mutation).await {
-                Ok(notification) => app.open_notification_detail(notification),
-                Err(error) => app.push_error(&error),
-            }
-        }
-        InputAction::NotificationPreference(action) => {
-            let Some(mut preferences) = app.notification_preferences.clone() else {
-                return;
-            };
-            match action {
-                NotificationPreferenceAction::ToggleWeb => {
-                    preferences.web_enabled = !preferences.web_enabled
-                }
-                NotificationPreferenceAction::ToggleDesktop => {
-                    preferences.desktop_enabled = !preferences.desktop_enabled
-                }
-                NotificationPreferenceAction::ToggleNtfy => {
-                    preferences.ntfy_enabled = !preferences.ntfy_enabled
-                }
-                NotificationPreferenceAction::ToggleDnd => {
-                    if preferences.dnd_start_minute_utc.is_some()
-                        && preferences.dnd_end_minute_utc.is_some()
-                    {
-                        preferences.dnd_start_minute_utc = None;
-                        preferences.dnd_end_minute_utc = None;
-                    } else {
-                        preferences.dnd_start_minute_utc = Some(0);
-                        preferences.dnd_end_minute_utc = Some(0);
-                    }
-                }
-            }
-            match backend.set_notification_preferences(&preferences).await {
-                Ok(preferences) => app.open_notification_preferences(preferences),
-                Err(error) => app.push_error(&error),
-            }
-        }
-        InputAction::ActivityRun(id) => match backend
-            .run_activity(&id, None, &app.selected_workspace)
-            .await
-        {
-            Ok(job) => {
-                let task_id = job.id.clone();
-                app.open_task_detail(job);
-                app.push_system(&format!(
-                    "Activity work was submitted as durable task {task_id}."
-                ));
-            }
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::ActivityTransition(id, state) => {
-            match backend.transition_activity(&id, state, None).await {
-                Ok(activity) => {
-                    app.update_activity(activity);
-                    app.push_system(if state == "paused" {
-                        "Activity paused. In-flight tasks were not cancelled."
-                    } else {
-                        "Activity is active."
-                    });
-                }
-                Err(error) => app.push_error(&error),
-            }
-        }
-        InputAction::ActivityAttention(id) => match backend.activity_attention(&id).await {
-            Ok(attention) => app.open_activity_attention(attention),
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::ActivityControls(id) => match backend.activity_controls(&id).await {
-            Ok(controls) => app.open_activity_controls(controls),
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::ActivityEvidence(id) => match backend.activity_evidence(&id).await {
-            Ok(evidence) => app.open_activity_evidence(evidence),
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::ActivityReview(id) => match backend.activity_review(&id).await {
-            Ok(review) => app.open_activity_review(review),
-            Err(error) => app.push_error(&error),
-        },
-        InputAction::Submit(input) => {
-            if let Some(command) = commands::parse(&input) {
-                if let Err(error) = commands::execute(app, backend.clone(), command).await {
-                    app.push_error(&error);
-                } else {
-                    stream::restore_conversation(app, backend, runtime_tx).await;
-                }
-            } else if app.active_task.is_some() {
-                let use_memory = app.task_use_memory;
-                let max_turns = app.task_max_turns;
-                stream::queue_prompt(
-                    app,
-                    backend,
-                    use_memory,
-                    max_turns,
-                    input,
-                )
-                .await;
-            } else {
-                let workspace = app.selected_workspace.clone();
-                let use_memory = app.task_use_memory;
-                let max_turns = app.task_max_turns;
-                stream::start_prompt(
-                    app,
-                    backend,
-                    runtime_tx,
-                    use_memory,
-                    max_turns,
-                    input,
-                    workspace,
-                )
-                .await;
-            }
-        }
+    let cancel = matches!(&action, InputAction::Cancel)
+        || matches!(&action, InputAction::TaskCancel(id) if app.active_task.as_ref() == Some(id))
+        || matches!(&action, InputAction::Submit(input)
+            if matches!(commands::parse(input), Some(commands::Command::Cancel)));
+    if cancel {
+        requests.stop(app, backend);
+        return;
+    }
+    let quit = matches!(&action, InputAction::Quit)
+        || matches!(&action, InputAction::Submit(input)
+            if matches!(commands::parse(input), Some(commands::Command::Quit)));
+    if quit {
+        app.should_quit = true;
+        return;
+    }
+    if requests.busy() && !matches!(action, InputAction::None) {
+        requests.defer(app, action);
+        return;
+    }
+    match actions::prepare(action, app, backend, runtime_tx) {
+        Ok(Some(request)) => requests.start(app, request),
+        Ok(None) => {}
+        Err(error) => app.push_error(&error),
     }
 }
 

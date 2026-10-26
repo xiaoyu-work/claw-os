@@ -13,6 +13,7 @@ audit.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | CLI options, terminal lifecycle, async event loop, commands and task streaming |
+| `actions.rs`, `requests.rs` | Owned asynchronous request snapshots, UI-thread completion updates and independent cancellation |
 | `state.rs` | Bounded transcript, composer, durable-task handles, approval and session state |
 | `commands.rs` | Closed Claw slash catalogue and canonical conversation/model/Skill actions |
 | `stream.rs` | Durable task submission, identity/model acknowledgement and stream polling |
@@ -35,6 +36,12 @@ audit.
 - Keep durable tasks running when the UI disconnects unless the user explicitly
   cancels. Task browsing, cancellation and retry must use the owner-scoped
   broker contract rather than terminal-local task records.
+- Broker and bounded file operations never borrow UI state while waiting.
+  One foreground request runs alongside task streaming, animation and a
+  separate stop request. Repeated input cannot replay a pending mutation.
+  Esc dismisses a pending read or stops the exact active task; a stop during
+  initial submission waits for its acknowledged ID before cancelling it.
+  Dispatched mutations settle explicitly, including when the user quits.
 - A transient broker disconnect keeps the exact task and stream cursor,
   displays a reconnecting state, and resumes the durable stream without
   resubmitting work.

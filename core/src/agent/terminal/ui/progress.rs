@@ -23,7 +23,26 @@ fn elapsed(duration: Duration) -> String {
 }
 
 pub(super) fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    if app.active_task.is_none() || area.is_empty() {
+    if area.is_empty() {
+        return;
+    }
+    if let Some(label) = app.pending_request {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::styled(
+                    format!(" {} {label}", spinner(app.frame)),
+                    Style::default().fg(accent(app)).add_modifier(Modifier::BOLD),
+                ),
+                Line::styled(
+                    "   Waiting for broker confirmation | Esc stop",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+            area,
+        );
+        return;
+    }
+    if app.active_task.is_none() {
         return;
     }
     let tools = || {

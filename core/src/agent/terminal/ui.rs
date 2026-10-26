@@ -21,7 +21,11 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
-            Constraint::Length(if app.active_task.is_some() { 2 } else { 0 }),
+            Constraint::Length(if app.active_task.is_some() || app.pending_request.is_some() {
+                2
+            } else {
+                0
+            }),
             Constraint::Length(composer_height),
             Constraint::Length(1),
         ])
@@ -2088,6 +2092,10 @@ fn render_picker(frame: &mut Frame<'_>, screen: Rect, app: &App) {
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let status = match app.status {
+        RunStatus::Ready if app.pending_request.is_some() => Span::styled(
+            format!("{} WAITING", spinner(app.frame)),
+            Style::default().fg(accent(app)),
+        ),
         RunStatus::Ready => Span::styled("READY", Style::default().fg(Color::Green)),
         RunStatus::Working => Span::styled(
             format!("{} WORKING {}", spinner(app.frame), elapsed(app)),

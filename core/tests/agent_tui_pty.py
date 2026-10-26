@@ -132,6 +132,9 @@ class FixtureBroker:
         self.slow_progress_release = threading.Event()
         self.approval_state = "pending"
         self.approval_decided = threading.Event()
+        self.request_waiting = threading.Event()
+        self.request_release = threading.Event()
+        self.workers = []
         self.home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
         self.workspace = str(self.home / "project")
         self.session_id = SESSION_ID
@@ -285,6 +288,15 @@ class FixtureBroker:
         }
 
     def dispatch(self, method, params):
+        held_method = {
+            "slow-submit": "task.submit",
+            "slow-review": "permission.decide",
+            "slow-panel": "task.list",
+        }.get(self.case)
+        if method == held_method:
+            self.request_waiting.set()
+            if not self.request_release.wait(timeout=10):
+                raise AssertionError("delayed request fixture was not released")
         if method == "daemon.status":
             return {"daemon": "clawd", "status": "running"}
         if method == "daemon.health":
@@ -418,8 +430,8 @@ class FixtureBroker:
             }
         if method == "memory.history":
             return {"session_id": SESSION_ID, "n": 0, "messages": []}
-        if method == "permission.pending" and self.case in ("approval-center", "approval-choice"):
-            metadata = self.case == "approval-choice"
+        if method == "permission.pending" and self.case in ("approval-center", "approval-choice", "slow-review"):
+            metadata = self.case in ("approval-choice", "slow-review")
             return {
                 "requests": [{
                     "id": PENDING_APPROVAL_ID,
@@ -475,7 +487,7 @@ class FixtureBroker:
             }
         if method == "permission.decide":
             if (
-                self.case != "approval-choice"
+                self.case not in ("approval-choice", "slow-review")
                 or params != {
                     "id": PENDING_APPROVAL_ID,
                     "decision": "approve",
@@ -722,6 +734,12 @@ class FixtureBroker:
                 "activity_id": ACTIVITY_ID,
                 "capability_policy": self.capability_policy,
             }
+        if method == "activity.work.get":
+            return {
+                "schema": 1,
+                "activity_id": ACTIVITY_ID,
+                "work": None,
+            }
         if method == "activity.capability_policy.set":
             if params.get("expected_revision") != self.capability_policy["revision"]:
                 raise AssertionError("capability policy edit revision was not exact")
@@ -735,7 +753,7 @@ class FixtureBroker:
             self.capability_policy["enabled"] = params["enabled"]
             return self.capability_policy
         if method == "task.list":
-            if self.case == "task-center":
+            if self.case in ("task-center", "slow-panel"):
                 return {
                     "jobs": [
                         self.history_job(
@@ -880,7 +898,7 @@ class FixtureBroker:
                     }},
                     {"progress": {"kind": "tool_start", "id": "tool-1", "name": tool_name}},
                 ]
-                if self.case == "approval-choice":
+                if self.case in ("approval-choice", "slow-review"):
                     events.append({
                         "progress": {
                             "kind": "waiting_approval",
@@ -1036,41 +1054,54 @@ class FixtureBroker:
                 connection, _ = self.listener.accept()
             except socket.timeout:
                 continue
-            with connection:
-                connection.settimeout(3)
+            if self.case in ("slow-submit", "slow-review", "slow-panel"):
+                worker = threading.Thread(target=self.handle_connection, args=(connection,))
+                self.workers.append(worker)
+                worker.start()
+            else:
+                self.handle_connection(connection)
+
+    def handle_connection(self, connection):
+        with connection:
+            connection.settimeout(3)
+            try:
+                header = self.read_exact(connection, 10)
+                magic, kind, reserved, length = struct.unpack(">4sBBI", header)
+                if (magic, kind, reserved) != (b"CBK1", 1, 0) or length > 1024 * 1024:
+                    raise AssertionError("invalid broker framing")
+                request = json.loads(self.read_exact(connection, length))
+                self.requests.append(request)
                 try:
-                    header = self.read_exact(connection, 10)
-                    magic, kind, reserved, length = struct.unpack(">4sBBI", header)
-                    if (magic, kind, reserved) != (b"CBK1", 1, 0) or length > 1024 * 1024:
-                        raise AssertionError("invalid broker framing")
-                    request = json.loads(self.read_exact(connection, length))
-                    self.requests.append(request)
-                    try:
-                        result = self.dispatch(request["command"], request.get("params", {}))
-                        response = {
-                            "v": 2, "id": request["id"], "ok": True,
-                            "result": result, "error": None,
-                        }
-                    except (AssertionError, KeyError) as error:
-                        self.errors.append(str(error))
-                        response = {
-                            "v": 2, "id": request["id"], "ok": False, "result": None,
-                            "error": {"code": "execution_failed", "message": str(error)},
-                        }
-                    encoded = json.dumps(response).encode()
-                    connection.sendall(struct.pack(">4sBBI", b"CBK1", 2, 0, len(encoded)) + encoded)
-                except ConnectionAbortedError:
-                    pass
-                except BrokenPipeError as error:
-                    if self.case != "resume-running":
-                        self.errors.append(str(error))
-                except (OSError, EOFError, ValueError, AssertionError) as error:
+                    result = self.dispatch(request["command"], request.get("params", {}))
+                    response = {
+                        "v": 2, "id": request["id"], "ok": True,
+                        "result": result, "error": None,
+                    }
+                except (AssertionError, KeyError) as error:
                     self.errors.append(str(error))
+                    response = {
+                        "v": 2, "id": request["id"], "ok": False, "result": None,
+                        "error": {"code": "execution_failed", "message": str(error)},
+                    }
+                encoded = json.dumps(response).encode()
+                connection.sendall(struct.pack(">4sBBI", b"CBK1", 2, 0, len(encoded)) + encoded)
+            except ConnectionAbortedError:
+                pass
+            except BrokenPipeError as error:
+                if self.case not in ("resume-running", "slow-panel"):
+                    self.errors.append(str(error))
+            except (OSError, EOFError, ValueError, AssertionError) as error:
+                self.errors.append(str(error))
 
     def close(self):
         self.stopped.set()
         self.slow_progress_release.set()
+        self.request_release.set()
         self.thread.join(timeout=5)
+        for worker in self.workers:
+            worker.join(timeout=5)
+            if worker.is_alive():
+                raise AssertionError("fixture request worker did not stop")
         self.listener.close()
         if self.thread.is_alive():
             raise AssertionError("fixture broker did not stop")
@@ -1114,6 +1145,16 @@ def read_terminal(master, output, deadline, predicate, exit_process=None):
         errors = re.findall(r"Error: ([^\r\n]+)", output.decode(errors="replace"))
         detail = errors[-1] if errors else "no completed interaction before timeout"
         raise AssertionError(f"terminal interaction did not reach its expected state: {detail}")
+
+
+def require_live_wait(master, output):
+    for _ in range(2):
+        previous = len(output)
+        due = time.monotonic() + 0.3
+        read_terminal(
+            master, output, due + 2,
+            lambda data: time.monotonic() >= due and len(data) > previous,
+        )
 
 
 def terminal_child():
@@ -2278,6 +2319,22 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 else RUNNING
             )
+            if case == "slow-submit":
+                read_terminal(
+                    master, output, time.monotonic() + 15,
+                    lambda data: broker.request_waiting.is_set() and b"Submitting task" in data,
+                )
+                require_live_wait(master, output)
+                os.write(master, b"\x1b[27;1u")
+                read_terminal(
+                    master, output, time.monotonic() + 5,
+                    lambda data: b"submission is acknowledged" in data,
+                )
+                broker.request_release.set()
+                read_terminal(
+                    master, output, time.monotonic() + 5,
+                    lambda _: broker.cancelled.is_set(),
+                )
             if case == "slow-progress":
                 read_terminal(
                     master,
@@ -2404,7 +2461,7 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 os.write(master, b"\x1b")
                 time.sleep(0.3)
-            if case == "approval-choice":
+            if case in ("approval-choice", "slow-review"):
                 read_terminal(
                     master,
                     output,
@@ -2427,6 +2484,22 @@ def run(cos, case, transcript, original_namespace, trace):
                 ):
                     raise AssertionError("repeated approval shortcut was accepted")
                 os.write(master, b"\r")
+                if case == "slow-review":
+                    read_terminal(
+                        master, output, time.monotonic() + 5,
+                        lambda _: broker.request_waiting.is_set(),
+                    )
+                    require_live_wait(master, output)
+                    os.write(master, b"\r\x1b[27;1u")
+                    read_terminal(
+                        master, output, time.monotonic() + 3,
+                        lambda _: broker.cancelled.is_set(),
+                    )
+                    if sum(
+                        request["command"] == "permission.decide" for request in broker.requests
+                    ) != 1:
+                        raise AssertionError("pending permission mutation was replayed")
+                    broker.request_release.set()
                 read_terminal(
                     master,
                     output,
@@ -2442,6 +2515,28 @@ def run(cos, case, transcript, original_namespace, trace):
                 )
                 if b"Claw OS authorization" in output:
                     raise AssertionError("TUI approval opened the password prompt")
+            if case == "slow-panel":
+                send_prompt(master, output, "/tasks")
+                read_terminal(
+                    master, output, time.monotonic() + 5,
+                    lambda _: broker.request_waiting.is_set(),
+                )
+                require_live_wait(master, output)
+                os.write(master, b"\x1b[27;1u")
+                read_terminal(
+                    master, output, time.monotonic() + 3,
+                    lambda _: broker.cancelled.is_set(),
+                )
+                broker.request_release.set()
+            if case in ("slow-submit", "slow-review", "slow-panel"):
+                read_terminal(
+                    master, output, time.monotonic() + 5,
+                    lambda data: b"Task cancelled." in data,
+                )
+                if sum(
+                    request["command"] == "task.cancel" for request in broker.requests
+                ) != 1:
+                    raise AssertionError("stop was not sent exactly once")
             if case == "cancel":
                 os.write(master, b"\x1b")
                 read_terminal(
@@ -2520,6 +2615,9 @@ if __name__ == "__main__":
         choices=(
             "complete",
             "slow-progress",
+            "slow-submit",
+            "slow-review",
+            "slow-panel",
             "cancel",
             "commands",
             "confirmations",
