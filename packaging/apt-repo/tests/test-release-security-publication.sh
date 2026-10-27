@@ -374,6 +374,59 @@ grep -q "or newer" "$WORK/set.err" \
     || { cat "$WORK/set.err" >&2; fail "the compatibility refusal was not explained"; }
 ok "publication refuses a mutually incompatible package set"
 
+# Protocol generations must agree even when ordinary version dependencies pass.
+python3 - "$POLICY" "$WORK" <<'PY'
+import json
+import pathlib
+import sys
+
+policy = json.loads(pathlib.Path(sys.argv[1]).read_text())
+for epoch in (14, 16):
+    document = {**policy, "protocols": {**policy["protocols"], "agentd_worker": epoch}}
+    (pathlib.Path(sys.argv[2]) / f"protocol-{epoch}.json").write_text(json.dumps(document))
+PY
+PROTOCOL_PREVIOUS="$(previous_dir protocols pre-protection)"
+for older in claw-os-base claw-os-agent; do
+    REPO="$(fresh_repo "repo-protocol-$older")"
+    agent_policy="$WORK/protocol-16.json"
+    base_policy="$WORK/protocol-16.json"
+    if [ "$older" = claw-os-base ]; then
+        base_policy="$WORK/protocol-14.json"
+    else
+        agent_policy="$WORK/protocol-14.json"
+    fi
+    POLICY="$agent_policy" make_deb "$REPO" claw-os-agent "$V2" amd64 alpha
+    POLICY="$base_policy" make_deb "$REPO" claw-os-base "$V1" all alpha
+    if COS_RELEASE_SECURITY_BOOTSTRAP=1 \
+        "$VERIFY" "$REPO" "$SUITE" "$COMPONENT" "$KEYRING" "$PROTOCOL_PREVIOUS" \
+        >/dev/null 2>"$WORK/protocols.err"; then
+        fail "a protocol-v14 package was published beside a protocol-v16 package"
+    fi
+    grep -q 'agentd_worker protocol v14.*requires v16' "$WORK/protocols.err" \
+        || { cat "$WORK/protocols.err" >&2; fail "the exact protocol mismatch was not explained"; }
+    ok "publication refuses $older protocol v14 beside a protocol-v16 sibling"
+done
+
+REPO="$(fresh_repo repo-protocol-compatible)"
+POLICY="$WORK/protocol-16.json" make_deb "$REPO" claw-os-agent "$V2" amd64 alpha
+POLICY="$WORK/protocol-16.json" make_deb "$REPO" claw-os-base "$V1" all alpha
+COS_RELEASE_SECURITY_BOOTSTRAP=1 \
+    "$VERIFY" "$REPO" "$SUITE" "$COMPONENT" "$KEYRING" "$PROTOCOL_PREVIOUS" >/dev/null \
+    || fail "compatible protocols must not require equal package versions"
+ok "compatible Agent and Base versions remain independently publishable"
+
+REPO="$(fresh_repo repo-protocol-regression)"
+V3="1:0.2.0+git300.gcccccccccccc"
+POLICY="$WORK/protocol-14.json" make_deb "$REPO" claw-os-agent "$V3" amd64 alpha
+POLICY="$WORK/protocol-14.json" make_deb "$REPO" claw-os-base "$V3" all alpha
+if "$VERIFY" "$REPO" "$SUITE" "$COMPONENT" "$KEYRING" "$PREVIOUS" \
+    >/dev/null 2>"$WORK/protocol-regression.err"; then
+    fail "newer package versions lowered a previously published protocol floor"
+fi
+grep -q 'agentd_worker protocol v14.*repository requires' "$WORK/protocol-regression.err" \
+    || { cat "$WORK/protocol-regression.err" >&2; fail "the protocol-floor regression was not explained"; }
+ok "publication preserves protocol floors across newer package versions"
+
 # ---------------------------------------------------------------------------
 # 6. Migration ratchet: a pre-protection artifact is tolerated only while
 #    the repository has no baseline, and never once it has one.

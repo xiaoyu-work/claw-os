@@ -443,6 +443,7 @@ The **Release Claw OS** workflow (`release.yml`) has one target selector:
 | --- | --- |
 | `agent` | `claw-os-agent` for amd64 and arm64, with TUI and Ubuntu install/reinstall checks |
 | `base` | `claw-os-base` (`Architecture: all`) |
+| `core` | Agent and Base together, without Desktop or image builds; coordinated protocol updates and headless recovery |
 | `desktop` | `claw-os-desktop` for amd64 and arm64, using dedicated rootfs runners |
 | `images` | Shared-rootfs Docker/WSL images; consumes same-run signed Agent/Base packages without publishing them to APT |
 | `website` | Website and Pages composition; preserves every existing package |
@@ -470,6 +471,12 @@ whole pool: every Claw OS package must carry a canonical release manifest that
 describes exactly that package, version and architecture, signed by the key the
 repository publishes; the set must be mutually compatible; and nothing may
 regress the epoch, the version, or the bytes of a version already published.
+Protocol generations are compared against the maximum across the candidate
+pool and authenticated previous package manifests. A newer package version
+cannot lower that floor, and an Agent-only release cannot preserve a Base
+whose declared protocols are too old. Select `core` for a coordinated
+Agent/Base release, or `all` if Desktop also declares an older protocol.
+Compatible package versions remain independently publishable.
 
 Publication is anchored to a **signed baseline marker**. Once a repository has
 published `dists/<suite>/release-security/baseline.json` and advertised

@@ -242,6 +242,8 @@ def load(directory):
     if not directory or not os.path.isdir(directory):
         return found
     for path in sorted(pathlib.Path(directory).glob("*.json")):
+        if path.name == "baseline.json":
+            continue
         document = json.loads(path.read_text(encoding="utf-8"))
         found[path.stem] = document
     return found
@@ -285,6 +287,28 @@ for name, document in published.items():
             raise SystemExit(
                 f"error: {name} would replace the published "
                 f"{former['release']['version']} with different content"
+            )
+
+protocol_floor = {}
+for manifests in (previous, published):
+    for name, document in manifests.items():
+        protocols = document["protocols"]
+        if not isinstance(protocols, dict) or not protocols:
+            raise SystemExit(f"error: {name} has no protocol generations")
+        for protocol, epoch in protocols.items():
+            if type(epoch) is not int or not 0 < epoch <= 0xFFFFFFFF:
+                raise SystemExit(f"error: {name} has an invalid {protocol} generation")
+            protocol_floor[protocol] = max(protocol_floor.get(protocol, 0), epoch)
+
+for name, document in published.items():
+    for protocol, epoch in document["protocols"].items():
+        required = protocol_floor[protocol]
+        if epoch < required:
+            raise SystemExit(
+                f"error: {name} {document['release']['version']} speaks "
+                f"{protocol} protocol v{epoch}, but this repository requires "
+                f"v{required}; publish compatible packages together with "
+                f"release target core (Agent/Base) or all (including Desktop)"
             )
 
 versions = {

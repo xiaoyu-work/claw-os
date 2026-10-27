@@ -147,7 +147,7 @@ installed targets.
 ### `apt` repository
 
 The manually dispatched **Release Claw OS** workflow (`release.yml`) accepts
-`agent`, `base`, `desktop`, `images`, `website`, or `all`. Package targets remain
+`agent`, `base`, `core`, `desktop`, `images`, `website`, or `all`. Package targets remain
 independently publishable. Agent and Base use source assets and compiled
 binaries without a rootfs; Desktop retains its dedicated rootfs build.
 `all` first calls the shared test workflow with the same immutable App snapshot
@@ -159,6 +159,10 @@ package families. The website builds once and Pages deploys once per
 publication. `images` does not publish its input packages to APT; `website`
 preserves all published packages. Non-expiring indexes require no weekly CI.
 Release runs are serialized without cancellation.
+
+Use `core` for coordinated Agent/Base protocol updates without Desktop/image
+builds. Independent releases remain available when their declared protocols
+are compatible; the publisher refuses a mixed or regressing protocol set.
 
 Only four workflows remain: `test.yml` (PR/manual/reusable validation),
 `release.yml` (manual OS publication), `publish-sdk-release.yml`, and

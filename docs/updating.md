@@ -1177,6 +1177,13 @@ architecture, using the same run's signed Agent/Base packages without
 publishing those packages to APT. `website` updates the website while preserving
 the signed package pool. `all` runs shared tests and publishes every channel.
 
+Select `core` to publish Agent and Base together without building Desktop or
+images. This is required when a protocol change makes an older sibling
+manifest incompatible. Publication checks the new pool against both sibling
+protocol generations and authenticated previous manifests before signing the
+index; a partial release that would fail the installed floor is refused.
+Compatible package versions need not match.
+
 Every run freezes one OS package version and, when needed, one immutable App
 snapshot shared by its tests and package builds. Each release requires the repository Actions secret
 `CLAW_OS_APT_SIGNING_PRIVATE_KEY`. Set
@@ -1187,6 +1194,24 @@ deploys GitHub Pages once alongside one website build. Publications queue
 without cancellation so release runs cannot overwrite each other's state.
 Non-expiring APT indexes require no scheduled re-signing; key and package
 manifest validity remain independent.
+
+### Recovering a partially configured Agent/Base pair
+
+If Base configuration reports an older protocol than the system requires,
+the repository needs a compatible coordinated release. Do not remove the
+security floor, force a downgrade or repeatedly configure the same old Base.
+After a compatible `core` release is published, upgrade both packages in one
+APT transaction:
+
+```bash
+sudo apt update
+sudo apt install claw-os-agent claw-os-base
+sudo dpkg --configure -a
+```
+
+APT chooses the published compatible pair; the final command finishes any
+remaining interrupted configuration without bypassing verification.
+
 ## Nearby sharing updates
 
 Agent now provides `claw-os-nearby-v1`, the fixed non-root
