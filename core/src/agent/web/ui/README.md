@@ -30,6 +30,24 @@ the chosen validation reports missing dependencies. If `dist/` already has
 unrelated changes, do not overwrite it during validation; use the isolated
 build below and integrate regenerated distribution files deliberately.
 
+## Model setup and Copilot sign-in
+
+The Web server remains available before model setup. Chat checks the shared
+provider/credential readiness contract before submitting a Job and points to
+**Settings > Text** when setup is incomplete.
+
+Copilot sign-in distinguishes device authorization from loading the live model
+catalogue and applying a model. Polling honors the provider interval, slow-down
+responses and code expiry. Non-pending failures stop with their diagnostic;
+requests have a bounded timeout, and **Stop waiting** cancels future client
+work without revoking credentials already saved. Saved authorization can retry
+model setup without another device authorization. Empty catalogues are not
+silently replaced by a default model.
+
+Setup success and failure messages survive status refresh. Explicit verification
+checks the backend's `ok` result; a saved configuration or a skipped/live-free
+check is not presented as a successful model request.
+
 ## Layout
 
 - src/main.tsx          — React entry
