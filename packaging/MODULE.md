@@ -71,6 +71,13 @@ their binaries. Desktop keeps its separate native rootfs build but consumes
 that same App snapshot. The APT publisher merges all selected package families
 once, preserving the authenticated candidates for families not rebuilt.
 
+Independent publication must still preserve protocol compatibility. Before
+signing an index, the publisher rejects package protocol generations below
+either a sibling's generation or the previously published floor. Use the
+`core` release target to advance Agent/Base together, or `all` when Desktop
+also needs updating; never lower installed security-floor checks to repair a
+mixed repository.
+
 Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.

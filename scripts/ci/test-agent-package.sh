@@ -28,25 +28,32 @@ installed() {
     file_version="${COS_PACKAGE_VERSION//:/%3a}"
     agent_deb="build/debs/claw-os-agent_${file_version}_${ARCH}.deb"
     install_deb="$(mktemp /tmp/claw-os-agent.XXXXXX.deb)"
-    trap 'rm -f "$install_deb"' EXIT
+    install_debs=("$install_deb")
+    trap 'rm -f -- "${install_debs[@]}"' EXIT
     install -m 0644 "$agent_deb" "$install_deb"
+    if [ "${1:-}" = core ]; then
+        base_deb="build/debs/claw-os-base_${file_version}_all.deb"
+        base_install_deb="$(mktemp /tmp/claw-os-base.XXXXXX.deb)"
+        install_debs+=("$base_install_deb")
+        install -m 0644 "$base_deb" "$base_install_deb"
+    fi
     # Keep the real postinst scan away from transient build caches.
     sudo unshare --mount --propagation private \
         /bin/bash -euo pipefail -c '
-            package=$1
-            workspace=$2
-            cargo_home=$3
-            rustup_home=$4
+            workspace=$1
+            cargo_home=$2
+            rustup_home=$3
+            shift 3
             cd /tmp
             for path in "$workspace" "$cargo_home" "$rustup_home"; do
                 if [ -d "$path" ]; then
                     mount -t tmpfs -o nodev,nosuid,noexec,size=1m tmpfs "$path"
                 fi
             done
-            apt-get install -y --no-install-recommends "$package"
-            apt-get install -y --reinstall --no-install-recommends "$package"
-        ' bash "$install_deb" "$GITHUB_WORKSPACE" "$CARGO_HOME" \
-        "${RUSTUP_HOME:-$HOME/.rustup}"
+            apt-get install -y --no-install-recommends "$@"
+            apt-get install -y --reinstall --no-install-recommends "$@"
+        ' bash "$GITHUB_WORKSPACE" "$CARGO_HOME" \
+        "${RUSTUP_HOME:-$HOME/.rustup}" "${install_debs[@]}"
     for attempt in {1..30}; do
         if sudo systemctl is-active --quiet clawd.service \
             && sudo test -S /run/cos/clawd.sock; then
@@ -64,6 +71,7 @@ installed() {
     test -x /usr/bin/pkexec
     test -x /usr/bin/pkttyagent
     test -x /usr/local/bin/claw-approval-helper
+    sudo /usr/lib/cos/bin/claw-security-floor verify-installed
     original_mount="$(readlink /proc/self/ns/mnt)"
     original_pid="$(readlink /proc/self/ns/pid)"
     sudo unshare --mount --pid --fork --mount-proc --net \
@@ -96,5 +104,6 @@ installed() {
 case "${1:-}" in
     tui) tui ;;
     installed) installed ;;
-    *) echo "usage: $0 {tui|installed}" >&2; exit 2 ;;
+    installed-core) installed core ;;
+    *) echo "usage: $0 {tui|installed|installed-core}" >&2; exit 2 ;;
 esac

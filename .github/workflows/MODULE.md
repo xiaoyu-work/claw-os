@@ -53,7 +53,7 @@ dispatched and reusable test/publication pipelines.
 | Path | Role |
 | --- | --- |
 | `test.yml` | Pull-request, manual, and reusable test/clippy workflow |
-| `release.yml` | Manual `agent`, `base`, `desktop`, `images`, `website` or `all` release; shared package builds, one website/APT composition and Pages deployment |
+| `release.yml` | Manual `agent`, `base`, `core`, `desktop`, `images`, `website` or `all` release; shared package builds, one website/APT composition and Pages deployment |
 | `publish-sdk-release.yml` | GitHub SDK artifacts and synchronized language tags |
 | `publish-app-platform.yml` | Manually published versioned SDK/runtime/toolkit development artifact for independent App builds |
 | `../actionlint.yaml` | Dedicated runner labels and compatibility with GitHub's queued concurrency |
@@ -67,6 +67,14 @@ Agent/Base packages are built once and downloaded by the image matrix; image
 jobs never compile the shared Rust binaries. Docker and WSL consume the same
 stamped rootfs per architecture. Desktop retains its dedicated full-rootfs
 build and native source graph.
+
+`core` publishes Agent and Base together without building Desktop or images.
+Its Agent matrix installs and reinstalls that exact pair in one APT transaction
+and verifies the installed floor before uploading the Agent packages.
+Use it when their protocol generations must advance together. The publisher
+compares every package's declared protocols with the maximum in both the new
+pool and authenticated previous manifests; incompatible partial releases fail
+before Pages deployment. Compatible package versions may still differ.
 
 Release runs queue without cancelling one another. Selected packages are merged
 with the authenticated existing pool only once, alongside one independent web

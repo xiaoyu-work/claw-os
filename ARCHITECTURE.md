@@ -2349,7 +2349,7 @@ selected .deb artifacts + authenticated existing pool + web artifact
 
 `test.yml` runs on pull requests and remains manually dispatchable/reusable.
 The other three workflows are manually dispatched: `release.yml` selects
-`agent`, `base`, `desktop`, `images`, `website` or `all`; SDK and App development
+`agent`, `base`, `core`, `desktop`, `images`, `website` or `all`; SDK and App development
 platform releases retain independent versions and entry points. `all` runs the
 shared tests first. Component targets retain their existing build/install
 checks. Same-run artifacts bind the image packages and App snapshot rather
@@ -2357,6 +2357,12 @@ than treating Cargo caches or an older run as release output.
 Release runs queue without cancellation; selected packages merge and deploy
 to Pages once. APT indexes intentionally have no expiry or scheduled refresh;
 signature, package-manifest validity and downgrade checks remain enforced.
+
+The `core` target publishes Agent/Base together without a Desktop or image
+build. Before repository signing, protocol compatibility is checked against
+both the candidate pool and authenticated previous package manifests.
+Independent package versions are allowed; a partial release cannot publish a
+sibling below the shared protocol floor enforced on installed machines.
 
 ## Entry Points
 

@@ -8,6 +8,7 @@ agent=false base=false desktop=false images=false pages=false
 case "$target" in
     agent) agent=true; pages=true ;;
     base) base=true; pages=true ;;
+    core) agent=true; base=true; pages=true ;;
     desktop) desktop=true; pages=true ;;
     images) agent=true; base=true; images=true ;;
     website) pages=true ;;
