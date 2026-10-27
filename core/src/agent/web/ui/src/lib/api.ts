@@ -77,6 +77,21 @@ export class ApiError extends Error {
 
 export class ApiTransportError extends Error {}
 
+export function abortableDelay(delay: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason || new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, delay);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
 async function request<T = any>(
   path: string,
   opts: ApiOpts = {},

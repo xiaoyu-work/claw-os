@@ -57,6 +57,9 @@ web UI.
 - Reuse frozen session prompts and configured history compression through the
   shared runtime.
 - Serve built UI assets without exposing credentials.
+- Keep Copilot authorization and model configuration as separate visible
+  stages. Only pending/slow-down responses continue polling; failures remain
+  visible after refresh, and cancellation prevents late configuration writes.
 
 ## Key Files
 

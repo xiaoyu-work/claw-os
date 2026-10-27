@@ -9,7 +9,7 @@
  * OAuth flows for `text` use `oauth/start` + `oauth/poll`.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -18,7 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { abortableDelay, api } from "@/lib/api";
 import { isActive, navigate, useRoute } from "@/lib/router";
 import { readSetupStatus } from "@/lib/setup-status";
 import { cn } from "@/lib/utils";
@@ -136,6 +136,31 @@ type ProviderEntry = {
   extra_fields?: ProviderField[];
 };
 
+type OAuthState = {
+  user_code?: string;
+  verification_uri?: string;
+  status: "polling" | "configuring" | "done" | "error";
+  authorized?: boolean;
+};
+
+type OAuthStartResponse = {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+};
+
+type OAuthPollResponse = {
+  status: "pending" | "slow_down" | "ok" | "expired" | "denied";
+  interval?: number;
+};
+
+function setupRequestSignal(signal?: AbortSignal, timeout = 90_000): AbortSignal {
+  const deadline = AbortSignal.timeout(timeout);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
 function providerId(p: ProviderEntry): string {
   return String(p.id || p.key || p.name || p.label || "");
 }
@@ -165,23 +190,21 @@ function ModalityPanel({ modality }: { modality: string }) {
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   // OAuth device-flow display state: shown after user clicks "Sign in"
   // and we have the user_code + verification_uri to display.
-  const [oauth, setOauth] = useState<{
-    user_code?: string;
-    verification_uri?: string;
-    status: "polling" | "done" | "error";
-  } | null>(null);
+  const [oauth, setOauth] = useState<OAuthState | null>(null);
+  const oauthRun = useRef<{ controller: AbortController; authorized: boolean } | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (preserveSelection = false, signal?: AbortSignal) => {
     setLoading(true);
-    setMsg(null);
     try {
       const [st, pv] = await Promise.all([
-        api.get(`/api/setup/status/${modality}`),
-        api.get(`/api/setup/providers/${modality}`),
+        api.get(`/api/setup/status/${modality}`, { signal: setupRequestSignal(signal) }),
+        api.get(`/api/setup/providers/${modality}`, { signal: setupRequestSignal(signal) }),
       ]);
+      if (signal?.aborted) return;
       setStatus(st);
       const list = extractProviders(pv);
       setProviders(list);
+      if (preserveSelection) return;
       const stObj = (st as any) || {};
       const curProvider = stObj.provider || stObj.current || providerId(list[0] || {});
       const curModel = stObj.model || stObj.current_model;
@@ -193,9 +216,10 @@ function ModalityPanel({ modality }: { modality: string }) {
       }
       setExtras(nextExtras);
     } catch (e: any) {
+      if (signal?.aborted) return;
       setMsg({ kind: "err", text: e?.message || "Load failed" });
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [modality]);
 
@@ -203,10 +227,19 @@ function ModalityPanel({ modality }: { modality: string }) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    setBusy(null);
+    return () => {
+      oauthRun.current?.controller.abort();
+      oauthRun.current = null;
+    };
+  }, [provider, modality]);
+
   // Load model list whenever provider changes. The /api/setup/models
   // endpoint only supports `copilot`; for everything else we fall back
   // to the `models` list returned by /api/setup/providers/{modality}.
   useEffect(() => {
+    if (busy != null) return;
     if (!provider) return;
     const entry = providers.find((p) => providerId(p) === provider);
     if (entry?.models && entry.models.length > 0) {
@@ -221,19 +254,30 @@ function ModalityPanel({ modality }: { modality: string }) {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     api
-      .get(`/api/setup/models/${modality}/${provider}`)
+      .get(`/api/setup/models/${modality}/${provider}`, {
+        signal: setupRequestSignal(controller.signal),
+      })
       .then((r) => {
         if (cancelled) return;
         setModels(extractModelIds(r));
       })
-      .catch(() => {
-        if (!cancelled) setModels([]);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setModels([]);
+        if (isOauthOnly(entry)) {
+          setMsg({
+            kind: "err",
+            text: `Copilot model discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          });
+        }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [modality, provider, providers, status]);
+  }, [modality, provider, providers, status, busy]);
 
   const providerEntry = useMemo(
     () => providers.find((p) => providerId(p) === provider),
@@ -243,6 +287,7 @@ function ModalityPanel({ modality }: { modality: string }) {
   async function apply(verify: boolean) {
     setBusy("apply");
     setMsg(null);
+    let saved = false;
     try {
       const body: any = { modality, provider, verify };
       if (model) body.model = model;
@@ -253,11 +298,17 @@ function ModalityPanel({ modality }: { modality: string }) {
       if (extras.base_url) body.base_url = extras.base_url;
       if (extras.api_version) body.api_version = extras.api_version;
       await api.post("/api/setup/apply", body);
-      setMsg({ kind: "ok", text: verify ? "Applied and verified." : "Applied." });
+      saved = true;
       setApiKey("");
+      const verified = verify ? await verifyProvider() : "";
+      setMsg({ kind: "ok", text: verify ? `Settings saved. ${verified}` : "Applied." });
       await load();
     } catch (e: any) {
-      setMsg({ kind: "err", text: e?.message || "Apply failed" });
+      setMsg({
+        kind: "err",
+        text: saved ? `Settings saved, but verification failed: ${e?.message || "unknown error"}`
+          : e?.message || "Apply failed",
+      });
     } finally {
       setBusy(null);
     }
@@ -287,8 +338,7 @@ function ModalityPanel({ modality }: { modality: string }) {
     setBusy("test");
     setMsg(null);
     try {
-      const r = await api.post(`/api/setup/test/${modality}`);
-      setMsg({ kind: "ok", text: (r as any)?.message || "Verified." });
+      setMsg({ kind: "ok", text: await verifyProvider() });
     } catch (e: any) {
       setMsg({ kind: "err", text: e?.message || "Verify failed" });
     } finally {
@@ -296,54 +346,114 @@ function ModalityPanel({ modality }: { modality: string }) {
     }
   }
 
+  async function verifyProvider(): Promise<string> {
+    const result = await api.post<{
+      ok: boolean;
+      attempted?: boolean;
+      message?: string;
+      kind?: string;
+      reason?: unknown;
+      probe?: { error_message?: string };
+    }>(`/api/setup/test/${modality}`, undefined, { signal: setupRequestSignal() });
+    if (result.ok !== true) {
+      throw new Error(result.probe?.error_message ||
+        readSetupStatus({ reason: result.reason }).reason || "Provider verification failed.");
+    }
+    return result.message || result.kind ||
+      (result.attempted === false ? "Configured; no live model request was made." : "Verified.");
+  }
+
   async function oauthStart() {
+    if (oauthRun.current) return;
+    const run = {
+      controller: new AbortController(),
+      authorized: oauth?.status === "error" && oauth.authorized === true,
+    };
+    oauthRun.current = run;
+    const signal = run.controller.signal;
     setBusy("oauth");
     setMsg(null);
-    setOauth(null);
     try {
-      const r: any = await api.post("/api/setup/oauth/start", { provider, modality });
-      const userCode = r?.user_code || r?.verification_code;
-      const url = r?.verification_uri || r?.verification_url;
-      const devCode = r?.device_code;
-      if (!devCode) throw new Error("No device_code returned by server");
-      setOauth({ user_code: userCode, verification_uri: url, status: "polling" });
-      const deadline = Date.now() + 10 * 60_000;
-      const interval = Number(r?.interval) || 5;
+      if (run.authorized) {
+        await finalizeOauth(signal);
+        return;
+      }
+      setOauth(null);
+      const start = await api.post<OAuthStartResponse>(
+        "/api/setup/oauth/start", { provider, modality },
+        { signal: setupRequestSignal(signal) },
+      );
+      signal.throwIfAborted();
+      if (!start.device_code || !start.user_code || !start.verification_uri) {
+        throw new Error("GitHub sign-in returned an incomplete device code.");
+      }
+      if (!Number.isSafeInteger(start.expires_in) || start.expires_in <= 0 ||
+          !Number.isSafeInteger(start.interval) || start.interval <= 0) {
+        throw new Error("GitHub sign-in returned invalid polling times.");
+      }
+      setOauth({
+        user_code: start.user_code, verification_uri: start.verification_uri, status: "polling",
+      });
+      const deadline = Date.now() + start.expires_in * 1000;
+      let interval = Math.max(start.interval, 5);
       while (Date.now() < deadline) {
-        await new Promise((res) => setTimeout(res, interval * 1000));
-        try {
-          const p: any = await api.post("/api/setup/oauth/poll", {
-            provider,
-            modality,
-            device_code: devCode,
-          });
-          // `status === "ok"` is the canonical success. Other statuses
-          // ("pending" | "slow_down" | "expired" | "denied") loop back
-          // or fall through to the timeout branch.
-          if (p?.status === "ok") {
-            await finalizeOauth();
+        await abortableDelay(Math.min(interval * 1000, deadline - Date.now()), signal);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const poll = await api.post<OAuthPollResponse>("/api/setup/oauth/poll", {
+          provider, modality, device_code: start.device_code,
+        }, { signal: setupRequestSignal(signal, Math.min(90_000, remaining)) });
+        signal.throwIfAborted();
+        switch (poll.status) {
+          case "pending":
+            continue;
+          case "slow_down":
+            if (poll.interval !== undefined &&
+                (!Number.isSafeInteger(poll.interval) || poll.interval <= 0)) {
+              throw new Error("GitHub sign-in returned an invalid polling interval.");
+            }
+            interval = Math.max(interval + 5, poll.interval ?? 0);
+            continue;
+          case "ok":
+            run.authorized = true;
+            await finalizeOauth(signal);
             return;
-          }
-          if (p?.status === "expired" || p?.status === "denied") {
-            setOauth({ status: "error" });
-            setMsg({
-              kind: "err",
-              text: p.status === "denied" ? "Sign-in denied." : "Code expired. Try again.",
-            });
-            return;
-          }
-        } catch {
-          // server reports authorization_pending as a 4xx — keep polling
+          case "expired":
+            throw new Error("GitHub sign-in code expired. Start sign-in again.");
+          case "denied":
+            throw new Error("GitHub sign-in was denied.");
+          default:
+            throw new Error("GitHub sign-in returned an unexpected status.");
         }
       }
-      setOauth({ status: "error" });
-      setMsg({ kind: "err", text: "OAuth timed out" });
-    } catch (e: any) {
-      setOauth({ status: "error" });
-      setMsg({ kind: "err", text: e?.message || "OAuth failed" });
+      throw new Error("GitHub sign-in code expired. Start sign-in again.");
+    } catch (error: unknown) {
+      if (signal.aborted) return;
+      setOauth({ status: "error", authorized: run.authorized });
+      const details = error instanceof Error ? error.message : "Sign-in failed.";
+      setMsg({
+        kind: "err",
+        text: run.authorized
+          ? `GitHub sign-in succeeded, but Copilot setup did not finish: ${details}`
+          : `GitHub sign-in failed: ${details}`,
+      });
+      if (run.authorized) await load(true, signal);
     } finally {
-      setBusy(null);
+      if (oauthRun.current === run) {
+        oauthRun.current = null;
+        setBusy(null);
+      }
     }
+  }
+
+  function cancelOauth() {
+    const authorized = oauthRun.current?.authorized === true;
+    oauthRun.current?.controller.abort();
+    oauthRun.current = null;
+    setBusy(null);
+    setLoading(false);
+    setOauth(authorized ? { status: "error", authorized: true } : null);
+    setMsg({ kind: "ok", text: "Stopped waiting. Any credentials already saved are kept." });
   }
 
   // After OAuth success, the GitHub token has been stored as a credential
@@ -353,52 +463,38 @@ function ModalityPanel({ modality }: { modality: string }) {
   // web port mirrors that — auto-pick the first model and apply so the
   // user lands on a fully-configured "ready" state instead of "signed in
   // but not configured".
-  async function finalizeOauth() {
+  async function finalizeOauth(signal: AbortSignal) {
     setBusy("oauth-finalize");
-    setOauth({ status: "done" });
+    setOauth({ status: "configuring", authorized: true });
     setMsg({ kind: "ok", text: "Signed in. Configuring Copilot…" });
-    try {
-      // Fetch the live model list now that we have a token.
-      const m: any = await api.get(`/api/setup/models/${modality}/${provider}`);
-      const ids = extractModelIds(m);
-      setModels(ids);
-      // Prefer the provider's declared default if it's in the live list,
-      // else the first live entry.
-      const def = providerEntry?.default_model || "";
-      const pick = (def && ids.includes(def) ? def : ids[0]) || def;
-      if (!pick) {
-        setMsg({
-          kind: "err",
-          text: "Signed in, but Copilot returned no models. Pick one manually and click Apply.",
-        });
-        await load();
-        return;
-      }
-      setModel(pick);
-      // Auto-apply. Copilot's `apply` resolves the credential by provider
-      // name (COPILOT_GITHUB_TOKEN_CREDENTIAL) so we don't pass api_key.
-      await api.post("/api/setup/apply", {
-        modality,
-        provider,
-        model: pick,
-        verify: true,
-      });
-      setMsg({ kind: "ok", text: `Copilot configured with ${pick}.` });
-      await load();
-    } catch (e: any) {
-      setMsg({
-        kind: "err",
-        text: `Signed in, but auto-configure failed: ${e?.message || e}. Pick a model and click Apply.`,
-      });
-      // Even on failure, refresh status so the UI reflects the stored token.
-      await load();
-    } finally {
-      setBusy(null);
+    const modelsResponse: unknown = await api.get(`/api/setup/models/${modality}/${provider}`, {
+      signal: setupRequestSignal(signal),
+    });
+    signal.throwIfAborted();
+    const ids = extractModelIds(modelsResponse);
+    setModels(ids);
+    const preferred = providerEntry?.default_model || "";
+    const pick = preferred && ids.includes(preferred) ? preferred : ids[0];
+    if (!pick) {
+      throw new Error("Copilot returned no selectable chat models. Check Copilot access or enter a model manually and click Apply.");
     }
+    setModel(pick);
+    await api.post("/api/setup/apply", {
+      modality,
+      provider,
+      model: pick,
+      verify: true,
+    }, { signal: setupRequestSignal(signal) });
+    signal.throwIfAborted();
+    setOauth({ status: "done", authorized: true });
+    setMsg({ kind: "ok", text: `Copilot configured with ${pick}.` });
+    await load(false, signal);
   }
 
   const { configured, ready, reason } = readSetupStatus(status);
   const oauthOnly = isOauthOnly(providerEntry);
+  const oauthAuthenticated = oauth?.authorized === true ||
+    (status?.provider === provider && ready);
   // Provider-declared extra fields (e.g. Azure base_url + api_version).
   // We render these regardless of OAuth mode — Azure for example needs
   // its endpoint URL even though API key auth is the only path today.
@@ -432,7 +528,7 @@ function ModalityPanel({ modality }: { modality: string }) {
         </div>
       </div>
 
-      {loading ? (
+      {loading && !status ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading…
@@ -443,6 +539,7 @@ function ModalityPanel({ modality }: { modality: string }) {
             <Label>Provider</Label>
             <Select
               value={provider}
+              disabled={busy != null}
               onValueChange={(v) => {
                 setProvider(v);
                 setOauth(null);
@@ -469,10 +566,11 @@ function ModalityPanel({ modality }: { modality: string }) {
           {oauthOnly ? (
             <CopilotAuthBlock
               providerLabel={providerEntry ? providerLabel(providerEntry) : provider}
-              busy={busy === "oauth"}
+              busy={busy === "oauth" || busy === "oauth-finalize" ? busy : null}
               oauth={oauth}
-              ready={ready}
+              ready={status?.provider === provider && ready}
               onStart={oauthStart}
+              onCancel={cancelOauth}
             />
           ) : (
             <>
@@ -518,10 +616,22 @@ function ModalityPanel({ modality }: { modality: string }) {
             </div>
           ) : null}
 
+          {msg && (
+            <p
+              role={msg.kind === "err" ? "alert" : "status"}
+              className={cn(
+                "text-sm",
+                msg.kind === "ok" ? "text-emerald-500" : "text-destructive",
+              )}
+            >
+              {msg.text}
+            </p>
+          )}
+
           <div className="grid gap-1.5">
             <Label>Model</Label>
             {models.length > 0 ? (
-              <Select value={model} onValueChange={setModel}>
+              <Select value={model} onValueChange={setModel} disabled={busy != null}>
                 <SelectTrigger>
                   <SelectValue placeholder="Choose model…" />
                 </SelectTrigger>
@@ -536,30 +646,20 @@ function ModalityPanel({ modality }: { modality: string }) {
             ) : (
               <Input
                 placeholder={
-                  oauthOnly && !ready
+                  oauthOnly && !oauthAuthenticated
                     ? "Sign in first to fetch the model list"
                     : "model id"
                 }
                 value={model}
+                disabled={busy != null}
                 onChange={(e) => setModel(e.target.value)}
               />
             )}
           </div>
 
-          {msg && (
-            <p
-              className={cn(
-                "text-sm",
-                msg.kind === "ok" ? "text-emerald-500" : "text-destructive",
-              )}
-            >
-              {msg.text}
-            </p>
-          )}
-
           <div className="flex flex-wrap gap-2">
             <Button
-              disabled={busy != null || !provider || (oauthOnly && !ready)}
+              disabled={busy != null || !provider || (oauthOnly && !oauthAuthenticated)}
               onClick={() => apply(true)}
             >
               {busy === "apply" ? (
@@ -569,7 +669,7 @@ function ModalityPanel({ modality }: { modality: string }) {
             </Button>
             <Button
               variant="outline"
-              disabled={busy != null || !provider || (oauthOnly && !ready)}
+              disabled={busy != null || !provider || (oauthOnly && !oauthAuthenticated)}
               onClick={() => apply(false)}
             >
               Apply
@@ -600,12 +700,14 @@ function CopilotAuthBlock({
   oauth,
   ready,
   onStart,
+  onCancel,
 }: {
   providerLabel: string;
-  busy: boolean;
-  oauth: { user_code?: string; verification_uri?: string; status: string } | null;
+  busy: "oauth" | "oauth-finalize" | null;
+  oauth: OAuthState | null;
   ready: boolean;
   onStart: () => void;
+  onCancel: () => void;
 }) {
   return (
     <div className="grid gap-3 rounded-md border border-dashed border-border bg-muted/30 p-4">
@@ -613,7 +715,7 @@ function CopilotAuthBlock({
         <p className="text-sm font-medium">{providerLabel} sign-in</p>
         <p className="text-xs text-muted-foreground">
           {providerLabel} uses GitHub device-flow authorization — no API key.
-          {ready ? " Already signed in." : ""}
+          {ready || oauth?.authorized ? " A GitHub sign-in is saved." : ""}
         </p>
       </div>
       {oauth?.user_code && oauth.status === "polling" && (
@@ -639,10 +741,16 @@ function CopilotAuthBlock({
           </p>
         </div>
       )}
-      <Button onClick={onStart} disabled={busy} className="w-fit">
-        {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-        {ready ? "Sign in again" : `Sign in with GitHub`}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={onStart} disabled={busy != null} className="w-fit">
+          {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+          {busy === "oauth-finalize" ? "Completing Copilot setup…"
+            : busy === "oauth" ? (oauth?.status === "polling" ? "Waiting for GitHub approval…" : "Starting GitHub sign-in…")
+            : oauth?.status === "error" && oauth.authorized ? "Retry Copilot setup"
+            : ready ? "Sign in again" : "Sign in with GitHub"}
+        </Button>
+        {busy && <Button variant="outline" onClick={onCancel}>Stop waiting</Button>}
+      </div>
     </div>
   );
 }

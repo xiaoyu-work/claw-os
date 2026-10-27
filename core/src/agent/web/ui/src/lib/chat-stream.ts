@@ -1,4 +1,4 @@
-import { api, ApiError, ApiTransportError, streamSse } from "./api";
+import { abortableDelay, api, ApiError, ApiTransportError, streamSse } from "./api";
 import type { RetainedTask } from "./chat-history";
 
 export type TaskIdentity = { taskId: string; sessionId: string };
@@ -56,21 +56,6 @@ function transportFailure(error: unknown): boolean {
     (error instanceof ApiError && [408, 429, 502, 503, 504].includes(error.status));
 }
 
-function wait(delay: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason || new DOMException("Aborted", "AbortError"));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      resolve();
-    }, delay);
-    signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
-  });
-}
-
 export async function streamDurableTask(options: StreamOptions): Promise<void> {
   let task = options.task || null;
   let taskId = task?.taskId || "";
@@ -120,7 +105,7 @@ export async function streamDurableTask(options: StreamOptions): Promise<void> {
       }
       attempts += 1;
       options.onRecovering(`Connection lost. Reconnecting to the same task (${attempts}/5)...`);
-      await wait(Math.min(500 * 2 ** (attempts - 1), 8_000), options.signal);
+      await abortableDelay(Math.min(500 * 2 ** (attempts - 1), 8_000), options.signal);
       recovering = true;
     }
   }
