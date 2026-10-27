@@ -1641,6 +1641,9 @@ learned data only; original interaction/execution evidence and derived-index
 inspection remain read-only. Corrections are owner notes, never forged App
 reports or system policy. Worker access to these human routes is refused;
 model-directed guarded retrieval and bounded pinned context are unchanged.
+Legacy and canonical history reads share an owner-identity, read-only broker
+opener. Viewing history never creates or migrates SQLite databases or changes
+existing ownership; invalid owner files remain explicit diagnostics.
 Successful built-in reads emit bounded source/revision references without
 queries or contents. Presentation labels them retrieval, not evidence of
 current truth or correct use by the answer. Worker protocol v17 preserves

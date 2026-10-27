@@ -147,6 +147,12 @@ extensions() {
         COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1 \
         "$root/cos_lib_tests" extension_host::child_isolation::tests \
         --test-threads=1
+    sudo env \
+        HOME=/root \
+        SUDO_UID="$(id -u)" \
+        "$root/cos_lib_tests" \
+        clawd::memory::tests::root_legacy_reads_never_create_or_transfer_owner_state \
+        --exact --ignored --test-threads=1
 }
 
 display() {
