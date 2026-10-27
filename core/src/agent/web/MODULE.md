@@ -14,6 +14,9 @@ web UI.
   OS review DTO, preserving displayed revisions and controller-supported
   choices; App confirmation remains in the OS review presenter.
 - Map HTTP routes to agent/session/setup operations.
+- Keep setup pages available without a configured model, but reject a new
+  Chat submission with an actionable Settings/Text diagnostic before creating
+  a Job when the shared provider/credential readiness check fails.
 - Present owner-scoped conversation inventory, metadata, history and
   presentation mutations through `agent.conversation.*`; Web never opens or
   mutates Agent memory as a separate authority.

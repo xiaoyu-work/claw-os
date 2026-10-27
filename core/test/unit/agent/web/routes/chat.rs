@@ -1,6 +1,32 @@
 use super::*;
 use crate::agent::llm::{ChatResponse, FinishReason, ToolCall, Usage};
 
+#[test]
+fn chat_setup_errors_explain_missing_configuration_before_submission() {
+    let mut config = crate::config::AgentConfig::default();
+    config.provider.clear();
+    config.model = "selected-model".into();
+    let error = require_chat_setup(&config).expect_err("missing provider");
+    assert!(error.contains("not ready"));
+    assert!(error.contains("Settings > Text"));
+    assert!(error.contains("cos agent setup text"));
+    assert!(!error.contains("authentication failed"));
+
+    config.provider = "ollama".into();
+    config.model.clear();
+    let error = require_chat_setup(&config).expect_err("missing model");
+    assert!(error.contains("No text model is selected"));
+
+    config.model = "local-model".into();
+    require_chat_setup(&config).expect("a local provider needs no API credential");
+
+    config.model.clear();
+    config.provider_fallbacks =
+        serde_json::from_value(json!([{ "provider": "ollama", "model": "fallback-model" }]))
+            .unwrap();
+    require_chat_setup(&config).expect("an explicitly configured fallback model remains usable");
+}
+
 #[tokio::test]
 async fn chat_drive_installs_one_complete_config_snapshot() {
     let mut config = crate::config::CosConfig::default();
