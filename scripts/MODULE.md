@@ -22,7 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
-| `ci/test-boundaries.sh` | App bind, Calendar, extension, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
+| `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
 | `ci/prepare-release.sh` | Select release jobs, including coordinated Agent/Base-only `core`; freeze the package version and one immutable App-main snapshot |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload, same-run App snapshot and signed release manifest before upload or image composition |

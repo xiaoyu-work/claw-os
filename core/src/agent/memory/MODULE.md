@@ -80,6 +80,11 @@ Conversation evidence and derived-index inspection are read-only. Corrections
 to reported/derived data are separate owner notes, not forged App provenance.
 UI mutations refuse active Agent tasks. Model workers still use guarded memory
 tools; the human management routes confer no model authority.
+Legacy `memory.history/sessions` reads share the broker's owner-identity,
+read-only opener with canonical conversations. A missing database is an empty
+initial state; unreadable, wrong-owner or invalid existing files remain
+explicit errors. Reads never create a database, run migrations, transfer
+ownership or discard conversation data.
 Injected packet data is recorded without the ordinary message-preview
 truncation and is excluded from conversation replay and curation.
 

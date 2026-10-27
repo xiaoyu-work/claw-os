@@ -1165,6 +1165,18 @@ provenance is unaffected — user-installed Apps, Skills and MCP packages keep
 their own signature and revocation checks, and a `cos provenance rollback` still
 re-verifies the artifact it activates.
 
+## Agent Web setup and history
+
+Web Chat now reports incomplete model/provider credentials before creating a
+task. Copilot setup distinguishes saved GitHub authorization from selecting and
+applying a usable model; failed authorization or model discovery no longer
+loops silently or loses its diagnostic during refresh.
+
+History readers use the authenticated owner's filesystem identity and open
+SQLite read-only. Missing initial databases are not created by viewing history.
+Existing databases are not migrated, chowned, reset or deleted by this change;
+invalid ownership is reported explicitly instead of bypassing owner isolation.
+
 ## Maintainer publication step
 
 Pushing a commit does not immediately make it available to existing
