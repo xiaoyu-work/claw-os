@@ -194,6 +194,27 @@ struct TurnConflict {
     session_id: String,
 }
 
+fn require_chat_setup(config: &crate::config::AgentConfig) -> Result<(), String> {
+    let hint = "Open Settings > Text to configure a model and its credentials, or sign in with GitHub Copilot. You can also run `cos agent setup text`.";
+    if config.model.trim().is_empty()
+        && config
+            .provider_fallbacks
+            .iter()
+            .all(|fallback| fallback.apply_to(config).model.trim().is_empty())
+    {
+        return Err(format!("No text model is selected. {hint}"));
+    }
+    crate::agent::setup::is_ready(config).map_err(|error| {
+        let reason = serde_json::from_str::<Value>(&error).ok();
+        let details = reason
+            .as_ref()
+            .and_then(|value| value.get("details"))
+            .and_then(Value::as_str)
+            .unwrap_or(&error);
+        format!("Text model is not ready: {details} {hint}")
+    })
+}
+
 async fn drive_chat(
     state: AppState,
     prompt: String,
@@ -251,6 +272,8 @@ async fn drive_chat_scoped(
                 .to_string(),
         );
     }
+    let config = crate::config::current_snapshot();
+    tokio::task::block_in_place(|| require_chat_setup(&config.agent))?;
     let mut params = json!({ "prompt": prompt, "use_memory": use_memory });
     if !attachments.is_empty() {
         params["attachments"] =
@@ -516,9 +539,15 @@ fn project_progress(progress: &Value) -> Vec<String> {
     match progress.get("kind").and_then(Value::as_str) {
         Some("memory_sources") => {
             let sources = progress.get("sources").cloned().unwrap_or(Value::Null);
-            match serde_json::from_value::<Vec<crate::agent::memory::access::MemoryAccess>>(sources) {
-                Ok(sources) if sources.len() <= 16 => vec![sse::encode_event("memory_sources", &json!({"id":id,"name":name,"sources":sources}))],
-                _ => vec![warning_frame("Memory source references are unavailable for this read.")],
+            match serde_json::from_value::<Vec<crate::agent::memory::access::MemoryAccess>>(sources)
+            {
+                Ok(sources) if sources.len() <= 16 => vec![sse::encode_event(
+                    "memory_sources",
+                    &json!({"id":id,"name":name,"sources":sources}),
+                )],
+                _ => vec![warning_frame(
+                    "Memory source references are unavailable for this read.",
+                )],
             }
         }
         Some("tool_start") => vec![sse::encode_event(
