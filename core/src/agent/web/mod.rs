@@ -89,7 +89,6 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     let mut log_override: Option<PathBuf> = None;
     let mut tls_cert: Option<PathBuf> = None;
     let mut tls_key: Option<PathBuf> = None;
-    let mut rotate_token = false;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -153,10 +152,6 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                 tls_key = Some(PathBuf::from(value));
                 i += 2;
             }
-            "--rotate-token" => {
-                rotate_token = true;
-                i += 1;
-            }
             "--stop" => {
                 stop_daemon_flag = true;
                 i += 1;
@@ -169,7 +164,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                 return Ok(json!({
                     "command": "cos agent serve",
                     "summary": "Run the built-in web UI for chat / tasks / approvals / sysinfo.",
-                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--rotate-token] [--open] [--detach|--stop|--status] [--log <path>]",
+                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--open] [--detach|--stop|--status] [--log <path>]",
                     "flags": {
                         "--bind": "Network interface to bind. Default 127.0.0.1 (localhost only).",
                         "--port": "TCP port. Default 7878.",
@@ -181,7 +176,6 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                         "--log": "Path for the detached daemon's log file. Default $COS_DATA_DIR/agent/web/serve.log.",
                         "--tls-cert": "PEM certificate chain. Required with --tls-key.",
                         "--tls-key": "Owner-only PEM private key. Required with --tls-cert.",
-                        "--rotate-token": "Rotate bootstrap and signing secrets, immediately invalidating every issued access token.",
                     },
                     "url": format!("{}://{}/", if tls_cert.is_some() { "https" } else { "http" }, display_address(&bind, port)),
                 }));
@@ -195,18 +189,6 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     }
     if status_daemon_flag {
         return report_status();
-    }
-    if rotate_token {
-        let owner_uid = state::current_owner_uid()?;
-        state::validate_owner_storage(owner_uid)?;
-        let bootstrap = auth::rotate_tokens()?;
-        return Ok(json!({
-            "rotated": true,
-            "bootstrap_token": bootstrap,
-            "bootstrap_path": auth::token_path().display().to_string(),
-            "signing_key_path": auth::signing_key_path().display().to_string(),
-            "note": "all previously issued access tokens are now invalid",
-        }));
     }
     let owner_uid = state::current_owner_uid()?;
     let addr: std::net::SocketAddr = format!("{bind}:{port}")

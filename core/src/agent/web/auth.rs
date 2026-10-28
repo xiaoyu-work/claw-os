@@ -64,18 +64,6 @@ fn load_bootstrap_token() -> Result<String, String> {
     }
 }
 
-pub fn rotate_tokens() -> Result<String, String> {
-    let bootstrap = generate_secret("web bootstrap token")?;
-    let signing_key = generate_secret("web signing key")?;
-    persist_secret(&signing_key_path(), &signing_key)?;
-    if let Err(error) = persist_secret(&token_path(), &bootstrap) {
-        return Err(format!(
-            "signing key rotated and existing access tokens are invalid, but bootstrap rotation failed: {error}"
-        ));
-    }
-    Ok(bootstrap)
-}
-
 pub fn ensure_signing_key() -> Result<(), String> {
     let path = signing_key_path();
     let secret = match load_hex_secret(&path)? {
