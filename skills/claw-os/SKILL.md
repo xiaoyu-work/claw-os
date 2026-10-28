@@ -121,8 +121,6 @@ can instead terminate HTTPS while `cos agent serve` remains bound to
 
 `serve.token` is only a bootstrap secret. The browser exchanges it at
 `POST /api/auth/token` for a uid-bound HMAC-SHA256 access token valid for at
-most one hour; normal APIs reject the persistent bootstrap secret. Run
-`cos agent serve --rotate-token` to rotate both bootstrap and signing secrets,
-immediately invalidating every issued access token.
+most one hour; normal APIs reject the persistent bootstrap secret.
 
 For detailed usage of any feature, read the corresponding doc linked above.
