@@ -70,6 +70,7 @@ persistence, and structured primitive dispatch.
 | `src/audit.rs` | Hash-chained audit persistence |
 | `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |
 | `src/session/` | Session storage and lifecycle |
+| `src/storage.rs` | Daemon state hardening and bounded ownership repair of legacy root-created owner memory files |
 
 ## Dependencies
 

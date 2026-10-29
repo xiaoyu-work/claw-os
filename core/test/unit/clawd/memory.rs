@@ -70,8 +70,10 @@ fn root_legacy_reads_never_create_or_transfer_owner_state() {
     let root = tempfile::tempdir().unwrap();
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o711)).unwrap();
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("state"));
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", root.path().join("logs"));
     let (gid, _) = crate::clawd::client_identity::owner_groups(uid).unwrap();
     crate::storage::ensure_owner_agent_state_dir(uid, gid).unwrap();
+    crate::storage::harden_clawd_state().unwrap();
     let path = crate::paths::clawd_user_memory_db_path(uid);
     assert_eq!(sessions(json!({}), &client(uid)).unwrap()["n"], 0);
     assert!(!path.exists());
@@ -96,17 +98,75 @@ fn root_legacy_reads_never_create_or_transfer_owner_state() {
     assert_eq!(std::fs::metadata(&path).unwrap().uid(), 0);
     assert_eq!(std::fs::read(&path).unwrap(), original);
 
+    let legacy_writer = MemoryDb::open(&path).unwrap();
+    legacy_writer
+        .record_message("legacy", "assistant", "preserved WAL history")
+        .unwrap();
+    let agent_dir = path.parent().unwrap();
+    let files = [
+        "memory.db",
+        "memory.db-wal",
+        "memory.db-shm",
+        "memory.db.lifecycle.lock",
+    ]
+    .map(|name| agent_dir.join(name));
+    let before = files
+        .iter()
+        .map(|file| {
+            std::os::unix::fs::chown(file, Some(0), Some(0)).unwrap();
+            (file.clone(), std::fs::read(file).unwrap())
+        })
+        .collect::<Vec<_>>();
+    assert!(std::fs::metadata(&files[1]).unwrap().len() > 32);
+    crate::storage::harden_clawd_state().unwrap();
+    for (file, contents) in &before {
+        let metadata = std::fs::metadata(file).unwrap();
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.gid(), gid);
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        assert_eq!(&std::fs::read(file).unwrap(), contents);
+    }
+    let response = history(json!({ "session_id": "legacy" }), &client(uid)).unwrap();
+    assert_eq!(response["messages"][0]["text"], "preserved owner history");
+    assert_eq!(response["messages"][1]["text"], "preserved WAL history");
+    drop(legacy_writer);
+    run_as_owner(uid, |path| {
+        MemoryDb::open(path)
+            .map_err(|error| error.to_string())?
+            .record_message("legacy", "user", "new owner message")
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    crate::storage::harden_clawd_state().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(std::fs::metadata(&path).unwrap().uid(), uid);
+    assert_eq!(
+        history(json!({ "session_id": "legacy" }), &client(uid)).unwrap()["n"],
+        3
+    );
+
     let foreign = root.path().join("foreign");
     std::fs::write(&foreign, b"not owner memory").unwrap();
     std::fs::remove_file(&path).unwrap();
     std::os::unix::fs::symlink(&foreign, &path).unwrap();
+    assert!(crate::storage::ensure_owner_agent_state_dir(uid, gid).is_err());
     assert!(sessions(json!({}), &client(uid)).is_err());
     assert_eq!(std::fs::metadata(&foreign).unwrap().uid(), 0);
     std::fs::remove_file(&path).unwrap();
     std::fs::hard_link(&foreign, &path).unwrap();
+    assert!(crate::storage::ensure_owner_agent_state_dir(uid, gid).is_err());
     assert!(sessions(json!({}), &client(uid)).is_err());
     assert_eq!(std::fs::metadata(&foreign).unwrap().uid(), 0);
     assert_eq!(std::fs::read(&foreign).unwrap(), b"not owner memory");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, b"another owner's state").unwrap();
+    let foreign_uid = if uid == 65534 { 65533 } else { 65534 };
+    std::os::unix::fs::chown(&path, Some(foreign_uid), Some(foreign_uid)).unwrap();
+    assert!(crate::storage::ensure_owner_agent_state_dir(uid, gid).is_err());
+    assert_eq!(std::fs::metadata(&path).unwrap().uid(), foreign_uid);
+    assert_eq!(std::fs::read(&path).unwrap(), b"another owner's state");
 }
 
 #[test]
