@@ -1296,14 +1296,23 @@ async fn injected_transport_carries_copilot_exchange_catalog_and_chat() {
     let requests = server.await.unwrap();
     assert_eq!(request_line(&requests[0]), "GET /token HTTP/1.1");
     assert_eq!(request_line(&requests[1]), "GET /models HTTP/1.1");
-    assert_eq!(request_line(&requests[2]), "POST /chat/completions HTTP/1.1");
-    for request in &requests {
-        assert!(
-            request_header(request, "authorization")
-                .as_deref()
-                .is_some_and(|value| value.starts_with("Bearer ")),
-            "request did not use bearer auth: {}",
-            request_line(request)
+    assert_eq!(
+        request_line(&requests[2]),
+        "POST /chat/completions HTTP/1.1"
+    );
+    assert_eq!(
+        request_header(&requests[0], "authorization").as_deref(),
+        Some("token github-issue-38-shared-transport")
+    );
+    assert_eq!(
+        request_header(&requests[0], "x-github-api-version").as_deref(),
+        Some("2025-04-01")
+    );
+    for request in &requests[1..] {
+        assert_eq!(
+            request_header(request, "authorization").as_deref(),
+            Some("Bearer copilot-issue-38-shared-transport"),
+            "Copilot API request must use the exchanged token"
         );
     }
     assert_eq!(

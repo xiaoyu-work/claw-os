@@ -9,8 +9,8 @@
 //!
 //!   2. Short-lived **Copilot API token** (~30 min TTL) acquired by
 //!      `GET https://api.github.com/copilot_internal/v2/token` with the
-//!      GitHub token as bearer. Never persisted — re-exchanged on demand
-//!      and cached in-process here.
+//!      GitHub token using `token` authorization. Never persisted —
+//!      re-exchanged on demand and cached in-process here.
 //!
 //! The Copilot token's value embeds a `proxy-ep=<host>` parameter that
 //! tells us which proxy hostname to dial. We strip the `proxy.` prefix
@@ -45,6 +45,7 @@ pub const COPILOT_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+const GITHUB_TOKEN_API_VERSION: &str = "2025-04-01";
 pub(crate) const COPILOT_GITHUB_TOKEN_CREDENTIAL: &str = "copilot_github_token";
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.individual.githubcopilot.com";
 const SCOPES: &str = "read:user";
@@ -425,12 +426,21 @@ pub(crate) async fn exchange_for_copilot_token_with_transport(
     transport: &HttpTransport,
     endpoints: &CopilotAuthEndpoints,
 ) -> Result<CopilotToken, CopilotAuthError> {
+    let mut authorization = reqwest::header::HeaderValue::try_from(format!("token {github_token}"))
+        .map_err(|_| {
+            CopilotAuthError::NotAuthorized(
+                "GitHub sign-in credential is not valid for HTTP authentication; sign in again"
+                    .to_string(),
+            )
+        })?;
+    authorization.set_sensitive(true);
     let resp = transport
         .get(&endpoints.token_url, AUTH_HTTP_TIMEOUT)
         .header("Accept", "application/json")
         .header("Editor-Version", EDITOR_VERSION)
         .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
-        .bearer_auth(github_token)
+        .header("X-GitHub-Api-Version", GITHUB_TOKEN_API_VERSION)
+        .header(reqwest::header::AUTHORIZATION, authorization)
         .send()
         .await?;
     let status = resp.status();
