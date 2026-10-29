@@ -30,6 +30,9 @@ and agent tasks.
 - Read legacy and canonical conversation history under the authenticated
   owner's filesystem identity. Read routes never create or migrate SQLite
   databases, and report wrong ownership without changing existing files.
+- Repair legacy root-created memory file ownership during Root state
+  initialization, before owner-identity readers or workers use the database;
+  never migrate, reset or recursively change owner data.
 - Expose owner-scoped notification publication, subscription, state, and
   delivery-leasing RPC.
 - Supervise unprivileged `claw-agentd` workers and task-owned
@@ -53,6 +56,7 @@ and agent tasks.
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `conversations.rs`, `conversations/` | Owner-scoped Agent conversation create/get/list/update/fork/revert, stable frontend UUID projection, verified task/message annotations, bounded actual Job metadata, owner-identity snapshots, and non-destructive replay exclusions; no task execution or authority |
 | `memory.rs` | Shared owner-identity/read-only history opening and legacy session views; missing stores stay absent and existing ownership is never changed |
+| `../storage.rs` | Startup/owner-state preparation repairs only fixed, single-link root-owned memory files through pinned directory/file descriptors |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `activity_attention.rs` | Shared read-only Job issue/count, protected approval, and task-linked notification projection; never consent or authority |
 | `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |

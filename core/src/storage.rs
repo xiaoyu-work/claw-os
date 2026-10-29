@@ -182,6 +182,9 @@ pub fn ensure_owner_agent_state_dir(uid: u32, gid: u32) -> io::Result<()> {
             }
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
         }
+        if euid == 0 {
+            repair_root_owned_owner_memory(&owner_root, uid, gid)?;
+        }
         Ok(())
     }
     #[cfg(not(unix))]
@@ -191,9 +194,104 @@ pub fn ensure_owner_agent_state_dir(uid: u32, gid: u32) -> io::Result<()> {
     }
 }
 
+#[cfg(unix)]
+fn repair_root_owned_owner_memory(owner_root: &Path, uid: u32, gid: u32) -> io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    if uid == 0 || unsafe { libc::geteuid() } != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "owner memory ownership repair requires root and a non-root owner",
+        ));
+    }
+    let owner = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(owner_root)?;
+    if owner.metadata()?.uid() != uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "owner memory partition has an unexpected owner",
+        ));
+    }
+    let directory = unsafe {
+        libc::openat(
+            owner.as_raw_fd(),
+            c"agent".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if directory < 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(error)
+        };
+    }
+    let directory = unsafe { fs::File::from_raw_fd(directory) };
+    if directory.metadata()?.uid() != uid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "owner agent directory has an unexpected owner",
+        ));
+    }
+    for name in [
+        c"memory.db",
+        c"memory.db-wal",
+        c"memory.db-shm",
+        c"memory.db-journal",
+        c"memory.db.lifecycle.lock",
+    ] {
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::NotFound {
+                continue;
+            }
+            return Err(io::Error::new(
+                error.kind(),
+                format!("open owner memory file {}: {error}", name.to_string_lossy()),
+            ));
+        }
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = file.metadata()?;
+        if metadata.uid() == uid {
+            continue;
+        }
+        if metadata.uid() != 0 || !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing ownership repair for {}: expected a single-link root-owned regular file",
+                    name.to_string_lossy(),
+                ),
+            ));
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        file.sync_all()?;
+        tracing::info!(
+            owner_uid = uid,
+            file = %name.to_string_lossy(),
+            "corrected legacy root-owned owner memory file"
+        );
+    }
+    Ok(())
+}
+
 /// `users/` itself is daemon-owned and traversable; each `users/<uid>`
-/// below it belongs to that account and is left alone, so hardening on
-/// start-up cannot take a running worker's state away from it.
+/// below it belongs to that account. Only incorrectly root-owned memory
+/// files are repaired; owner-owned state is left alone.
 fn harden_owner_partitioned_tree(root: &Path) -> io::Result<()> {
     reject_symlink(root)?;
     let metadata = fs::symlink_metadata(root)?;
@@ -219,6 +317,19 @@ fn harden_owner_partitioned_tree(root: &Path) -> io::Result<()> {
             // belongs to no account); keep it locked down.
             if child.is_dir() && child.uid() == 0 {
                 harden_private_tree(&path)?;
+            } else if child.is_dir()
+                && unsafe { libc::geteuid() } == 0
+                && metadata.uid() == 0
+                && entry.file_name().to_str() == Some(child.uid().to_string().as_str())
+            {
+                if let Err(error) = repair_root_owned_owner_memory(&path, child.uid(), child.gid())
+                {
+                    tracing::warn!(
+                        owner_uid = child.uid(),
+                        %error,
+                        "owner memory ownership repair refused; owner state remains unavailable"
+                    );
+                }
             }
         }
         #[cfg(not(unix))]

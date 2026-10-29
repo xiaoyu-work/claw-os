@@ -1174,8 +1174,14 @@ loops silently or loses its diagnostic during refresh.
 
 History readers use the authenticated owner's filesystem identity and open
 SQLite read-only. Missing initial databases are not created by viewing history.
-Existing databases are not migrated, chowned, reset or deleted by this change;
-invalid ownership is reported explicitly instead of bypassing owner isolation.
+On restart after an upgrade, Root repairs incorrect root ownership of the
+existing owner partition's `memory.db`, SQLite WAL/SHM/journal files and
+`memory.db.lifecycle.lock`, keeping them private to that owner. The same check
+runs before a worker uses owner state. It changes only filesystem metadata:
+there is no database migration, copy, reset or deletion, and no recursive
+chown. Symlinks, multi-link root-owned files and files belonging to another
+non-root account are refused rather than transferred. History reads still
+report invalid ownership instead of bypassing owner isolation.
 
 ## Maintainer publication step
 

@@ -1876,7 +1876,14 @@ Because the runtime now executes as the owner, the per-owner agent state it
 writes — conversation memory, notes, todos, AI budget counters and run records
 under `<data>/users/<uid>/` — is owned by that account with mode `0700`, and
 `<data>` plus `<data>/users` are `0711`: traversable, never listable. Every
-other subtree stays `0700 root`. The residual boundary is honest and documented
+other subtree stays `0700 root`. During startup and owner-state preparation,
+Root corrects older root-created `memory.db`, SQLite sidecars and lifecycle-lock
+ownership inside an existing matching owner partition. The repair uses pinned,
+non-symlink directory/file descriptors and accepts only single-link root-owned
+regular files; it never opens SQLite, copies data, changes another owner's
+files or recursively chowns the partition. History readers remain read-only
+under the owner's filesystem identity.
+The residual boundary is honest and documented
 in `core/src/agentd/MODULE.md`: a compromised worker holds the authority of the
 account that submitted the task, and nothing beyond it. A task owned by root is
 refused rather than run, so single-account container and WSL images must give
