@@ -42,6 +42,10 @@ transport, and provider-specific headers or state do not leak into unrelated
 wire formats. Setup/model discovery changes stay consistent with runtime
 routing.
 
+Copilot's shared GitHub token exchange uses `token` authorization and the
+GitHub token API version. Only subsequent Copilot model/inference requests use
+the exchanged short-lived token as `Bearer`; setup and runtime share this path.
+
 Provider constructors used by production composition are fallible. Legacy
 infallible constructors remain source-compatible and store deferred typed
 initialization failures; `is_configured` returns false and requests return that
