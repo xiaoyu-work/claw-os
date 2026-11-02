@@ -1620,6 +1620,22 @@ try {
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/chat` });
   await wait("!!document.querySelector('textarea')", "authenticated chat composer");
   await evaluate(`(() => {
+    const input = document.querySelector('textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, '中文输入');
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+  })()`);
+  await delay(50);
+  for (const isComposing of [true, false]) {
+    await evaluate(`document.querySelector('textarea').dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', keyCode: 229, isComposing: ${isComposing}, bubbles: true, cancelable: true
+    }))`);
+  }
+  await delay(100);
+  assert.equal(requests.filter((request) => request.path === "/api/chat").length, 0,
+    "confirming an IME candidate does not send the message");
+  assert.equal(await evaluate("document.querySelector('textarea').value"), "中文输入",
+    "IME confirmation preserves the draft");
+  await evaluate(`(() => {
     const input = document.querySelector('[aria-label="Attach images"]');
     const transfer = new DataTransfer();
     const original = new Uint8Array(${originalImage.length});

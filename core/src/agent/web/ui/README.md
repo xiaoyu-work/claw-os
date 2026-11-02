@@ -10,6 +10,14 @@ tokens, sidebar + inset shell, shadcn primitives).
 The compiled bundle lives in dist/ and is **committed to git**
 so cargo builds don't require bun/node.
 
+On WSL, `cos agent serve --open` launches the Windows default browser, keeping
+Windows Chinese/other input methods in the host input stack. The server stays
+inside WSL and is reached through localhost. Windows interop must be enabled;
+the launcher does not depend on Windows directories being appended to Linux
+`PATH`. If host launch is unavailable, the server prints the URL for opening
+manually instead of silently launching a WSLg Linux browser.
+Confirming an IME candidate with Enter does not send or queue the draft.
+
 To rebuild:
 
 ```bash

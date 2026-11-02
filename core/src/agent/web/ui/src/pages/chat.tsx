@@ -720,6 +720,7 @@ export function ChatPage({ meta }: { meta: any }) {
                 if (files.length > 0) void addAttachments(files);
               }}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   if (busy) void queueFollowUp();

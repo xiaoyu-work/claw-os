@@ -243,10 +243,17 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     } else {
         format!("{scheme}://{addr}/")
     };
+    let listener = std::net::TcpListener::bind(addr)
+        .map_err(|error| format!("bind {addr}: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("set nonblocking {addr}: {error}"))?;
     eprintln!("cos agent serve — listening on {addr}");
     eprintln!("  open: {url}");
     if open_browser {
-        let _ = try_open_browser(&url);
+        if let Err(error) = try_open_browser(&url) {
+            eprintln!("warning: {error}");
+        }
     }
     eprintln!("  token persisted at {}", auth::token_path().display());
     if foreground_flag {
@@ -256,11 +263,6 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         eprintln!("  press Ctrl-C to stop (or run with --detach to background).");
     }
 
-    let listener = std::net::TcpListener::bind(addr)
-        .map_err(|error| format!("bind {addr}: {error}"))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("set nonblocking {addr}: {error}"))?;
     let _ = fs::remove_file(ready_path());
     // Drop any stale PID file from a crashed previous daemon, then claim it.
     if let Err(e) = write_pid_file(std::process::id()) {
@@ -910,9 +912,10 @@ fn register_detached_session(command: &[String], local: bool) -> Result<String, 
 }
 
 fn try_open_browser(url: &str) -> Result<(), String> {
-    let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", "start", url])
-    } else if cfg!(target_os = "macos") {
+    if cfg!(target_os = "windows") || crate::host_browser::is_wsl() {
+        return crate::host_browser::open_windows_browser(url);
+    }
+    let (program, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
         ("open", vec![url])
     } else {
         ("xdg-open", vec![url])
