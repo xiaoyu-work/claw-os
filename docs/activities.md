@@ -164,7 +164,11 @@ terminal-only and desktop installations. It combines associated Job counts,
 pending or recorded permission decisions, prioritized execution issues, and
 retained task-linked notifications. Counts and totals cover the full retained
 scope; the 1-100 limit applies independently to each returned detail list.
-Non-critical Agent lifecycle updates associated with an Activity are durable
+Routine queue/start/resume/recovery progress is execution history, not an Inbox
+notification. Outcomes already visible in a focused Web conversation stay in
+that conversation; detached outcomes can notify without requiring a model to
+ask for delivery. Non-critical background updates associated with an Activity
+are durable
 but silent: they do not queue browser, desktop, or ntfy interruptions. Updates
 from the same producer are grouped by Activity during the notification
 deduplication window, with `occurrences` reporting the batch size and the

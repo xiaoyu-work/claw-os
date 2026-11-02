@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn conversation_view_leases_are_owner_scoped_expiring_and_revision_bound() {
+    let mut views = visibility::ConversationViews::default();
+    views.update(7, "browser-tab", 1, Some("session-1"), 1_000).unwrap();
+    assert!(views.contains(7, "session-1", 1_001));
+    assert!(!views.contains(8, "session-1", 1_001));
+    assert!(!views.contains(7, "session-2", 1_001));
+    assert!(!views.contains(7, "session-1", 16_000));
+
+    views.update(7, "browser-tab", 3, None, 2_000).unwrap();
+    views.update(7, "browser-tab", 2, Some("session-1"), 2_001).unwrap();
+    assert!(!views.contains(7, "session-1", 2_002));
+    assert!(views.update(7, "browser-tab", 3, Some("session-1"), 2_003).is_err());
+    views.update(7, "other-tab", 1, Some("session-1"), 2_004).unwrap();
+    assert!(views.contains(7, "session-1", 2_005));
+    views.update(7, "other-tab", 2, None, 2_006).unwrap();
+    assert!(!views.contains(7, "session-1", 2_007));
+    assert!(views.update(7, "invalid", 0, None, 2_008).is_err());
+
+    for index in 0..62 {
+        views.update(7, &format!("tab-{index}"), 1, None, 2_009).unwrap();
+    }
+    assert!(views.update(7, "over-limit", 1, None, 2_010).is_err());
+    views.update(8, "other-owner", 1, Some("session-2"), 2_010).unwrap();
+    assert!(views.contains(8, "session-2", 2_011));
+}
+
 fn draft(kind: &str) -> NotificationDraft {
     NotificationDraft::new(
         "test",

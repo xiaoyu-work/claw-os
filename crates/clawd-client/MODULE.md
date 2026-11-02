@@ -22,6 +22,10 @@ The inventory also includes `agent.hooks.get/set` for closed built-in hook
 settings. Arbitrary commands, environment values and trust decisions are not
 part of this Claw route.
 
+`notification.view` reports an owner-scoped, bounded conversation-view hint.
+Its viewer/revision and optional session select only notification presentation;
+they never attest terminal presence, authorize work or decide an approval.
+
 `agent.account.get/logout` is fixed to the authenticated owner's Copilot
 credential. Logout requires confirmation, refuses active tasks and cannot name
 or read any other credential.

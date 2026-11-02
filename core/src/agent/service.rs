@@ -3025,6 +3025,20 @@ fn task_notification_draft(
     phase: &str,
 ) -> Option<(u32, crate::notifications::NotificationDraft)> {
     let owner_uid = job.owner_uid.filter(|uid| *uid != 0)?;
+    if matches!(phase, "submitted" | "started" | "resumed" | "recovered") {
+        return None;
+    }
+    if matches!(phase, "completed" | "cancelled" | "failed") {
+        if let Some(session_id) = job.session_id.as_deref() {
+            match crate::notifications::conversation_is_viewed(owner_uid, session_id) {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "could not check notification view; retaining alert");
+                }
+            }
+        }
+    }
     let trigger = job
         .session_id
         .as_deref()
@@ -3037,54 +3051,26 @@ fn task_notification_draft(
     } else {
         format!("agent.{phase}")
     };
-    let (severity, title, body, quiet_by_phase) = match phase {
-        "submitted" => (
-            crate::notifications::Severity::Info,
-            "Agent task queued",
-            "A background Agent task is waiting to run.",
-            true,
-        ),
-        "started" => (
-            crate::notifications::Severity::Info,
-            "Agent task started",
-            "A background Agent task has started.",
-            true,
-        ),
-        "recovered" => (
-            crate::notifications::Severity::Warning,
-            "Agent task restarted",
-            "A background Agent task was recovered after its worker stopped.",
-            true,
-        ),
-        "resumed" => (
-            crate::notifications::Severity::Info,
-            "Agent task resumed",
-            "A background Agent task resumed after approval.",
-            true,
-        ),
+    let (severity, title, body) = match phase {
         "waiting" => (
             crate::notifications::Severity::Warning,
             "Agent task needs approval",
             "A background Agent task is waiting for a permission decision.",
-            false,
         ),
         "completed" => (
             crate::notifications::Severity::Info,
             "Agent task completed",
             "A background Agent task finished successfully.",
-            false,
         ),
         "cancelled" => (
             crate::notifications::Severity::Warning,
             "Agent task cancelled",
             "A background Agent task was cancelled.",
-            false,
         ),
         _ => (
             crate::notifications::Severity::Error,
             "Agent task failed",
             "A background Agent task failed. Open the Agent to inspect the result.",
-            false,
         ),
     };
     let dedupe_key = job
@@ -3095,7 +3081,7 @@ fn task_notification_draft(
     let mut draft =
         crate::notifications::NotificationDraft::new(source, kind, severity, title, body)
             .dedupe(dedupe_key);
-    if job.activity_id.is_some() || quiet_by_phase {
+    if job.activity_id.is_some() {
         draft = draft.activity();
     }
     draft.task_id = Some(job.id.clone());

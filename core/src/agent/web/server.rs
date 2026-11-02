@@ -162,6 +162,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/inbox", get(routes::notifications::list))
         .route("/api/events", get(routes::inbox::list))
         .route("/api/notifications", get(routes::notifications::list))
+        .route("/api/notifications/view", post(routes::notifications::view))
         .route(
             "/api/notifications/stream",
             post(routes::notifications::stream),

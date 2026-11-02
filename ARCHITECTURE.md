@@ -1811,7 +1811,15 @@ remains an automation input and `system-operations.jsonl` remains immutable
 audit evidence; notification read, acknowledgement, dismissal, retry, and DND
 state live independently in `notifications.db`.
 
-Activity-linked Agent lifecycle events, including approval waits, use the
+Queue/start/resume/recovery progress remains in task streams and audit, not the
+Inbox. Web reports its visible focused conversation with a bounded,
+owner-scoped `notification.view` lease. Initial Chat submission binds the same
+viewer before queue publication. Terminal outcomes of that viewed conversation
+stay inline; hiding/leaving clears the hint and expiry restores background
+notification behavior. Viewer revisions and leases are comparison/presentation
+data, never kernel attendance, consent, capabilities or task cancellation.
+
+Meaningful Activity-linked outcomes, including approval waits, use the
 existing owner/source/Activity deduplication partition. The latest bounded
 record retains an occurrence count and task/session link for the shared
 Activity attention projection. Its Activity delivery policy persists the

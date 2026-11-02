@@ -254,6 +254,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::SystemReviewConsume, "system.review.consume"),
         (Command::SystemReviewCancel, "system.review.cancel"),
         (Command::NotificationSubscribe, "notification.subscribe"),
+        (Command::NotificationView, "notification.view"),
         (
             Command::NotificationDeliveryClaim,
             "notification.delivery.claim",
@@ -267,7 +268,7 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NearbyStatus,"nearby.status"),
         (Command::NearbyControl,"nearby.control"),
     ];
-    assert_eq!(Command::ALL.len(), 65);
+    assert_eq!(Command::ALL.len(), 66);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");

@@ -13,6 +13,9 @@ fn follow_up_uses_only_the_owner_checked_predecessor_conversation() {
             prompt: "Refine the answer".to_string(),
             attachments: Vec::new(),
             use_memory: true,
+            notification_viewer: Some(serde_json::from_value(json!({
+                "id": "browser-tab", "revision": 1, "visible": true,
+            })).unwrap()),
         },
     )
     .unwrap();
@@ -24,6 +27,7 @@ fn follow_up_uses_only_the_owner_checked_predecessor_conversation() {
             "session_id": "ses_0000000000001_000000000001",
             "after_task_id": "job-predecessor",
             "use_memory": true,
+            "notification_viewer": { "id": "browser-tab", "revision": 1, "visible": true },
         })
     );
     assert!(params.get("owner_uid").is_none());
@@ -42,6 +46,7 @@ fn follow_up_body_and_predecessor_shape_are_closed() {
             prompt: "Refine".to_string(),
             attachments: Vec::new(),
             use_memory: true,
+            notification_viewer: None,
         },
     )
     .is_err());

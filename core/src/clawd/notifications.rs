@@ -19,6 +19,38 @@ const DEFAULT_SUBSCRIBE_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_DELIVERY_LEASE_MS: i64 = 30_000;
 const EXTERNAL_BATCH_SIZE: usize = 16;
 
+pub fn view(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let owner_uid = client.require_uid()?;
+    let request: super::wire::requests::NotificationView =
+        serde_json::from_value(params).map_err(|error| format!("invalid notification view: {error}"))?;
+    let session_id = request.session_id.as_ref().map(|id| id.as_str());
+    if request.viewer.visible {
+        super::tasks::task_session_meta(
+            session_id.ok_or("a visible notification view requires a conversation")?,
+            owner_uid,
+        )?;
+    }
+    view_for_session(owner_uid, &request.viewer, session_id)
+}
+
+pub(super) fn view_for_session(
+    owner_uid: u32,
+    viewer: &super::wire::requests::NotificationViewer,
+    session_id: Option<&str>,
+) -> Result<Value, String> {
+    if viewer.visible && session_id.is_none() {
+        return Err("a visible notification view requires a conversation".into());
+    }
+    let receipt = notifications::set_conversation_view(
+        owner_uid,
+        viewer.id.as_str(),
+        viewer.revision.get(),
+        if viewer.visible { session_id } else { None },
+    )
+    .map_err(|error| error.to_string())?;
+    serde_json::to_value(receipt).map_err(|error| error.to_string())
+}
+
 pub fn publish(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
     let source = required_string(&params, "source")?;

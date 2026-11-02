@@ -31,6 +31,27 @@ pub struct StreamBody {
     cursor: u64,
 }
 
+pub async fn view(
+    body: Result<
+        Json<crate::clawd::wire::requests::NotificationView>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|_| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "Invalid notification view." })),
+        )
+    })?;
+    request(
+        Command::NotificationView,
+        serde_json::to_value(body)
+            .map_err(|error| bad_request(format!("invalid notification view: {error}")))?,
+    )
+    .await
+    .map(Json)
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PreferencesBody {
     web_enabled: bool,

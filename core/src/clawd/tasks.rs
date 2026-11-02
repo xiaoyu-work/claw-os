@@ -91,6 +91,18 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .get("plan_only")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let notification_viewer = params
+        .get("notification_viewer")
+        .cloned()
+        .map(serde_json::from_value::<super::wire::requests::NotificationViewer>)
+        .transpose()
+        .map_err(|error| format!("invalid notification viewer: {error}"))?;
+    if notification_viewer
+        .as_ref()
+        .is_some_and(|viewer| viewer.id.as_str().is_empty())
+    {
+        return Err("notification viewer id must not be empty".into());
+    }
     let requested_workspace = params.get("workspace").and_then(Value::as_str);
     let requested_activity = optional_activity_id(&params)?;
     let session_meta = session_id
@@ -156,6 +168,18 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     job.requested_reasoning_effort = requested_reasoning_effort;
     job.workspace = Some(workspace.to_string_lossy().into_owned());
     job.after_task_id = after_task_id;
+    if let Some(viewer) = notification_viewer.as_ref() {
+        if let Err(error) =
+            super::notifications::view_for_session(owner_uid, viewer, job.session_id.as_deref())
+        {
+            tracing::warn!(
+                task = %job.id,
+                owner_uid,
+                %error,
+                "could not register conversation view; retaining background alerts"
+            );
+        }
+    }
     let task_id = job.id.clone();
     let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
         .map_err(|err| err.to_string())?;
@@ -258,7 +282,10 @@ fn configure_task_session(
     Ok(())
 }
 
-fn task_session_meta(session_id: &str, owner_uid: u32) -> Result<session::SessionMeta, String> {
+pub(super) fn task_session_meta(
+    session_id: &str,
+    owner_uid: u32,
+) -> Result<session::SessionMeta, String> {
     let sid = session_id
         .parse::<session::SessionId>()
         .map_err(|err| format!("invalid task session id: {err}"))?;

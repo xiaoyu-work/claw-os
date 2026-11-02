@@ -144,6 +144,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "notification.publish",
     "notification.list",
     "notification.subscribe",
+    "notification.view",
     "notification.read",
     "notification.acknowledge",
     "notification.dismiss",

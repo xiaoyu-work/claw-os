@@ -1272,6 +1272,16 @@ routes! {
         ],
         run: |c| notifications::publish(c.params, c.client).map_err(BrokerError::from),
     }
+    NotificationView {
+        name: "notification.view",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationView,
+        audit: &[("session_id", FieldRule::Token)],
+        run: |c| notifications::view(c.params, c.client).map_err(BrokerError::from),
+    }
     NotificationList {
         name: "notification.list",
         access: Access::User,
