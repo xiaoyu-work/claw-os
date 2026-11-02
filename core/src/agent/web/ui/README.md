@@ -77,7 +77,13 @@ re-encoding or forced compression. HTTP and task-submit transport allow
 32 MiB for base64 and bounded request metadata; provider limits still apply.
 Approval decisions invoke the installed polkit helper; the Web process never
 gains direct permission-decision authority.
-Chat and Approvals use the same OS-owned capability cards. Task cards derive
+Chat, Tasks and Approvals use the same compact capability rows. Action, target,
+decision status and important risk remain visible; reasons, scope, session and
+revision are expandable details rather than repeated catalog descriptions.
+Resolved grants say **Authorized**, not that execution or the task completed.
+Normal history has no unavailable-decision warning; genuine status errors and
+blocked pending reviews retain their diagnostics. Recent history is read-only.
+Task rows derive
 their request ids from owner-checked Job `waiting_on` state. Human labels,
 targets and supported lifetimes come from `system.review.*`; decisions carry
 the exact displayed revision, with decimal-string transport for full `u64`

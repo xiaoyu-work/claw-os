@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { APPROVAL_LABELS, readApprovalBundle, readAuthorization } from "../src/lib/approvals";
+import { APPROVAL_LABELS, APPROVAL_STATUS_LABELS, readApprovalBundle, readAuthorization } from "../src/lib/approvals";
 
 const review = () => ({
   id:"approval-1", revision:"9007199254740993", status:"pending",
@@ -29,6 +29,8 @@ test("approval views preserve exact revisions and only OS-supported choices", ()
   expect(bundle.reviews[0].revision).toBe("9007199254740993");
   expect(bundle.reviews[0].choices).toEqual(["deny","allow_once"]);
   expect(APPROVAL_LABELS.allow_once).toBe("Authorize once");
+  expect(APPROVAL_STATUS_LABELS.completed).toBe("Authorized");
+  expect(APPROVAL_STATUS_LABELS.cancelled).toBe("Denied");
   expect(() => readApprovalBundle({task_id:"job-other",reviews:[review()],app_reviews:[]}, "job-1")).toThrow();
   expect(() => readApprovalBundle({reviews:[{...review(),choices:["force_grant"]}],app_reviews:[]})).toThrow();
 });

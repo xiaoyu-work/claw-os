@@ -124,9 +124,11 @@ const approvalView = (id, reason = "Review the release notes") => ({
   verb: "fs.read", details: [], diagnostic: null,
 });
 const osAuthorizations = new Map();
+const resolvedApprovals = new Map();
 let osAuthorizationNumber = 0;
 const osFixturePassword = "browser-fixture-password";
 function completeOsAuthorization(id) {
+  resolvedApprovals.set(id, { ...approvalView(id), status: "completed", choices: [] });
   if (id === "inline-approval") inlineApprovalDecided = true;
   for (const job of jobs.values()) {
     if (job.waiting_on.includes(id)) Object.assign(job, {
@@ -824,7 +826,9 @@ async function fixture(req, res) {
       app_reviews: [],
     });
   }
-  if (url.pathname === "/api/approvals/reviews/recent") return reply(req, res, { reviews: [], app_reviews: [] });
+  if (url.pathname === "/api/approvals/reviews/recent") return reply(req, res, {
+    reviews: [...resolvedApprovals.values()], app_reviews: [],
+  });
   if (/^\/api\/approvals\/[^/]+\/decision$/.test(url.pathname)) {
     const id = url.pathname.split("/")[3];
     assert.deepEqual(body, { revision: "3", choice: "deny" }, "only denial bypasses OS authentication");
@@ -1662,6 +1666,14 @@ try {
   await wait("document.querySelector('[data-tool-id=\"live-tool\"]')?.innerText.includes('preparing')", "provider preparation is not runtime execution");
   await wait("!!document.querySelector('[aria-label=\"Current task approvals\"]')", "task-scoped inline approvals");
   await wait("document.body.innerText.includes('Read selected files') && document.body.innerText.includes('/tmp/report.txt')", "readable OS permission target");
+  const inlineReview = `document.querySelector('[data-review-id="inline-approval"]')`;
+  assert.equal(await evaluate(`${inlineReview}.querySelector('details').open`), false);
+  assert.equal(await evaluate(`${inlineReview}.innerText.includes('Inspect this task')`), false);
+  assert.equal(await evaluate(`${inlineReview}.textContent.includes('Read the specified resource without changing it.')`), false);
+  assert.ok(await evaluate(`${inlineReview}.getBoundingClientRect().height < 80`), "pending request is a compact row");
+  await click(`${inlineReview}.querySelector('summary')`);
+  await wait(`${inlineReview}.innerText.includes("Inspect this task's system information")`, "expanded request reason");
+  await click(`${inlineReview}.querySelector('summary')`);
   await click(`Array.from(document.querySelectorAll('[aria-label="Current task approvals"] button')).find(button => button.textContent === 'Authorize once')`);
   assert.equal(inlineApprovalDecided, false, "clicking is not OS consent");
   await typeOsPassword("wrong-fixture-password");
@@ -2067,12 +2079,26 @@ try {
   await expectDetail("Task notification acknowledged");
   await expectDetail("4 grouped updates");
   await clickText("Open Approvals");
-  await wait("location.hash === '#/approvals' && document.body.innerText.includes('Review the release notes')", "existing approvals page");
+  await wait("location.hash === '#/approvals' && !!document.querySelector('[data-review-id=\"approval-1\"]')", "existing approvals page");
+  assert.equal(await evaluate("document.body.innerText.includes('OS-owned permission requests.')"), false);
+  assert.equal(await evaluate("document.body.innerText.includes('Review the release notes')"), false);
+  await click(`document.querySelector('[data-review-id="approval-1"] summary')`);
+  await wait("document.body.innerText.includes('Review the release notes')", "expanded approval details");
+  await click(`document.querySelector('[data-review-id="approval-1"] summary')`);
   await clickText("Authorize once");
   await typeOsPassword(osFixturePassword);
   await wait("document.body.innerText.includes('No approval records in this view.')", "existing approval action");
   assert.equal(firstJob.status, "ok");
   assert.equal(activities.get("activity-1").state, "active", "successful jobs never auto-complete a goal");
+  await clickText("Recent");
+  const recentReview = `document.querySelector('[data-review-id="approval-1"]')`;
+  await wait(`${recentReview}?.innerText.includes('Authorized')`, "authorization outcome, not task completion");
+  assert.equal(await evaluate(`${recentReview}.innerText.includes('completed')`), false);
+  assert.equal(await evaluate(`${recentReview}.innerText.includes('no longer available')`), false);
+  assert.equal(await evaluate(`${recentReview}.querySelectorAll('button').length`), 0);
+  assert.equal(await evaluate(`${recentReview}.querySelector('details').open`), false);
+  assert.ok(await evaluate(`${recentReview}.getBoundingClientRect().height < 80`), "history remains a compact read-only row");
+  console.log("PASS compact expandable approval rows and read-only authorization history");
   await clickText("Activities");
   await open("Release preparation");
   await expectDetail("Release draft reviewed.");

@@ -359,6 +359,11 @@ def exercise_web_authorization(cos, uid, other_uid, home, root):
         assert recorded["result"]["statuses"][0]["status"] == "approved", (
             "real OS authentication must reach the protected broker decision"
         )
+        status, recent = web.call("GET", "/api/approvals/reviews/recent")
+        assert status == 200
+        resolved = next(item for item in recent["reviews"] if item["id"] == first["id"])
+        assert resolved["status"] == "completed" and not resolved["choices"]
+        assert resolved["diagnostic"] is None, "resolved permissions are not unavailable errors"
         print(json.dumps({"case": "web-real-pam-no-terminal", "completed": True}), flush=True)
 
         for case in ("wrong-password", "cancelled"):
