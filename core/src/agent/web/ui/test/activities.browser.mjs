@@ -1877,7 +1877,7 @@ try {
   assert.ok(!navigationButtons.includes("System"), "System is absent from navigation");
   assert.ok(navigationButtons.includes("New chat"), "New chat remains the conversation entry");
   assert.ok(!navigationButtons.includes("Chat"), "duplicate Chat navigation is absent");
-  assert.ok(navigationButtons.includes("Tasks"), "unrequested Tasks navigation is unchanged");
+  assert.ok(!navigationButtons.includes("Tasks"), "Tasks is contextual rather than primary navigation");
   const chatSubmissionsBeforeNavigation = requests.filter((request) => request.path === "/api/chat").length;
   await clickText("New chat");
   await wait("location.hash === '#/chat' && !!document.querySelector('textarea')", "New chat opens the composer");
@@ -1885,7 +1885,7 @@ try {
     "opening New chat does not submit Agent work");
   await clickText("Activities");
   await wait("document.body.innerText.includes('No activities yet.')", "return to Activities");
-  console.log("PASS sidebar retains New chat without duplicate Chat navigation and preserves other entries");
+  console.log("PASS sidebar retains New chat without duplicate Chat or primary Tasks navigation");
   await clickText("New activity");
   await fill("Title", "Release preparation");
   await fill("Goal", "Prepare a reviewed release draft");
