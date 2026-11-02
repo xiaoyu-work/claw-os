@@ -11,6 +11,7 @@ from pathlib import Path
 import pty
 import pwd
 import re
+import secrets
 import select
 import shutil
 import signal
@@ -23,6 +24,8 @@ import tempfile
 import termios
 import time
 import uuid
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 
 
@@ -104,6 +107,8 @@ class Terminal:
                 "LANG": "C.UTF-8",
                 "LC_ALL": "C.UTF-8",
                 "TERM": "xterm-256color",
+                "COS_CONFIG_DIR": str(home.parent / "empty-config"),
+                "COS_USER_CONFIG_DIR": str(home / "config"),
             },
             preexec_fn=lambda: child_identity(uid, gid),
         )
@@ -189,6 +194,195 @@ def wait_bus():
     raise AssertionError("private polkit daemon did not become ready")
 
 
+def web_identity(uid):
+    os.setsid()
+    os.setgroups([])
+    os.setgid(uid)
+    os.setuid(uid)
+
+
+class WebClient:
+    def __init__(self, cos, uid, home, root):
+        command("ip", "link", "set", "lo", "up")
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        self.origin = f"http://127.0.0.1:{port}"
+        self.bootstrap = secrets.token_hex(32)
+        self.token = None
+        self.log = (root / "web.log").open("w+")
+        self.process = subprocess.Popen(
+            [str(cos), "agent", "serve", "--port", str(port), "--token", self.bootstrap],
+            stdin=subprocess.DEVNULL, stdout=self.log, stderr=self.log, cwd=home,
+            preexec_fn=lambda: web_identity(uid),
+            env={
+                "HOME": str(home), "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "LANG": "C.UTF-8", "COS_DATA_DIR": str(home / "web-data"),
+                "COS_CAPS_DATA_DIR": str(home / "web-caps"),
+                "COS_CONFIG_DIR": str(root / "empty-config"),
+                "COS_USER_CONFIG_DIR": str(home / "config"),
+            },
+        )
+        try:
+            for _ in range(200):
+                try:
+                    status, payload = self.call(
+                        "POST", "/api/auth/token", {"ttl_seconds": 3600},
+                        authorization=f"Bootstrap {self.bootstrap}",
+                    )
+                    assert status == 200
+                    self.token = payload["access_token"]
+                    break
+                except (urllib.error.URLError, ConnectionError):
+                    if self.process.poll() is not None:
+                        raise AssertionError("private Web server exited before readiness")
+                    time.sleep(0.05)
+            else:
+                raise AssertionError("private Web server did not become ready")
+        except BaseException:
+            self.close()
+            raise
+
+    def call(self, method, path, body=None, *, origin=None, authorization=None):
+        headers = {"Origin": origin or self.origin}
+        if authorization is not None:
+            headers["Authorization"] = authorization
+        elif self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        data = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode()
+        request = urllib.request.Request(
+            self.origin + path, data=data, method=method, headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.load(response)
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def wait(self, session, terminal=False):
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            status, state = self.call("GET", f"/api/authorizations/{session['id']}")
+            assert status == 200, state
+            assert PASSWORD not in json.dumps(state)
+            if terminal and state["phase"] in ("finished", "failed", "cancelled", "expired"):
+                return state
+            if not terminal and state["phase"] == "prompt":
+                return state
+            if state["phase"] in ("failed", "cancelled", "expired"):
+                raise AssertionError(f"Web OS authentication failed before prompting: {state}")
+            time.sleep(0.05)
+        raise AssertionError("Web OS authentication did not reach its bounded expected state")
+
+    def close(self):
+        stop(self.process)
+        self.log.seek(0)
+        output = self.log.read()
+        self.log.close()
+        assert PASSWORD not in output, "OS password must never enter Web logs"
+        assert "Password:" not in output, "OS password prompts must not fall back to the terminal"
+
+
+def exercise_web_authorization(cos, uid, other_uid, home, root):
+    with contextlib.closing(WebClient(cos, uid, home, root)) as web:
+        def request(name, owner=uid):
+            return rpc("permission.request", {
+                "verb": "sys.observe", "scope": {"kind": "name", "value": "environment"},
+                "session": name, "reason": "Inspect the fixture environment",
+            }, owner)["result"]
+
+        def review(request_id):
+            status, bundle = web.call("GET", "/api/approvals/reviews")
+            assert status == 200, bundle
+            return next(item for item in bundle["reviews"] if item["id"] == request_id)
+
+        def pending(request_id, owner=uid):
+            statuses = rpc("permission.status", {"ids": [request_id]}, owner)
+            return statuses["result"]["statuses"][0]["status"] == "pending"
+
+        def begin(item):
+            assert "allow_session" in item["choices"]
+            status, state = web.call("POST", f"/api/approvals/{item['id']}/authorization", {
+                "revision": item["revision"], "choice": "allow_session",
+            })
+            assert status == 200, state
+            assert state["review_id"] == item["id"] and state["choice"] == "allow_session"
+            return web.wait(state)
+
+        first = request("web-password-fixture")
+        item = review(first["id"])
+        status, _ = web.call("POST", f"/api/approvals/{item['id']}/authorization", {
+            "revision": "18446744073709551615", "choice": "allow_session",
+        })
+        assert status == 409 and pending(first["id"]), "stale displayed revisions must not prompt or grant"
+        status, _ = web.call("POST", f"/api/approvals/{item['id']}/authorization", {
+            "revision": item["revision"], "choice": "allow_session",
+        }, origin="https://different.example")
+        assert status == 409 and pending(first["id"]), "different origins must not start OS authentication"
+        status, _ = web.call("POST", f"/api/approvals/{item['id']}/approve", {"duration": "session"})
+        assert status == 409, "legacy Web clients must reload, never trigger terminal authentication"
+        session = begin(item)
+        assert Path(f"/proc/{web.process.pid}/mem").stat().st_uid == 0, (
+            "OS authentication memory must not be dumpable by the serving user"
+        )
+        limits = Path(f"/proc/{web.process.pid}/limits").read_text()
+        assert re.search(r"Max core file size\s+0\s+0\s+bytes", limits)
+        assert not session.get("cookie") and "response" not in session
+        status, token = web.call("POST", "/api/auth/token", {"ttl_seconds": 3600},
+                                 authorization=f"Bootstrap {web.bootstrap}")
+        assert status == 200
+        status, _ = web.call("GET", f"/api/authorizations/{session['id']}",
+                            authorization=f"Bearer {token['access_token']}")
+        assert status == 409, "a different Web token must not access the authentication conversation"
+        status, _ = web.call("POST", f"/api/authorizations/{session['id']}/response", {
+            "prompt_id": "stale", "response": PASSWORD,
+        })
+        assert status == 409 and pending(first["id"]), "stale prompts must not receive responses"
+        status, _ = web.call("POST", f"/api/authorizations/{session['id']}/response", {
+            "prompt_id": session["prompt"]["id"], "response": PASSWORD, "authorized": True,
+        })
+        assert status == 422 and pending(first["id"]), "JSON cannot assert OS authentication"
+        status, _ = web.call("POST", f"/api/authorizations/{session['id']}/response", {
+            "prompt_id": session["prompt"]["id"], "response": PASSWORD,
+        }, origin="https://different.example")
+        assert status == 409 and pending(first["id"])
+        status, _ = web.call("POST", f"/api/authorizations/{session['id']}/response", {
+            "prompt_id": session["prompt"]["id"], "response": PASSWORD,
+        })
+        assert status == 200
+        outcome = web.wait(session, terminal=True)
+        assert outcome["phase"] == "finished", outcome
+        recorded = rpc("permission.status", {"ids": [first["id"]]}, uid)
+        assert recorded["result"]["statuses"][0]["status"] == "approved", (
+            "real OS authentication must reach the protected broker decision"
+        )
+        print(json.dumps({"case": "web-real-pam-no-terminal", "completed": True}), flush=True)
+
+        for case in ("wrong-password", "cancelled"):
+            record = request(f"web-{case}-fixture")
+            session = begin(review(record["id"]))
+            if case == "cancelled":
+                status, _ = web.call("POST", f"/api/authorizations/{session['id']}/cancel")
+            else:
+                status, _ = web.call("POST", f"/api/authorizations/{session['id']}/response", {
+                    "prompt_id": session["prompt"]["id"], "response": "not-the-fixture-password",
+                })
+            assert status == 200
+            outcome = web.wait(session, terminal=True)
+            assert outcome["phase"] != "finished", outcome
+            assert pending(record["id"]), "failed/cancelled authentication must not create permission"
+            print(json.dumps({"case": f"web-{case}-no-grant", "completed": True}), flush=True)
+        foreign = request("web-foreign-fixture", other_uid)
+        status, _ = web.call("POST", f"/api/approvals/{foreign['id']}/authorization", {
+            "revision": "1", "choice": "allow_session",
+        })
+        assert status != 200 and pending(foreign["id"], other_uid)
+        print(json.dumps({"case": "web-foreign-owner-refused", "completed": True}), flush=True)
+
+
 def rpc(method, params, uid=None):
     request = json.dumps({
         "v": 2, "id": uuid.uuid4().hex, "command": method, "params": params,
@@ -251,6 +445,10 @@ def run(args):
         raise RuntimeError("refusing to mount over the host namespace")
     if os.readlink("/proc/self/ns/pid") == args.original_pid_namespace:
         raise RuntimeError("a private PID namespace is required")
+    if not re.fullmatch(r"net:\[\d+\]", args.original_network_namespace):
+        raise RuntimeError("invalid original network namespace")
+    if os.readlink("/proc/self/ns/net") == args.original_network_namespace:
+        raise RuntimeError("a private network namespace is required")
     command("mount", "--make-rprivate", "/")
     accounts = pwd.getpwall()
     polkit = pwd.getpwnam("polkitd")
@@ -345,7 +543,9 @@ def run(args):
                 process = subprocess.Popen(
                     argv, stdout=log, stderr=log,
                     env={"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/root",
-                         "LANG": "C.UTF-8", "COS_DATA_DIR": "/var/lib/cos"},
+                         "LANG": "C.UTF-8", "COS_DATA_DIR": "/var/lib/cos",
+                         "COS_CONFIG_DIR": str(root / "empty-config"),
+                         "COS_USER_CONFIG_DIR": str(root / "empty-root-config")},
                 )
                 cleanup.callback(stop, process)
                 logs[name] = (log, process)
@@ -526,6 +726,7 @@ def run(args):
                             "permission.status", {"ids": [request["id"]]}, uid
                         )["result"]["statuses"][0]["status"] == "approved"
                     )
+                    terminal.pump(lambda: b"APPROVED" in terminal.output[offset:])
                     assert b"Claw OS authorization" not in terminal.output[offset:]
                     assert b"Password:" not in terminal.output[offset:]
                     assert not termios.tcgetattr(terminal.master)[3] & (
@@ -538,6 +739,7 @@ def run(args):
                 print(json.dumps({
                     "case": "real-tui-inline-broker-approval", "completed": True,
                 }), flush=True)
+                exercise_web_authorization(args.cos, uid, other_uid, home, root)
             except BaseException:
                 for name, (log, process) in logs.items():
                     log.seek(0)
@@ -559,6 +761,7 @@ if __name__ == "__main__":
     parser.add_argument("--polkitd", default="/usr/lib/polkit-1/polkitd")
     parser.add_argument("--original-mount-namespace", required=True)
     parser.add_argument("--original-pid-namespace", required=True)
+    parser.add_argument("--original-network-namespace", required=True)
     arguments = parser.parse_args()
     for name in ("cos", "clawd", "helper", "policy"):
         setattr(arguments, name, getattr(arguments, name).resolve(strict=True))

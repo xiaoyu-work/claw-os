@@ -54,3 +54,41 @@ export const APPROVAL_LABELS: Record<ApprovalChoice, string> = {
   allow_once: "Authorize once", allow_session: "Authorize for this session",
   allow_forever: "Authorize reusable access",
 };
+
+const AUTHORIZATION_PHASES = ["starting", "prompt", "verifying", "finished", "failed", "cancelled", "expired"] as const;
+export type AuthorizationPhase = typeof AUTHORIZATION_PHASES[number];
+export type AuthorizationView = {
+  id: string; review_id: string; revision: string; label: string; target: string;
+  choice: ApprovalChoice; phase: AuthorizationPhase;
+  prompt: { id: string; message: string } | null; message: string | null;
+};
+
+export function readAuthorization(value: unknown, expected: {
+  review_id: string; revision: string; id?: string;
+}): AuthorizationView {
+  if (!record(value) || typeof value.id !== "string" || !/^[a-f0-9]{64}$/.test(value.id) ||
+      value.review_id !== expected.review_id || value.revision !== expected.revision ||
+      (expected.id !== undefined && value.id !== expected.id) ||
+      typeof value.label !== "string" || typeof value.target !== "string" ||
+      !oneOf(CHOICES, value.choice) || value.choice === "deny" ||
+      !oneOf(AUTHORIZATION_PHASES, value.phase) ||
+      !(value.message === null || typeof value.message === "string")) {
+    throw new Error("The OS authentication response has an invalid identity or shape.");
+  }
+  let prompt: AuthorizationView["prompt"] = null;
+  if (value.prompt !== null) {
+    if (!record(value.prompt) || typeof value.prompt.id !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.prompt.id) || typeof value.prompt.message !== "string") {
+      throw new Error("The OS authentication prompt is invalid.");
+    }
+    prompt = { id: value.prompt.id, message: value.prompt.message };
+  }
+  if ((value.phase === "prompt") !== (prompt !== null)) {
+    throw new Error("The OS authentication prompt does not match its state.");
+  }
+  return {
+    id: value.id, review_id: expected.review_id, revision: expected.revision,
+    label: value.label, target: value.target, choice: value.choice,
+    phase: value.phase, prompt, message: value.message,
+  };
+}

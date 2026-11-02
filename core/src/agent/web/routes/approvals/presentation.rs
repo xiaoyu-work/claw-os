@@ -1,15 +1,12 @@
 //! Capability review presentation over the shared protected OS review contract.
 
-use std::process::Stdio;
-
 use axum::{extract::Path, http::StatusCode, Json};
 use clawd_client::system_review::{
     PendingReviews, PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision,
-    ReviewKind, ReviewStatus, SystemReview, MAX_DECISION_BYTES,
+    ReviewKind, ReviewStatus, SystemReview,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::AsyncWriteExt;
 
 use super::{bad_request, internal, validate_decision_input};
 use crate::agent::web::routes::clawd;
@@ -71,7 +68,7 @@ fn project(review: SystemReview) -> Result<ApprovalView, Failure> {
     })
 }
 
-async fn show(id: &str) -> Result<SystemReview, Failure> {
+pub(super) async fn show(id: &str) -> Result<SystemReview, Failure> {
     validate_decision_input(id, None)?;
     let value = clawd::request(Command::SystemReviewShow, json!({"id":id}))
         .await
@@ -169,7 +166,7 @@ pub struct DecisionBody {
     pub choice: PermissionChoice,
 }
 
-fn decision_for(review: &SystemReview, body: DecisionBody) -> Result<ReviewDecision, Failure> {
+pub(super) fn decision_for(review: &SystemReview, body: DecisionBody) -> Result<ReviewDecision, Failure> {
     let revision = body
         .revision
         .parse::<u64>()
@@ -219,54 +216,13 @@ pub async fn decide_review(
             .await
             .map_err(clawd::RpcError::into_api_error)?;
     } else {
-        let encoded = serde_json::to_vec(&decision).map_err(|error| internal(error.to_string()))?;
-        if encoded.len() > MAX_DECISION_BYTES {
-            return Err(bad_request(
-                "Review decision exceeds its byte limit.".into(),
-            ));
-        }
-        let mut child = tokio::process::Command::new("/usr/bin/pkexec")
-            .arg("/usr/local/bin/claw-approval-helper")
-            .arg("--system-review-json")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| internal(format!("Launch OS approval helper: {error}")))?;
-        let mut input = child
-            .stdin
-            .take()
-            .ok_or_else(|| internal("OS helper has no decision input.".into()))?;
-        input
-            .write_all(&encoded)
-            .await
-            .map_err(|error| internal(format!("Send OS review decision: {error}")))?;
-        drop(input);
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|error| internal(format!("Wait for OS approval helper: {error}")))?;
-        if !output.status.success() {
-            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "error":if message.is_empty() { "OS authorization was cancelled or denied." } else { message.as_str() },
-                    "hint":"Authorization requires the OS authentication prompt. On a headless system use cos review show for this request."
-                })),
-            ));
-        }
-        let returned: SystemReview = serde_json::from_slice(&output.stdout)
-            .map_err(|error| internal(format!("Invalid OS decision acknowledgement: {error}")))?;
-        returned
-            .validate()
-            .map_err(|error| internal(error.to_string()))?;
-        if returned.id != id || returned.status == ReviewStatus::Pending {
-            return Err(internal(
-                "OS decision was not acknowledged. Refresh to inspect its outcome.".into(),
-            ));
-        }
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "Use the Web OS authorization dialog. Refresh this page before authorizing.",
+                "code": "authorization_dialog_required",
+            })),
+        ));
     }
     let refreshed = show(&id).await?;
     if refreshed.status == ReviewStatus::Pending {

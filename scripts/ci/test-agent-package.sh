@@ -74,6 +74,7 @@ installed() {
     sudo /usr/lib/cos/bin/claw-security-floor verify-installed
     original_mount="$(readlink /proc/self/ns/mnt)"
     original_pid="$(readlink /proc/self/ns/pid)"
+    original_network="$(readlink /proc/self/ns/net)"
     sudo unshare --mount --pid --fork --mount-proc --net \
         python3 -B core/tests/approval_polkit_process.py \
         --cos /usr/local/bin/cos \
@@ -81,7 +82,8 @@ installed() {
         --helper /usr/local/bin/claw-approval-helper \
         --policy /usr/share/polkit-1/actions/org.clawos.approval.policy \
         --original-mount-namespace "$original_mount" \
-        --original-pid-namespace "$original_pid"
+        --original-pid-namespace "$original_pid" \
+        --original-network-namespace "$original_network"
     /usr/local/bin/cos-browser --help >/dev/null
     COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
         /usr/local/bin/cos agent skills list \

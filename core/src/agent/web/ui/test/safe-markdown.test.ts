@@ -14,6 +14,8 @@ describe("renderSafeMarkdown", () => {
 <img src=x onerror="window.stolen = true">
 <a href="javascript:alert(1)" onclick="window.stolen = true">raw link</a>
 <a href="java&#x0a;script:alert(1)">encoded link</a>
+<form><input type="password"><button>Authenticate</button></form>
+<textarea>OS password</textarea>
 [script link](javascript:alert)
 [data link](data:text/html;base64,PHNjcmlwdD4=)
 `, sanitizer);
@@ -21,6 +23,7 @@ describe("renderSafeMarkdown", () => {
     expect(document.querySelector("script")).toBeNull();
     expect(document.querySelector("[onclick], [onerror]")).toBeNull();
     expect(document.querySelector("a[href]")).toBeNull();
+    expect(document.querySelector("form, input, button, textarea, select")).toBeNull();
   });
 
   test("keeps normal Markdown, code blocks, tables, and safe links", () => {
@@ -36,6 +39,9 @@ const safe = 1 < 2;
 | name | value |
 | --- | --- |
 | safe | yes |
+
+- [x] Done
+- [ ] Pending
 `, sanitizer);
 
     expect(html).toContain("<h1>Heading</h1>");
@@ -44,5 +50,9 @@ const safe = 1 < 2;
     expect(html).toContain('class="language-ts"');
     expect(html).toContain("const safe = 1 &lt; 2;");
     expect(html).toContain("<table>");
+    const document = new JSDOM(html).window.document;
+    expect(document.querySelector("input")).toBeNull();
+    expect(document.body.textContent).toContain("\u2611");
+    expect(document.body.textContent).toContain("\u2610");
   });
 });

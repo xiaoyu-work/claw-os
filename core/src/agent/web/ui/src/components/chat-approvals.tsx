@@ -1,34 +1,61 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
-import { APPROVAL_LABELS, readApprovalBundle, type ApprovalBundle, type ApprovalChoice, type ApprovalView } from "@/lib/approvals";
+import { APPROVAL_LABELS, readApprovalBundle, readAuthorization, type ApprovalBundle, type ApprovalChoice, type ApprovalView, type AuthorizationView } from "@/lib/approvals";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
+import { OsAuthorizationDialog } from "./os-authorization";
 
 export function ApprovalCard({ review, onChanged, readOnly = false }: {
   review: ApprovalView; onChanged: () => void; readOnly?: boolean;
 }) {
-  const [choice, setChoice] = useState<ApprovalChoice | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationView | null>(null);
+  const activeAuthorization = useRef<string | null>(null);
   useEffect(() => {
-    setChoice(review.choices.includes("allow_once") ? "allow_once" :
-      review.choices.includes("restore") ? "restore" : null);
     setError(null);
   }, [review.id, review.revision]);
+  useEffect(() => () => {
+    const id = activeAuthorization.current;
+    if (id) void api.post(`/api/authorizations/${id}/cancel`).catch(() => {
+      console.warn("OS authorization cancellation was not confirmed; inspect the request outcome.");
+    });
+  }, [review.id]);
+  const finishAuthorization = (failure?: string) => {
+    const id = activeAuthorization.current;
+    activeAuthorization.current = null;
+    setAuthorization(null);
+    setBusy(false);
+    setError(failure || null);
+    if (failure && id) void api.post(`/api/authorizations/${id}/cancel`).catch(() => {
+      console.warn("OS authorization cancellation was not confirmed; inspect the request outcome.");
+    });
+    onChanged();
+  };
   const decide = async (selected: ApprovalChoice) => {
     const displayedRevision = review.revision;
     setBusy(true);
     setError(null);
     try {
-      await api.post(`/api/approvals/${encodeURIComponent(review.id)}/decision`, {
-        revision: displayedRevision, choice: selected,
-      });
-      onChanged();
+      if (selected === "deny") {
+        await api.post(`/api/approvals/${encodeURIComponent(review.id)}/decision`, {
+          revision: displayedRevision, choice: selected,
+        });
+        onChanged();
+      } else {
+        const value: unknown = await api.post(`/api/approvals/${encodeURIComponent(review.id)}/authorization`, {
+          revision: displayedRevision, choice: selected,
+        }, { signal: AbortSignal.timeout(10_000) });
+        const session = readAuthorization(value, { review_id: review.id, revision: displayedRevision });
+        if (session.choice !== selected) throw new Error("The OS returned a different authorization choice.");
+        activeAuthorization.current = session.id;
+        setAuthorization(session);
+      }
     } catch (failure: unknown) {
       const hint = failure instanceof ApiError && typeof failure.body?.hint === "string" ? failure.body.hint : "";
       setError([failure instanceof Error ? failure.message : "OS approval failed.", hint].filter(Boolean).join(" "));
     } finally {
-      setBusy(false);
+      if (!activeAuthorization.current) setBusy(false);
     }
   };
   const mutable = !readOnly && review.status === "pending" && !review.diagnostic;
@@ -50,26 +77,18 @@ export function ApprovalCard({ review, onChanged, readOnly = false }: {
       </details>
       {mutable && (
         <>
-          {grantChoices.length > 0 && (grantChoices.length > 1 || choice === null) && (
-            <select className="rounded border bg-background p-1 text-xs" aria-label={`Authorization duration: ${review.label}`}
-              value={choice || ""} disabled={busy} onChange={(event) => {
-                const selected = grantChoices.find((candidate) => candidate === event.target.value);
-                setChoice(selected || null);
-              }}>
-              <option value="">Choose authorization</option>
-              {grantChoices.map((candidate) => <option key={candidate} value={candidate}>{APPROVAL_LABELS[candidate]}</option>)}
-            </select>
-          )}
           <div className="flex flex-wrap gap-2">
-            {choice && <Button size="sm" disabled={busy || !!error} onClick={() => void decide(choice)}>{APPROVAL_LABELS[choice]}</Button>}
+            {grantChoices.map((choice) => <Button key={choice} size="sm"
+              variant={choice === "allow_once" ? "default" : "outline"}
+              disabled={busy || !!error} onClick={() => void decide(choice)}>{APPROVAL_LABELS[choice]}</Button>)}
             {review.choices.includes("deny") && <Button size="sm" variant="outline" disabled={busy || !!error} onClick={() => void decide("deny")}>Deny</Button>}
-            {error && <Button size="sm" variant="outline" onClick={onChanged}>Refresh and review again</Button>}
+            {error && <Button size="sm" variant="outline" onClick={() => { setError(null); onChanged(); }}>Refresh and review again</Button>}
           </div>
-          <p className="text-[11px] text-muted-foreground">Authorization uses the OS secure prompt. It does not confirm task completion.</p>
-          <p className="text-[11px] text-muted-foreground">Headless authorization: <code>cos review approve {review.id}</code> in an attended OS terminal.</p>
+          <p className="text-[11px] text-muted-foreground">OS authentication opens here. Authorization does not confirm task completion.</p>
         </>
       )}
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {authorization && <OsAuthorizationDialog initial={authorization} onFinished={finishAuthorization} />}
     </Card>
   );
 }

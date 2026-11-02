@@ -1673,7 +1673,17 @@ snapshots supply catalog labels, human targets and supported choices. Each
 decision carries the revision actually displayed, transported as a decimal
 string to preserve `u64` precision. Positive choices use the existing
 `--system-review-json` helper; owner-only cancellation denies without minting
-authority. App confirmation remains a separate protected OS presentation. The Inbox is the
+authority. Web positive decisions use a process-bound polkit authentication
+agent and an in-page password dialog, rather than a hidden terminal prompt.
+Polkit's cookie and account identity never come from the browser; the agent
+accepts only the authenticated OS service and the serving owner's offered
+identity. Responses are transient, prompt-specific and bound to the Web token,
+origin and displayed decision. They travel only to the OS verifier, not model
+context, conversation/credential storage or logs. `pkexec`'s internal terminal
+agent is disabled, and only the existing Root helper/broker can record a grant.
+Cancellation/timeout never implies that an already admitted decision was undone;
+the broker is read again before presenting the outcome.
+App confirmation remains a separate protected OS presentation. The Inbox is the
 
 The Inbox is the The Inbox is the
 Notification Service projection; raw `context.event` records remain available

@@ -15,6 +15,7 @@ pub struct AppStateInner {
     pub owner_uid: u32,
     pub local_only: bool,
     pub started_at_unix: u64,
+    pub(super) authorizations: super::authorization::Controller,
     turn_leases: TurnLeaseRegistry,
 }
 
@@ -34,6 +35,7 @@ impl AppState {
                 owner_uid,
                 local_only,
                 started_at_unix,
+                authorizations: super::authorization::Controller::default(),
                 turn_leases: TurnLeaseRegistry::default(),
             }),
         }

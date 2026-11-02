@@ -76,9 +76,18 @@ the exact displayed revision, with decimal-string transport for full `u64`
 precision. Positive choices use the installed helper's bounded
 `--system-review-json` input. Denial uses owner-only `system.review.cancel` and
 grants nothing. Stale/error outcomes require refresh and are never retried
-automatically. Headless authorization retains `cos review approve <id>` in an
-attended OS terminal (`show` remains read-only inspection);
-Web never collects an OS password or supplies attendance/owner authority.
+automatically. Positive actions open an in-page OS authentication dialog,
+including on headless/WSL hosts. Only this dedicated authentication transport
+handles a transient password response; it sends the response to the OS
+polkit/PAM verifier, not Chat, model/provider setup, logs or credential storage.
+The Web process registers an agent for its own PID/start time and accepts only
+its authenticated owner's identity. HTTPS is required outside loopback, and
+responses are bound to the same origin, Web token and single-use prompt.
+Cancelling authentication does not undo an already recorded authorization.
+The Root helper and broker remain the only permission-decision authority.
+Agent Markdown cannot render password inputs or other active form controls;
+task-list checkboxes remain inert presentation. `cos review` remains the
+independent attended-terminal interface.
 
 ## Activities
 

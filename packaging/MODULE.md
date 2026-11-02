@@ -82,10 +82,11 @@ Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
 
-Agent depends on `pkexec` and `polkitd`, which provide the polkit runtime used by the
-installed `claw-approval-helper`. Headless and WSL terminal installations need
-the same protected approval path as desktop installations; the Desktop package
-must not be the component that accidentally supplies it.
+Agent depends on `pkexec` and `polkitd`, which provide the polkit runtime and
+password verifier used by the installed `claw-approval-helper`. Headless/WSL Web
+review and the protected `cos review` path need these without a Desktop package.
+The Web process supplies a process-bound authentication dialog, not permission
+authority; ordinary attended TUI one-shot decisions stay inline.
 
 The fixed helper action requires `auth_self` even without a local logind
 seat/session, as on WSL. This allows a password challenge but never automatic
@@ -94,6 +95,9 @@ agent, real PAM and helper against a private broker in mount/PID/network
 namespaces, with synthetic accounts and no live PAM/polkit changes. It covers
 legacy policy refusal, wrong-password/cancel, exact owner decisions and retry;
 an unconditional CI `YES` rule is not authentication coverage.
+The same private fixture exercises browser password responses without a
+controlling terminal, stale review/prompt and cross-origin/Web-token refusal,
+and verifies that password failure/cancellation never creates a grant.
 
 Agent also builds/installs the independent `claw-calendar-reader` from the
 OS-owned GPL Applet service library, with its original license. Its
