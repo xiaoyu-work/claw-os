@@ -10,15 +10,22 @@ fn info_distinguishes_ubuntu_host_from_claw_agent() {
              ID_LIKE=debian\n\
              VERSION_ID=\"26.04\"\n",
         ),
-        "0.1.0",
+        "1:0.2.0+git123.g0123456789ab",
     );
 
     assert_eq!(info["name"], "ubuntu");
     assert_eq!(info["version"], "26.04");
     assert_eq!(info["distribution"]["pretty_name"], "Ubuntu 26.04 LTS");
     assert_eq!(info["agent"]["name"], "claw-os-agent");
+    assert_eq!(info["cos_version"], "1:0.2.0+git123.g0123456789ab");
+    assert_eq!(info["agent"]["version"], info["cos_version"]);
     assert_eq!(info["claw_os"], false);
     assert_eq!(info["environment"], "claw-agent-on-host");
+
+    let running = cmd_info().unwrap();
+    let expected = option_env!("COS_PACKAGE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+    assert_eq!(running["cos_version"], expected);
+    assert_eq!(running["agent"]["version"], expected);
 }
 
 #[test]

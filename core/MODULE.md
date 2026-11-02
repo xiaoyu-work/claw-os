@@ -25,6 +25,7 @@ persistence, and structured primitive dispatch.
 | Path | Role |
 | --- | --- |
 | `src/main.rs` | `cos` process entry and output format selection |
+| `src/lib.rs` | Shared build identity: compiled `COS_PACKAGE_VERSION`, or Cargo package version for unstamped source builds; used by system info and Agent Web metadata |
 | `CHANGELOG.md` | Versioned core API migrations and compatibility transitions |
 | `src/router.rs` | Top-level command and hidden bridge dispatch |
 | `src/bin/clawd.rs` | System daemon entry |

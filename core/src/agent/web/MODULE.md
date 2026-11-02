@@ -24,6 +24,8 @@ web UI.
   The serving process disables core dumps and owner-level memory inspection
   before an OS authentication conversation starts.
 - Map HTTP routes to agent/session/setup operations.
+- Report the running binary's compiled build version through `/api/meta`,
+  sharing system information's source instead of a runtime environment value.
 - Keep setup pages available without a configured model, but reject a new
   Chat submission with an actionable Settings/Text diagnostic before creating
   a Job when the shared provider/credential readiness check fails.

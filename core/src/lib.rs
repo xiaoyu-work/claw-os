@@ -9,6 +9,11 @@
     clippy::type_complexity
 )]
 
+pub(crate) const BUILD_VERSION: &str = match option_env!("COS_PACKAGE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 pub mod activities;
 pub mod activity;
 pub mod agent;
