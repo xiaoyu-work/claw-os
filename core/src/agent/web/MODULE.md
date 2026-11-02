@@ -16,6 +16,9 @@ web UI.
 - Present task-linked capability reviews inline through the protected shared
   OS review DTO, preserving displayed revisions and controller-supported
   choices; App confirmation remains in the OS review presenter.
+  Chat, Tasks and Approvals share compact, expandable rows. Resolved capability
+  consent is labelled Authorized/Denied, never task completion. Only pending
+  unsupported choices become blocking diagnostics; real status errors remain visible.
 - Present OS password authentication in a bounded in-page dialog through a
   process-bound polkit agent, including WSL without a desktop/logind session.
   Bind responses to the owner, Web token, origin, displayed review and current

@@ -45,6 +45,13 @@ fn project(review: SystemReview) -> Result<ApprovalView, Failure> {
             "Capability review identity differs from its permission.".into(),
         ));
     }
+    let diagnostic = review.status_message.or_else(|| {
+        if review.status == ReviewStatus::Pending {
+            permission.unsupported_reason.clone()
+        } else {
+            None
+        }
+    });
     Ok(ApprovalView {
         id: review.id,
         revision: review.revision.to_string(),
@@ -62,9 +69,7 @@ fn project(review: SystemReview) -> Result<ApprovalView, Failure> {
         choices: permission.supported_choices.clone(),
         verb: permission.verb.clone(),
         details: review.context,
-        diagnostic: review
-            .status_message
-            .or_else(|| permission.unsupported_reason.clone()),
+        diagnostic,
     })
 }
 
