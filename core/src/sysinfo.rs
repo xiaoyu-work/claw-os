@@ -194,8 +194,10 @@ fn subtree_scope(root: &Path) -> String {
 
 fn cmd_info() -> Result<Value, String> {
     let os_release = std::fs::read_to_string("/etc/os-release").ok();
-    let agent_version = env::var("COS_VERSION").unwrap_or_else(|_| "unknown".into());
-    Ok(info_from_os_release(os_release.as_deref(), &agent_version))
+    Ok(info_from_os_release(
+        os_release.as_deref(),
+        crate::BUILD_VERSION,
+    ))
 }
 
 fn info_from_os_release(raw: Option<&str>, agent_version: &str) -> Value {
