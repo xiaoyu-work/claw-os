@@ -17,7 +17,6 @@ import {
   ChevronDown,
   GitFork,
   Inbox,
-  ListTodo,
   MessageSquare,
   MoreHorizontal,
   Moon,
@@ -76,7 +75,6 @@ const NAV_ITEMS: Array<{
   href: string;
 }> = [
   { key: "activities", label: "Activities", icon: Target, href: "/activities" },
-  { key: "tasks", label: "Tasks", icon: ListTodo, href: "/tasks" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "memory", label: "Memory", icon: Brain, href: "/memory" },
   { key: "nearby", label: "Nearby Sharing", icon: Archive, href: "/nearby" },
