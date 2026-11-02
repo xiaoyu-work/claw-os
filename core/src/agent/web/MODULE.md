@@ -89,6 +89,7 @@ web UI.
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
 | `routes/activities/work.rs`, `ui/src/components/activity-auto-work.tsx` | Shared automatic-work controls and bounded reported handoffs, without local scheduling or permission authority |
 | `ui/` | TypeScript/React source and generated distribution assets |
+| `ui/src/components/cos-sidebar.tsx` | New chat and conversation history alongside OS navigation, without a duplicate Chat navigation item |
 | `ui/src/lib/chat-stream.ts` | Terminal-event validation and bounded same-Job transport recovery through verified history replay |
 | `ui/src/lib/chat-presentation.ts`, `ui/src/components/chat-evidence.tsx` | Truthful tool-phase reduction and inert evidence/source presentation |
 | `ui/src/pages/activities.tsx`, `ui/src/components/activity-*.tsx` | Fixed Activity list, planning forms, detail cards, and existing task/approval/session navigation |

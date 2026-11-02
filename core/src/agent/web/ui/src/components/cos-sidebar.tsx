@@ -75,7 +75,6 @@ const NAV_ITEMS: Array<{
   icon: typeof MessageSquare;
   href: string;
 }> = [
-  { key: "chat", label: "Chat", icon: MessageSquare, href: "/chat" },
   { key: "activities", label: "Activities", icon: Target, href: "/activities" },
   { key: "tasks", label: "Tasks", icon: ListTodo, href: "/tasks" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
