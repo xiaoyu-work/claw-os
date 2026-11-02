@@ -146,6 +146,12 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/approvals/reviews/recent", get(routes::approvals::recent_reviews))
         .route("/api/tasks/{id}/approvals", get(routes::approvals::task_reviews))
         .route("/api/approvals/{id}/decision", post(routes::approvals::decide_review))
+        .route("/api/approvals/{id}/authorization", post(routes::approvals::start_authorization))
+        .route("/api/authorizations/{id}", get(routes::approvals::authorization_status))
+        .route("/api/authorizations/{id}/response",
+            post(routes::approvals::authorization_response)
+                .layer(DefaultBodyLimit::max(32 * 1024)))
+        .route("/api/authorizations/{id}/cancel", post(routes::approvals::cancel_authorization))
         .route("/api/approvals/recent", get(routes::approvals::recent))
         .route(
             "/api/approvals/{id}/approve",

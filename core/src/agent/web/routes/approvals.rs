@@ -12,7 +12,9 @@ use crate::agent::web::state::AppState;
 use crate::clawd::routes::Command;
 
 mod presentation;
+mod authorization;
 pub use presentation::{pending_reviews, task_reviews, recent_reviews, decide_review};
+pub use authorization::{start_authorization, authorization_status, authorization_response, cancel_authorization};
 
 pub async fn pending(
     State(_state): State<AppState>,
@@ -63,9 +65,13 @@ pub async fn approve(
         )));
     }
     validate_decision_input(&id, body.note.as_deref())?;
-    run_approval_helper(&id, &duration, body.note)
-        .await
-        .map(Json)
+    Err((
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "Use the Web OS authorization dialog. Refresh this page before authorizing.",
+            "code": "authorization_dialog_required",
+        })),
+    ))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -89,45 +95,6 @@ pub async fn deny(
         .await
         .map(Json)
         .map_err(super::clawd::RpcError::into_api_error)
-}
-
-async fn run_approval_helper(
-    id: &str,
-    duration: &str,
-    note: Option<String>,
-) -> Result<Value, (StatusCode, Json<Value>)> {
-    let mut command = tokio::process::Command::new("/usr/bin/pkexec");
-    command
-        .arg("/usr/local/bin/claw-approval-helper")
-        .arg("--id")
-        .arg(id)
-        .arg("--decision")
-        .arg("approve")
-        .arg("--duration")
-        .arg(duration)
-        .kill_on_drop(true);
-    if let Some(note) = note.filter(|note| !note.trim().is_empty()) {
-        command.arg("--note").arg(note);
-    }
-    let output = command
-        .output()
-        .await
-        .map_err(|error| internal(format!("launch privileged approval helper: {error}")))?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": if message.is_empty() {
-                    "approval authorization was cancelled or denied"
-                } else {
-                    message.as_str()
-                }
-            })),
-        ));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| internal(format!("invalid approval helper response: {error}")))
 }
 
 fn validate_decision_input(

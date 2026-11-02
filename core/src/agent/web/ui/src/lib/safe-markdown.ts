@@ -16,7 +16,6 @@ const MARKDOWN_TAGS = [
   "h6",
   "hr",
   "img",
-  "input",
   "li",
   "ol",
   "p",
@@ -60,6 +59,8 @@ export function renderSafeMarkdown(
   markdown: string,
   sanitizer: Sanitizer = DOMPurify,
 ): string {
-  const html = marked.parse(markdown, { async: false }) as string;
+  const renderer = new marked.Renderer();
+  renderer.checkbox = ({ checked }) => checked ? "&#9745;" : "&#9744;";
+  const html = marked.parse(markdown, { async: false, renderer }) as string;
   return sanitizer.sanitize(html, SANITIZE_OPTIONS);
 }

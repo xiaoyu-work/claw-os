@@ -123,6 +123,18 @@ const approvalView = (id, reason = "Review the release notes") => ({
   target: "/tmp/report.txt", reason, risk: "medium", choices: ["deny", "allow_once"],
   verb: "fs.read", details: [], diagnostic: null,
 });
+const osAuthorizations = new Map();
+let osAuthorizationNumber = 0;
+const osFixturePassword = "browser-fixture-password";
+function completeOsAuthorization(id) {
+  if (id === "inline-approval") inlineApprovalDecided = true;
+  for (const job of jobs.values()) {
+    if (job.waiting_on.includes(id)) Object.assign(job, {
+      status: "ok", waiting_on: [], finished_at: timestamp(),
+      response: "Release draft reviewed.", approved: true,
+    });
+  }
+}
 const evidenceFixture = {
   status: "verified", required: true, verified_claims: 1, total_claims: 1,
   source_count: 1, sources: [{
@@ -815,14 +827,42 @@ async function fixture(req, res) {
   if (url.pathname === "/api/approvals/reviews/recent") return reply(req, res, { reviews: [], app_reviews: [] });
   if (/^\/api\/approvals\/[^/]+\/decision$/.test(url.pathname)) {
     const id = url.pathname.split("/")[3];
-    assert.deepEqual(body, { revision: "3", choice: "allow_once" }, "decision carries the displayed revision and no owner or scope");
-    if (id === "inline-approval") inlineApprovalDecided = true;
-    for (const job of jobs.values()) {
-      if (job.waiting_on.includes(id)) Object.assign(job, {
-        status: "ok", waiting_on: [], finished_at: timestamp(), response: "Release draft reviewed.", approved: true,
+    assert.deepEqual(body, { revision: "3", choice: "deny" }, "only denial bypasses OS authentication");
+    return reply(req, res, { ...approvalView(id), status: "cancelled", choices: [] });
+  }
+  if (/^\/api\/approvals\/[^/]+\/authorization$/.test(url.pathname)) {
+    const review_id = url.pathname.split("/")[3];
+    assert.deepEqual(body, { revision: "3", choice: "allow_once" }, "OS authentication binds the displayed revision and choice");
+    const id = createHash("sha256").update(`os-auth-${++osAuthorizationNumber}`).digest("hex");
+    const state = {
+      id, review_id, revision: "3", label: "Read selected files", target: "/tmp/report.txt",
+      choice: body.choice, phase: "prompt", message: null,
+      prompt: { id: createHash("sha256").update(id).digest("hex"), message: "OS password" },
+    };
+    osAuthorizations.set(id, state);
+    return reply(req, res, state);
+  }
+  const osAuthorization = /^\/api\/authorizations\/([a-f0-9]{64})(?:\/(response|cancel))?$/.exec(url.pathname);
+  if (osAuthorization) {
+    const state = osAuthorizations.get(osAuthorization[1]);
+    assert.ok(state, "authentication belongs to an existing OS conversation");
+    if (osAuthorization[2] === "cancel") {
+      if (!["finished", "failed", "cancelled", "expired"].includes(state.phase)) Object.assign(state, {
+        phase: "cancelled", prompt: null, message: "OS authorization was cancelled; permission is still pending.",
       });
+    } else if (osAuthorization[2] === "response") {
+      assert.deepEqual(Object.keys(body).sort(), ["prompt_id", "response"]);
+      assert.equal(body.prompt_id, state.prompt.id);
+      if (body.response === osFixturePassword) {
+        completeOsAuthorization(state.review_id);
+        Object.assign(state, { phase: "finished", prompt: null, message: null });
+      } else {
+        Object.assign(state, { phase: "failed", prompt: null, message: "The OS password was not accepted." });
+      }
+    } else {
+      assert.equal(req.method, "GET");
     }
-    return reply(req, res, { ...approvalView(id), status: "completed", choices: [] });
+    return reply(req, res, state);
   }
   if (url.pathname === "/api/activities/capability-policy-catalog") {
     assert.equal(req.method, "GET");
@@ -1468,6 +1508,15 @@ try {
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
   };
   const clickText = (text) => click(buttonExpression(text));
+  const typeOsPassword = async (value) => {
+    await wait("!!document.querySelector('[role=\"dialog\"] input[type=\"password\"]')", "in-page OS password prompt");
+    await evaluate(`(() => {
+      const input = document.querySelector('[role="dialog"] input[type="password"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    })()`);
+    await click(`Array.from(document.querySelector('[role="dialog"]').querySelectorAll('button')).find(button => button.textContent === 'Authenticate')`);
+  };
   const clickLabel = (label) => click(`document.querySelector('[aria-label=${JSON.stringify(label)}]')`);
   const selectMenuItem = async (text) => {
     const expression = `Array.from(document.querySelectorAll('[role="menuitem"]')).find(el =>
@@ -1598,8 +1647,23 @@ try {
   await wait("!!document.querySelector('[aria-label=\"Current task approvals\"]')", "task-scoped inline approvals");
   await wait("document.body.innerText.includes('Read selected files') && document.body.innerText.includes('/tmp/report.txt')", "readable OS permission target");
   await click(`Array.from(document.querySelectorAll('[aria-label="Current task approvals"] button')).find(button => button.textContent === 'Authorize once')`);
+  assert.equal(inlineApprovalDecided, false, "clicking is not OS consent");
+  await typeOsPassword("wrong-fixture-password");
+  await wait("document.body.innerText.includes('The OS password was not accepted.')", "wrong password remains an explicit failure");
+  assert.equal(inlineApprovalDecided, false);
+  await clickText("Refresh and review again");
+  await clickText("Authorize once");
+  await wait("!!document.querySelector('[role=\"dialog\"] input[type=\"password\"]')", "new OS authentication attempt");
+  await click(`Array.from(document.querySelector('[role="dialog"]').querySelectorAll('button')).find(button => button.textContent === 'Cancel')`);
+  await wait("document.body.innerText.includes('OS authorization was cancelled; permission is still pending.')", "cancelled OS authentication");
+  assert.equal(inlineApprovalDecided, false);
+  await clickText("Refresh and review again");
+  await clickText("Authorize once");
+  await typeOsPassword(osFixturePassword);
   await wait("!document.querySelector('[aria-label=\"Current task approvals\"]')", "inline decision followed by an OS refresh");
   assert.equal(inlineApprovalDecided, true);
+  assert.equal(await evaluate(`JSON.stringify(localStorage).includes(${JSON.stringify(osFixturePassword)})`), false);
+  assert.equal(await evaluate("document.querySelectorAll('select[aria-label^=\"Authorization duration\"]').length"), 0);
   console.log("PASS task-scoped readable inline authorization with exact displayed revision");
 
   await evaluate(`(() => {
@@ -1989,6 +2053,7 @@ try {
   await clickText("Open Approvals");
   await wait("location.hash === '#/approvals' && document.body.innerText.includes('Review the release notes')", "existing approvals page");
   await clickText("Authorize once");
+  await typeOsPassword(osFixturePassword);
   await wait("document.body.innerText.includes('No approval records in this view.')", "existing approval action");
   assert.equal(firstJob.status, "ok");
   assert.equal(activities.get("activity-1").state, "active", "successful jobs never auto-complete a goal");

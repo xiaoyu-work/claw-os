@@ -2,7 +2,7 @@ pub mod activities;
 pub mod approvals;
 pub mod auth;
 pub mod chat;
-mod clawd;
+pub(super) mod clawd;
 pub mod inbox;
 pub mod meta;
 pub mod memory;

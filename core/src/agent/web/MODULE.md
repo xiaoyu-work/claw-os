@@ -13,6 +13,13 @@ web UI.
 - Present task-linked capability reviews inline through the protected shared
   OS review DTO, preserving displayed revisions and controller-supported
   choices; App confirmation remains in the OS review presenter.
+- Present OS password authentication in a bounded in-page dialog through a
+  process-bound polkit agent, including WSL without a desktop/logind session.
+  Bind responses to the owner, Web token, origin, displayed review and current
+  single-use prompt. Passwords go only to the OS verifier, never to the Agent,
+  credential store, logs or conversation state.
+  The serving process disables core dumps and owner-level memory inspection
+  before an OS authentication conversation starts.
 - Map HTTP routes to agent/session/setup operations.
 - Keep setup pages available without a configured model, but reject a new
   Chat submission with an actionable Settings/Text diagnostic before creating
@@ -68,6 +75,8 @@ web UI.
 | `routes/` | HTTP and SSE endpoint handlers |
 | `routes/memory.rs`, `ui/src/pages/memory.tsx` | Same-owner memory inspection, checked learned-note editing and explicit forgetting through the shared broker |
 | `routes/approvals/presentation.rs`, `ui/src/components/chat-approvals.tsx` | Shared readable capability-review projection, same-task discovery, exact displayed-revision decisions and helper delegation |
+| `authorization.rs`, `authorization/polkit.rs`, `routes/approvals/authorization.rs` | Ephemeral browser-bound polkit/PAM conversation, fixed OS helpers, deadlines/cancellation and root-broker outcome reconciliation |
+| `ui/src/components/os-authorization.tsx` | Password-only dialog outside untrusted Markdown; no secret React state, storage or automatic response replay |
 | `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
 | `routes/activities/work.rs`, `ui/src/components/activity-auto-work.tsx` | Shared automatic-work controls and bounded reported handoffs, without local scheduling or permission authority |
@@ -92,6 +101,15 @@ web UI.
 Routes call agent/core services and use the same guarded runtime paths as CLI
 requests. SSE presentation is not conversation authority or persisted provider
 state. Generated `ui/dist/` assets come from the UI build.
+Positive Web review actions register an authentication agent for the serving
+PID/start time, not a desktop session or fallback agent. Only the authenticated
+polkit service can start the fixed approval action, and only the serving
+account's offered identity is accepted. OS-password responses use the standard
+polkit verifier socket/SUID helper; they never replace polkit's proof or the
+Root helper's protected review validation. `pkexec`'s internal terminal agent
+is disabled. Failed, cancelled and uncertain outcomes require a broker refresh,
+never automatic grant replay. Auth sessions are process-local and expire; no
+new daemon, portable authority or desktop runtime dependency is introduced.
 Conversation list/detail/history/update/fork routes adapt the shared broker
 contract used by terminal and native presentations. Canonical session identity,
 owner-memory access, idle-session mutation locking, archive state and branch

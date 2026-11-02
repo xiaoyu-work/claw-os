@@ -41,6 +41,7 @@
 
 pub mod assets;
 pub mod auth;
+pub(super) mod authorization;
 pub mod routes;
 pub mod server;
 pub mod sse;

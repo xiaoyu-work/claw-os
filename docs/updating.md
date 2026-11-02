@@ -305,11 +305,12 @@ restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed. A Root-managed graphical session is an
 interruption boundary: see [display lifetime](#root-managed-desktop-session-lifetime).
 
-The Agent package also installs `pkexec` and its polkit runtime. This is
-required even on headless Ubuntu and WSL because the terminal's authorize and
-deny actions invoke the installed `claw-approval-helper` only through that
-protected path. Upgrading an installation that lacks `pkexec` pulls it in
-without changing existing approval records.
+The Agent package also installs `pkexec` and its polkit runtime. Protected
+Web/native review decisions and `cos review` use the installed
+`claw-approval-helper` through this path, including on headless Ubuntu and WSL.
+Upgrading an installation that lacks `pkexec` pulls it in without changing
+existing approval records. Ordinary attended TUI one-shot approval stays
+inline through the broker's kernel-presence check, with no OS-password prompt.
 
 Claw's fixed approval-helper policy requires `auth_self` for active, inactive
 and sessionless callers. WSL processes can have a terminal but no local logind
@@ -317,12 +318,17 @@ seat/session; rejecting that category prevented even a password prompt.
 This permits authentication, not automatic approval: the helper still binds
 the decision to `PKEXEC_UID`, and the broker rejects another owner's request.
 Authorization is not cached (`auth_self_keep` and unconditional `yes` are not
-used). TUI authentication uses an unprivileged `pkttyagent` bound to the
-frontend's PID/start time and stopped after each decision. This avoids the
-internal setuid agent's authentication-cookie mismatch on affected polkit
-versions. `polkitd` is a direct package dependency for that presenter. Restart an
-already-open TUI after upgrading so it also picks up the terminal-input handoff
-and improved failure diagnostics.
+used). Web review authentication now appears in a password dialog in the
+page, not the terminal that launched `cos agent serve`. The serving process
+registers a temporary PID/start-time-bound polkit agent and accepts only its
+own OS identity. Password responses are single-use, same-origin and Web-session
+bound, cleared after forwarding, and never stored in Chat, provider credentials
+or application logs. The OS polkit/PAM verifier still authenticates the
+password; the browser cannot assert that authentication succeeded.
+`pkexec`'s internal terminal agent is disabled. Authentication expires after a
+bounded wait, and cancellation/timeout is followed by a broker read because
+already-recorded decisions are not rolled back. Restart an already-open Web
+server after upgrading, then refresh the page to load the paired dialog.
 
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
 are replaced together.
