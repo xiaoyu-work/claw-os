@@ -57,6 +57,9 @@ material internals.
   network/protocol strings to `CredentialErrorKind::External` at command
   dispatch. It does not own randomness, key material, files, locks, or keyring
   state.
+- OAuth browser launch shares the core Windows/WSL host launcher with Agent
+  Web. URLs go through stdin, not an interpolated shell script; failed Windows
+  interop is reported before the normal manual-link flow.
 
 ## Change Together
 

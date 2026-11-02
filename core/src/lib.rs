@@ -36,6 +36,7 @@ pub mod engine_pkg;
 pub mod errors;
 pub mod extension_host;
 pub mod filelock;
+pub(crate) mod host_browser;
 pub mod i18n;
 pub mod ipc;
 pub mod model;

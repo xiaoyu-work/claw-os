@@ -8,6 +8,9 @@ web UI.
 ## Responsibilities
 
 - Authenticate local browser/desktop requests.
+- Open the Windows default browser for `--open` under WSL rather than a WSLg
+  Linux browser, so host input methods remain available. Bind the listener
+  before launch and report failed interop without silently switching browsers.
 - Present the broker-owned Memory center, including source/revision/time,
   checked notes, explicit App forgetting and read-only conversation/index views.
 - Present task-linked capability reviews inline through the protected shared

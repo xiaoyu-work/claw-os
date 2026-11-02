@@ -643,6 +643,15 @@ fn google_authorization_url(
 }
 
 fn open_browser(url: &str) -> bool {
+    if cfg!(target_os = "windows") || crate::host_browser::is_wsl() {
+        return match crate::host_browser::open_windows_browser(url) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("{error}");
+                false
+            }
+        };
+    }
     for (program, args) in [
         ("xdg-open", vec![url]),
         ("gio", vec!["open", url]),

@@ -71,6 +71,7 @@ persistence, and structured primitive dispatch.
 | `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |
 | `src/session/` | Session storage and lifecycle |
 | `src/storage.rs` | Daemon state hardening and bounded ownership repair of legacy root-created owner memory files |
+| `src/host_browser.rs` | Shared Windows/WSL default-browser launch using data-only URL transport, independent of the Linux desktop and Windows PATH inheritance |
 
 ## Dependencies
 
