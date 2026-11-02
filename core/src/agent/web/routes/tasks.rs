@@ -17,6 +17,8 @@ pub struct FollowUpRequest {
     attachments: Vec<crate::agent::attachments::AttachmentInput>,
     #[serde(default = "default_true")]
     use_memory: bool,
+    #[serde(default)]
+    notification_viewer: Option<crate::clawd::wire::requests::NotificationViewer>,
 }
 
 fn default_true() -> bool {
@@ -116,6 +118,10 @@ fn follow_up_params(predecessor: &Value, request: FollowUpRequest) -> Result<Val
         "after_task_id": predecessor_id,
         "use_memory": request.use_memory,
     });
+    if let Some(viewer) = request.notification_viewer {
+        params["notification_viewer"] =
+            serde_json::to_value(viewer).map_err(|error| error.to_string())?;
+    }
     if !request.attachments.is_empty() {
         params["attachments"] =
             serde_json::to_value(request.attachments).map_err(|error| error.to_string())?;

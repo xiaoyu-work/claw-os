@@ -62,6 +62,32 @@ fn broker_handlers_derive_owner_from_peer_credentials() {
             .unwrap()
             .is_empty()
     );
+
+    let sid = crate::session::create("notification view fixture").unwrap();
+    crate::session::update_meta(&sid, |meta| {
+        meta.owner_uid = Some(1000);
+        meta.creator_runtime = Some("clawd".into());
+    }).unwrap();
+    let before = crate::session::get_meta(&sid).unwrap();
+    let viewer_id = uuid::Uuid::new_v4().to_string();
+    let viewing = json!({
+        "viewer": { "id": viewer_id, "revision": 1, "visible": true },
+        "session_id": sid.to_string(),
+    });
+    assert!(view(viewing.clone(), &other).is_err());
+    view(viewing.clone(), &owner).unwrap();
+    assert!(crate::notifications::conversation_is_viewed(1000, &sid.to_string()).unwrap());
+    assert!(!crate::notifications::conversation_is_viewed(1001, &sid.to_string()).unwrap());
+    let after = crate::session::get_meta(&sid).unwrap();
+    assert_eq!(before.client, after.client);
+    assert_eq!(before.origin, after.origin);
+    let mut forged = viewing;
+    forged["owner_uid"] = json!(1000);
+    assert!(view(forged, &other).is_err());
+    view(json!({
+        "viewer": { "id": viewer_id, "revision": 2, "visible": false },
+    }), &owner).unwrap();
+    assert!(!crate::notifications::conversation_is_viewed(1000, &sid.to_string()).unwrap());
 }
 
 #[test]

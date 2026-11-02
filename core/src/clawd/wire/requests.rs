@@ -539,6 +539,24 @@ pub struct TaskSubmit {
     pub reasoning_effort: Option<Text<16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_memory: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_viewer: Option<NotificationViewer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationViewer {
+    pub id: Token<128>,
+    pub revision: std::num::NonZeroU64,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationView {
+    pub viewer: NotificationViewer,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

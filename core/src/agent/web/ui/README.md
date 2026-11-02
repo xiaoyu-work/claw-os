@@ -103,6 +103,18 @@ Agent Markdown cannot render password inputs or other active form controls;
 task-list checkboxes remain inert presentation. `cos review` remains the
 independent attended-terminal interface.
 
+## Inbox and conversation visibility
+
+Inbox is notification history, not a row for every conversation turn.
+Queue/start/resume/recovery progress stays in the conversation and execution
+history. A focused visible conversation reports an owner-scoped short viewing
+lease; its result stays inline instead of generating another Inbox item.
+Hiding/leaving/closing clears the hint, so work finishing in the background
+can notify. View changes never cancel, replay, approve or complete a Job.
+Actual approval alerts and other system/App notifications keep their existing
+service and delivery policy. Existing notification history is not deleted or
+automatically acknowledged.
+
 ## Activities
 
 `#/activities`, `#/activities/new`, and `#/activities/:id` present the

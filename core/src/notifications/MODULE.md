@@ -28,8 +28,17 @@ The `Activity` delivery policy is durable-only and never queues Web, desktop,
 or ntfy interruption. Activity-linked Agent lifecycle updates use one
 owner/source/Activity dedupe key during the normal deduplication window, so
 `occurrences` exposes each bounded batch while the latest linked Job and
-session remain inspectable. Standalone Jobs retain their phase-specific
-delivery behavior, and critical immediate delivery remains a separate policy.
+session remain inspectable. Queue/start/resume/recovery progress stays in task
+streams and audit rather than creating notifications. Background terminal
+outcomes retain their existing delivery policy; outcomes of a currently viewed
+conversation are presented inline instead. Genuine approval and critical
+alerts remain separate.
+
+The broker holds bounded owner/viewer conversation leases in memory. Web sends
+focus/visibility updates and five-second renewals; leases expire after fifteen
+seconds. Revisions prevent late updates from restoring an abandoned view, and
+multiple viewers remain independent. These are notification hints only, never
+the kernel-attended `SessionPresence` proof or permission/consent authority.
 
 The existing Agent desktop bridge remains the sole desktop delivery consumer.
 Its connection-local numeric handles are not durable IDs or an alias store.
@@ -48,6 +57,7 @@ the worker's automatic legacy-state move no longer selects it.
 | `mod.rs` | Stable service definition and domain model |
 | `sqlite.rs` | Durable SQLite provider |
 | `ntfy.rs` | Opt-in ntfy delivery adapter |
+| `visibility.rs` | Bounded, expiring, owner-scoped conversation-view hints; no durable state or authority |
 | `../../test/unit/notifications/` | Unit and adapter tests |
 
 ## Dependencies

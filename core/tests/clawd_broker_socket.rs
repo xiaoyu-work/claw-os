@@ -166,6 +166,36 @@ async fn original_image_submission_crosses_the_authenticated_broker_socket() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn notification_view_roundtrips_without_owner_or_authority_selectors() {
+    let bound = bind();
+    let path = bound.path.clone();
+    let server = tokio::spawn(serve_once(bound.listener, |envelope| {
+        let decode = Command::NotificationView.route().decode;
+        let params = decode(envelope.params).unwrap();
+        assert_eq!(params["viewer"]["revision"], 3);
+        assert_eq!(params["viewer"]["visible"], false);
+        let mut forged = params.clone();
+        forged["owner_uid"] = json!(1001);
+        assert!(decode(forged).is_err());
+        let mut invalid = params.clone();
+        invalid["viewer"]["revision"] = json!(0);
+        assert!(decode(invalid).is_err());
+        Response::ok(envelope.id, json!({
+            "id": params["viewer"]["id"], "revision": 3,
+            "session_id": null, "expires_at_ms": 15000,
+        }))
+    }));
+    let request = Request::build(Command::NotificationView, json!({
+        "viewer": { "id": "browser-tab", "revision": 3, "visible": false },
+    }));
+    let response = cos::clawd::client::request(path, request).await.unwrap();
+    assert_eq!(response.result.unwrap()["revision"], 3);
+    let (credentials, envelope) = server.await.unwrap();
+    assert_eq!(credentials.uid, unsafe { libc::getuid() });
+    assert_eq!(envelope.command.as_str(), "notification.view");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message() {
     let bound = bind();
     let path = bound.path.clone();

@@ -185,16 +185,17 @@ fn activity_task_notifications_group_every_phase_without_interrupting() {
     second.activity_id = first.activity_id.clone();
     second.session_id = Some("session-2".into());
 
-    let (_, submitted) = task_notification_draft(&first, "submitted").unwrap();
+    for phase in ["submitted", "started", "resumed", "recovered"] {
+        assert!(task_notification_draft(&first, phase).is_none());
+    }
     let (_, waiting) = task_notification_draft(&second, "waiting").unwrap();
     let (_, completed) = task_notification_draft(&second, "completed").unwrap();
 
     assert_eq!(
-        submitted.dedupe_key.as_deref(),
+        waiting.dedupe_key.as_deref(),
         Some("activity:00000000-0000-4000-8000-000000000001:tasks")
     );
-    assert_eq!(waiting.dedupe_key, submitted.dedupe_key);
-    assert_eq!(completed.dedupe_key, submitted.dedupe_key);
+    assert_eq!(completed.dedupe_key, waiting.dedupe_key);
     assert_eq!(
         waiting.delivery_policy,
         crate::notifications::DeliveryPolicy::Activity
@@ -213,27 +214,34 @@ fn standalone_task_notifications_keep_phase_specific_delivery() {
     let mut job = pending_with_model(None);
     job.owner_uid = Some(7);
 
-    let (_, submitted) = task_notification_draft(&job, "submitted").unwrap();
+    for phase in ["submitted", "started", "resumed", "recovered"] {
+        assert!(task_notification_draft(&job, phase).is_none());
+    }
     let (_, completed) = task_notification_draft(&job, "completed").unwrap();
 
-    assert_eq!(
-        submitted.delivery_policy,
-        crate::notifications::DeliveryPolicy::Activity
-    );
     assert_eq!(
         completed.delivery_policy,
         crate::notifications::DeliveryPolicy::Immediate
     );
-    let submitted_key = format!("task:{}:submitted", job.id);
     let completed_key = format!("task:{}:completed", job.id);
-    assert_eq!(
-        submitted.dedupe_key.as_deref(),
-        Some(submitted_key.as_str())
-    );
     assert_eq!(
         completed.dedupe_key.as_deref(),
         Some(completed_key.as_str())
     );
+
+    let session_id = format!("viewed-{}", uuid::Uuid::new_v4());
+    let viewer_id = uuid::Uuid::new_v4().to_string();
+    job.session_id = Some(session_id.clone());
+    crate::notifications::set_conversation_view(7, &viewer_id, 1, Some(&session_id)).unwrap();
+    for phase in ["completed", "cancelled", "failed"] {
+        assert!(task_notification_draft(&job, phase).is_none());
+    }
+    assert!(task_notification_draft(&job, "waiting").is_some());
+    job.owner_uid = Some(8);
+    assert!(task_notification_draft(&job, "completed").is_some());
+    job.owner_uid = Some(7);
+    crate::notifications::set_conversation_view(7, &viewer_id, 2, None).unwrap();
+    assert!(task_notification_draft(&job, "completed").is_some());
 }
 
 fn fresh_activity_root() -> tempfile::TempDir {

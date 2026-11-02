@@ -53,6 +53,7 @@ import {
   type ToolCall,
 } from "@/lib/chat-history";
 import { renderSafeMarkdown } from "@/lib/safe-markdown";
+import { notificationViewer, useConversationView } from "@/lib/conversation-view";
 import { useRoute, navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,7 @@ export function ChatPage({ meta }: { meta: any }) {
   // with a stale server snapshot. Stash the just-assigned id so the
   // effect can recognise it and skip the reload.
   const skipReloadFor = useRef<string>("");
+  useConversationView(sessionId, !restoring && !blockedByTask && !reconnecting);
 
   const replayTask = useCallback(async (task: TaskIdentity, signal: AbortSignal) => {
     const { history, job } = await taskReplay(task, signal);
@@ -420,6 +422,7 @@ export function ChatPage({ meta }: { meta: any }) {
         body: {
           prompt: text,
           session_id: sessionId || undefined,
+          notification_viewer: notificationViewer(),
           ...(submittedAttachments.length
             ? {
                 attachments: submittedAttachments.map((attachment) => ({
@@ -574,6 +577,7 @@ export function ChatPage({ meta }: { meta: any }) {
         `/api/tasks/${encodeURIComponent(predecessorId)}/follow-up`,
         {
           prompt: text,
+          notification_viewer: notificationViewer(!restoring && !blockedByTask && !reconnecting),
           ...(queuedAttachments.length
             ? {
                 attachments: queuedAttachments.map((attachment) => ({
@@ -607,7 +611,7 @@ export function ChatPage({ meta }: { meta: any }) {
     } finally {
       setQueueing(false);
     }
-  }, [attachments, busy, input, queueing, sessionId, watchPredecessor]);
+  }, [attachments, blockedByTask, busy, input, queueing, reconnecting, restoring, sessionId, watchPredecessor]);
 
   const stop = useCallback(() => {
     const controller = abortRef.current;

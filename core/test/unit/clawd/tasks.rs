@@ -86,6 +86,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
     let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
     image.resize(2 * 1024 * 1024, 0);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&image);
+    let viewer_id = uuid::Uuid::new_v4().to_string();
     let submitted = submit(
         json!({
             "prompt": "inspect the screenshot",
@@ -96,6 +97,7 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
             }],
             "reasoning_effort": "high",
             "plan_only": true,
+            "notification_viewer": { "id": viewer_id, "revision": 1, "visible": true },
         }),
         &client,
     )
@@ -115,6 +117,10 @@ async fn image_attachments_are_verified_persisted_retried_and_redacted_from_resu
     assert_eq!(stored.attachments[0].data, encoded);
     assert_eq!(stored.requested_reasoning_effort.as_deref(), Some("high"));
     assert!(stored.plan_only);
+    assert!(crate::notifications::conversation_is_viewed(
+        owner_uid, stored.session_id.as_deref().unwrap()
+    ).unwrap());
+    assert!(!stored.client.attended, "notification visibility never supplies attendance");
     let digest = stored.attachments[0].sha256.clone();
     store.cancel_pending(id).unwrap().unwrap();
 

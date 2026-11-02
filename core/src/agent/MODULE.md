@@ -18,10 +18,11 @@ surfaces.
   separate from owner-controlled, extension and third-party content.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
-- Publish deterministic task and approval lifecycle notifications after durable
-  state transitions. Activity-linked phases, including approval waits,
-  coalesce into quiet Activity attention batches; standalone delivery remains
-  phase-specific.
+- Publish meaningful background outcomes and approval notifications after
+  durable transitions, not routine queue/start/resume progress. Current Web
+  conversation outcomes stay inline while its owner-scoped viewing lease is
+  active; detached outcomes become notifications. Activity-linked attention
+  coalesces into quiet batches, independently of consent and critical alerts.
 - Attach built-in, app, and MCP tools to one guarded registry.
 - Delegate dynamic App and MCP execution to the task-owned extension host when
   running inside `claw-agentd`.

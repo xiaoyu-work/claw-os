@@ -288,6 +288,21 @@ class WebClient:
 
 def exercise_web_authorization(cos, uid, other_uid, home, root):
     with contextlib.closing(WebClient(cos, uid, home, root)) as web:
+        conversation = rpc("agent.conversation.create", {"title": "Viewing fixture"}, uid)
+        conversation_id = conversation["result"]["conversation"]["id"]
+        viewer_id = uuid.uuid4().hex
+        viewing = {
+            "viewer": {"id": viewer_id, "revision": 1, "visible": True},
+            "session_id": conversation_id,
+        }
+        status, receipt = web.call("POST", "/api/notifications/view", viewing)
+        assert status == 200 and receipt["session_id"] == conversation_id
+        assert not rpc("notification.view", viewing, other_uid)["ok"], (
+            "view hints must not select another owner's conversation"
+        )
+        status, _ = web.call("POST", "/api/notifications/view", {**viewing, "owner_uid": uid})
+        assert status == 422, "JSON cannot select the notification owner"
+
         def request(name, owner=uid):
             return rpc("permission.request", {
                 "verb": "sys.observe", "scope": {"kind": "name", "value": "environment"},
@@ -364,6 +379,10 @@ def exercise_web_authorization(cos, uid, other_uid, home, root):
         resolved = next(item for item in recent["reviews"] if item["id"] == first["id"])
         assert resolved["status"] == "completed" and not resolved["choices"]
         assert resolved["diagnostic"] is None, "resolved permissions are not unavailable errors"
+        status, receipt = web.call("POST", "/api/notifications/view", {
+            "viewer": {"id": viewer_id, "revision": 2, "visible": False},
+        })
+        assert status == 200 and receipt["session_id"] is None
         print(json.dumps({"case": "web-real-pam-no-terminal", "completed": True}), flush=True)
 
         for case in ("wrong-password", "cancelled"):

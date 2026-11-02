@@ -49,6 +49,21 @@ const automaticWorkRecords = new Map();
 const capabilityPolicyRecords = new Map();
 const continuityImports = new Set();
 const requests = [];
+const notificationViews = new Map();
+function recordNotificationView(viewer, sessionId) {
+  assert.deepEqual(Object.keys(viewer).sort(), ["id", "revision", "visible"]);
+  assert.match(viewer.id, /^[a-f0-9-]{36}$/);
+  assert.ok(Number.isSafeInteger(viewer.revision) && viewer.revision > 0);
+  assert.equal(typeof viewer.visible, "boolean");
+  const previous = notificationViews.get(viewer.id);
+  if (!previous || viewer.revision > previous.revision) {
+    notificationViews.set(viewer.id, {
+      id: viewer.id, revision: viewer.revision,
+      session_id: viewer.visible ? sessionId : null, expires_at_ms: Date.now() + 15_000,
+    });
+  }
+  return notificationViews.get(viewer.id);
+}
 const fixtureErrors = [];
 const browserErrors = [];
 const expectedHttpErrors = [];
@@ -509,6 +524,11 @@ async function fixture(req, res) {
     res.on("close", () => clearInterval(ping));
     return;
   }
+  if (url.pathname === "/api/notifications/view") {
+    assert.ok(Object.keys(body).every((key) => ["viewer", "session_id"].includes(key)));
+    if (body.viewer.visible) assert.equal(typeof body.session_id, "string");
+    return reply(req, res, recordNotificationView(body.viewer, body.session_id));
+  }
   if (url.pathname === "/api/inbox") return reply(req, res, { cursor: 0, notifications: [] });
   if (url.pathname === "/api/notifications/preferences") {
     return reply(req, res, { web_enabled: false, desktop_enabled: false, ntfy_enabled: false });
@@ -518,6 +538,8 @@ async function fixture(req, res) {
     assert.equal(req.method, "POST");
     assert.equal(body.prompt, "Show live presentation");
     assert.equal(body.session_id, undefined);
+    recordNotificationView(body.notification_viewer, "chat-browser");
+    assert.equal(body.notification_viewer.visible, true);
     assert.equal(body.attachments.length, 1);
     assert.equal(body.attachments[0].name, "screen.png");
     assert.equal(body.attachments[0].media_type, "image/png");
@@ -606,7 +628,8 @@ async function fixture(req, res) {
   }
   if (url.pathname === "/api/tasks/job-chat/follow-up") {
     assert.equal(req.method, "POST");
-    assert.deepEqual(body, { prompt: "Queued refinement" });
+    assert.equal(body.prompt, "Queued refinement");
+    recordNotificationView(body.notification_viewer, "chat-browser");
     chatFollowUpQueued = true;
     return reply(req, res, {
       id: "job-chat-followup",
@@ -1454,6 +1477,7 @@ try {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   const send = (method, params) => cdp.send(method, params, sessionId);
+  await send("Emulation.setFocusEmulationEnabled", { enabled: true });
   cdp.on((event) => {
     if (event.sessionId !== sessionId) return;
     if (event.method === "Runtime.exceptionThrown") browserErrors.push(JSON.stringify(event.params.exceptionDetails));
@@ -1662,6 +1686,29 @@ try {
   await click(`document.querySelector('details summary')`);
   await wait("document.body.innerText.includes('Compared the available Agent context.')", "reasoning summary presentation");
   assert.equal(await evaluate("location.hash"), "#/chat/chat-browser");
+  const chatViewerId = requests.find((request) => request.path === "/api/chat").body.notification_viewer.id;
+  const expectChatView = async (sessionId) => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (notificationViews.get(chatViewerId)?.session_id === sessionId) return;
+      await delay(20);
+    }
+    assert.equal(notificationViews.get(chatViewerId)?.session_id, sessionId);
+  };
+  await expectChatView("chat-browser");
+  await evaluate(`(() => {
+    Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
+    document.dispatchEvent(new Event('visibilitychange'));
+  })()`);
+  await expectChatView(null);
+  await evaluate(`(() => {
+    delete document.visibilityState;
+    document.dispatchEvent(new Event('visibilitychange'));
+  })()`);
+  await expectChatView("chat-browser");
+  assert.equal(requests.filter((request) => request.path === "/api/chat").length, 1,
+    "view changes never replay or submit Agent work");
+  assert.equal(requests.some((request) => request.path === "/api/tasks/job-chat/stop"), false);
+  console.log("PASS foreground conversation visibility clears on hiding and restores without cancelling or resubmitting");
   console.log("PASS live reasoning summary and accumulated provider usage presentation");
   await wait("document.querySelector('[data-tool-id=\"live-tool\"]')?.innerText.includes('preparing')", "provider preparation is not runtime execution");
   await wait("!!document.querySelector('[aria-label=\"Current task approvals\"]')", "task-scoped inline approvals");
@@ -1870,6 +1917,7 @@ try {
 
   await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/activities` });
   await wait(`document.body.innerText.includes('No activities yet.')`, "authenticated empty list");
+  await expectChatView(null);
   const navigationButtons = await evaluate(
     "Array.from(document.querySelectorAll('button')).map((button) => button.textContent.trim())",
   );

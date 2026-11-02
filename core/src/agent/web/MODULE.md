@@ -69,6 +69,10 @@ web UI.
   broker-verified Job attachment contract used by native Desktop.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
+- Report the visible focused conversation through `notification.view` and
+  renew its short lease. Initial Chat/follow-up submission carries the same
+  viewer revision before queue publication. Hiding, leaving or closing clears
+  the hint without cancelling work; it never supplies attended authorization.
 - Reuse frozen session prompts and configured history compression through the
   shared runtime.
 - Serve built UI assets without exposing credentials.
@@ -85,13 +89,14 @@ web UI.
 | `routes/approvals/presentation.rs`, `ui/src/components/chat-approvals.tsx` | Shared readable capability-review projection, same-task discovery, exact displayed-revision decisions and helper delegation |
 | `authorization.rs`, `authorization/polkit.rs`, `routes/approvals/authorization.rs` | Ephemeral browser-bound polkit/PAM conversation, fixed OS helpers, deadlines/cancellation and root-broker outcome reconciliation |
 | `ui/src/components/os-authorization.tsx` | Password-only dialog outside untrusted Markdown; no secret React state, storage or automatic response replay |
-| `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
+| `routes/notifications.rs` | Notification list, SSE, state, preferences and owner-scoped conversation-view bridge to `clawd` |
 | `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
 | `routes/activities/work.rs`, `ui/src/components/activity-auto-work.tsx` | Shared automatic-work controls and bounded reported handoffs, without local scheduling or permission authority |
 | `ui/` | TypeScript/React source and generated distribution assets |
 | `ui/src/components/cos-sidebar.tsx` | New chat and conversation history alongside OS navigation, without duplicate Chat or primary Tasks entries |
 | `ui/src/pages/tasks.tsx` | Contextual global execution inspection and stop/retry controls through existing Chat/Activity links and `/tasks`; not a primary sidebar entry |
 | `ui/src/lib/chat-stream.ts` | Terminal-event validation and bounded same-Job transport recovery through verified history replay |
+| `ui/src/lib/conversation-view.ts` | Focus/visibility leases, initial submission viewer metadata and detach-only cleanup; no consent, cancellation or replay |
 | `ui/src/lib/chat-presentation.ts`, `ui/src/components/chat-evidence.tsx` | Truthful tool-phase reduction and inert evidence/source presentation |
 | `ui/src/pages/activities.tsx`, `ui/src/components/activity-*.tsx` | Fixed Activity list, planning forms, detail cards, and existing task/approval/session navigation |
 | `ui/src/lib/activities.ts`, `ui/src/hooks/use-activities.ts` | Validated fetched views and abortable, selection-safe refreshes |

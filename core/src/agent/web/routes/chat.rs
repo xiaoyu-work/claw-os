@@ -37,6 +37,8 @@ pub struct ChatRequest {
     pub session_id: Option<String>,
     #[serde(default = "default_true")]
     pub use_memory: bool,
+    #[serde(default)]
+    pub notification_viewer: Option<crate::clawd::wire::requests::NotificationViewer>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -95,6 +97,7 @@ pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>
             requested_session,
             lease_key,
             req.use_memory,
+            req.notification_viewer,
             tx.clone(),
             drive_disconnected,
             turn_lease,
@@ -222,6 +225,7 @@ async fn drive_chat(
     requested_session: Option<String>,
     provisional_session: String,
     use_memory: bool,
+    notification_viewer: Option<crate::clawd::wire::requests::NotificationViewer>,
     tx: mpsc::Sender<SseFrame>,
     disconnected: Arc<AtomicBool>,
     turn_lease: TurnLease,
@@ -236,6 +240,7 @@ async fn drive_chat(
             requested_session,
             provisional_session,
             use_memory,
+            notification_viewer,
             tx,
             disconnected,
             turn_lease,
@@ -258,6 +263,7 @@ async fn drive_chat_scoped(
     requested_session: Option<String>,
     provisional_session: String,
     use_memory: bool,
+    notification_viewer: Option<crate::clawd::wire::requests::NotificationViewer>,
     tx: mpsc::Sender<SseFrame>,
     disconnected: Arc<AtomicBool>,
     turn_lease: TurnLease,
@@ -275,6 +281,10 @@ async fn drive_chat_scoped(
     let config = crate::config::current_snapshot();
     tokio::task::block_in_place(|| require_chat_setup(&config.agent))?;
     let mut params = json!({ "prompt": prompt, "use_memory": use_memory });
+    if let Some(viewer) = notification_viewer {
+        params["notification_viewer"] =
+            serde_json::to_value(viewer).map_err(|error| error.to_string())?;
+    }
     if !attachments.is_empty() {
         params["attachments"] =
             serde_json::to_value(attachments).map_err(|error| error.to_string())?;

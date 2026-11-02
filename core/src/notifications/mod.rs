@@ -7,6 +7,7 @@
 
 mod ntfy;
 mod sqlite;
+mod visibility;
 
 use std::path::Path;
 
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 pub use ntfy::{DeliveryAdapter, DeliveryError, NtfyAdapter, NtfyTarget};
 pub use sqlite::SqliteNotificationService;
+pub(crate) use visibility::{conversation_is_viewed, set_conversation_view};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_TITLE_CHARS: usize = 240;
@@ -34,7 +36,7 @@ pub enum NotificationError {
     Io(#[from] std::io::Error),
     #[error("notification serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
-    #[error("notification database lock is poisoned")]
+    #[error("notification service lock is poisoned")]
     Poisoned,
 }
 
