@@ -26,7 +26,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
 import { applyFrame, markToolsUnconfirmed } from "@/lib/chat-presentation";
@@ -620,11 +620,6 @@ export function ChatPage({ meta }: { meta: any }) {
     void cancelTask(taskId, controller);
   }, [cancelTask]);
 
-  const placeholder = useMemo(() => {
-    if (!meta) return "Ask cos anything…";
-    return `Ask ${meta.model || meta.provider || "cos"}…`;
-  }, [meta]);
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       {reconnecting && (
@@ -731,7 +726,7 @@ export function ChatPage({ meta }: { meta: any }) {
                   else void send();
                 }
               }}
-              placeholder={placeholder}
+              aria-label="Message"
               className="min-h-[44px] resize-none"
               rows={1}
             />
