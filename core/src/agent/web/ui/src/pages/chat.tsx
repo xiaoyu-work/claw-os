@@ -773,9 +773,11 @@ export function ChatPage({ meta }: { meta: any }) {
               </Button>
             )}
           </div>
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            {readingAttachments ? "Reading original images..." : "Up to 4 images, 20 MiB total. Original bytes are preserved."}
-          </p>
+          {readingAttachments && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Reading original images...
+            </p>
+          )}
           {attachmentError && (
             <p role="alert" className="mt-2 text-xs text-destructive">
               {attachmentError}
