@@ -143,6 +143,7 @@ export async function streamSse(
   body: any,
   on: (event: string, data: any) => void,
   signal?: AbortSignal,
+  onOpen?: () => void,
 ): Promise<void> {
   const tok = getToken();
   const res = await fetch(path, {
@@ -172,6 +173,7 @@ export async function streamSse(
     throw new ApiError(res.status, errBody, `SSE ${res.status}`);
   }
   const reader = res.body.getReader();
+  onOpen?.();
   const decoder = new TextDecoder();
   let buf = "";
   while (true) {
