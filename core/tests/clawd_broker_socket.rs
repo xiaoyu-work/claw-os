@@ -196,6 +196,25 @@ async fn notification_view_roundtrips_without_owner_or_authority_selectors() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn notification_read_all_is_an_owner_bound_empty_request() {
+    let bound = bind();
+    let path = bound.path.clone();
+    let server = tokio::spawn(serve_once(bound.listener, |envelope| {
+        let decode = Command::NotificationReadAll.route().decode;
+        assert_eq!(decode(envelope.params).unwrap(), json!({}));
+        assert!(decode(json!({ "owner_uid": 1001 })).is_err());
+        assert!(decode(json!({ "ids": ["selected-subset"] })).is_err());
+        Response::ok(envelope.id, json!({ "updated": 600 }))
+    }));
+    let request = Request::build(Command::NotificationReadAll, json!({}));
+    let response = cos::clawd::client::request(path, request).await.unwrap();
+    assert_eq!(response.result.unwrap()["updated"], 600);
+    let (credentials, envelope) = server.await.unwrap();
+    assert_eq!(credentials.uid, unsafe { libc::getuid() });
+    assert_eq!(envelope.command.as_str(), "notification.read_all");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message() {
     let bound = bind();
     let path = bound.path.clone();

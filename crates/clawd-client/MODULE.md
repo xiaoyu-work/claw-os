@@ -26,6 +26,11 @@ part of this Claw route.
 Its viewer/revision and optional session select only notification presentation;
 they never attest terminal presence, authorize work or decide an approval.
 
+`notification.read_all` is an empty, owner-derived request. It atomically reads
+all retained, unexpired unread notification records, not a caller-selected page
+or ID set; it never acknowledges approvals, completes tasks or dismisses
+notifications.
+
 `agent.account.get/logout` is fixed to the authenticated owner's Copilot
 credential. Logout requires confirmation, refuses active tasks and cannot name
 or read any other credential.

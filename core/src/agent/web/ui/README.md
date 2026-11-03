@@ -111,6 +111,10 @@ muted kinds and retention live in a grouped settings dialog with bounded
 controls. Quiet-hour inputs display HH:MM but still send UTC minute values.
 Drafts survive failed saves and Cancel writes nothing. Browser permission and
 per-browser opt-in remain distinct from OS Web delivery preferences.
+Unread notifications have a visible Mark read action; clicking their title
+also marks them read.
+Mark all read uses the owner-wide broker transaction, including unloaded
+records; it changes neither acknowledgement nor task/approval state.
 
 Inbox is notification history, not a row for every conversation turn.
 Queue/start/resume/recovery progress stays in the conversation and execution

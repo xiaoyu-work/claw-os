@@ -62,6 +62,18 @@ fn broker_handlers_derive_owner_from_peer_credentials() {
             .unwrap()
             .is_empty()
     );
+    let foreign = publish(json!({
+        "source": "app.test", "kind": "test.foreign", "severity": "info",
+        "title": "Foreign", "body": "Another owner's notification",
+    }), &other).unwrap();
+    assert_eq!(mark_all_read(&owner).unwrap()["updated"], 1);
+    assert_eq!(mark_all_read(&owner).unwrap()["updated"], 0);
+    let service = notifications::open_default().unwrap();
+    assert_eq!(service.get(1000, created["id"].as_str().unwrap()).unwrap().state,
+        crate::notifications::NotificationState::Read);
+    assert_eq!(service.get(1001, foreign["id"].as_str().unwrap()).unwrap().state,
+        crate::notifications::NotificationState::Unread);
+    assert!(mark_all_read(&ClientIdentity::unknown()).is_err());
 
     let sid = crate::session::create("notification view fixture").unwrap();
     crate::session::update_meta(&sid, |meta| {

@@ -157,6 +157,15 @@ pub fn mark_read(params: Value, client: &ClientIdentity) -> Result<Value, String
     mutate(params, client, NotificationMutation::Read)
 }
 
+pub fn mark_all_read(client: &ClientIdentity) -> Result<Value, String> {
+    let owner_uid = client.require_uid()?;
+    let service = notifications::open_default().map_err(|error| error.to_string())?;
+    let updated = service
+        .mark_all_read(owner_uid)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({ "updated": updated }))
+}
+
 pub fn acknowledge(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     mutate(params, client, NotificationMutation::Acknowledge)
 }

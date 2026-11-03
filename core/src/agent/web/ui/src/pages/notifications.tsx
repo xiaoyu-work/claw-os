@@ -1,4 +1,4 @@
-import { Bell, BellOff, ChevronDown, CircleAlert, Inbox as InboxIcon, Loader2, MailOpen, MoreHorizontal, Settings2, TriangleAlert, X } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ChevronDown, CircleAlert, Inbox as InboxIcon, Loader2, MailOpen, MoreHorizontal, Settings2, TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 
 import { NotificationSettings } from "@/components/notification-settings";
@@ -11,6 +11,7 @@ export function NotificationsPage() {
   const notifications = useNotifications();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [browserBusy, setBrowserBusy] = useState(false);
+  const [readingAll, setReadingAll] = useState(false);
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [feedback, setFeedback] = useState<{ text: string; error: boolean } | null>(null);
   const unread = notifications.notifications.filter((notification) => notification.state === "unread").length;
@@ -28,6 +29,19 @@ export function NotificationsPage() {
       setFeedback({ text: cause instanceof Error ? cause.message : "Browser notifications could not be enabled.", error: true });
     } finally {
       setBrowserBusy(false);
+    }
+  };
+
+  const markAllRead = async () => {
+    setReadingAll(true);
+    setFeedback(null);
+    try {
+      const updated = await notifications.markAllRead();
+      setFeedback({ text: updated ? `Marked ${updated} notifications as read.` : "No unread notifications.", error: false });
+    } catch (cause: unknown) {
+      setFeedback({ text: cause instanceof Error ? cause.message : "Notifications could not be marked as read.", error: true });
+    } finally {
+      setReadingAll(false);
     }
   };
 
@@ -87,13 +101,20 @@ export function NotificationsPage() {
         {notifications.error && <p role="alert" className="text-xs text-destructive">{notifications.error}</p>}
 
         <section className="space-y-3" aria-label="Notifications">
-          <div className="inline-flex rounded-lg bg-muted/60 p-1" role="group" aria-label="Notification filter">
-            {(["all", "unread"] as const).map((value) => (
-              <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${filter === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-                {value === "all" ? "All" : "Unread"}
-              </button>
-            ))}
+          <div className="flex items-center justify-between gap-3">
+            <div className="inline-flex rounded-lg bg-muted/60 p-1" role="group" aria-label="Notification filter">
+              {(["all", "unread"] as const).map((value) => (
+                <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${filter === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                  {value === "all" ? "All" : "Unread"}
+                </button>
+              ))}
+            </div>
+            <Button size="sm" variant="ghost" disabled={readingAll || notifications.notifications.length === 0}
+              onClick={() => void markAllRead()}>
+              {readingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCheck className="h-3.5 w-3.5" />}
+              Mark all read
+            </Button>
           </div>
           {records.length === 0 ? (
             <div className="grid justify-items-center rounded-xl border border-dashed px-6 py-16 text-center">
@@ -106,6 +127,7 @@ export function NotificationsPage() {
           ) : (
             <div className="divide-y overflow-hidden rounded-xl border bg-card/30">
               {records.map((notification) => <NotificationRow key={notification.id} notification={notification}
+                disabled={readingAll}
                 onError={(text) => setFeedback({ text, error: true })} />)}
             </div>
           )}
@@ -121,7 +143,9 @@ export function NotificationsPage() {
   );
 }
 
-function NotificationRow({ notification, onError }: { notification: NotificationRecord; onError: (message: string) => void }) {
+function NotificationRow({ notification, onError, disabled = false }: {
+  notification: NotificationRecord; onError: (message: string) => void; disabled?: boolean;
+}) {
   const actions = useNotifications();
   const [busy, setBusy] = useState(false);
   const critical = notification.severity === "critical" || notification.severity === "error";
@@ -150,20 +174,34 @@ function NotificationRow({ notification, onError }: { notification: Notification
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-2">
               {notification.state === "unread" && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
-              <h3 className={`min-w-0 break-words text-sm ${notification.state === "unread" ? "font-semibold" : "font-medium text-muted-foreground"}`}>{notification.title}</h3>
+              <h3 className={`min-w-0 break-words text-sm ${notification.state === "unread" ? "font-semibold" : "font-medium text-muted-foreground"}`}>
+                {notification.state === "unread" ? (
+                  <button type="button" disabled={busy || disabled} className="text-left hover:underline"
+                    aria-label={`Read notification: ${notification.title}`} onClick={() => void act("read")}>
+                    {notification.title}
+                  </button>
+                ) : notification.title}
+              </h3>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <time className="text-[11px] text-muted-foreground" dateTime={new Date(notification.updated_at_ms).toISOString()}
                 title={new Date(notification.updated_at_ms).toLocaleString()}>{relativeTime(notification.updated_at_ms)}</time>
+              {notification.state === "unread" && (
+                <Button size="sm" variant="ghost" disabled={busy || disabled} className="h-8 px-2"
+                  aria-label={`Mark as read: ${notification.title}`} title="Mark as read"
+                  onClick={() => void act("read")}>
+                  <MailOpen className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Mark read</span>
+                </Button>
+              )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="icon-sm" variant="ghost" disabled={busy} aria-label={`Actions for ${notification.title}`}
+                  <Button size="icon-sm" variant="ghost" disabled={busy || disabled} aria-label={`Actions for ${notification.title}`}
                     className="sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                     {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  {notification.state === "unread" && <DropdownMenuItem onSelect={() => void act("read")}><MailOpen />Mark as read</DropdownMenuItem>}
                   {notification.state !== "acknowledged" && <DropdownMenuItem onSelect={() => void act("acknowledge")}><BellOff />Acknowledge</DropdownMenuItem>}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => void act("dismiss")}><X />Dismiss</DropdownMenuItem>
@@ -186,7 +224,7 @@ function NotificationRow({ notification, onError }: { notification: Notification
           {notification.actions.length > 0 && <div className="mt-3 flex flex-wrap gap-2">
             {notification.actions.map((action) => {
               const route = notificationActionRoute(action.uri, notification.task_id);
-              return route && <Button key={action.id} size="sm" variant="outline" disabled={busy}
+              return route && <Button key={action.id} size="sm" variant="outline" disabled={busy || disabled}
                 onClick={() => void act("read", route)}>{action.label}</Button>;
             })}
           </div>}

@@ -15,6 +15,10 @@ user interfaces consume them without relying on model behavior.
 - Provide transactional owner/task projections with full retained and unread
   counts before bounded detail limits.
 - Provide channel-neutral delivery claims and the ntfy adapter.
+- Mark all retained, unexpired unread notifications for one authenticated owner
+  in a single transaction, including records beyond presentation limits.
+  Per-record read changes remain observable; acknowledgement, dismissal,
+  delivery state, Jobs and approval authority are unchanged.
 
 Native `cosmic-notifications` submits bounded intent through
 `clawd/app_notifications.rs`. The service stores display-only sender, theme
