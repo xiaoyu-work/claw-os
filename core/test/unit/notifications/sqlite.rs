@@ -5,6 +5,60 @@ fn draft(kind: &str) -> NotificationDraft {
 }
 
 #[test]
+fn mark_all_read_covers_the_full_owner_scope_without_acknowledging_or_dismissing() {
+    let service = SqliteNotificationService::open_in_memory().unwrap();
+    for _ in 0..600 {
+        service.publish(7, draft("unread")).unwrap();
+    }
+    let foreign = service.publish(8, draft("foreign")).unwrap();
+    let acknowledged = service.publish(7, draft("acknowledged")).unwrap();
+    service.mutate(7, &acknowledged.id, NotificationMutation::Acknowledge).unwrap();
+    let dismissed = service.publish(7, draft("dismissed")).unwrap();
+    service.mutate(7, &dismissed.id, NotificationMutation::Dismiss).unwrap();
+    let expired = service.publish(7, draft("expired")).unwrap();
+    service.lock().unwrap().execute(
+        "UPDATE notifications SET expires_at_ms = 0 WHERE id = ?1", params![expired.id]
+    ).unwrap();
+    let before_ack = service.get(7, &acknowledged.id).unwrap();
+    let before_dismissed = service.get(7, &dismissed.id).unwrap();
+    let cursor = service.cursor(7).unwrap();
+
+    assert_eq!(service.mark_all_read(7).unwrap(), 600);
+    assert_eq!(service.mark_all_read(7).unwrap(), 0);
+    assert_eq!(service.cursor(7).unwrap(), cursor + 600);
+    let changes = service.changes(7, cursor, 500).unwrap();
+    assert_eq!(changes.changes.len(), 500);
+    assert!(changes.changes.iter().all(|change| {
+        change.change == "read"
+            && change.notification.owner_uid == 7
+            && change.notification.state == NotificationState::Read
+            && change.notification.read_at_ms.is_some()
+            && change.notification.acknowledged_at_ms.is_none()
+            && change.notification.dismissed_at_ms.is_none()
+    }));
+    assert_eq!(service.changes(7, changes.cursor, 500).unwrap().changes.len(), 100);
+    assert_eq!(service.get(7, &acknowledged.id).unwrap(), before_ack);
+    assert_eq!(service.get(7, &dismissed.id).unwrap(), before_dismissed);
+    assert_eq!(service.get(7, &expired.id).unwrap().state, NotificationState::Unread);
+    assert_eq!(service.get(8, &foreign.id).unwrap().state, NotificationState::Unread);
+    assert_eq!(service.mark_all_read(9).unwrap(), 0);
+}
+
+#[test]
+fn mark_all_read_rolls_back_records_and_changes_together() {
+    let service = SqliteNotificationService::open_in_memory().unwrap();
+    let row = service.publish(7, draft("unread")).unwrap();
+    let cursor = service.cursor(7).unwrap();
+    service.lock().unwrap().execute_batch(
+        "CREATE TEMP TRIGGER fail_read_all BEFORE UPDATE OF state ON notifications
+         BEGIN SELECT RAISE(ABORT, 'fixture read failure'); END;"
+    ).unwrap();
+    assert!(service.mark_all_read(7).is_err());
+    assert_eq!(service.get(7, &row.id).unwrap(), row);
+    assert_eq!(service.cursor(7).unwrap(), cursor);
+}
+
+#[test]
 fn task_page_filters_before_limiting_and_counts_unread_without_duplicates() {
     let service = SqliteNotificationService::open_in_memory().unwrap();
     let mut owned = Vec::new();

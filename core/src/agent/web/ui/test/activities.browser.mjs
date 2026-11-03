@@ -57,6 +57,7 @@ let notificationPreferences = {
   ntfy_server: "https://ntfy.sh",
 };
 let rejectNotificationPreferencesOnce = false;
+let rejectNotificationReadAllOnce = false;
 const inboxNotifications = [];
 function recordNotificationView(viewer, sessionId) {
   assert.deepEqual(Object.keys(viewer).sort(), ["id", "revision", "visible"]);
@@ -538,8 +539,26 @@ async function fixture(req, res) {
     return reply(req, res, recordNotificationView(body.viewer, body.session_id));
   }
   if (url.pathname === "/api/inbox") return reply(req, res, {
-    cursor: 0, notifications: inboxNotifications.filter((notification) => notification.state !== "dismissed"),
+    cursor: 0, notifications: inboxNotifications.filter((notification) =>
+      notification.owner_uid === 1000 && notification.state !== "dismissed").slice(0, 100),
   });
+  if (url.pathname === "/api/notifications/read-all") {
+    assert.equal(req.method, "POST");
+    assert.deepEqual(body, {}, "mark-all-read has no caller-selected owner or displayed IDs");
+    if (rejectNotificationReadAllOnce) {
+      rejectNotificationReadAllOnce = false;
+      expectedHttpErrors.push({ method: req.method, path: url.pathname, status: 500 });
+      return reply(req, res, { error: "Notification read fixture failed." }, 500);
+    }
+    let updated = 0;
+    for (const notification of inboxNotifications) {
+      if (notification.owner_uid === 1000 && notification.state === "unread") {
+        notification.state = "read";
+        updated += 1;
+      }
+    }
+    return reply(req, res, { updated });
+  }
   if (url.pathname === "/api/notifications/preferences") {
     if (req.method === "POST") {
       assert.ok(Object.keys(body).every((key) => [
@@ -3074,9 +3093,25 @@ try {
   await clickText("Cancel");
   await send("Emulation.clearDeviceMetricsOverride");
   await delay(200);
-  await clickLabel("Actions for Downloads organized");
-  await selectMenuItem("Mark as read");
+  await clickLabel("Mark as read: Downloads organized");
   await wait("!document.querySelector('[data-notification-id=\"inbox-result\"] [aria-label=\"Unread\"]')", "owner-scoped read mutation");
+  await clickLabel("Read notification: Permission needed");
+  await wait("!document.querySelector('[data-notification-id=\"inbox-permission\"] [aria-label=\"Unread\"]')", "notification title directly marks it read");
+  for (const [id, owner_uid] of [["unloaded-one", 1000], ["unloaded-two", 1000], ["foreign-unread", 1001]]) {
+    inboxNotifications.push({ ...clone(inboxNotifications[0]), id, owner_uid, state: "unread" });
+  }
+  const beforeFailedRead = clone(inboxNotifications);
+  rejectNotificationReadAllOnce = true;
+  await clickText("Mark all read");
+  await wait("document.body.innerText.includes('Notification read fixture failed.')", "all-read failure is explicit");
+  assert.deepEqual(inboxNotifications, beforeFailedRead, "failed all-read does not fake local read state");
+  await clickText("Mark all read");
+  await wait("document.body.innerText.includes('Marked 2 notifications as read.')", "all-read includes unloaded owned records");
+  assert.equal(inboxNotifications.find((notification) => notification.id === "foreign-unread").state, "unread");
+  assert.equal(await evaluate("document.querySelectorAll('[data-notification-id] [aria-label=\"Unread\"]').length"), 0);
+  await clickText("Unread");
+  await wait("document.body.innerText.includes('Nothing unread')", "all-read updates filtering and badges");
+  await clickText("All");
   await clickLabel("Actions for Permission needed");
   await selectMenuItem("Acknowledge");
   await wait("!document.querySelector('[data-notification-id=\"inbox-permission\"] [aria-label=\"Unread\"]')", "notification acknowledgement only");
@@ -3097,6 +3132,7 @@ try {
       "/api/activities/activity-1/scheduling-priority",
       "/api/activities/continuity/import",
       "/api/notifications/preferences",
+      "/api/notifications/read-all",
     ],
     "stale writes and duplicate continuity exercise actual HTTP errors, not 200-only proxies",
   );

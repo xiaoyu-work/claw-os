@@ -536,6 +536,38 @@ impl NotificationService for SqliteNotificationService {
         load_notification(&conn, owner_uid, id)
     }
 
+    fn mark_all_read(&self, owner_uid: u32) -> Result<usize, NotificationError> {
+        let now = super::now_ms();
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO notification_changes
+                 (owner_uid, notification_id, change_kind, changed_at_ms)
+             SELECT owner_uid, id, 'read', ?3 FROM notifications
+             WHERE owner_uid = ?1 AND state = ?2
+               AND (expires_at_ms IS NULL OR expires_at_ms > ?3)",
+            params![
+                owner_uid,
+                notification_state_code(NotificationState::Unread),
+                now
+            ],
+        )?;
+        let updated = tx.execute(
+            "UPDATE notifications
+             SET state = ?4, read_at_ms = COALESCE(read_at_ms, ?3), updated_at_ms = ?3
+             WHERE owner_uid = ?1 AND state = ?2
+               AND (expires_at_ms IS NULL OR expires_at_ms > ?3)",
+            params![
+                owner_uid,
+                notification_state_code(NotificationState::Unread),
+                now,
+                notification_state_code(NotificationState::Read),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
     fn preferences(&self, owner_uid: u32) -> Result<NotificationPreferences, NotificationError> {
         let conn = self.lock()?;
         preferences_conn(&conn, owner_uid)

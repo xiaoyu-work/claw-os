@@ -151,6 +151,20 @@ pub async fn mark_read(Path(id): Path<String>) -> Result<Json<Value>, ApiError> 
         .map(Json)
 }
 
+pub async fn mark_all_read(
+    body: Result<Json<crate::clawd::wire::requests::NoBody>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(_) = body.map_err(|_| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "Invalid notification read request." })),
+        )
+    })?;
+    request(Command::NotificationReadAll, json!({}))
+        .await
+        .map(Json)
+}
+
 pub async fn acknowledge(Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
     request(Command::NotificationAcknowledge, json!({ "id": id }))
         .await

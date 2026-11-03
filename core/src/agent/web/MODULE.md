@@ -69,6 +69,8 @@ web UI.
   broker-verified Job attachment contract used by native Desktop.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
+- Keep per-notification read actions directly visible and route Mark all read
+  through the shared owner-wide atomic service, not a loop over displayed cards.
 - Report the visible focused conversation through `notification.view` and
   renew its short lease. Initial Chat/follow-up submission carries the same
   viewer revision before queue publication. Hiding, leaving or closing clears

@@ -78,6 +78,7 @@ type NotificationContextValue = {
   disableBrowserNotifications: () => void;
   refresh: () => Promise<void>;
   markRead: (id: string) => Promise<void>;
+  markAllRead: () => Promise<number>;
   acknowledge: (id: string) => Promise<void>;
   dismiss: (id: string) => Promise<void>;
   savePreferences: (preferences: NotificationPreferences) => Promise<void>;
@@ -276,6 +277,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       },
       refresh,
       markRead: (id) => mutate(id, "read"),
+      markAllRead: async () => {
+        const result = await api.post<{ updated: unknown }>("/api/notifications/read-all", {});
+        if (typeof result.updated !== "number" || !Number.isSafeInteger(result.updated) || result.updated < 0) {
+          throw new Error("The OS returned an invalid notification read count.");
+        }
+        await refresh();
+        return result.updated;
+      },
       acknowledge: (id) => mutate(id, "acknowledge"),
       dismiss: (id) => mutate(id, "dismiss"),
       savePreferences: async (next) => {

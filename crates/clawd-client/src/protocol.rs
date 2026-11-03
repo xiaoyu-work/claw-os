@@ -140,6 +140,8 @@ pub enum Command {
     NotificationSubscribe,
     #[serde(rename = "notification.view")]
     NotificationView,
+    #[serde(rename = "notification.read_all")]
+    NotificationReadAll,
     #[serde(rename = "notification.delivery.claim")]
     NotificationDeliveryClaim,
     #[serde(rename = "notification.delivery.complete")]
@@ -162,7 +164,7 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 66] = [
+    pub const ALL: [Self; 67] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -225,6 +227,7 @@ impl Command {
         Self::SystemReviewCancel,
         Self::NotificationSubscribe,
         Self::NotificationView,
+        Self::NotificationReadAll,
         Self::NotificationDeliveryClaim,
         Self::NotificationDeliveryComplete,
         Self::NotificationAcknowledge,
@@ -295,6 +298,7 @@ impl Command {
             Self::SystemReviewCancel => "system.review.cancel",
             Self::NotificationSubscribe => "notification.subscribe",
             Self::NotificationView => "notification.view",
+            Self::NotificationReadAll => "notification.read_all",
             Self::NotificationDeliveryClaim => "notification.delivery.claim",
             Self::NotificationDeliveryComplete => "notification.delivery.complete",
             Self::NotificationAcknowledge => "notification.acknowledge",

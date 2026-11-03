@@ -1315,6 +1315,15 @@ routes! {
         audit: &[("id", FieldRule::Token)],
         run: |c| notifications::mark_read(c.params, c.client).map_err(BrokerError::from),
     }
+    NotificationReadAll {
+        name: "notification.read_all",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NoBody,
+        run: |c| notifications::mark_all_read(c.client).map_err(BrokerError::from),
+    }
     NotificationAcknowledge {
         name: "notification.acknowledge",
         access: Access::User,

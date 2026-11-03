@@ -600,6 +600,10 @@ pub trait NotificationService: Send + Sync {
         mutation: NotificationMutation,
     ) -> Result<Notification, NotificationError>;
 
+    /// Atomically mark all retained, unexpired unread records for this owner.
+    /// This is presentation state only, not acknowledgement or consent.
+    fn mark_all_read(&self, owner_uid: u32) -> Result<usize, NotificationError>;
+
     fn preferences(&self, owner_uid: u32) -> Result<NotificationPreferences, NotificationError>;
 
     fn set_preferences(

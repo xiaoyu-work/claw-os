@@ -164,6 +164,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/notifications", get(routes::notifications::list))
         .route("/api/notifications/view", post(routes::notifications::view))
         .route(
+            "/api/notifications/read-all",
+            post(routes::notifications::mark_all_read),
+        )
+        .route(
             "/api/notifications/stream",
             post(routes::notifications::stream),
         )

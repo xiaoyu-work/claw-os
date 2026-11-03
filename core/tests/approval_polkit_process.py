@@ -329,6 +329,11 @@ def exercise_web_authorization(cos, uid, other_uid, home, root):
 
         first = request("web-password-fixture")
         item = review(first["id"])
+        status, read_result = web.call("POST", "/api/notifications/read-all", {})
+        assert status == 200 and isinstance(read_result["updated"], int)
+        assert pending(first["id"]), "reading notifications must not authorize pending work"
+        status, _ = web.call("POST", "/api/notifications/read-all", {"owner_uid": other_uid})
+        assert status == 422 and pending(first["id"]), "read-all cannot select another owner"
         status, _ = web.call("POST", f"/api/approvals/{item['id']}/authorization", {
             "revision": "18446744073709551615", "choice": "allow_session",
         })

@@ -146,6 +146,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "notification.subscribe",
     "notification.view",
     "notification.read",
+    "notification.read_all",
     "notification.acknowledge",
     "notification.dismiss",
     "notification.preferences.get",
@@ -236,6 +237,7 @@ fn every_route_owns_its_audit_metadata() {
         "context.snapshot",
         "context.sources",
         "notification.preferences.get",
+        "notification.read_all",
         "transaction.begin",
         "transaction.list",
     ]
