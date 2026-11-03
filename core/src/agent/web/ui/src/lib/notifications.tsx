@@ -206,6 +206,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
               }
             },
             controller.signal,
+            () => {
+              if (!stopped) {
+                setConnected(true);
+                setError(null);
+              }
+            },
           );
         } catch (cause: any) {
           if (controller.signal.aborted) return;

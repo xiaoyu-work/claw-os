@@ -1,378 +1,205 @@
-import { Bell, BellOff, Check, CircleAlert, Loader2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bell, BellOff, ChevronDown, CircleAlert, Inbox as InboxIcon, Loader2, MailOpen, MoreHorizontal, Settings2, TriangleAlert, X } from "lucide-react";
+import { useState } from "react";
 
+import { NotificationSettings } from "@/components/notification-settings";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  type NotificationPreferences,
-  type NotificationRecord,
-  notificationActionRoute,
-  useNotifications,
-} from "@/lib/notifications";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { type NotificationRecord, notificationActionRoute, useNotifications } from "@/lib/notifications";
 import { navigate } from "@/lib/router";
 
 export function NotificationsPage() {
   const notifications = useNotifications();
-  const [draft, setDraft] = useState<NotificationPreferences | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [browserBusy, setBrowserBusy] = useState(false);
+  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [feedback, setFeedback] = useState<{ text: string; error: boolean } | null>(null);
+  const unread = notifications.notifications.filter((notification) => notification.state === "unread").length;
+  const records = filter === "unread"
+    ? notifications.notifications.filter((notification) => notification.state === "unread")
+    : notifications.notifications;
+  const browserPaused = notifications.browserEnabled && notifications.preferences?.web_enabled === false;
 
-  useEffect(() => {
-    if (notifications.preferences) setDraft(notifications.preferences);
-  }, [notifications.preferences]);
-
-  async function save() {
-    if (!draft) return;
-    setSaving(true);
-    setMessage(null);
+  const enableBrowser = async () => {
+    setBrowserBusy(true);
+    setFeedback(null);
     try {
-      await notifications.savePreferences(draft);
-      setMessage("Notification preferences saved.");
-    } catch (cause: any) {
-      setMessage(cause?.message || "Failed to save notification preferences");
+      await notifications.enableBrowserNotifications();
+    } catch (cause: unknown) {
+      setFeedback({ text: cause instanceof Error ? cause.message : "Browser notifications could not be enabled.", error: true });
     } finally {
-      setSaving(false);
+      setBrowserBusy(false);
     }
-  }
+  };
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Inbox</h1>
-          <p className="text-xs text-muted-foreground">
-            Live Agent, scheduled-task, reminder, and system alerts.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              notifications.connected ? "bg-emerald-500" : "bg-amber-500"
-            }`}
-          />
-          {notifications.connected ? "Live" : "Reconnecting"}
-        </div>
-      </div>
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-6 sm:px-6" aria-label="Notification Inbox">
+        <header className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-semibold tracking-tight">Inbox</h1>
+            {unread > 0 && <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{unread} unread</span>}
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className={`h-1.5 w-1.5 rounded-full ${notifications.connected ? "bg-emerald-500" : "bg-amber-500"}`} />
+              {notifications.connected ? "Live" : "Connecting"}
+            </span>
+            <Button size="icon-sm" variant="ghost" aria-label="Notification settings" title="Notification settings"
+              disabled={!notifications.preferences} onClick={() => setSettingsOpen(true)}>
+              <Settings2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </header>
 
-      <Card className="grid gap-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium">Browser notifications</p>
-            <p className="text-xs text-muted-foreground">
-              Show alerts while this page is in the background.
-            </p>
+        <section className="flex items-center justify-between gap-4 rounded-xl border bg-muted/20 px-4 py-3" aria-label="Browser notifications">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background">
+              <Bell className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="text-sm font-medium">Browser notifications</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {browserPaused ? "Web alerts are off in delivery settings." : "Get an alert when you're away."}
+              </p>
+            </div>
           </div>
           {notifications.browserEnabled ? (
-            <Button variant="outline" size="sm" onClick={notifications.disableBrowserNotifications}>
-              <BellOff className="mr-2 h-3.5 w-3.5" />
-              Disable
-            </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className={`text-xs ${browserPaused ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400"}`}>
+                {browserPaused ? "Paused" : "On"}
+              </span>
+              <Button size="sm" variant="ghost" onClick={notifications.disableBrowserNotifications}>Disable</Button>
+            </div>
           ) : (
-            <Button
-              size="sm"
-              onClick={() =>
-                void notifications
-                  .enableBrowserNotifications()
-                  .catch((error) => setMessage(error.message))
-              }
-            >
-              <Bell className="mr-2 h-3.5 w-3.5" />
+            <Button size="sm" variant="outline" disabled={browserBusy} onClick={() => void enableBrowser()}>
+              {browserBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Enable
             </Button>
           )}
-        </div>
+        </section>
 
-        {draft && (
-          <>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Toggle
-                label="Web activity"
-                checked={draft.web_enabled}
-                onChange={(checked) => setDraft({ ...draft, web_enabled: checked })}
-              />
-              <Toggle
-                label="Desktop popups"
-                checked={draft.desktop_enabled}
-                onChange={(checked) => setDraft({ ...draft, desktop_enabled: checked })}
-              />
-              <Toggle
-                label="ntfy push"
-                checked={draft.ntfy_enabled}
-                onChange={(checked) => setDraft({ ...draft, ntfy_enabled: checked })}
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <SeveritySelect
-                label="Web minimum severity"
-                value={draft.web_min_severity}
-                onChange={(value) => setDraft({ ...draft, web_min_severity: value })}
-              />
-              <SeveritySelect
-                label="Desktop minimum severity"
-                value={draft.desktop_min_severity}
-                onChange={(value) =>
-                  setDraft({ ...draft, desktop_min_severity: value })
-                }
-              />
-              <SeveritySelect
-                label="ntfy minimum severity"
-                value={draft.ntfy_min_severity}
-                onChange={(value) => setDraft({ ...draft, ntfy_min_severity: value })}
-              />
-            </div>
-            {draft.ntfy_enabled && (
-              <label className="grid gap-1 text-xs">
-                <span className="font-medium">ntfy topic</span>
-                <input
-                  className="h-9 rounded-md border bg-background px-3"
-                  value={draft.ntfy_topic || ""}
-                  onChange={(event) =>
-                    setDraft({ ...draft, ntfy_topic: event.target.value || undefined })
-                  }
-                  placeholder="my-claw-alerts"
-                />
-              </label>
-            )}
-            <div className="grid gap-3 sm:grid-cols-3">
-              <MinuteInput
-                label="DND start (UTC minute)"
-                value={draft.dnd_start_minute_utc}
-                onChange={(value) =>
-                  setDraft({ ...draft, dnd_start_minute_utc: value })
-                }
-              />
-              <MinuteInput
-                label="DND end (UTC minute)"
-                value={draft.dnd_end_minute_utc}
-                onChange={(value) =>
-                  setDraft({ ...draft, dnd_end_minute_utc: value })
-                }
-              />
-              <Toggle
-                label="Critical alerts bypass DND"
-                checked={draft.critical_bypasses_dnd}
-                onChange={(checked) =>
-                  setDraft({ ...draft, critical_bypasses_dnd: checked })
-                }
-              />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1 text-xs">
-                <span className="font-medium">Muted event kinds</span>
-                <input
-                  className="h-9 rounded-md border bg-background px-3"
-                  value={draft.muted_kinds.join(", ")}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      muted_kinds: event.target.value
-                        .split(",")
-                        .map((value) => value.trim())
-                        .filter(Boolean),
-                    })
-                  }
-                  placeholder="cron.completed, agent.completed"
-                />
-              </label>
-              <label className="grid gap-1 text-xs">
-                <span className="font-medium">History retention (days)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={365}
-                  className="h-9 rounded-md border bg-background px-3"
-                  value={draft.retention_days}
-                  onChange={(event) =>
-                    setDraft({ ...draft, retention_days: Number(event.target.value) })
-                  }
-                />
-              </label>
-            </div>
-            <div className="flex justify-end">
-              <Button size="sm" onClick={() => void save()} disabled={saving}>
-                {saving && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
-                Save delivery preferences
-              </Button>
-            </div>
-          </>
+        {feedback && (
+          <div role={feedback.error ? "alert" : "status"} className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-xs ${feedback.error ? "border-destructive/30 text-destructive" : "text-muted-foreground"}`}>
+            <p>{feedback.text}</p>
+            <button type="button" aria-label="Dismiss message" onClick={() => setFeedback(null)}><X className="h-3.5 w-3.5" /></button>
+          </div>
         )}
-        {message && <p className="text-xs text-muted-foreground">{message}</p>}
-      </Card>
+        {notifications.error && <p role="alert" className="text-xs text-destructive">{notifications.error}</p>}
 
-      {notifications.error && (
-        <Card className="border-destructive/40 p-3 text-sm text-destructive">
-          {notifications.error}
-        </Card>
-      )}
+        <section className="space-y-3" aria-label="Notifications">
+          <div className="inline-flex rounded-lg bg-muted/60 p-1" role="group" aria-label="Notification filter">
+            {(["all", "unread"] as const).map((value) => (
+              <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
+                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${filter === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                {value === "all" ? "All" : "Unread"}
+              </button>
+            ))}
+          </div>
+          {records.length === 0 ? (
+            <div className="grid justify-items-center rounded-xl border border-dashed px-6 py-16 text-center">
+              <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-muted/50">
+                <InboxIcon className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
+              </span>
+              <h2 className="text-sm font-medium">{filter === "unread" ? "Nothing unread" : "You're all caught up"}</h2>
+              <p className="mt-1 text-xs text-muted-foreground">New alerts will appear here.</p>
+            </div>
+          ) : (
+            <div className="divide-y overflow-hidden rounded-xl border bg-card/30">
+              {records.map((notification) => <NotificationRow key={notification.id} notification={notification}
+                onError={(text) => setFeedback({ text, error: true })} />)}
+            </div>
+          )}
+        </section>
 
-      <div className="grid gap-2">
-        {notifications.notifications.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No notifications.
-          </p>
-        ) : (
-          notifications.notifications.map((notification) => (
-            <NotificationCard key={notification.id} notification={notification} />
-          ))
+        {settingsOpen && notifications.preferences && (
+          <NotificationSettings preferences={notifications.preferences} onSave={notifications.savePreferences}
+            onClose={() => setSettingsOpen(false)}
+            onSaved={() => { setSettingsOpen(false); setFeedback({ text: "Notification settings saved.", error: false }); }} />
         )}
       </div>
     </div>
   );
 }
 
-function SeveritySelect({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: NotificationRecord["severity"];
-  onChange: (value: NotificationRecord["severity"]) => void;
-}) {
-  return (
-    <label className="grid gap-1 text-xs">
-      <span className="font-medium">{label}</span>
-      <select
-        className="h-9 rounded-md border bg-background px-3"
-        value={value}
-        onChange={(event) =>
-          onChange(event.target.value as NotificationRecord["severity"])
-        }
-      >
-        <option value="info">Info</option>
-        <option value="warning">Warning</option>
-        <option value="error">Error</option>
-        <option value="critical">Critical</option>
-      </select>
-    </label>
-  );
-}
-
-function MinuteInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value?: number;
-  onChange: (value?: number) => void;
-}) {
-  return (
-    <label className="grid gap-1 text-xs">
-      <span className="font-medium">{label}</span>
-      <input
-        type="number"
-        min={0}
-        max={1439}
-        className="h-9 rounded-md border bg-background px-3"
-        value={value ?? ""}
-        onChange={(event) =>
-          onChange(event.target.value === "" ? undefined : Number(event.target.value))
-        }
-        placeholder="Disabled"
-      />
-    </label>
-  );
-}
-
-function Toggle({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      {label}
-    </label>
-  );
-}
-
-function NotificationCard({ notification }: { notification: NotificationRecord }) {
+function NotificationRow({ notification, onError }: { notification: NotificationRecord; onError: (message: string) => void }) {
   const actions = useNotifications();
+  const [busy, setBusy] = useState(false);
   const critical = notification.severity === "critical" || notification.severity === "error";
+  const Icon = critical ? CircleAlert : notification.severity === "warning" ? TriangleAlert : Bell;
+  const iconClass = critical ? "bg-destructive/10 text-destructive" :
+    notification.severity === "warning" ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" : "bg-muted text-muted-foreground";
+  const act = async (action: "read" | "acknowledge" | "dismiss", route?: string) => {
+    setBusy(true);
+    try {
+      const mutate = action === "read" ? actions.markRead : action === "acknowledge" ? actions.acknowledge : actions.dismiss;
+      await mutate(notification.id);
+      if (route) navigate(route);
+    } catch (cause: unknown) {
+      onError(cause instanceof Error ? cause.message : "The notification could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <Card
-      className={`grid gap-2 p-4 ${
-        notification.state === "unread" ? "border-primary/50" : "opacity-80"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 gap-3">
-          <CircleAlert
-            className={`mt-0.5 h-4 w-4 shrink-0 ${
-              critical ? "text-destructive" : "text-amber-500"
-            }`}
-          />
-          <div className="min-w-0">
-            <p className="text-sm font-medium">{notification.title}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{notification.body}</p>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              {notification.source} · {notification.kind} ·{" "}
-              {new Date(notification.updated_at_ms).toLocaleString()}
-              {notification.occurrences > 1
-                ? ` · repeated ${notification.occurrences} times`
-                : ""}
-            </p>
-            {notification.actions.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {notification.actions.map((action) => {
-                  const route = notificationActionRoute(action.uri, notification.task_id);
-                  return route ? (
-                    <Button
-                      key={action.id}
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        void actions.markRead(notification.id);
-                        navigate(route);
-                      }}
-                    >
-                      {action.label}
-                    </Button>
-                  ) : null;
-                })}
-              </div>
-            ) : null}
+    <article className="group px-4 py-4 transition-colors hover:bg-muted/20" data-notification-id={notification.id}>
+      <div className="flex items-start gap-3">
+        <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconClass}`}>
+          <Icon className="h-4 w-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-2">
+              {notification.state === "unread" && <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
+              <h3 className={`min-w-0 break-words text-sm ${notification.state === "unread" ? "font-semibold" : "font-medium text-muted-foreground"}`}>{notification.title}</h3>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <time className="text-[11px] text-muted-foreground" dateTime={new Date(notification.updated_at_ms).toISOString()}
+                title={new Date(notification.updated_at_ms).toLocaleString()}>{relativeTime(notification.updated_at_ms)}</time>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon-sm" variant="ghost" disabled={busy} aria-label={`Actions for ${notification.title}`}
+                    className="sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                    {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {notification.state === "unread" && <DropdownMenuItem onSelect={() => void act("read")}><MailOpen />Mark as read</DropdownMenuItem>}
+                  {notification.state !== "acknowledged" && <DropdownMenuItem onSelect={() => void act("acknowledge")}><BellOff />Acknowledge</DropdownMenuItem>}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => void act("dismiss")}><X />Dismiss</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
-        </div>
-        <div className="flex shrink-0 gap-1">
-          {notification.state === "unread" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              title="Mark read"
-              onClick={() => void actions.markRead(notification.id)}
-            >
-              <Check className="h-3.5 w-3.5" />
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            title="Acknowledge"
-            onClick={() => void actions.acknowledge(notification.id)}
-          >
-            <BellOff className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            title="Dismiss"
-            onClick={() => void actions.dismiss(notification.id)}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
+          <details className="group mt-1 text-xs" open={critical}>
+            <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+              <span className="block line-clamp-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-muted-foreground group-open:line-clamp-none">{notification.body}</span>
+              <span className="mt-2 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                Details <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" aria-hidden="true" />
+              </span>
+            </summary>
+            <p className="mt-2 break-words text-[11px] text-muted-foreground">
+              {notification.source} · {notification.kind}
+              {notification.occurrences > 1 ? ` · ${notification.occurrences} updates` : ""}
+            </p>
+          </details>
+          {notification.actions.length > 0 && <div className="mt-3 flex flex-wrap gap-2">
+            {notification.actions.map((action) => {
+              const route = notificationActionRoute(action.uri, notification.task_id);
+              return route && <Button key={action.id} size="sm" variant="outline" disabled={busy}
+                onClick={() => void act("read", route)}>{action.label}</Button>;
+            })}
+          </div>}
         </div>
       </div>
-    </Card>
+    </article>
   );
+}
+
+function relativeTime(timestamp: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  return new Date(timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

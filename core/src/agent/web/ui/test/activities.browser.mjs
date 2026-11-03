@@ -50,6 +50,14 @@ const capabilityPolicyRecords = new Map();
 const continuityImports = new Set();
 const requests = [];
 const notificationViews = new Map();
+let notificationPreferences = {
+  web_enabled: true, desktop_enabled: true, ntfy_enabled: false,
+  web_min_severity: "info", desktop_min_severity: "info", ntfy_min_severity: "warning",
+  muted_kinds: [], critical_bypasses_dnd: true, retention_days: 30,
+  ntfy_server: "https://ntfy.sh",
+};
+let rejectNotificationPreferencesOnce = false;
+const inboxNotifications = [];
 function recordNotificationView(viewer, sessionId) {
   assert.deepEqual(Object.keys(viewer).sort(), ["id", "revision", "visible"]);
   assert.match(viewer.id, /^[a-f0-9-]{36}$/);
@@ -529,9 +537,32 @@ async function fixture(req, res) {
     if (body.viewer.visible) assert.equal(typeof body.session_id, "string");
     return reply(req, res, recordNotificationView(body.viewer, body.session_id));
   }
-  if (url.pathname === "/api/inbox") return reply(req, res, { cursor: 0, notifications: [] });
+  if (url.pathname === "/api/inbox") return reply(req, res, {
+    cursor: 0, notifications: inboxNotifications.filter((notification) => notification.state !== "dismissed"),
+  });
   if (url.pathname === "/api/notifications/preferences") {
-    return reply(req, res, { web_enabled: false, desktop_enabled: false, ntfy_enabled: false });
+    if (req.method === "POST") {
+      assert.ok(Object.keys(body).every((key) => [
+        "web_enabled", "desktop_enabled", "ntfy_enabled", "web_min_severity",
+        "desktop_min_severity", "ntfy_min_severity", "muted_kinds",
+        "dnd_start_minute_utc", "dnd_end_minute_utc", "critical_bypasses_dnd",
+        "retention_days", "ntfy_server", "ntfy_topic",
+      ].includes(key)), "notification preferences contain no authority or owner selectors");
+      if (rejectNotificationPreferencesOnce) {
+        rejectNotificationPreferencesOnce = false;
+        expectedHttpErrors.push({ method: req.method, path: url.pathname, status: 400 });
+        return reply(req, res, { error: "Notification settings fixture rejected the save." }, 400);
+      }
+      notificationPreferences = clone(body);
+    }
+    return reply(req, res, notificationPreferences);
+  }
+  const notificationMutation = url.pathname.match(/^\/api\/notifications\/([^/]+)\/(read|acknowledge|dismiss)$/);
+  if (notificationMutation) {
+    const notification = inboxNotifications.find((record) => record.id === notificationMutation[1]);
+    assert.ok(notification);
+    notification.state = { read: "read", acknowledge: "acknowledged", dismiss: "dismissed" }[notificationMutation[2]];
+    return reply(req, res, notification);
   }
   if (url.pathname === "/api/notifications/delivery/claim") return reply(req, res, { deliveries: [] });
   if (url.pathname === "/api/chat") {
@@ -2943,6 +2974,117 @@ try {
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   await validateMemoryCenter();
   await validateNearbySharing();
+  const inboxWorkBefore = clone([...jobs.values()]);
+  for (const [id, title, state, severity] of [
+    ["inbox-result", "Downloads organized", "unread", "info"],
+    ["inbox-permission", "Permission needed", "unread", "warning"],
+    ["inbox-backup", "Backup finished", "read", "info"],
+  ]) {
+    inboxNotifications.push({
+      schema: 1, sequence: inboxNotifications.length + 1, id, owner_uid: 1000,
+      source: "agent", kind: severity === "warning" ? "approval.requested" : "agent.completed",
+      severity, title, body: severity === "warning"
+        ? "A background operation is waiting for your permission."
+        : "The background work finished. Open the result whenever you're ready.",
+      delivery_policy: "immediate", state, occurrences: 1,
+      created_at_ms: Date.now() - 300000, updated_at_ms: Date.now() - 300000,
+      actions: id === "inbox-result" ? [{ id: "open", label: "Open result", uri: "clawos://agent/session/session-budget" }] : [],
+      deliveries: [{ channel: "web", state: "delivered" }],
+    });
+  }
+  await send("Page.navigate", { url: `${origin}/?t=${bootstrap}#/inbox` });
+  await wait("document.body.innerText.includes('Downloads organized') && document.body.innerText.includes('Live')", "notification-first Inbox");
+  const inbox = `document.querySelector('[aria-label="Notification Inbox"]')`;
+  assert.ok(await evaluate(`${inbox}.getBoundingClientRect().width <= 900`), "Inbox content is a bounded column");
+  assert.ok(await evaluate(`${inbox}.querySelector('[aria-label="Browser notifications"]').getBoundingClientRect().height < 90`), "browser preference is a compact row");
+  assert.equal(await evaluate(`${inbox}.querySelectorAll('input,select,[role="switch"]').length`), 0, "advanced settings are not an always-visible form");
+  assert.equal(await evaluate("document.querySelectorAll('[data-notification-id]').length"), 3);
+  await clickText("Unread");
+  assert.equal(await evaluate("document.querySelectorAll('[data-notification-id]').length"), 2);
+  await clickText("All");
+  console.log("PASS compact notification-first Inbox layout with bounded browser controls and local filtering");
+
+  await cdp.send("Browser.setPermission", { permission: { name: "notifications" }, setting: "denied", origin });
+  await clickText("Enable");
+  await wait("document.body.innerText.includes('Browser notification permission was not granted')", "browser denial is explicit");
+  await cdp.send("Browser.setPermission", { permission: { name: "notifications" }, setting: "granted", origin });
+  await clickText("Enable");
+  await wait("!!Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Disable')", "browser notifications enabled explicitly");
+  assert.equal(await evaluate("localStorage.getItem('cos.browser-notifications.enabled')"), "true");
+  await clickText("Disable");
+  await wait("!!Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Enable')", "browser notifications disabled");
+  assert.equal(await evaluate("localStorage.getItem('cos.browser-notifications.enabled')"), null);
+
+  await clickLabel("Notification settings");
+  await wait("document.querySelector('[role=\"dialog\"]')?.innerText.includes('Notification settings')", "bounded settings dialog");
+  assert.ok(await evaluate("document.querySelector('[role=\"dialog\"]').getBoundingClientRect().width <= 600"));
+  await clickLabel("Web alerts");
+  await clickText("Cancel");
+  assert.equal(notificationPreferences.web_enabled, true, "cancel never persists settings");
+  await clickLabel("Notification settings");
+  await clickLabel("Desktop popups minimum severity");
+  await click(`Array.from(document.querySelectorAll('[role="option"]')).find(option => option.textContent.trim() === 'Errors')`);
+  await clickLabel("ntfy push");
+  const fillNotificationField = async (label, value) => {
+    await evaluate(`(() => {
+      const input = document.querySelector('[aria-label=${JSON.stringify(label)}]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    })()`);
+  };
+  await fillNotificationField("ntfy topic", "claw-inbox-fixture");
+  await fillNotificationField("Quiet hours start", "22:30");
+  await fillNotificationField("Quiet hours end", "07:15");
+  await click(`document.querySelector('#critical-alerts')`);
+  await click(`document.querySelector('[role="dialog"] details summary')`);
+  await fillNotificationField("Muted event kinds", "agent.completed, cron.completed");
+  await fillNotificationField("History retention", "60");
+  rejectNotificationPreferencesOnce = true;
+  await clickText("Save changes");
+  await wait("document.body.innerText.includes('Notification settings fixture rejected the save.')", "failed preference save preserves the dialog");
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"ntfy topic\"]').value"), "claw-inbox-fixture");
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Quiet hours start\"]').value"), "22:30");
+  await clickText("Save changes");
+  await wait("!document.querySelector('[role=\"dialog\"]') && document.body.innerText.includes('Notification settings saved.')", "checked settings save");
+  assert.equal(notificationPreferences.desktop_min_severity, "error");
+  assert.equal(notificationPreferences.ntfy_enabled, true);
+  assert.equal(notificationPreferences.ntfy_topic, "claw-inbox-fixture");
+  assert.equal(notificationPreferences.dnd_start_minute_utc, 1350);
+  assert.equal(notificationPreferences.dnd_end_minute_utc, 435);
+  assert.equal(notificationPreferences.critical_bypasses_dnd, false);
+  assert.equal(notificationPreferences.retention_days, 60);
+  assert.deepEqual(notificationPreferences.muted_kinds, ["agent.completed", "cron.completed"]);
+  await clickLabel("Notification settings");
+  assert.equal(await evaluate("document.querySelector('[aria-label=\"Quiet hours end\"]').value"), "07:15");
+  assert.ok(await evaluate("Array.from(document.querySelectorAll('[role=\"dialog\"] [data-slot=\"select-trigger\"], [role=\"dialog\"] input[type=\"time\"], [role=\"dialog\"] [role=\"switch\"]').values()).every(input => input.getBoundingClientRect().width <= 160)"), "controls do not stretch across the dialog");
+  console.log("PASS bounded notification settings preserve wire values and failed-save drafts");
+  await clickText("Cancel");
+
+  await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await delay(200);
+  assert.ok(await evaluate("document.documentElement.scrollWidth <= 390"), "mobile Inbox has no horizontal overflow");
+  await clickLabel("Notification settings");
+  assert.ok(await evaluate("document.querySelector('[role=\"dialog\"]').getBoundingClientRect().width <= 358"), "mobile settings fit the viewport");
+  assert.ok(await evaluate("document.querySelector('[role=\"dialog\"] fieldset').scrollWidth <= document.querySelector('[role=\"dialog\"] fieldset').clientWidth"), "mobile settings scroll vertically, not horizontally");
+  assert.ok(await evaluate(`(() => {
+    const body = document.querySelector('[data-notification-settings-scroll]');
+    return body.getBoundingClientRect().bottom <= body.nextElementSibling.getBoundingClientRect().top + 1;
+  })()`), "settings content never overlaps the pinned footer");
+  console.log("PASS mobile Inbox and settings fit the viewport");
+  await clickText("Cancel");
+  await send("Emulation.clearDeviceMetricsOverride");
+  await delay(200);
+  await clickLabel("Actions for Downloads organized");
+  await selectMenuItem("Mark as read");
+  await wait("!document.querySelector('[data-notification-id=\"inbox-result\"] [aria-label=\"Unread\"]')", "owner-scoped read mutation");
+  await clickLabel("Actions for Permission needed");
+  await selectMenuItem("Acknowledge");
+  await wait("!document.querySelector('[data-notification-id=\"inbox-permission\"] [aria-label=\"Unread\"]')", "notification acknowledgement only");
+  await clickLabel("Actions for Backup finished");
+  await selectMenuItem("Dismiss");
+  await wait("!document.querySelector('[data-notification-id=\"inbox-backup\"]')", "notification dismissal");
+  assert.deepEqual([...jobs.values()], inboxWorkBefore, "Inbox preferences and read/ack/dismiss never modify executions");
+  console.log("PASS responsive Inbox, explicit browser permission, contextual notification actions and unchanged execution state");
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);
   assert.deepEqual(failedResponses.map((response) => ({
@@ -2954,6 +3096,7 @@ try {
       "/api/activities/activity-1/capability-policy",
       "/api/activities/activity-1/scheduling-priority",
       "/api/activities/continuity/import",
+      "/api/notifications/preferences",
     ],
     "stale writes and duplicate continuity exercise actual HTTP errors, not 200-only proxies",
   );

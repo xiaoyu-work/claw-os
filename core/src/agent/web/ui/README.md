@@ -105,6 +105,13 @@ independent attended-terminal interface.
 
 ## Inbox and conversation visibility
 
+Inbox uses a bounded notification list, compact browser preference row and
+local All/Unread filter. Delivery channels, severity thresholds, quiet hours,
+muted kinds and retention live in a grouped settings dialog with bounded
+controls. Quiet-hour inputs display HH:MM but still send UTC minute values.
+Drafts survive failed saves and Cancel writes nothing. Browser permission and
+per-browser opt-in remain distinct from OS Web delivery preferences.
+
 Inbox is notification history, not a row for every conversation turn.
 Queue/start/resume/recovery progress stays in the conversation and execution
 history. A focused visible conversation reports an owner-scoped short viewing
