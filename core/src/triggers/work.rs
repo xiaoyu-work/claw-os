@@ -144,6 +144,13 @@ pub(crate) fn stage_checkpoint(
     {
         return Err("handoff does not match the broker-owned work Job/session/generation".into());
     }
+    checkpoint.validate().map_err(|error| error.to_string())?;
+    crate::clawd::activity_receipts::attach_reported_artifacts(
+        owner,
+        activity_id,
+        "agent",
+        &checkpoint.artifacts,
+    )?;
     let mut checkpoint = checkpoint;
     let redactor = crate::agent::safety::redact::Redactor::default_set();
     checkpoint.summary = redactor.redact(&checkpoint.summary);

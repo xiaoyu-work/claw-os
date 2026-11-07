@@ -60,6 +60,14 @@ task Activity association, before model-input trust fencing. One-shot CLI
 operations are not projected as model tools. Schema inspection and
 unassociated calls do not create automatic receipts.
 
+Successful JSON App results can report canonical references in `object` fields
+or `artifacts` arrays. Root validates their authenticated declarations and
+attaches them to the owned Activity without reading App data or granting
+permission. Text body strings are not scanned for references. Existing owner
+labels are preserved; terminal goals do not acquire new resources from late
+results. Attachment failures preserve the original result and require only a
+metadata retry, never another App execution.
+
 Human `cos app` calls do not enable automatic task capture. The explicit
 `cos operation execute --activity` path owns its single receipt even when the
 human caller's session is already associated with that Activity.

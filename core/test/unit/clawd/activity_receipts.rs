@@ -17,6 +17,7 @@ fn app(root: &std::path::Path) -> crate::apps::App {
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(dir.join("app.json"), json!({
         "schema_version":2,"id":"demo","version":"1","name":{"en":"Demo"},
+        "objects":{"entry":{"label":{"en":"Entry"},"resolve":{"operation":"get","id_arg":"key"}}},
         "operations":{"get":{"label":{"en":"Get"},"args":[{"name":"key","kind":"name","required":true}],
         "effects":[{"kind":"read","label":{"en":"Read key"},"target_arg":"key","recovery":"not_applicable"}]}},
         "mcp":{"entry":"server.py","tools":[{"name":"demo.get","summary":{"en":"Read through the service"}}]}
@@ -232,6 +233,109 @@ fn app_service_recording_failure_returns_original_data_and_only_a_recording_retr
     );
     assert!(error.message.starts_with("original transport uncertainty"));
     assert!(error.message.contains("Do not repeat"));
+}
+
+#[test]
+fn app_artifacts_attach_without_execution_or_label_replacement() {
+    use crate::agent::tools::mcp::protocol::{CallToolResult, ContentItem};
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    let apps = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let _apps = TestEnvVarGuard::set("COS_APPS_DIR", apps.path());
+    let app = app(apps.path());
+    let activity = super::super::activities::create(
+        json!({"title":"Artifacts","goal":"Keep reported objects"}),
+        &peer(1000),
+    )
+    .unwrap();
+    let id = activity["id"].as_str().unwrap();
+    let reference = "app://demo/entry?id=release";
+    let output = CallToolResult {
+        content: vec![ContentItem::Text {
+            text:
+                json!({"nested":{"object":reference},"body":"app://demo/entry?id=not-an-artifact"})
+                    .to_string(),
+        }],
+        is_error: Some(false),
+    };
+    let returned = record_service_result(
+        1000,
+        id,
+        "demo",
+        "demo.get",
+        app.require_verified().unwrap().content_digest(),
+        None,
+        Ok(output.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(returned).unwrap(),
+        serde_json::to_value(output).unwrap()
+    );
+    let service = activities::open_default().unwrap();
+    let recorded = service.get(1000, id).unwrap();
+    assert_eq!(recorded.resources.len(), 1);
+    assert_eq!(recorded.resources[0].reference, reference);
+    assert_eq!(recorded.state, activities::ActivityState::Active);
+    service
+        .add_resource(
+            1000,
+            id,
+            activities::ActivityResource {
+                label: "Owner's label".into(),
+                reference: reference.into(),
+            },
+        )
+        .unwrap();
+    attach_reported_artifacts(1000, id, "agent", &[reference.into()]).unwrap();
+    assert_eq!(
+        service.get(1000, id).unwrap().resources[0].label,
+        "Owner's label"
+    );
+    assert!(attach_reported_artifacts(2000, id, "agent", &[reference.into()]).is_err());
+    service
+        .transition(
+            1000,
+            id,
+            activities::ActivityState::Completed,
+            Some("Owner confirmed".into()),
+        )
+        .unwrap();
+    attach_reported_artifacts(1000, id, "agent", &["app://demo/entry?id=late".into()]).unwrap();
+    assert_eq!(service.get(1000, id).unwrap().resources.len(), 1);
+}
+
+#[test]
+fn invalid_artifacts_never_attach_a_partial_report() {
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    let apps = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let _apps = TestEnvVarGuard::set("COS_APPS_DIR", apps.path());
+    let _app = app(apps.path());
+    let activity = super::super::activities::create(
+        json!({"title":"Artifacts","goal":"Validate references"}),
+        &peer(1000),
+    )
+    .unwrap();
+    let id = activity["id"].as_str().unwrap();
+    assert!(attach_reported_artifacts(
+        1000,
+        id,
+        "agent",
+        &[
+            "app://demo/entry?id=valid".into(),
+            "app://demo/undeclared?id=invalid".into(),
+        ]
+    )
+    .is_err());
+    assert!(activities::open_default()
+        .unwrap()
+        .get(1000, id)
+        .unwrap()
+        .resources
+        .is_empty());
 }
 
 #[test]

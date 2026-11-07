@@ -16,7 +16,8 @@ pub(crate) const WORK_INSTRUCTIONS: &str = "\
 This task is one bounded segment of an explicitly enabled Activity. Work on the \
 current next task, using ordinary authorized tools. Before ending, call \
 cos_activity_checkpoint as the only tool call in its response. Report completed \
-steps and attached App object artifact references accurately. A handoff is a \
+steps and canonical App object artifact references accurately. Root validates \
+and attaches newly reported declarations without reading the objects. A handoff is a \
 caller report, not verified effects, permission or goal completion. Use continue \
 with a concrete different next task when useful work remains, wait when an \
 external condition must change, and review when the goal appears ready for owner \
@@ -74,7 +75,7 @@ impl Tool for ActivityCheckpoint {
                 "summary":{"type":"string","minLength":1,"maxLength":8192},
                 "made_progress":{"type":"boolean"},
                 "completed_steps":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":512}},
-                "artifacts":{"type":"array","maxItems":32,"items":{"type":"string","description":"Canonical app:// reference already attached to this Activity"}},
+                "artifacts":{"type":"array","maxItems":32,"items":{"type":"string","description":"Canonical app:// reference to an authenticated declared App object; Root attaches new references as reported metadata"}},
                 "next":{"oneOf":[
                     {"type":"object","additionalProperties":false,"required":["kind","task"],"properties":{"kind":{"const":"continue"},"task":task}},
                     {"type":"object","additionalProperties":false,"required":["kind","task","reason"],"properties":{"kind":{"const":"wait"},"task":task,"reason":reason}},
