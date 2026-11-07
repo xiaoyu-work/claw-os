@@ -145,7 +145,7 @@ fn refresh_microsoft_tokens(
         "grant_type=refresh_token&refresh_token={}&client_id={}&scope={}",
         urlencoded(refresh_token),
         urlencoded(client_id),
-        urlencoded("offline_access openid email User.Read Mail.Read Mail.Send Calendars.ReadWrite"),
+        urlencoded(super::oauth_login::MICROSOFT_SCOPES),
     );
 
     let url = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");

@@ -244,6 +244,16 @@ fn accepts_complete_google_scope_grant() {
 }
 
 #[test]
+fn draft_scope_requires_fresh_explicit_google_consent() {
+    let token = serde_json::json!({
+        "scope": "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events"
+    });
+    assert!(google_granted_scopes(&token)
+        .unwrap_err()
+        .contains("gmail.compose"));
+}
+
+#[test]
 fn oauth_configuration_uses_credential_store_interface() {
     let _lock = crate::caps::test_env_lock::env_lock();
     let _env = StrictCapabilityEnv::new(serde_json::json!([{

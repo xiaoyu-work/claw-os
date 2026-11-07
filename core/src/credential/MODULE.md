@@ -63,6 +63,12 @@ material internals.
 
 ## Change Together
 
+Interactive Google authorization includes `gmail.compose` for persisted Mail
+drafts; Microsoft authorization and refresh share `Mail.ReadWrite` for draft
+creation/editing. These scopes are shown through the provider's normal
+interactive consent. Existing access/refresh credentials are not rewritten or
+assumed to have acquired additional provider permissions.
+
 - Change `domain.rs`, `authorization.rs`, and capability/audit tests together
   when an identifier, scope, or tier rule changes.
 - Change `crypto.rs`, `master_key.rs`, fixtures, and vectors together for any
