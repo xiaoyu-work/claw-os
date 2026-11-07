@@ -50,12 +50,17 @@ handoff closes operational tool admission for that segment. The final allowed
 model turn offers only that reporting tool, not further operational tools.
 
 Handoffs contain a bounded summary, reported progress flag, completed-step
-labels, attached canonical App object artifact references and one next action:
+labels, canonical App object artifact references and one next action:
 continue with a concrete next task, wait, request owner review, or report a
 blocker. These are caller reports, not verified facts, effects, authorization
 or goal completion. The supervisor validates and redacts the report under its
 own Job identity before persisting it. Progress is applied only after the Job
 has durably succeeded and containment cleanup has succeeded.
+
+New canonical artifact references are authenticated and attached by Root
+before handoff storage, using the Job's existing owner/Activity association.
+They remain caller-reported metadata: attachment never fetches data, supplies
+permission, replaces an owner label or completes the goal.
 
 A continuation is admitted promptly after completion, without waiting an hour.
 A wait releases the worker and uses the configured check interval (60–86400

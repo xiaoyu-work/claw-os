@@ -1,5 +1,7 @@
 //! Receipt reports are owner data, never proof of execution or authority.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 
 use crate::activities::{
@@ -11,6 +13,112 @@ use super::activities::{decode, encode, owner, service_error};
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 use super::wire::requests as body;
+
+pub(crate) fn attach_reported_artifacts(
+    owner: u32,
+    activity_id: &str,
+    producer: &str,
+    references: &[String],
+) -> Result<(), String> {
+    use crate::objects::ObjectCatalog;
+    if references.len() > 32 {
+        return Err("an artifact report allows at most 32 references".into());
+    }
+    if references.is_empty() {
+        return Ok(());
+    }
+    let service = activities::open_default().map_err(|error| error.to_string())?;
+    let activity = service
+        .get(owner, activity_id)
+        .map_err(|error| error.to_string())?;
+    if matches!(
+        activity.state,
+        activities::ActivityState::Completed | activities::ActivityState::Cancelled
+    ) {
+        return Ok(());
+    }
+    let mut known: BTreeSet<String> = activity
+        .resources
+        .iter()
+        .map(|resource| resource.reference.clone())
+        .collect();
+    let catalog = crate::objects::default_catalog();
+    let mut pending = Vec::new();
+    for reference in references {
+        let object =
+            crate::objects::parse_reference(reference).map_err(|error| error.to_string())?;
+        catalog
+            .describe(&object)
+            .map_err(|error| error.to_string())?;
+        if known.insert(reference.clone()) {
+            pending.push(reference.clone());
+        }
+    }
+    if known.len() > 32 {
+        return Err("the Activity's 32-resource limit would be exceeded".into());
+    }
+    for reference in pending {
+        service
+            .add_resource(
+                owner,
+                &activity.id,
+                activities::ActivityResource {
+                    label: format!("Artifact reported by {producer}"),
+                    reference,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn result_artifacts(
+    result: &crate::agent::tools::mcp::protocol::CallToolResult,
+) -> Result<Vec<String>, String> {
+    use crate::agent::tools::mcp::protocol::ContentItem;
+    let mut references = BTreeSet::new();
+    for item in &result.content {
+        let ContentItem::Text { text } = item else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            continue;
+        };
+        let mut pending = vec![&value];
+        let mut visited = 0;
+        while let Some(value) = pending.pop() {
+            visited += 1;
+            if visited > 16_384 {
+                return Err("App artifact metadata exceeds the traversal bound".into());
+            }
+            match value {
+                Value::Object(object) => {
+                    if let Some(Value::String(reference)) = object.get("object") {
+                        if reference.starts_with("app://") {
+                            references.insert(reference.clone());
+                        }
+                    }
+                    if let Some(Value::Array(artifacts)) = object.get("artifacts") {
+                        for reference in artifacts.iter().filter_map(Value::as_str) {
+                            references.insert(reference.to_string());
+                        }
+                    }
+                    pending.extend(
+                        object
+                            .values()
+                            .filter(|value| value.is_object() || value.is_array()),
+                    );
+                }
+                Value::Array(values) => pending.extend(values),
+                _ => {}
+            }
+            if references.len() > 32 {
+                return Err("App result reports more than 32 artifacts".into());
+            }
+        }
+    }
+    Ok(references.into_iter().collect())
+}
 
 pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let owner = owner(client)?;
@@ -151,6 +259,22 @@ pub(crate) fn record_service_result(
             Err(error) => {
                 error.message.push_str("\n\n");
                 error.message.push_str(&message);
+            }
+        }
+    } else if let Ok(result) = &mut outcome {
+        if result.is_error != Some(true) {
+            let attached = result_artifacts(result).and_then(|references| {
+                attach_reported_artifacts(owner, activity_id, app_id, &references)
+            });
+            if let Err(error) = attached {
+                result.content.push(crate::agent::tools::mcp::protocol::ContentItem::Text {
+                    text: format!(
+                        "Activity artifact attachment failed: {}. The original App result is preserved. \
+                         Do not repeat the App call; retry only metadata through the existing Activity object attachment controls.",
+                        diagnostic(&error),
+                    ),
+                });
+                result.is_error = Some(true);
             }
         }
     }
