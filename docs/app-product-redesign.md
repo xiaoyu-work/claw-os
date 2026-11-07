@@ -30,9 +30,11 @@ exports, bundled-runtime compatibility and App-pin/OS-package delivery remain
 explicit contracts and release coupling; see
 [`packaging/README.md`](../packaging/README.md).
 
-Source migration now covers **75 of the original 75 identities** across
-**24 business product groups** plus **4 shared-capability source groups**:
-63 Agent-package identities and 12 desktop identities.
+Source migration covered all original 75 identities. The current selection
+retains **64 identities** across **24 business product groups** plus
+**4 shared-capability source groups**: 52 Agent-package identities and
+12 desktop identities. Eleven unselected messaging connectors were explicitly
+retired; their previous credentials and installed data are not migrated here.
 This count includes native Notifications and `notify`, not their OS service
 or shared libraries. `doc` now belongs to the explicitly declared Document
 Engine capability-client group, not a new Documents business product. `db` and
@@ -101,20 +103,9 @@ and consent cutovers, or visual/installed-image acceptance.
 | `launcher` | Python five-tool App moved to `clawos-app/products/launcher/apps/launcher`; XDG discovery, exact launch/file grants and recent layout preserved; complete native source/build also moved, while UI-service catalog/history and MCP data remain separate |
 | `clipboard-manager` | Five-tool App moved to `clawos-app/products/clipboard/apps/clipboard-manager`; selection read/write, exact source grant, MIME/primary defaults and clear confirmation preserved; Wayland execution stays OS-owned; unifying its selection backend with the now-migrated native CopyQ history panel remains separate work |
 | `gateway-discord` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/discord`; existing operations/MCP contract, nested install path and state layout preserved; explicit pinned `gateway._shared` imports replace relative lookup; authenticated connector admission/lifecycle and durable replay handling remain pending |
-| `gateway-dingtalk` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/dingtalk`; outbound-only send/status, optional signing, keyword/Markdown/mentions and existing grants preserved; imports use pinned `gateway._shared`; no inbound Agent loop or new state store |
-| `gateway-googlechat` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/googlechat`; outbound text/cardsV2, thread behavior and existing grants preserved; recipient remains informational and cannot retarget the webhook; Python/Rust contract fixtures follow source ownership |
-| `gateway-larksuite` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/larksuite`; text/rich-post/card operations and existing grants preserved; corrected HMAC to the official timestamp-plus-secret key with an empty message; Python argument case moved with the connector |
-| `gateway-matrix` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/matrix`; room-message send/status, URL escaping, transaction IDs, homeserver selection and existing grants preserved; inbound `/sync` remains unimplemented |
-| `gateway-mattermost` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/mattermost`; outgoing webhook send/status, channel/DM and username/icon overrides plus existing grants preserved; Python parameter cases moved and Rust recipient binding uses pinned source |
-| `gateway-rocketchat` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/rocketchat`; REST send/status, channel/DM targets, token/user-id headers and existing grants preserved; no inbound service or local state added |
-| `gateway-signal` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/signal`; external REST send/status, phone/group handling and existing grants preserved; backend/account state remain external, private-network access is not automatically authorized and inbound polling remains unimplemented |
 | `gateway-slack` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/slack`; Web API send/status, bot-token precedence, API-level errors and existing grants preserved; Rust manifest fixture follows the immutable source pin, and Socket Mode / Events HTTP remain unimplemented |
-| `gateway-sms` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/sms`; Twilio REST send/status, Basic authentication, phone/Messaging Service sender selection and existing grants preserved; no inbound webhook, delivery callback or state migration added |
-| `gateway-teams` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/teams`; default Adaptive Card, explicit legacy MessageCard and existing grants preserved; recipient remains informational, Python argument cases moved and Rust binding fixture follows the source pin |
 | `gateway-telegram` | Source and existing tests moved to `clawos-app/products/messaging-channels/apps/gateway/telegram`; four operations, repeatable text, polling, allowlists/rate limits and grants preserved; offset/PID state remains installed data with OS migration, while authenticated admission and supervised lifecycle remain pending |
-| `gateway-webex` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/webex`; email/room routing, Markdown/plain payloads and existing grants preserved; Python argument case moved, while person-ID autodetection remains unimplemented despite older descriptions |
 | `gateway-whatsapp` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/whatsapp`; Cloud API send/status, existing Graph version, separate sender ID/recipient number and grants preserved; no webhook reception, delivery confirmation or state migration added |
-| `gateway-zulip` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/zulip`; stream/topic and private-email routing, API-level results and existing grants preserved; all fifteen Messaging Channels source identities are relocated, but inbound/lifecycle redesign remains pending |
 | `gateway-ntfy` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/ntfy`; required server/exact host, metadata and auth behavior preserved, including public-default stored-token suppression; durable Notification Service/Rust adapter stay OS-owned and no queue/state is duplicated |
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
 | `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
@@ -176,8 +167,8 @@ contracts.
 
 ## Complete ownership map
 
-Each starting App ID occurs in exactly one row below. These are ownership
-groups, not a proposal to replace 75 Apps with 28 new App packages.
+Each retained App ID occurs in exactly one row below. These are ownership
+groups, not a proposal to replace 64 Apps with 28 new App packages.
 
 ### Business products
 
@@ -239,7 +230,7 @@ runtime capability, grant union, identity deprecation or backend/data redesign.
 
 | Target | Starting App IDs | Implementation disposition |
 | --- | --- | --- |
-| Messaging channels | `gateway-discord`, `gateway-dingtalk`, `gateway-googlechat`, `gateway-larksuite`, `gateway-matrix`, `gateway-mattermost`, `gateway-rocketchat`, `gateway-signal`, `gateway-slack`, `gateway-sms`, `gateway-teams`, `gateway-telegram`, `gateway-webex`, `gateway-whatsapp`, `gateway-zulip` | Signed, optional channel connectors; admit supported inbound messages through authenticated owner/sender binding, rate limits and replay controls before the system Agent. |
+| Messaging channels | `gateway-discord`, `gateway-slack`, `gateway-telegram`, `gateway-whatsapp` | The four selected connectors; admit inbound messages through authenticated owner/sender binding, rate limits and replay controls before the system Agent. |
 | Notification/event delivery | `gateway-ntfy`, `gateway-pushover`, `gateway-webhook` | Restricted delivery adapters; reuse durable service leases, retries and acknowledgements instead of another notification database. |
 | Home integration | `gateway-homeassistant` | Device-control integration, not a chat transport. Do not invent a new GUI without a product requirement. |
 
