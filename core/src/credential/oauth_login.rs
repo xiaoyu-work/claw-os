@@ -12,14 +12,15 @@ use crate::caps::Verb;
 
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const GOOGLE_SCOPES: &str = "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events";
+const GOOGLE_SCOPES: &str = "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/calendar.events";
 const GOOGLE_REQUIRED_SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/calendar.events",
 ];
-const MICROSOFT_SCOPES: &str =
-    "offline_access openid email User.Read Mail.Read Mail.Send Calendars.ReadWrite";
+pub(super) const MICROSOFT_SCOPES: &str =
+    "offline_access openid email User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite";
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const APP_ACCESS_TOKEN_TIER: u8 = 2;
