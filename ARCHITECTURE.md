@@ -570,55 +570,11 @@ copied. The legacy inbound `cos agent ask` path is not an authenticated
 connector admission API and is not newly authorized by this move. Owner/sender
 binding, service lifecycle and durable replay handling remain pending without
 weakening the App-originated system-Agent restrictions.
-Messaging Channels also owns outbound-only `gateway-dingtalk`, preserving
-send/status, optional HMAC signing, keyword/Markdown/mention handling and the
-existing operations/MCP adapter. Explicit `gateway._shared` imports use pinned
-platform libraries. Existing network/credential/memory grants remain unchanged;
-the egress helper checks the actual destination host. No inbound Agent loop,
-new notification store or delivery lifecycle is introduced.
-The same source group now owns outbound-only `gateway-googlechat`, keeping
-send/status, text/cardsV2 and thread reply-or-create behavior. The configured
-webhook fixes the destination space; `recipient` remains informational only.
-Its contract and grants are unchanged, with pinned shared egress/credential
-libraries and no new inbound Agent route or local state store.
-Outbound-only `gateway-larksuite` also belongs there, preserving text/rich-post/
-interactive-card operations and existing grants. Its old HMAC algorithm is
-corrected to the official custom-bot contract: timestamp-plus-secret key, empty
-message and a seconds timestamp. No unsigned fallback, extra authority or new
-state is introduced; the existing optional unsigned mode is unchanged.
-`gateway-matrix` source is also owned by Messaging Channels. Existing send/status
-and grants remain unchanged, with escaped room IDs, per-send transaction IDs
-and pinned shared transport helpers. Homeserver selection and its existing
-default are preserved. No local state is moved; the inbound `/sync` loop remains
-unimplemented, so this is not a bidirectional connector cutover.
-Messaging Channels also owns `gateway-mattermost` send/status. Its recipient
-selects a channel or direct-message handle in the outgoing webhook payload;
-username/icon overrides and existing grants remain unchanged. Shared egress
-and credential handling stay platform-owned. No inbound endpoint or state store
-is added by relocation.
-`gateway-rocketchat` also moves to Messaging Channels, preserving REST send/status,
-channel/DM targets, separate token/user-id headers and existing grants. Its
-credential precedence, response handling and shared host-gated egress are
-unchanged. No inbound service or local state is added.
-`gateway-signal` also belongs to Messaging Channels, retaining its external
-`signal-cli-rest-api` send/status client, phone/group handling and existing
-grants. The external service and account pairing state are not moved into the
-product. Shared egress still gates private/local endpoints; relocation does
-not authorize the default localhost URL or implement inbound polling.
 `gateway-slack` also moves to Messaging Channels with its Web API send/status,
 bot-token precedence and API-level error handling intact. Existing Slack-host,
 credential and self-memory grants are unchanged; status remains authority-free.
 Socket Mode and Events HTTP are still unimplemented, not newly authorized by
 the repository move.
-`gateway-sms` also belongs to Messaging Channels, retaining Twilio REST
-send/status, phone/Messaging Service sender selection and existing grants.
-Credentials and shared egress remain platform-owned. No inbound webhook or
-delivery callback is introduced; API acceptance is not final SMS delivery.
-`gateway-teams` also moves to Messaging Channels, preserving default Adaptive
-Cards, explicit legacy MessageCards and existing grants. Its recipient remains
-informational; only the configured webhook selects the destination. Python
-argument cases move with the product and the Rust binding contract reads the
-immutable source pin. No automatic fallback or inbound service is introduced.
 `gateway-telegram` also moves to Messaging Channels with send/status/start/stop,
 repeatable message text, legacy polling, allowlists and rate limits. Its
 offset/PID layout and existing OS state-partition migration are preserved;
@@ -626,19 +582,14 @@ installed state is not copied with source. Like Discord, the legacy
 `cos agent ask` path does not establish authenticated owner-bound connector
 admission. Broker restrictions remain unchanged; supervised lifecycle and
 durable delivery are still pending.
-`gateway-webex` also moves to Messaging Channels, preserving REST send/status,
-email/room routing, Markdown/plain payloads and existing grants. The legacy
-person-ID autodetection described by its manifest is not implemented; relocation
-does not add it or an inbound service. Its Python argument case moves with source.
 `gateway-whatsapp` also moves to Messaging Channels, preserving Cloud API
 send/status, the existing Graph version, sender phone-number ID and recipient
 normalization. Grants and credential ownership are unchanged. No webhook
 receiver or delivery confirmation is introduced by the source move.
-`gateway-zulip` completes source relocation of the fifteen Messaging Channels
-identities, retaining stream/topic and private-email routing, API-level results
-and existing grants. This source milestone does not complete authenticated
-inbound admission, supervised lifecycle or durable delivery. Shared egress,
-credentials and state authority remain OS-owned.
+Only Discord, Telegram, Slack and WhatsApp remain selected. The other eleven
+messaging connectors were explicitly retired from App source and OS package
+selection. Their previous credentials and installed state are not deleted or
+migrated; shared egress and authority remain OS-owned.
 `gateway-ntfy` starts the separate Notification Delivery source group with its
 one-shot send/status contract. Required server arguments still derive exact
 host authority, and stored tokens remain suppressed for the public default
@@ -679,8 +630,10 @@ Its declared Files `claw_files` export supplies the same parser in development,
 Doc-only staging and the Agent package. No Files App call or second parser is
 introduced; identical co-staged library payloads are reused and conflicts
 refused. Native preparation stays product-only. Missing or ambiguous declared
-sources never fall back to local OS Apps. This completes 75/75 original source identities:
-24 business product groups plus four capability groups, 63 Agent and 12 desktop
+sources never fall back to local OS Apps. Original source relocation covered
+75/75 identities; the current selection retains 64 after retiring eleven
+messaging connectors: 24 business product groups plus four capability groups,
+52 Agent and 12 desktop
 identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
 memory identity and installed state are unchanged.
 
