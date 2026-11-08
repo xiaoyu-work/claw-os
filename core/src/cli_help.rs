@@ -256,6 +256,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
             "Owner-scoped goals shared by terminal, Web, and desktop",
             activity_schemas(),
         ),
+        ("workspace", "Owner-scoped shared context above Activities", workspace_schemas()),
         ("share","Nearby AirDrop file sharing independent of the Agent",share_schemas()),
         (
             "object",
@@ -752,6 +753,55 @@ fn share_schemas()->Vec<CommandSchema> {
                 _=>"cos share status",
             },
         }).collect()
+}
+
+fn workspace_schemas() -> Vec<CommandSchema> {
+    let (_, _, commands) = cli_catalog::builtin_namespaces().into_iter()
+        .find(|(namespace, _, _)| *namespace == "workspace")
+        .expect("Workspace namespace is defined in the CLI catalogue");
+    commands.into_iter().map(|(command,description)| {
+        let mut params = if command == "list" { vec![] } else {
+            vec![Param::positional("id","uuid",true,"Workspace UUID; create instead accepts a name")]
+        };
+        if !matches!(command,"list" | "show" | "create") {
+            params.push(Param::flag("--revision","integer",true,"Exact Workspace revision actually displayed"));
+        }
+        match command {
+            "create" | "update" => {
+                if command == "update" { params.push(Param::flag("--name","string",false,"New Workspace name")); }
+                params.extend([
+                    Param::flag("--description","string",false,"Shared owner background"),
+                    Param::flag("--context","string",false,"Bounded context data, never system policy"),
+                ]);
+            }
+            "tag" => params.push(Param::positional("path","string",true,"Absolute readable file or recursive folder; no write or execution grant")),
+            "untag" => params.push(Param::positional("tag_id","uuid",true,"Exact selected sharing tag")),
+            "note" => params.extend([
+                Param::positional("title","string",true,"Shared note title"),
+                Param::flag("--content","string",true,"Bounded note content"),
+                Param::flag("--note","uuid",false,"Existing owner note to replace"),
+            ]),
+            "forget-note" => params.push(Param::positional("note_id","uuid",true,"Exact selected note")),
+            "attach" | "detach" => params.push(Param::positional("activity_id","uuid",true,"Owned idle Activity; detach requires pause")),
+            "delete" => params.push(Param::flag("--confirm","boolean",true,"Confirm shared-context deletion; original files and evidence remain")),
+            _ => {}
+        }
+        CommandSchema { command, description, params, example: match command {
+            "list" => "cos workspace list",
+            "show" => "cos workspace show 00000000-0000-4000-8000-000000000001",
+            "create" => "cos workspace create Research --context \"Explain terms for beginners\"",
+            "update" => "cos workspace update 00000000-0000-4000-8000-000000000001 --name Research --revision 1",
+            "tag" => "cos workspace tag 00000000-0000-4000-8000-000000000001 /home/example/Documents/research --revision 1",
+            "untag" => "cos workspace untag WORKSPACE_UUID TAG_UUID --revision 2",
+            "note" => "cos workspace note WORKSPACE_UUID Audience --content Beginners --revision 1",
+            "forget-note" => "cos workspace forget-note WORKSPACE_UUID NOTE_UUID --revision 2",
+            "attach" => "cos workspace attach WORKSPACE_UUID ACTIVITY_UUID --revision 1",
+            "detach" => "cos workspace detach WORKSPACE_UUID ACTIVITY_UUID --revision 2",
+            "archive" => "cos workspace archive WORKSPACE_UUID --revision 1",
+            "restore" => "cos workspace restore WORKSPACE_UUID --revision 2",
+            _ => "cos workspace delete WORKSPACE_UUID --revision 3 --confirm",
+        }}
+    }).collect()
 }
 
 fn activity_schemas() -> Vec<CommandSchema> {

@@ -54,6 +54,14 @@ The ordinary request ceiling remains 1 MiB. `task.submit` alone may use a
 32-MiB request for bounded inline original images. An explicit lower client
 configuration still wins, and the response ceiling is unchanged.
 
+## Workspace contract
+
+`src/workspaces.rs` defines bounded owner context domains, sourced shared notes,
+recursive read-only resource tags, exact metadata revisions and archive/delete
+state. `workspace.list/get/control` require a Root broker peer. The client
+contains no persistence, source reader or grant authority. Tags do not grant
+write, execution or external delivery. See [`../../docs/workspaces.md`](../../docs/workspaces.md).
+
 ## Nearby sharing contract
 
 `src/nearby.rs` defines the closed schema-1 owner/window/offer/transfer and

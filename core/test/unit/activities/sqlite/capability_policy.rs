@@ -816,7 +816,11 @@ fn schema_four_database(path: &Path) -> Vec<Activity> {
     }
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(
-        "DROP TABLE activity_work_history;
+        "DROP TABLE workspace_activities;
+         DROP TABLE workspace_tags;
+         DROP TABLE workspace_notes;
+         DROP TABLE workspaces;
+         DROP TABLE activity_work_history;
          DROP TABLE activity_work;
          DROP TABLE activity_continuity;
          DROP TABLE activity_scheduling_policies;
@@ -843,7 +847,7 @@ fn schema_four_migration_preserves_all_activity_history_and_execution_accounting
     };
     let service = SqliteActivityService::open(&path).unwrap();
     assert_eq!(SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 9);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 10);
     {
         let conn = service.lock().unwrap();
         assert_eq!(

@@ -7,9 +7,10 @@
 mod client;
 mod discovery;
 mod error;
+pub mod nearby;
 mod protocol;
 pub mod system_review;
-pub mod nearby;
+pub mod workspaces;
 
 pub use client::{Client, ClientConfig};
 pub use discovery::{
@@ -18,5 +19,6 @@ pub use discovery::{
 pub use error::{ClientError, Error, ErrorCode, RemoteError};
 pub use protocol::{
     Command, Request, RequestId, Response, HEADER_BYTES, KIND_REQUEST, KIND_RESPONSE, MAGIC,
-    MAX_REQUEST_BYTES, MAX_TASK_SUBMIT_BYTES, MAX_REQUEST_ID_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION,
+    MAX_REQUEST_BYTES, MAX_REQUEST_ID_BYTES, MAX_RESPONSE_BYTES, MAX_TASK_SUBMIT_BYTES,
+    PROTOCOL_VERSION,
 };
