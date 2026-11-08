@@ -228,6 +228,12 @@ impl Verb {
     /// Run arbitrary JS in the page (`page.eval`). Bypasses the
     /// content-script's safety abstractions; admin only.
     pub const BROWSER_EVAL: Verb = Verb::new("browser.eval");
+
+    // -- Owner's configured mail accounts ---------------------------------
+    pub const MAIL_ACCOUNTS: Verb = Verb::new("mail.accounts");
+    pub const MAIL_READ: Verb = Verb::new("mail.read");
+    pub const MAIL_DRAFT: Verb = Verb::new("mail.draft");
+    pub const MAIL_SEND: Verb = Verb::new("mail.send");
 }
 
 /// Every verb the OS recognises. Order is the canonical display order
@@ -331,6 +337,10 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::BROWSER_DOM_WRITE,
     Verb::BROWSER_INPUT_SECRET,
     Verb::BROWSER_EVAL,
+    Verb::MAIL_ACCOUNTS,
+    Verb::MAIL_READ,
+    Verb::MAIL_DRAFT,
+    Verb::MAIL_SEND,
 ];
 
 #[cfg(test)]

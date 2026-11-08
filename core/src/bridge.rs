@@ -1156,6 +1156,26 @@ pub fn run_native_app_host(
     program: &std::ffi::OsStr,
     args: &[std::ffi::OsString],
 ) -> Result<(), String> {
+    run_native_app_host_inner(app_id, app_dir, program, args, None)
+}
+
+pub fn run_native_app_host_with_stdio(
+    app_id: &str,
+    app_dir: &Path,
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+    proxy: fn(&mut std::process::Child) -> Result<(), String>,
+) -> Result<(), String> {
+    run_native_app_host_inner(app_id, app_dir, program, args, Some(proxy))
+}
+
+fn run_native_app_host_inner(
+    app_id: &str,
+    app_dir: &Path,
+    program: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+    proxy: Option<fn(&mut std::process::Child) -> Result<(), String>>,
+) -> Result<(), String> {
     if app_id != "mail-ai" {
         return Err("native App host is restricted to mail-ai".to_string());
     }
@@ -1228,10 +1248,24 @@ pub fn run_native_app_host(
         .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
         .env("COS_DATA_DIR", crate::paths::user_data_dir());
     apply_routed_identity(&mut command)?;
+    if proxy.is_some() {
+        command.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("spawn native App host: {error}"))?;
     bind_child_session(&mut app_session, &mut child)?;
+    if let Some(proxy) = proxy {
+        let result = proxy(&mut child);
+        if child.try_wait().map_err(|error| format!("inspect native App host: {error}"))?
+            .is_none()
+        {
+            child.kill().map_err(|error| format!("stop native App host: {error}"))?;
+        }
+        child.wait().map_err(|error| format!("reap native App host: {error}"))?;
+        return result;
+    }
     let status = child
         .wait()
         .map_err(|error| format!("wait for native App host: {error}"))?;

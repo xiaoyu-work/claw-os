@@ -1311,8 +1311,8 @@ enum Fixture {
     Http(&'static str),
     /// A 302 to somewhere the caller was never granted.
     Redirect(&'static str),
-    /// A minimal ESMTP conversation.
-    Smtp,
+    /// A canned account-scoped Mail service result, without App egress.
+    Mailbox,
 }
 
 impl StubEgress {
@@ -1347,7 +1347,7 @@ impl StubEgress {
                     .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
                     .expect("accept CONNECT");
                 let exchange = match fixture {
-                    Fixture::Smtp => serve_smtp(&mut stream),
+                    Fixture::Mailbox => panic!("Mailbox service must not open an egress tunnel"),
                     Fixture::Http(_) | Fixture::Redirect(_) => {
                         let connection = rustls::ServerConnection::new(Arc::clone(
                             tls.as_ref().expect("HTTPS fixture configuration"),
@@ -1425,62 +1425,13 @@ fn serve_http(stream: &mut (impl Read + Write), fixture: Fixture) -> String {
             "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\
              Connection: close\r\n\r\n"
         ),
-        Fixture::Smtp => panic!("SMTP is not an HTTP fixture"),
+        Fixture::Mailbox => panic!("Mailbox is not an HTTP fixture"),
     };
     stream
         .write_all(response.as_bytes())
         .expect("write HTTPS fixture");
     stream.flush().expect("flush HTTPS fixture");
     request
-}
-
-fn serve_smtp(stream: &mut std::os::unix::net::UnixStream) -> String {
-    use std::io::{BufRead, BufReader};
-
-    let reader_stream = stream.try_clone().unwrap();
-    let mut reader = BufReader::new(reader_stream);
-    stream.write_all(b"220 fixture ESMTP\r\n").unwrap();
-    let mut in_data = false;
-    let mut transcript = String::new();
-    loop {
-        let mut line = String::new();
-        let count = reader.by_ref().take(65536).read_line(&mut line).unwrap();
-        assert!(
-            count > 0 && line.ends_with('\n'),
-            "incomplete SMTP fixture request"
-        );
-        transcript.push_str(&line);
-        assert!(
-            transcript.len() <= 65536,
-            "SMTP fixture request exceeds limit"
-        );
-        let upper = line.trim_end().to_ascii_uppercase();
-        let reply: &[u8] = if in_data {
-            if line.trim_end() == "." {
-                in_data = false;
-                b"250 queued\r\n"
-            } else {
-                continue;
-            }
-        } else if upper.starts_with("EHLO") {
-            b"250-fixture\r\n250-AUTH PLAIN\r\n250 SIZE 1000000\r\n"
-        } else if upper.starts_with("HELO") {
-            b"250 fixture\r\n"
-        } else if upper.starts_with("AUTH PLAIN ") {
-            b"235 authenticated\r\n"
-        } else if upper.starts_with("MAIL") || upper.starts_with("RCPT") {
-            b"250 ok\r\n"
-        } else if upper.starts_with("DATA") {
-            in_data = true;
-            b"354 send it\r\n"
-        } else if upper.starts_with("QUIT") {
-            stream.write_all(b"221 bye\r\n").unwrap();
-            return transcript;
-        } else {
-            panic!("unexpected SMTP fixture command: {upper}");
-        };
-        stream.write_all(reply).unwrap();
-    }
 }
 
 fn fixture_tls(python: &Path, host: &str) -> Arc<rustls::ServerConfig> {
@@ -1607,6 +1558,20 @@ elif len(args) == 5 and args[:4] == ["--wire=1", "__memory", "remember", "--json
     print(json.dumps({"ok": True, "wire_version": 1, "data": {
         "row_id": 1, "source": APP, "indexed_semantic": False
     }}))
+elif args == ["--wire=1", "__mail", "request", "--request-stdin"]:
+    payload = json.loads(sys.stdin.read(1024 * 1024 + 1))
+    assert payload["action"] == "send"
+    account = payload["account"]
+    policy.require("mail.send", name=account)
+    record({"command": "mail.send", "account": account, "args": payload["args"]})
+    print(json.dumps({"ok": True, "wire_version": 1, "data": {
+        "account": account, "sent": True, "id": None, "delivery_confirmed": False
+    }}))
+elif args == ["--wire=1", "__app_event", "publish"]:
+    payload = json.loads(sys.stdin.read(20 * 1024 + 1))
+    policy.require("ipc.publish", name="app:" + APP)
+    record({"command": "app.event", "request": payload})
+    print(json.dumps({"ok": True, "wire_version": 1, "data": {"published": True}}))
 else:
     raise RuntimeError("unsupported fixture service request: " + repr(args))
 "#,
@@ -1702,8 +1667,13 @@ async fn run_shipped_app(
     assert_eq!(caps, expected_caps, "published operation needs changed");
     let arguments = serde_json::to_value(effective.values).unwrap();
     let network = cos::worker::derive::egress_from_caps(&caps);
-    assert_eq!(network.endpoints().len(), 1);
-    let endpoint = network.endpoints()[0].clone();
+    let endpoint = if matches!(fixture, Fixture::Mailbox) {
+        assert!(network.endpoints().is_empty(), "native Mail must not inherit App egress");
+        None
+    } else {
+        assert_eq!(network.endpoints().len(), 1);
+        Some(network.endpoints()[0].clone())
+    };
     let partition = owner_data
         .path()
         .canonicalize()
@@ -1714,12 +1684,11 @@ async fn run_shipped_app(
     let service_log = partition.join("fixture-services.jsonl");
     std::fs::write(&service_log, "").unwrap();
     let fixture_cos = fixture_services(&python, app_id, &caps);
-    let tls = match fixture {
-        Fixture::Smtp => None,
-        _ => Some(fixture_tls(&python, &endpoint.host)),
-    };
     let stub_socket = partition.join("egress.sock");
-    let stub = StubEgress::start(stub_socket.clone(), fixture, tls);
+    let stub = endpoint.as_ref().map(|endpoint| {
+        let tls = fixture_tls(&python, &endpoint.host);
+        StubEgress::start(stub_socket.clone(), fixture, Some(tls))
+    });
 
     std::env::set_var("COS_SDK_PYTHON_DIR", &python);
     std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_cos"));
@@ -1732,7 +1701,7 @@ async fn run_shipped_app(
         })
         .collect();
     let authorized = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
-    let mut extra_env = BTreeMap::from([
+    let extra_env = BTreeMap::from([
         (
             "COS_APP_MANIFEST".to_string(),
             manifest_path.to_string_lossy().into_owned(),
@@ -1750,12 +1719,6 @@ async fn run_shipped_app(
             python.join("fixture-ca.pem").to_string_lossy().into_owned(),
         ),
     ]);
-    if matches!(fixture, Fixture::Smtp) {
-        // Exercise configured SMTP on the exact manifest-derived egress port.
-        extra_env.insert("SMTP_PORT".into(), endpoint.port.to_string());
-        extra_env.insert("SMTP_USER".into(), "sender@example.test".into());
-        extra_env.insert("SMTP_FROM".into(), "sender@example.test".into());
-    }
     let mut policy = cos::worker::derive::app_session(AppSessionInput {
         package_identity: Some((metadata.dev(), metadata.ino())),
         pinned_entries,
@@ -1791,19 +1754,17 @@ async fn run_shipped_app(
     // is redirected, to the stub that terminates the tunnel; the App's
     // data partition is mounted at the same path inside the sandbox,
     // so the worker sees this exact name.
-    assert!(matches!(
-        policy.network,
-        cos::worker::NetworkPolicy::Brokered { .. }
-    ));
-    assert_eq!(
-        policy.env.get("COS_EGRESS_ENDPOINTS").map(String::as_str),
-        Some(endpoint.authority().as_str()),
-        "the derived egress allowlist is not the granted endpoint"
-    );
-    policy.env.insert(
-        "COS_EGRESS_SOCKET".to_string(),
-        stub_socket.to_string_lossy().into_owned(),
-    );
+    if let Some(endpoint) = endpoint.as_ref() {
+        assert!(matches!(policy.network, cos::worker::NetworkPolicy::Brokered { .. }));
+        assert_eq!(
+            policy.env.get("COS_EGRESS_ENDPOINTS").map(String::as_str),
+            Some(endpoint.authority().as_str()),
+            "the derived egress allowlist is not the granted endpoint"
+        );
+        policy.env.insert("COS_EGRESS_SOCKET".to_string(), stub_socket.to_string_lossy().into_owned());
+    } else {
+        assert!(policy.env.get("COS_EGRESS_ENDPOINTS").is_none_or(|value| value.is_empty()));
+    }
 
     let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
         "app-shipped",
@@ -1867,7 +1828,9 @@ async fn run_shipped_app(
                 if message.contains("missing authenticated")),
             "{unauthenticated:?}"
         );
-        assert!(stub.targets().is_empty());
+        if let Some(stub) = stub.as_ref() {
+            assert!(stub.targets().is_empty());
+        }
         assert!(std::fs::read_to_string(&service_log).unwrap().is_empty());
         client
             .call_tool_with_context(
@@ -1901,7 +1864,7 @@ async fn run_shipped_app(
         .unwrap()
         .unwrap();
     let stderr = String::from_utf8_lossy(&errors);
-    let egress = stub.finish();
+    let egress = stub.map(StubEgress::finish).unwrap_or_default();
     assert!(
         errors.len() <= 65536,
         "MCP fixture stderr exceeded its bound"
@@ -2063,17 +2026,18 @@ async fn the_calendar_list_reaches_its_endpoint_only_through_the_broker() {
 }
 
 #[tokio::test]
-async fn smtp_send_reaches_its_server_only_through_the_broker() {
+async fn native_mail_send_uses_account_service_without_app_egress_or_credentials() {
     require_sandbox!();
+    let account = "00000000-0000-4000-8000-000000000001:account1";
     let call = run_shipped_app(
         "mail",
         "email",
         "email.send",
-        json!({"provider": "smtp", "host": "smtp.example.test", "to": "recipient@example.test", "subject": "Brokered message", "body": "Actual public Email"}),
-        Fixture::Smtp,
+        json!({"account": account, "to": "recipient@example.test", "subject": "Brokered message", "body": "Actual public Email"}),
+        Fixture::Mailbox,
         CapSet::from_caps([
-            Cap::new(Verb::NET_DIAL, Scope::host("smtp.example.test")),
-            Cap::new(Verb::SECRET_READ, Scope::name("default/SMTP_PASSWORD")),
+            Cap::new(Verb::MAIL_SEND, Scope::name(account)),
+            Cap::new(Verb::IPC_PUBLISH, Scope::name("app:email")),
             Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("email")),
         ]),
     ).await;
@@ -2081,35 +2045,20 @@ async fn smtp_send_reaches_its_server_only_through_the_broker() {
     assert_eq!(
         result_json(&call.result),
         json!({
-            "sent": true, "to": "recipient@example.test",
-            "subject": "Brokered message", "provider": "smtp",
+            "sent": true, "account": account, "id": null,
+            "delivery_confirmed": false, "provider": "thunderbird",
         })
     );
-    assert_eq!(call.egress.targets, ["smtp.example.test:443"]);
-    assert_eq!(call.egress.exchanges.len(), 1);
-    let transcript = &call.egress.exchanges[0];
-    assert!(transcript.contains("AUTH PLAIN "), "{transcript}");
-    assert!(
-        transcript
-            .to_ascii_lowercase()
-            .contains("mail from:<sender@example.test>"),
-        "{transcript}"
-    );
-    assert!(
-        transcript
-            .to_ascii_lowercase()
-            .contains("rcpt to:<recipient@example.test>"),
-        "{transcript}"
-    );
-    assert!(
-        transcript.contains("Subject: Brokered message"),
-        "{transcript}"
-    );
-    assert!(transcript.contains("\r\n\r\nActual public Email\r\n"), "{transcript}");
-    assert_eq!(call.services.len(), 2);
-    assert_eq!(call.services[0]["name"], "SMTP_PASSWORD");
+    assert!(call.egress.targets.is_empty());
+    assert!(call.egress.exchanges.is_empty());
+    assert_eq!(call.services.len(), 3);
+    assert_eq!(call.services[0]["command"], "mail.send");
+    assert_eq!(call.services[0]["account"], account);
+    assert_eq!(call.services[0]["args"]["body"], "Actual public Email");
     assert_eq!(call.services[1]["command"], "memory.remember");
     assert_eq!(call.services[1]["payload"]["source"], "email");
+    assert_eq!(call.services[2]["command"], "app.event");
+    assert_eq!(call.services[2]["request"]["event_type"], "message.sent");
 }
 
 #[test]

@@ -35,34 +35,42 @@ cos credential store GOOGLE_SEARCH_ENGINE_ID "a1b2c3..." --tier 1
 
 ## Email
 
-Send, search, and read email. SMTP for sending, Gmail/Outlook for full features:
+Read, search, draft and send through the owner's existing Thunderbird accounts.
+Discover accounts first and explicitly select the returned account ID:
 
 ```bash
-cos app email send --provider smtp --host mail.example.com:587 \
+cos app email accounts
+cos app email folders --account ACCOUNT_ID
+cos app email search --account ACCOUNT_ID --query "urgent" --max-results 10
+cos app email list --account ACCOUNT_ID --unread --max-results 5
+cos app email read --account ACCOUNT_ID --id MESSAGE_REFERENCE_ID
+cos app email draft_save --account SENDER_ACCOUNT_ID \
   --to user@example.com --subject "Report" --body "Review the report"
-cos app email send --to user@example.com --subject "Hi" --body "Hello" --provider gmail
-cos app email search --provider gmail --query "subject:urgent" --max-results 10
-cos app email list --provider gmail --unread --max-results 5
-cos app email read --provider gmail --id MESSAGE_ID
 ```
 
-Provider selection is required: `smtp` is send-only, and Gmail/Outlook operations
-use their independent OAuth grants. There is no credential auto-detection or
-implicit SMTP default. SMTP requires an explicit `host:port`; `SMTP_PORT` cannot
-retarget it.
+There is no Gmail/Outlook API, SMTP or credential-detection fallback. The OS
+starts the owner's Thunderbird through the user-session service manager when
+needed; no Agent UI or model request is required. Unavailable session/backend
+services fail explicitly. Mailbox read/draft and sender rights are separately
+account-scoped, not borrowed from OAuth grants or a product name.
 
-Message and draft results carry provider-bound canonical App references.
-`gmail_message`, `outlook_message`, `gmail_draft` and `outlook_draft` fix the
-provider and take only an opaque ID. Copy returned references; do not invent IDs
-or treat references as authority.
+Message and draft results carry `thunderbird-message` / `thunderbird-draft`
+references. Copy returned IDs: they include profile/account/folder/RFC
+Message-ID, not Thunderbird's numeric IDs that change on restart.
+`native_message` / `native_draft` resolve them using existing bounded mailbox
+rights. Historical Gmail/Outlook objects are not remapped to native messages.
 
-`attachment_download` requires explicit provider/message/attachment IDs and a
+`attachment_download` requires an explicit mailbox account/message/MIME-part ID and a
 canonical new output path whose parent already exists. Provider filenames never
 select destinations; downloads are private, bounded and non-overwriting.
-`draft_save` persists a provider draft without sending. `draft_send` requires
-the fingerprint returned by a current draft read and `confirm=true`, and rejects
-changed data. It does not promise a universal provider-side compare-and-swap or
-delivery confirmation. `email.draft` is still an AI text helper only.
+`draft_save` persists a native draft without sending. Replacing requires its
+explicit `source-account`. `native_draft --id ...` returns a complete review,
+including Bcc and attachment byte fingerprints. `draft_send` requires the
+draft's mailbox `account`, an explicit `sender-account`, its current `review`
+and `confirm=true`. These accounts can differ for Local Folders; their grants
+remain independent. It sends the captured reviewed contents and removes only
+an unchanged source draft; it does not prove recipient delivery.
+`email.draft` is still an AI text helper only.
 
 Keep one UUID `request-id` for each reviewed `send`, `draft_save` or `draft_send`
 action, retain it in the Activity handoff, and retry only the same arguments.

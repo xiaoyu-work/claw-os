@@ -254,7 +254,8 @@
             "time.cron", "time.delay",
             "ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.audio.tts", "ai.audio.stt", "ai.vision.analyze", "ai.video.generate", "ai.video.analyze", "ai.bypass",
             "desktop.launch", "desktop.window", "desktop.capture", "desktop.media.observe", "desktop.media.control",
-            "browser.tabs.read", "browser.nav", "browser.dom.read", "browser.dom.write", "browser.input.secret", "browser.eval"
+            "browser.tabs.read", "browser.nav", "browser.dom.read", "browser.dom.write", "browser.input.secret", "browser.eval",
+            "mail.accounts", "mail.read", "mail.draft", "mail.send"
           ]
         },
         "scope": { "$ref": "#/$defs/scopeBinding" },

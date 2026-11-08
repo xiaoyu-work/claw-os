@@ -1166,6 +1166,20 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__mail" {
+        if args.len() != 3 || args[1] != "request" || args[2] != "--request-stdin" {
+            return Err("internal Mail bridge requires `request --request-stdin`".to_string());
+        }
+        let mut request = parse_internal_bridge_request(
+            stdin_data.as_deref(), 1024 * 1024, "Mail",
+        )?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal Mail command requires COS_SESSION".to_string())?;
+        request.insert("session".to_string(), Value::String(session));
+        let value = request_wire_clawd(Command::SystemMailControl, Value::Object(request))?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__bluetooth" {
         let action = args
             .get(1)

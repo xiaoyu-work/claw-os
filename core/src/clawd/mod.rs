@@ -53,6 +53,7 @@ pub mod hardware;
 pub mod heartbeat;
 pub mod journal;
 pub mod location;
+pub mod mail;
 pub mod media_player;
 pub mod memory;
 pub mod nearby;
