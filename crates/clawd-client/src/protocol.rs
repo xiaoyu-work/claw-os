@@ -16,6 +16,12 @@ pub const MAX_REQUEST_ID_BYTES: usize = 64;
 /// Routes used by unprivileged desktop consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Command {
+    #[serde(rename = "workspace.list")]
+    WorkspaceList,
+    #[serde(rename = "workspace.get")]
+    WorkspaceGet,
+    #[serde(rename = "workspace.control")]
+    WorkspaceControl,
     #[serde(rename = "activity.create")]
     ActivityCreate,
     #[serde(rename = "activity.list")]
@@ -156,7 +162,10 @@ impl Command {
     pub const fn requires_root_peer(self) -> bool {
         matches!(
             self,
-            Self::SystemReviewPrepare
+            Self::WorkspaceList
+                | Self::WorkspaceGet
+                | Self::WorkspaceControl
+                | Self::SystemReviewPrepare
                 | Self::SystemReviewPending
                 | Self::SystemReviewShow
                 | Self::SystemReviewConsume
@@ -164,7 +173,10 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 70] = [
+        Self::WorkspaceList,
+        Self::WorkspaceGet,
+        Self::WorkspaceControl,
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -236,6 +248,9 @@ impl Command {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::WorkspaceList => "workspace.list",
+            Self::WorkspaceGet => "workspace.get",
+            Self::WorkspaceControl => "workspace.control",
             Self::ActivityCreate => "activity.create",
             Self::ActivityList => "activity.list",
             Self::ActivityGet => "activity.get",

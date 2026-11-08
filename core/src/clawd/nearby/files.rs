@@ -73,29 +73,7 @@ fn child(directory: &File, name: &str, flags: i32, mode: u32) -> Result<File, St
 }
 
 pub(super) fn directory(path: &Path) -> Result<File, String> {
-    if !path.is_absolute() {
-        return Err("directory must be absolute".into());
-    }
-    let mut handle = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_DIRECTORY)
-        .open("/")
-        .map_err(error)?;
-    for part in path.components() {
-        match part {
-            std::path::Component::RootDir => {}
-            std::path::Component::Normal(name) => {
-                handle = child(
-                    &handle,
-                    name.to_str().ok_or("directory must be UTF-8")?,
-                    libc::O_DIRECTORY | libc::O_PATH,
-                    0,
-                )?;
-            }
-            _ => return Err("directory must be canonical".into()),
-        }
-    }
-    Ok(handle)
+    super::super::owner_files::directory(path)
 }
 
 impl Store {

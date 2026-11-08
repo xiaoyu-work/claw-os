@@ -54,6 +54,7 @@ and the owner-scoped broker contract; only their presentations differ.
 | `continuity.rs` | Strict deterministic continuity-v1 document, bounds, snapshot digest and explicit local placement |
 | `sqlite/continuity.rs` | Schema-8 stable identity/revision, deterministic legacy migration and atomic paused import/export |
 | `work.rs`, `sqlite/work.rs` | Closed bounded work state/handoffs, schema-9 storage, exact revision transitions and immutable local history |
+| `sqlite/workspaces.rs` | Schema-10 owner context domains, shared notes, recursive source tags and Activity membership |
 | `capability_policy.rs` | Strict capability-rule DTOs, canonicalization and pure constraint decisions |
 | `sqlite/capability_policy.rs` | Owner-scoped capability policy CAS, revocation and schema-5 migration |
 | `../clawd/activities.rs` | Owner-scoped broker consumer and execution projections |
@@ -83,7 +84,7 @@ parent directories are rejected.
 Disk connections require WAL journaling, `synchronous=FULL`, and a five-second
 busy timeout. Creation, partial updates, transitions, receipt appends and
 object-state appends, execution and monetary reservations, settlements and policy changes
-use immediate transactions. A new empty database receives schema version 9
+use immediate transactions. A new empty database receives schema version 10
 through explicit sequential migrations. Schema 1 first adds
 the schema-2 `activity_receipts` ledger; schema 2 then adds
 `activity_object_state` and the receipt composite index needed for
@@ -118,7 +119,12 @@ than initializing a replacement database over them. Reads validate stored
 metadata rather than silently repairing it. The in-memory provider is for
 tests and uses SQLite's in-memory journal instead of WAL.
 
-`DATABASE_SCHEMA_VERSION = 9` controls SQLite `user_version` and migration.
+Schema 10 adds Workspaces, sourced shared notes, read-only path tags and
+owner-bound Activity membership. It preserves existing goal rows and all
+execution/continuity ledgers. Workspace deletion clears shared bytes and
+pauses member goals but does not remove their evidence or source files.
+
+`DATABASE_SCHEMA_VERSION = 10` controls SQLite `user_version` and migration.
 The broker independently owns `clawd::activities::WIRE_SCHEMA_VERSION = 1`
 for `activity.list` and `activity.get`; it does not emit the database version.
 The existing public `activities::SCHEMA_VERSION = 1` is retained for wire

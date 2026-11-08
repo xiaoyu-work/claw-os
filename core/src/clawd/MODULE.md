@@ -58,6 +58,7 @@ and agent tasks.
 | `memory.rs` | Shared owner-identity/read-only history opening and legacy session views; missing stores stay absent and existing ownership is never changed |
 | `../storage.rs` | Startup/owner-state preparation repairs only fixed, single-link root-owned memory files through pinned directory/file descriptors |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
+| `workspaces.rs`, `owner_files.rs` | Owner-only Workspace management, exact source sharing, pinned source traversal and deletion/cancellation coordination |
 | `app_events.rs` | App/source/owner-bound reported events, exact named IPC publication, durable same-key deduplication and existing trigger journal; no task authority |
 | `channels.rs`, `channels/providers.rs` | Protected human channel bindings, owner credential custody, Discord/Telegram polling, signed Slack/WhatsApp ingress and retained reply receipts; wakes existing Activity triggers, never grants task authority |
 | `activity_attention.rs` | Shared read-only Job issue/count, protected approval, and task-linked notification projection; never consent or authority |

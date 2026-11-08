@@ -259,7 +259,7 @@ fn schema_eight_upgrade_and_portable_import_never_create_automatic_execution() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE activity_work_history; DROP TABLE activity_work; PRAGMA user_version=8;",
+            "DROP TABLE workspace_activities; DROP TABLE workspace_tags; DROP TABLE workspace_notes; DROP TABLE workspaces; DROP TABLE activity_work_history; DROP TABLE activity_work; PRAGMA user_version=8;",
         )
         .unwrap();
     }
