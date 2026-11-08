@@ -67,7 +67,8 @@ const AUTHORIZATION_PHASES = ["starting", "prompt", "verifying", "finished", "fa
 export type AuthorizationPhase = typeof AUTHORIZATION_PHASES[number];
 export type AuthorizationView = {
   id: string; review_id: string; revision: string; label: string; target: string;
-  choice: ApprovalChoice; phase: AuthorizationPhase;
+  choice: ApprovalChoice | null; phase: AuthorizationPhase;
+  action?: "confirm_install" | "confirm_activation" | "confirm_update";
   prompt: { id: string; message: string } | null; message: string | null;
 };
 
@@ -78,7 +79,8 @@ export function readAuthorization(value: unknown, expected: {
       value.review_id !== expected.review_id || value.revision !== expected.revision ||
       (expected.id !== undefined && value.id !== expected.id) ||
       typeof value.label !== "string" || typeof value.target !== "string" ||
-      !oneOf(CHOICES, value.choice) || value.choice === "deny" ||
+      !(oneOf(CHOICES, value.choice) && value.choice !== "deny" && value.action === undefined ||
+        value.choice === null && oneOf(["confirm_install", "confirm_activation", "confirm_update"] as const, value.action)) ||
       !oneOf(AUTHORIZATION_PHASES, value.phase) ||
       !(value.message === null || typeof value.message === "string")) {
     throw new Error("The OS authentication response has an invalid identity or shape.");
@@ -97,6 +99,7 @@ export function readAuthorization(value: unknown, expected: {
   return {
     id: value.id, review_id: expected.review_id, revision: expected.revision,
     label: value.label, target: value.target, choice: value.choice,
+    ...(value.choice === null ? { action: value.action } : {}),
     phase: value.phase, prompt, message: value.message,
   };
 }

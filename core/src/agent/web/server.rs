@@ -29,9 +29,27 @@ pub fn build_app(state: AppState) -> Router {
         .route("/clawos-symbol.png", get(assets::brand_symbol_light))
         .route("/clawos-symbol-dark.png", get(assets::brand_symbol_dark))
         .route("/assets/{file}", get(assets::asset))
+        .route("/app-ui/{id}/{*file}", get(routes::apps::resource))
         // JSON API.
         .route("/api/auth/token", post(routes::auth::token))
         .route("/api/meta", get(routes::meta::handler))
+        .route("/api/app-store", get(routes::apps::catalog))
+        .route("/api/apps", get(routes::apps::installed))
+        .route("/api/app-installs", get(routes::apps::requests))
+        .route("/api/app-reviews/{id}", get(routes::apps::review))
+        .route("/api/apps/{id}/install", post(routes::apps::prepare))
+        .route("/api/app-installs/{id}/commit", post(routes::apps::commit))
+        .route("/api/app-installs/{id}/cancel", post(routes::apps::cancel))
+        .route(
+            "/api/app-reviews/{id}/authorization",
+            post(routes::apps::authorize),
+        )
+        .route("/api/apps/{id}/open", post(routes::apps::open))
+        .route(
+            "/api/apps/{id}/call",
+            post(routes::apps::call).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route("/api/app-views/{id}/close", post(routes::apps::close))
         .route("/api/memory/inspect", post(routes::memory::inspect))
         .route("/api/memory/read", post(routes::memory::read))
         .route("/api/memory/update", post(routes::memory::update))
@@ -58,12 +76,16 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::activities::transition),
         )
         .route("/api/activities/{id}/run", post(routes::activities::run))
-        .route("/api/nearby",get(routes::nearby::status))
-        .route("/api/nearby/control",post(routes::nearby::control))
-        .route("/api/activities/{id}/work",
-            get(routes::activities::work::get).post(routes::activities::work::set))
-        .route("/api/activities/{id}/work/enabled",
-            post(routes::activities::work::enabled))
+        .route("/api/nearby", get(routes::nearby::status))
+        .route("/api/nearby/control", post(routes::nearby::control))
+        .route(
+            "/api/activities/{id}/work",
+            get(routes::activities::work::get).post(routes::activities::work::set),
+        )
+        .route(
+            "/api/activities/{id}/work/enabled",
+            post(routes::activities::work::enabled),
+        )
         .route(
             "/api/activities/{id}/objects",
             get(routes::activities::objects).post(routes::activities::attach_object),
@@ -142,16 +164,38 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks/{id}/stop", post(routes::tasks::stop))
         .route("/api/tasks/{id}/resume", post(routes::tasks::resume))
         .route("/api/approvals/pending", get(routes::approvals::pending))
-        .route("/api/approvals/reviews", get(routes::approvals::pending_reviews))
-        .route("/api/approvals/reviews/recent", get(routes::approvals::recent_reviews))
-        .route("/api/tasks/{id}/approvals", get(routes::approvals::task_reviews))
-        .route("/api/approvals/{id}/decision", post(routes::approvals::decide_review))
-        .route("/api/approvals/{id}/authorization", post(routes::approvals::start_authorization))
-        .route("/api/authorizations/{id}", get(routes::approvals::authorization_status))
-        .route("/api/authorizations/{id}/response",
-            post(routes::approvals::authorization_response)
-                .layer(DefaultBodyLimit::max(32 * 1024)))
-        .route("/api/authorizations/{id}/cancel", post(routes::approvals::cancel_authorization))
+        .route(
+            "/api/approvals/reviews",
+            get(routes::approvals::pending_reviews),
+        )
+        .route(
+            "/api/approvals/reviews/recent",
+            get(routes::approvals::recent_reviews),
+        )
+        .route(
+            "/api/tasks/{id}/approvals",
+            get(routes::approvals::task_reviews),
+        )
+        .route(
+            "/api/approvals/{id}/decision",
+            post(routes::approvals::decide_review),
+        )
+        .route(
+            "/api/approvals/{id}/authorization",
+            post(routes::approvals::start_authorization),
+        )
+        .route(
+            "/api/authorizations/{id}",
+            get(routes::approvals::authorization_status),
+        )
+        .route(
+            "/api/authorizations/{id}/response",
+            post(routes::approvals::authorization_response).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
+            "/api/authorizations/{id}/cancel",
+            post(routes::approvals::cancel_authorization),
+        )
         .route("/api/approvals/recent", get(routes::approvals::recent))
         .route(
             "/api/approvals/{id}/approve",

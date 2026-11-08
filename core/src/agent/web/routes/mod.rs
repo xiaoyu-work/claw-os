@@ -1,11 +1,12 @@
 pub mod activities;
 pub mod approvals;
+pub mod apps;
 pub mod auth;
 pub mod chat;
 pub(super) mod clawd;
 pub mod inbox;
-pub mod meta;
 pub mod memory;
+pub mod meta;
 pub mod nearby;
 pub mod notifications;
 pub mod sessions;

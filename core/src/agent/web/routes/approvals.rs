@@ -11,10 +11,12 @@ use serde_json::{json, Value};
 use crate::agent::web::state::AppState;
 use crate::clawd::routes::Command;
 
+pub(super) mod authorization;
 mod presentation;
-mod authorization;
-pub use presentation::{pending_reviews, task_reviews, recent_reviews, decide_review};
-pub use authorization::{start_authorization, authorization_status, authorization_response, cancel_authorization};
+pub use authorization::{
+    authorization_response, authorization_status, cancel_authorization, start_authorization,
+};
+pub use presentation::{decide_review, pending_reviews, recent_reviews, task_reviews};
 
 pub async fn pending(
     State(_state): State<AppState>,
@@ -97,10 +99,7 @@ pub async fn deny(
         .map_err(super::clawd::RpcError::into_api_error)
 }
 
-fn validate_decision_input(
-    id: &str,
-    note: Option<&str>,
-) -> Result<(), (StatusCode, Json<Value>)> {
+fn validate_decision_input(id: &str, note: Option<&str>) -> Result<(), (StatusCode, Json<Value>)> {
     if id.is_empty()
         || id.len() > 128
         || !id

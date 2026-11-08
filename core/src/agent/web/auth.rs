@@ -59,7 +59,9 @@ pub fn persist_token(hex: &str) -> Result<String, String> {
 fn load_bootstrap_token() -> Result<String, String> {
     match load_hex_secret(&token_path())? {
         SecretLoad::Valid(secret) => Ok(secret),
-        SecretLoad::Missing => Err("web bootstrap token is missing; restart the server".to_string()),
+        SecretLoad::Missing => {
+            Err("web bootstrap token is missing; restart the server".to_string())
+        }
         SecretLoad::Invalid(reason) => Err(reason),
     }
 }
@@ -183,10 +185,7 @@ pub fn exchange_bootstrap_token(
     ttl_seconds: Option<u64>,
 ) -> Result<IssuedAccessToken, TokenExchangeError> {
     let expected = load_bootstrap_token().map_err(TokenExchangeError::Internal)?;
-    if !constant_time_eq(
-        presented_bootstrap.as_bytes(),
-        expected.as_bytes(),
-    ) {
+    if !constant_time_eq(presented_bootstrap.as_bytes(), expected.as_bytes()) {
         return Err(TokenExchangeError::InvalidBootstrap);
     }
     let ttl = ttl_seconds
@@ -200,8 +199,9 @@ pub fn exchange_bootstrap_token(
         expires_at: now.saturating_add(ttl),
         token_id: generate_token_id().map_err(TokenExchangeError::Internal)?,
     };
-    let payload = serde_json::to_vec(&claims)
-        .map_err(|error| TokenExchangeError::Internal(format!("serialize access token: {error}")))?;
+    let payload = serde_json::to_vec(&claims).map_err(|error| {
+        TokenExchangeError::Internal(format!("serialize access token: {error}"))
+    })?;
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
     let signed = format!("v1.{encoded}");
     let key = load_signing_key().map_err(TokenExchangeError::Internal)?;
@@ -296,6 +296,7 @@ pub async fn require_token(
             | "/clawos-symbol-dark.png"
             | "/apple-touch-icon.png"
     ) || path.starts_with("/assets/")
+        || path.starts_with("/app-ui/")
         || path == "/api/auth/token";
     if public {
         return next.run(req).await;

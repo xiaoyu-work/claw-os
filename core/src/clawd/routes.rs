@@ -1651,6 +1651,76 @@ routes! {
     // -----------------------------------------------------------------
     // App / MCP session authority
     // -----------------------------------------------------------------
+    AppStoreList {
+        name: "app_store.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget { max_in_flight: 2, deadline: Deadline::Interruptible(Duration::from_secs(200)) },
+        authority: peer(Audience::AppLaunch),
+        body: body::NoBody,
+        audit: &[],
+        run: |c| super::app_store::list(c.params, c.client).await,
+    }
+    AppStoreInstalled {
+        name: "app_store.installed",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::mutation(),
+        authority: peer(Audience::AppLaunch),
+        body: body::NoBody,
+        audit: &[],
+        run: |c| super::app_store::installed(c.params, c.client).await,
+    }
+    AppStoreRequests {
+        name: "app_store.requests",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::AppLaunch),
+        body: body::NoBody,
+        audit: &[],
+        run: |c| super::app_store::requests(c.params, c.client).await,
+    }
+    AppStorePrepare {
+        name: "app_store.prepare",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 2, deadline: Deadline::Uninterruptible },
+        authority: peer(Audience::AppLaunch),
+        body: body::AppStoreSelection,
+        audit: &[("app_id", FieldRule::Token), ("sha256", FieldRule::Token)],
+        run: |c| super::app_store::prepare(c.params, c.client).await,
+    }
+    AppStoreCommit {
+        name: "app_store.commit",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 2, deadline: Deadline::Uninterruptible },
+        authority: peer(Audience::AppLaunch),
+        body: body::AppStoreRequest,
+        audit: &[("request_id", FieldRule::Token)],
+        run: |c| super::app_store::commit(c.params, c.client).await,
+    }
+    AppStoreCancel {
+        name: "app_store.cancel",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::AppLaunch),
+        body: body::AppStoreRequest,
+        audit: &[("request_id", FieldRule::Token)],
+        run: |c| super::app_store::cancel(c.params, c.client).await,
+    }
+    AppStoreOpen {
+        name: "app_store.open",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::AppLaunch),
+        body: body::AppStoreApp,
+        audit: &[("app_id", FieldRule::Token)],
+        run: |c| super::app_store::open(c.params, c.client).await,
+    }
     AppServiceCall {
         name: "app_service.call",
         access: Access::PrivateTaskHost,

@@ -27,6 +27,8 @@ import {
   Settings,
   Sun,
   Target,
+  ShoppingBag,
+  Package,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -74,6 +76,8 @@ const NAV_ITEMS: Array<{
   icon: typeof MessageSquare;
   href: string;
 }> = [
+  { key: "apps", label: "Apps", icon: Package, href: "/apps" },
+  { key: "app-store", label: "App Store", icon: ShoppingBag, href: "/app-store" },
   { key: "activities", label: "Activities", icon: Target, href: "/activities" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "memory", label: "Memory", icon: Brain, href: "/memory" },

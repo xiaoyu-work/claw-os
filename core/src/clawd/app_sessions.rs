@@ -1008,6 +1008,7 @@ pub(crate) async fn prepare_cli_app_service_call(
     params: Value,
     client: &ClientIdentity,
 ) -> Result<super::app_services::PreparedAppServiceCall, BrokerError> {
+    use crate::provenance::runtime::PackageRef;
     use crate::agent::tools::app_gateway::{
         McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
     };
@@ -1061,6 +1062,15 @@ pub(crate) async fn prepare_cli_app_service_call(
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
+    if let Some(expected) = params.get("expected_package") {
+        let expected: PackageRef = serde_json::from_value(expected.clone())
+            .map_err(|_| BrokerError::authorization("Invalid App UI package binding"))?;
+        if PackageRef::of(app.require_verified()?) != expected {
+            return Err(BrokerError::authorization(
+                "The App package changed; reopen its Web interface before calling it",
+            ));
+        }
+    }
     finalize_prepared_app_service_call(&app, &app_id, &tool, &supplied, &delegation, context, uid)
 }
 

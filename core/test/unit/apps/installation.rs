@@ -1,5 +1,72 @@
 use super::*;
 
+#[test]
+fn updates_preserve_normalized_nested_app_layouts() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let apps = root.path().join("apps");
+    let destination = apps.join("gateway").join("fixture");
+    write_min_app(
+        &source,
+        "gateway-fixture",
+        r#"{"id":"gateway-fixture","version":"1.0.0","name":{"en":"Nested"}}"#,
+    );
+    let install = DirectoryInstall::prepare_at(&source, &apps, Some(&destination)).unwrap();
+    assert_eq!(install.destination(), destination);
+    assert!(DirectoryInstall::prepare_at(&source, &apps, Some(&apps.join("different"))).is_err());
+    assert!(
+        DirectoryInstall::prepare_at(&source, &apps, Some(&root.path().join("outside"))).is_err()
+    );
+}
+
+#[test]
+fn reviewed_install_exposes_the_signed_web_interface_and_mcp_declaration() {
+    let _guard = crate::test_env::lock_env();
+    let package = crate::test_env::signed_web_app("installed-web");
+    let source = package.dir();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(source.join("app.json")).unwrap()).unwrap();
+    manifest["schema_version"] = serde_json::json!(2);
+    manifest["mcp"] = serde_json::json!({
+        "entry": "server.py", "transport": "stdio", "tools": [{
+            "name": "installed-web.echo", "summary": {"en": "Echo an explicit message"},
+            "args": [{"name": "message", "kind": "text", "required": true}], "needs": [],
+        }],
+    });
+    fs::write(
+        source.join("app.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        source.join("server.py"),
+        "raise RuntimeError('installation must not execute App code')\n",
+    )
+    .unwrap();
+    reseal_app(source, "installed-web");
+    let target = crate::test_env::secure_scratch_dir("web-installed");
+    let install = DirectoryInstall::prepare(source, &target).unwrap();
+    let mut reviewed = false;
+    install
+        .publish(false, false, &mut |app| {
+            assert_eq!(app.manifest.id, "installed-web");
+            assert!(app.require_verified().is_ok());
+            reviewed = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(reviewed);
+    let app = crate::apps::find_verified_fresh(&target, "installed-web").unwrap();
+    assert!(app.manifest.mcp.is_some());
+    let metadata = crate::apps::store::web_metadata(app.require_verified().unwrap()).unwrap();
+    assert_eq!(metadata["tools"][0]["name"], "installed-web.echo");
+    assert!(app
+        .require_verified()
+        .unwrap()
+        .read_verified("web/index.html")
+        .is_ok());
+}
+
 fn write_min_app(dir: &Path, id: &str, body: &str) {
     fs::create_dir_all(dir).unwrap();
     fs::write(dir.join("app.json"), body).unwrap();

@@ -16,6 +16,7 @@ pub struct AppStateInner {
     pub local_only: bool,
     pub started_at_unix: u64,
     pub(super) authorizations: super::authorization::Controller,
+    pub(super) web_apps: super::app_ui::Views,
     turn_leases: TurnLeaseRegistry,
 }
 
@@ -36,6 +37,7 @@ impl AppState {
                 local_only,
                 started_at_unix,
                 authorizations: super::authorization::Controller::default(),
+                web_apps: super::app_ui::Views::default(),
                 turn_leases: TurnLeaseRegistry::default(),
             }),
         }
@@ -72,12 +74,9 @@ pub fn validate_owner_storage(owner_uid: u32) -> Result<(), String> {
     {
         use std::os::unix::fs::MetadataExt;
 
-        let roots = [
-            crate::paths::data_dir(),
-            crate::paths::caps_data_dir(),
-        ]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
+        let roots = [crate::paths::data_dir(), crate::paths::caps_data_dir()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
         for path in roots {
             if !path.exists() {
                 crate::storage::ensure_private_dir(&path)
