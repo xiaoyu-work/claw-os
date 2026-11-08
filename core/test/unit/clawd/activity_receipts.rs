@@ -254,7 +254,7 @@ fn app_artifacts_attach_without_execution_or_label_replacement() {
     let output = CallToolResult {
         content: vec![ContentItem::Text {
             text:
-                json!({"nested":{"object":reference},"body":"app://demo/entry?id=not-an-artifact"})
+                json!({"nested":{"object":reference},"reference":reference,"body":"app://demo/entry?id=not-an-artifact"})
                     .to_string(),
         }],
         is_error: Some(false),

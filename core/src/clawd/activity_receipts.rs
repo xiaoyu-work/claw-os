@@ -93,9 +93,11 @@ fn result_artifacts(
             }
             match value {
                 Value::Object(object) => {
-                    if let Some(Value::String(reference)) = object.get("object") {
-                        if reference.starts_with("app://") {
-                            references.insert(reference.clone());
+                    for field in ["object", "reference"] {
+                        if let Some(Value::String(reference)) = object.get(field) {
+                            if reference.starts_with("app://") {
+                                references.insert(reference.clone());
+                            }
                         }
                     }
                     if let Some(Value::Array(artifacts)) = object.get("artifacts") {
