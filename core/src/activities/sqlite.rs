@@ -5,6 +5,7 @@ mod monetary_budget;
 mod object_state;
 mod scheduling_policy;
 mod work;
+mod workspaces;
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -172,6 +173,10 @@ impl SqliteActivityService {
             tx.execute_batch(work::MIGRATE_TO_V9)?;
         }
         work::validate_schema(&tx)?;
+        if version < 10 {
+            tx.execute_batch(workspaces::MIGRATE_TO_V10)?;
+        }
+        workspaces::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -733,7 +738,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1..=8 => {}
+        1..=9 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

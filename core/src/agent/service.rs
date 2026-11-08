@@ -2655,6 +2655,16 @@ pub(crate) fn require_active_activity(owner_uid: u32, activity_id: &str) -> io::
             ),
         ));
     }
+    use crate::workspaces::WorkspaceService;
+    let workspace = crate::workspaces::open_default()
+        .and_then(|service| service.activity_workspace(owner_uid, &activity.id))
+        .map_err(|error| io::Error::other(format!("load Activity Workspace: {error}")))?;
+    if workspace.is_some_and(|workspace| workspace.state != crate::workspaces::WorkspaceState::Active) {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Activity Workspace is archived or deleted and does not accept new work",
+        ));
+    }
     Ok(activity)
 }
 

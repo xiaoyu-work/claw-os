@@ -68,6 +68,7 @@ pub mod triggers;
 pub mod update;
 pub mod watch;
 pub mod worker;
+pub mod workspaces;
 
 #[cfg(test)]
 pub mod test_env {

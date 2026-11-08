@@ -51,6 +51,7 @@ use super::{
     journal as journal_ops, location, mail, memory, network, network_diagnostics, notifications,
     operation_previews, packages, permissions, power, printer, scheduler, security, snapshots,
     storage, system_journal, systemd, tasks, transactions, usage, usb_guard, users,
+    workspaces,
 };
 
 /// Who may reach a route at all.
@@ -490,6 +491,39 @@ routes! {
         })),
     }
 
+    // -----------------------------------------------------------------
+    // Workspaces: owner-selected knowledge sharing, not execution authority.
+    // -----------------------------------------------------------------
+    WorkspaceList {
+        name: "workspace.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Context),
+        body: body::NoBody,
+        audit: &[],
+        run: |c| workspaces::list(c.params,c.client).await,
+    }
+    WorkspaceGet {
+        name: "workspace.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Context),
+        body: body::WorkspaceGet,
+        audit: &[("id",FieldRule::Token)],
+        run: |c| workspaces::get(c.params,c.client).await,
+    }
+    WorkspaceControl {
+        name: "workspace.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Context),
+        body: body::WorkspaceControl,
+        audit: &[("request",FieldRule::Size)],
+        run: |c| workspaces::control(c.params,c.client).await,
+    }
     // -----------------------------------------------------------------
     // Activities: owner-scoped work records, not authority.
     // -----------------------------------------------------------------

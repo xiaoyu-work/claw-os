@@ -268,8 +268,11 @@ fn main_routes_survive_activity_inventory_merge() {
         (Command::NotificationDismiss, "notification.dismiss"),
         (Command::NearbyStatus,"nearby.status"),
         (Command::NearbyControl,"nearby.control"),
+        (Command::WorkspaceList,"workspace.list"),
+        (Command::WorkspaceGet,"workspace.get"),
+        (Command::WorkspaceControl,"workspace.control"),
     ];
-    assert_eq!(Command::ALL.len(), 67);
+    assert_eq!(Command::ALL.len(), 70);
     let mut names = std::collections::HashSet::new();
     for command in Command::ALL {
         assert!(names.insert(command.as_str()), "duplicate {command}");
@@ -291,6 +294,9 @@ fn main_routes_survive_activity_inventory_merge() {
 #[test]
 fn system_review_root_peer_requirement_survives_activity_merge() {
     let protected = [
+        Command::WorkspaceList,
+        Command::WorkspaceGet,
+        Command::WorkspaceControl,
         Command::SystemReviewPrepare,
         Command::SystemReviewPending,
         Command::SystemReviewShow,
