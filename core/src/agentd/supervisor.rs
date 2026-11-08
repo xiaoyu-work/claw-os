@@ -1054,6 +1054,7 @@ async fn start_extension_host(
             expires_at_ms,
         )
         .with_task_app_data(&host)
+        .with_task_session(session.cloned())
         .with_activity(activity),
     );
     let broker_task = tokio::spawn(crate::extension_host::broker::serve(
