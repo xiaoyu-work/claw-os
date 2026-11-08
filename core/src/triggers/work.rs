@@ -145,6 +145,12 @@ pub(crate) fn stage_checkpoint(
         return Err("handoff does not match the broker-owned work Job/session/generation".into());
     }
     checkpoint.validate().map_err(|error| error.to_string())?;
+    if let Some(sid)=job.session_id.as_deref(){
+        let sid=sid.parse::<crate::session::SessionId>().map_err(|e|e.to_string())?;
+        if crate::workspaces::context_access::has_temporary(&sid)?{
+            return Err("temporary context cannot be automatically handed to another segment; inspect the result and explicitly supply a fresh next task".into());
+        }
+    }
     crate::clawd::activity_receipts::attach_reported_artifacts(
         owner,
         activity_id,
@@ -296,10 +302,21 @@ fn tick_one(
     if active {
         return Ok(());
     }
+    use crate::workspaces::WorkspaceService;
+    let domain=crate::workspaces::open_default().and_then(|service|service.activity_workspace(owner,activity_id))
+        .map_err(|e|e.to_string())?.map(|workspace|workspace.id);
+    let checkpoint=match work.last_checkpoint.as_ref(){
+        Some(record)=>{
+            let meta=crate::clawd::tasks::task_session_meta(&record.session_id,owner)?;
+            if meta.workspace_id!=domain || crate::workspaces::context_access::has_temporary(&meta.id)?{None}
+            else{Some(record)}
+        }
+        None=>None,
+    };
     let mut job = prepare_job(&rule, work.config.task.clone())?;
     job.activity_work_generation = work.generation.clone();
     job.context = Some(
-        handoff_segment(&work.next_task, work.last_checkpoint.as_ref())?
+        handoff_segment(&work.next_task, checkpoint)?
             .render_fenced(crate::agent::trust::envelope::process_seal()),
     );
     let reserved = service.change_work(

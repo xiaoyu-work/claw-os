@@ -43,6 +43,22 @@ desktop/agent/
     └── assets/             #   brand PNGs baked into binary
 ```
 
+## Workspaces
+
+The model-independent Workspaces sidebar opens shared background, sourced notes,
+read-only file/folder tags, local source/search/index diagnostics and idle
+Activity assignment. New conversation creates a canonical Root-owned session
+in that domain; old history is never moved. Exact displayed revisions and
+generation-bound requests prevent stale edits or replay on reconnect. Temporary
+cross-Workspace selection is closed to exact note/tag/file IDs, an existing
+Job/conversation and expiry. Root owns all privacy, grants and persistence.
+See [Workspaces](../../docs/workspaces.md).
+
+Presentation protocol v4 pairs UI and bridge so semantic associations cannot be
+discarded by an older client. It re-exports the renderer-independent
+`clawd-client::workspaces` DTOs; no privileged Agent implementation is linked
+into the UI.
+
 ## Nearby Sharing
 
 The standalone sidebar also exposes
@@ -98,9 +114,9 @@ The bridge and approval applet share `crates/clawd-client` for canonical
 `CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),
 v2 broker envelopes and request correlation, `CBK1` length-prefixed framing,
 deadlines, bounds, and typed transport/protocol errors. This broker wire
-version is independent of desktop HTTP/SSE presentation protocol v3. The
-paired UI/bridge minimum is v3 because an older bridge can either discard image
-attachments or cancel a durable Job when its viewer disconnects. Activity detail
+version is independent of desktop HTTP/SSE presentation protocol v4. The
+paired UI/bridge minimum is v4 so semantic Workspace associations cannot be
+silently discarded. The v3 image and durable viewer-detachment guarantees remain. Activity detail
 also carries the shared `activity.attention` projection; the bridge validates
 its Activity identity and derives the legacy pending-approval presentation only
 from exact pending decisions in that projection. Grouped notification

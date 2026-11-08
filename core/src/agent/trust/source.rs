@@ -173,6 +173,11 @@ pub enum SourceKind {
     Unknown,
     /// A previous bounded Activity segment's caller-reported handoff.
     ActivityWorkCheckpoint,
+    WorkspaceContext,
+    WorkspaceOwnerNote,
+    WorkspaceAgentReport,
+    WorkspaceSharedSource,
+    WorkspaceImportedNote,
 }
 
 impl SourceKind {
@@ -212,6 +217,11 @@ impl SourceKind {
         SourceKind::LegacyStoredRow,
         SourceKind::Unknown,
         SourceKind::ActivityWorkCheckpoint,
+        SourceKind::WorkspaceContext,
+        SourceKind::WorkspaceOwnerNote,
+        SourceKind::WorkspaceAgentReport,
+        SourceKind::WorkspaceSharedSource,
+        SourceKind::WorkspaceImportedNote,
     ];
 
     /// Dense index into [`SourceKind::ALL`].
@@ -256,6 +266,11 @@ impl SourceKind {
             Self::LegacyStoredRow => 31,
             Self::Unknown => 32,
             Self::ActivityWorkCheckpoint => 33,
+            Self::WorkspaceContext => 34,
+            Self::WorkspaceOwnerNote => 35,
+            Self::WorkspaceAgentReport => 36,
+            Self::WorkspaceSharedSource => 37,
+            Self::WorkspaceImportedNote => 38,
         }
     }
 
@@ -509,6 +524,11 @@ impl SourceKind {
                 UserChannelEnvelope,
                 ContentRef,
             ),
+            Self::WorkspaceContext => ("workspace_context",UserControlledContext,InjectedAuditRow,UserChannelEnvelope,ContentRef),
+            Self::WorkspaceOwnerNote => ("workspace_owner_note",UserControlledContext,InjectedAuditRow,UserChannelEnvelope,ContentRef),
+            Self::WorkspaceAgentReport => ("workspace_agent_report",ModelGenerated,InjectedAuditRow,UserChannelEnvelope,ContentRef),
+            Self::WorkspaceSharedSource => ("workspace_shared_source",UntrustedExternalContent,RequestLocal,ToolChannelEnvelope,LabelAndDigest),
+            Self::WorkspaceImportedNote => ("workspace_imported_note",UserControlledContext,RequestLocal,ToolChannelEnvelope,LabelAndDigest),
         };
 
         SourceProfile {
@@ -579,6 +599,7 @@ impl SourceKind {
             return Self::McpToolMetadata;
         }
         match tool_name {
+            "cos_workspace" => Self::WorkspaceSharedSource,
             "cos_app_memory" => Self::AppMemory,
             "cos_browser" => Self::WebPageContent,
             "cos_tts" | "cos_stt" | "cos_imagegen" | "cos_vision" => Self::MediaTranscript,

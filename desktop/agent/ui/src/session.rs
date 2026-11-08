@@ -153,6 +153,7 @@ pub(crate) struct LocalSession {
     started_at: Instant,
     pub(crate) messages: Vec<ChatMessage>,
     pub(crate) remote_id: Option<String>,
+    pub(crate) workspace_id:Option<String>,
     pub(crate) provisional_remote_id: Option<String>,
     pub(crate) persistent_context: Option<String>,
     pub(crate) history: HistoryState,
@@ -170,6 +171,7 @@ impl LocalSession {
             started_at: Instant::now(),
             messages: Vec::new(),
             remote_id: None,
+            workspace_id:None,
             provisional_remote_id: None,
             persistent_context: None,
             history: HistoryState::Loaded,
@@ -187,6 +189,7 @@ impl LocalSession {
             started_at: Instant::now(),
             messages: Vec::new(),
             remote_id: Some(summary.id.clone()),
+            workspace_id:summary.workspace_id.clone(),
             provisional_remote_id: None,
             persistent_context: None,
             history: HistoryState::NotLoaded,
@@ -300,6 +303,7 @@ impl SessionState {
         title: String,
     ) {
         let mut session = LocalSession::new();
+        session.workspace_id=self.active().and_then(|source|source.workspace_id.clone());
         session.title = fl!("retry-title", title = title);
         session.messages = prefix;
         session.message_count = session.messages.len() as i64;
@@ -322,6 +326,7 @@ impl SessionState {
                 existing.archived = summary.archived;
                 existing.manageable = summary.manageable;
                 existing.legacy = summary.legacy;
+                existing.workspace_id=summary.workspace_id;
                 continue;
             }
 
@@ -350,6 +355,7 @@ impl SessionState {
         session.archived = summary.archived;
         session.manageable = summary.manageable;
         session.legacy = summary.legacy;
+        session.workspace_id=summary.workspace_id;
         if select {
             self.active = index;
         }
@@ -371,6 +377,7 @@ impl SessionState {
         let session = &mut self.sessions[session_index];
         match result {
             Ok(response) => {
+                session.workspace_id=response.workspace_id.clone();
                 let active = response
                     .jobs
                     .iter()

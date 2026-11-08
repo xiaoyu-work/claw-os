@@ -86,6 +86,8 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
@@ -230,6 +232,17 @@ pub struct SessionSummary {
     pub legacy: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
+}
+
+#[derive(Debug,Clone,Default,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionCreateRequest {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub workspace_id:Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +324,8 @@ pub struct ConversationJob {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HistoryResponse {
     pub session_id: String,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub workspace_id:Option<String>,
     #[serde(default)]
     pub n: usize,
     #[serde(default)]

@@ -130,6 +130,7 @@ export function ActivityDetailPanel({
               <ActivityStateBadge state={activity.state} />
               <span className="break-all font-mono text-[11px] text-muted-foreground">{activity.id}</span>
             </div>
+            <p className="break-all text-xs text-muted-foreground">Workspace: {detail.workspace_id ?? "Unassigned"}. Existing conversations retain their own context domain.</p>
             <p className="text-xs text-muted-foreground">
               Updated <time dateTime={activity.updated_at}>{new Date(activity.updated_at).toLocaleString()}</time>
             </p>

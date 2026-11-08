@@ -263,6 +263,17 @@ fn main() {
         process::exit(1);
     }
     let (raw_args, fmt) = extract_format(raw_args);
+    if raw_args.as_slice() == ["__embed-local"] {
+        if wire_v1 {
+            eprintln!("local embedding pipe does not support the public wire envelope");
+            process::exit(1);
+        }
+        if let Err(error) = cos::model::local_embedding::serve() {
+            eprintln!("cos local embedding: {error}");
+            process::exit(1);
+        }
+        return;
+    }
     if opaque_stdio {
         if wire_v1 {
             eprintln!("cos app stdio is an opaque transport and does not support --wire=1");

@@ -63,6 +63,7 @@ editing additional surfaces.
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |
 | Memory, recall, or sessions | `core/src/agent/memory/`, `core/src/session/` | runtime recording, prompt injection, audit/session CLI |
 | Workspace context domains or file/folder sharing tags | `core/src/workspaces/MODULE.md`, `docs/workspaces.md`, `crates/clawd-client/src/workspaces.rs` | Shared Activity database, owner-only broker, scoped Agent context and four presentations; tags are read-only data sharing, never App or execution grants |
+| Personal-file vectors or semantic index lifecycle | `crates/MODULE.md`, `crates/claw-semantic/src/indexer.rs`, `crates/claw-embed/src/local.rs` | Fixed local Core inference pipe, managed Qwen3/ORT/GenAI bundle, atomic file revisions, live-root reconciliation and broker-side scoped retrieval; no cloud or stub fallback |
 | Owner Memory center or learned-source edit/forget | `core/src/agent/memory/inspection.rs`, `core/src/clawd/memory/inspection.rs` | `memory.inspect/read/update/forget` wire/client inventory, Web/native presentations, exact revisions, original-source provenance and preserved conversation evidence |
 | Session journal or mutation bracketing | `core/src/session/journal/`, `core/src/clawd/journal.rs` | `core/src/clawd/server.rs` dispatch, `core/src/agentd/supervisor.rs`, authority audit, packaging modes |
 | Proactive notification | `core/src/notifications/`, `core/src/clawd/notifications.rs` | cron/triggers/heartbeat/nudges, Agent task lifecycle, Agent Web UI, desktop Agent bridge |
@@ -339,6 +340,32 @@ trusted. Keep canonical reference semantics shared through the public SDK;
 describing or attaching a reference must not execute an App, copy its data,
 or create authority. Explicit resolution reuses the normal App invocation
 pipeline. See [`docs/app-objects.md`](docs/app-objects.md).
+
+### New or changed Workspace behavior
+
+Workspace context domains sit above Activities and remain separate from the
+existing filesystem `Job.workspace` cwd. Use the shared owner database and
+Root-derived optional conversation/Job associations; no frontend owns a
+second lifecycle, context store or permission authority.
+
+Keep shared context bounded and sourced, never a concatenation of complete
+conversation histories. Filter memory sessions and file eligibility before
+limits, counts, source pages or semantic ranking. File/folder tags are explicit
+read-only sharing: recheck live tags, owner permissions, pinned no-symlink
+paths and current file revision before returning bytes. Global personal-file
+indexing is independent of tags and never falls back to cloud or fake vectors.
+
+Temporary cross-Workspace reads select exact same-owner notes/files for one
+Job or canonical conversation, with finite expiry, live revocation and no
+transitive sharing. Imported bytes do not become owner notes, shared findings,
+handoffs or policy. Visibility changes fence stale replay; preserve original
+owner-visible evidence rather than silently rewriting a conversation.
+
+Deletion removes shared bytes/tags and disables associated automatic work,
+pauses preserved goals and requests ordinary standalone/Activity Job
+cancellation. Unconfirmed retirement stays pending. Cover CLI, Claw TUI,
+authenticated Agent Web and native Agent presentations at exact displayed
+revisions, and update [`docs/workspaces.md`](docs/workspaces.md).
 
 ### LLM provider change
 

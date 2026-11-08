@@ -33,6 +33,29 @@ database, migrating schema or constructing an embedder.
 Its model-backed search checks model identity, dimensions and vector integrity
 before returning similarity-ranked candidates; raw precomputed-vector queries
 retain the caller-managed vector-space contract.
+
+Personal-file indexing uses `claw-semantic/src/indexer.rs` and the same SQLite
+`SemanticStore`, not the historical `StubEmbedder` JSON corpus. The versioned
+`claw-embed::local` pipe delegates fixed Qwen3 CPU inference to `cos`; these
+leaf crates do not import core or select a cloud provider. The shared
+`claw-embed::file_source` helpers pin every path component without symlinks.
+Callers still supply owner identity and sharing policy.
+
+Each complete file source is replaced atomically after all embeddings exist
+and its held/live file identity is unchanged. Keys bind chunks to a SHA-256
+file revision; indexed text remains a snapshot, not live-file evidence.
+Scoped search filters namespace/key eligibility before inspecting private
+rows, ranking or limits. Workspace readers additionally recheck current tags,
+permissions and source bytes at the broker boundary.
+
+The existing daemon watches configured personal directories and reconciles
+deleted, excluded and removed-root sources. Protected credentials/OS state
+cannot be enabled by removing user exclusion patterns. Only supported UTF-8
+text is extracted. Effective file chunks are capped at 448 characters for the
+2048-token local inference ceiling; status reports the requested and effective
+sizes. Missing models, runtime, unsupported sources and watcher errors are
+explicit; there is no cloud or fake-vector fallback.
+
 Desktop broker consumers depend on `clawd-client`; the client contains no
 desktop UI or privileged broker implementation.
 System-review commands authenticate the connected Unix peer as root before

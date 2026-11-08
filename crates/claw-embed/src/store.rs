@@ -105,7 +105,10 @@ pub struct SemanticStore {
 impl SemanticStore {
     pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, SemanticError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)), embedder: None })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            embedder: None,
+        })
     }
 
     /// Open (or create) the store at `path`, attaching `embedder` for
@@ -142,6 +145,105 @@ impl SemanticStore {
 
     pub fn embedder(&self) -> Option<Arc<dyn Embedder>> {
         self.embedder.clone()
+    }
+
+    /// Replace one complete source atomically after its real embeddings exist.
+    pub fn replace_namespace(
+        &self,
+        namespace: &str,
+        records: &[(String, String)],
+        response: crate::EmbedResponse,
+    ) -> Result<(), SemanticError> {
+        if records.is_empty()
+            || records.len() > 8192
+            || response.embeddings.len() != records.len()
+            || response.model.is_empty()
+            || response.model.starts_with("stub-")
+            || response.dim == 0
+            || response.dim > 4096
+            || response.embeddings.iter().any(|vector| {
+                vector.len() != response.dim
+                    || vector.iter().any(|value| !value.is_finite())
+                    || vector.iter().all(|value| *value == 0.0)
+            })
+        {
+            return Err(SemanticError::Embed(
+                "invalid real source embedding batch".into(),
+            ));
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for (key, text) in records {
+            if key.is_empty()
+                || key.len() > 256
+                || !keys.insert(key)
+                || text.trim().is_empty()
+                || text.chars().count() > MAX_EMBED_TEXT_CHARS
+            {
+                return Err(SemanticError::Embed(
+                    "invalid or duplicate indexed source chunk".into(),
+                ));
+            }
+        }
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let existing: Option<String> = tx
+            .query_row("SELECT model FROM semantic_docs LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing != response.model {
+                return Err(SemanticError::ModelMismatch {
+                    existing,
+                    incoming: response.model,
+                });
+            }
+        }
+        tx.execute("DELETE FROM semantic_docs WHERE namespace=?1", [namespace])?;
+        let timestamp = current_ts_ms();
+        for ((key, text), mut vector) in records.iter().zip(response.embeddings) {
+            normalise(&mut vector);
+            tx.execute(
+                "INSERT INTO semantic_docs(namespace,key,text,model,dim,embedding,ts_ms)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    namespace,
+                    key,
+                    text,
+                    response.model,
+                    response.dim as i64,
+                    encode_vec(&vector),
+                    timestamp
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn namespaces(&self) -> Result<Vec<String>, SemanticError> {
+        let conn = self.lock_conn()?;
+        let mut query =
+            conn.prepare("SELECT DISTINCT namespace FROM semantic_docs ORDER BY namespace")?;
+        let rows = query
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn search_scoped_with_vector(
+        &self,
+        query: &[f32],
+        limit: usize,
+        model: &str,
+        allowed: &dyn Fn(&str, &str) -> bool,
+    ) -> Result<Vec<SemanticHit>, SemanticError> {
+        if query.is_empty() || query.iter().any(|value| !value.is_finite()) || limit > 100 {
+            return Err(SemanticError::Embed("invalid scoped semantic query".into()));
+        }
+        let mut query = query.to_vec();
+        normalise(&mut query);
+        self.search_vector_filtered(None, &query, limit, Some(model), allowed)
     }
 
     /// Attach (or replace) the embedder. Useful in tests and CLI tools
@@ -272,6 +374,17 @@ impl SemanticStore {
         limit: usize,
         expected_model: Option<&str>,
     ) -> Result<Vec<SemanticHit>, SemanticError> {
+        self.search_vector_filtered(namespace, query, limit, expected_model, &|_, _| true)
+    }
+
+    fn search_vector_filtered(
+        &self,
+        namespace: Option<&str>,
+        query: &[f32],
+        limit: usize,
+        expected_model: Option<&str>,
+        allowed: &dyn Fn(&str, &str) -> bool,
+    ) -> Result<Vec<SemanticHit>, SemanticError> {
         // We collect the candidate rows under the mutex into a small
         // intermediate buffer, then *drop the lock* before doing the
         // O(rows × dim) scoring work. Holding the connection mutex
@@ -294,6 +407,11 @@ impl SemanticStore {
             };
             let mut buf: Vec<(SemanticHit, Vec<u8>, usize)> = Vec::new();
             while let Some(row) = rows.next()? {
+                let namespace: String = row.get(1)?;
+                let key: String = row.get(2)?;
+                if !allowed(&namespace, &key) {
+                    continue;
+                }
                 let model: String = row.get(4)?;
                 if let Some(expected) = expected_model {
                     if model != expected {
@@ -318,8 +436,8 @@ impl SemanticStore {
                 let blob: Vec<u8> = row.get(6)?;
                 let hit = SemanticHit {
                     id: row.get(0)?,
-                    namespace: row.get(1)?,
-                    key: row.get(2)?,
+                    namespace,
+                    key,
                     text: row.get(3)?,
                     model,
                     score: 0.0,

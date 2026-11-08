@@ -165,6 +165,10 @@ pub struct Job {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Optional durable predecessor. The scheduler may claim this Job only
     /// after that exact same-owner/session Job reaches a terminal state.
@@ -316,6 +320,8 @@ impl Job {
             context,
             branch_context,
             workspace: None,
+            workspace_id: None,
+            workspace_revision: None,
             session_id,
             after_task_id: None,
             activity_id: None,
@@ -781,7 +787,12 @@ impl Store {
         self.publish(job)
     }
 
-    pub(crate) fn publish(&self, mut job: Job) -> io::Result<Job> {
+    pub(crate) fn publish(&self, job: Job) -> io::Result<Job> {
+        let _context_lock = self.lock_context_admission()?;
+        self.publish_in_context(job)
+    }
+
+    pub(crate) fn publish_in_context(&self, mut job: Job) -> io::Result<Job> {
         validate_requested_model(job.requested_model.as_deref())
             .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
         validate_requested_reasoning_effort(job.requested_reasoning_effort.as_deref())
@@ -792,7 +803,7 @@ impl Store {
             .map(|session| self.lock_for_session(session))
             .transpose()?;
         let session_meta =
-            submission_session_meta(job.session_id.as_deref(), job.activity_id.is_some())?;
+            submission_session_meta(job.session_id.as_deref(), job.activity_id.is_some() || job.workspace_id.is_some())?;
         let inherited = session_meta
             .as_ref()
             .and_then(|meta| meta.activity_id.as_deref());
@@ -807,6 +818,15 @@ impl Store {
         } else {
             None
         };
+        if let Some(owner) = job.owner_uid {
+            job.workspace_id = crate::workspaces::association::resolve(
+                owner, session_meta.as_ref(), job.activity_id.as_deref(), job.workspace_id.as_deref(),
+            ).map_err(io::Error::other)?;
+            if let Some(meta) = &session_meta {
+                crate::workspaces::association::bind_session(meta, owner, job.workspace_id.as_deref())
+                    .map_err(io::Error::other)?;
+            }
+        }
         let mut active_session_jobs = Vec::new();
         if let Some(session_id) = job.session_id.as_deref() {
             for status in [
@@ -1016,6 +1036,7 @@ impl Store {
         &self,
         clock: impl FnOnce() -> std::time::SystemTime,
     ) -> io::Result<Option<Job>> {
+        let _context_lock = self.lock_context_admission()?;
         self.reconcile_duplicate_job_ids()?;
         let pending = self.bucket_dir(JobStatus::Pending);
         // Iterate all current pending entries. If a rename fails with
@@ -1117,6 +1138,10 @@ impl Store {
                 dependencies::Dependency::Blocked => continue,
                 dependencies::Dependency::Ready => {}
             }
+            if let Err(error) = crate::workspaces::association::check_job(&job) {
+                self.fail_waiting_job(&src, &id, job, error, "clawd.task.workspace-blocked")?;
+                continue;
+            }
             let activity = match job.activity_id.as_deref() {
                 Some(activity_id) => {
                     let owner_uid = job.owner_uid.ok_or_else(|| {
@@ -1150,6 +1175,14 @@ impl Store {
                 }
                 None => None,
             };
+            if let (Some(owner),Some(id))=(job.owner_uid,job.workspace_id.as_deref()) {
+                use crate::workspaces::WorkspaceService;
+                if let Some(meta)=submission_session_meta(job.session_id.as_deref(),true)? {
+                    crate::workspaces::context_access::bind_epoch(&meta,owner,id).map_err(io_other)?;
+                }
+                job.workspace_revision=Some(crate::workspaces::open_default()
+                    .and_then(|service|service.workspace(owner,id)).map_err(io_other)?.workspace.revision);
+            }
             if job.activity_work_generation.is_some() {
                 if let Err(error) = crate::triggers::work::admit_job(&job) {
                     self.fail_waiting_job(
@@ -2540,6 +2573,42 @@ impl Store {
         self.lock_path(self.job_lock_path(id))
     }
 
+    pub(crate) fn lock_context_admission(&self) -> io::Result<JobLock> {
+        self.lock_path(self.root.join("locks").join("workspace-context.lock"))
+    }
+
+    pub(crate) fn acknowledge_workspace_report(&self,id:&str,revision:u64)->io::Result<()> {
+        let _lock=self.lock_for_id(id)?;
+        let path=self.path_for(JobStatus::Running,id);
+        let mut job:Job=serde_json::from_str(&fs::read_to_string(&path)?).map_err(io_other)?;
+        if job.workspace_id.is_none() || job.workspace_revision.is_none() || job.cancel_requested_at.is_some() {
+            return Err(io::Error::other("Workspace report lost its live Root Job"));
+        }
+        job.workspace_revision=Some(revision);
+        write_json_atomic(&path,&job)
+    }
+
+    pub(crate) fn refresh_workspace_context(&self,owner:u32,id:&str,revision:u64)->io::Result<()>{
+        for job in self.list_for_workspace(owner,id)?{
+            if job.workspace_revision.is_none() || !matches!(job.status,JobStatus::Pending|JobStatus::Running|JobStatus::WaitingApproval){continue;}
+            let _lock=self.lock_for_id(&job.id)?;
+            let Some((bucket,mut current))=self.locate_for_owner(&job.id,Some(owner))?else{continue;};
+            if current.cancel_requested_at.is_some(){continue;}
+            current.workspace_revision=Some(revision);
+            write_json_atomic(&self.path_for(bucket,&current.id),&current)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn list_for_workspace(&self, owner: u32, workspace: &str) -> io::Result<Vec<Job>> {
+        let mut jobs = Vec::new();
+        for status in [JobStatus::Pending, JobStatus::Running, JobStatus::WaitingApproval, JobStatus::Ok] {
+            jobs.extend(self.list_bucket_for_owner(status, None, Some(owner))?
+                .into_iter().filter(|job| job.workspace_id.as_deref() == Some(workspace)));
+        }
+        Ok(jobs)
+    }
+
     fn lock_for_session(&self, session_id: &str) -> io::Result<JobLock> {
         let name = crate::crypto::sha256_hex(session_id.as_bytes());
         self.lock_path(self.root.join("locks").join(format!("session-{name}.lock")))
@@ -2701,6 +2770,8 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.context == right.context
         && left.branch_context == right.branch_context
         && left.workspace == right.workspace
+        && left.workspace_id == right.workspace_id
+        && left.activity_id == right.activity_id
         && left.session_id == right.session_id
         && left.after_task_id == right.after_task_id
         && left.activity_work_generation == right.activity_work_generation
@@ -3796,6 +3867,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             workspace: job.workspace.clone(),
+            workspace_id: job.workspace_id.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.effective_max_turns(),
             requested_model: job.requested_model.clone(),
@@ -3859,6 +3931,7 @@ pub struct JobExecution {
     pub context: Option<String>,
     pub branch_context: Option<String>,
     pub workspace: Option<String>,
+    pub workspace_id: Option<String>,
     pub session_id: Option<String>,
     pub max_turns: Option<u32>,
     pub requested_model: Option<String>,
@@ -3982,15 +4055,26 @@ pub(crate) async fn execute_job_with_hooks_budget_and_work(
         };
     let mut effective_config = (*current_config).clone();
     effective_config.agent = cfg.clone();
-    let registry_deps = crate::agent::tools::registry::RegistryDeps::load_with_hooks(
+    let mut registry_deps = crate::agent::tools::registry::RegistryDeps::load_with_hooks(
         Arc::new(effective_config),
         crate::agent::tools::registry::RegistryPaths::from_process(),
         hooks.clone(),
     );
     let mut runtime_deps = registry_deps.runtime.clone();
+    if let Some(workspace_id) = job.workspace_id.as_deref() {
+        let prelude = match crate::workspaces::gateway::request(
+            crate::workspaces::gateway::ContextOperation::Workspace { request:crate::workspaces::WorkspaceRead::Context },
+        ).await.and_then(|value|serde_json::from_value::<crate::workspaces::gateway::Prelude>(value).map_err(|e|e.to_string())) {
+            Ok(prelude) if prelude.workspace_id==workspace_id => prelude,
+            Ok(_) => return FinishOutcome::Error("Root returned a different Workspace context".into()),
+            Err(error) => return FinishOutcome::Error(error),
+        };
+        runtime_deps = runtime_deps.with_workspace(prelude);
+    }
     if let Some(controller) = monetary_budget {
         runtime_deps = runtime_deps.with_monetary_budget(controller);
     }
+    registry_deps.runtime=runtime_deps.clone();
     let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     if let Some(slot) = work {
         tools.set_activity_work(slot);

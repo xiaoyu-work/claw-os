@@ -588,6 +588,68 @@ is held for inspection, never silently republished. These execution records and
 scheduler bindings are excluded from portable continuity. See
 [long-running Activity work](activity-work.md).
 
+### Local personal-file vector index
+
+The existing `claw-semantic` CLI and user daemon now use real local
+Qwen3-Embedding-0.6B vectors in
+`$XDG_STATE_HOME/claw-semantic/semantic.db` (default
+`~/.local/state/claw-semantic/semantic.db`). The old `stub-sha256`
+`store.json` is preserved but is not queried or converted into trusted
+vectors. A first real reindex is required; neither an upgrade nor a Workspace
+tag uploads files to a provider.
+
+The `qwen3-embedding` image feature installs the validated ONNX Runtime
+1.31.1 and ORT GenAI 0.14.0 pair in `/var/lib/cos/engines`, beside the system
+model bundle. GenAI alone is insufficient. Package-only installations without
+that optional local bundle report missing model/runtime explicitly; the file
+pipeline never falls back to cloud embeddings or placeholder hashes.
+
+Only supported UTF-8 text in configured personal directories is extracted.
+Documents, Desktop and Downloads remain the default roots; add another
+existing directory with `claw-semantic add-root /absolute/personal/directory`.
+Inspect `claw-semantic status`, run `claw-semantic reindex`, or query
+`claw-semantic search "meeting agenda"`. Filesystem changes and configuration
+reloads update the same corpus, removing deleted, newly excluded and
+removed-root snapshots. Protected OS state and credentials remain excluded
+even if the user clears optional skip patterns.
+
+File chunks are capped at 448 characters and the fixed model helper at 2048
+tokens. Status shows both configured and effective chunk sizes. The model
+needs about 3 GiB for a short input, so the semantic service's former 2 GiB
+ceiling could not run it; its existing process/model-child group now has
+`MemoryHigh=6G` and `MemoryMax=8G`. These are resource limits, not evidence
+that inference or an entire index sweep succeeded.
+
+Each complete source is atomically indexed under its file SHA-256 revision.
+Search relevance and cached snapshots are not current-file attestation.
+Workspace retrieval separately rechecks live sharing tags, owner permissions,
+protected paths and file revision before returning bytes. Removing a tag
+changes Workspace visibility, not the globally indexed personal file.
+
+### Workspace context domains
+
+Activity database schema 10 adds owner-scoped Workspace context, notes,
+resource tags and Activity membership through the transactional schema-9
+migration. Existing goals do not opt into a Workspace or automation. Preserve
+`activities.db`; older schema-9 cores refuse the new database instead of
+discarding shared state. Temporary read selections and access revisions use
+defaulted Workspace JSON fields, not another database migration.
+
+Canonical Session metadata and Root Jobs carry optional Workspace associations.
+Legacy unassigned conversations remain unassigned and do not gain access to
+private Workspace histories. Scope projection happens before recall limits,
+source reads and counts, and future context uses the live sharing revision.
+Expired or revoked visibility conservatively requires a new conversation;
+original execution/conversation evidence remains owner-readable.
+
+Upgrade `cos`, `clawd` and `claw-agentd` together for private worker protocol
+20. The native Agent bridge/UI use presentation protocol 4 and must remain
+paired. The release-security policy records these same generations; a mixed
+cohort fails closed. Workspace deletion revokes sharing, stops related
+automatic work and cancels associated Jobs without deleting original files,
+goals or evidence. Unconfirmed resource retirement remains visible as pending.
+See [Workspace behavior and controls](workspaces.md).
+
 ### App data moves into per-App directories
 
 Ordinary Python and polyglot operations now wait in `claw-app-runner` until

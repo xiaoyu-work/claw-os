@@ -24,6 +24,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
 | `src/memory_center.rs` | Generation-safe fetched memory sources, checked note drafts and explicit learned-entry forgetting; no local memory store or authority |
 | `src/nearby.rs` | Independent Nearby Sharing center, local file chooser, exact offer/peer controls, fetched progress and generation-safe responses; no local transfer or radio authority |
+| `src/workspaces.rs`, `src/bridge/workspaces.rs` | Fluent semantic Workspace center, exact context/sharing revisions, local file/folder selection and scoped source/search/index presentation over shared DTOs |
 | `src/queue_panel.rs` | Fetched per-Job follow-up previews, individual cancellation and exact selected-list confirmation; no local queue or cancellation authority |
 | `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
 | `src/views.rs` | Read-only widget composition for reasoning summaries, cumulative usage, safe tool status/metrics, selected-image metadata, and other presentation state |

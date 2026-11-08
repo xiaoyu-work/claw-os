@@ -338,6 +338,8 @@ pub struct MemoryDb {
     pub(super) path: Option<PathBuf>,
     pub(super) compaction_locks: Arc<Mutex<HashSet<String>>>,
     _lifecycle_lock: Option<Arc<MemoryLifecycleLock>>,
+    read_sessions: Option<Arc<String>>,
+    exclude_sessions: bool,
 }
 
 impl MemoryDb {
@@ -400,6 +402,8 @@ impl MemoryDb {
             path: Some(path.to_path_buf()),
             compaction_locks: Arc::new(Mutex::new(HashSet::new())),
             _lifecycle_lock: lifecycle_lock.map(Arc::new),
+            read_sessions: None,
+            exclude_sessions: false,
         })
     }
 
@@ -414,6 +418,8 @@ impl MemoryDb {
             path: None,
             compaction_locks: Arc::new(Mutex::new(HashSet::new())),
             _lifecycle_lock: None,
+            read_sessions: None,
+            exclude_sessions: false,
         })
     }
 
@@ -428,6 +434,8 @@ impl MemoryDb {
             path: None,
             compaction_locks: Arc::new(Mutex::new(HashSet::new())),
             _lifecycle_lock: None,
+            read_sessions: None,
+            exclude_sessions: false,
         })
     }
 
@@ -446,6 +454,8 @@ impl MemoryDb {
             path: None,
             compaction_locks: Arc::new(Mutex::new(HashSet::new())),
             _lifecycle_lock: None,
+            read_sessions: None,
+            exclude_sessions: false,
         }
     }
 
@@ -454,6 +464,20 @@ impl MemoryDb {
     pub(crate) fn run_provenance_migration_for_test(&self) -> Result<(), MemoryError> {
         let conn = self.lock_conn()?;
         migrate_provenance_columns(&conn)
+    }
+
+    /// Root chooses the session set before any model-visible ranking or read.
+    /// An exclusion set preserves unassigned legacy rows without exposing new
+    /// Workspace conversations. Owner inspection retains the unscoped opener.
+    pub(crate) fn with_session_scope(mut self, sessions: &[String], exclude: bool) -> Result<Self, MemoryError> {
+        self.read_sessions = Some(Arc::new(serde_json::to_string(sessions)
+            .map_err(|e| MemoryError::Integrity(e.to_string()))?));
+        self.exclude_sessions = exclude;
+        Ok(self)
+    }
+
+    fn read_scope(&self) -> Option<&str> {
+        self.read_sessions.as_deref().map(String::as_str)
     }
 
     /// Overwrite a stored trust class, to prove reads re-clamp it.
@@ -655,7 +679,8 @@ impl MemoryDb {
             "SELECT session_id, tool_call_id, tool_name, input, started_at_ms,
                     completed_at_ms, success, latency_ms, error
              FROM tool_invocations
-             WHERE session_id = ?
+             WHERE session_id = ?1
+               AND (?3 IS NULL OR ((session_id IN (SELECT value FROM json_each(?3))) != ?4))
              ORDER BY started_at_ms DESC
              LIMIT ?",
         )?;
@@ -827,12 +852,12 @@ impl MemoryDb {
                  FROM messages
                  WHERE session_id = ?
                  ORDER BY ts_ms DESC, id DESC
-                 LIMIT ?
+                 LIMIT ?2
              )
              ORDER BY ts_ms ASC, id ASC",
         )?;
         let rows = stmt
-            .query_map(params![session_id, limit as i64], row_to_message)?
+            .query_map(params![session_id, limit as i64, self.read_scope(), self.exclude_sessions], row_to_message)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -854,15 +879,16 @@ impl MemoryDb {
              FROM (
                  SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
                  FROM messages
-                 WHERE session_id = ? AND role <> ? {filter}
+                 WHERE session_id = ?1 AND role <> ?2 {filter}
+                   AND (?4 IS NULL OR ((session_id IN (SELECT value FROM json_each(?4))) != ?5))
                  ORDER BY ts_ms DESC, id DESC
-                 LIMIT ?
+                 LIMIT ?3
              )
              ORDER BY ts_ms ASC, id ASC"
         ))?;
         let rows = stmt
             .query_map(
-                params![session_id, INJECTED_ROLE, limit as i64],
+                params![session_id, INJECTED_ROLE, limit as i64, self.read_scope(), self.exclude_sessions],
                 row_to_message,
             )?
             .collect::<Result<Vec<_>, _>>()?;
@@ -939,6 +965,7 @@ impl MemoryDb {
                AND (?2 IS NULL OR m.session_id = ?2)
                AND (NOT ?3 OR m.role <> ?4)
                AND (NOT ?5 OR (m.role = 'app' AND m.session_id LIKE 'app:%'))
+               AND (?7 IS NULL OR ((m.session_id IN (SELECT value FROM json_each(?7))) != ?8))
                {replay_filter}
              ORDER BY rank, m.id
              LIMIT ?6"
@@ -951,7 +978,9 @@ impl MemoryDb {
                     !matches!(rows, SearchRows::All),
                     INJECTED_ROLE,
                     matches!(rows, SearchRows::Apps),
-                    limit as i64
+                    limit as i64,
+                    self.read_scope(),
+                    self.exclude_sessions
                 ],
                 |row| {
                     Ok(SearchHit {
@@ -969,8 +998,9 @@ impl MemoryDb {
         Ok(conn
             .query_row(
                 "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
-                 FROM messages WHERE id = ?",
-                params![id],
+                 FROM messages WHERE id = ?1
+                   AND (?2 IS NULL OR ((session_id IN (SELECT value FROM json_each(?2))) != ?3))",
+                params![id, self.read_scope(), self.exclude_sessions],
                 row_to_message,
             )
             .optional()?)
@@ -985,9 +1015,10 @@ impl MemoryDb {
                     "SELECT id, session_id, role, content, ts_ms,
                             trust_class, trust_source, trust_lineage
                      FROM messages
-                     WHERE id = ? {filter}"
+                     WHERE id = ?1 {filter}
+                       AND (?2 IS NULL OR ((session_id IN (SELECT value FROM json_each(?2))) != ?3))"
                 ),
-                params![id],
+                params![id, self.read_scope(), self.exclude_sessions],
                 row_to_message,
             )
             .optional()?)
@@ -995,15 +1026,19 @@ impl MemoryDb {
 
     pub fn count_total(&self) -> Result<i64, MemoryError> {
         let conn = self.lock_conn()?;
-        let n = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))?;
+        let n = conn.query_row(
+            "SELECT COUNT(*) FROM messages
+             WHERE ?1 IS NULL OR ((session_id IN (SELECT value FROM json_each(?1))) != ?2)",
+            params![self.read_scope(), self.exclude_sessions], |r| r.get::<_, i64>(0))?;
         Ok(n)
     }
 
     pub fn count_session(&self, session_id: &str) -> Result<i64, MemoryError> {
         let conn = self.lock_conn()?;
         let n = conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
-            params![session_id],
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?1
+             AND (?2 IS NULL OR ((session_id IN (SELECT value FROM json_each(?2))) != ?3))",
+            params![session_id, self.read_scope(), self.exclude_sessions],
             |r| r.get::<_, i64>(0),
         )?;
         Ok(n)
@@ -1012,8 +1047,9 @@ impl MemoryDb {
     pub fn has_session(&self, session_id: &str) -> Result<bool, MemoryError> {
         let conn = self.lock_conn()?;
         let present = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = ?)",
-            params![session_id],
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = ?1
+             AND (?2 IS NULL OR ((session_id IN (SELECT value FROM json_each(?2))) != ?3)))",
+            params![session_id, self.read_scope(), self.exclude_sessions],
             |row| row.get::<_, i64>(0),
         )?;
         Ok(present != 0)
@@ -1357,12 +1393,13 @@ impl MemoryDb {
                     t.title      AS title
              FROM messages AS m
              LEFT JOIN session_titles AS t ON t.session_id = m.session_id
+             WHERE ?2 IS NULL OR ((m.session_id IN (SELECT value FROM json_each(?2))) != ?3)
              GROUP BY m.session_id
              ORDER BY last_ts DESC
-             LIMIT ?",
+             LIMIT ?1",
         )?;
         let rows = stmt
-            .query_map(params![limit as i64], |row| {
+            .query_map(params![limit as i64, self.read_scope(), self.exclude_sessions], |row| {
                 Ok(SessionSummary {
                     session_id: row.get(0)?,
                     last_ts_ms: row.get(1)?,
@@ -1387,12 +1424,13 @@ impl MemoryDb {
                     t.title      AS title
              FROM messages AS m
              LEFT JOIN session_titles AS t ON t.session_id = m.session_id
+             WHERE ?2 IS NULL OR ((m.session_id IN (SELECT value FROM json_each(?2))) != ?3)
              GROUP BY m.session_id
              ORDER BY n DESC, last_ts DESC
-             LIMIT ?",
+             LIMIT ?1",
         )?;
         let rows = stmt
-            .query_map(params![limit as i64], |row| {
+            .query_map(params![limit as i64, self.read_scope(), self.exclude_sessions], |row| {
                 Ok(SessionSummary {
                     session_id: row.get(0)?,
                     last_ts_ms: row.get(1)?,

@@ -21,6 +21,7 @@ pub mod progressive;
 pub mod registry;
 pub mod skills;
 pub mod todo;
+pub(crate) mod workspace;
 
 use crate::agent::runtime::approval::ApprovalBoundary;
 use async_trait::async_trait;

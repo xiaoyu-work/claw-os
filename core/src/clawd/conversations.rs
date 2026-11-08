@@ -57,12 +57,20 @@ pub(super) fn create(params: Value, client: &ClientIdentity) -> Result<Value, St
         .map_err(|err| format!("invalid conversation create: {err}"))?;
     let owner_uid = owner_uid(client)?;
     let title = request.title.map(validate_title).transpose()?;
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let _context_lock = store.lock_context_admission().map_err(|err| err.to_string())?;
+    if let Some(id) = request.workspace_id.as_deref() {
+        crate::workspaces::association::active(owner_uid, id)?;
+    }
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
     let (_, value) = super::tasks::create_agent_session_with(
         "Agent conversation".to_string(),
         owner_uid,
         &owner_home,
         |sid| {
+            session::update_meta(sid, |meta| {
+                meta.workspace_id = request.workspace_id.clone();
+            }).map_err(|err| err.to_string())?;
             let meta = session::get_meta(sid).map_err(|err| err.to_string())?;
             let presentation = Presentation {
                 presentation_id: Some(derive_presentation_id(sid)),
@@ -210,6 +218,12 @@ pub(super) fn fork(params: Value, client: &ClientIdentity) -> Result<Value, Stri
         owner_uid,
         &owner_home,
         |sid| {
+            session::update_meta(sid, |meta| {
+                meta.workspace_id = parent.workspace_id.clone();
+                meta.workspace_access_revision=parent.workspace_access_revision;
+                meta.activity_id = parent.activity_id.clone();
+            }).map_err(|err| err.to_string())?;
+            crate::workspaces::context_access::copy_constraints(&parent.id,sid)?;
             let presentation = Presentation {
                 presentation_id: Some(derive_presentation_id(sid)),
                 title: Some(title),
@@ -426,6 +440,8 @@ fn presentation_metadata(
         archived: presentation.archived,
         deleted: presentation.deleted,
         parent_id,
+        workspace_id: meta.workspace_id.clone(),
+        activity_id: meta.activity_id.clone(),
     })
 }
 

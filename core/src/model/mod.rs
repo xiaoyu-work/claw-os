@@ -23,6 +23,7 @@ pub mod bench;
 pub mod compat;
 pub mod engines;
 pub mod import;
+pub mod local_embedding;
 pub mod ipc;
 pub mod paths;
 pub mod registry;
@@ -353,10 +354,16 @@ fn tts_status_json() -> Value {
 /// doc comment for why there is no `--model` override.
 fn run_embed(args: &[String]) -> Result<Value, String> {
     let mut inputs: Vec<String> = Vec::new();
+    let mut local_only = false;
     let mut positional: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--local" => {
+                if local_only { return Err("--local may not be repeated".into()); }
+                local_only = true;
+                i += 1;
+            }
             "--input" => {
                 let v = args
                     .get(i + 1)
@@ -396,7 +403,8 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
         inputs.push(positional.join(" "));
     }
 
-    let cfg = crate::config::current_snapshot().embed.clone();
+    let mut cfg = crate::config::current_snapshot().embed.clone();
+    if local_only { cfg.provider = "local".into(); }
     let embedder = embed::build_from(&cfg)
         .map_err(|e| format!("embed config: {e}"))?
         .ok_or_else(|| {

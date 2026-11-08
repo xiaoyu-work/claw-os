@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -61,6 +61,7 @@ pub const ROUTE_RESULT: &str = "result";
 pub const ROUTE_APPROVAL: &str = "approval";
 pub const ROUTE_RECEIPT: &str = "receipt";
 pub const ROUTE_MONETARY_BUDGET: &str = "monetary_budget";
+pub const ROUTE_CONTEXT: &str = "context";
 
 /// The complete route surface a worker grant may carry. Nothing else
 /// exists on this channel, so a leaked descriptor is still only an
@@ -76,6 +77,7 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_APPROVAL,
     ROUTE_RECEIPT,
     ROUTE_MONETARY_BUDGET,
+    ROUTE_CONTEXT,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
@@ -133,6 +135,27 @@ pub enum BrokerFrame {
         correlation_id: u64,
         reply: MonetaryBudgetReply,
     },
+    ContextReply {
+        correlation_id: u64,
+        nonce: String,
+        reply: ContextReply,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextRequest {
+    pub task_id: String,
+    pub correlation_id: u64,
+    pub nonce: String,
+    pub operation: crate::workspaces::gateway::ContextOperation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ContextReply {
+    Data { value: Value },
+    Refused { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +404,8 @@ pub struct JobSpec {
     /// Broker-validated canonical directory under `owner_home`. It selects
     /// runtime context but grants no capability.
     pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     /// Reporting hint only; the broker resolves the Activity from its own Job.
     #[serde(default)]
     pub record_activity_receipts: bool,
@@ -439,6 +464,7 @@ pub enum WorkerFrame {
     },
     Receipt(Box<ReceiptRequest>),
     MonetaryBudget(Box<MonetaryBudgetRequest>),
+    Context(Box<ContextRequest>),
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -457,6 +483,7 @@ impl WorkerFrame {
             WorkerFrame::Approval { .. } => ROUTE_APPROVAL,
             WorkerFrame::Receipt(_) => ROUTE_RECEIPT,
             WorkerFrame::MonetaryBudget(_) => ROUTE_MONETARY_BUDGET,
+            WorkerFrame::Context(_) => ROUTE_CONTEXT,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -469,6 +496,7 @@ impl WorkerFrame {
             WorkerFrame::Hello(hello) => Some(hello.grant.claims.task_id.as_str()),
             WorkerFrame::Receipt(request) => Some(request.task_id.as_str()),
             WorkerFrame::MonetaryBudget(request) => Some(request.task_id.as_str()),
+            WorkerFrame::Context(request) => Some(request.task_id.as_str()),
             WorkerFrame::Stream { task_id, .. }
             | WorkerFrame::Progress { task_id, .. }
             | WorkerFrame::Audit { task_id, .. }

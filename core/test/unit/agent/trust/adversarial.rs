@@ -216,6 +216,25 @@ fn recalled_memory_injection_is_contained() {
 }
 
 #[test]
+fn workspace_sources_cannot_escape_fences_or_become_owner_commands(){
+    use crate::agent::context::packet::{ContextKind,ContextSection};
+    for (context,kind) in [(ContextKind::Workspace,SourceKind::WorkspaceContext),
+        (ContextKind::WorkspaceOwnerNote,SourceKind::WorkspaceOwnerNote),
+        (ContextKind::WorkspaceAgentReport,SourceKind::WorkspaceAgentReport)]{
+        let section=ContextSection::new(context,"workspace-test",ESCALATION.into());
+        let rendered=section.rendered();
+        assert_contained(&rendered,&format!("{}:workspace-test",kind.tag()));
+        let projection=PromptProjection::new().with(section.labeled());
+        assert!(projection.system_text().is_empty());
+        assert!(!kind.class().is_policy());assert_ne!(kind.class(),TrustClass::UserInstruction);
+    }
+    for kind in [SourceKind::WorkspaceSharedSource,SourceKind::WorkspaceImportedNote]{
+        assert_contained(&crate::agent::safety::untrusted::wrap_labeled(kind,None,ESCALATION),kind.tag());
+    }
+    assert_eq!(SourceKind::WorkspaceAgentReport.class(),TrustClass::ModelGenerated);
+}
+
+#[test]
 fn context_event_fields_are_data_not_operator_rules() {
     // A context event's source/type strings are attacker-chosen. They
     // must be fenced as fields inside a payload, never interpolated

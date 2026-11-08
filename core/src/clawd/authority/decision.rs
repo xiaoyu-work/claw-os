@@ -216,6 +216,13 @@ impl Decision {
     /// obligation — and obtain an [`Authorized`] proof — without ever
     /// naming a capability.
     pub fn require_all(&self, required: &[Cap]) -> Result<Authorized, String> {
+        if let Some(binding) = &self.subject.workspace {
+            binding.check(required)?;
+        } else if let Some(task_id) = self.subject.task_id.as_deref() {
+            let job = crate::agent::service::Store::open_default().and_then(|store|store.locate_for_owner(task_id,Some(self.owner_uid())))
+                .map_err(|e|e.to_string())?.map(|(_,job)|job).ok_or("Root task grant lost its Job")?;
+            for cap in required { crate::workspaces::boundary::task_capability(&job,cap)?; }
+        }
         if required.is_empty() {
             // Deliberately does not mark the obligation met: a route
             // that asked for nothing has authorized nothing.

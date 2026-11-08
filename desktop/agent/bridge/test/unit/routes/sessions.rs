@@ -12,6 +12,8 @@ fn canonical_conversation_summary_keeps_presentation_controls() {
             archived: true,
             deleted: false,
             parent_id: Some("ses_0000000000000_000000000001".to_string()),
+            workspace_id:Some("11111111-1111-4111-8111-111111111111".into()),
+            activity_id:None,
             messages: Vec::new(),
             message_count: 7,
             jobs: Vec::new(),
@@ -30,6 +32,7 @@ fn canonical_conversation_summary_keeps_presentation_controls() {
     assert!(summary.archived);
     assert!(!summary.legacy);
     assert_eq!(summary.message_count, 7);
+    assert_eq!(summary.workspace_id.as_deref(),Some("11111111-1111-4111-8111-111111111111"));
     assert!(summary.last_ts_ms.is_some_and(|timestamp| timestamp > 0));
     assert_eq!(
         summary.parent_id.as_deref(),
@@ -52,6 +55,8 @@ fn malformed_conversation_identity_and_time_are_not_invented() {
             archived: false,
             deleted: false,
             parent_id: None,
+            workspace_id:None,
+            activity_id:None,
             messages: Vec::new(),
             message_count: 0,
             jobs: Vec::new(),

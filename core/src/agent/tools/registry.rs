@@ -1060,6 +1060,11 @@ pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
     }
     if let (Some(store), Some(db)) = (&deps.semantic, &deps.memory) {
         super::cos_proxy::register_recall_semantic(&mut r, Arc::clone(store), db.clone());
+    } else if let Some(db) = deps.memory.as_ref().filter(|_|crate::workspaces::gateway::available()) {
+        r.register(Arc::new(super::cos_proxy::recall_semantic::CosRecallSemanticTool::brokered(db.clone())));
+    }
+    if crate::workspaces::gateway::workspace_bound() {
+        r.register(Arc::new(super::workspace::WorkspaceTool));
     }
     r
 }

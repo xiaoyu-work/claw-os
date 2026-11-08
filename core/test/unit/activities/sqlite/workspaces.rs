@@ -177,3 +177,83 @@ fn workspace_schema_migration_preserves_existing_activity_metadata() {
     assert_eq!(version, DATABASE_SCHEMA_VERSION);
     create(&migrated);
 }
+
+#[test]
+fn workspace_agent_reports_are_job_sourced_and_owner_rules_remain_immutable() {
+    let service = SqliteActivityService::open_in_memory().unwrap();
+    let first = create(&service);
+    let job = uuid::Uuid::new_v4().to_string();
+    let report = service
+        .report_workspace(
+            1000,
+            &first.workspace.id,
+            &job,
+            NoteDraft {
+                title: "Finding".into(),
+                content: "Caller-reported, not owner rules.".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(report.source, NoteSource::AgentReport);
+    assert_eq!(report.source_job_id.as_deref(), Some(job.as_str()));
+    assert!(service
+        .change_workspace(
+            1000,
+            WorkspaceAction::PutNote {
+                id: first.workspace.id.clone(),
+                expected_revision: 2,
+                note_id: Some(report.id),
+                note: NoteDraft {
+                    title: "Owner rule".into(),
+                    content: "Replace provenance".into()
+                }
+            }
+        )
+        .is_err());
+    assert_eq!(
+        service
+            .workspace(1000, &first.workspace.id)
+            .unwrap()
+            .workspace
+            .access_revision,
+        1
+    );
+}
+
+#[test]
+fn workspace_revocation_advances_visibility_without_deleting_original_evidence() {
+    let service = SqliteActivityService::open_in_memory().unwrap();
+    let first = create(&service);
+    let note = service
+        .change_workspace(
+            1000,
+            WorkspaceAction::PutNote {
+                id: first.workspace.id.clone(),
+                expected_revision: 1,
+                note_id: None,
+                note: NoteDraft {
+                    title: "Shared".into(),
+                    content: "Small shared note".into(),
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(note.workspace.access_revision, 1);
+    let next = service
+        .change_workspace(
+            1000,
+            WorkspaceAction::ForgetNote {
+                id: first.workspace.id.clone(),
+                expected_revision: 2,
+                note_id: note.notes[0].id.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(next.workspace.access_revision, 2);
+    let mut old = serde_json::to_value(&next.workspace).unwrap();
+    old.as_object_mut().unwrap().remove("access_revision");
+    old.as_object_mut().unwrap().remove("read_links");
+    let restored: Workspace = serde_json::from_value(old).unwrap();
+    assert_eq!(restored.access_revision, 1);
+    assert!(restored.read_links.is_empty());
+}

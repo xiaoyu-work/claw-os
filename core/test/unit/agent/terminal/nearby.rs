@@ -13,6 +13,7 @@ fn fixture() -> App {
         },
         Conversation {
             id: "fixture".into(),
+            workspace_id:None,
             title: String::new(),
             archived: false,
             history_truncated: false,

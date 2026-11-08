@@ -126,6 +126,7 @@ pub(super) enum ConfirmationAction {
     ActivityCancel { id: String },
     MemoryReset,
     AccountLogout,
+    WorkspaceDelete { id:String, revision:u64 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -137,6 +138,7 @@ pub(super) struct Confirmation {
 }
 
 pub(super) struct App {
+    pub spaces: super::workspaces::Center,
     pub info: BackendInfo,
     pub conversation: Conversation,
     pub entries: Vec<Entry>,
@@ -241,6 +243,7 @@ impl App {
         let selected_model = info.model.clone();
         let selected_workspace = info.home.to_string_lossy().into_owned();
         let mut app = Self {
+            spaces: super::workspaces::Center::default(),
             info,
             conversation,
             entries: Vec::new(),

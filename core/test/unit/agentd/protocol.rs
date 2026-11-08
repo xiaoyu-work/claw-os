@@ -3,6 +3,38 @@ use super::*;
 use crate::agentd::grant::{GrantClaims, GrantSigner, GRANT_AUDIENCE, GRANT_VERSION};
 use base64::Engine;
 
+#[test]
+fn workspace_context_wire_has_no_owner_domain_or_authority_selector() {
+    let operation = crate::workspaces::gateway::ContextOperation::Workspace {
+        request: crate::workspaces::WorkspaceRead::Context,
+    };
+    let request = ContextRequest {
+        task_id: "task-a".into(),
+        correlation_id: 1,
+        nonce: "a".repeat(32),
+        operation,
+    };
+    let frame = WorkerFrame::Context(Box::new(request));
+    assert_eq!(frame.route(), ROUTE_CONTEXT);
+    assert_eq!(frame.task_id(), Some("task-a"));
+    let mut value = serde_json::to_value(frame).unwrap();
+    let mut human_selector = value.clone();
+    human_selector["operation"]["target"] = serde_json::json!({"kind":"job","id":"task-other"});
+    assert!(serde_json::from_value::<WorkerFrame>(human_selector).is_err());
+    let mut nested_selector = value.clone();
+    nested_selector["operation"]["request"]["target"] =
+        serde_json::json!({"kind":"conversation","id":"other"});
+    assert!(serde_json::from_value::<WorkerFrame>(nested_selector).is_err());
+    value["operation"]["owner_uid"] = serde_json::json!(1001);
+    assert!(serde_json::from_value::<WorkerFrame>(value).is_err());
+    assert!(serde_json::from_value::<crate::workspaces::WorkspaceRead>(
+        serde_json::json!({"command":"source","path":"/home/user/note.txt","offset":4})
+    )
+    .unwrap()
+    .validate()
+    .is_err());
+}
+
 fn signed_grant() -> crate::agentd::grant::SignedGrant {
     GrantSigner::from_secret([3u8; 32]).issue(GrantClaims {
         v: GRANT_VERSION,
@@ -50,9 +82,10 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_APPROVAL,
             ROUTE_RECEIPT,
             ROUTE_MONETARY_BUDGET,
+            ROUTE_CONTEXT,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 19);
+    assert_eq!(PROTOCOL_VERSION, 20);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
@@ -83,6 +116,7 @@ fn requested_model_round_trips_in_the_worker_assignment() {
         owner_uid: 1000,
         owner_home: "/home/test".to_string(),
         workspace: "/home/test/project".to_string(),
+        workspace_id: None,
         record_activity_receipts: false,
         activity_capability_checks: false,
         activity_monetary_checks: false,
@@ -102,14 +136,21 @@ fn requested_model_round_trips_in_the_worker_assignment() {
     assert_eq!(decoded.requested_reasoning_effort.as_deref(), Some("high"));
     assert_eq!(decoded.attachments, attachments);
     let frame = BrokerFrame::Prepare(Box::new(Assignment {
-        protocol: PROTOCOL_VERSION, grant: signed_grant(), job: decoded,
-        consent_context: unattended_consent(), session: None, presence: None, extension: None,
+        protocol: PROTOCOL_VERSION,
+        grant: signed_grant(),
+        job: decoded,
+        consent_context: unattended_consent(),
+        session: None,
+        presence: None,
+        extension: None,
     }));
     let encoded = encode(&frame).unwrap();
     assert!(encoded.len() > 8 * 1024 * 1024);
     assert!(encoded.len() <= MAX_FRAME_BYTES);
     let decoded: BrokerFrame = serde_json::from_str(encoded.trim_end()).unwrap();
-    let BrokerFrame::Prepare(assignment) = decoded else { panic!("expected preparation"); };
+    let BrokerFrame::Prepare(assignment) = decoded else {
+        panic!("expected preparation");
+    };
     assert_eq!(assignment.job.attachments[0].bytes, image.len() as u64);
 }
 

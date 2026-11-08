@@ -41,11 +41,11 @@ use tokio::sync::Mutex;
 // Trait + types come from the workspace-internal `claw-embed` crate.
 // We can still `impl Embedder for Qwen3GenaiEmbedder` because the
 // type is local to this crate (orphan rule).
-use claw_embed::{EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedder};
 use crate::model::engines::ort_genai::runtime::OrtGenaiRuntime;
 use crate::model::engines::ort_genai::safe::{
     OgaGenerator, OgaGeneratorParams, OgaModel, OgaTokenizer, OrtGenaiError,
 };
+use claw_embed::{EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedder};
 
 /// Canonical model name reported in [`EmbedResponse::model`]. The
 /// SemanticStore stickiness guard pins a corpus to whatever value it
@@ -124,6 +124,16 @@ impl Qwen3GenaiEmbedder {
     /// `<models_dir>/qwen3-embedding-0.6b/v1/`.
     pub fn default_model_dir() -> PathBuf {
         crate::model::paths::model_version_dir("qwen3-embedding-0.6b", "v1")
+    }
+
+    pub fn with_max_input_tokens(mut self, maximum: usize) -> Result<Self, EmbedError> {
+        if maximum == 0 || maximum > DEFAULT_MAX_TOKENS {
+            return Err(EmbedError::InvalidInput(
+                "local embedding token ceiling is outside the model limit".into(),
+            ));
+        }
+        self.max_input_tokens = maximum;
+        Ok(self)
     }
 
     fn ensure_model_dir(&self) -> Result<(), EmbedError> {
@@ -265,6 +275,7 @@ impl Embedder for Qwen3GenaiEmbedder {
     fn is_configured(&self) -> bool {
         self.model_dir.exists()
             && self.model_dir.join("genai_config.json").exists()
+            && crate::model::engines::ort::is_installed()
             && crate::model::engines::ort_genai::is_installed()
     }
 
@@ -344,11 +355,11 @@ pub fn precheck(cfg: &crate::config::EmbedConfig) -> Result<(), String> {
             dir.display()
         ));
     }
+    if !crate::model::engines::ort::is_installed() {
+        return Err("ONNX Runtime dependency is not installed; run `cos engine update ort`".into());
+    }
     if !crate::model::engines::ort_genai::is_installed() {
-        return Err(
-            "ort-genai engine is not installed; run `cos engine update ort-genai`"
-                .into(),
-        );
+        return Err("ort-genai engine is not installed; run `cos engine update ort-genai`".into());
     }
     Ok(())
 }

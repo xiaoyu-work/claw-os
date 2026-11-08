@@ -36,6 +36,10 @@ struct SessionMetadata {
     deleted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activity_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +119,14 @@ pub async fn list(
     project_list(result, legacy).map(Json)
 }
 
+pub async fn create(Json(body):Json<crate::clawd::wire::requests::AgentConversationCreate>)->Result<Json<Value>,(StatusCode,Json<Value>)>{
+    if let Some(id)=body.workspace_id.as_ref(){crate::workspaces::validate_id(id.as_str()).map_err(invalid_broker_response)?;}
+    let value=super::clawd::request(Command::AgentConversationCreate,serde_json::to_value(body)
+        .map_err(|e|invalid_broker_response(e.to_string()))?).await.map_err(super::clawd::RpcError::into_api_error)?;
+    let conversation=parse_conversation(value)?;
+    Ok(Json(json!({"session":project_metadata(conversation.metadata)})))
+}
+
 pub async fn detail(
     State(_state): State<AppState>,
     Path(id): Path<String>,
@@ -131,6 +143,8 @@ pub async fn detail(
                 "archived": metadata.archived,
                 "deleted": metadata.deleted,
                 "parent_id": metadata.parent_id,
+                "workspace_id": metadata.workspace_id,
+                "activity_id": metadata.activity_id,
                 "message_count": conversation.message_count,
                 "messages_truncated": conversation.messages_truncated,
                 "jobs": conversation.jobs,
@@ -154,6 +168,8 @@ pub async fn history(
     match get_conversation(&id, 500).await {
         Ok(conversation) => Ok(Json(json!({
             "session_id": conversation.metadata.id,
+            "workspace_id": conversation.metadata.workspace_id,
+            "activity_id": conversation.metadata.activity_id,
             "n": conversation.messages.len(),
             "message_count": conversation.message_count,
             "messages_truncated": conversation.messages_truncated,
@@ -298,6 +314,8 @@ fn project_metadata(metadata: SessionMetadata) -> Value {
         "archived": metadata.archived,
         "deleted": metadata.deleted,
         "parent_id": metadata.parent_id,
+        "workspace_id": metadata.workspace_id,
+        "activity_id": metadata.activity_id,
         "manageable": true,
         "legacy": false,
     })

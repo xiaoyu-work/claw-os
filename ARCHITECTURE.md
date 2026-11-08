@@ -69,7 +69,7 @@ route.
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, checkpoints, and owner-scoped learned-memory reset that preserves execution evidence | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, owner-scoped task/session/attention projections, and closed portable continuity of intent without authority or execution state | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/clawd/activity_attention.rs`, `core/src/clawd/activity_continuity.rs`, `core/src/activity.rs` |
-| Workspaces | Owner-scoped context domains above Activities, shared background and notes, recursive read-only source tags and checked deletion coordination in the existing goal database | `core/src/workspaces/`, `core/src/activities/sqlite/workspaces.rs`, `core/src/clawd/workspaces.rs`, `crates/clawd-client/src/workspaces.rs` |
+| Workspaces | Owner-scoped context domains above Activities, bounded sourced context, Root-derived conversation/Job bindings, live read-only source visibility and exact temporary cross-domain selections in the existing goal database | `core/src/workspaces/`, `core/src/activities/sqlite/workspaces.rs`, `core/src/clawd/workspaces.rs`, `crates/clawd-client/src/workspaces.rs` |
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
 | Activity object state | Bounded caller-reported observations, receipt links, planning relations and immutable correction/retraction history | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs` |
 | Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
@@ -88,6 +88,7 @@ route.
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | App development platform | Versioned, digest-pinned SDK/runtime/toolkit library artifact, independent of App releases and OS implementation checkouts | `packaging/app-platform.json`, `scripts/app_platform.py`, `docs/app-platform.md` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
+| Personal-file vector index | Existing owner daemon, fixed local Qwen3 CPU inference pipe, atomic source-revision SQLite corpus and live-root reconciliation; Workspace read visibility stays broker-owned | `crates/claw-semantic/`, `crates/claw-embed/`, `core/src/model/local_embedding.rs` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
 | Migrated App products | Product UI, business implementation, MCP and upstream source live in a separate repository; Mail native build and product cutover remain in progress | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` |
 | Shared-capability clients | Legacy facades are explicitly separate from business products; Document Engine owns `doc` and Storage SDK owns `db`, while privileged providers and SDK stay in the OS | External `clawos-app/capabilities/`, `packaging/apps.lock.json` |
@@ -111,6 +112,22 @@ The detailed contract and physical acceptance limits are in
 Dependencies point from entry points and orchestration toward stable
 definitions, then to providers; authorization and persistence remain explicit
 cross-cutting boundaries rather than hidden implementation details.
+
+Workspace state follows shared client definition -> existing owner Activity
+database/provider -> Root broker -> CLI/TUI/Web/native consumers. It is a
+semantic context domain, not the task filesystem cwd. Conversations and Jobs
+carry Root-derived optional associations; workers obtain bounded labelled
+context and exact reads through the private gateway, never an owner/domain
+selector or direct owner-wide memory handle.
+
+Memory projection selects allowed sessions before limits, listings/counts,
+source reads and ranking. Personal-file vectors live in one independent owner
+corpus; the broker filters current tags and verifies owner-readable pinned file
+bytes and their revision before returning a snapshot. Temporary cross-domain
+reads are exact, finite and non-transitive, and never persist imported bytes as
+shared findings or authority. Visibility epochs fence stale replay. Checked
+deletion preserves original goals, files and execution evidence while revoking
+sharing and cancelling associated work. See [`docs/workspaces.md`](docs/workspaces.md).
 
 ### App source ownership
 

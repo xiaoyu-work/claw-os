@@ -162,7 +162,7 @@ where
     run_as_owner(uid, read)
 }
 
-pub(super) fn open_owner_db(
+pub(crate) fn open_owner_db(
     path: &std::path::Path,
     owner_uid: u32,
 ) -> Result<Option<MemoryDb>, String> {
@@ -194,7 +194,7 @@ pub(super) fn open_owner_db(
         .map_err(|error| format!("open owner memory database {}: {error}", path.display()))
 }
 
-pub(super) fn run_as_owner<T, F>(owner_uid: u32, operation: F) -> Result<T, String>
+pub(crate) fn run_as_owner<T, F>(owner_uid: u32, operation: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(PathBuf) -> Result<T, String> + Send + 'static,

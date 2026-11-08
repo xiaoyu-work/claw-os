@@ -104,7 +104,10 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         return Err("notification viewer id must not be empty".into());
     }
     let requested_workspace = params.get("workspace").and_then(Value::as_str);
+    let requested_space = params.get("workspace_id").and_then(Value::as_str);
     let requested_activity = optional_activity_id(&params)?;
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let _context_lock = store.lock_context_admission().map_err(|err| err.to_string())?;
     let session_meta = session_id
         .as_deref()
         .map(|session_id| task_session_meta(session_id, owner_uid))
@@ -113,6 +116,9 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         owner_uid,
         session_meta.as_ref(),
         requested_activity.as_deref(),
+    )?;
+    let workspace_id = crate::workspaces::association::resolve(
+        owner_uid, session_meta.as_ref(), activity_id.as_deref(), requested_space,
     )?;
     // Activity admission precedes session creation, capability refresh, and
     // queue publication. Its planning fields never supply capabilities.
@@ -123,7 +129,6 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
     crate::storage::ensure_owner_agent_state_dir(owner_uid, owner_gid)
         .map_err(|err| format!("prepare owner agent state: {err}"))?;
-    let store = Store::open_default().map_err(|err| err.to_string())?;
     if let Some(predecessor_id) = after_task_id.as_deref() {
         let expected_session = session_id
             .as_deref()
@@ -167,6 +172,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     job.requested_model = requested_model;
     job.requested_reasoning_effort = requested_reasoning_effort;
     job.workspace = Some(workspace.to_string_lossy().into_owned());
+    job.workspace_id = workspace_id;
     job.after_task_id = after_task_id;
     if let Some(viewer) = notification_viewer.as_ref() {
         if let Err(error) =
@@ -181,7 +187,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         }
     }
     let task_id = job.id.clone();
-    let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
+    let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish_in_context(job))
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
 }
@@ -282,7 +288,7 @@ fn configure_task_session(
     Ok(())
 }
 
-pub(super) fn task_session_meta(
+pub(crate) fn task_session_meta(
     session_id: &str,
     owner_uid: u32,
 ) -> Result<session::SessionMeta, String> {
@@ -591,6 +597,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     )?;
     let requested_model = original.requested_model.clone();
     let requested_reasoning_effort = original.requested_reasoning_effort.clone();
+    let _context_lock = store.lock_context_admission().map_err(|err| err.to_string())?;
     let owner_uid = original
         .owner_uid
         .ok_or_else(|| "task has no recorded owner and cannot be retried".to_string())?;
@@ -606,6 +613,9 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         client.require_uid()?,
         session_meta.as_ref(),
         original.activity_id.as_deref(),
+    )?;
+    let workspace_id = crate::workspaces::association::resolve(
+        owner_uid, session_meta.as_ref(), activity_id.as_deref(), original.workspace_id.as_deref(),
     )?;
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
     let session_client = SessionClient::new(SessionSource::BrokerTask, false, true);
@@ -629,10 +639,11 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     retried.requested_model = requested_model;
     retried.requested_reasoning_effort = requested_reasoning_effort;
     retried.workspace = original.workspace;
+    retried.workspace_id = workspace_id;
     retried.after_task_id = original.after_task_id;
     let task_id = retried.id.clone();
     let retried =
-        with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(retried))
+        with_presence_publication(&task_id, client, unix_now_ms(), || store.publish_in_context(retried))
             .map_err(|err| err.to_string())?;
     Ok(job_value(retried))
 }

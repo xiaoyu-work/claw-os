@@ -6,6 +6,9 @@ mod backend;
 mod commands;
 mod models;
 mod nearby;
+mod workspaces;
+#[cfg(unix)]
+mod plain;
 mod presentation;
 mod requests;
 mod state;
@@ -52,6 +55,7 @@ enum Mode {
 pub(super) struct ChatOptions {
     mode: Mode,
     pub session_id: Option<String>,
+    pub workspace_id: Option<String>,
     pub no_stream: bool,
     pub no_memory: bool,
     pub show_tools: bool,
@@ -80,6 +84,11 @@ impl ChatOptions {
                             .ok_or("--session needs a non-empty id")?
                             .clone(),
                     );
+                }
+                "--space" | "--workspace-id" => {
+                    let id=args.next().ok_or("--space requires a Workspace UUID")?;
+                    crate::workspaces::validate_id(id)?;
+                    options.workspace_id=Some(id.clone());
                 }
                 "--no-stream" => options.no_stream = true,
                 "--no-memory" => options.no_memory = true,
@@ -165,9 +174,15 @@ pub(super) fn run(_options: ChatOptions) -> Result<Value, String> {
     Err("the Claw Agent TUI requires Linux or WSL".into())
 }
 
+pub(super) fn run_plain(options:ChatOptions)->Result<Value,String>{
+    #[cfg(unix)]{plain::run(options)}
+    #[cfg(not(unix))]{let _=options;Err("Agent chat requires Linux or WSL".into())}
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum InputAction {
     None,
+    Spaces(workspaces::Action),
     Nearby(Option<clawd_client::nearby::NearbyAction>),
     Submit(String),
     Cancel,
@@ -201,8 +216,13 @@ async fn run_with_backend(
     backend: Arc<dyn Backend>,
     options: ChatOptions,
 ) -> Result<Value, String> {
-    let conversation = connect_initial_conversation(backend.as_ref(), options.session_id.as_deref())
-        .await?;
+    let conversation = if let Some(id)=options.workspace_id.as_deref() {
+        if let Some(session)=options.session_id.as_deref() {
+            let conversation=backend.get_conversation(session).await?;
+            if conversation.workspace_id.as_deref()!=Some(id){return Err("Workspace mismatch; select another conversation".into());}
+            conversation
+        }else{backend.create_conversation_in_workspace(Some(id)).await?}
+    }else{connect_initial_conversation(backend.as_ref(), options.session_id.as_deref()).await?};
     let mut app = App::new(backend.info().clone(), conversation);
     app.set_task_defaults(!options.no_memory, options.max_turns);
     let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
@@ -436,6 +456,7 @@ async fn connect_initial_conversation(
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
+    if let Some(action)=workspaces::key(app,key) {return action;}
     if let Some(action)=nearby::key(app,key) {return action;}
     if app.current_approval().is_some() || app.approval_detail.is_some() {
         let control_cancel =

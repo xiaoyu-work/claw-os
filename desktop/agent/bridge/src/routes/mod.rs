@@ -18,6 +18,7 @@ mod chat;
 mod models;
 mod memory;
 mod nearby;
+mod workspaces;
 mod sessions;
 mod voice;
 
@@ -32,6 +33,11 @@ pub fn api() -> Router<AppState> {
         .route("/health", get(|| async { "ok" }))
         .route("/nearby",get(nearby::status))
         .route("/nearby/control",post(nearby::control))
+        .route("/workspaces",get(workspaces::list))
+        .route("/workspaces/control",post(workspaces::control))
+        .route("/workspaces/:id",get(workspaces::get))
+        .route("/workspaces/:id/read",post(workspaces::read))
+        .route("/workspaces/index-source",post(workspaces::index_source))
         .route("/memory/inspect", post(memory::inspect))
         .route("/memory/read", post(memory::read))
         .route("/memory/update", post(memory::update))
@@ -111,7 +117,7 @@ pub fn api() -> Router<AppState> {
             get(activities::automatic_work::get).post(activities::automatic_work::set))
         .route("/activities/:id/work/enabled",post(activities::automatic_work::enabled))
         .route("/tasks/:task_id/retry", post(activities::retry_job))
-        .route("/sessions", get(sessions::list))
+        .route("/sessions", get(sessions::list).post(sessions::create))
         .route(
             "/sessions/:id",
             get(sessions::get)

@@ -23,6 +23,7 @@ audit.
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes, including attended one-shot decisions |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
 | `nearby.rs` | Model-independent `/share` center over the shared nearby service, stable exact offer selection, progress, refresh and detach-only close |
+| `workspaces.rs`, `plain.rs` | Model-independent semantic `/spaces` center, exact sharing revisions and plain chat using canonical Root conversations/Jobs |
 | `../../../test/unit/agent/terminal/mod.rs` | State, rendering, privacy and option regression tests |
 | `../../../test/unit/agent/terminal/backend.rs` | Exact approval decision readback |
 | `../../../tests/agent_tui_pty.py` | Real-binary PTY completion/cancellation/plain scenarios |
@@ -190,6 +191,13 @@ audit.
   protocol. External interfaces may inform interaction design only.
 
 ## Validation
+
+Semantic Workspaces use `/spaces` or `/workspaces`; `/workspace` remains cwd.
+The center creates/deletes domains, edits background/notes, tags files/folders,
+reads/searches sources, checks index readiness and assigns idle Activities.
+Switching opens another canonical conversation, never moves history. Both TUI
+and plain chat submit through the same scoped Root task path; management does
+not require a configured model. See [Workspaces](../../../../docs/workspaces.md).
 
 ```bash
 cargo test -p cos --lib agent::terminal:: -- --test-threads=1

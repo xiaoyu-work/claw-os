@@ -333,6 +333,9 @@ impl Authority {
         {
             return Err(AuthorityError::Subject);
         }
+        if issuance.subject.workspace.as_ref().is_some_and(|binding|binding.owner_uid!=issuance.principal.uid) {
+            return Err(AuthorityError::Subject);
+        }
         let handle = GrantHandle::generate().map_err(|_| AuthorityError::UnverifiablePrincipal)?;
         let key = handle.key();
         let now = Instant::now();
@@ -405,6 +408,7 @@ impl Authority {
             .check(parent, now)
             .map_err(AuthorityError::Attenuation)?;
         request.subject.activity = parent.subject.activity.clone();
+        request.subject.workspace = parent.subject.workspace.clone();
         let parent_id = parent.id;
         let depth = parent.depth + 1;
         inner.check_quota(&request.principal, request.subject.session_id.as_deref())?;

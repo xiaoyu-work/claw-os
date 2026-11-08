@@ -29,14 +29,21 @@ pub trait Extractor: Send + Sync {
 pub struct TextExtractor;
 
 impl TextExtractor {
+    pub fn supports(path: &Path) -> bool {
+        path.extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|ext| {
+                Self::TEXT_EXTS
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+            })
+    }
+
     const TEXT_EXTS: &'static [&'static str] = &[
-        "txt", "md", "markdown", "rst", "log",
-        "py", "rs", "js", "ts", "tsx", "jsx", "go", "java", "c", "h",
-        "cpp", "hpp", "cc", "cs", "rb", "php", "swift", "kt", "scala",
-        "sh", "bash", "zsh", "fish",
-        "yaml", "yml", "toml", "json", "ini", "conf",
-        "html", "xml", "css", "scss", "sass", "less",
-        "tex", "bib", "org",
+        "txt", "md", "markdown", "rst", "log", "py", "rs", "js", "ts", "tsx", "jsx", "go", "java",
+        "c", "h", "cpp", "hpp", "cc", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash",
+        "zsh", "fish", "yaml", "yml", "toml", "json", "ini", "conf", "html", "xml", "css", "scss",
+        "sass", "less", "tex", "bib", "org",
     ];
 }
 

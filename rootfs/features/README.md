@@ -18,7 +18,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `base` | Core CLI tools, Node.js 24 (+ pnpm/typescript/tsx), Python apt packages, runtime dirs, `/etc/cos/profile.sh` sourcing, version injection |
 | `cos-core` | `claw-os-agent` plus `claw-os-base`: Agent/browser binaries, headless apps, skills, SDKs, and Claw OS integration |
 | `browser` | Chromium executable and target runtime integration for the browser binaries already shipped by `claw-os-agent` |
-| `qwen3-embedding` | Downloads the public Hugging Face `johnucm/Qwen-Qwen3-Embedding-0.6B-onnx` ONNX GenAI bundle into `/var/lib/cos/models/qwen3-embedding-0.6b/v1` and installs the pinned `ort-genai` runtime where upstream provides a Linux asset |
+| `qwen3-embedding` | Downloads the public Hugging Face `johnucm/Qwen-Qwen3-Embedding-0.6B-onnx` ONNX GenAI bundle into `/var/lib/cos/models/qwen3-embedding-0.6b/v1` and installs the validated `ort` plus `ort-genai` pair in `/var/lib/cos/engines` where upstream provides Linux assets |
 | `desktop` | Builds the vendored desktop workspace into `claw-os-desktop.deb`, then installs it. Includes compositor, greeter, panel, launcher, settings, apps, desktop defaults, and graphical boot wiring. Set `DESKTOP_SKIP=1` to install runtime deps + overlay only. |
 | `claw-mail-ai` | Registers the MailExtension with Thunderbird and installs the NM manifest + policies. Reuses the XPI, shared Python package at `/usr/lib/cos/apps/mail-ai`, launcher and SDKs installed together by `claw-os-agent`; never overwrites them or builds a separate UI copy. Requires Thunderbird (already pulled in by `desktop`). |
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by the external Terminal product's `@`-trigger AI integration. |
@@ -43,6 +43,15 @@ Target-specific boot/install features (`kernel`, `grub-disk`, `vm`,
 `local-user`, `cloud-init`, `azure`, `vmware`, `live`, `installer`), desktop
 UI, and third-party agent providers
 (`copilot-cli`) are opt-in.
+
+The personal-file semantic daemon uses these real local embeddings; Recoll
+remains the separate full-text index. Its default roots are the owner's
+Documents, Desktop and Downloads, not the entire system or every binary
+format. Workspace tags control retrieval visibility, not global indexing.
+The fixed inference helper uses the system model/engine registry, never a
+cloud fallback. A short Qwen3 inference needs about 3 GiB of RAM, and the
+existing semantic user unit has an 8 GiB memory ceiling covering its model
+child. See [installed index behavior](../../docs/updating.md#local-personal-file-vector-index).
 
 The default headless VM has no known password. On its first serial-console
 boot, `cos-local-first-login.service` blocks the normal getty until the user

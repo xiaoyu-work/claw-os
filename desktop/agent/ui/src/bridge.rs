@@ -33,6 +33,7 @@ use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVers
 use cos_agent_protocol::{ActivityAutoWork,ActivityAutoWorkResponse,AutoWorkSetRequest,AutoWorkEnabledRequest};
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
+pub(crate) mod workspaces;
 
 /// Maximum age of the endpoint file before we assume the bridge is dead.
 /// Today we don't actually check mtime — kept here for the future

@@ -6,6 +6,7 @@
 //! callers migrate to `claw_embed` directly.
 
 pub mod config;
+pub mod indexer;
 
 pub use claw_embed::{
     Chunk, DocumentStoreError, EmbedError, EmbedRequest, EmbedResponse, EmbedUsage, Embedder,

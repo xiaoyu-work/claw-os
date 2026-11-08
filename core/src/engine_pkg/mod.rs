@@ -51,6 +51,7 @@ pub const KNOWN_ENGINES: &[&str] = &["llama-cpp", "ort", "ort-genai"];
 /// Qwen3 embedding path. Keep the GitHub release tag separate because
 /// upstream tags include a leading `v`, while model compatibility ranges
 /// use plain semver.
+pub const QWEN3_ORT_KNOWN_GOOD_VERSION: &str = "1.31.1";
 pub const ORT_GENAI_KNOWN_GOOD_VERSION: &str = "0.14.0";
 pub const ORT_GENAI_KNOWN_GOOD_TAG: &str = "v0.14.0";
 

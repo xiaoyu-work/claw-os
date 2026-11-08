@@ -26,6 +26,11 @@ Model engine loaders consume verified package outputs; they do not duplicate
 download/version logic. Unknown platform or validation failure is an error, not
 a success-shaped fallback.
 
+The Qwen3 image feature installs the validated ONNX Runtime and ORT GenAI
+versions declared in `mod.rs` into the same system registry. GenAI's upstream
+archive does not contain ONNX Runtime. Model loaders retain the registered
+dependency instead of relying on ambient library search paths.
+
 ## Tests
 
 ```bash

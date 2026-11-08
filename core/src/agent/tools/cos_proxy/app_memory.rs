@@ -129,6 +129,9 @@ impl Tool for CosAppMemoryTool {
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
+        if crate::workspaces::gateway::workspace_bound() {
+            return ToolResult::err("global App memory has no Workspace provenance; inspect permitted current App data through its ordinary capability-gated tools");
+        }
         let command = match input.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {

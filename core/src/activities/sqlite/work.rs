@@ -82,6 +82,20 @@ fn load(conn: &Connection, activity: &Activity) -> Result<Option<ActivityWork>, 
     .transpose()
 }
 
+pub(super) fn hold_for_workspace_move(conn:&Connection,activity:&Activity)->Result<(),ActivityError>{
+    let Some(mut work)=load(conn,activity)?else{return Ok(());};
+    if work.current.is_some(){return Err(ActivityError::Conflict("retire and reconcile automatic work before changing its Workspace".into()));}
+    work.enabled=false;work.phase=ActivityWorkPhase::Held;work.next_wake_at=None;
+    work.message=Some("Workspace changed. Inspect retained execution evidence and explicitly provide a fresh next task; old private handoffs are not imported.".into());
+    work.revision=work.revision.checked_add(1).filter(|revision|*revision<=i64::MAX as u64)
+        .ok_or_else(||corrupt("work revision exhausted"))?;
+    work.updated_at=timestamp().max(work.updated_at);
+    work.validate()?;
+    conn.execute("UPDATE activity_work SET revision=?3,state_json=?4 WHERE owner_uid=?1 AND activity_id=?2",
+        params![activity.owner_uid,activity.id,i64::try_from(work.revision).map_err(|_|corrupt("work revision out of range"))?,serde_json::to_string(&work)?])?;
+    Ok(())
+}
+
 pub(super) fn validate_schema(conn: &Connection) -> Result<(), ActivityError> {
     conn.prepare("SELECT owner_uid, activity_id, revision, state_json FROM activity_work LIMIT 0")?;
     conn.prepare("SELECT sequence, owner_uid, activity_id, job_id, record_json FROM activity_work_history LIMIT 0")?;

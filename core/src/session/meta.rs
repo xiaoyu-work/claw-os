@@ -273,6 +273,12 @@ pub struct SessionMeta {
     /// Optional planning association, not a source of capabilities.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
+    /// Root-bound semantic context domain; unrelated to a task's process cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Visibility epoch for model replay, not permission or conversation evidence.
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub workspace_access_revision:Option<u64>,
 
     /// Trusted issuer that minted this session's capabilities. Only a
     /// daemon-side authority writes it, and only a root-owned record
@@ -321,6 +327,8 @@ impl SessionMeta {
             credential_tier: None,
             owner_uid: None,
             activity_id: None,
+            workspace_id: None,
+            workspace_access_revision:None,
             origin: None,
             client: SessionClient::default(),
             parent_session: None,

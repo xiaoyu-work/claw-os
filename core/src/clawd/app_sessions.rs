@@ -113,6 +113,7 @@ struct LauncherAuthority {
     role: Option<String>,
     activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
     task_session: Option<Arc<SessionInfo>>,
+    workspace: Option<crate::workspaces::boundary::WorkspaceBinding>,
 }
 
 /// Everything the capability derivation is allowed to consult.
@@ -137,6 +138,7 @@ struct Delegation {
     /// names the resource the App will actually touch.
     paths: crate::caps::args::PathContext,
     activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
+    workspace: Option<crate::workspaces::boundary::WorkspaceBinding>,
 }
 
 impl Delegation {
@@ -160,6 +162,7 @@ impl Delegation {
                 cwd: process_cwd(launcher.pid),
             },
             activity: launcher.activity.clone(),
+            workspace: launcher.workspace.clone(),
         })
     }
 }
@@ -1560,6 +1563,10 @@ async fn authenticate_launcher(
         .map(|session| crate::caps::activity_boundary::ActivityBoundary::for_session(uid, session))
         .transpose()?
         .flatten();
+    launcher.workspace = authority_session.map(|session|
+        crate::workspaces::boundary::WorkspaceBinding::for_session(uid,session,
+            client.extension_host.as_ref().filter(|host|host.purpose==crate::extension_host::protocol::HostPurpose::Task).map(|host|host.lease_id.as_str()))
+    ).transpose()?.flatten();
     Ok(launcher)
 }
 
@@ -1602,6 +1609,7 @@ fn launcher_authority(
                 role: session.role.clone(),
                 activity: None,
                 task_session: None,
+                workspace: None,
             })
         }
         None => Ok(LauncherAuthority {
@@ -1615,6 +1623,7 @@ fn launcher_authority(
             role: Some(Role::Worker.name().to_string()),
             activity: None,
             task_session: None,
+            workspace: None,
         }),
     }
 }
@@ -2084,6 +2093,9 @@ fn authorize_plan(
     dropped.extend(dropped_missing);
     record_ceiling_drop(ceiling, app_id, "authorize_plan", &dropped);
     crate::approvals::app_policy::require(delegation.uid, app_id, &caps)?;
+    if let Some(workspace) = &delegation.workspace {
+        workspace.check(&caps.iter().cloned().collect::<Vec<_>>()).map_err(BrokerError::authorization)?;
+    }
 
     let exact = match &delegation.activity {
         Some(boundary) => boundary
@@ -2441,7 +2453,8 @@ fn issue_launch_grant_with_gui(
             binding: authority::Binding::Process,
             subject: authority::Subject::session(session_id)
                 .with_app(app_id.map(ToOwned::to_owned))
-                .with_activity(activity),
+                .with_activity(activity)
+                .with_workspace(launcher.workspace.clone()),
             // The launch grant is the parent of the session grant and
             // of the launcher's relay grant, so it has to carry every
             // audience either will need; `bind` narrows the session

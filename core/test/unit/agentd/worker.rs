@@ -89,6 +89,7 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
             owner_uid: 1000,
             owner_home: "/home/test".to_string(),
             workspace: "/home/test".to_string(),
+            workspace_id:None,
             record_activity_receipts: false,
             activity_capability_checks: false,
             activity_monetary_checks: false,
@@ -276,12 +277,14 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         waiters: Mutex::new(HashMap::new()),
         receipt_waiters: Mutex::new(HashMap::new()),
         monetary_waiters: Mutex::new(HashMap::new()),
+        context_waiters:Mutex::new(HashMap::new()),
         pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
         boundaries_used: AtomicU32::new(0),
         receipts_used: AtomicU32::new(0),
         monetary_used: AtomicU32::new(0),
+        context_used:AtomicU32::new(0),
     });
     (
         ChannelApprovalGateway {
@@ -295,6 +298,19 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
 }
 
 #[test]
+fn context_replies_require_exact_nonce_and_cancellation_releases_waiters(){
+    let (gateway,_)=gateway();let state=gateway.state;
+    let (sender,receiver)=sync_channel(1);
+    state.context_waiters.lock().unwrap().insert(7,("a".repeat(32),sender));
+    state.deliver_context(7,&"b".repeat(32),ContextReply::Data{value:serde_json::json!({"private":"wrong"})});
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(state.context_waiters.lock().unwrap().len(),1);
+    state.refuse_all("cancelled");
+    assert!(matches!(receiver.try_recv().unwrap(),ContextReply::Refused{..}));
+    assert!(state.context_waiters.lock().unwrap().is_empty());
+}
+
+#[test]
 fn cancelled_worker_refuses_reservations_but_can_settle_an_existing_turn() {
     use crate::agent::runtime::monetary_budget::MonetaryBudgetController;
 
@@ -305,12 +321,14 @@ fn cancelled_worker_refuses_reservations_but_can_settle_an_existing_turn() {
         waiters: Mutex::new(HashMap::new()),
         receipt_waiters: Mutex::new(HashMap::new()),
         monetary_waiters: Mutex::new(HashMap::new()),
+        context_waiters:Mutex::new(HashMap::new()),
         pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
         boundaries_used: AtomicU32::new(0),
         receipts_used: AtomicU32::new(0),
         monetary_used: AtomicU32::new(0),
+        context_used:AtomicU32::new(0),
     });
     let controller = Arc::new(ChannelMonetaryBudgetController {
         task_id: "task-a".into(),

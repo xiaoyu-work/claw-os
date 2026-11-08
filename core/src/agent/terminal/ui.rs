@@ -67,6 +67,7 @@ pub(super) fn render(frame: &mut Frame<'_>, app: &App) {
     render_activity_review(frame, area, app);
     render_activity_operation_preview(frame, area, app);
     super::nearby::render(frame,area,app);
+    super::workspaces::render(frame,area,app);
     render_confirmation(frame, area, app);
 }
 
@@ -629,6 +630,7 @@ fn render_debug_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         Line::styled("Conversation", Style::default().fg(Color::Yellow)),
         Line::raw(format!("id: {}", app.conversation.id)),
         Line::raw(format!("workspace: {}", clean_text(&app.selected_workspace))),
+        Line::raw(format!("context domain: {}", app.conversation.workspace_id.as_deref().unwrap_or("personal / unassigned"))),
         Line::raw(format!("active task: {active_task}")),
         Line::styled("Provider", Style::default().fg(Color::Yellow)),
         Line::raw(format!(

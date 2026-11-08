@@ -27,6 +27,7 @@ mod effects;
 mod localize;
 mod memory_center;
 mod nearby;
+mod workspaces;
 mod queue_panel;
 mod overlay;
 mod recorder;
@@ -78,6 +79,9 @@ pub enum Message {
     Memory(memory_center::Message),
     Nearby(nearby::Message),
     NearbyTick,
+    Workspaces(workspaces::Message),
+    NewWorkspaceConversation(Option<String>),
+    WorkspaceConversationCreated { generation:u64, session_index:usize, result:Result<SessionSummary,String> },
     Queue(queue_panel::Message),
     QueueTick,
     OpenActivitySession(String),
@@ -151,6 +155,9 @@ pub struct App {
     activities: activities::Activities,
     memory: memory_center::MemoryCenter,
     nearby: nearby::Nearby,
+    spaces: workspaces::Workspaces,
+    workspace_create_pending:bool,
+    workspace_create_generation:u64,
     queue: queue_panel::QueuePanel,
     sessions: SessionState,
     stream: StreamState,
@@ -196,6 +203,9 @@ impl Application for App {
             activities: activities::Activities::default(),
             memory: memory_center::MemoryCenter::default(),
             nearby: nearby::Nearby::default(),
+            spaces: workspaces::Workspaces::default(),
+            workspace_create_pending:false,
+            workspace_create_generation:0,
             queue: queue_panel::QueuePanel::default(),
             sessions: SessionState::default(),
             stream: StreamState::default(),
@@ -247,9 +257,51 @@ impl Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Workspaces(message)=>{
+                if self.flags.overlay{return Task::none();}
+                if matches!(message,workspaces::Message::Show){self.activities.hide();self.memory.hide();self.nearby.hide();}
+                if let workspaces::Message::PickTag(folder)=message{return self.spaces.pick(folder);}
+                let endpoint=self.bridge.endpoint().cloned();
+                match (self.spaces.update(message,endpoint.is_some()),endpoint){
+                    (Some(request),Some(endpoint))=>effects::workspace_task(endpoint,request),
+                    _=>Task::none(),
+                }
+            }
+            Message::NewWorkspaceConversation(workspace)=>{
+                if self.flags.overlay || self.workspace_create_pending || self.queue_pending || self.stream.is_cancelling(){return Task::none();}
+                if self.stream.is_active(){
+                    if self.stream.task_id().is_none(){return Task::none();}
+                    if let Some(previous)=self.stream.detach(&mut self.sessions){self.sessions.invalidate_history(previous);}
+                }
+                let Some(endpoint)=self.bridge.endpoint().cloned()else{self.error=Some(fl!("bridge-offline"));return Task::none();};
+                self.workspace_create_pending=true;
+                self.workspace_create_generation=self.workspace_create_generation.wrapping_add(1);
+                let generation=self.workspace_create_generation;
+                let session_index=self.sessions.active_index();
+                Task::perform(async move{bridge::workspaces::conversation(endpoint,workspace).await.map_err(|error|format!("{error:#}"))},
+                    move|result|cosmic::Action::App(Message::WorkspaceConversationCreated{generation,session_index,result}))
+            }
+            Message::WorkspaceConversationCreated{generation,session_index,result}=>{
+                if generation!=self.workspace_create_generation{return Task::none();}
+                self.workspace_create_pending=false;
+                match result{
+                    Ok(summary)=>{
+                        self.spaces.select_for_chat(summary.workspace_id.clone());
+                        let select=self.sessions.active_index()==session_index;
+                        let index=self.sessions.apply_remote_summary(summary,select);
+                        if let Some(session)=self.sessions.get_mut(index){session.history=HistoryState::Loaded;}
+                        if select{
+                            self.spaces.hide();self.activities.hide();self.memory.hide();self.nearby.hide();
+                            self.input=text_editor::Content::new();self.attachments.clear();self.error=None;
+                        }
+                        focus_editor()
+                    }
+                    Err(error)=>{self.error=Some(format!("{error}\n{}",fl!("spaces-no-replay")));Task::none()}
+                }
+            }
             Message::Nearby(message)=>{
                 if self.flags.overlay {return Task::none();}
-                if matches!(message,nearby::Message::Show) {self.activities.hide();self.memory.hide();}
+                if matches!(message,nearby::Message::Show) {self.activities.hide();self.memory.hide();self.spaces.hide();}
                 self.nearby.update(message,self.bridge.endpoint().cloned())
             }
             Message::NearbyTick=>self.nearby.update(nearby::Message::Poll,self.bridge.endpoint().cloned()),
@@ -257,7 +309,7 @@ impl Application for App {
             Message::QueueTick => self.queue.update(queue_panel::Message::Poll(self.stream.task_id().map(str::to_string)),self.bridge.endpoint().cloned()),
             Message::Memory(message) => {
                 if self.flags.overlay { return Task::none(); }
-                if matches!(message, memory_center::Message::Show) { self.activities.hide();self.nearby.hide(); }
+                if matches!(message, memory_center::Message::Show) { self.activities.hide();self.nearby.hide();self.spaces.hide(); }
                 self.memory.update(message, self.bridge.endpoint().cloned())
             }
             Message::Activities(message) => self.update_activities(message),
@@ -504,6 +556,7 @@ impl Application for App {
                 focus_editor()
             }
             Message::SelectSession(index) => {
+                self.spaces.hide();
                 self.memory.hide();
                 self.nearby.hide();
                 if self.stream.is_cancelling() || self.queue_pending {
@@ -535,6 +588,8 @@ impl Application for App {
                 Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
             }
             Message::NewSession => {
+                self.spaces.hide();
+                if self.workspace_create_pending{return Task::none();}
                 self.memory.hide();
                 self.nearby.hide();
                 if self.stream.is_cancelling() || self.queue_pending {
@@ -556,6 +611,7 @@ impl Application for App {
                 }
                 self.activities.hide();
                 self.sessions.new_session();
+                if let Some(session)=self.sessions.active_mut(){session.workspace_id=self.spaces.selected().map(str::to_string);}
                 self.input = text_editor::Content::new();
                 self.attachments.clear();
                 self.renaming_session = None;
@@ -834,6 +890,9 @@ impl Application for App {
                 if self.nearby.is_visible() {
                     tasks.push(self.nearby.update(nearby::Message::Refresh,Some(endpoint.clone())));
                 }
+                if self.spaces.is_visible(){
+                    if let Some(request)=self.spaces.update(workspaces::Message::Refresh,true){tasks.push(effects::workspace_task(endpoint.clone(),request));}
+                }
                 if !self.flags.overlay {
                     tasks.push(effects::fetch_sessions_task(
                         endpoint,
@@ -953,7 +1012,7 @@ impl Application for App {
 
 impl App {
     fn update_activities(&mut self, message: activities::Message) -> Task<Message> {
-        if matches!(message, activities::Message::Show) { self.memory.hide();self.nearby.hide(); }
+        if matches!(message, activities::Message::Show) { self.memory.hide();self.nearby.hide();self.spaces.hide(); }
         if self.flags.overlay
             || (matches!(message, activities::Message::Show)
                 && (self.stream.is_active() || self.voice.is_active()))
@@ -1120,6 +1179,7 @@ impl App {
             prompt: Some(prompt),
             attachments: self.attachments.clone(),
             session_id: stream_session.remote_id,
+            workspace_id: self.active_session().and_then(|session|session.workspace_id.clone()),
             model: None,
             context: one_shot_context,
             branch_context: stream_session.persistent_context,

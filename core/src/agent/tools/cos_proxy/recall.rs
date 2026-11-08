@@ -39,8 +39,10 @@ impl Tool for CosRecallTool {
     }
 
     fn description(&self) -> &str {
-        "Search the agent's full conversation history (every prior turn, every \
-         session) using SQLite FTS5. Use this to recall what the user told you \
+        "Search authorized conversation history using SQLite FTS5. Root-selected \
+         Workspace tasks stay within their current domain; unassigned work cannot \
+         read private Workspace histories. Temporary-context history is never \
+         widened into another task or conversation. Use this to recall what the user told you \
          earlier, what tools you ran, or what you concluded in a past session. \
          Incidentally also returns structured facts that apps have pushed \
          (calendar events, sent emails, etc.) because they share the same \
@@ -188,6 +190,16 @@ impl Tool for CosRecallTool {
             return ToolResult::err(denial.to_string());
         }
 
+        if crate::workspaces::gateway::available() {
+            let read = match serde_json::from_value(input) {
+                Ok(input) => crate::workspaces::gateway::ContextOperation::Recall { input },
+                Err(error) => return ToolResult::err(format!("invalid bounded recall: {error}")),
+            };
+            return match crate::workspaces::gateway::request(read).await {
+                Ok(value) => super::memory::memory_result_with_class(SourceKind::RecalledMemory,TrustClass::LegacyUnknown,&value),
+                Err(error) => ToolResult::err(error),
+            };
+        }
         let db = self.db.clone();
         let join = tokio::task::spawn_blocking(move || -> Result<(Value, TrustClass), String> {
             match command.as_str() {

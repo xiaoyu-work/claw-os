@@ -17,6 +17,7 @@ pub mod notes;
 pub mod ontology;
 pub mod recovery;
 pub mod semantic;
+pub(crate) mod scoped;
 pub mod sqlite_fts;
 pub mod inspection;
 pub(crate) mod access;

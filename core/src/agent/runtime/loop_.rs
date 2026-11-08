@@ -2056,7 +2056,7 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     // Auto-curator: opt-in via `[agent] auxiliary_*` config. After
     // each final answer, fires `curate_session` in the background to
     // extract durable user facts and append them to MEMORY.md.
-    let auto_curator = recorder.and_then(|(db, _)| {
+    let auto_curator = recorder.filter(|_|deps.workspace().is_none()).and_then(|(db, _)| {
         let config = deps
             .config_snapshot()
             .unwrap_or_else(crate::config::current_snapshot);
