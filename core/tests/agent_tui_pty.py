@@ -2314,7 +2314,7 @@ def run(cos, case, transcript, original_namespace, trace):
                 os.write(master, b"\x1b")
                 time.sleep(0.4)
             if case == "workspace":
-                send_prompt(master, output, "/workspace project")
+                send_prompt(master, output, "/directory project")
                 read_terminal(
                     master,
                     output,

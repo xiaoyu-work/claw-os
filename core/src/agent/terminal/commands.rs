@@ -33,7 +33,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ),
     ("/models", "list configured-provider models"),
     ("/model", "select the model for future tasks"),
-    ("/workspace", "show or select a broker-validated workspace"),
+    ("/directory", "show or select the broker-validated working directory"),
     ("/attach", "attach an image to the next task"),
     ("/review", "review staged file plans and reported diffs"),
     ("/copy", "copy the latest assistant response"),
@@ -56,7 +56,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/dnd", "set or disable the UTC DND window"),
     ("/activity", "browse, open, or create an Activity"),
     ("/share", "nearby AirDrop sharing, independent of Agent tasks"),
-    ("/spaces", "Workspaces: shared context, read-only sources and independent conversations"),
+    ("/workspace", "Workspace: shared context, read-only sources and independent conversations"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -66,7 +66,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Command {
     Nearby(String),
-    Spaces(String),
+    Workspace(String),
     Help,
     New,
     Sessions,
@@ -78,7 +78,7 @@ pub(super) enum Command {
     Rewind(u32),
     Models,
     Model(String),
-    Workspace(Option<String>),
+    Directory(Option<String>),
     Attach(Option<String>),
     Review(Option<String>),
     Copy,
@@ -171,7 +171,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         .split_once(char::is_whitespace)
         .map_or((value, ""), |(name, rest)| (name, rest.trim()));
     Some(match name {
-        "spaces" | "workspaces" => Command::Spaces(rest.into()),
+        "workspace" => Command::Workspace(rest.into()),
         "help" | "?" => Command::Help,
         "new" => Command::New,
         "sessions" => Command::Sessions,
@@ -189,8 +189,8 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         "models" => Command::Models,
         "model" if rest.is_empty() => Command::Models,
         "model" => Command::Model(rest.to_string()),
-        "workspace" if rest.is_empty() => Command::Workspace(None),
-        "workspace" => Command::Workspace(Some(rest.to_string())),
+        "directory" if rest.is_empty() => Command::Directory(None),
+        "directory" => Command::Directory(Some(rest.to_string())),
         "attach" if rest.is_empty() => Command::Attach(None),
         "attach" => Command::Attach(Some(rest.to_string())),
         "review" if rest.is_empty() => Command::Review(None),
@@ -391,7 +391,7 @@ fn takes_argument(command: &str) -> bool {
             | "/rename"
             | "/rewind"
             | "/model"
-            | "/workspace"
+            | "/directory"
             | "/attach"
             | "/review"
             | "/export"
@@ -439,7 +439,7 @@ pub(super) fn execute(
                 | Command::Nearby(_)
                 | Command::Tasks
                 | Command::Task(_)
-                | Command::Workspace(_)
+                | Command::Directory(_)
                 | Command::Attach(_)
                 | Command::Review(_)
                 | Command::Copy
@@ -474,7 +474,7 @@ pub(super) fn execute(
                 | Command::ActivityPriority { .. }
                 | Command::ActivityEvidence(_)
                 | Command::ActivityPreview { .. }
-                | Command::Spaces(_)
+                | Command::Workspace(_)
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -487,13 +487,14 @@ pub(super) fn execute(
         Command::Nearby(rest) => {
             return Ok(Some(super::nearby::command(app, backend, rest)));
         }
-        Command::Spaces(rest) => {
+        Command::Workspace(rest) => {
             let action=super::workspaces::command(app,&rest)?;
             return Ok(Some(super::workspaces::request(app,backend,action)?));
         }
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
-             /fork  /rewind N  /models  /model ID  /workspace [PATH|home]  /skills\n\
+             /fork  /rewind N  /models  /model ID  /directory [PATH|home]  /skills\n\
+             /workspace\n\
              /attach [PATH|clear]\n\
              /review [ACTIVITY_ID]\n\
              /copy  /export PATH\n\
@@ -600,13 +601,13 @@ pub(super) fn execute(
                 app.push_error("Unknown model. Use /models for the configured catalogue.");
             }
         }
-        Command::Workspace(None) => app.push_system(&format!(
-            "workspace: {}\nBroker validation is required before this path reaches a task.",
+        Command::Directory(None) => app.push_system(&format!(
+            "directory: {}\nBroker validation is required before this path reaches a task.",
             app.selected_workspace
         )),
-        Command::Workspace(Some(path)) => {
+        Command::Directory(Some(path)) => {
             return Ok(Some(Request::new(
-                "Resolving workspace",
+                "Resolving directory",
                 async move {
                     backend.resolve_workspace((path != "home").then_some(path.as_str())).await
                 },
@@ -1166,11 +1167,11 @@ pub(super) fn list_workspace_files(workspace: &Path) -> Result<WorkspaceFiles, S
             }
             let relative = path
                 .strip_prefix(&workspace)
-                .map_err(|_| "workspace file escaped its canonical root".to_string())?;
+                .map_err(|_| "directory file escaped its canonical root".to_string())?;
             let relative = relative
                 .to_str()
                 .filter(|value| !value.chars().any(char::is_control))
-                .ok_or("workspace file path is not valid UTF-8")?;
+                .ok_or("directory file path is not valid UTF-8")?;
             paths.push(relative.replace('\\', "/"));
         }
         if truncated {

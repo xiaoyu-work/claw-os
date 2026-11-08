@@ -23,7 +23,7 @@ audit.
 | `backend.rs` | Narrow typed consumer of canonical `clawd` routes, including attended one-shot decisions |
 | `models.rs` | Configured-provider model catalogue without provider mutation |
 | `nearby.rs` | Model-independent `/share` center over the shared nearby service, stable exact offer selection, progress, refresh and detach-only close |
-| `workspaces.rs`, `plain.rs` | Model-independent semantic `/spaces` center, exact sharing revisions and plain chat using canonical Root conversations/Jobs |
+| `workspaces.rs`, `plain.rs` | Model-independent semantic `/workspace` center, exact sharing revisions and plain chat using canonical Root conversations/Jobs |
 | `../../../test/unit/agent/terminal/mod.rs` | State, rendering, privacy and option regression tests |
 | `../../../test/unit/agent/terminal/backend.rs` | Exact approval decision readback |
 | `../../../tests/agent_tui_pty.py` | Real-binary PTY completion/cancellation/plain scenarios |
@@ -112,7 +112,7 @@ audit.
 - While idle, double `Esc` opens retained user turns. Selecting one creates a
   backend-checked prefix fork and restores the selected prompt for editing;
   it never rewinds effects or forks active work.
-- Workspace selection resolves through `task.workspace.resolve`; the TUI keeps
+- Filesystem `/directory` selection resolves through `task.workspace.resolve`; the TUI keeps
   only the returned canonical path and binds it to each submitted/queued task.
   A cwd is context, never filesystem authority.
 - Follow-up text is published immediately as a durable pending Job whose exact
@@ -121,7 +121,7 @@ audit.
 - `Ctrl-O` prepares one explicit image path under the verified owner home.
   The terminal reads bounded bytes and submits the existing attachment wire
   object; no path or filesystem capability reaches the task.
-- `Ctrl-F` lists at most 512 regular-file names under the selected workspace
+- `Ctrl-F` lists at most 512 regular-file names under the selected working directory
   and inserts an `@relative/path` mention. Completion reads no file contents,
   follows no symlink directories, and grants no capability.
 - `/copy` emits only the latest redacted Assistant display through bounded
@@ -192,12 +192,14 @@ audit.
 
 ## Validation
 
-Semantic Workspaces use `/spaces` or `/workspaces`; `/workspace` remains cwd.
+Semantic Workspace uses `/workspace` only; `/directory` selects filesystem cwd.
 The center creates/deletes domains, edits background/notes, tags files/folders,
 reads/searches sources, checks index readiness and assigns idle Activities.
 Switching opens another canonical conversation, never moves history. Both TUI
 and plain chat submit through the same scoped Root task path; management does
 not require a configured model. See [Workspaces](../../../../docs/workspaces.md).
+Plain chat uses `/workspace UUID|none` and `/directory PATH|home`; unsupported
+slash commands are local errors, not model prompts.
 
 ```bash
 cargo test -p cos --lib agent::terminal:: -- --test-threads=1

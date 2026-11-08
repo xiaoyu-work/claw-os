@@ -38,7 +38,7 @@ external delivery, another App's private storage or model-provider consent.
 Current source state and live sharing must be rechecked before returning bytes;
 an index or old reference is not proof of freshness or current permission.
 
-The existing filesystem `task.workspace.resolve`, TUI `/workspace`, and
+The existing filesystem `task.workspace.resolve`, TUI `/directory`, and
 `--workspace` task argument continue to select process cwd only. They do not
 select this context domain. Use the separate semantic selector:
 
@@ -166,7 +166,7 @@ same-account programs, unmanaged App internals or manual terminal edits.
 ## Human presentations
 
 - **CLI:** `cos workspace` uses the shared owner broker and exact revisions.
-- **Claw TUI:** `/spaces` or `/workspaces` opens a model-independent center.
+- **Claw TUI:** `/workspace` is the only name for the model-independent center.
   Its picker, context/notes, tags, local search/readiness and Activity assignment
   use owned asynchronous requests. Enter starts another bound conversation.
   Protected approvals retain focus; closing a center does not replay or stop work.
@@ -180,6 +180,10 @@ same-account programs, unmanaged App internals or manual terminal edits.
 
 Management needs no model setup. The model is needed only for Agent execution
 or local semantic query vectors.
+
+Plain chat uses `/workspace UUID|none` to open another bound conversation and
+`/directory PATH|home` to select filesystem cwd. Unsupported slash commands
+remain local errors and are never submitted to the model.
 
 ## Archive and deletion
 

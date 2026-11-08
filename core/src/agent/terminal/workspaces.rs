@@ -67,7 +67,7 @@ pub(super) fn command(app: &mut App, rest: &str) -> Result<Action, String> {
         .spaces
         .view
         .as_ref()
-        .ok_or("Open /spaces and select a Workspace first")?;
+        .ok_or("Open /workspace and select a Workspace first")?;
     let id = view.workspace.id.clone();
     let expected_revision = view.workspace.revision;
     let action=match verb {
@@ -80,7 +80,7 @@ pub(super) fn command(app: &mut App, rest: &str) -> Result<Action, String> {
         "tag"=>WorkspaceAction::Tag{id,expected_revision,path:tail.into(),kind:None},
         "untag"=>WorkspaceAction::Untag{id,expected_revision,tag_id:tail.into()},
         "note"=>{
-            let (title,content)=tail.split_once('|').ok_or("Use /spaces note TITLE | CONTENT")?;
+            let (title,content)=tail.split_once('|').ok_or("Use /workspace note TITLE | CONTENT")?;
             WorkspaceAction::PutNote{id,expected_revision,note_id:None,note:NoteDraft{title:title.trim().into(),content:content.trim().into()}}
         }
         "forget-note"=>WorkspaceAction::ForgetNote{id,expected_revision,note_id:tail.into()},
@@ -110,7 +110,7 @@ pub(super) fn command(app: &mut App, rest: &str) -> Result<Action, String> {
             WorkspaceAction::ReadLink{id,expected_revision,source_workspace_id:selection.source_workspace_id,
                 target:selection.target,note_ids:selection.note_ids,sources:selection.sources,expires_at:selection.expires_at}
         }
-        _=>return Err("Use /spaces [create NAME|select ID|chat|global|context TEXT|tag PATH|untag ID|note TITLE | CONTENT|forget-note ID|attach ACTIVITY|detach ACTIVITY|search QUERY|read PATH|read-note ID|index [TAG]|read-link JSON|revoke ID|archive|restore|delete]".into()),
+        _=>return Err("Use /workspace [create NAME|select ID|chat|global|context TEXT|tag PATH|untag ID|note TITLE | CONTENT|forget-note ID|attach ACTIVITY|detach ACTIVITY|search QUERY|read PATH|read-note ID|index [TAG]|read-link JSON|revoke ID|archive|restore|delete]".into()),
     };
     action.validate()?;
     Ok(Action::Control(action))
@@ -235,7 +235,7 @@ pub(super) fn request(
             if generation != app.spaces.generation {
                 if mutation {
                     app.push_system(
-                        "Workspace operation was acknowledged; refresh /spaces to inspect it.",
+                        "Workspace operation was acknowledged; refresh /workspace to inspect it.",
                     );
                 }
                 return Ok(());
@@ -329,10 +329,10 @@ pub(super) fn key(app: &mut App, event: KeyEvent) -> Option<InputAction> {
         KeyCode::Char('i') => InputAction::Spaces(Action::Read(WorkspaceRead::Index)),
         KeyCode::Char(ch) if matches!(ch, 'c' | 'd' | 't' | 'n' | 'b' | 's' | 'u' | 'x' | 'l') => {
             app.spaces.open = false;
-            let form=match ch {'c'=>"/spaces create ",'d'=>"/spaces delete",'t'=>"/spaces tag /absolute/file-or-folder",
-                'n'=>"/spaces note Title | Shared note",'b'=>"/spaces context Shared background",'s'=>"/spaces search query",
-                'u'=>"/spaces untag TAG_UUID",'x'=>"/spaces attach ACTIVITY_UUID",
-                _=>"/spaces read-link {\"source_workspace_id\":\"UUID\",\"target\":{\"kind\":\"conversation\",\"id\":\"ses_...\"},\"note_ids\":[\"UUID\"],\"sources\":[],\"expires_at\":\"RFC3339\"}"};
+            let form=match ch {'c'=>"/workspace create ",'d'=>"/workspace delete",'t'=>"/workspace tag /absolute/file-or-folder",
+                'n'=>"/workspace note Title | Shared note",'b'=>"/workspace context Shared background",'s'=>"/workspace search query",
+                'u'=>"/workspace untag TAG_UUID",'x'=>"/workspace attach ACTIVITY_UUID",
+                _=>"/workspace read-link {\"source_workspace_id\":\"UUID\",\"target\":{\"kind\":\"conversation\",\"id\":\"ses_...\"},\"note_ids\":[\"UUID\"],\"sources\":[],\"expires_at\":\"RFC3339\"}"};
             app.prefill_input(form.into());
             InputAction::None
         }
@@ -362,7 +362,7 @@ pub(super) fn render(frame: &mut Frame<'_>, screen: Rect, app: &App) {
     );
     let mut lines=vec![Line::raw("Left/Right selects. Enter starts a NEW conversation in that Workspace; existing histories never move."),
         Line::raw("C create · D delete · T tag · U untag · N note · B background · S search · I index readiness · X attach Activity · L temporary read"),
-        Line::raw("Use /spaces index TAG_UUID to explicitly add its directory to the independent personal-file index. Tags still constrain retrieval.")];
+        Line::raw("Use /workspace index TAG_UUID to explicitly add its directory to the independent personal-file index. Tags still constrain retrieval.")];
     for record in &app.spaces.records {
         lines.push(Line::raw(format!(
             "{} {} · {:?} · {}",
@@ -401,12 +401,12 @@ pub(super) fn render(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         }
         for id in &view.activity_ids {
             lines.push(Line::raw(format!(
-                "Activity {id} · /activity {id} · /spaces detach {id} (paused only)"
+                "Activity {id} · /activity {id} · /workspace detach {id} (paused only)"
             )));
         }
         for link in &view.workspace.read_links {
             lines.push(Line::raw(format!(
-                "Temporary read {} · from {} · {:?} · expires {} · /spaces revoke {}",
+                "Temporary read {} · from {} · {:?} · expires {} · /workspace revoke {}",
                 link.id, link.source_workspace_id, link.target, link.expires_at, link.id
             )));
         }
