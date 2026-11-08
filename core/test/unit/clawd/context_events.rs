@@ -71,3 +71,11 @@ fn query_rejects_backwards_time_range() {
     .unwrap_err();
     assert!(err.contains("since must be <= until"));
 }
+
+#[test]
+fn unprivileged_context_events_cannot_claim_an_app_publication_source() {
+    let client = ClientIdentity { uid: Some(1000), ..ClientIdentity::unknown() };
+    assert!(append(json!({
+        "source":"app:email","event_type":"message.received","payload":{}
+    }), &client).unwrap_err().contains("reserved"));
+}

@@ -66,12 +66,14 @@ export function cosCallJson(
   label: string,
   args: string[],
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  input?: string,
 ): unknown {
   const bin = cosBinary();
   const res = spawnSync(bin, [WIRE_ARG, ...args], {
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: MAX_BUFFER,
+    input,
   });
 
   if (res.error) {

@@ -574,7 +574,13 @@ pub(crate) fn fired_prompt(rule: &TriggerRule, ev: &Value) -> String {
     let fenced = crate::agent::safety::untrusted::wrap_labeled(
         crate::agent::trust::SourceKind::ContextEvent,
         Some(&rule.id),
-        &format!("source={src}\nevent_type={et}"),
+        &format!(
+            "source={src}\nevent_type={et}\nevent_data={}",
+            crate::agent::service::clip_progress_text(
+                &json!({"id":ev.get("id"),"entity_id":ev.get("entity_id"),"payload":ev.get("payload")}).to_string(),
+                8192,
+            ),
+        ),
     );
     format!(
         "{}\n\n[Fired by ClawOS trigger '{}' on a system event. The event's own \

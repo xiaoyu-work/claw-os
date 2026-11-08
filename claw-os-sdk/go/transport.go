@@ -68,12 +68,18 @@ type cosOutcome struct {
 // label names the logical call (e.g. "cos ai chat") for error messages.
 // Returns an *UnavailableError for transport/protocol problems and a
 // *DeniedError for a valid kernel error envelope.
-func cosCallJSON(label string, args []string) (*cosOutcome, error) {
+func cosCallJSON(label string, args []string, input ...[]byte) (*cosOutcome, error) {
 	bin := CosBinary()
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, append([]string{"--wire=1"}, args...)...)
+	if len(input) > 1 {
+		return nil, &UnavailableError{Msg: "only one controlled stdin payload is allowed"}
+	}
+	if len(input) == 1 {
+		cmd.Stdin = bytes.NewReader(input[0])
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

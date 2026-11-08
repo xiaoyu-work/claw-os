@@ -17,6 +17,8 @@ Rust, Python, Node, and Go bindings.
   transports bounded prompt/system/tool/budget data to the authenticated broker.
   Hosted Apps neither resolve local session registries nor own provider access.
 - Keep language bindings behaviorally compatible.
+- Publish bounded App-owned events through the same live session and named IPC
+  capability. Root derives identity/source; reported events never delegate work.
 - Define pure, canonical App object references without discovery, authority,
   or a presentation-specific store.
 - Define optional App effect metadata without treating declarations or
@@ -48,6 +50,7 @@ Rust, Python, Node, and Go bindings.
 | `rust/src/applet/`, `wire/v1/applet-services.md`, `wire/v1/applet-services.cases.json` | Public fixed-helper Calendar/task/telemetry client and history preflight, closed records and shared conformance cases; no OS provider or App implementation |
 | `rust/notification-presentation/`, `wire/v1/notification-presentation.md` | OS-defined rendering/preferences companion contract; no App config/UI dependency, authority store or renderer feature coupling |
 | `python/` | Python public SDK |
+| `python/src/claw_os_sdk/events.py`, `rust/src/events.rs`, `node/src/events.ts`, `go/events.go` | App-scoped reported event publication on bounded stdin, sharing existing wire decoders |
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |
 | `python/src/claw_os_sdk/generated.py` | Generated Python wire bindings |
