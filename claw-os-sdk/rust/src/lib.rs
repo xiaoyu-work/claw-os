@@ -68,6 +68,7 @@ use serde::de::DeserializeOwned;
 
 pub mod ai;
 pub mod applet;
+pub mod channels;
 pub mod envelope;
 pub mod events;
 pub mod generated;

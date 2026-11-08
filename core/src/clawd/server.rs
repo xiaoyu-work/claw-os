@@ -191,6 +191,7 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     // non-agent primitive served.
     let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown, agentd_broker);
     let _notification_dispatcher = super::notifications::spawn_external_dispatcher();
+    super::channels::spawn();
     spawn_heartbeat();
     let serve = async move {
         loop {

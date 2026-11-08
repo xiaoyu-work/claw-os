@@ -39,6 +39,37 @@ func TestAppEventPayloadUsesStdinWithoutIdentitySelectors(t *testing.T) {
 	}
 }
 
+func TestChannelReplyUsesVerifiedEventAndExplicitConfirmationOnStdin(t *testing.T) {
+	bin, argv := fakeCos(t, wireSuccess(`{"submitted":true,"delivery_confirmed":false}`), 0)
+	captured := bin + ".stdin"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argv +
+		"\ncat > " + captured + "\nprintf '%s\\n' '" + wireSuccess(`{"submitted":true,"delivery_confirmed":false}`) + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	confirm := true
+	withCos(t, bin, nil, func() {
+		result, err := ControlChannel("reply", "channel-event-synthetic", "Synthetic reply", &confirm)
+		if err != nil || result["submitted"] != true {
+			t.Fatalf("reply failed: %v %v", result, err)
+		}
+	})
+	data, err := os.ReadFile(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request["event_id"] != "channel-event-synthetic" || request["confirm"] != true || request["owner_uid"] != nil || request["recipient"] != nil {
+		t.Fatalf("invalid reply request: %v", request)
+	}
+	if got := strings.Join(readArgv(t, argv), " "); got != "--wire=1 __channel control" {
+		t.Fatalf("business data reached argv: %s", got)
+	}
+}
+
 func wireSuccess(data string) string {
 	return `{"ok":true,"wire_version":1,"data":` + data + `}`
 }

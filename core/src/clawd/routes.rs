@@ -46,7 +46,7 @@ use super::wire::{Fault, RequestId};
 use super::{
     accessibility, activities, activity_attention, activity_object_state, activity_objects,
     activity_receipts, agent_account, agent_hooks, app_events, app_services, app_sessions, audio, backup,
-    bluetooth, browser, camera, clipboard, config_editor, containers, context, context_events,
+    bluetooth, browser, camera, channels, clipboard, config_editor, containers, context, context_events,
     conversations, crash, credentials, desktop, display, event_center, file_changes, firewall, hardware,
     journal as journal_ops, location, memory, network, network_diagnostics, notifications,
     operation_previews, packages, permissions, power, printer, scheduler, security, snapshots,
@@ -1247,6 +1247,39 @@ routes! {
         run: |c| {
             let authority = c.authority()?;
             app_events::publish(c.params, c.client, authority).map_err(BrokerError::from)
+        },
+    }
+    ChannelConfigure {
+        name: "channel.configure",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Scheduler),
+        body: body::ChannelConfigure,
+        audit: &[("platform", FieldRule::Token), ("trigger_id", FieldRule::Identifier)],
+        run: |c| channels::configure(c.params, c.client).await,
+    }
+    ChannelManage {
+        name: "channel.manage",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Scheduler),
+        body: body::ChannelManage,
+        audit: &[("platform", FieldRule::Token), ("action", FieldRule::Token)],
+        run: |c| channels::manage(c.params, c.client).await,
+    }
+    SystemChannelControl {
+        name: "system.channel.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::ChannelControl,
+        audit: &[("action", FieldRule::Token), ("event_id", FieldRule::Identifier), ("text", FieldRule::Size)],
+        run: |c| {
+            let authority = c.authority()?;
+            channels::control(c.params, authority).await
         },
     }
     SystemOperations {

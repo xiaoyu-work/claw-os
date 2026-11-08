@@ -29,6 +29,7 @@ pub mod browser;
 pub mod calendar;
 pub mod camera;
 pub mod capture;
+pub mod channels;
 pub mod client;
 pub mod client_identity;
 pub mod clipboard;

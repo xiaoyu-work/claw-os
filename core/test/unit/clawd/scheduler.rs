@@ -9,12 +9,13 @@ const OWNER_UID: u32 = 4242;
 
 #[test]
 fn nearby_grants_are_bounded_and_bound_to_the_exact_peer_and_operation() {
-    let first=nearby_grant_identity(&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-a");
+    let first=owner_effect_grant_identity("nearby",&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-a");
     assert!(first.len()<128);
-    assert_eq!(first,nearby_grant_identity(&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-a"));
-    assert_ne!(first,nearby_grant_identity(&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-b"));
-    assert_ne!(first,nearby_grant_identity("another-session","uid:1000 pid:10 start:20","operation-a"));
-    assert_ne!(first,nearby_grant_identity(&"long-session".repeat(100),"uid:1000 pid:11 start:30","operation-a"));
+    assert_eq!(first,owner_effect_grant_identity("nearby",&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-a"));
+    assert_ne!(first,owner_effect_grant_identity("nearby",&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-b"));
+    assert_ne!(first,owner_effect_grant_identity("nearby","another-session","uid:1000 pid:10 start:20","operation-a"));
+    assert_ne!(first,owner_effect_grant_identity("nearby",&"long-session".repeat(100),"uid:1000 pid:11 start:30","operation-a"));
+    assert_ne!(first,owner_effect_grant_identity("channel",&"long-session".repeat(100),"uid:1000 pid:10 start:20","operation-a"));
 }
 
 fn home() -> std::path::PathBuf {

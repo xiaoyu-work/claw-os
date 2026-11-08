@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 import * as tools from "./tools";
 import * as events from "./events";
+import * as channels from "./channels";
 import {
   WireDecimal,
   WireJsonSerializationError,
@@ -31,6 +32,23 @@ test("App events keep business payload on stdin without caller identity selector
   assert.deepEqual(readFileSync(fake.argvOut, "utf8").split("\n"), ["--wire=1", "__app_event", "publish"]);
   assert.deepEqual(JSON.parse(readFileSync(captured, "utf8")), {
     event_type: "changed", key: "stable", payload: { object: "app://fs/file?id=%2Ftmp%2Ffile" },
+  });
+});
+
+test("channel replies keep only verified event text and confirmation on stdin", () => {
+  const fake = installFakeCos(wireSuccessJson('{"submitted":true,"delivery_confirmed":false}'));
+  const captured = fake.bin + ".stdin";
+  writeFileSync(fake.bin, readFileSync(fake.bin, "utf8").replace(
+    "process.stdout.write(",
+    `fs.writeFileSync(${JSON.stringify(captured)}, fs.readFileSync(0));\nprocess.stdout.write(`,
+  ));
+  const result = withCos(fake, {}, () =>
+    channels.control("reply", { eventId: "channel-event-synthetic", text: "Synthetic reply", confirm: true }),
+  );
+  assert.deepEqual(result, { submitted: true, delivery_confirmed: false });
+  assert.deepEqual(readFileSync(fake.argvOut, "utf8").split("\n"), ["--wire=1", "__channel", "control"]);
+  assert.deepEqual(JSON.parse(readFileSync(captured, "utf8")), {
+    action: "reply", event_id: "channel-event-synthetic", text: "Synthetic reply", confirm: true,
   });
 });
 

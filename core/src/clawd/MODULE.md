@@ -59,6 +59,7 @@ and agent tasks.
 | `../storage.rs` | Startup/owner-state preparation repairs only fixed, single-link root-owned memory files through pinned directory/file descriptors |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `app_events.rs` | App/source/owner-bound reported events, exact named IPC publication, durable same-key deduplication and existing trigger journal; no task authority |
+| `channels.rs`, `channels/providers.rs` | Protected human channel bindings, owner credential custody, Discord/Telegram polling, signed Slack/WhatsApp ingress and retained reply receipts; wakes existing Activity triggers, never grants task authority |
 | `activity_attention.rs` | Shared read-only Job issue/count, protected approval, and task-linked notification projection; never consent or authority |
 | `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |
 | `activity_monetary_budget.rs` | Owner-scoped monetary policy get/set/enabled controls over the shared Activity ledger |

@@ -12,7 +12,7 @@ const MAX_QUERY_LIMIT: usize = 5_000;
 pub fn append(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let source = required_string(&params, "source")?;
     if let Some(uid) = client.uid {
-        if uid != 0 && (source == super::heartbeat::SOURCE || source.starts_with("clawd.") || source.starts_with("app:")) {
+        if uid != 0 && (source == super::heartbeat::SOURCE || source.starts_with("clawd.") || source.starts_with("app:") || source.starts_with("channel:")) {
             return Err(format!("reserved context event source: {source}"));
         }
     }
