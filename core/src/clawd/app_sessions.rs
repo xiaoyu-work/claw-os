@@ -112,6 +112,7 @@ struct LauncherAuthority {
     priority: Option<String>,
     role: Option<String>,
     activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
+    task_session: Option<Arc<SessionInfo>>,
 }
 
 /// Everything the capability derivation is allowed to consult.
@@ -1384,8 +1385,6 @@ async fn validate_mcp_call_context(
     uid: u32,
     home: &std::path::Path,
 ) -> Result<(), String> {
-    use crate::agent::tools::app_gateway::McpPrincipalKind;
-
     context.validate()?;
     let caller_session = context
         .session_id
@@ -1418,6 +1417,23 @@ async fn validate_mcp_call_context(
     })
     .await
     .ok_or_else(|| "MCP App launcher session no longer exists".to_string())?;
+
+    validate_mcp_caller_session(context, launcher, transport, uid, home).await
+}
+
+async fn validate_mcp_caller_session(
+    context: &crate::agent::tools::app_gateway::McpCallContext,
+    launcher: &LauncherAuthority,
+    transport: SessionInfo,
+    uid: u32,
+    home: &std::path::Path,
+) -> Result<(), String> {
+    use crate::agent::tools::app_gateway::McpPrincipalKind;
+
+    let caller_session = context
+        .session_id
+        .as_deref()
+        .ok_or_else(|| "MCP App call omitted its caller session".to_string())?;
     if transport.pid != launcher.pid
         || transport.start_time_ticks != launcher.start_time_ticks
         || transport.pending_bind
@@ -1437,12 +1453,21 @@ async fn validate_mcp_call_context(
                 "MCP App call context does not match the authenticated Extension Host".to_string(),
             );
         }
-        let caller_id = caller_session.to_string();
-        crate::paths::with_user_override(uid, home.to_path_buf(), async move {
-            crate::proc::session_info_by_id(&caller_id)
-        })
-        .await
-        .ok_or_else(|| "MCP App caller session no longer exists".to_string())?
+        match launcher
+            .task_session
+            .as_ref()
+            .filter(|session| session.session_id == caller_session)
+        {
+            Some(session) => session.as_ref().clone(),
+            None => {
+                let caller_id = caller_session.to_string();
+                crate::paths::with_user_override(uid, home.to_path_buf(), async move {
+                    crate::proc::session_info_by_id(&caller_id)
+                })
+                .await
+                .ok_or_else(|| "MCP App caller session no longer exists".to_string())?
+            }
+        }
     };
 
     let principal_matches = match context.caller.kind {
@@ -1513,7 +1538,8 @@ async fn authenticate_launcher(
     if process_no_new_privs(pid) != Some(false) && !trusted_extension_host {
         return Err("App processes cannot manage App sessions".to_string());
     }
-    let mut launcher = launcher_authority(&sessions, pid, start_time_ticks, &home)?;
+    let mut launcher =
+        launcher_authority_for_client(&sessions, client, pid, start_time_ticks, &home)?;
     let authority_session = client
         .extension_host
         .as_ref()
@@ -1565,6 +1591,7 @@ fn launcher_authority(
                 priority: session.priority.clone(),
                 role: session.role.clone(),
                 activity: None,
+                task_session: None,
             })
         }
         None => Ok(LauncherAuthority {
@@ -1577,8 +1604,66 @@ fn launcher_authority(
             priority: None,
             role: Some(Role::Worker.name().to_string()),
             activity: None,
+            task_session: None,
         }),
     }
+}
+
+fn launcher_authority_for_client(
+    sessions: &[SessionInfo],
+    client: &ClientIdentity,
+    pid: u32,
+    start_time_ticks: Option<u64>,
+    home: &std::path::Path,
+) -> Result<LauncherAuthority, String> {
+    let Some(host) = client
+        .extension_host
+        .as_ref()
+        .filter(|host| host.purpose == crate::extension_host::protocol::HostPurpose::Task)
+    else {
+        return launcher_authority(sessions, pid, start_time_ticks, home);
+    };
+    let task_session = host
+        .task_session
+        .as_ref()
+        .ok_or_else(|| "Task Extension Host authority session is unavailable".to_string())?;
+    if client.uid != Some(host.owner_uid)
+        || client.execution_uid != Some(host.extension_uid)
+        || client.pid != Some(pid)
+        || pid != host.host_pid
+        || start_time_ticks.is_none()
+        || start_time_ticks != host.host_start_time_ticks
+        || client.start_time_ticks != start_time_ticks
+        || host.authority_session_id.as_deref() != Some(task_session.session_id.as_str())
+    {
+        return Err("Task Extension Host authority does not match its peer".to_string());
+    }
+    let transport = nearest_registered_session(sessions, pid)?
+        .ok_or_else(|| "Task Extension Host launcher session no longer exists".to_string())?;
+    if host.host_session_id.as_deref() != Some(transport.session_id.as_str())
+        || transport.parent.as_deref() != Some(task_session.session_id.as_str())
+        || transport.group.as_deref() != Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP)
+        || transport.command.first().map(String::as_str) != Some("claw-extension-host")
+        || transport.command.get(1) != Some(&host.lease_id)
+    {
+        return Err(
+            "Task Extension Host authority does not match its registered session".to_string(),
+        );
+    }
+
+    // Durable task sessions are not proc rows. Only this controller-held
+    // snapshot may fill the exact authenticated Host's ancestry locally.
+    require_non_app_session_ancestry(sessions, task_session)?;
+    let mut ancestry = sessions.to_vec();
+    if !ancestry
+        .iter()
+        .any(|session| session.session_id == task_session.session_id)
+    {
+        ancestry.push(task_session.as_ref().clone());
+    }
+    let mut launcher = launcher_authority(&ancestry, pid, start_time_ticks, home)?;
+    launcher.task_session = Some(task_session.clone());
+    Ok(launcher)
 }
 
 /// An intermediate task Host or helper session must not erase App ownership.

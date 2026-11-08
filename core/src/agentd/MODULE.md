@@ -147,6 +147,11 @@ Capabilities are derived by `clawd` from root-owned session metadata
 them, and the exact tool/provider checks still run at the execution boundary
 inside it.
 
+The private broker retains that task session snapshot for the exact task Host.
+App orchestration uses it to resolve durable caller identity without publishing
+an ambient process-registry row. App origin, registered Host identity, task
+binding and the Host's narrower capability ceiling remain enforced.
+
 ## Permission Mediation
 
 `<caps-data>/approvals` is root-owned and the worker has no broker route, so a

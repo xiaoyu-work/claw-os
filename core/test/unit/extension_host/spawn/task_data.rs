@@ -127,6 +127,7 @@ fn task_client(data: &Arc<TaskAppData>) -> ClientIdentity {
             capability_generation: data.binding.capability_generation.clone(),
             host_pid: data.binding.host_pid,
             host_start_time_ticks: data.binding.host_start_time_ticks,
+            task_session: None,
             task_app_data: Some(data.clone()),
         },
     )

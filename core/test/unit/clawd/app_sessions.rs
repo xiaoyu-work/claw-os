@@ -423,6 +423,7 @@ fn authority_for(
         priority: None,
         role: None,
         activity: None,
+        task_session: None,
     }
 }
 
@@ -1083,6 +1084,175 @@ fn launcher_ancestry_rejects_missing_parents_and_cycles() {
     assert!(launcher_authority(&[row], pid, ticks, &home()).is_err());
 }
 
+fn leased_task_host() -> (Vec<SessionInfo>, ClientIdentity) {
+    let (pid, ticks) = this_process();
+    let mut task = session_row("task-session", 0, None, home_reader_ceiling());
+    task.client.source = crate::session::SessionSource::BrokerTask;
+    let mut host = session_row(
+        "task-host",
+        pid,
+        None,
+        CapSet::from_caps([Cap::new(Verb::FS_READ, Scope::path("/home/u/sample.csv"))]),
+    );
+    host.parent = Some(task.session_id.clone());
+    host.group = Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP.to_string());
+    host.command = args(&["claw-extension-host", "task-a"]);
+    let client = ClientIdentity {
+        pid: Some(pid),
+        uid: Some(1000),
+        gid: Some(61_000),
+        execution_uid: Some(61_000),
+        start_time_ticks: ticks,
+        attended_local: false,
+        extension_host: Some(crate::clawd::client_identity::AuthenticatedExtensionHost {
+            purpose: crate::extension_host::protocol::HostPurpose::Task,
+            lease_id: "task-a".into(),
+            authority_session_id: Some(task.session_id.clone()),
+            host_session_id: Some(host.session_id.clone()),
+            owner_uid: 1000,
+            extension_uid: 61_000,
+            capability_generation: "a".repeat(16),
+            host_pid: pid,
+            host_start_time_ticks: ticks,
+            task_session: Some(Arc::new(task)),
+            task_app_data: None,
+        }),
+    };
+    (vec![host], client)
+}
+
+fn leased_task_call_context() -> crate::agent::tools::app_gateway::McpCallContext {
+    use crate::agent::tools::app_gateway::{
+        McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
+    };
+    McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        call_id: "call-task".into(),
+        trace_id: "call-task".into(),
+        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 60_000),
+        session_id: Some("task-session".into()),
+        task_id: Some("task-a".into()),
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::SystemAgent,
+            id: "task-session".into(),
+            owner_uid: 1000,
+        },
+    }
+}
+
+#[tokio::test]
+async fn leased_task_host_mcp_resolves_a_durable_caller_absent_from_proc() {
+    let (rows, client) = leased_task_host();
+    let (pid, ticks) = this_process();
+    let launcher = launcher_authority_for_client(&rows, &client, pid, ticks, &home()).unwrap();
+    assert!(launcher
+        .caps
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/home/u/sample.csv"),)));
+    assert!(!launcher
+        .caps
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/home/u/other.csv"),)));
+    assert!(!launcher
+        .caps
+        .covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("fs"))));
+    let context = leased_task_call_context();
+    context.validate().unwrap();
+    validate_mcp_caller_session(&context, &launcher, rows[0].clone(), 1000, &home())
+        .await
+        .unwrap();
+}
+
+#[test]
+fn leased_task_authority_requires_the_exact_owner_host_and_session() {
+    for mismatch in 0..7 {
+        let (rows, mut client) = leased_task_host();
+        let (pid, ticks) = this_process();
+        let mut host = client.extension_host.clone().unwrap();
+        match mismatch {
+            0 => client.uid = Some(2000),
+            1 => client.execution_uid = Some(61_001),
+            2 => host.host_pid = pid + 1,
+            3 => host.host_start_time_ticks = ticks.map(|value| value + 1),
+            4 => host.host_session_id = Some("another-host".into()),
+            5 => {
+                Arc::make_mut(host.task_session.as_mut().unwrap()).session_id =
+                    "another-session".into()
+            }
+            6 => host.task_session = None,
+            _ => unreachable!(),
+        }
+        client.extension_host = Some(host);
+        assert!(
+            launcher_authority_for_client(&rows, &client, pid, ticks, &home()).is_err(),
+            "mismatch {mismatch}"
+        );
+    }
+}
+
+#[test]
+fn leased_task_authority_preserves_app_origin_and_parent_ancestry() {
+    for origin in 0..4 {
+        let (mut rows, mut client) = leased_task_host();
+        let (pid, ticks) = this_process();
+        let task = Arc::make_mut(
+            client
+                .extension_host
+                .as_mut()
+                .unwrap()
+                .task_session
+                .as_mut()
+                .unwrap(),
+        );
+        match origin {
+            0 => task.client.source = crate::session::SessionSource::App,
+            1 => task.app_id = Some("crm".into()),
+            2 => {
+                task.parent = Some("app-owner".into());
+                rows.push(session_row(
+                    "app-owner",
+                    0,
+                    Some("crm"),
+                    home_reader_ceiling(),
+                ));
+            }
+            3 => {
+                task.client.source = crate::session::SessionSource::App;
+                rows.push(session_row("task-session", 0, None, home_reader_ceiling()));
+            }
+            _ => unreachable!(),
+        }
+        let error = launcher_authority_for_client(&rows, &client, pid, ticks, &home()).unwrap_err();
+        assert!(error.contains("cannot orchestrate"), "{error}");
+    }
+}
+
+#[tokio::test]
+async fn leased_task_mcp_context_cannot_select_another_task_or_caller() {
+    let (rows, client) = leased_task_host();
+    let (pid, ticks) = this_process();
+    let launcher = launcher_authority_for_client(&rows, &client, pid, ticks, &home()).unwrap();
+    for mismatch in 0..3 {
+        let mut context = leased_task_call_context();
+        match mismatch {
+            0 => context.task_id = Some("another-task".into()),
+            1 => {
+                context.session_id = Some("another-session".into());
+                context.caller.id = "another-session".into();
+            }
+            2 => {
+                context.caller.kind =
+                    crate::agent::tools::app_gateway::McpPrincipalKind::ExternalAgent
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            validate_mcp_caller_session(&context, &launcher, rows[0].clone(), 1000, &home())
+                .await
+                .is_err(),
+            "mismatch {mismatch}"
+        );
+    }
+}
+
 #[test]
 fn only_the_exact_broker_registered_extension_host_may_launch_under_nonewprivs() {
     let (pid, ticks) = this_process();
@@ -1401,6 +1571,7 @@ fn test_authority() -> LauncherAuthority {
         priority: None,
         role: None,
         activity: None,
+        task_session: None,
     }
 }
 
@@ -1884,6 +2055,7 @@ fn e2e_install_grants_with_ceiling(
         priority: None,
         role: None,
         activity: None,
+        task_session: None,
     };
     let handle = issue_launch_grant(
         session_id,
@@ -3840,6 +4012,7 @@ async fn cli_app_service_dispatch_rejects_an_extension_host_identity() {
         capability_generation: "a".repeat(16),
         host_pid: client.pid.unwrap_or(1),
         host_start_time_ticks: client.start_time_ticks,
+        task_session: None,
         task_app_data: None,
     });
     let error = prepare_cli_app_service_call(

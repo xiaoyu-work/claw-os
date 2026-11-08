@@ -67,6 +67,13 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "agent.account.logout",
     "agent.usage",
     "credential.oauth-refresh",
+    "channel.configure",
+    "channel.manage",
+    "nearby.control",
+    "nearby.status",
+    "system.app-event.publish",
+    "system.channel.control",
+    "system.mail.control",
     "system.audio.control",
     "system.app-permissions",
     "permission.apps",
@@ -236,6 +243,7 @@ fn every_route_owns_its_audit_metadata() {
         "task.count",
         "context.snapshot",
         "context.sources",
+        "nearby.status",
         "notification.preferences.get",
         "notification.read_all",
         "transaction.begin",
@@ -336,6 +344,7 @@ fn cli_and_private_app_service_routes_are_separate() {
         capability_generation: "a".repeat(16),
         host_pid: 42,
         host_start_time_ticks: Some(1),
+        task_session: None,
         task_app_data: None,
     });
     assert_eq!(private.authorize(&task_host), Ok(()));
@@ -388,6 +397,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         capability_generation: "a".repeat(16),
         host_pid: 42,
         host_start_time_ticks: Some(1),
+        task_session: None,
         task_app_data: None,
     });
     assert_eq!(private.authorize(&task_host), Ok(()));

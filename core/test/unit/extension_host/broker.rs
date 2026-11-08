@@ -37,7 +37,7 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
             );
         assert_eq!(child_route(route), expected, "route {}", route.name);
     }
-    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 41);
+    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 44);
     assert!(child_route(Command::SystemFileReplace.route()));
     assert!(!host_lifecycle_route(Command::SystemFileReplace));
     assert!(child_route(Command::SystemCalendarDay.route()));
@@ -288,6 +288,7 @@ fn extension_identity_preserves_owner_and_execution_uid_as_distinct_principals()
             capability_generation: "a".repeat(16),
             host_pid: pid,
             host_start_time_ticks: Some(start),
+            task_session: None,
             task_app_data: None,
         },
     );

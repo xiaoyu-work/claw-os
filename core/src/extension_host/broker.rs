@@ -96,6 +96,7 @@ pub struct ExtensionLease {
     deadline_ms: AtomicU64,
     closed: AtomicBool,
     activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
+    task_session: Option<Arc<crate::proc::SessionInfo>>,
     task_app_data: Option<Arc<super::spawn::TaskAppData>>,
 }
 
@@ -132,6 +133,7 @@ impl ExtensionLease {
             deadline_ms: AtomicU64::new(deadline_ms),
             closed: AtomicBool::new(false),
             activity: None,
+            task_session: None,
             task_app_data: None,
         }
     }
@@ -155,6 +157,11 @@ impl ExtensionLease {
         self
     }
 
+    pub(crate) fn with_task_session(mut self, session: Option<crate::proc::SessionInfo>) -> Self {
+        self.task_session = session.map(Arc::new);
+        self
+    }
+
     pub fn renew(&self, lease: Duration) -> u64 {
         let deadline = crate::agentd::grant::now_ms().saturating_add(lease.as_millis() as u64);
         self.deadline_ms.store(deadline, Ordering::SeqCst);
@@ -169,6 +176,13 @@ impl ExtensionLease {
     }
 
     fn verify_live(&self) -> Result<(), String> {
+        if let Some(session) = &self.task_session {
+            if self.purpose != crate::extension_host::protocol::HostPurpose::Task
+                || self.task_session_id.as_deref() != Some(session.session_id.as_str())
+            {
+                return Err("extension task authority does not match its lease".to_string());
+            }
+        }
         if self.closed.load(Ordering::SeqCst) {
             return Err("extension task lease is closed".to_string());
         }
@@ -483,6 +497,11 @@ async fn serve_connection(
             capability_generation: lease.capability_generation.clone(),
             host_pid: lease.host_pid,
             host_start_time_ticks: lease.host_start_time_ticks,
+            task_session: if process.pid == lease.host_pid {
+                lease.task_session.clone()
+            } else {
+                None
+            },
             task_app_data: lease.task_app_data.clone(),
         },
     );
