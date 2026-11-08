@@ -3,7 +3,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use clawd_client::system_review::{PermissionChoice, ReviewDecision, ReviewStatus, SystemReview};
+use clawd_client::system_review::{
+    PermissionChoice, ReviewAction, ReviewDecision, ReviewStatus, SystemReview,
+};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::{oneshot, watch};
@@ -78,7 +80,9 @@ pub(super) struct Snapshot {
     pub revision: String,
     pub label: String,
     pub target: String,
-    pub choice: PermissionChoice,
+    pub choice: Option<PermissionChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<ReviewAction>,
     pub phase: Phase,
     pub prompt: Option<Prompt>,
     pub message: Option<String>,
@@ -201,22 +205,48 @@ impl Controller {
         decision
             .validate_for(&review)
             .map_err(|_| "The displayed OS review is no longer valid.".to_string())?;
-        let choice = decision
-            .choices
-            .first()
-            .ok_or("OS authorization requires an explicit permission choice.")?
-            .choice;
-        let permission = review
-            .permissions
-            .first()
-            .ok_or("The OS review has no permission to authorize.")?;
+        let (choice, action, label, target) = match decision.action {
+            ReviewAction::ApplyChoices => {
+                let choice = decision
+                    .choices
+                    .first()
+                    .ok_or("OS authorization requires an explicit permission choice.")?
+                    .choice;
+                let permission = review
+                    .permissions
+                    .first()
+                    .ok_or("The OS review has no permission to authorize.")?;
+                (
+                    Some(choice),
+                    None,
+                    permission.label.clone(),
+                    permission.scope.description.clone(),
+                )
+            }
+            ReviewAction::ConfirmInstall
+            | ReviewAction::ConfirmActivation
+            | ReviewAction::ConfirmUpdate => (
+                None,
+                Some(decision.action),
+                review.subject.name.clone(),
+                format!(
+                    "{} {}",
+                    review.subject.app_id.as_deref().unwrap_or("App"),
+                    review.subject.version.as_deref().unwrap_or("")
+                ),
+            ),
+            ReviewAction::Cancel => {
+                return Err("Cancellation does not need OS authentication.".into())
+            }
+        };
         let snapshot = Snapshot {
             id: nonce()?,
             review_id: review.id.clone(),
             revision: review.revision.to_string(),
-            label: permission.label.clone(),
-            target: permission.scope.description.clone(),
+            label,
+            target,
             choice,
+            action,
             phase: Phase::Starting,
             prompt: None,
             message: None,

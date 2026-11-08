@@ -111,7 +111,10 @@ export function OsAuthorizationDialog({ initial, onFinished }: {
         <div className="grid gap-2 text-sm">
           <p className="font-medium">{current.label}</p>
           <p className="break-words"><strong>Target:</strong> {current.target}</p>
-          <p className="text-xs text-muted-foreground">{APPROVAL_LABELS[current.choice]}</p>
+          <p className="text-xs text-muted-foreground">{current.choice !== null
+            ? APPROVAL_LABELS[current.choice]
+            : current.action === "confirm_activation" ? "Confirm opening this App; no capability is granted."
+            : "Confirm the reviewed App installation; runtime permissions remain separately enforced."}</p>
         </div>
         {current.phase === "prompt" && current.prompt && !cancelling ? (
           <form id={`os-auth-${initial.id}`} onSubmit={(event) => {

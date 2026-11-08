@@ -11,6 +11,7 @@ use crate::provenance::{self, PackageKind, VerifiedPackage, VerifyOptions};
 pub(crate) mod installation;
 pub(crate) mod lint;
 pub mod permission_review;
+pub(crate) mod store;
 
 /// An app manifest loaded from `app.json`. There is one manifest format
 /// — [`caps::manifest::Manifest`](crate::caps::manifest::Manifest) — and

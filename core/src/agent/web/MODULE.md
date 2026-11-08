@@ -78,6 +78,15 @@ web UI.
 - Reuse frozen session prompts and configured history compression through the
   shared runtime.
 - Serve built UI assets without exposing credentials.
+- Provide the official App Store, retained installation/review status and
+  installed App navigation without a model request. Catalogs and immutable
+  snapshots come only from `xiaoyu-work/clawos-app`; `clawd` verifies freshness,
+  digests and publisher provenance and publishes only after protected owner
+  confirmation.
+- Host each product's signed `claw.web-app/v1` resources in a script-enabled
+  sandbox without same-origin access. View-bound nonces relay only the owning
+  App's declared MCP tools through the existing CLI App-service path, including
+  an exact package binding. App frames receive no Agent Web token or task API.
 - Keep Copilot authorization and model configuration as separate visible
   stages. Only pending/slow-down responses continue polling; failures remain
   visible after refresh, and cancellation prevents late configuration writes.
@@ -113,6 +122,8 @@ web UI.
 | `ui/src/components/activity-capability-policy.tsx`, `ui/src/lib/capability-policy.ts` | Fixed typed Normal/Ask/Deny rules, strict owner/revision/scope acknowledgements and retained stale drafts; no local capability authority |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
+| `routes/apps.rs`, `app_ui.rs` | Store adapters, protected App confirmation, view-bound signed assets and same-App MCP mediation |
+| `ui/src/pages/app-store.tsx`, `ui/src/pages/apps.tsx`, `ui/src/pages/app.tsx` | Official releases, installed identities and isolated product-owned interfaces |
 
 ## Dependencies
 

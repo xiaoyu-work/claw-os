@@ -26,7 +26,7 @@ const CONTENT_SECURITY_POLICY: &str = concat!(
     "font-src 'self'; ",
     "form-action 'none'; ",
     "frame-ancestors 'none'; ",
-    "frame-src 'none'; ",
+    "frame-src 'self'; ",
     "img-src 'self' data: https:; ",
     "manifest-src 'self'; ",
     "object-src 'none'; ",

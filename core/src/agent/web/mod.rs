@@ -39,6 +39,7 @@
 //! and refuses shared or wrong-owner state directories. Multiple desktop
 //! users run separate isolated instances.
 
+pub(super) mod app_ui;
 pub mod assets;
 pub mod auth;
 pub(super) mod authorization;
@@ -207,13 +208,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         );
     }
     if detach && !foreground_flag {
-        return spawn_detached(
-            args,
-            &bind,
-            port,
-            tls_enabled,
-            log_override.as_deref(),
-        );
+        return spawn_detached(args, &bind, port, tls_enabled, log_override.as_deref());
     }
 
     let cfg = crate::config::current_snapshot().agent.clone();
@@ -413,10 +408,7 @@ fn spawn_detached(
     log_override: Option<&std::path::Path>,
 ) -> Result<Value, String> {
     if crate::paths::current_owner_uid_override().is_some() {
-        return Err(
-            "detached agent serve cannot be started from a routed job"
-                .to_string(),
-        );
+        return Err("detached agent serve cannot be started from a routed job".to_string());
     }
     // Refuse to start a second daemon if one is already alive — the
     // user almost certainly forgot to `--stop` first.
@@ -724,11 +716,7 @@ fn write_pid_file(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn write_serve_info(
-    pid: u32,
-    address: std::net::SocketAddr,
-    scheme: &str,
-) -> Result<(), String> {
+fn write_serve_info(pid: u32, address: std::net::SocketAddr, scheme: &str) -> Result<(), String> {
     let data = serde_json::to_vec(&json!({
         "pid": pid,
         "address": address.to_string(),
@@ -746,11 +734,8 @@ fn read_serve_info() -> Option<Value> {
 }
 
 fn write_ready_file(pid: u32) -> Result<(), String> {
-    crate::agent::util::atomic_write_with_fsync(
-        &ready_path(),
-        format!("{pid}\n").as_bytes(),
-    )
-    .map_err(|error| format!("write {}: {error}", ready_path().display()))
+    crate::agent::util::atomic_write_with_fsync(&ready_path(), format!("{pid}\n").as_bytes())
+        .map_err(|error| format!("write {}: {error}", ready_path().display()))
 }
 
 fn read_ready_pid() -> Option<i32> {
@@ -824,10 +809,7 @@ impl DetachedSessionGuard {
 impl Drop for DetachedSessionGuard {
     fn drop(&mut self) {
         if let Some(session_id) = self.session_id.take() {
-            crate::proc::deregister_current_process_session(
-                &session_id,
-                "agent-web",
-            );
+            crate::proc::deregister_current_process_session(&session_id, "agent-web");
         }
     }
 }
@@ -857,25 +839,17 @@ impl Drop for PendingDetachedSessionGuard {
 }
 
 fn register_detached_session(command: &[String], local: bool) -> Result<String, String> {
-    let parent = crate::proc::current_session_info_for_caps().ok_or_else(|| {
-        "detached agent serve requires a registered parent session".to_string()
-    })?;
-    crate::caps::enforcement::require_current_session_identity(
-        &parent.session_id,
-        parent.pid,
-    )
-    .map_err(|error| {
-        format!("detached agent parent identity check failed: {error}")
-    })?;
+    let parent = crate::proc::current_session_info_for_caps()
+        .ok_or_else(|| "detached agent serve requires a registered parent session".to_string())?;
+    crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
+        .map_err(|error| format!("detached agent parent identity check failed: {error}"))?;
     if parent.app_id.is_some() {
-        return Err(
-            "an App session cannot detach the system Agent web service"
-                .to_string(),
-        );
+        return Err("an App session cannot detach the system Agent web service".to_string());
     }
-    let caps = parent.caps.clone().ok_or_else(|| {
-        "detached agent parent session has no capabilities".to_string()
-    })?;
+    let caps = parent
+        .caps
+        .clone()
+        .ok_or_else(|| "detached agent parent session has no capabilities".to_string())?;
     let session_id = format!("agent-web-{}", uuid::Uuid::new_v4().simple());
     let pid = std::process::id();
     let info = crate::proc::SessionInfo {

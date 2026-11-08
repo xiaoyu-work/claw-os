@@ -29,7 +29,7 @@ fn failure(message: String) -> Failure {
     (StatusCode::CONFLICT, Json(json!({"error":message})))
 }
 
-fn origin(headers: &HeaderMap, state: &AppState) -> Result<String, Failure> {
+pub(crate) fn origin(headers: &HeaderMap, state: &AppState) -> Result<String, Failure> {
     let value = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())

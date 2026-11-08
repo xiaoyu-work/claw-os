@@ -20,6 +20,14 @@ pub(crate) struct DirectoryInstall {
 
 impl DirectoryInstall {
     pub(crate) fn prepare(source: &Path, apps_root: &Path) -> Result<Self, String> {
+        Self::prepare_at(source, apps_root, None)
+    }
+
+    pub(crate) fn prepare_at(
+        source: &Path,
+        apps_root: &Path,
+        existing: Option<&Path>,
+    ) -> Result<Self, String> {
         if !source.is_dir() {
             return Err(format!(
                 "install source `{}` is not a directory",
@@ -42,7 +50,29 @@ impl DirectoryInstall {
             .validate_tools_against_catalog(&catalog)
             .map_err(|e| format!("manifest catalog check: {e}"))?;
 
-        let dest = apps_root.join(&manifest.id);
+        let dest = match existing {
+            Some(path) => {
+                let relative = path.strip_prefix(apps_root).map_err(|_| {
+                    "existing App destination is outside the installed App root".to_string()
+                })?;
+                let parts = relative
+                    .components()
+                    .map(|component| match component {
+                        std::path::Component::Normal(part) => part
+                            .to_str()
+                            .ok_or_else(|| "App destination must be UTF-8".to_string()),
+                        _ => Err("App destination must be a normalized relative path".to_string()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if parts.join("-") != manifest.id {
+                    return Err(
+                        "existing App destination does not retain the installed identity".into(),
+                    );
+                }
+                path.to_path_buf()
+            }
+            None => apps_root.join(&manifest.id),
+        };
         let same_path = source
             .canonicalize()
             .ok()

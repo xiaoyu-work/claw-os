@@ -322,6 +322,45 @@ pub(crate) fn app_launch(dir: &std::path::Path, id: &str) -> crate::bridge::AppL
         .unwrap_or_else(|e| panic!("bind test app {id}: {e}"))
 }
 
+pub(crate) fn signed_web_app(id: &str) -> std::sync::Arc<crate::provenance::VerifiedPackage> {
+    let dir = secure_scratch_dir("web-app").join(id);
+    std::fs::create_dir_all(dir.join("web")).unwrap();
+    std::fs::write(dir.join("app.json"), serde_json::to_vec(&serde_json::json!({
+        "id": id, "version": "1.0.0", "name": {"en": "Web fixture"}, "runtime": "python", "entry": "main.py",
+    })).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("main.py"),
+        "raise RuntimeError('inspection must not run App code')\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("web/index.html"),
+        "<!doctype html><title>Fixture</title>",
+    )
+    .unwrap();
+    std::fs::write(dir.join("web/app.js"), "window.fixtureLoaded = true;\n").unwrap();
+    std::fs::write(
+        dir.join("web-ui.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "claw.web-app/v1", "app_id": id, "source_kind": "product",
+            "source_name": "fixture", "title": "Web fixture", "description": "Signed fixture",
+            "entry": "web/index.html",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    sign_test_package(&dir, crate::provenance::PackageKind::App, id);
+    std::sync::Arc::new(
+        crate::provenance::verify::verify_package(
+            &dir,
+            &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
+                .expect_id(id),
+            &crate::provenance::trust_store(),
+        )
+        .unwrap(),
+    )
+}
+
 /// Try the same, returning the error instead of panicking.
 pub(crate) fn try_app_launch(
     dir: &std::path::Path,

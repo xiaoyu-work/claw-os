@@ -35,6 +35,25 @@ const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppStoreSelection {
+    pub app_id: Name,
+    pub sha256: Text<64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppStoreRequest {
+    pub request_id: Token<32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppStoreApp {
+    pub app_id: Name,
+}
+
 pub use clawd_client::nearby::NearbyRequest as NearbyControl;
 
 pub use crate::clawd::regional_settings::Request as RegionalSettingsControl;
@@ -1095,6 +1114,8 @@ pub struct AppServiceCliCall {
     pub app_id: Name,
     pub tool: Text<LABEL_BYTES>,
     pub arguments: super::bounded::McpArguments,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_package: Option<Structured>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

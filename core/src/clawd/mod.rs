@@ -20,6 +20,7 @@ pub mod app_events;
 pub mod app_permissions;
 pub mod app_services;
 pub mod app_sessions;
+pub mod app_store;
 pub mod audio;
 pub mod audit;
 pub mod authority;
