@@ -46,7 +46,9 @@ fn fluent_count(value: u64) -> i64 {
 impl App {
     pub(super) fn view_standalone(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let main: Element<'_, Message> = if self.nearby.is_visible() {
+        let main: Element<'_, Message> = if self.spaces.is_visible() {
+            self.spaces.view()
+        } else if self.nearby.is_visible() {
             self.nearby.view()
         } else if self.memory.is_visible() {
             self.memory.view()
@@ -954,7 +956,10 @@ impl App {
             .push(Self::brand_symbol(16.0))
             .push(text(fl!("app-name")).size(13.0))
             .push(text("/").size(13.0))
-            .push(text(if self.nearby.is_visible() {
+            .push(text(self.active_session().and_then(|session|session.workspace_id.as_deref()).unwrap_or("Personal")).size(11.0))
+            .push(text(if self.spaces.is_visible(){
+                fl!("spaces-title")
+            }else if self.nearby.is_visible() {
                 fl!("nearby-title")
             } else if self.activities.is_visible() {
                 fl!("activities")
@@ -1011,6 +1016,7 @@ impl App {
         for (index, session) in self.sessions.iter().enumerate() {
             let query = self.session_filter.trim().to_lowercase();
             if session.archived != self.show_archived_sessions
+                || session.workspace_id.as_deref()!=self.spaces.selected()
                 || (!query.is_empty()
                     && !format!(
                         "{} {}",
@@ -1023,7 +1029,7 @@ impl App {
             }
             list = list.push(Self::session_row(
                 session,
-                !self.activities.is_visible() && !self.nearby.is_visible() && index == self.sessions.active_index(),
+                !self.activities.is_visible() && !self.nearby.is_visible() && !self.spaces.is_visible() && index == self.sessions.active_index(),
                 index,
                 self.stream.is_active() && self.stream.session_index() == Some(index),
             ));
@@ -1033,6 +1039,8 @@ impl App {
         }
         let mut sidebar = Column::new()
             .push(activities)
+            .push(button::text(fl!("spaces-title")).on_press(Message::Workspaces(crate::workspaces::Message::Show)))
+            .push(button::text(fl!("spaces-personal")).on_press(Message::NewWorkspaceConversation(None)))
             .push(button::text(fl!("nearby-title")).on_press(Message::Nearby(crate::nearby::Message::Show)))
             .push(container(header).padding([
                 0u16,

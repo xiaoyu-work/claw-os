@@ -15,6 +15,7 @@ pub(super) fn apply_record(app: &mut App, record: &Value) -> Result<RecordOutcom
     if let Some(progress) = record.get("progress") {
         let kind = required_string(progress, "kind")?;
         match kind {
+            "context_read"=>{},
             "tool_start" => app.tool_started(
                 required_string(progress, "id")?,
                 required_string(progress, "name")?,

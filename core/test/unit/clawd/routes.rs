@@ -10,6 +10,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "workspace.list",
     "workspace.get",
     "workspace.control",
+    "workspace.read",
+    "workspace.index_source",
     "nearby.status",
     "nearby.control",
     "channel.configure",

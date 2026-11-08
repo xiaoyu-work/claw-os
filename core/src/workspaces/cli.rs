@@ -45,7 +45,23 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         } else if arg.starts_with("--") {
             if !matches!(
                 arg.as_str(),
-                "--revision" | "--name" | "--description" | "--context" | "--content" | "--note"
+                "--revision"
+                    | "--name"
+                    | "--description"
+                    | "--context"
+                    | "--content"
+                    | "--note"
+                    | "--limit"
+                    | "--offset"
+                    | "--max-chars"
+                    | "--source-revision"
+                    | "--link"
+                    | "--source-space"
+                    | "--job"
+                    | "--conversation"
+                    | "--notes"
+                    | "--sources"
+                    | "--expires"
             ) {
                 return Err(format!("unknown Workspace flag: {arg}"));
             }
@@ -86,6 +102,85 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
     validate_id(first)?;
     let id = first.clone();
+    if matches!(
+        command,
+        "context" | "read" | "search" | "index" | "read-note" | "index-source"
+    ) {
+        let second = positional.get(1);
+        let request = match command {
+            "context" => WorkspaceRead::Context,
+            "index" => WorkspaceRead::Index,
+            "read-note" => WorkspaceRead::Note {
+                note_id: second.ok_or("read-note requires a note UUID")?.clone(),
+                link_id: flags.remove("--link"),
+            },
+            "read" => WorkspaceRead::Source {
+                path: second
+                    .ok_or("read requires an absolute tagged path")?
+                    .clone(),
+                link_id: flags.remove("--link"),
+                offset: flags
+                    .remove("--offset")
+                    .unwrap_or_else(|| "0".into())
+                    .parse()
+                    .map_err(|_| "invalid --offset")?,
+                max_chars: flags
+                    .remove("--max-chars")
+                    .unwrap_or_else(|| "4096".into())
+                    .parse()
+                    .map_err(|_| "invalid --max-chars")?,
+                revision: flags.remove("--source-revision"),
+            },
+            "search" => WorkspaceRead::Search {
+                query: second.ok_or("search requires one quoted query")?.clone(),
+                limit: flags
+                    .remove("--limit")
+                    .unwrap_or_else(|| "10".into())
+                    .parse()
+                    .map_err(|_| "invalid --limit")?,
+            },
+            "index-source" => {
+                let tag_id = second.ok_or("index-source requires a tag UUID")?;
+                let revision: u64 = flags
+                    .remove("--revision")
+                    .ok_or("index-source requires the displayed --revision")?
+                    .parse()
+                    .map_err(|_| "invalid --revision")?;
+                if positional.len() != 2 || !flags.is_empty() {
+                    return Err("unexpected index-source arguments".into());
+                }
+                return call(
+                    Command::WorkspaceIndexSource,
+                    json!({"id":id,"tag_id":tag_id,"expected_revision":revision}),
+                );
+            }
+            _ => return Err("unsupported Workspace read".into()),
+        };
+        let count = if matches!(command, "context" | "index") {
+            1
+        } else {
+            2
+        };
+        let target = match (flags.remove("--job"), flags.remove("--conversation")) {
+            (None, None) => None,
+            (Some(id), None) => Some(ReadTarget::Job { id }),
+            (None, Some(id)) => Some(ReadTarget::Conversation { id }),
+            _ => return Err("select exactly one --job or --conversation".into()),
+        };
+        if positional.len() != count || !flags.is_empty() {
+            return Err("unexpected Workspace read arguments".into());
+        }
+        let request = ReadRequest {
+            id,
+            request,
+            target,
+        };
+        request.validate()?;
+        return call(
+            Command::WorkspaceRead,
+            serde_json::to_value(request).map_err(|error| error.to_string())?,
+        );
+    }
     let expected_revision: u64 = flags
         .remove("--revision")
         .ok_or("supply --revision from cos workspace show ID")?
@@ -161,6 +256,38 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             expected_revision,
             activity_id: second()?,
         },
+        "read-link" => {
+            let source_workspace_id = flags
+                .remove("--source-space")
+                .ok_or("read-link requires --source-space")?;
+            let target = match (flags.remove("--job"), flags.remove("--conversation")) {
+                (Some(id), None) => ReadTarget::Job { id },
+                (None, Some(id)) => ReadTarget::Conversation { id },
+                _ => return Err("select exactly one --job or --conversation".into()),
+            };
+            WorkspaceAction::ReadLink {
+                id,
+                expected_revision,
+                source_workspace_id,
+                target,
+                note_ids: serde_json::from_str(
+                    &flags.remove("--notes").unwrap_or_else(|| "[]".into()),
+                )
+                .map_err(|e| e.to_string())?,
+                sources: serde_json::from_str(
+                    &flags.remove("--sources").unwrap_or_else(|| "[]".into()),
+                )
+                .map_err(|e| e.to_string())?,
+                expires_at: flags
+                    .remove("--expires")
+                    .ok_or("read-link requires --expires RFC3339, within 24 hours")?,
+            }
+        }
+        "revoke" => WorkspaceAction::RevokeLink {
+            id,
+            expected_revision,
+            link_id: second()?,
+        },
         _ => {
             return Err(format!(
                 "unknown Workspace command: {command}; try cos workspace --help"
@@ -169,7 +296,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     };
     let expected_positionals = if matches!(
         command,
-        "tag" | "untag" | "note" | "forget-note" | "attach" | "detach"
+        "tag" | "untag" | "note" | "forget-note" | "attach" | "detach" | "revoke"
     ) {
         2
     } else {

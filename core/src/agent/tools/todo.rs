@@ -356,6 +356,9 @@ impl Tool for Todo {
     }
 
     async fn exec(&self, input: serde_json::Value) -> ToolResult {
+        if crate::workspaces::gateway::workspace_bound(){
+            return ToolResult::err("unscoped todo memory is outside this Workspace; use the current conversation and sourced Workspace reports");
+        }
         let parsed: TodoInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::err(format!("invalid todo input: {e}")),

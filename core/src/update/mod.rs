@@ -79,6 +79,9 @@ pub const SECURITY_EPOCH: u64 = 1;
 /// the supported protocol range — without pinning exact versions,
 /// which would make phased publication impossible.
 pub const ABI: u32 = 1;
+/// Paired Root/worker context gateway contract, tracked by release policy.
+pub const AGENTD_CONTEXT_PROTOCOL: u32 = 20;
+const _: () = assert!(AGENTD_CONTEXT_PROTOCOL == crate::agentd::protocol::PROTOCOL_VERSION);
 
 /// Authoritative floor state. A compiled-in absolute path: never
 /// derived from the environment, so no caller can point enforcement at
@@ -252,7 +255,7 @@ pub fn compiled_protocols() -> std::collections::BTreeMap<String, u32> {
     let mut map = std::collections::BTreeMap::new();
     map.insert(
         "agentd_worker".to_string(),
-        crate::agentd::protocol::PROTOCOL_VERSION,
+        AGENTD_CONTEXT_PROTOCOL,
     );
     map.insert(
         "broker_envelope".to_string(),

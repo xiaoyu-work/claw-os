@@ -35,6 +35,7 @@ fn app() -> App {
         },
         Conversation {
             id: "ses_001953abcdef0_123456789abc".into(),
+            workspace_id:None,
             title: "Claw terminal test".into(),
             archived: false,
             history_truncated: false,

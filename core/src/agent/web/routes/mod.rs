@@ -13,3 +13,4 @@ pub mod sessions;
 pub mod setup;
 pub mod sysinfo;
 pub mod tasks;
+pub mod workspaces;

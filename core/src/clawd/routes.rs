@@ -524,6 +524,26 @@ routes! {
         audit: &[("request",FieldRule::Size)],
         run: |c| workspaces::control(c.params,c.client).await,
     }
+    WorkspaceRead {
+        name: "workspace.read",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Context),
+        body: body::WorkspaceRead,
+        audit: &[("id",FieldRule::Token),("request",FieldRule::Size)],
+        run: |c| workspaces::read(c.params,c.client).await,
+    }
+    WorkspaceIndexSource {
+        name: "workspace.index_source",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Context),
+        body: body::WorkspaceIndexSource,
+        audit: &[("id",FieldRule::Token),("tag_id",FieldRule::Token)],
+        run: |c| workspaces::index_source(c.params,c.client).await,
+    }
     // -----------------------------------------------------------------
     // Activities: owner-scoped work records, not authority.
     // -----------------------------------------------------------------

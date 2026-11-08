@@ -33,6 +33,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
+import { workspaceApi, selectWorkspace, useWorkspaceSelection, type Workspace } from "@/lib/workspaces";
 import { useNotifications } from "@/lib/notifications";
 import { isActive, navigate, useRoute } from "@/lib/router";
 import { setTheme, useTheme, type Theme } from "@/lib/theme";
@@ -79,6 +80,7 @@ const NAV_ITEMS: Array<{
   { key: "apps", label: "Apps", icon: Package, href: "/apps" },
   { key: "app-store", label: "App Store", icon: ShoppingBag, href: "/app-store" },
   { key: "activities", label: "Activities", icon: Target, href: "/activities" },
+  { key: "workspaces", label: "Workspaces", icon: MessageSquare, href: "/workspaces" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "memory", label: "Memory", icon: Brain, href: "/memory" },
   { key: "nearby", label: "Nearby Sharing", icon: Archive, href: "/nearby" },
@@ -99,6 +101,7 @@ type Session = {
   parent_id?: string;
   manageable?: boolean;
   legacy?: boolean;
+  workspace_id?: string | null;
 };
 
 type SessionList = {
@@ -108,6 +111,8 @@ type SessionList = {
 
 export function CosSidebar({ meta }: { meta: any }) {
   const current = useRoute();
+  const selectedWorkspace = useWorkspaceSelection();
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const { unreadCount } = useNotifications();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [navOpen, setNavOpen] = useState(true);
@@ -119,6 +124,13 @@ export function CosSidebar({ meta }: { meta: any }) {
   const [busySession, setBusySession] = useState<string | null>(null);
   const [renameSession, setRenameSession] = useState<Session | null>(null);
   const [renameTitle, setRenameTitle] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => { void workspaceApi.list().then((records) => { if (!cancelled) setWorkspaces(records); })
+      .catch((error: unknown) => { if (!cancelled) setSessionError(error instanceof Error ? error.message : "Workspace picker failed"); }); };
+    load(); window.addEventListener("cos:workspaces-changed", load);
+    return () => { cancelled = true; window.removeEventListener("cos:workspaces-changed", load); };
+  }, []);
 
   const fetchSessions = useCallback(async (archived: boolean) => {
     const suffix = archived ? "?archived=true" : "";
@@ -161,11 +173,12 @@ export function CosSidebar({ meta }: { meta: any }) {
 
   const filteredSessions = useMemo(() => {
     const query = sessionSearch.trim().toLowerCase();
-    if (!query) return sessions;
-    return sessions.filter((session) =>
+    const scoped = sessions.filter((session) => (session.workspace_id ?? null) === selectedWorkspace);
+    if (!query) return scoped;
+    return scoped.filter((session) =>
       `${session.title || ""} ${session.id}`.toLowerCase().includes(query),
     );
-  }, [sessionSearch, sessions]);
+  }, [sessionSearch, sessions, selectedWorkspace]);
   const grouped = useMemo(() => {
     const sorted = filteredSessions.slice().sort(
       (left, right) =>
@@ -229,6 +242,16 @@ export function CosSidebar({ meta }: { meta: any }) {
     const updated = await updateSession(renameSession, { title });
     if (updated) setRenameSession(null);
   }
+  async function newChat() {
+    if (busySession) return;
+    setBusySession("new");
+    try {
+      const id = await workspaceApi.conversation(selectedWorkspace);
+      window.dispatchEvent(new CustomEvent("cos:sessions-changed"));
+      navigate(`/chat/${id}`);
+    } catch (cause) { setSessionError(`${cause instanceof Error ? cause.message : "Conversation creation failed"}. Creation is not replayed automatically.`); }
+    finally { setBusySession(null); }
+  }
 
   return (
     <Sidebar collapsible="offcanvas" className="border-r">
@@ -249,11 +272,17 @@ export function CosSidebar({ meta }: { meta: any }) {
           variant="default"
           size="sm"
           className="mx-2 h-8 justify-start gap-2 text-xs font-medium"
-          onClick={() => navigate("/chat")}
+          disabled={busySession !== null}
+          onClick={() => void newChat()}
         >
           <Plus className="h-3.5 w-3.5" />
           New chat
         </Button>
+        <select aria-label="Workspace for new conversations" className="mx-2 rounded-md border bg-sidebar p-2 text-xs"
+          value={selectedWorkspace ?? ""} onChange={(event) => selectWorkspace(event.target.value || null)}>
+          <option value="">Personal / unassigned conversations</option>
+          {workspaces.filter((workspace) => workspace.state === "active").map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+        </select>
       </SidebarHeader>
 
       <SidebarContent>

@@ -37,6 +37,8 @@ fn meta_round_trip_full() {
         credential_tier: Some(Role::Automator.credential_tier()),
         owner_uid: Some(1000),
         activity_id: Some("d3fa14e6-ae1b-459a-8230-13e7d26eb211".to_string()),
+        workspace_id:Some("f882527b-1aa8-4638-b8a7-2b6c1ee5c7aa".into()),
+        workspace_access_revision:Some(1),
         origin: Some(SessionOrigin::CronDelegation),
         client: SessionClient::new(SessionSource::ScheduledTrigger, false, true),
         parent_session: Some(SessionId::generate()),

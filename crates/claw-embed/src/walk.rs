@@ -17,6 +17,7 @@ use std::time::Duration;
 pub enum FsEvent {
     Upsert(PathBuf),
     Delete(PathBuf),
+    Error(String),
 }
 
 pub struct Watcher {
@@ -38,16 +39,25 @@ impl Watcher {
                         EventKind::Remove(_) => FsEvent::Delete(p),
                         _ => continue,
                     };
-                    let _ = tx_clone.send(msg);
+                    if tx_clone.send(msg).is_err() {
+                        tracing::warn!("file watcher receiver closed");
+                        return;
+                    }
+                }
+            } else if let Err(error) = res {
+                if tx_clone.send(FsEvent::Error(error.to_string())).is_err() {
+                    tracing::warn!("file watcher receiver closed after an error");
                 }
             }
         })
         .context("constructing fs watcher")?;
+        let mut watched = Vec::new();
         for d in &topdirs {
             if d.exists() {
                 watcher
                     .watch(d, RecursiveMode::Recursive)
                     .with_context(|| format!("watching {}", d.display()))?;
+                watched.push(d.clone());
             } else {
                 tracing::warn!(path = %d.display(), "topdir missing, not watching");
             }
@@ -55,14 +65,20 @@ impl Watcher {
         Ok(Self {
             _inner: watcher,
             rx,
-            topdirs,
+            topdirs: watched,
         })
     }
 
     /// Block until the next event, with a debounce timeout so the
     /// daemon can flush batched work periodically even when idle.
     pub fn recv_with_timeout(&self, dur: Duration) -> Option<FsEvent> {
-        self.rx.recv_timeout(dur).ok()
+        match self.rx.recv_timeout(dur) {
+            Ok(event) => Some(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Some(FsEvent::Error("file watcher channel disconnected".into()))
+            }
+        }
     }
 }
 
@@ -93,4 +109,72 @@ fn walk_into(dir: &Path, out: &mut Vec<PathBuf>) {
             }
         }
     }
+}
+
+pub fn walk_checked(topdirs: &[PathBuf], maximum: usize) -> Result<Vec<PathBuf>> {
+    walk_filtered(topdirs, maximum, &|_| false)
+}
+
+pub fn walk_filtered(
+    topdirs: &[PathBuf],
+    maximum: usize,
+    excluded: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>> {
+    let mut result = Vec::new();
+    let mut pending = topdirs.to_vec();
+    let mut directories = 0;
+    while let Some(directory) = pending.pop() {
+        if excluded(&directory) {
+            continue;
+        }
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tracing::warn!(path=%directory.display(),"index source directory is absent");
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspect {}", directory.display()))
+            }
+        };
+        anyhow::ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "index source directory must not be a symlink: {}",
+            directory.display()
+        );
+        directories += 1;
+        anyhow::ensure!(
+            directories <= maximum,
+            "file index sweep exceeds {maximum} directories"
+        );
+        for entry in std::fs::read_dir(&directory)
+            .with_context(|| format!("walk {}", directory.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if excluded(&path) {
+                continue;
+            }
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                anyhow::ensure!(
+                    result.len() < maximum,
+                    "file index sweep exceeds {maximum} files"
+                );
+                result.push(path);
+            }
+        }
+        anyhow::ensure!(
+            pending.len() <= maximum,
+            "file index directory queue exceeds its bound"
+        );
+    }
+    result.sort();
+    result.dedup();
+    Ok(result)
 }

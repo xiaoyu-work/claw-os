@@ -763,7 +763,7 @@ fn workspace_schemas() -> Vec<CommandSchema> {
         let mut params = if command == "list" { vec![] } else {
             vec![Param::positional("id","uuid",true,"Workspace UUID; create instead accepts a name")]
         };
-        if !matches!(command,"list" | "show" | "create") {
+        if !matches!(command,"list" | "show" | "create" | "context" | "read" | "read-note" | "search" | "index") {
             params.push(Param::flag("--revision","integer",true,"Exact Workspace revision actually displayed"));
         }
         match command {
@@ -784,7 +784,33 @@ fn workspace_schemas() -> Vec<CommandSchema> {
             "forget-note" => params.push(Param::positional("note_id","uuid",true,"Exact selected note")),
             "attach" | "detach" => params.push(Param::positional("activity_id","uuid",true,"Owned idle Activity; detach requires pause")),
             "delete" => params.push(Param::flag("--confirm","boolean",true,"Confirm shared-context deletion; original files and evidence remain")),
+            "read" => params.extend([
+                Param::positional("path","path",true,"Exact tagged UTF-8 file"),
+                Param::flag("--offset","integer",false,"Character offset"),
+                Param::flag("--max-chars","integer",false,"Page size, at most 16384 characters"),
+                Param::flag("--source-revision","string",false,"Current content digest; required for continued pages"),
+            ]),
+            "read-note"=>params.push(Param::positional("note_id","uuid",true,"Exact shared note")),
+            "search"=>params.extend([Param::positional("query","string",true,"One quoted semantic query"),
+                Param::flag("--limit","integer",false,"At most 50 hits, filtered before ranking")]),
+            "index-source"=>params.push(Param::positional("tag_id","uuid",true,"Exact displayed source tag")),
+            "revoke"=>params.push(Param::positional("link_id","uuid",true,"Exact temporary read")),
+            "read-link"=>params.extend([
+                Param::flag("--source-space","uuid",true,"Another same-owner Workspace"),
+                Param::flag("--job","uuid",false,"Exact existing Job; exclusive with --conversation"),
+                Param::flag("--conversation","string",false,"Exact canonical conversation"),
+                Param::flag("--notes","json",false,"Closed array of selected note UUIDs"),
+                Param::flag("--sources","json",false,"Closed array of exact tag_id/path file selections"),
+                Param::flag("--expires","string",true,"RFC3339 expiry within 24 hours"),
+            ]),
             _ => {}
+        }
+        if matches!(command, "read" | "read-note") {
+            params.extend([
+                Param::flag("--link", "uuid", false, "Exact temporary selection; requires one matching --job or --conversation"),
+                Param::flag("--job", "uuid", false, "Exact live Job for --link preview; exclusive with --conversation"),
+                Param::flag("--conversation", "string", false, "Exact canonical conversation for --link preview; never widens a Job-only selection"),
+            ]);
         }
         CommandSchema { command, description, params, example: match command {
             "list" => "cos workspace list",
@@ -799,6 +825,14 @@ fn workspace_schemas() -> Vec<CommandSchema> {
             "detach" => "cos workspace detach WORKSPACE_UUID ACTIVITY_UUID --revision 2",
             "archive" => "cos workspace archive WORKSPACE_UUID --revision 1",
             "restore" => "cos workspace restore WORKSPACE_UUID --revision 2",
+            "context"=>"cos workspace context WORKSPACE_UUID",
+            "read"=>"cos workspace read WORKSPACE_UUID /home/example/Documents/note.md --max-chars 4096",
+            "read-note"=>"cos workspace read-note WORKSPACE_UUID NOTE_UUID",
+            "search"=>"cos workspace search WORKSPACE_UUID \"related research\" --limit 10",
+            "index"=>"cos workspace index WORKSPACE_UUID",
+            "index-source"=>"cos workspace index-source WORKSPACE_UUID TAG_UUID --revision 2",
+            "read-link"=>"cos workspace read-link WORKSPACE_UUID --source-space SOURCE_UUID --conversation ses_001953abcdef0_123456789abc --notes '[\"NOTE_UUID\"]' --expires RFC3339 --revision 2",
+            "revoke"=>"cos workspace revoke WORKSPACE_UUID LINK_UUID --revision 3",
             _ => "cos workspace delete WORKSPACE_UUID --revision 3 --confirm",
         }}
     }).collect()

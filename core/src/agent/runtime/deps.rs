@@ -63,6 +63,7 @@ pub struct RuntimeDeps {
     curation_log: PathBuf,
     monetary_budget: Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>>,
     _auto_hook_guard: Option<Arc<super::hooks_config::AutoHookGuard>>,
+    workspace: Option<crate::workspaces::gateway::Prelude>,
 }
 
 impl RuntimeDeps {
@@ -82,6 +83,7 @@ impl RuntimeDeps {
             curation_log: crate::paths::agent_curation_log_path(),
             monetary_budget: None,
             _auto_hook_guard: None,
+            workspace: None,
         }
     }
 
@@ -192,6 +194,14 @@ impl RuntimeDeps {
         &self,
     ) -> Option<Arc<dyn super::monetary_budget::MonetaryBudgetController>> {
         self.monetary_budget.clone()
+    }
+
+    pub(crate) fn with_workspace(mut self, workspace: crate::workspaces::gateway::Prelude) -> Self {
+        self.workspace = Some(workspace);
+        self
+    }
+    pub(crate) fn workspace(&self) -> Option<&crate::workspaces::gateway::Prelude> {
+        self.workspace.as_ref()
     }
 }
 

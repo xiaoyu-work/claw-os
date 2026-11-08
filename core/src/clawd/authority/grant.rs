@@ -234,6 +234,7 @@ pub struct Subject {
     pub app_id: Option<String>,
     pub task_id: Option<String>,
     pub(crate) activity: Option<crate::caps::activity_boundary::PolicyBinding>,
+    pub(crate) workspace: Option<crate::workspaces::boundary::WorkspaceBinding>,
 }
 
 impl Subject {
@@ -259,6 +260,11 @@ impl Subject {
         activity: Option<crate::caps::activity_boundary::PolicyBinding>,
     ) -> Self {
         self.activity = activity;
+        self
+    }
+
+    pub(crate) fn with_workspace(mut self, workspace: Option<crate::workspaces::boundary::WorkspaceBinding>) -> Self {
+        self.workspace=workspace;
         self
     }
 }
@@ -412,6 +418,7 @@ pub struct Attenuation {
 pub enum AttenuationError {
     /// Activity constraints or their confirmed invocation must not be replaced.
     ActivityChanged,
+    WorkspaceChanged,
     /// The child asked for a capability the parent does not cover.
     CapabilityWiden { verb: &'static str },
     /// The child asked for `Scope::Wild` on a verb that addresses a
@@ -441,6 +448,7 @@ impl std::fmt::Display for AttenuationError {
             AttenuationError::ActivityChanged => {
                 f.write_str("child grant would replace its Activity capability boundary")
             }
+            AttenuationError::WorkspaceChanged=>f.write_str("child grant would replace its Workspace data boundary"),
             AttenuationError::CapabilityWiden { verb } => {
                 write!(f, "child grant would widen `{verb}` beyond its parent")
             }
@@ -492,6 +500,9 @@ impl Attenuation {
         }
         if self.subject.activity.is_some() && self.subject.activity != parent.subject.activity {
             return Err(AttenuationError::ActivityChanged);
+        }
+        if self.subject.workspace.is_some() && self.subject.workspace != parent.subject.workspace {
+            return Err(AttenuationError::WorkspaceChanged);
         }
         if !self.audience.is_subset_of(parent.audience) {
             return Err(AttenuationError::AudienceWiden);

@@ -54,6 +54,27 @@ pub fn prepare(
     )?;
     let fixed = request_tokens(system, &required_messages, llm_tools);
     let mut builder = ContextBuilder::new(budget, budget.input_tokens.saturating_sub(fixed));
+    if let Some(workspace) = deps.workspace() {
+        let mut section = ContextSection::new(ContextKind::Workspace,workspace.workspace_id.clone(),
+            serde_json::json!({"workspace_id":workspace.workspace_id,"name":workspace.name,
+                "revision":workspace.revision,"background":workspace.background,
+                "resources":workspace.tags,"notes_total":workspace.notes_total,
+                "tags_total":workspace.tags_total,"temporary_reads":workspace.temporary_reads,
+                "coverage":"small request snapshot, not shared conversation history; use cos_workspace for additional reads"}).to_string());
+        section.revision = workspace.revision.to_string();
+        section.read_hint = "cos_workspace command=context".into();
+        builder.required(section)?;
+        for note in &workspace.notes {
+            let mut section = ContextSection::new(
+                if note.source==crate::workspaces::NoteSource::OwnerNote {ContextKind::WorkspaceOwnerNote}
+                else {ContextKind::WorkspaceAgentReport},note.id.clone(),serde_json::to_string(note)
+                    .map_err(|e|ContextError::Source {origin:"Workspace note".into(),detail:e.to_string()})?);
+            section.revision = note.revision.to_string();
+            section.truncated = true;
+            section.read_hint = format!("cos_workspace command=note note_id={}",note.id);
+            builder.optional(section);
+        }
+    }
     if let Some(context) = transient_context.filter(|value| !value.trim().is_empty()) {
         let content = match redactor {
             Some(redactor) => redactor.redact(context.trim()),
@@ -65,7 +86,7 @@ pub fn prepare(
             content,
         ))?;
     }
-    let reminders = match deps.paths() {
+    let reminders = if deps.workspace().is_some(){Vec::new()}else{match deps.paths() {
         Some(paths) => prompt::try_build_turn_context_segments_with(
             &crate::agent::nudge::NudgeStore::new(&paths.nudges_path),
             deps.now_ms() / 1000,
@@ -78,7 +99,7 @@ pub fn prepare(
     .map_err(|detail| ContextError::Source {
         origin: "due reminders".into(),
         detail,
-    })?;
+    })?};
     for reminder in reminders {
         let content = match redactor {
             Some(redactor) => redactor.redact(&reminder.raw),
@@ -97,9 +118,11 @@ pub fn prepare(
         "cos_recall",
         "cos_recall_semantic",
         "cos_app_memory",
+        "cos_workspace",
     ]
     .into_iter()
     .filter(|name| {
+        if deps.workspace().is_some() && matches!(*name,"cos_memory"|"cos_app_memory"){return false;}
         tools.get_for(exposure, name).is_some() && llm_tools.iter().any(|tool| tool.name == *name)
     })
     .collect();
@@ -119,7 +142,7 @@ pub fn prepare(
         crate::caps::Verb::MEMORY_READ,
         crate::caps::Scope::self_ref(crate::agent::tools::SYSTEM_AGENT_MEMORY_SCOPE),
     );
-    if tools.get_for(exposure, "cos_memory").is_some()
+    if deps.workspace().is_none() && tools.get_for(exposure, "cos_memory").is_some()
         && exposure.capabilities().covers(&profile_read)
     {
         add_notes(&mut builder, deps.notes(), redactor)?;

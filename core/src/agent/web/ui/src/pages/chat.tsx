@@ -55,6 +55,7 @@ import {
 import { renderSafeMarkdown } from "@/lib/safe-markdown";
 import { notificationViewer, useConversationView } from "@/lib/conversation-view";
 import { useRoute, navigate } from "@/lib/router";
+import { workspaceId } from "@/lib/workspaces";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -78,6 +79,7 @@ export function ChatPage({ meta }: { meta: any }) {
   const route = useRoute();
   const sessionFromRoute = route.startsWith("/chat/") ? route.slice("/chat/".length) : "";
   const [sessionId, setSessionId] = useState<string>(sessionFromRoute);
+  const [workspace, setWorkspace] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<PendingImageAttachment[]>([]);
@@ -150,6 +152,7 @@ export function ChatPage({ meta }: { meta: any }) {
     for (const watcher of queueWatchersRef.current.values()) watcher.abort();
     queueWatchersRef.current.clear();
     if (!sessionFromRoute) {
+      setWorkspace(null);
       setRestoring(false);
       setAttachments([]);
       setAttachmentError(null);
@@ -174,6 +177,7 @@ export function ChatPage({ meta }: { meta: any }) {
           { signal: controller.signal },
         );
         if (cancelled) return;
+        if (!Array.isArray(response)) setWorkspace(response.workspace_id == null ? null : workspaceId(response.workspace_id));
         const rows = Array.isArray(response)
           ? response
           : response?.messages || [];
@@ -626,6 +630,7 @@ export function ChatPage({ meta }: { meta: any }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <p className="border-b px-4 py-1 text-xs text-muted-foreground">Context domain: {workspace ?? "Personal / unassigned"}. Changing the Workspace picker starts another conversation; existing history does not move.</p>
       {reconnecting && (
         <p role="status" className="border-b px-4 py-2 text-xs text-amber-600 dark:text-amber-400">
           {reconnecting}

@@ -22,6 +22,10 @@ pub enum Command {
     WorkspaceGet,
     #[serde(rename = "workspace.control")]
     WorkspaceControl,
+    #[serde(rename = "workspace.read")]
+    WorkspaceRead,
+    #[serde(rename = "workspace.index_source")]
+    WorkspaceIndexSource,
     #[serde(rename = "activity.create")]
     ActivityCreate,
     #[serde(rename = "activity.list")]
@@ -165,6 +169,8 @@ impl Command {
             Self::WorkspaceList
                 | Self::WorkspaceGet
                 | Self::WorkspaceControl
+                | Self::WorkspaceRead
+                | Self::WorkspaceIndexSource
                 | Self::SystemReviewPrepare
                 | Self::SystemReviewPending
                 | Self::SystemReviewShow
@@ -173,10 +179,12 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 70] = [
+    pub const ALL: [Self; 72] = [
         Self::WorkspaceList,
         Self::WorkspaceGet,
         Self::WorkspaceControl,
+        Self::WorkspaceRead,
+        Self::WorkspaceIndexSource,
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -251,6 +259,8 @@ impl Command {
             Self::WorkspaceList => "workspace.list",
             Self::WorkspaceGet => "workspace.get",
             Self::WorkspaceControl => "workspace.control",
+            Self::WorkspaceRead => "workspace.read",
+            Self::WorkspaceIndexSource => "workspace.index_source",
             Self::ActivityCreate => "activity.create",
             Self::ActivityList => "activity.list",
             Self::ActivityGet => "activity.get",

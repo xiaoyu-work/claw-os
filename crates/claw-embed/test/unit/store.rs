@@ -61,6 +61,40 @@ fn store_with_hash(dim: usize) -> SemanticStore {
     SemanticStore::open_in_memory(Some(e)).unwrap()
 }
 
+#[test]
+fn scoped_file_search_filters_before_reading_text_or_validating_other_scopes_vectors() {
+    let store = SemanticStore::open_in_memory(None).unwrap();
+    let response = || EmbedResponse {
+        embeddings: vec![vec![1.0,0.0]], model:"verified-fixture".into(),dim:2,usage:EmbedUsage::default(),
+    };
+    store.replace_namespace("file//home/example/A/note.txt",&[("revision:0".into(),"Allowed A".into())],response()).unwrap();
+    store.replace_namespace("file//home/example/B/private.txt",&[("revision:0".into(),"Private B".into())],response()).unwrap();
+    store.conn.lock().unwrap().execute(
+        "UPDATE semantic_docs SET model='other-model',embedding=?1 WHERE namespace=?2",
+        params![vec![0u8],"file//home/example/B/private.txt"],
+    ).unwrap();
+    let hits = store.search_scoped_with_vector(&[1.0,0.0],1,"verified-fixture",
+        &|namespace,_|namespace.starts_with("file//home/example/A/")).unwrap();
+    assert_eq!(hits.len(),1);
+    assert_eq!(hits[0].text,"Allowed A");
+}
+
+#[test]
+fn complete_source_replacement_is_atomic_and_refuses_stub_or_duplicate_chunks() {
+    let store = SemanticStore::open_in_memory(None).unwrap();
+    let response = |model: &str| EmbedResponse {
+        embeddings:vec![vec![1.0,0.0]],model:model.into(),dim:2,usage:EmbedUsage::default(),
+    };
+    store.replace_namespace("file/source",&[("first:0".into(),"Original source".into())],response("real-fixture")).unwrap();
+    assert!(store.replace_namespace("file/source",&[("second:0".into(),"Fake replacement".into())],response("stub-sha256")).is_err());
+    assert_eq!(store.get("file/source","first:0").unwrap().unwrap().text,"Original source");
+    let duplicate = EmbedResponse {
+        embeddings:vec![vec![1.0,0.0],vec![1.0,0.0]],model:"real-fixture".into(),dim:2,usage:EmbedUsage::default(),
+    };
+    assert!(store.replace_namespace("file/source",&[("same".into(),"One".into()),("same".into(),"Two".into())],duplicate).is_err());
+    assert_eq!(store.count(Some("file/source")).unwrap(),1);
+}
+
 #[tokio::test]
 async fn source_reads_do_not_embed_again_and_are_scoped_by_namespace_and_key() {
     let embedder = Arc::new(HashEmbedder::new(8));

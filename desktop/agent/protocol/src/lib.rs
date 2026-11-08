@@ -34,3 +34,4 @@ pub use scheduling_priority::*;
 pub use stream::*;
 pub use version::*;
 pub use clawd_client::nearby;
+pub use clawd_client::workspaces;

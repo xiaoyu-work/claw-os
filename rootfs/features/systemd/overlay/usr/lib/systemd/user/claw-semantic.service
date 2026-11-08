@@ -9,8 +9,8 @@ StartLimitBurst=5
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/claw-semantic-daemon
-MemoryHigh=1G
-MemoryMax=2G
+MemoryHigh=6G
+MemoryMax=8G
 CPUWeight=40
 IOWeight=40
 Nice=12

@@ -56,6 +56,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
     ("/dnd", "set or disable the UTC DND window"),
     ("/activity", "browse, open, or create an Activity"),
     ("/share", "nearby AirDrop sharing, independent of Agent tasks"),
+    ("/spaces", "Workspaces: shared context, read-only sources and independent conversations"),
     ("/session", "show current Claw identity and model"),
     ("/clear", "clear only the terminal transcript view"),
     ("/cancel", "cancel the exact current task"),
@@ -65,6 +66,7 @@ pub(super) const PALETTE_COMMANDS: &[(&str, &str)] = &[
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Command {
     Nearby(String),
+    Spaces(String),
     Help,
     New,
     Sessions,
@@ -169,6 +171,7 @@ pub(super) fn parse(value: &str) -> Option<Command> {
         .split_once(char::is_whitespace)
         .map_or((value, ""), |(name, rest)| (name, rest.trim()));
     Some(match name {
+        "spaces" | "workspaces" => Command::Spaces(rest.into()),
         "help" | "?" => Command::Help,
         "new" => Command::New,
         "sessions" => Command::Sessions,
@@ -471,6 +474,7 @@ pub(super) fn execute(
                 | Command::ActivityPriority { .. }
                 | Command::ActivityEvidence(_)
                 | Command::ActivityPreview { .. }
+                | Command::Spaces(_)
                 | Command::Session
                 | Command::Cancel
                 | Command::Quit
@@ -482,6 +486,10 @@ pub(super) fn execute(
     match command {
         Command::Nearby(rest) => {
             return Ok(Some(super::nearby::command(app, backend, rest)));
+        }
+        Command::Spaces(rest) => {
+            let action=super::workspaces::command(app,&rest)?;
+            return Ok(Some(super::workspaces::request(app,backend,action)?));
         }
         Command::Help => app.push_system(
             "/new  /sessions  /resume ID  /rename TITLE  /archive  /unarchive\n\
@@ -504,9 +512,10 @@ pub(super) fn execute(
              Enter submits text; Esc cancels the current task; queued text runs next.",
         ),
         Command::New => {
+            let workspace_id=app.conversation.workspace_id.clone();
             return Ok(Some(Request::new(
                 "Creating conversation",
-                async move { backend.create_conversation().await },
+                async move { backend.create_conversation_in_workspace(workspace_id.as_deref()).await },
                 |app, conversation| {
                     app.replace_conversation(conversation);
                     Ok(())
@@ -1407,6 +1416,24 @@ pub(super) fn confirm(
     action: ConfirmationAction,
 ) -> Request {
     match action {
+        ConfirmationAction::WorkspaceDelete {id,revision} => {
+            Request::new("Deleting Workspace",async move {
+                let value=backend.workspace_request(clawd_client::Command::WorkspaceControl,serde_json::json!({
+                    "request":{"action":"delete","id":id,"expected_revision":revision,"confirm":true},
+                })).await?;
+                let view:crate::workspaces::WorkspaceView=serde_json::from_value(value).map_err(|e|e.to_string())?;
+                view.validate()?;
+                Ok(view)
+            },|app,view|{
+                let pending=view.workspace.cleanup_pending;
+                app.spaces.selected=Some(view.workspace.id.clone());
+                app.spaces.view=Some(view);
+                app.spaces.open=true;
+                app.push_system(if pending {"Workspace sharing is deleted. Exact task retirement is pending; refresh before repeating cleanup."}
+                    else {"Workspace sharing was deleted and checked task cleanup completed. Original files and execution evidence remain."});
+                Ok(())
+            }).mutation()
+        }
         ConfirmationAction::Archive => {
             let id = app.conversation.id.clone();
             Request::new(

@@ -125,6 +125,9 @@ impl Tool for CosMemoryTool {
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
+        if crate::workspaces::gateway::workspace_bound() {
+            return ToolResult::err("global learned notes are outside this Workspace; use cos_workspace for shared notes and sourced Agent reports");
+        }
         let command = match input.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
@@ -268,7 +271,7 @@ pub(super) fn memory_result(kind: SourceKind, value: &Value) -> ToolResult {
     memory_result_with_class(kind, kind.class(), value)
 }
 
-pub(super) fn memory_result_with_class(
+pub(crate) fn memory_result_with_class(
     kind: SourceKind,
     class: TrustClass,
     value: &Value,

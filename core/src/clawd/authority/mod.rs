@@ -268,6 +268,7 @@ async fn mint_peer_session_grant(
         });
     }
 
+    let workspace;
     let activity = if session.app_id.is_some() || session.group.as_deref() == Some("mcp") {
         // Reuse held invocation authority, including service-Host calls whose
         // parent is not a durable task session. Registry data cannot restore it.
@@ -286,9 +287,15 @@ async fn mint_peer_session_grant(
                 .check()
                 .map_err(|_| AuthorityError::ActivityPolicy)?;
         }
+        if let Some(binding)=&live.subject.workspace {
+            binding.check(&[]).map_err(|_|AuthorityError::ActivityPolicy)?;
+        }
+        workspace=live.subject.workspace.clone();
         caps = live.caps.intersect(&caps);
         live.subject.activity
     } else {
+        workspace=crate::workspaces::boundary::WorkspaceBinding::for_session(uid,session_id,None)
+            .map_err(|_|AuthorityError::ActivityPolicy)?;
         crate::caps::activity_boundary::ActivityBoundary::for_session(uid, session_id)
             .map_err(|_| AuthorityError::ActivityPolicy)?
             .map(|boundary| boundary.binding())
@@ -301,7 +308,8 @@ async fn mint_peer_session_grant(
         binding: Binding::ProcessTree,
         subject: Subject::session(session_id)
             .with_app(session.app_id.clone())
-            .with_activity(activity),
+            .with_activity(activity)
+            .with_workspace(workspace),
         audience: AudienceSet::one(descriptor.audience),
         caps,
         lifetime: PEER_SESSION_GRANT_TTL,

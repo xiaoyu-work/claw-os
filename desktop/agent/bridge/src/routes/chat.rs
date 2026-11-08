@@ -55,6 +55,10 @@ fn task_submit_params(
     session_id: Option<&str>,
 ) -> Result<Value, String> {
     let mut params = json!({ "prompt": prompt });
+    if let Some(id)=request.workspace_id.as_deref(){
+        cos_agent_protocol::workspaces::validate_id(id)?;
+        params["workspace_id"]=json!(id);
+    }
     if !request.attachments.is_empty() {
         params["attachments"] = serde_json::to_value(&request.attachments)
             .map_err(|error| format!("encoding image attachments: {error}"))?;

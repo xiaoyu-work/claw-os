@@ -3,6 +3,7 @@ import { readActivityReceipts } from "@/lib/activity-receipts";
 import { nullableString, record, strings } from "@/lib/api-shapes";
 import { readOperationPreview, type OperationInvocation } from "@/lib/operation-preview";
 import { readObjectState, readObjectStateEntry, type ObjectStateDraft } from "@/lib/object-state";
+import { workspaceId } from "@/lib/workspaces";
 
 export const ACTIVITY_STATES = ["active", "paused", "completed", "cancelled"] as const;
 export type ActivityState = (typeof ACTIVITY_STATES)[number];
@@ -39,6 +40,7 @@ export type ActivityDetail = {
   activity: Activity;
   jobs: ActivityJob[];
   sessions: string[];
+  workspace_id?: string | null;
 };
 export type ActivityRun = {
   prompt?: string;
@@ -158,7 +160,8 @@ export function readActivityDetail(value: unknown, id: string): ActivityDetail {
       || !value.jobs.every(isActivityJob) || !strings(value.sessions)) {
     throw new Error("Invalid Activity detail from the server.");
   }
-  return { schema: 1, activity: value.activity, jobs: value.jobs, sessions: value.sessions };
+  const workspace = value.workspace_id == null ? null : workspaceId(value.workspace_id);
+  return { schema: 1, activity: value.activity, jobs: value.jobs, sessions: value.sessions, workspace_id: workspace };
 }
 
 function isObjectDescription(value: unknown): value is ObjectDescription {

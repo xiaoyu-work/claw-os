@@ -72,6 +72,8 @@ impl ConversationLookup {
 pub(super) struct CreateRequest {
     #[serde(default)]
     pub(super) title: Option<String>,
+    #[serde(default)]
+    pub(super) workspace_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +131,10 @@ pub(super) struct ConversationMetadata {
     pub(super) deleted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) activity_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

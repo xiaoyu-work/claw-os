@@ -96,6 +96,7 @@ web UI.
 | Path | Role |
 | --- | --- |
 | `routes/` | HTTP and SSE endpoint handlers |
+| `routes/workspaces.rs`, `ui/src/lib/workspaces.ts`, `ui/src/pages/workspaces.tsx` | Shared owner Workspace CRUD, source/search/index and temporary-read controls with strict bounded decoding and decimal-string revisions |
 | `routes/memory.rs`, `ui/src/pages/memory.tsx` | Same-owner memory inspection, checked learned-note editing and explicit forgetting through the shared broker |
 | `routes/approvals/presentation.rs`, `ui/src/components/chat-approvals.tsx` | Shared readable capability-review projection, same-task discovery, exact displayed-revision decisions and helper delegation |
 | `authorization.rs`, `authorization/polkit.rs`, `routes/approvals/authorization.rs` | Ephemeral browser-bound polkit/PAM conversation, fixed OS helpers, deadlines/cancellation and root-broker outcome reconciliation |
@@ -230,6 +231,13 @@ time and OS evidence; result previews and errors stay inert text. See
 [`docs/execution-receipts.md`](../../../../docs/execution-receipts.md).
 
 ## Tests
+
+The Workspace page and new-conversation picker use only `workspace.*` and
+canonical conversation broker routes. Selection and drafts are presentation
+state, not sharing or lifecycle authority. Mutations retain exact displayed
+revisions, abortable reads reject stale generations, and failures never replay
+writes. Workspace management remains available before model setup. See
+[Workspaces](../../../../docs/workspaces.md).
 
 Run relevant Rust route tests and, for UI changes, the existing UI package
 build/test commands from `ui/`.

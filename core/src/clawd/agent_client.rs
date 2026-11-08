@@ -28,7 +28,15 @@ pub fn ask_in_session_with_timeout(
     session_id: Option<&str>,
     timeout_ms: u64,
 ) -> Result<Value, String> {
+    ask_in_space(prompt,session_id,None,timeout_ms)
+}
+
+pub fn ask_in_space(prompt:&str,session_id:Option<&str>,workspace_id:Option<&str>,timeout_ms:u64) -> Result<Value,String> {
     let mut params = json!({ "prompt": prompt });
+    if let Some(id) = workspace_id {
+        crate::workspaces::validate_id(id)?;
+        params["workspace_id"]=json!(id);
+    }
     if let Some(session_id) = session_id {
         params["session_id"] = json!(session_id);
     }
@@ -92,7 +100,7 @@ fn service_help() -> Value {
     json!({
         "backend": "clawd",
         "subcommands": [
-            "submit  \"<prompt>\" [--session ID] [--after-task ID] [--activity ID] [--workspace PATH] [--max-turns N] [--model ID]",
+            "submit  \"<prompt>\" [--session ID] [--after-task ID] [--activity ID] [--space WORKSPACE_UUID] [--workspace PATH] [--max-turns N] [--model ID]",
             "list    [--status pending|running|ok|error|cancelled] [--activity ID] [--limit N]",
             "status  [<task_id>]",
             "result  <task_id> [--wait-secs N]",
@@ -120,6 +128,7 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
     let mut activity_id: Option<String> = None;
     let mut after_task_id: Option<String> = None;
     let mut workspace: Option<String> = None;
+    let mut workspace_id: Option<String> = None;
     let mut max_turns: Option<u32> = None;
     let mut model: Option<String> = None;
     let mut i = 0usize;
@@ -156,6 +165,12 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
                         .clone(),
                 );
                 i += 2;
+            }
+            "--space" | "--workspace-id" => {
+                let id = args.get(i+1).ok_or("--space requires a Workspace UUID")?;
+                crate::workspaces::validate_id(id)?;
+                workspace_id=Some(id.clone());
+                i+=2;
             }
             "--max-turns" => {
                 let v = args.get(i + 1).ok_or("--max-turns needs a value")?;
@@ -196,6 +211,7 @@ fn service_submit_params(args: &[String]) -> Result<Value, String> {
     if let Some(workspace) = workspace {
         params["workspace"] = json!(workspace);
     }
+    if let Some(id) = workspace_id { params["workspace_id"]=json!(id); }
     if let Some(max_turns) = max_turns {
         params["max_turns"] = json!(max_turns);
     }

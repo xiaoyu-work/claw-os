@@ -28,6 +28,7 @@ import { NearbyPage } from "@/pages/nearby";
 import { AppStorePage } from "@/pages/app-store";
 import { AppsPage } from "@/pages/apps";
 import { AppPage } from "@/pages/app";
+import { WorkspacesPage } from "@/pages/workspaces";
 
 export default function App() {
   const [meta, setMeta] = useState<any>(null);
@@ -80,6 +81,7 @@ function Header() {
 function routeTitle(route: string): string {
   if (route.startsWith("/app-store")) return "App Store";
   if (route.startsWith("/apps")) return "Apps";
+  if (route.startsWith("/workspaces")) return "Workspaces";
   if (route.startsWith("/nearby")) return "Nearby Sharing";
   if (route.startsWith("/activities")) return "Activities";
   if (route.startsWith("/tasks")) return "Tasks";
@@ -98,6 +100,7 @@ function Router({ meta }: { meta: any }) {
   if (route.startsWith("/app-store")) return <AppStorePage />;
   if (route.startsWith("/apps/")) return <AppPage />;
   if (route === "/apps") return <AppsPage />;
+  if (route.startsWith("/workspaces")) return <WorkspacesPage />;
   if (route.startsWith("/nearby")) return <NearbyPage />;
   if (route.startsWith("/activities")) return <ActivitiesPage />;
   if (route.startsWith("/tasks")) return <TasksPage />;

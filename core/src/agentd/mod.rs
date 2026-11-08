@@ -87,6 +87,8 @@ pub mod grant;
 pub mod guard;
 pub mod protocol;
 #[cfg(unix)]
+mod context;
+#[cfg(unix)]
 mod receipts;
 #[cfg(unix)]
 pub mod spawn;

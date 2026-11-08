@@ -24,6 +24,23 @@ pub(crate) fn connect_bridge() -> Task<Message> {
     )
 }
 
+pub(crate) fn workspace_task(endpoint:BridgeEndpoint,request:crate::workspaces::Request)->Task<Message>{
+    let generation=request.generation;
+    Task::perform(async move{
+        use crate::workspaces::{Action,Response};
+        let result=match request.action{
+            Action::List=>crate::bridge::workspaces::list(endpoint).await.map(Response::List),
+            Action::Get(id)=>crate::bridge::workspaces::get(endpoint,&id).await.map(Response::View),
+            Action::Origin(id)=>crate::bridge::workspaces::get(endpoint,&id).await.map(Response::Origin),
+            Action::Control(action)=>crate::bridge::workspaces::control(endpoint,action).await.map(Response::View),
+            Action::Read(id,request)=>crate::bridge::workspaces::read(endpoint,&id,request).await.map(Response::Read),
+            Action::Preview(id,request,target)=>crate::bridge::workspaces::preview(endpoint,&id,request,target).await.map(Response::Read),
+            Action::Index(request)=>crate::bridge::workspaces::index_source(endpoint,request).await.map(Response::Index),
+        };
+        result.map(Box::new).map_err(|error|format!("{error:#}"))
+    },move|result|cosmic::Action::App(Message::Workspaces(crate::workspaces::Message::Fetched(generation,result))))
+}
+
 pub(crate) fn fetch_models_task(endpoint: BridgeEndpoint) -> Task<Message> {
     Task::perform(
         async move {

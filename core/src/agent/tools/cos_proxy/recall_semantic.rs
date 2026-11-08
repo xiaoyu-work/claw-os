@@ -31,14 +31,16 @@ const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 50;
 
 pub struct CosRecallSemanticTool {
-    store: Arc<SemanticStore>,
+    store: Option<Arc<SemanticStore>>,
     memory: MemoryDb,
 }
 
 impl CosRecallSemanticTool {
     pub fn new(store: Arc<SemanticStore>, memory: MemoryDb) -> Self {
-        Self { store, memory }
+        Self { store:Some(store), memory }
     }
+
+    pub(crate) fn brokered(memory: MemoryDb) -> Self { Self {store:None,memory} }
 }
 
 #[async_trait]
@@ -54,6 +56,8 @@ impl Tool for CosRecallSemanticTool {
          given, restricts to that conversation; with `session_id` omitted \
          (recommended for cross-app recall), scans every namespace including \
          `app/<source>` rows produced by calendar/email/search/gateway/etc. \
+         Root further constrains namespaces and source reads to the current Workspace \
+         or unassigned domain before ranking; temporary context is not transitive. \
          Use when the user paraphrases something they said or did earlier. \
          For exact-word search prefer `cos_recall`; for source-filtered \
          structured app-fact queries prefer `cos_app_memory`; for durable \
@@ -232,10 +236,21 @@ impl Tool for CosRecallSemanticTool {
             return ToolResult::err(denial.to_string());
         }
 
+        if crate::workspaces::gateway::available() {
+            let read = match serde_json::from_value(input) {
+                Ok(input) => crate::workspaces::gateway::ContextOperation::SemanticRecall { input },
+                Err(error) => return ToolResult::err(format!("invalid bounded semantic recall: {error}")),
+            };
+            return match crate::workspaces::gateway::request(read).await {
+                Ok(value) => super::memory::memory_result_with_class(SourceKind::RecalledMemory,TrustClass::LegacyUnknown,&value),
+                Err(error) => ToolResult::err(error),
+            };
+        }
+        let Some(store) = &self.store else { return ToolResult::err("Root semantic recall gateway is unavailable"); };
         match command.as_str() {
             "search" => {
                 let ns = namespace.as_deref();
-                match self.store.search(ns, &query, limit + 1).await {
+                match store.search(ns, &query, limit + 1).await {
                     Ok(hits) => {
                         let mut replayable = Vec::with_capacity(hits.len());
                         for hit in hits {
@@ -289,7 +304,7 @@ impl Tool for CosRecallSemanticTool {
                         ))
                     }
                 }
-                match self.store.get(namespace, key) {
+                match store.get(namespace, key) {
                     Ok(Some(row)) => {
                         let page = match window.page(&row.text) {
                             Ok(page) => page,
@@ -316,7 +331,7 @@ impl Tool for CosRecallSemanticTool {
             }
             "count" => {
                 let ns = namespace.as_deref();
-                match self.store.count(ns) {
+                match store.count(ns) {
                     Ok(n) => {
                         let v = json!({
                             "namespace": ns,

@@ -40,6 +40,7 @@ pub(super) struct ConversationJob {
 #[derive(Clone, Debug)]
 pub(super) struct Conversation {
     pub id: String,
+    pub workspace_id: Option<String>,
     pub title: String,
     pub archived: bool,
     pub history_truncated: bool,
@@ -489,6 +490,13 @@ pub(super) trait Backend: Send + Sync {
         session_id: Option<&str>,
     ) -> Result<Conversation, InitialConnectionError>;
     async fn create_conversation(&self) -> Result<Conversation, String>;
+    async fn create_conversation_in_workspace(&self,workspace:Option<&str>)->Result<Conversation,String> {
+        if workspace.is_some(){return Err("Workspace conversation creation is unavailable".into());}
+        self.create_conversation().await
+    }
+    async fn workspace_request(&self,_command:clawd_client::Command,_params:Value)->Result<Value,String>{
+        Err("Workspaces are unavailable".into())
+    }
     async fn get_conversation(&self, id: &str) -> Result<Conversation, String>;
     async fn list_conversations(&self) -> Result<ConversationList, String>;
     async fn update_conversation(
@@ -672,6 +680,24 @@ impl Backend for BrokerBackend {
             self.call(Command::AgentConversationCreate, json!({}))
                 .await?,
         )
+    }
+    async fn create_conversation_in_workspace(&self,workspace:Option<&str>)->Result<Conversation,String> {
+        let mut params=json!({});
+        if let Some(id)=workspace{crate::workspaces::validate_id(id)?;params["workspace_id"]=json!(id);}
+        let conversation=parse_conversation(self.call(Command::AgentConversationCreate,params).await?)?;
+        if conversation.workspace_id.as_deref()!=workspace{return Err("Workspace conversation acknowledgement mismatch".into());}
+        Ok(conversation)
+    }
+    async fn workspace_request(&self,command:clawd_client::Command,params:Value)->Result<Value,String>{
+        let command=match command{
+            clawd_client::Command::WorkspaceList=>Command::WorkspaceList,
+            clawd_client::Command::WorkspaceGet=>Command::WorkspaceGet,
+            clawd_client::Command::WorkspaceControl=>Command::WorkspaceControl,
+            clawd_client::Command::WorkspaceRead=>Command::WorkspaceRead,
+            clawd_client::Command::WorkspaceIndexSource=>Command::WorkspaceIndexSource,
+            _=>return Err("not a human Workspace command".into()),
+        };
+        self.call(command,params).await
     }
 
     async fn get_conversation(&self, id: &str) -> Result<Conversation, String> {
@@ -2197,6 +2223,7 @@ fn parse_conversation(value: Value) -> Result<Conversation, String> {
         })?;
     Ok(Conversation {
         id: required_string(value, "id")?,
+        workspace_id: optional_string(value,"workspace_id"),
         title: value
             .get("title")
             .and_then(Value::as_str)

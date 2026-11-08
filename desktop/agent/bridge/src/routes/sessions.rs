@@ -48,6 +48,10 @@ struct Conversation {
     #[serde(default)]
     parent_id: Option<String>,
     #[serde(default)]
+    workspace_id:Option<String>,
+    #[serde(default)]
+    activity_id:Option<String>,
+    #[serde(default)]
     messages: Vec<HistoryMessage>,
     #[serde(default)]
     message_count: u64,
@@ -106,8 +110,20 @@ pub async fn list(
                 }),
         );
     }
+
     sessions.sort_by_key(|session| std::cmp::Reverse(session.last_ts_ms.unwrap_or_default()));
     Ok(Json(sessions))
+}
+
+pub async fn create(State(state):State<AppState>,Json(request):Json<cos_agent_protocol::SessionCreateRequest>)->Result<Json<SessionSummary>,ApiError>{
+    if let Some(id)=request.workspace_id.as_deref() {
+        cos_agent_protocol::workspaces::validate_id(id).map_err(|error|ApiError::new(StatusCode::BAD_REQUEST,ErrorCode::InvalidRequest,error))?;
+    }
+    let value=state.clawd.call(Command::AgentConversationCreate,serde_json::to_value(&request).map_err(|error|ApiError::bad_gateway(error.to_string()))?).await
+        .map_err(|error|ApiError::service_unavailable(error.to_string()))?;
+    let session=summary(parse_conversation(value)?,true,false)?;
+    if session.workspace_id!=request.workspace_id{return Err(ApiError::bad_gateway("Workspace conversation acknowledgement mismatch"));}
+    Ok(Json(session))
 }
 
 pub async fn get(
@@ -208,6 +224,7 @@ pub async fn history(
             translation::sanitize_task_presentations(&mut jobs);
             Ok(Json(HistoryResponse {
                 session_id: conversation.id,
+                workspace_id:conversation.workspace_id,
                 n: messages.len(),
                 messages,
                 jobs,
@@ -277,6 +294,8 @@ fn summary(
         manageable,
         legacy,
         parent_id: conversation.parent_id,
+        workspace_id:conversation.workspace_id,
+        activity_id:conversation.activity_id,
     })
 }
 

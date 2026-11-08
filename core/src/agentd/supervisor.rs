@@ -546,6 +546,10 @@ async fn supervise(
         },
         None => (None, ConsentContext::Unattended),
     };
+    if let Err(error) = crate::workspaces::association::check_job(&job) {
+        finish_error(&store,job,&error);
+        return Ok(());
+    }
     let mut effective_client = if job.client.source != crate::session::SessionSource::Unknown {
         job.client
     } else {
@@ -559,6 +563,12 @@ async fn supervise(
     effective_client.attended = false;
     if let Some(session) = session.as_mut() {
         session.client = effective_client;
+        if let Some(existing) = session.caps.as_ref() {
+            match crate::workspaces::boundary::restrict_caps(&job,existing) {
+                Ok(caps) => session.caps=Some(caps),
+                Err(error) => { finish_error(&store,job,&error); return Ok(()); }
+            }
+        }
     }
 
     let workspace = match crate::agent::workspace::resolve(owner_uid, job.workspace.as_deref()) {
@@ -1228,8 +1238,9 @@ async fn pump(
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
             workspace: workspace.to_string_lossy().into_owned(),
+            workspace_id: job.workspace_id.clone(),
             record_activity_receipts: job.activity_id.is_some(),
-            activity_capability_checks: job.activity_id.is_some(),
+            activity_capability_checks: job.activity_id.is_some() || job.workspace_id.is_some(),
             activity_monetary_checks: job.activity_id.is_some(),
             activity_work: job.activity_work_generation.is_some(),
         },
@@ -1302,6 +1313,9 @@ async fn pump(
             return TaskOutcome::Failed(error);
         }
     }
+    if let Err(error) = crate::workspaces::association::check_job(job) {
+        return TaskOutcome::Failed(error);
+    }
     match execution_limits.check_now(job) {
         Ok(None) => {}
         Ok(Some(reason)) | Err(reason) => return TaskOutcome::Failed(reason),
@@ -1360,6 +1374,7 @@ async fn pump(
     let mut next_boundary_check = Instant::now();
     let mut receipts_used: u32 = 0;
     let mut monetary_exchanges: u32 = 0;
+    let mut context_exchanges: u32 = 0;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1421,10 +1436,14 @@ async fn pump(
                             } else {
                                 &mut approvals_used
                             };
-                            let mut reply = crate::caps::activity_boundary::scope(
+                            let mut reply = if let Err(error) = crate::workspaces::boundary::task_capability(
+                                job,&crate::caps::Cap::new(crate::caps::Verb::parse(exchange.ask.verb()).unwrap_or(crate::caps::Verb::FS_READ),exchange.ask.scope().clone()),
+                            ) {
+                                ApprovalReply::Refused {message:error}
+                            } else { crate::caps::activity_boundary::scope(
                                 activity_boundary.clone(),
                                 async { mediate_approval(used, &lease, &exchange.ask) },
-                            ).await;
+                            ).await };
                             if let ApprovalReply::Pending {
                                 request_id: Some(request_id),
                             } = &reply
@@ -1580,7 +1599,23 @@ async fn pump(
                                 ));
                             }
                         }
+                        WorkerFrame::Context(request) => {
+                            let reply = match super::context::read(
+                                &mut context_exchanges,store,job,&request,shutdown,lease.deadline,cancel_sent,
+                            ).await {
+                                Ok(reply) => reply,
+                                Err(error) => return TaskOutcome::Failed(error),
+                            };
+                            if let Err(error) = send(&mut writer,&BrokerFrame::ContextReply {
+                                correlation_id:request.correlation_id,nonce:request.nonce,reply,
+                            }).await {
+                                return TaskOutcome::Indeterminate(format!("could not acknowledge Root context read: {error}"));
+                            }
+                        }
                         WorkerFrame::Result { outcome, .. } => {
+                            if let Err(error) = crate::workspaces::association::check_job(job) {
+                                return TaskOutcome::Failed(error);
+                            }
                             if let Some(reason) = execution_stop_reason {
                                 return TaskOutcome::Failed(reason);
                             }
@@ -1657,6 +1692,11 @@ async fn pump(
                 return post_assignment_interruption(detail, cancel_sent);
             },
             _ = ticker.tick() => {
+                if execution_stop_reason.is_none() {
+                    if let Err(error) = crate::workspaces::association::check_job(job) {
+                        execution_stop_reason = Some(error);
+                    }
+                }
                 if !cancel_sent {
                     let mut stop = match execution_limits.check(job) {
                         Ok(reason) => reason,
@@ -1864,6 +1904,13 @@ fn accept(
     }
     if frame.task_id() != Some(lease.task_id.as_str()) {
         return Err("frame is addressed to a different task".to_string());
+    }
+    if let WorkerFrame::Context(request) = frame {
+        if request.correlation_id == 0 || request.nonce.len()!=32
+            || !request.nonce.bytes().all(|b|b.is_ascii_hexdigit()) {
+            return Err("invalid task context correlation".into());
+        }
+        request.operation.validate()?;
     }
     if let WorkerFrame::Approval {
         correlation_id,

@@ -53,6 +53,7 @@ use super::protocol::{
     FrameReader, MonetaryBudgetOperation, MonetaryBudgetReply, MonetaryBudgetRequest,
     ProgressRecord, ReceiptReply, ReceiptRequest, RuntimeAuditRecord, WorkerFrame, WorkerHello,
     WorkerOutcome, WorkerPrepared,
+    ContextReply, ContextRequest,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -291,12 +292,14 @@ struct ChannelState {
     waiters: Mutex<HashMap<u64, ApprovalWaiter>>,
     receipt_waiters: Mutex<HashMap<u64, SyncSender<ReceiptReply>>>,
     monetary_waiters: Mutex<HashMap<u64, SyncSender<MonetaryBudgetReply>>>,
+    context_waiters: Mutex<HashMap<u64, (String, SyncSender<ContextReply>)>>,
     pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
     boundaries_used: AtomicU32,
     receipts_used: AtomicU32,
     monetary_used: AtomicU32,
+    context_used: AtomicU32,
 }
 
 #[derive(Debug)]
@@ -351,6 +354,9 @@ impl ChannelState {
         if let Ok(mut waiters) = self.monetary_waiters.lock() {
             waiters.remove(&correlation_id);
         }
+        if let Ok(mut waiters) = self.context_waiters.lock() {
+            waiters.remove(&correlation_id);
+        }
     }
 
     fn deliver(&self, correlation_id: u64, exchange: &ApprovalExchange, reply: ApprovalReply) {
@@ -387,9 +393,22 @@ impl ChannelState {
         }
     }
 
+    fn deliver_context(&self,correlation_id:u64,nonce:&str,reply:ContextReply){
+        if let Ok(mut waiters)=self.context_waiters.lock(){
+            if waiters.get(&correlation_id).is_some_and(|(expected,_)|expected==nonce){
+                if let Some((_,waiter))=waiters.remove(&correlation_id){let _=waiter.try_send(reply);}
+            }
+        }
+    }
+
     /// Wake every outstanding waiter so a cancelled or disconnected task
     /// cannot leave a tool call blocked until its timeout.
     fn refuse_all(&self, message: &str) {
+        if let Ok(mut waiters) = self.context_waiters.lock() {
+            for (_, (_,waiter)) in waiters.drain() {
+                let _ = waiter.try_send(ContextReply::Refused { message: message.into() });
+            }
+        }
         let drained: Vec<SyncSender<ApprovalReply>> = self
             .waiters
             .lock()
@@ -456,12 +475,14 @@ impl ChannelIo {
             waiters: Mutex::new(HashMap::new()),
             receipt_waiters: Mutex::new(HashMap::new()),
             monetary_waiters: Mutex::new(HashMap::new()),
+            context_waiters: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
             boundaries_used: AtomicU32::new(0),
             receipts_used: AtomicU32::new(0),
             monetary_used: AtomicU32::new(0),
+            context_used: AtomicU32::new(0),
         });
         let (handshake_tx, handshake_rx) = sync_channel(1);
         let io_state = state.clone();
@@ -867,6 +888,16 @@ where
             })) => {
                 state.deliver_monetary(correlation_id, reply);
             }
+            Ok(Some(BrokerFrame::ContextReply { correlation_id, nonce, reply })) => {
+                let valid_size = serde_json::to_vec(&reply).is_ok_and(|bytes|
+                    bytes.len() <= crate::workspaces::gateway::MAX_REPLY_BYTES);
+                if !valid_size {
+                    state.cancelled.store(true,Ordering::SeqCst);
+                    state.refuse_all("task context reply exceeds its disclosure budget");
+                    break;
+                }
+                state.deliver_context(correlation_id,&nonce,reply);
+            }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => {
                 state.cancelled.store(true, Ordering::SeqCst);
                 crate::agent::runtime::interrupt::signal(&task_id);
@@ -1156,6 +1187,39 @@ impl ChannelMonetaryBudgetController {
 // Execution
 // ---------------------------------------------------------------------------
 
+struct ChannelContextGateway {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+impl crate::workspaces::gateway::ContextGateway for ChannelContextGateway {
+    fn request(&self, operation: crate::workspaces::gateway::ContextOperation) -> Result<Value,String> {
+        operation.validate()?;
+        if self.state.context_used.fetch_add(1,Ordering::SeqCst) >= crate::workspaces::gateway::MAX_EXCHANGES {
+            return Err("task context exchange budget exhausted".into());
+        }
+        if self.state.cancelled.load(Ordering::SeqCst) { return Err("task is cancelled".into()); }
+        let correlation_id = self.state.next_correlation.fetch_add(1,Ordering::SeqCst);
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let (tx,rx) = sync_channel(1);
+        self.state.context_waiters.lock().map_err(|_|"context reply registry is poisoned")?
+            .insert(correlation_id,(nonce.clone(),tx));
+        if self.state.tx.send(WorkerFrame::Context(Box::new(ContextRequest {
+            task_id:self.task_id.clone(),correlation_id,nonce,operation,
+        }))).is_err() {
+            self.state.forget(correlation_id);
+            return Err("Root task context channel was lost".into());
+        }
+        let reply = rx.recv_timeout(Duration::from_secs(120));
+        self.state.forget(correlation_id);
+        match reply {
+            Ok(ContextReply::Data { value }) => Ok(value),
+            Ok(ContextReply::Refused { message }) => Err(message),
+            Err(error) => Err(format!("Root context acknowledgement unavailable: {error}")),
+        }
+    }
+}
+
 async fn execute(
     assignment: Assignment,
     tx: UnboundedSender<WorkerFrame>,
@@ -1164,6 +1228,11 @@ async fn execute(
 ) -> WorkerOutcome {
     let job = assignment.job;
     let task_id = job.id.clone();
+    if let Err(message) = crate::workspaces::gateway::install(Arc::new(ChannelContextGateway {
+        task_id:task_id.clone(),state:state.clone(),
+    }), job.workspace_id.is_some()) {
+        return WorkerOutcome::Error { message };
+    }
 
     let hooks = hooks::HookRegistry::new();
     hooks.register(Arc::new(WorkerAuditHook {
@@ -1201,6 +1270,7 @@ async fn execute(
         context: job.context,
         branch_context: job.branch_context,
         workspace: Some(job.workspace),
+        workspace_id: job.workspace_id,
         session_id: job.session_id,
         max_turns: job.max_turns,
         requested_model: job.requested_model,

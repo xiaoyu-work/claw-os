@@ -24,6 +24,9 @@ pub enum ContextKind {
     Discovery,
     UserNotes,
     MemoryNotes,
+    Workspace,
+    WorkspaceOwnerNote,
+    WorkspaceAgentReport,
 }
 
 impl ContextKind {
@@ -34,6 +37,9 @@ impl ContextKind {
             Self::Discovery => SourceKind::BuiltinToolMetadata,
             Self::UserNotes => SourceKind::UserProfileNotes,
             Self::MemoryNotes => SourceKind::MemoryNotes,
+            Self::Workspace => SourceKind::WorkspaceContext,
+            Self::WorkspaceOwnerNote => SourceKind::WorkspaceOwnerNote,
+            Self::WorkspaceAgentReport => SourceKind::WorkspaceAgentReport,
         }
     }
 }

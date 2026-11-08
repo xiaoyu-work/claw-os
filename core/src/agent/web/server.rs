@@ -54,6 +54,11 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/memory/read", post(routes::memory::read))
         .route("/api/memory/update", post(routes::memory::update))
         .route("/api/memory/forget", post(routes::memory::forget))
+        .route("/api/workspaces",get(routes::workspaces::list))
+        .route("/api/workspaces/control",post(routes::workspaces::control))
+        .route("/api/workspaces/{id}",get(routes::workspaces::get))
+        .route("/api/workspaces/{id}/read",post(routes::workspaces::read))
+        .route("/api/workspaces/{id}/index-source",post(routes::workspaces::index_source))
         .route(
             "/api/chat",
             post(routes::chat::handler).layer(DefaultBodyLimit::max(CHAT_MAX_HTTP_BYTES)),
@@ -146,7 +151,7 @@ pub fn build_app(state: AppState) -> Router {
             "/api/activities/{id}/capability-policy/enabled",
             post(routes::activities::enable_capability_policy),
         )
-        .route("/api/sessions", get(routes::sessions::list))
+        .route("/api/sessions", get(routes::sessions::list).post(routes::sessions::create))
         .route(
             "/api/sessions/{id}",
             get(routes::sessions::detail).post(routes::sessions::update),

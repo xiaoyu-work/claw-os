@@ -9,12 +9,14 @@ use std::sync::{Arc, OnceLock};
 
 use libloading::Library;
 
+use super::super::ort::runtime::OrtRuntime;
 use super::ffi::OrtGenaiSyms;
 use super::EngineError;
 
 pub struct OrtGenaiRuntime {
     /// SAFETY: never dropped while `syms` is reachable.
     _lib: Library,
+    _ort: Arc<OrtRuntime>,
     pub syms: OrtGenaiSyms,
     pub lib_path: PathBuf,
 }
@@ -30,6 +32,12 @@ impl OrtGenaiRuntime {
             )));
         }
 
+        // GenAI loads ORT from its native initializer. Preload the registered
+        // dependency so missing packages return an error instead of unwinding
+        // a C++ exception through dlopen into Rust.
+        let ort = OrtRuntime::shared()
+            .map_err(|e| EngineError::LibraryLoadFailed(format!("ort-genai dependency: {e}")))?;
+
         // SAFETY: see `super::super::ort::runtime::load_with_sibling_search`.
         let lib = unsafe { load_with_sibling_search(lib_path) }
             .map_err(|e| EngineError::LibraryLoadFailed(format!("{}: {e}", lib_path.display())))?;
@@ -40,6 +48,7 @@ impl OrtGenaiRuntime {
 
         Ok(Self {
             _lib: lib,
+            _ort: ort,
             syms,
             lib_path: lib_path.to_path_buf(),
         })

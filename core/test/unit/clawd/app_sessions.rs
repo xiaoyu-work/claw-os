@@ -147,6 +147,7 @@ fn delegation(ceiling: CapSet) -> Delegation {
             cwd: Some(home()),
         },
         activity: None,
+        workspace:None,
     }
 }
 
@@ -424,6 +425,7 @@ fn authority_for(
         role: None,
         activity: None,
         task_session: None,
+        workspace:None,
     }
 }
 
@@ -1572,6 +1574,7 @@ fn test_authority() -> LauncherAuthority {
         role: None,
         activity: None,
         task_session: None,
+        workspace:None,
     }
 }
 
@@ -2056,6 +2059,7 @@ fn e2e_install_grants_with_ceiling(
         role: None,
         activity: None,
         task_session: None,
+        workspace:None,
     };
     let handle = issue_launch_grant(
         session_id,

@@ -56,6 +56,8 @@ pub struct AppStoreApp {
 
 pub use clawd_client::nearby::NearbyRequest as NearbyControl;
 pub use clawd_client::workspaces::ControlRequest as WorkspaceControl;
+pub use clawd_client::workspaces::ReadRequest as WorkspaceRead;
+pub use clawd_client::workspaces::IndexRequest as WorkspaceIndexSource;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -461,6 +463,8 @@ pub struct ActivityReceiptRecord {
 pub struct AgentConversationCreate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<Text<512>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<Token>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -547,6 +551,8 @@ pub struct TaskSubmit {
     pub attachments: Option<TaskAttachments>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<Text<4096>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

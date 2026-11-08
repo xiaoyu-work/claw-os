@@ -1,19 +1,12 @@
-//! `claw-semantic-daemon` — long-running indexer.
-//!
-//! On startup, walks the configured topdirs, extracts text, chunks,
-//! embeds (stubbed in Phase 1), and writes to the vector store.
-//! Then subscribes to inotify and reflects each create/modify/delete.
-//!
-//! Run via systemd --user (see the systemd feature's claw-semantic.service).
+//! Existing user file indexer with real local model vectors and live updates.
 
 use anyhow::{Context, Result};
-use claw_semantic::{
-    chunk::chunks_for, watch::FsEvent, Config, EmbedRequest, Embedder, Extractor, MemoryStore,
-    StubEmbedder, TextExtractor, VectorStore,
+use claw_embed::{
+    local::LocalEmbedder,
+    walk::{FsEvent, Watcher},
 };
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use claw_semantic::{indexer, Config};
+use std::{collections::BTreeSet, time::Duration};
 use tracing::{info, warn};
 
 #[tokio::main(flavor = "current_thread")]
@@ -24,93 +17,126 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| "claw_semantic=info".into()),
         )
         .init();
-
-    let cfg = Config::load_or_default().context("loading config")?;
-    info!(?cfg, "starting claw-semantic-daemon");
-
-    let store: Arc<dyn VectorStore> = Arc::new(MemoryStore::open(MemoryStore::default_path())?);
-    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder);
-    let extractors: Vec<Box<dyn Extractor>> = vec![Box::new(TextExtractor)];
-
-    // Phase 1: full sweep on startup, single-threaded for simplicity.
-    // Phase 2 will switch to a worker pool sized to num_cpus / 2.
-    info!("initial sweep");
-    let files = claw_semantic::watch::walk(&cfg.topdirs);
-    info!(n = files.len(), "files found, indexing");
-    for p in files {
-        if let Err(e) = index_file(&p, &cfg, embedder.as_ref(), &extractors, store.as_ref()).await {
-            warn!(path = %p.display(), error = %e, "index failed, continuing");
+    let mut config = Config::load_or_default()?;
+    config.validate()?;
+    let (chunk_chars, chunk_overlap) = indexer::chunk_parameters(&config);
+    info!(
+        configured_chunk_chars = config.chunk_chars,
+        chunk_chars, chunk_overlap, "file chunks use the bounded local inference token budget"
+    );
+    let embedder = LocalEmbedder::default();
+    let status = embedder
+        .status()
+        .await
+        .map_err(anyhow::Error::msg)
+        .context("file index local embedding availability")?;
+    anyhow::ensure!(
+        status.configured,
+        "file embedding is not ready: {}",
+        status
+            .detail
+            .as_deref()
+            .unwrap_or("local model/runtime missing")
+    );
+    let store = indexer::open_store(&indexer::database_path()?)?;
+    let sweep = |config: &Config| {
+        claw_embed::walk::walk_filtered(&config.topdirs, 100_000, &|path| config.is_skipped(path))
+    };
+    let mut watcher = Watcher::spawn(config.topdirs.clone())?;
+    let files = sweep(&config)?;
+    let mut initial_errors = 0;
+    for path in &files {
+        if let Err(error) = indexer::index_file(path, &config, &embedder, &store).await {
+            initial_errors += 1;
+            warn!(path=%path.display(),%error,"file not indexed");
         }
     }
-    let stats = store.stats()?;
-    info!(?stats, "initial sweep done");
-
-    // Phase 1: subscribe to live events. Real coalescing / debouncing
-    // comes in Phase 2 (right now we redo the file on every Modify
-    // notification, which can fire many times during a save).
-    let watcher =
-        claw_semantic::watch::Watcher::spawn(cfg.topdirs.clone()).context("starting fs watcher")?;
-    info!("watching for changes");
+    indexer::reconcile_files(&files, &store)?;
+    info!(corpus=%indexer::corpus_stats(&store)?,error_count=initial_errors,"real local file index initial sweep completed");
     loop {
-        let Some(ev) = watcher.recv_with_timeout(Duration::from_secs(60)) else {
-            continue;
-        };
-        match ev {
-            FsEvent::Upsert(p) => {
-                if !p.is_file() {
-                    continue;
-                }
-                if let Err(e) =
-                    index_file(&p, &cfg, embedder.as_ref(), &extractors, store.as_ref()).await
-                {
-                    warn!(path = %p.display(), error = %e, "index failed");
-                }
+        let mut upserts = BTreeSet::new();
+        let mut deletes = BTreeSet::new();
+        let first = watcher.recv_with_timeout(Duration::from_secs(15));
+        if let Some(event) = first {
+            collect(event, &mut upserts, &mut deletes)?;
+            while let Ok(event) = watcher.rx.try_recv() {
+                collect(event, &mut upserts, &mut deletes)?;
+                anyhow::ensure!(
+                    upserts.len() + deletes.len() <= 100_000,
+                    "file watcher batch exceeds its bound"
+                );
             }
-            FsEvent::Delete(p) => {
-                let s = p.to_string_lossy().to_string();
-                if let Err(e) = store.delete_path(&s) {
-                    warn!(path = %s, error = %e, "delete from store failed");
+        }
+        let next = Config::load_or_default()?;
+        next.validate()?;
+        let available_roots: Vec<_> = next
+            .topdirs
+            .iter()
+            .filter(|path| path.is_dir())
+            .cloned()
+            .collect();
+        if next.topdirs != config.topdirs
+            || next.skip_patterns != config.skip_patterns
+            || next.chunk_chars != config.chunk_chars
+            || next.chunk_overlap_chars != config.chunk_overlap_chars
+            || next.max_file_mb != config.max_file_mb
+            || available_roots != watcher.topdirs
+        {
+            watcher = Watcher::spawn(next.topdirs.clone())?;
+            config = next;
+            let files = sweep(&config)?;
+            indexer::reconcile_files(&files, &store)?;
+            upserts.extend(files);
+        }
+        for path in deletes {
+            indexer::remove_file(&path, &store)?;
+        }
+        for path in upserts {
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                    for file in claw_embed::walk::walk_filtered(&[path], 100_000, &|path| {
+                        config.is_skipped(path)
+                    })? {
+                        if let Err(error) =
+                            indexer::index_file(&file, &config, &embedder, &store).await
+                        {
+                            warn!(path=%file.display(),%error,"updated file not indexed");
+                        }
+                    }
                 }
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                    if let Err(error) = indexer::index_file(&path, &config, &embedder, &store).await
+                    {
+                        warn!(path=%path.display(),%error,"updated file not indexed");
+                    }
+                }
+                Ok(_) => indexer::remove_file(&path, &store)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    indexer::remove_file(&path, &store)?
+                }
+                Err(error) => return Err(error).context("inspect changed index source"),
             }
         }
     }
 }
 
-async fn index_file(
-    path: &Path,
-    cfg: &Config,
-    embedder: &dyn Embedder,
-    extractors: &[Box<dyn Extractor>],
-    store: &dyn VectorStore,
+fn collect(
+    event: FsEvent,
+    upserts: &mut BTreeSet<std::path::PathBuf>,
+    deletes: &mut BTreeSet<std::path::PathBuf>,
 ) -> Result<()> {
-    if cfg.is_skipped(path) {
-        return Ok(());
+    match event {
+        FsEvent::Upsert(path) => {
+            deletes.remove(&path);
+            upserts.insert(path);
+        }
+        FsEvent::Delete(path) => {
+            upserts.remove(&path);
+            deletes.insert(path);
+        }
+        FsEvent::Error(message) => {
+            anyhow::bail!("file watcher failed; indexer restart required: {message}")
+        }
     }
-    let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
-    if !meta.is_file() {
-        return Ok(());
-    }
-    if meta.len() > (cfg.max_file_mb as u64) * 1024 * 1024 {
-        return Ok(());
-    }
-
-    let text = extractors
-        .iter()
-        .find_map(|e| e.extract(path).transpose())
-        .transpose()?;
-    let Some(text) = text else { return Ok(()) };
-
-    let abs = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-    let chunks = chunks_for(&abs, &text, cfg.chunk_chars, cfg.chunk_overlap_chars);
-    if chunks.is_empty() {
-        return Ok(());
-    }
-    let inputs: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-    let response = embedder.embed(EmbedRequest { inputs }).await?;
-    store.upsert(&abs, &chunks, &response.embeddings)?;
     Ok(())
 }

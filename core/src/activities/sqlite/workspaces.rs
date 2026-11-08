@@ -256,7 +256,9 @@ impl WorkspaceService for SqliteActivityService {
                 context: draft.context.trim().into(),
                 state: WorkspaceState::Active,
                 revision: 1,
+                access_revision:1,
                 cleanup_pending: false,
+                read_links: Vec::new(),
                 created_at: now.clone(),
                 updated_at: now.clone(),
             };
@@ -292,6 +294,9 @@ impl WorkspaceService for SqliteActivityService {
         match request {
             WorkspaceAction::Create { .. } => {}
             WorkspaceAction::Update { draft, .. } => {
+                if workspace.context!=draft.context.trim(){
+                    workspace.access_revision=workspace.access_revision.checked_add(1).ok_or_else(||invalid("visibility revision exhausted"))?;
+                }
                 workspace.name = draft.name.trim().into();
                 workspace.description = draft.description.trim().into();
                 workspace.context = draft.context.trim().into();
@@ -308,6 +313,7 @@ impl WorkspaceService for SqliteActivityService {
                 workspace.state = next;
             }
             WorkspaceAction::Delete { .. } => {
+                workspace.access_revision=workspace.access_revision.checked_add(1).ok_or_else(||invalid("visibility revision exhausted"))?;
                 if workspace.state == WorkspaceState::Deleted && !workspace.cleanup_pending {
                     return Err(ActivityError::Conflict(
                         "Workspace has already been deleted".into(),
@@ -316,6 +322,7 @@ impl WorkspaceService for SqliteActivityService {
                 workspace.state = WorkspaceState::Deleted;
                 workspace.context.clear();
                 workspace.description.clear();
+                workspace.read_links.clear();
                 workspace.cleanup_pending = true;
                 tx.execute(
                     "DELETE FROM workspace_notes WHERE owner_uid=?1 AND workspace_id=?2",
@@ -331,6 +338,41 @@ impl WorkspaceService for SqliteActivityService {
                      (SELECT activity_id FROM workspace_activities WHERE owner_uid=?1 AND workspace_id=?2)",
                     params![owner,id,now],
                 )?;
+            }
+            WorkspaceAction::ReadLink { source_workspace_id, target, note_ids, sources, expires_at, .. } => {
+                if workspace.state != WorkspaceState::Active {
+                    return Err(invalid("temporary reads require an active Workspace"));
+                }
+                let source = view(&tx, owner, &source_workspace_id)?;
+                if source.workspace.state != WorkspaceState::Active {
+                    return Err(invalid("source Workspace is not active"));
+                }
+                if note_ids.iter().any(|id| !source.notes.iter().any(|note| note.id == *id))
+                    || sources.iter().any(|selected| !source.tags.iter().any(|tag|
+                        tag.id == selected.tag_id && tag.covers(std::path::Path::new(&selected.path))))
+                {
+                    return Err(invalid("selection is not shared by the source Workspace"));
+                }
+                let expiry = chrono::DateTime::parse_from_rfc3339(&expires_at).map_err(invalid)?;
+                let now_time = chrono::DateTime::parse_from_rfc3339(&now).map_err(invalid)?;
+                if expiry <= now_time || expiry > now_time + chrono::Duration::hours(24) {
+                    return Err(invalid("temporary reads expire within 24 hours"));
+                }
+                workspace.read_links.retain(|link|chrono::DateTime::parse_from_rfc3339(&link.expires_at).is_ok_and(|expiry|expiry>now_time));
+                if workspace.read_links.len() >= MAX_READ_LINKS {
+                    return Err(ActivityError::LimitReached);
+                }
+                workspace.read_links.push(ReadLink {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    source_workspace_id, target, note_ids, sources,
+                    expires_at, created_at: now.clone(),
+                });
+            }
+            WorkspaceAction::RevokeLink { link_id, .. } => {
+                let count = workspace.read_links.len();
+                workspace.read_links.retain(|link| link.id != link_id);
+                if count == workspace.read_links.len() { return Err(ActivityError::NotFound); }
+                workspace.access_revision=workspace.access_revision.checked_add(1).ok_or_else(||invalid("visibility revision exhausted"))?;
             }
             WorkspaceAction::Tag { path, kind, .. } => {
                 let kind =
@@ -373,6 +415,7 @@ impl WorkspaceService for SqliteActivityService {
                 {
                     return Err(ActivityError::NotFound);
                 }
+                workspace.access_revision=workspace.access_revision.checked_add(1).ok_or_else(||invalid("visibility revision exhausted"))?;
             }
             WorkspaceAction::PutNote { note_id, note, .. } => {
                 let previous = note_id.as_ref().map(|note_id| {
@@ -388,6 +431,9 @@ impl WorkspaceService for SqliteActivityService {
                         return Err(ActivityError::Conflict(
                             "Agent reports remain immutable; add an owner correction note".into(),
                         ));
+                    }
+                    if previous.content!=note.content.trim() || previous.title!=note.title.trim(){
+                        workspace.access_revision=workspace.access_revision.checked_add(1).ok_or_else(||invalid("visibility revision exhausted"))?;
                     }
                 } else {
                     let count: i64 = tx.query_row(
@@ -438,6 +484,7 @@ impl WorkspaceService for SqliteActivityService {
                 {
                     return Err(ActivityError::NotFound);
                 }
+                workspace.access_revision=workspace.access_revision.checked_add(1).ok_or_else(||invalid("visibility revision exhausted"))?;
             }
             WorkspaceAction::BindActivity { activity_id, .. } => {
                 let activity = load_activity(&tx, owner, &activity_id)?;
@@ -462,6 +509,7 @@ impl WorkspaceService for SqliteActivityService {
                             .into(),
                     ));
                 }
+                super::work::hold_for_workspace_move(&tx,&activity)?;
                 tx.execute(
                     "INSERT INTO workspace_activities(owner_uid,workspace_id,activity_id) VALUES (?1,?2,?3)",
                     params![owner,id,activity_id],
@@ -472,6 +520,7 @@ impl WorkspaceService for SqliteActivityService {
                 if activity.state == ActivityState::Active {
                     return Err(invalid("pause the Activity before changing its Workspace"));
                 }
+                super::work::hold_for_workspace_move(&tx,&activity)?;
                 if tx.execute(
                     "DELETE FROM workspace_activities WHERE owner_uid=?1 AND workspace_id=?2 AND activity_id=?3",
                     params![owner,id,activity_id],
@@ -514,6 +563,39 @@ impl WorkspaceService for SqliteActivityService {
         let result = view(&tx, owner, id)?;
         tx.commit()?;
         Ok(result)
+    }
+
+    fn report_workspace(&self, owner: u32, id: &str, job_id: &str, note: NoteDraft) -> Result<WorkspaceNote, ActivityError> {
+        validate_id(job_id).map_err(invalid)?;
+        note.validate().map_err(invalid)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut workspace = load(&tx, owner, id)?;
+        if workspace.state != WorkspaceState::Active {
+            return Err(invalid("Agent reports require an active Workspace"));
+        }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM workspace_notes WHERE owner_uid=?1 AND workspace_id=?2",
+            params![owner, id], |row| row.get(0),
+        )?;
+        if count >= MAX_NOTES as i64 { return Err(ActivityError::LimitReached); }
+        let now = timestamp();
+        let record = WorkspaceNote {
+            id: uuid::Uuid::new_v4().to_string(), workspace_id: id.into(),
+            title: note.title, content: note.content, source: NoteSource::AgentReport,
+            source_job_id: Some(job_id.into()), revision: 1,
+            created_at: now.clone(), updated_at: now.clone(),
+        };
+        record.validate().map_err(invalid)?;
+        tx.execute(
+            "INSERT INTO workspace_notes(owner_uid,workspace_id,id,record_json) VALUES (?1,?2,?3,?4)",
+            params![owner, id, record.id, serde_json::to_string(&record)?],
+        )?;
+        workspace.revision = workspace.revision.checked_add(1).ok_or_else(|| invalid("revision exhausted"))?;
+        workspace.updated_at = now;
+        save(&tx, owner, &workspace)?;
+        tx.commit()?;
+        Ok(record)
     }
 }
 

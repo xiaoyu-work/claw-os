@@ -188,11 +188,11 @@ fn discovery_metadata_has_a_golden_shape_and_valid_range() {
     assert!(endpoint.has_valid_version_range());
     assert_eq!(
         endpoint.negotiate(ProtocolMetadata::CURRENT),
-        Some(ProtocolVersion(3))
+        Some(ProtocolVersion::CURRENT)
     );
     assert_eq!(
         serde_json::to_string(&endpoint).unwrap(),
-        r#"{"port":43123,"token":"token","protocol_version":3,"min_protocol_version":3}"#
+        r#"{"port":43123,"token":"token","protocol_version":4,"min_protocol_version":4}"#
     );
     assert!(
         serde_json::from_str::<BridgeEndpoint>(

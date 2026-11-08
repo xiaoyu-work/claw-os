@@ -25,7 +25,12 @@ executes neither.
 
 ## Key Files
 
-Private worker protocol v19 adds an automatic-Activity reporting hint and a
+Private worker protocol v20 adds bounded current-domain context/recall/source
+reads and reporting over the existing private channel. Root derives owner,
+Workspace, conversation and Job from its lease; no request supplies those
+selectors. Correlation nonce, count/byte limits and cancellation keep this
+separate from consent and monetary exchanges. A Root check precedes each
+Workspace model turn. V19 retained the automatic-Activity reporting hint and a
 bounded optional handoff on a completed result. Root derives the actual work
 binding from its own Job and stages reports before finishing the Job; neither
 the hint nor a report supplies permission or goal completion. The protocol
@@ -43,6 +48,7 @@ wire representation.
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, lease-renewal and permission-mediation types |
 | `receipts.rs` | Reporting-only Activity receipt association from the authenticated lease and broker-owned Job |
+| `context.rs`, `../clawd/workspaces/reads.rs` | Root current-domain context gateway, scoped memory/source retrieval and sourced reporting; no management or authority selectors |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 | `../extension_host/` | Dynamic App/MCP host, task-bound control, route-filtered broker proxy, cleanup |

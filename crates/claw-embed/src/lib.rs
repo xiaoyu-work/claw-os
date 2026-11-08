@@ -30,6 +30,8 @@ pub mod chunk;
 pub mod document_store;
 pub mod embed;
 pub mod extract;
+pub mod file_source;
+pub mod local;
 pub mod store;
 pub mod walk;
 

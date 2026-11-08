@@ -5,6 +5,7 @@ export type TaskIdentity = { taskId: string; sessionId: string };
 export type ConversationTask = RetainedTask & { prompt: string };
 export type ChatHistoryResponse = {
   session_id?: string;
+  workspace_id?: string | null;
   messages?: unknown[];
   jobs?: ConversationTask[];
   jobs_truncated?: boolean;

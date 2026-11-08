@@ -41,9 +41,18 @@ Examples:
   Azure Linux Agent integration, forces Hyper-V storage/network modules into
   initramfs, and enables Azure serial-console boot diagnostics.
 - `desktop` adds the COSMIC desktop independently of the platform.
+- `qwen3-embedding` supplies the fixed local Qwen3 model and its validated
+  ONNX Runtime/GenAI pair in the system registry for real personal-file vectors.
 
 In particular, `vm` does not create a user and `azure` does not contain the
 Claw OS application stack. Profiles compose those independent capabilities.
+
+The local file index is independent of Workspace tags: configured personal
+directories are indexed once, while the shared broker filters each Workspace's
+readable sources. Recoll remains full-text search. Unsupported formats or
+missing local model/runtime are disclosed, never replaced with cloud or hash
+embeddings. The model requires several GiB of memory; the semantic user service
+limits its existing process/model-child group to 8 GiB.
 
 ### Image profiles
 

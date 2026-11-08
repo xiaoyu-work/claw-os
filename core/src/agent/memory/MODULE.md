@@ -30,6 +30,7 @@ results, and curates durable notes from completed work.
 | `sqlite_fts.rs` | SQLite/WAL/FTS persistence plus pending/completed tool invocations |
 | `conversation_bindings.rs` | Durable task/message membership recorded with each task-owned row |
 | `semantic.rs` | Vector/semantic recall integration |
+| `scoped.rs` | Model recall over Root-selected session projections, before ranking, pagination, listings and counts |
 | `curator.rs` | Automatic memory curation |
 | `notes.rs` | Durable notes, pinned profile entries and model-invoked literal search |
 | `history.rs` | Conversation history queries and versioned UTF-8-safe read windows |

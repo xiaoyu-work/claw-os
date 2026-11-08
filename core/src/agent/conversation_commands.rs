@@ -1,9 +1,12 @@
-use super::{llm, memory, runtime, setup};
+use super::llm;
+#[cfg(test)]
+use super::{memory,runtime};
 use serde_json::{json, Value};
 
 pub(super) fn ask_cmd(args: &[String]) -> Result<Value, String> {
     let mut full = false;
     let mut session_id: Option<String> = None;
+    let mut workspace_id: Option<String> = None;
     let mut timeout_ms: Option<u64> = None;
     let mut positional: Vec<String> = Vec::with_capacity(args.len());
     let mut i = 0usize;
@@ -24,6 +27,12 @@ pub(super) fn ask_cmd(args: &[String]) -> Result<Value, String> {
                     .ok_or_else(|| "--session needs a non-empty id".to_string())?;
                 session_id = Some(value.clone());
                 i += 2;
+            }
+            "--space" | "--workspace-id" => {
+                let id=args.get(i+1).ok_or("--space requires a Workspace UUID")?;
+                crate::workspaces::validate_id(id)?;
+                workspace_id=Some(id.clone());
+                i+=2;
             }
             "--timeout-secs" => {
                 let value = args
@@ -60,14 +69,9 @@ pub(super) fn ask_cmd(args: &[String]) -> Result<Value, String> {
                 .into(),
         );
     }
-    let envelope = match timeout_ms {
-        Some(timeout_ms) => crate::clawd::agent_client::ask_in_session_with_timeout(
-            &prompt,
-            session_id.as_deref(),
-            timeout_ms,
-        )?,
-        None => crate::clawd::agent_client::ask_in_session(&prompt, session_id.as_deref())?,
-    };
+    let envelope = crate::clawd::agent_client::ask_in_space(
+        &prompt,session_id.as_deref(),workspace_id.as_deref(),timeout_ms.unwrap_or(24*60*60*1000),
+    )?;
     if full {
         Ok(envelope)
     } else {
@@ -322,36 +326,11 @@ pub(super) fn chat_cmd(args: &[String]) -> Result<Value, String> {
 
 /// Preserve the existing session-aware REPL and its stdout/stderr contract.
 fn chat_plain_cmd(options: super::terminal::ChatOptions) -> Result<Value, String> {
-    let config = crate::config::current_snapshot();
-    let cfg = &config.agent;
-    setup::is_ready(cfg)?;
-    // Build the provider once and reuse across turns. If the user
-    // mid-REPL wants a different model, they can `/quit` and re-launch.
-    let provider = crate::ai::gate::build_system_provider(cfg)
-        .map_err(|e| format!("provider unavailable: {e}"))?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
-    let timeout = runtime::loop_::background_drain_timeout();
-    runtime.block_on(async move {
-        let outcome = chat_cmd_async(
-            provider,
-            cfg,
-            options.session_id,
-            !options.no_stream,
-            !options.no_memory,
-            options.show_tools,
-            options.max_turns,
-        )
-        .await;
-        runtime::background::drain(timeout).await;
-        outcome
-    })
+    super::terminal::run_plain(options)
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 async fn chat_cmd_async(
     provider: std::sync::Arc<dyn llm::Provider>,
     cfg_in: &crate::config::AgentConfig,

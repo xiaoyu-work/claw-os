@@ -356,6 +356,10 @@ pub(crate) async fn run_final_turn_interruptible_with_reasoning(
 }
 
 async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::loop_::AgentError> {
+    if crate::workspaces::gateway::workspace_bound(){
+        crate::workspaces::gateway::request(crate::workspaces::gateway::ContextOperation::Check).await
+            .map_err(|detail|crate::agent::context::budget::ContextError::Source{origin:"Root Workspace visibility".into(),detail})?;
+    }
     let TurnRequest {
         provider,
         model,

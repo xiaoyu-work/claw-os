@@ -61,9 +61,13 @@ pub fn get(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError>
         .filter_map(|job| job.session_id.as_deref())
         .collect();
     let views: Vec<_> = jobs.iter().map(job_view).collect();
+    use crate::workspaces::WorkspaceService;
+    let workspace_id=crate::workspaces::open_default().and_then(|service|service.activity_workspace(owner,&activity.id))
+        .map_err(service_error)?.map(|workspace|workspace.id);
     Ok(json!({
         "schema": WIRE_SCHEMA_VERSION,
         "activity": activity,
+        "workspace_id":workspace_id,
         "jobs": views,
         "sessions": sessions,
         "job_limit": limit,
