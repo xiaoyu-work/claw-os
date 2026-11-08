@@ -758,7 +758,7 @@ impl App {
     pub fn set_workspace(&mut self, workspace: String) {
         self.selected_workspace = workspace;
         self.push_system(&format!(
-            "Future tasks will use workspace {}. Workspace selection grants no capability.",
+            "Future tasks will use directory {}. Directory selection grants no capability.",
             self.selected_workspace
         ));
     }

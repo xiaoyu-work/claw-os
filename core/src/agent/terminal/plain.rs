@@ -36,10 +36,10 @@ pub(super) fn run(options: ChatOptions) -> Result<Value, String> {
         let mut app=App::new(backend.info().clone(),conversation);
         let streaming=!options.no_stream;
         let stdout_tty=std::io::stdout().is_terminal();
-        eprintln!("cos agent chat — provider={} model={} session={} space={} memory={} streaming={}",
+        eprintln!("cos agent chat — provider={} model={} session={} workspace={} memory={} streaming={}",
             app.info.provider,app.selected_model,app.conversation.id,app.conversation.workspace_id.as_deref().unwrap_or("personal"),
             !options.no_memory,streaming);
-        eprintln!("/new /space UUID|none /workspace PATH|home /history [N] /session /quit");
+        eprintln!("/new /workspace UUID|none /directory PATH|home /history [N] /session /quit");
         let mut prompts=0usize;
         loop{
             if std::io::stdin().is_terminal(){eprint!("> ");let _=std::io::stderr().flush();}
@@ -51,25 +51,29 @@ pub(super) fn run(options: ChatOptions) -> Result<Value, String> {
             let prompt=line.1.trim().to_string();
             if prompt.is_empty(){continue;}
             if matches!(prompt.as_str(),"/quit"|"/exit"){break;}
-            if prompt=="/help"{eprintln!("/new /space UUID|none /workspace PATH|home /history [N] /session /quit");continue;}
-            if prompt=="/session"{eprintln!("session={} space={} cwd={}",app.conversation.id,
+            if prompt=="/help"{eprintln!("/new /workspace UUID|none /directory PATH|home /history [N] /session /quit");continue;}
+            if prompt=="/session"{eprintln!("session={} workspace={} directory={}",app.conversation.id,
                 app.conversation.workspace_id.as_deref().unwrap_or("personal"),app.selected_workspace);continue;}
             if prompt=="/new"{
                 let conversation=backend.create_conversation_in_workspace(app.conversation.workspace_id.as_deref()).await?;
                 app.replace_conversation(conversation);continue;
             }
-            if let Some(space)=prompt.strip_prefix("/space "){
+            if let Some(space)=prompt.strip_prefix("/workspace "){
                 let space=if space=="none"{None}else{crate::workspaces::validate_id(space)?;Some(space)};
                 let conversation=backend.create_conversation_in_workspace(space).await?;
                 app.replace_conversation(conversation);continue;
             }
-            if let Some(path)=prompt.strip_prefix("/workspace "){
+            if let Some(path)=prompt.strip_prefix("/directory "){
                 app.selected_workspace=backend.resolve_workspace((path!="home").then_some(path)).await?;continue;
             }
             if prompt=="/history" || prompt.starts_with("/history "){
                 let count=prompt.strip_prefix("/history ").map(str::parse::<usize>).transpose().map_err(|e|e.to_string())?.unwrap_or(20).min(200);
                 let conversation=backend.get_conversation(&app.conversation.id).await?;
                 for message in conversation.messages.iter().rev().take(count).rev(){eprintln!("{}: {}",message.role,message.text);}
+                continue;
+            }
+            if prompt.starts_with('/'){
+                eprintln!("Unknown plain chat command. Use /help.");
                 continue;
             }
             if !app.info.provider_ready{return Err("Configure a text model before submitting work; Workspace management remains available through cos workspace.".into());}

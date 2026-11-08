@@ -629,8 +629,8 @@ fn render_debug_overview(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         )),
         Line::styled("Conversation", Style::default().fg(Color::Yellow)),
         Line::raw(format!("id: {}", app.conversation.id)),
-        Line::raw(format!("workspace: {}", clean_text(&app.selected_workspace))),
-        Line::raw(format!("context domain: {}", app.conversation.workspace_id.as_deref().unwrap_or("personal / unassigned"))),
+        Line::raw(format!("directory: {}", clean_text(&app.selected_workspace))),
+        Line::raw(format!("workspace: {}", app.conversation.workspace_id.as_deref().unwrap_or("personal / unassigned"))),
         Line::raw(format!("active task: {active_task}")),
         Line::styled("Provider", Style::default().fg(Color::Yellow)),
         Line::raw(format!(
@@ -1854,7 +1854,7 @@ fn render_task_detail(frame: &mut Frame<'_>, screen: Rect, app: &App) {
         Line::raw(format!("session: {}", task.session_id)),
     ];
     if let Some(workspace) = &task.workspace {
-        lines.push(Line::raw(format!("workspace: {workspace}")));
+        lines.push(Line::raw(format!("directory: {workspace}")));
     }
     if let Some(predecessor) = &task.after_task_id {
         lines.push(Line::raw(format!("queued after: {predecessor}")));

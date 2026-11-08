@@ -235,7 +235,8 @@ the entry point rather than appearing as separate top-level commands:
 /rewind <user-turn-count>
 /models
 /model [model-id]
-/workspace [path|home]
+/workspace
+/directory [path|home]
 /skills
 /tasks
 /task [task-id]
@@ -280,8 +281,12 @@ queueing, retry and resume. The worker enforces an empty tool allowlist and
 adds explicit plan-only context, so this is not a cosmetic TUI flag and cannot
 perform tool effects.
 
-`/workspace` shows the selected task workspace. `/workspace home` resets to
-the authenticated owner's passwd home; `/workspace PATH` resolves an absolute
+`/workspace` opens the shared Workspace center for context, notes, read-only
+sources and Activity associations. It is the only command name for this
+feature. See [Workspaces](workspaces.md).
+
+`/directory` shows the selected task working directory. `/directory home` resets to
+the authenticated owner's passwd home; `/directory PATH` resolves an absolute
 path or a path relative to that home through `task.workspace.resolve`.
 The broker requires an existing canonical directory owned by that user and
 contained beneath the verified home. The returned path is bound to each
@@ -439,8 +444,9 @@ state and ratatui rendering. The PTY fixture drives the real `cos` binary,
 requires an actual canonical task submission, observes streamed output,
 cancels the matching task with `Esc`, resumes by presentation ID through the
 canonical service, verifies rename/fork command routing, preserves bracketed
-multiline paste, requires archive/rewind confirmation and confirms plain mode
-never contacts the broker. The task-center scenario browses owner-scoped tasks,
+multiline paste and requires archive/rewind confirmation.
+Plain chat uses the same canonical broker; its local slash commands are handled
+before model work. The task-center scenario browses owner-scoped tasks,
 cancels one exact running task and retries one exact terminal task. The
 slow-progress scenario holds a real task stream open after an authoritative
 tool-start record, verifies animated terminal writes and advancing elapsed

@@ -158,8 +158,32 @@ fn claw_commands_are_closed_and_semantic() {
     assert_eq!(parse_command("/unarchive"), Some(Command::Unarchive));
     assert_eq!(parse_command("/model"), Some(Command::Models));
     assert_eq!(
-        parse_command("/workspace project/repo"),
-        Some(Command::Workspace(Some("project/repo".into())))
+        parse_command("/workspace"),
+        Some(Command::Workspace(String::new()))
+    );
+    assert_eq!(
+        parse_command("/workspace create Research"),
+        Some(Command::Workspace("create Research".into()))
+    );
+    assert_eq!(parse_command("/directory"), Some(Command::Directory(None)));
+    assert_eq!(
+        parse_command("/directory project/repo"),
+        Some(Command::Directory(Some("project/repo".into())))
+    );
+    for name in ["space", "spaces", "workspaces"] {
+        assert_eq!(
+            parse_command(&format!("/{name}")),
+            Some(Command::Unknown(name.into()))
+        );
+        assert!(commands::suggestions(&format!("/{name}")).is_empty());
+    }
+    assert_eq!(
+        commands::completion("/work", 0),
+        Some("/workspace".into())
+    );
+    assert_eq!(
+        commands::completion("/dire", 0),
+        Some("/directory ".into())
     );
     assert_eq!(
         parse_command("/attach project/screen.png"),

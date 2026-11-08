@@ -213,11 +213,11 @@ pub(super) fn prepare(
         InputAction::FileMentions => {
             let workspace = std::path::PathBuf::from(&app.selected_workspace);
             Request::new(
-                "Loading workspace file names",
+                "Loading directory file names",
                 async move {
                     tokio::task::spawn_blocking(move || commands::list_workspace_files(&workspace))
                         .await
-                        .map_err(|_| "workspace file mention reader failed".to_string())?
+                        .map_err(|_| "directory file mention reader failed".to_string())?
                 },
                 |app, files| {
                     app.open_file_picker(files);
