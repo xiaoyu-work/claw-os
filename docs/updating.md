@@ -139,9 +139,10 @@ repository. OS package builds consume the exact revision recorded in
 implementation and XPI together. This is a source-ownership change, not a
 second installed updater: APT still upgrades the signed package, App identity
 and data paths are unchanged, and runtime discovery never downloads from Git.
-The migrated outbound delivery adapter retains `gateway-email` and its
-`/usr/lib/cos/apps/gateway/email` directory. Its policy/SMTP runtime is required;
-missing runtime libraries no longer enable unguarded standalone SMTP. The
+The legacy `gateway-email` source and its active build selection are retired.
+No new selected payload includes `/usr/lib/cos/apps/gateway/email`; old
+credentials and installed user data are not deleted or migrated by this source
+change. Existing installations change only through their normal reviewed update. The
 Agent compatibility assembly now obtains `_shared`, `gateway._shared` and
 `canonical_argv.py` from App-owned `shared/python` at the same immutable source
 pin. The public common staging contract installs them once in

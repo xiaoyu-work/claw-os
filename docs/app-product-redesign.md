@@ -31,10 +31,11 @@ explicit contracts and release coupling; see
 [`packaging/README.md`](../packaging/README.md).
 
 Source migration covered all original 75 identities. The current selection
-retains **64 identities** across **24 business product groups** plus
-**4 shared-capability source groups**: 52 Agent-package identities and
+retains **63 identities** across **24 business product groups** plus
+**4 shared-capability source groups**: 51 Agent-package identities and
 12 desktop identities. Eleven unselected messaging connectors were explicitly
-retired; their previous credentials and installed data are not migrated here.
+retired, followed by the legacy `gateway-email` App; their previous credentials
+and installed data are not deleted or migrated here.
 This count includes native Notifications and `notify`, not their OS service
 or shared libraries. `doc` now belongs to the explicitly declared Document
 Engine capability-client group, not a new Documents business product. `db` and
@@ -53,7 +54,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | --- | --- |
 | Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
 | `email` | Source remains in `clawos-app/products/mail/apps/email`; Thunderbird mailbox cutover preserves identity, declares separate account-scoped mail grants and leaves old provider state untouched |
-| `gateway-email` | Moved to `clawos-app/products/mail/apps/gateway/email`; nested installation, identity and grants preserved |
+| `gateway-email` | Explicitly retired from App source and active OS selection; no fallback, credential deletion or installed-data migration |
 | `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged |
 | `panel-calendar` | Complete native UI, assets, manifest, tests and build inputs moved to `clawos-app/products/calendar`; OS shell injects a shared policy-gated provider and retains desktop package ownership |
 | `panel-clipboard` | Complete native popup, CopyQ adapter/scripts, resources, manifest, tests and build inputs moved to `clawos-app/products/clipboard`; OS host supplies history-only policy, with desktop package ownership preserved; CopyQ history/Wayland selection integration remains separate |
@@ -168,13 +169,13 @@ contracts.
 ## Complete ownership map
 
 Each retained App ID occurs in exactly one row below. These are ownership
-groups, not a proposal to replace 64 Apps with 28 new App packages.
+groups, not a proposal to replace 63 Apps with 28 new App packages.
 
 ### Business products
 
 | Target | Starting App IDs | Implementation disposition |
 | --- | --- | --- |
-| Mail | `email`, `mail-ai`, `gateway-email` | One mailbox/account and sending implementation; UI, MCP, AI assistance and restricted delivery adapter belong to that product. |
+| Mail | `email`, `mail-ai` | One Thunderbird mailbox/account and sending implementation; UI, MCP and AI assistance belong to the product; legacy SMTP gateway retired. |
 | Calendar | `calendar`, `panel-calendar` | Calendar owns event identity, sync and reminder rules; the panel is a UI surface. |
 | Files | `cosmic-files`, `fs`, `docs` | Files owns the file-management experience; filesystem and file indexing become reusable services, not required App-to-App dependencies. |
 | Editor | `cosmic-edit` | UI and MCP share editing behavior and controlled filesystem/AI services. |
@@ -275,7 +276,7 @@ ownership alone does not complete that product cutover.
 | M1 | Implemented | All six UI/MCP AI operations call shared typed functions without argv translation. The canonical App, native launcher and versioned XPI ship together; both transports reject malformed input before effects. Native grants derive from the MCP contract and stay limited to AI/own-memory authority. |
 | M2 | Source-first | Define account, folder, message, thread and draft operations inside the imported Mail product. The external-extension reference-layer experiment is not the product architecture. Prove UI and headless callers address the same account/object with explicit provider selection and per-operation grants. |
 | M3 | In progress | Complete Thunderbird 153.2.0esr source imported at `clawos-app/products/mail/comm/`, with immutable source/platform pins and provenance. Source build, package output, branding, security updates and packaged-product execution remain to be completed. Do not ship a second independent Agent mailbox client. |
-| M4 | Planned | Complete mailbox read/search/send and AI integration through the shared product backend. Consolidate SMTP delivery; cut over `email`, `mail-ai` and `gateway-email` to the canonical Mail identity atomically with manifests, discovery, launchers, extension identity, skills, packages, consent and data handling. Remove the old identities, not alias them. |
+| M4 | Planned | Complete shared-product integration and cut over retained `email` and `mail-ai` identities atomically with manifests, discovery, launchers, extension identity, skills, packages, consent and data handling. The independent `gateway-email` source is already retired, not merged or aliased. |
 | D1 | Planned | Converge Files/Editor/Launcher/Terminal/Store/Browser UI and Agent paths on their owning services; remove the remaining desktop App calls. Preserve browser mode isolation. |
 | S1 | Planned | Remove system forwarding Apps as their service contracts and UI/tool consumers are wired. Consolidate notifications using the existing durable service; retain audit/event separation. |
 | C1 | Planned | Introduce the connector lifecycle and migrate channels/delivery/home integration with signed packages, explicit sender ownership and deterministic delivery policy. |

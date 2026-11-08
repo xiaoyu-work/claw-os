@@ -323,8 +323,9 @@ already-connected terminal, but headless callers need an authenticated session.
 
 Products migrate individually from this repository to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
-Mail's native source, `mail-ai`, legacy `email`, restricted `gateway-email`
-delivery and extension UI have moved;
+Mail's native source, `mail-ai`, Thunderbird-backed `email` and extension UI
+have moved; the legacy `gateway-email` App is explicitly retired without
+credential or installed-data deletion.
 Calendar's event/provider operations and complete native panel presentation,
 direct `fs` MCP implementation and
 Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
@@ -631,9 +632,9 @@ Doc-only staging and the Agent package. No Files App call or second parser is
 introduced; identical co-staged library payloads are reused and conflicts
 refused. Native preparation stays product-only. Missing or ambiguous declared
 sources never fall back to local OS Apps. Original source relocation covered
-75/75 identities; the current selection retains 64 after retiring eleven
-messaging connectors: 24 business product groups plus four capability groups,
-52 Agent and 12 desktop
+75/75 identities; the current selection retains 63 after retiring eleven
+messaging connectors and the legacy Email Gateway: 24 business product groups plus four capability groups,
+51 Agent and 12 desktop
 identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
 memory identity and installed state are unchanged.
 
