@@ -78,7 +78,8 @@ duplicate identities, escaping paths and unlocked Python-library owners fail.
 and OS policy/transport remain separate runtime inputs, not copied into its payload.
 `summarize` resolves to `capabilities/ai-helpers/apps/summarize`; the complete
 client comes from the App pin while AI/policy/memory authority stays OS-owned.
-The lock now covers all 75 original identities (63 Agent, 12 desktop), with no
+The lock now selects 63 retained identities (51 Agent, 12 desktop) after the
+eleven messaging connectors and legacy Email Gateway were retired, with no
 App production or helper source under local `apps/`.
 `db` and `kv` resolve to `capabilities/storage-sdk/apps/<id>`, never their deleted
 local sources or the distinct Storage business product. The source kind changes

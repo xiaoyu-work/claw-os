@@ -1364,9 +1364,9 @@ def test_native_notifications_keep_private_inputs_and_legacy_state_separate(publ
     assert "python3 ../../scripts/app_sources.py --native" in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
-    assert "**75 of the original 75 identities**" in status
+    assert "Source migration covered all original 75 identities" in status
     assert "**24 business product groups**" in status
-    assert "63 Agent-package identities and 12 desktop identities" in status
+    assert "**4 shared-capability source groups**: 51 Agent-package identities and" in status
     assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
     assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
 
@@ -1374,11 +1374,12 @@ def test_native_notifications_keep_private_inputs_and_legacy_state_separate(publ
 def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():
     lock = sources.read_lock()
     desktop = set(sources.desktop_apps())
-    assert len(lock["apps"]) == 75
+    assert len(lock["apps"]) == 63
     assert len(lock["products"]) == 24
     assert lock["capabilities"] == ["document-engine", "storage-sdk", "http", "ai-helpers"]
     assert len(set(lock["apps"]) & desktop) == 12
-    assert len(set(lock["apps"]) - desktop) == 63
+    assert len(set(lock["apps"]) - desktop) == 51
+    assert "gateway-email" not in lock["apps"]
     assert "notify" not in desktop
     assert "cosmic-notifications" in desktop
     assert not (ROOT / "apps/notify").exists()
@@ -1389,7 +1390,7 @@ def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transi
     assert "not part of the new service list" in contract
     assert "data.inbox.read" in contract
     assert "warning severity" in contract
-    assert "63 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
+    assert "51 Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
 
 
 @pytest.mark.parametrize("export", [

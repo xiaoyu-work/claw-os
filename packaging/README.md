@@ -131,8 +131,10 @@ Co-staging never merges conflicting library trees. Agent still owns
 `/usr/lib/cos/apps/doc`, `/usr/lib/cos/python/claw_files`, SDK/runtime and the
 canonical argument module. All six operations, manifest needs/AI declarations,
 outputs, memory identity and user state remain unchanged. The source lock now
-covers 75/75 original identities: 24 business products plus four capability groups, with
-63 migrated Agent and 12 desktop identities; native preparation stays product-only.
+selects 63 retained identities after the original 75-identity source relocation:
+24 business products plus four capability groups, with 51 Agent and 12 desktop
+identities; the retired messaging connectors and Email Gateway are not fallbacks.
+Native preparation stays product-only.
 
 Storage SDK supplies independent `db` and `kv` clients from
 `capabilities/storage-sdk/apps/<id>`, not from the distinct Storage business
