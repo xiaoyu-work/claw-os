@@ -1,6 +1,10 @@
 # Apps
 
-All apps are accessed via `cos app <name> <command>`.
+The system Agent discovers permitted App MCP tools through `cos_tool_search`,
+checks their live schema with `cos_tool_describe`, and invokes them with
+`cos_tool_call`. The catalogue is authoritative. Human CLI examples below use
+`cos app <name> <command>`; a CLI example does not make that command model-callable.
+Apps never invoke other Apps or orchestrate Agent tasks themselves.
 
 ## Browser (Web Reading)
 
@@ -34,28 +38,121 @@ cos credential store GOOGLE_SEARCH_ENGINE_ID "a1b2c3..." --tier 1
 Send, search, and read email. SMTP for sending, Gmail/Outlook for full features:
 
 ```bash
-cos app email send --to user@example.com --subject "Report" --body "See attached"
+cos app email send --provider smtp --host mail.example.com:587 \
+  --to user@example.com --subject "Report" --body "Review the report"
 cos app email send --to user@example.com --subject "Hi" --body "Hello" --provider gmail
-cos app email search --query "from:boss subject:urgent" --max-results 10
-cos app email list --unread --max-results 5
-cos app email read --id msg123
+cos app email search --provider gmail --query "subject:urgent" --max-results 10
+cos app email list --provider gmail --unread --max-results 5
+cos app email read --provider gmail --id MESSAGE_ID
 ```
 
-Providers: `smtp` (default, send-only), `gmail`, `outlook`. Auto-detected from credentials.
+Provider selection is required: `smtp` is send-only, and Gmail/Outlook operations
+use their independent OAuth grants. There is no credential auto-detection or
+implicit SMTP default. SMTP requires an explicit `host:port`; `SMTP_PORT` cannot
+retarget it.
+
+Message and draft results carry provider-bound canonical App references.
+`gmail_message`, `outlook_message`, `gmail_draft` and `outlook_draft` fix the
+provider and take only an opaque ID. Copy returned references; do not invent IDs
+or treat references as authority.
+
+`attachment_download` requires explicit provider/message/attachment IDs and a
+canonical new output path whose parent already exists. Provider filenames never
+select destinations; downloads are private, bounded and non-overwriting.
+`draft_save` persists a provider draft without sending. `draft_send` requires
+the fingerprint returned by a current draft read and `confirm=true`, and rejects
+changed data. It does not promise a universal provider-side compare-and-swap or
+delivery confirmation. `email.draft` is still an AI text helper only.
+
+Keep one UUID `request-id` for each reviewed `send`, `draft_save` or `draft_send`
+action, retain it in the Activity handoff, and retry only the same arguments.
+Different/corrupt/in-flight request records never automatically resubmit.
+An event-bookkeeping error does not justify repeating the Mail effect.
 
 ## Calendar
 
-Manage events locally or sync with Google/Outlook. Works out of the box with no API keys:
+Select `local`, `google` or `outlook` explicitly. Local CRUD needs no remote
+account, but is not a meeting-delivery or account-synchronization engine:
 
 ```bash
-cos app calendar create --title "Standup" --start "2026-03-25T09:00:00Z"
-cos app calendar today
-cos app calendar list --from "2026-03-25" --to "2026-03-26"
-cos app calendar update --id evt-123 --title "New title"
-cos app calendar delete --id evt-123
+cos app calendar create --provider local --title "Standup" \
+  --start "2026-11-08T09:00:00Z" --end "2026-11-08T09:30:00Z"
+cos app calendar today --provider local
+cos app calendar list --provider local --from "2026-11-08" --to "2026-11-09"
+cos app calendar update --provider local --id EVENT_ID --title "New title"
+cos app calendar delete --provider local --id EVENT_ID
 ```
 
-Local events stored in SQLite. Add `--provider google` or `--provider outlook` with OAuth tokens for cloud sync.
+`local_event`, `google_event` and `outlook_event` are independent ID-only object
+resolvers. `invite` and `respond` use only Google/Outlook and require explicit
+confirmation. Invites require distinct attendee addresses and offset-aware start/
+end times. Local CRUD never pretends to notify guests; provider request success
+is not guest delivery proof.
+
+## Cross-App Activities
+
+An Activity is the persistent owner goal; a Job is one attempt, and a Session
+is its conversation/authority context. Use the existing Activity service and
+ordinary authorized App Mesh, not a workflow DSL, App intercall or new queue.
+[Activity lifecycle](../../docs/activities.md) and
+[finite execution limits](../../docs/activity-execution-limits.md) are shared
+between terminal, Web and native presentation.
+
+| Goal | Authorized system-Agent sequence |
+| --- | --- |
+| Process an invoice | Read a Mail message and attachment list; download the selected attachment to an explicit new path; read it through Doc/Files; write an extraction/report through Files; save a Mail draft for review. |
+| Prepare a meeting | Read the Mail request and relevant Calendar events; prepare the agenda in Files; request a confirmed provider invitation; save/read/review/send the Mail follow-up with a retained request ID. |
+| Research and report | Search/read web sources; retain source attribution; write a Files report or staged change proposal; review its actual diff; save a provider Mail draft rather than silently sending AI text. |
+| Reconcile tabular data | Read a document through Doc; submit scoped statements to DB or explicit KV records; export a Files report; notify only after normal outbound authority and review. KV data is not Agent memory. |
+| Diagnose and repair | Inspect Diagnostics/Security/Events evidence; prepare an exact maintenance/package/container action; settle its normal OS approvals; retain results and uncertainty before notifying. |
+| Respond from a channel | Consume a provider-verified owner-bound channel event; execute the selected bounded Activity steps; call that connector's confirmed receipt-bound `reply`, not an arbitrary recipient or App-originated Agent call. |
+
+Attach only returned canonical references as artifacts. Root captures declared
+`object`, `reference` and `artifacts` result fields from successful App execution
+and records caller reports separately from authenticated declaration snapshots.
+Attachment does not resolve/read the object or grant permission. Effect previews
+are non-executing App declarations; unresolved targets and unknown recovery must
+stay visible.
+
+When explicitly enabled Activity work exposes `cos_activity_checkpoint`, call
+it alone at the segment end with accurate summary, completed steps, returned
+artifact references and a concrete next action. `continue` means different
+useful work remains; `wait` means an external condition must change; `review`
+requests owner verification; `blocked` requests human input. Never repeat an
+uncertain side effect, silently reset progress, or infer Activity completion
+from a successful Job. Only the owner explicitly completes the goal.
+
+Mail `sync` reads one bounded inbox history/delta page without a model. Its first
+pass is an inert baseline; later new-message references enter `app:email`.
+Calendar and Files publish their own reported events after successful changes.
+An owner-created, normally approved Activity trigger consumes these sources.
+Publication itself neither delegates work nor proves an external effect.
+
+## Selected message channels
+
+Only Discord, Telegram, Slack and WhatsApp are selected. Their IDs remain
+`gateway-discord`, `gateway-telegram`, `gateway-slack` and `gateway-whatsapp`.
+Existing outbound `send` operations remain independent.
+
+A human configures exact provider account, channel, sender and owned Activity
+trigger through `cos channels configure PLATFORM` with the closed JSON request
+on stdin. The trigger must match `channel:gateway-PLATFORM` and
+`message.received`, with active finite limits and its approved generation.
+The model and Apps cannot supply owner identities, credentials or trigger
+capability snapshots. See the [channel contract](../../claw-os-sdk/wire/v1/channel-ingress.md).
+
+Managed `start`, `stop` and `status` use `clawd`, independent of an active model.
+Discord/Telegram use authenticated provider polling with a non-replaying initial
+baseline; Slack/WhatsApp require signed HTTP requests and operator-owned public
+HTTPS forwarding to the loopback receiver. Discord local `configure` preferences
+and old App PID/cursor/session files do not become Root admission.
+
+Use `reply` with the original `channel-event-...` ID, explicit text and
+`confirm=true`. Root resolves the original owned account/recipient/thread;
+WhatsApp BSUIDs stay opaque and do not require a phone number. Identical completed
+replies return retained results; uncertain submissions never automatically resend.
+Stopping admission does not undo requests or cancel existing Jobs. Unavailable
+receivers, credentials, capacity or corrupt progress are explicit holds.
 
 ## File System
 
@@ -104,7 +201,8 @@ cos app net download https://example.com/file.zip --output /home/cos/file.zip
 
 ## Key-Value Store
 
-Persistent key-value storage for state and memory:
+Persistent App-owned key-value storage for explicitly selected records, not
+Agent memory, another product's private data or credentials:
 
 ```bash
 cos app kv set project:status "building"
