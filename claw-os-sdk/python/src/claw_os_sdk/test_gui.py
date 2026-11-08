@@ -1,8 +1,11 @@
 """Unit tests for the desktop GUI bootstrap in `claw_os_sdk.gui`."""
 
 import os
+import stat
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 _THIS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from claw_os_sdk import gui` works
@@ -79,9 +82,15 @@ class OverlayTests(unittest.TestCase):
     def test_missing_binary_raises(self) -> None:
         ctx = gui.GuiContext(app_id="notes")
         os.environ["COS_AGENT_UI_BIN"] = "/nonexistent/attacker"
+        def trusted_parents_missing_launcher(path):
+            if path == gui.ASK_CLAW_LAUNCHER:
+                raise FileNotFoundError(path)
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
         try:
-            with self.assertRaises(FileNotFoundError):
-                ctx.open_agent_overlay()
+            with patch.object(gui.os, "lstat", side_effect=trusted_parents_missing_launcher) as inspect:
+                with self.assertRaises(FileNotFoundError):
+                    ctx.open_agent_overlay()
+            self.assertEqual(inspect.call_args_list[-1].args, (gui.ASK_CLAW_LAUNCHER,))
         finally:
             os.environ.pop("COS_AGENT_UI_BIN", None)
 
