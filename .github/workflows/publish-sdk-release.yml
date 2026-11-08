@@ -112,7 +112,7 @@ jobs:
           PYTHONPATH=claw-os-sdk/python/src \
             python3 -m pytest -q claw-os-sdk/python/src
           npm test --prefix claw-os-sdk/node
-          cargo test -p claw-os-sdk
+          cargo test -p claw-os-sdk -- --test-threads=1
           (cd claw-os-sdk/go && go test ./...)
 
       - name: Build SDK release artifacts
