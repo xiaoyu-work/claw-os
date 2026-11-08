@@ -69,6 +69,7 @@ use serde::de::DeserializeOwned;
 pub mod ai;
 pub mod applet;
 pub mod envelope;
+pub mod events;
 pub mod generated;
 pub mod gui;
 pub mod mcp;

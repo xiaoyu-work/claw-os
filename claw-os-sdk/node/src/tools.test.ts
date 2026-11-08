@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import * as tools from "./tools";
+import * as events from "./events";
 import {
   WireDecimal,
   WireJsonSerializationError,
@@ -14,6 +15,24 @@ import {
   wireSuccessJson,
   withCos,
 } from "./testutil";
+
+test("App events keep business payload on stdin without caller identity selectors", () => {
+  const fake = installFakeCos(wireSuccessJson('{"accepted":true}'));
+  const captured = fake.bin + ".stdin";
+  const script = readFileSync(fake.bin, "utf8").replace(
+    "process.stdout.write(",
+    `fs.writeFileSync(${JSON.stringify(captured)}, fs.readFileSync(0));\nprocess.stdout.write(`,
+  );
+  writeFileSync(fake.bin, script);
+  const result = withCos(fake, {}, () =>
+    events.publish("changed", "stable", { payload: { object: "app://fs/file?id=%2Ftmp%2Ffile" } }),
+  );
+  assert.deepEqual(result, { accepted: true });
+  assert.deepEqual(readFileSync(fake.argvOut, "utf8").split("\n"), ["--wire=1", "__app_event", "publish"]);
+  assert.deepEqual(JSON.parse(readFileSync(captured, "utf8")), {
+    event_type: "changed", key: "stable", payload: { object: "app://fs/file?id=%2Ftmp%2Ffile" },
+  });
+});
 
 test("call builds argv and parses the result", () => {
   const fake = installFakeCos(

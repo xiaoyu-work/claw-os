@@ -724,6 +724,18 @@ pub struct ContextEventAppend {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AppEventPublish {
+    pub session: Token,
+    pub event_type: Name<128>,
+    pub key: Name<128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<Text<1024>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Structured>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextEventQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_type: Option<Token>,

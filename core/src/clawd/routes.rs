@@ -45,7 +45,7 @@ use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
     accessibility, activities, activity_attention, activity_object_state, activity_objects,
-    activity_receipts, agent_account, agent_hooks, app_services, app_sessions, audio, backup,
+    activity_receipts, agent_account, agent_hooks, app_events, app_services, app_sessions, audio, backup,
     bluetooth, browser, camera, clipboard, config_editor, containers, context, context_events,
     conversations, crash, credentials, desktop, display, event_center, file_changes, firewall, hardware,
     journal as journal_ops, location, memory, network, network_diagnostics, notifications,
@@ -1235,6 +1235,19 @@ routes! {
             ("limit", FieldRule::Count),
         ],
         run: |c| context_events::query_for_client(c.params, c.client).map_err(BrokerError::from),
+    }
+    SystemAppEventPublish {
+        name: "system.app-event.publish",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::AppEventPublish,
+        audit: &[("event_type", FieldRule::Token), ("key", FieldRule::Identifier)],
+        run: |c| {
+            let authority = c.authority()?;
+            app_events::publish(c.params, c.client, authority).map_err(BrokerError::from)
+        },
     }
     SystemOperations {
         name: "system.operations",

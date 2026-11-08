@@ -36,7 +36,7 @@ implementation details of the claw-os bundled apps, not part of the
 public SDK surface.
 """
 
-from . import ai, gui, kernel, mcp, objects, tools
+from . import ai, events, gui, kernel, mcp, objects, tools
 
-__all__ = ["ai", "gui", "kernel", "mcp", "objects", "tools"]
+__all__ = ["ai", "events", "gui", "kernel", "mcp", "objects", "tools"]
 __version__ = "0.1.0"

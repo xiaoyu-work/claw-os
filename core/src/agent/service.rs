@@ -4149,7 +4149,7 @@ struct JobProgressSink {
     job_id: String,
 }
 
-fn clip_progress_text(value: &str, max_chars: usize) -> String {
+pub(crate) fn clip_progress_text(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
     }

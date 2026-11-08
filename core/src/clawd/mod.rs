@@ -16,6 +16,7 @@ pub mod agent_client;
 pub mod agent_hooks;
 pub mod ai;
 pub mod app_notifications;
+pub mod app_events;
 pub mod app_permissions;
 pub mod app_services;
 pub mod app_sessions;

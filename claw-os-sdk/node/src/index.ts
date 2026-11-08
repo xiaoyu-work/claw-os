@@ -20,6 +20,7 @@
 // deliberately NOT here — they live in the internal cos-runtime tree.
 
 export * as ai from "./ai";
+export * as events from "./events";
 export * as tools from "./tools";
 export * as gui from "./gui";
 export * as mcp from "./mcp";

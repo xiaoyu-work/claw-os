@@ -764,6 +764,16 @@ fn dispatch_with_stdin_impl(
     if name == "__file" {
         return file_replace_bridge(args, stdin_data);
     }
+    if name == "__app_event" {
+        if args.len() != 2 || args[1] != "publish" {
+            return Err("App event bridge requires `publish` with bounded stdin".into());
+        }
+        let mut request = parse_internal_request_object(stdin_data.as_deref(), 20 * 1024, "App event")?;
+        let session = env::var("COS_SESSION").map_err(|_| "App events require an authenticated session")?;
+        request.insert("session".into(), json!(session));
+        let value = request_wire_clawd(Command::SystemAppEventPublish, Value::Object(request))?;
+        return Ok(Some(value.to_string()));
+    }
 
     if name == "__package" {
         let action = args
