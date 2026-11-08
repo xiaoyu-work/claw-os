@@ -35,12 +35,31 @@ fn context_rejects_malformed_file_arguments() {
 #[test]
 #[cfg(target_os = "linux")]
 fn overlay_ignores_executable_environment_override() {
-    std::env::set_var("COS_AGENT_UI_BIN", "/nonexistent/attacker");
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let attacker = directory.path().join("attacker");
+    let marker = directory.path().join("unexpected-execution");
+    std::fs::write(
+        &attacker,
+        format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&attacker, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::env::set_var("COS_AGENT_UI_BIN", &attacker);
     let context = Context {
         app_id: "notes".into(),
         files: Vec::new(),
     };
     let error = context.open_agent_overlay(None).unwrap_err();
     std::env::remove_var("COS_AGENT_UI_BIN");
-    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        !marker.exists(),
+        "an environment-selected program was executed"
+    );
+    assert!(
+        error.kind() == std::io::ErrorKind::NotFound
+            || (error.kind() == std::io::ErrorKind::PermissionDenied
+                && error.to_string().starts_with("untrusted Ask Claw launcher")),
+        "expected a missing or untrusted fixed launcher, got {error}"
+    );
 }
