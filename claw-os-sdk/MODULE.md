@@ -63,6 +63,12 @@ Rust, Python, Node, and Go bindings.
 `cos-runtime/` is a separate internal package for bundled apps; public apps
 must not depend on its policy/runtime internals.
 
+SDK 0.2.0 adds the public `mail.accounts`, `mail.read`, `mail.draft` and
+`mail.send` manifest vocabulary. Mailbox read/draft and sender rights remain
+independent, profile-qualified named resources; metadata does not grant them.
+Clients use the existing explicit-binary stdin transport, while OS Mail
+execution, native-peer authentication and startup remain broker-owned.
+
 Object resolver DTO fields remain `operation`, `id_arg`, and optional
 `revision_arg`. Core binds that selector through the ordinary App command
 contract, including MCP-only commands; SDK loaders merely admit the inert

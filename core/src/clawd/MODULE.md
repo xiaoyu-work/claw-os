@@ -84,6 +84,7 @@ and agent tasks.
 | `nearby/` | Owner/window-bound AirDrop sharing, exact human offer decisions, private uploads/snapshots, isolated transport and checked radio retirement; see `nearby/MODULE.md` |
 | `app_notifications.rs` | Closed native post/close and legacy-facade send/list, exact App/action/owner/source grants, and durable Notification Service publication/query |
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
+| `mail.rs`, `../mail_native.rs` | Account-scoped Thunderbird mail service and OS-owned Native Messaging multiplexer; independent read/draft/sender grants, owner service startup, stable message references and no mailbox authority for AI App stdout |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
@@ -117,6 +118,16 @@ argument-bound and mailbox/credential capabilities are refused, not inherited
 when the product gains another tool. Native launch still requires the
 root-owned launcher and Thunderbird parent; consent and AI accounting remain
 in the broker gate.
+
+`system.mail.control` uses the normal authenticated SystemService route and
+requires named `mail.read`, `mail.draft`, or `mail.send` rights, or unscoped
+`mail.accounts` for discovery. No caller App name confers access. Profile-
+qualified accounts bind to the owner's authenticated Thunderbird bridge.
+Closed action inputs cannot choose an owner, socket, executable or profile
+path. The OS-owned gateway alone forwards root broker mailbox requests; it
+filters AI child stdout to correlated AI replies. The native AI manifest
+ceiling remains unchanged and the existing native-host integration exception
+still blocks publication until its generic-contract replacement.
 
 The `system.app-permissions` service accepts any authenticated session holding
 the existing High-risk `sys.permissions:manage` capability for the request's

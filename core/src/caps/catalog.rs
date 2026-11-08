@@ -897,6 +897,38 @@ pub const CATALOG: &[CapMeta] = &[
         "⚠",
         Risk::Critical,
     ),
+    CapMeta::new(
+        Verb::MAIL_ACCOUNTS,
+        ScopeKind::None,
+        LocalizedStr::new("List your mail accounts"),
+        LocalizedStr::new("List this owner's configured Thunderbird accounts and sender identities. May start Thunderbird through the owner's service manager; does not read messages or credentials."),
+        "✉",
+        Risk::Low,
+    ),
+    CapMeta::new(
+        Verb::MAIL_READ,
+        ScopeKind::Name,
+        LocalizedStr::new("Read mail in the selected account"),
+        LocalizedStr::new("Read folders, messages, drafts and attachments in the explicitly selected Thunderbird account. Uses its existing login; does not expose credentials or authorize another account."),
+        "✉",
+        Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::MAIL_DRAFT,
+        ScopeKind::Name,
+        LocalizedStr::new("Save mail drafts in the selected account"),
+        LocalizedStr::new("Create or replace drafts in the explicitly selected Thunderbird account. Does not send mail or delete ordinary messages."),
+        "✉",
+        Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::MAIL_SEND,
+        ScopeKind::Name,
+        LocalizedStr::new("Send mail from the selected account"),
+        LocalizedStr::new("Send mail through the explicitly selected Thunderbird account and its existing sender identity. A saved draft additionally requires its current review fingerprint and explicit confirmation."),
+        "✉",
+        Risk::High,
+    ),
 ];
 
 /// Look up the metadata for a verb. Returns `None` only if the verb

@@ -9,8 +9,17 @@ pub(super) async fn launch(
     args: Vec<String>,
     environment: DesktopEnvironment,
 ) -> Result<(), String> {
+    launch_program(PROGRAM, "settings", &args, environment).await
+}
+
+pub(super) async fn launch_program(
+    program: &str,
+    service: &str,
+    args: &[String],
+    environment: DesktopEnvironment,
+) -> Result<(), String> {
     validate_session_bus(&environment)?;
-    let service_args = service_args(&args, &environment)?;
+    let service_args = service_args_for(program, service, args, &environment)?;
     let output = run_user_command(
         PathBuf::from("/usr/bin/systemd-run"),
         service_args,
@@ -20,7 +29,7 @@ pub(super) async fn launch(
     .await?;
     if !output.status.success() {
         return Err(format!(
-            "Settings user-session service unavailable or activation failed: {} ({})",
+            "{service} user-session service unavailable or activation failed: {} ({})",
             tail(&output.stderr),
             output.status,
         ));
@@ -48,7 +57,16 @@ fn validate_session_bus(environment: &DesktopEnvironment) -> Result<(), String> 
 }
 
 fn service_args(args: &[String], environment: &DesktopEnvironment) -> Result<Vec<String>, String> {
-    let launch = configured_user_command(Path::new(PROGRAM), args, environment);
+    service_args_for(PROGRAM, "settings", args, environment)
+}
+
+fn service_args_for(
+    program: &str,
+    service: &str,
+    args: &[String],
+    environment: &DesktopEnvironment,
+) -> Result<Vec<String>, String> {
+    let launch = configured_user_command(Path::new(program), args, environment);
     let mut service = vec![
         "--user".into(),
         "--quiet".into(),
@@ -56,10 +74,10 @@ fn service_args(args: &[String], environment: &DesktopEnvironment) -> Result<Vec
         "--service-type=exec".into(),
         "--expand-environment=no".into(),
         format!(
-            "--unit=claw-settings-{}.service",
+            "--unit=claw-{service}-{}.service",
             uuid::Uuid::new_v4().simple()
         ),
-        "--property=Description=Claw OS Settings".into(),
+        format!("--property=Description=Claw OS {service}"),
         "--property=TimeoutStartSec=25s".into(),
         // The start job observes immediate main-process failures without waiting
         // for the GUI's lifetime. systemd owns reaping and garbage collection.
@@ -87,7 +105,7 @@ fn service_args(args: &[String], environment: &DesktopEnvironment) -> Result<Vec
             service.push(format!("{name}={value}"));
         }
     }
-    service.push(PROGRAM.into());
+    service.push(program.into());
     service.extend(args.iter().cloned());
     Ok(service)
 }

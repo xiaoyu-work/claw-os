@@ -1436,6 +1436,17 @@ pub struct BrowserControl {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MailControl {
+    pub session: Token,
+    pub action: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<Name>,
+    pub args: serde_json::Map<String, serde_json::Value>,
+    pub deadline_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DesktopControl {
     pub session: Token,
     pub action: Token,

@@ -2778,6 +2778,10 @@ fn require_trusted_native_launcher(client: &ClientIdentity) -> Result<(), String
     let pid = client
         .pid
         .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
+    validate_native_mail_launcher(pid)
+}
+
+pub(super) fn validate_native_mail_launcher(pid: u32) -> Result<(), String> {
     let launcher = process_executable(pid)
         .ok_or_else(|| "native App launcher executable is unavailable".to_string())?;
     if launcher != std::path::Path::new("/usr/lib/cos/claw-mail-ai-host")

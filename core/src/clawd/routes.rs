@@ -48,7 +48,7 @@ use super::{
     activity_receipts, agent_account, agent_hooks, app_events, app_services, app_sessions, audio, backup,
     bluetooth, browser, camera, channels, clipboard, config_editor, containers, context, context_events,
     conversations, crash, credentials, desktop, display, event_center, file_changes, firewall, hardware,
-    journal as journal_ops, location, memory, network, network_diagnostics, notifications,
+    journal as journal_ops, location, mail, memory, network, network_diagnostics, notifications,
     operation_previews, packages, permissions, power, printer, scheduler, security, snapshots,
     storage, system_journal, systemd, tasks, transactions, usage, usb_guard, users,
 };
@@ -2173,6 +2173,23 @@ routes! {
         run: |c| {
             let authority = c.authority()?;
             browser::control(c.params, authority).await
+        },
+    }
+    SystemMailControl {
+        name: "system.mail.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 2, deadline: Deadline::Uninterruptible },
+        authority: session(Audience::SystemService),
+        body: body::MailControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("account", FieldRule::Token),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            mail::control(c.params, c.client, authority).await
         },
     }
     SystemDisplayControl {

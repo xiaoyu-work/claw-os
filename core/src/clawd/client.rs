@@ -94,6 +94,7 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
         || matches!(command, super::routes::Command::AppGuiLaunch
             | super::routes::Command::AppGuiWait | super::routes::Command::AppGuiStop)
         || command == super::routes::Command::SystemRegionalSettingsControl
+        || command == super::routes::Command::SystemMailControl
         || command.as_str().starts_with("system.review.")
 }
 

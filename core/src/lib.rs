@@ -45,6 +45,7 @@ pub(crate) mod host_browser;
 pub mod i18n;
 pub mod ipc;
 pub mod model;
+pub mod mail_native;
 pub mod netfilter;
 pub mod notifications;
 pub mod nearby;

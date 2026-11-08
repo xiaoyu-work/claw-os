@@ -106,7 +106,7 @@ pub async fn access(params: Value, authority: &Decision, mutation: bool) -> Resu
     }
 }
 
-fn resolve_path(raw: &str) -> Result<PathBuf, String> {
+pub(super) fn resolve_path(raw: &str) -> Result<PathBuf, String> {
     let path = Path::new(raw);
     if raw.is_empty() || raw.contains('\0') || !path.is_absolute() {
         return Err("filesystem path must be a nonempty absolute path without NUL".into());

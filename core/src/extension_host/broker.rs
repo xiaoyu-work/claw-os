@@ -48,6 +48,7 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemConfigControl,
     Command::SystemCrashInspect,
     Command::SystemBrowserControl,
+    Command::SystemMailControl,
     Command::SystemDesktopControl,
     Command::SystemFilesystemRead,
     Command::SystemFilesystemWrite,

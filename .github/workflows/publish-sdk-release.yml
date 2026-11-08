@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SDK SemVer already declared by Python, Node, and Rust (for example 0.1.0)"
+        description: "SDK SemVer already declared by Python, Node, and Rust (for example 0.2.0)"
         required: true
-        default: "0.1.0"
+        default: "0.2.0"
         type: string
 
 concurrency:

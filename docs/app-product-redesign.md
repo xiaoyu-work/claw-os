@@ -52,7 +52,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | Source migration | Status |
 | --- | --- |
 | Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
-| `email` | Moved to `clawos-app/products/mail/apps/email`; existing provider grants and installed identity preserved |
+| `email` | Source remains in `clawos-app/products/mail/apps/email`; Thunderbird mailbox cutover preserves identity, declares separate account-scoped mail grants and leaves old provider state untouched |
 | `gateway-email` | Moved to `clawos-app/products/mail/apps/gateway/email`; nested installation, identity and grants preserved |
 | `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged |
 | `panel-calendar` | Complete native UI, assets, manifest, tests and build inputs moved to `clawos-app/products/calendar`; OS shell injects a shared policy-gated provider and retains desktop package ownership |

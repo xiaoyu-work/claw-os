@@ -15,6 +15,17 @@ use super::client_identity::ClientIdentity;
 
 mod settings;
 
+pub(super) async fn start_thunderbird(client: &ClientIdentity) -> Result<(), String> {
+    let uid = client.require_uid()?;
+    let gid = client.gid.ok_or("Mail owner gid is unavailable")?;
+    let home = client.require_home_dir()?;
+    let pid = client.pid.ok_or("Mail caller pid is unavailable")?;
+    let environment = DesktopEnvironment::for_user(uid, gid, home, pid)?;
+    settings::launch_program(
+        "/usr/bin/thunderbird", "thunderbird", &[], environment,
+    ).await
+}
+
 const HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
