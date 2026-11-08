@@ -55,6 +55,13 @@ pub struct AppStoreApp {
 }
 
 pub use clawd_client::nearby::NearbyRequest as NearbyControl;
+pub use clawd_client::workspaces::ControlRequest as WorkspaceControl;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceGet {
+    pub id: Token,
+}
 
 pub use crate::clawd::regional_settings::Request as RegionalSettingsControl;
 

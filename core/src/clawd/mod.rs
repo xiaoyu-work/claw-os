@@ -87,3 +87,5 @@ pub mod usage;
 pub mod usb_guard;
 pub mod users;
 pub mod wire;
+pub(crate) mod owner_files;
+pub mod workspaces;

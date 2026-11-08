@@ -142,7 +142,11 @@ fn schema_six_migrates_to_seven_without_changing_activity_rows() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE activity_work_history;
+            "DROP TABLE workspace_activities;
+             DROP TABLE workspace_tags;
+             DROP TABLE workspace_notes;
+             DROP TABLE workspaces;
+             DROP TABLE activity_work_history;
              DROP TABLE activity_work;
              DROP TABLE activity_continuity;
              DROP TABLE activity_scheduling_policies;

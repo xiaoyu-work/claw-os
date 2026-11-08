@@ -19,6 +19,21 @@ pub const APP_STDIO_DESCRIPTION: &str =
 /// aliases.
 pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
     vec![
+        ("workspace", "Shared context domains above Activities; resource tags are read-only", vec![
+            ("list", "List the owner's Workspaces"),
+            ("show", "Show shared context, notes, resource tags and Activity membership"),
+            ("create", "Create a named Workspace"),
+            ("update", "Revise Workspace background at the displayed revision"),
+            ("archive", "Archive a Workspace without cancelling in-flight work"),
+            ("restore", "Restore an archived Workspace"),
+            ("delete", "Revoke sharing, stop automatic work and pause member Activities; preserve files and evidence"),
+            ("tag", "Share a file or recursive folder read-only with a Workspace"),
+            ("untag", "Remove one exact resource sharing tag"),
+            ("note", "Add or revise a sourced shared owner note"),
+            ("forget-note", "Remove a shared note from future context"),
+            ("attach", "Associate an idle Activity with a Workspace"),
+            ("detach", "Detach a paused idle Activity"),
+        ]),
         ("share","Nearby AirDrop file sharing; no Agent task required",vec![
             ("status","Inspect hardware, current window, offers and transfers"),
             ("doctor","Inspect the nearby radio and availability diagnostics"),

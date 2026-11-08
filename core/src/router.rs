@@ -1972,6 +1972,7 @@ fn dispatch_with_stdin_impl(
     // Built-in OS primitives
     match name.as_str() {
         "activity" => dispatch_builtin(args, "activity", crate::activity::run),
+        "workspace" => dispatch_builtin(args, "workspace", crate::workspaces::cli::run),
         "share" => dispatch_builtin(args, "share", crate::nearby::run),
         "object" => dispatch_builtin(args, "object", object_commands::run),
         "operation" => dispatch_builtin(args, "operation", operation_commands::run),
