@@ -62,7 +62,7 @@ pub fn publish(
     append_once(&record)
 }
 
-fn append_once(record: &Value) -> Result<Value, String> {
+pub(crate) fn append_once(record: &Value) -> Result<Value, String> {
     let path = crate::paths::context_events_log_path();
     if let Some(parent) = path.parent() {
         crate::storage::ensure_private_dir(parent).map_err(|error| error.to_string())?;

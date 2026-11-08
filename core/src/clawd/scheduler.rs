@@ -558,24 +558,57 @@ fn scheduled_ceiling(home: &Path) -> CapSet {
 pub(crate) async fn authorize_nearby_effect(
     client: &ClientIdentity, required: &[Cap], operation: &str, label: &str,
 ) -> Result<(),BrokerError> {
+    authorize_owner_effect(client, required, operation, label, "nearby", "Nearby sharing").await.map(|_| ())
+}
+
+pub(crate) struct OwnerEffectAuthorization {
+    pub uid: u32,
+    pub home: std::path::PathBuf,
+    pub tier: u8,
+}
+
+pub(crate) async fn authorize_channel_effect(
+    client: &ClientIdentity, required: &[Cap], operation: &str, label: &str,
+) -> Result<OwnerEffectAuthorization, BrokerError> {
+    authorize_owner_effect(client, required, operation, label, "channel", "Channel ingress").await
+}
+
+pub(crate) async fn authenticate_channel_owner(
+    client: &ClientIdentity,
+) -> Result<OwnerEffectAuthorization, BrokerError> {
+    let uid = client.require_uid()?;
+    if uid == 0 || client.extension_host.is_some() {
+        return Err(BrokerError::authorization("channel management requires a non-root human owner"));
+    }
+    let home = super::system_caps::verified_owner_home(uid)?;
+    let caller = authenticate_caller(client, uid, &home).await?;
+    Ok(OwnerEffectAuthorization { uid, home, tier: caller.tier.unwrap_or(Role::Worker.credential_tier()) })
+}
+
+async fn authorize_owner_effect(
+    client: &ClientIdentity, required: &[Cap], operation: &str, label: &str,
+    namespace: &str, purpose: &'static str,
+) -> Result<OwnerEffectAuthorization, BrokerError> {
     let uid=client.require_uid()?;
     if uid==0 || client.extension_host.is_some() || required.is_empty() {
-        return Err(BrokerError::authorization("Nearby sharing requires a non-root human owner"));
+        return Err(BrokerError::authorization(format!("{purpose} requires a non-root human owner")));
     }
     let home=super::system_caps::verified_owner_home(uid)?;
     let mut caller=authenticate_caller(client,uid,&home).await?;
-    caller.grant_session=nearby_grant_identity(&caller.grant_session,&caller.requester,operation);
+    caller.grant_session=owner_effect_grant_identity(namespace,&caller.grant_session,&caller.requester,operation);
     let missing:Vec<_>=required.iter().filter(|cap|!caller.delegable.covers(cap)).cloned().collect();
-    if missing.is_empty() {return Ok(());}
-    match crate::approvals::consume_grant_set_once_for_owner(&caller.grant_session,&missing,Some(uid)) {
-        Ok(true)=>Ok(()),
-        Ok(false)=>Err(request_approvals(label,&caller,&missing,"Nearby sharing")),
-        Err(error)=>Err(BrokerError::unavailable(format!("settle nearby permission: {error}"))),
+    if !missing.is_empty() {
+        match crate::approvals::consume_grant_set_once_for_owner(&caller.grant_session,&missing,Some(uid)) {
+            Ok(true)=>{}
+            Ok(false)=>return Err(request_approvals(label,&caller,&missing,purpose)),
+            Err(error)=>return Err(BrokerError::unavailable(format!("settle {namespace} permission: {error}"))),
+        }
     }
+    Ok(OwnerEffectAuthorization { uid, home, tier:caller.tier.unwrap_or(Role::Worker.credential_tier()) })
 }
 
-fn nearby_grant_identity(session:&str,requester:&str,operation:&str)->String {
-    format!("nearby:{}",crate::crypto::sha256_hex(format!("{session}\0{requester}\0{operation}").as_bytes()))
+fn owner_effect_grant_identity(namespace:&str,session:&str,requester:&str,operation:&str)->String {
+    format!("{namespace}:{}",crate::crypto::sha256_hex(format!("{session}\0{requester}\0{operation}").as_bytes()))
 }
 
 // ---------------------------------------------------------------------------

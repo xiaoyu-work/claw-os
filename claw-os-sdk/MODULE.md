@@ -51,6 +51,7 @@ Rust, Python, Node, and Go bindings.
 | `rust/notification-presentation/`, `wire/v1/notification-presentation.md` | OS-defined rendering/preferences companion contract; no App config/UI dependency, authority store or renderer feature coupling |
 | `python/` | Python public SDK |
 | `python/src/claw_os_sdk/events.py`, `rust/src/events.rs`, `node/src/events.ts`, `go/events.go` | App-scoped reported event publication on bounded stdin, sharing existing wire decoders |
+| Four-language `channels` clients, `wire/v1/channel-ingress.md` | Exact-App managed channel status/start/stop and confirmed receipt-bound replies; no App-controlled owner/sender configuration or task submission |
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |
 | `python/src/claw_os_sdk/generated.py` | Generated Python wire bindings |

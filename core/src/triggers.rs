@@ -510,7 +510,7 @@ where
         .ok_or_else(|| "internal: trigger update lost rule".to_string())
 }
 
-fn load_rule(id: &str) -> Result<TriggerRule, String> {
+pub(crate) fn load_rule(id: &str) -> Result<TriggerRule, String> {
     let id = sanitize_id(id).ok_or_else(|| format!("invalid rule id '{id}'"))?;
     let raw = crate::filelock::read_locked(&rule_path(&id))
         .map_err(|error| format!("read trigger '{id}': {error}"))?

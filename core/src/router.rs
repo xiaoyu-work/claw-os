@@ -774,6 +774,30 @@ fn dispatch_with_stdin_impl(
         let value = request_wire_clawd(Command::SystemAppEventPublish, Value::Object(request))?;
         return Ok(Some(value.to_string()));
     }
+    if name == "__channel" {
+        if args.len() != 2 || args[1] != "control" {
+            return Err("channel bridge requires `control` with bounded stdin".into());
+        }
+        let mut request = parse_internal_request_object(stdin_data.as_deref(), 20 * 1024, "channel control")?;
+        let session = env::var("COS_SESSION").map_err(|_| "channel control requires an authenticated App session")?;
+        request.insert("session".into(), json!(session));
+        let value = request_wire_clawd(Command::SystemChannelControl, Value::Object(request))?;
+        return Ok(Some(value.to_string()));
+    }
+    if name == "channels" {
+        if args.len() == 3 && matches!(args[1].as_str(), "status" | "stop") {
+            let value = request_wire_clawd(Command::ChannelManage, json!({"platform":args[2],"action":args[1]}))?;
+            return Ok(Some(value.to_string()));
+        }
+        if args.len() != 3 || args[1] != "configure" {
+            return Err("usage: cos channels configure <discord|telegram|slack|whatsapp> with account_id, channel_id, sender_id and trigger_id JSON on stdin".into());
+        }
+        let mut request = parse_internal_request_object(stdin_data.as_deref(), 4096, "channel configuration")?;
+        if request.contains_key("platform") { return Err("select the channel only in argv".into()); }
+        request.insert("platform".into(), json!(args[2]));
+        let value = request_wire_clawd(Command::ChannelConfigure, Value::Object(request))?;
+        return Ok(Some(value.to_string()));
+    }
 
     if name == "__package" {
         let action = args

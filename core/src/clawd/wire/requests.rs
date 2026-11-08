@@ -736,6 +736,36 @@ pub struct AppEventPublish {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ChannelConfigure {
+    pub platform: Token<16>,
+    pub account_id: Text<256>,
+    pub channel_id: Text<192>,
+    pub sender_id: Text<192>,
+    pub trigger_id: Token<64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelManage {
+    pub platform: Token<16>,
+    pub action: Token<16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelControl {
+    pub session: Token,
+    pub action: Token<16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Token<96>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<Text<16384>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextEventQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_type: Option<Token>,
