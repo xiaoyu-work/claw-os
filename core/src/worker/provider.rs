@@ -153,6 +153,7 @@ pub struct WorkerLaunch {
     /// `None` means the worker gets no broker endpoint at all — the
     /// sandbox contains no path to kernel authority.
     pub authority: Option<BrokerAuthority>,
+    pub(crate) root_custody: bool,
 }
 
 impl WorkerLaunch {
@@ -160,11 +161,17 @@ impl WorkerLaunch {
         Self {
             policy,
             authority: None,
+            root_custody: false,
         }
     }
 
     pub fn with_authority(mut self, authority: BrokerAuthority) -> Self {
         self.authority = Some(authority);
+        self
+    }
+
+    pub(crate) fn with_root_custody(mut self, required: bool) -> Self {
+        self.root_custody = required;
         self
     }
 }
@@ -220,6 +227,8 @@ impl Availability {
 /// runtime directory, so a worker cannot outlive the authority that
 /// launched it.
 pub struct LaunchResources {
+    #[cfg(target_os = "linux")]
+    pub(crate) app_custody: Option<std::sync::Arc<super::app_custody::Custody>>,
     #[allow(dead_code)]
     pub(crate) broker: Option<super::broker::BrokerEndpoint>,
     #[allow(dead_code)]
@@ -239,6 +248,8 @@ pub struct LaunchResources {
 impl LaunchResources {
     pub fn empty() -> Self {
         Self {
+            #[cfg(target_os = "linux")]
+            app_custody: None,
             broker: None,
             egress: None,
             runtime_dir: None,
@@ -251,9 +262,39 @@ impl LaunchResources {
         }
     }
 
+    pub(crate) fn custody_socket(&self) -> Option<&std::path::Path> {
+        #[cfg(target_os = "linux")]
+        { self.app_custody.as_ref().map(|custody| custody.socket()) }
+        #[cfg(not(target_os = "linux"))]
+        { None }
+    }
+
+    pub(crate) fn release_custody_gate(&self) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let Some(custody) = &self.app_custody {
+            custody.gate.release()?;
+        }
+
+        pub(crate) fn bind_custody_process(&self, pid: u32) -> Result<(), String> {
+            #[cfg(target_os = "linux")]
+            if let Some(custody) = &self.app_custody {
+                custody.bind_process(pid)?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = pid;
+            Ok(())
+        }
+        Ok(())
+    }
+
     /// Kill everything still running under this launch. Safe to call
     /// more than once.
     pub fn kill_all(&self, child_pid: Option<u32>) {
+        #[cfg(target_os = "linux")]
+        if let Some(custody) = &self.app_custody {
+            custody.stop_process();
+            return;
+        }
         if let Some(scope) = &self.cgroup {
             scope.kill();
         }
@@ -320,6 +361,15 @@ pub struct PreparedLaunch {
     pub facts: serde_json::Value,
     pub governor: Governor,
     pub resources: LaunchResources,
+}
+
+impl Drop for LaunchResources {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(custody) = &self.app_custody {
+            custody.ending();
+        }
+    }
 }
 
 pub trait WorkerSandbox: Send + Sync {

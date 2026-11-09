@@ -1,7 +1,7 @@
 //! Official App delivery. Protected human review precedes atomic publication.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ fn records() -> Result<Vec<Prepared>, String> {
 
 fn expire_requests() -> Result<(), String> {
     for mut record in records()? {
-        if record.phase == "ready" && record.expires_at <= Utc::now() {
+        if matches!(record.phase.as_str(), "ready" | "cleanup_pending") && record.expires_at <= Utc::now() {
             reviews::invalidate(record.owner_uid, &record.review_id)?;
             record.phase = "expired".into();
             write_json(&request_path(&record.request_id)?, &record)?;
@@ -290,7 +290,7 @@ fn prepared(id: &str, owner_uid: u32) -> Result<Prepared, String> {
     if value.owner_uid != owner_uid || value.request_id != id || value.expires_at <= Utc::now() {
         return Err("This App installation request belongs to another owner or has expired".into());
     }
-    if value.phase != "ready" {
+    if !matches!(value.phase.as_str(), "ready" | "cleanup_pending") {
         return Err(
             "The installation outcome must be inspected before preparing another request".into(),
         );
@@ -314,7 +314,7 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
     let active = records()
         .map_err(BrokerError::unavailable)?
         .into_iter()
-        .filter(|value| matches!(value.phase.as_str(), "ready" | "committing"))
+        .filter(|value| matches!(value.phase.as_str(), "ready" | "committing" | "cleanup_pending"))
         .collect::<Vec<_>>();
     if let Some(existing) = active.iter().find(|value| {
         value.owner_uid == owner_uid
@@ -402,7 +402,10 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
     }))
 }
 
-pub async fn commit(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+pub async fn commit(
+    state: &super::state::DaemonState,
+    params: Value, client: &ClientIdentity,
+) -> Result<Value, BrokerError> {
     let owner_uid = owner(client).await?;
     let id = super::permissions::required_string(&params, "request_id")?;
     let _guard = SERIALIZER.lock().await;
@@ -427,51 +430,230 @@ pub async fn commit(params: Value, client: &ClientIdentity) -> Result<Value, Bro
         &pending,
     )
     .map_err(BrokerError::unavailable)?;
-    let record = pending.record.clone();
-    let source = source_path(&id).map_err(BrokerError::authorization)?;
-    let review_id = pending.review_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let apps = apps_root();
-        let existing = crate::apps::discover(&apps)
-            .get(&record.app_id)
-            .map(|app| app.dir.clone());
-        let install = DirectoryInstall::prepare_at(&source, &apps, existing.as_deref())?;
-        let mut confirmation = |app: &crate::apps::App| {
-            let package = app.require_verified()?;
-            record.verify_package(package)?;
-            reviews::consume(owner_uid, &review_id, package)?;
-            Ok(())
-        };
-        install.publish(true, false, &mut confirmation)?;
-        let app = super::app_sessions::installed_app(&record.app_id)?;
-        store::web_metadata(app.require_verified()?)
-    })
-    .await
-    .map_err(|error| BrokerError::unavailable(error.to_string()))?;
-    match result {
-        Ok(app) => {
-            pending.phase = "installed".into();
-            write_json(
-                &request_path(&id).map_err(BrokerError::authorization)?,
-                &pending,
-            )
-            .map_err(BrokerError::unavailable)?;
-            std::fs::remove_dir_all(root().join("staging").join(&id))
-                .map_err(|error| BrokerError::unavailable(error.to_string()))?;
-            Ok(json!({"status": "installed", "app": app}))
+    let state = state.clone();
+    // The controller owns the transaction after the durable phase change. A disconnected
+    // client cannot release its fence while blocking publication or cleanup is still running.
+    let controller = tokio::spawn(async move {
+        let result = commit_prepared(&state, &pending).await;
+        match result {
+            Ok(app) => {
+                pending.phase = "installed".into();
+                write_json(&request_path(&pending.request_id).map_err(BrokerError::indeterminate)?, &pending)
+                    .map_err(BrokerError::indeterminate)?;
+                std::fs::remove_dir_all(root().join("staging").join(&pending.request_id))
+                    .map_err(|error| BrokerError::indeterminate(error.to_string()))?;
+                Ok(json!({"status": "installed", "app": app}))
+            }
+            Err(error) => {
+                // Review is still one-use: a consumed review makes this terminal.
+                let approved = reviews::get(owner_uid, &pending.review_id)
+                    .and_then(|review| review.effective_state()).map_err(BrokerError::indeterminate)?
+                    == reviews::ReviewState::Approved;
+                pending.phase = if approved {
+                    "cleanup_pending".into()
+                } else { "failed".into() };
+                write_json(&request_path(&pending.request_id).map_err(BrokerError::indeterminate)?, &pending)
+                    .map_err(BrokerError::indeterminate)?;
+                let message = format!("App installation is not confirmed: {error}. Inspect installed state; cleanup may still be pending.");
+                Err(if approved { BrokerError::unavailable(message) } else { BrokerError::indeterminate(message) })
+            }
         }
-        Err(error) => {
-            pending.phase = "failed".into();
-            write_json(
-                &request_path(&id).map_err(BrokerError::authorization)?,
-                &pending,
-            )
-            .map_err(BrokerError::unavailable)?;
-            Err(BrokerError::unavailable(format!(
-                "App installation was not confirmed: {error}. Inspect installed state before retrying."
-            )))
+    });
+    drop(_guard);
+    controller.await.map_err(|error| BrokerError::indeterminate(error.to_string()))?
+}
+
+async fn commit_prepared(state: &super::state::DaemonState, pending: &Prepared) -> Result<Value, String> {
+    let app_id = pending.record.app_id.clone();
+    let source = source_path(&pending.request_id)?;
+    let record = pending.record.clone();
+    let owner = pending.owner_uid;
+    let review = pending.review_id.clone();
+    let prepared = tokio::task::spawn_blocking(move || {
+        let apps = apps_root();
+        let existing = crate::apps::discover(&apps).get(&record.app_id).map(|app| app.dir.clone());
+        let install = DirectoryInstall::prepare_at(&source, &apps, existing.as_deref())?;
+        record.verify_package(install.preview()?.require_verified()?)?;
+        let delivery = DeliveryLock::acquire()?;
+        delivery.require_directory_delivery(install.destination())?;
+        Ok::<_, String>((install, delivery, record))
+    }).await.map_err(|error| error.to_string())??;
+    with_mutation(&app_id, |fence| retire_installed(state, &app_id, fence), move |fence| async move {
+        tokio::task::spawn_blocking(move || {
+            let _fence = fence;
+            let (install, delivery, record) = prepared;
+            delivery.require_directory_delivery(install.destination())?;
+            let mut confirmation = |app: &crate::apps::App| {
+                let package = app.require_verified()?;
+                record.verify_package(package)?;
+                reviews::consume(owner, &review, package)?;
+                Ok(())
+            };
+            install.publish(true, false, &mut confirmation)?;
+            let app = super::app_sessions::installed_app(&record.app_id)?;
+            let verified = app.require_verified()?;
+            record.verify_package(verified)?;
+            store::web_metadata(verified)
+        }).await.map_err(|error| error.to_string())?
+    }).await
+}
+
+type MutationFence = std::sync::Arc<tokio::sync::OwnedRwLockWriteGuard<()>>;
+
+pub(crate) async fn with_mutation<T, C, F, P, R>(
+    app: &str, retire: C, publish: P,
+) -> Result<T, String>
+where
+    C: FnOnce(MutationFence) -> F,
+    F: std::future::Future<Output = Result<(), String>>,
+    P: FnOnce(MutationFence) -> R,
+    R: std::future::Future<Output = Result<T, String>>,
+{
+    let fence = std::sync::Arc::new(super::app_mutation::fence(app).await?);
+    retire(fence.clone()).await?;
+    publish(fence).await
+}
+
+async fn retire_installed(state: &super::state::DaemonState, app: &str, fence: MutationFence) -> Result<(), String> {
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (state, app, fence); Err("Root App mutation requires Linux".into()) }
+    #[cfg(target_os = "linux")]
+    {
+        let services = state.app_service_manager().ok_or("Root App service custody is unavailable")?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut completed = services.retire_app(app, deadline).await?;
+        let app_id = app.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let _fence = fence;
+            completed.extend(super::gui::retire_installed_app(&app_id, deadline)?);
+            completed.extend(super::app_execution::retire_app(&app_id, deadline)?);
+            let mut owners = Vec::new();
+            match std::fs::read_dir("/run/cos/caps") {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("enumerate Root App owners: {error}")),
+                Ok(entries) => for entry in entries {
+                    let entry = entry.map_err(|error| error.to_string())?;
+                    if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
+                        let owner = entry.file_name().to_str().and_then(|value| value.parse::<u32>().ok())
+                            .ok_or("unexpected owner in Root capability state")?;
+                        owners.push(owner);
+                    }
+                },
+            }
+            for owner in owners {
+                super::authority::authority().revoke_app(owner, &app_id);
+                let rows = crate::proc::try_registry_sessions_for_owner(owner)?;
+                let instances = crate::provenance::runtime::running_instances(owner)?;
+                for row in rows.iter().filter(|row| row.app_id.as_deref() == Some(app_id.as_str())) {
+                    if !row.pending_bind && !completed.contains(&(owner, row.session_id.clone())) {
+                        return Err(format!("App session {} has no checked Root retirement receipt; stop/recover its legacy Host before updating", row.session_id));
+                    }
+                }
+                for (session, _) in instances.iter().filter(|(_, instance)|
+                    instance.package.as_ref().is_some_and(|package|
+                        package.kind == crate::provenance::PackageKind::App && package.id == app_id))
+                {
+                    let pending = rows.iter().any(|row| row.session_id == *session && row.pending_bind);
+                    if !pending && !completed.contains(&(owner, session.clone())) {
+                        return Err(format!("App instance {session} retains unconfirmed execution custody"));
+                    }
+                }
+                for row in rows.iter().filter(|row| row.app_id.as_deref() == Some(app_id.as_str())) {
+                    super::authority::revoke_session_for_owner(&row.session_id, owner);
+                    crate::proc::try_deregister_session_for_owner(&row.session_id, owner)?;
+                    crate::provenance::runtime::deregister_checked(owner, &row.session_id)?;
+                }
+            }
+            crate::extension_host::spawn::TaskAppData::retire_app_views(&app_id)?;
+            Ok(())
+        });
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), result).await
+            .map_err(|_| "Root App retirement remains pending")?
+            .map_err(|error| error.to_string())?
+    }
+}
+
+struct DeliveryLock(std::fs::File);
+
+impl DeliveryLock {
+    fn acquire() -> Result<Self, String> {
+        #[cfg(not(target_os = "linux"))]
+        { Err("App delivery ownership requires Linux".into()) }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            let file = std::fs::OpenOptions::new().read(true).write(true)
+                .custom_flags(libc::O_NOFOLLOW).open("/var/lib/dpkg/lock")
+                .map_err(|error| format!("cannot protect OS package ownership: {error}; use the OS package updater"))?;
+            let metadata = file.metadata().map_err(|error| error.to_string())?;
+            if !metadata.is_file() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 || metadata.nlink() != 1 {
+                return Err("OS package database lock is not protected".into());
+            }
+            let lock = libc::flock { l_type: libc::F_WRLCK as _, l_whence: libc::SEEK_SET as _, l_start: 0, l_len: 0, l_pid: 0 };
+            if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } != 0 {
+                return Err("An OS package operation is active; retry Store installation afterwards".into());
+            }
+            Ok(Self(file))
         }
     }
+
+    fn require_directory_delivery(&self, destination: &Path) -> Result<(), String> {
+        use std::io::Read;
+        let _held = &self.0;
+        let paths = delivery_paths(destination)?;
+        let mut query = std::process::Command::new("/usr/bin/dpkg-query")
+            .args(["--search", "--"]).args(paths)
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
+            .spawn().map_err(|error| format!("cannot verify OS package ownership: {error}"))?;
+        let stdout = query.stdout.take().ok_or("dpkg-query output is unavailable")?;
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.take(65537).read_to_end(&mut bytes).map(|_| bytes)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = query.try_wait().map_err(|error| error.to_string())? { break status; }
+            if Instant::now() >= deadline {
+                let _ = query.kill();
+                let _ = query.wait();
+                let _ = reader.join();
+                return Err("OS package ownership query did not complete".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let output = reader.join().map_err(|_| "OS package ownership reader failed")?
+            .map_err(|error| error.to_string())?;
+        delivery_owner_result(status.code(), &output)
+    }
+}
+
+fn delivery_paths(destination: &Path) -> Result<Vec<String>, String> {
+    let canonical = if destination.exists() {
+        destination.canonicalize()
+    } else {
+        let parent = destination.parent().ok_or("App destination has no parent")?;
+        let name = destination.file_name().ok_or("App destination has no file name")?;
+        parent.canonicalize().map(|parent| parent.join(name))
+    }.map_err(|error| format!("cannot resolve App delivery ownership: {error}"))?;
+    let mut paths = Vec::new();
+    for path in [destination, canonical.as_path()] {
+        let path = path.to_str().ok_or("App destination must be UTF-8")?;
+        if !paths.iter().any(|existing| existing == path) {
+            paths.extend([path.to_string(), format!("{path}/*")]);
+        }
+    }
+    Ok(paths)
+}
+
+fn delivery_owner_result(status: Option<i32>, output: &[u8]) -> Result<(), String> {
+    if !output.is_empty() || status == Some(0) {
+        return Err("This App path is owned by an OS package. Update its owning package through the OS package updater (APT), not a directory Store replacement.".into());
+    }
+    if status != Some(1) {
+        return Err("OS package ownership could not be established; directory replacement is refused".into());
+    }
+    Ok(())
 }
 
 pub async fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {

@@ -100,7 +100,8 @@ fn run_captured_inner(
         .spawn()
         .map_err(|error| format!("spawn sandboxed worker: {error}"))?;
     let pid = child.id();
-    if let Err(error) = on_spawn(pid) {
+    if let Err(error) = resources.bind_custody_process(pid)
+        .and_then(|()| on_spawn(pid)).and_then(|()| resources.release_custody_gate()) {
         resources.kill_all(Some(pid));
         let _ = child.kill();
         let _ = child.wait();

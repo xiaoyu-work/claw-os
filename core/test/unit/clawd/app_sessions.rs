@@ -3662,7 +3662,7 @@ fn e2e_installed_package(app_id: &str) -> crate::provenance::runtime::PackageRef
 
 #[cfg(unix)]
 #[test]
-fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
+fn a_dev_trusted_app_keeps_its_ceiling_and_cannot_bypass_root_bind_custody() {
     if !e2e_is_root() {
         eprintln!("skipped: the routed capability partition can only be prepared as root");
         return;
@@ -3748,23 +3748,28 @@ fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
             .expect_err("a developer launch grant must not address a provider audience");
     }
 
-    // 4. Binding a real child yields no relay handle at all.
+    // A package mutation closes both canonical registration and binding.
     let child = e2e_spawn_child(&mut harness);
-    let bound = e2e_runtime()
+    let fence = e2e_runtime().block_on(crate::clawd::app_mutation::fence("scratch")).unwrap();
+    let refused = e2e_runtime()
         .block_on(bind(
             json!({"session_id": session_id, "handle": handle, "pid": child}),
             &e2e_client(),
         ))
-        .expect("bind a developer App");
-    assert_eq!(bound["bound"], json!(true));
-    assert_eq!(
-        bound["relay_handle"],
-        Value::Null,
-        "a developer package must not be handed a relay grant"
-    );
+        .expect_err("a mutating App cannot bind");
+    assert!(refused.contains("mutation"), "{refused}");
+    let refused = e2e_runtime().block_on(register(json!({
+        "app_id": "scratch", "kind": "operation", "operation": "run", "args": [], "package": package,
+    }), &e2e_client())).unwrap_err();
+    assert!(refused.message.contains("mutation"), "{refused:?}");
+    drop(fence);
 
-    // 5. The live session grant addresses no provider route, and still
-    //    carries only the clamped set.
+    let refused = e2e_runtime().block_on(bind(
+        json!({"session_id": session_id, "handle": handle, "pid": child}), &e2e_client(),
+    )).expect_err("an ordinary child without checked Root custody must not be admitted");
+    assert!(refused.contains("custody_socket"), "{refused}");
+
+    // A refused bind cannot mint provider authority even for a real child.
     for audience in [
         authority::Audience::SystemService,
         authority::Audience::Credential,

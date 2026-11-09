@@ -306,7 +306,7 @@ impl LinuxSandbox {
         let mut resources = LaunchResources::empty();
         let mut mounts = policy.mounts.clone();
 
-        if policy.broker || matches!(policy.network, NetworkPolicy::Brokered { .. }) {
+        if launch.root_custody || policy.broker || matches!(policy.network, NetworkPolicy::Brokered { .. }) {
             let legacy_dir = if gui.is_none() {
                 Some(super::runtime::LaunchDir::create(&id, Some((uid, gid)))?)
             } else {
@@ -374,7 +374,7 @@ impl LinuxSandbox {
             resources.runtime_dir = legacy_dir;
         }
 
-        let actual_numbers = gui.is_some();
+        let actual_numbers = gui.is_some() || launch.root_custody;
         let pinned = if actual_numbers {
             PinnedSources::open_with_numbers(&mounts, true)?
         } else {
@@ -401,6 +401,9 @@ impl LinuxSandbox {
                 gui.instance,
                 &policy.limits,
             )?)
+        } else if launch.root_custody {
+            // Root attaches the still-gated runner before bubblewrap can fork.
+            None
         } else {
             match super::cgroup::is_available() && !inside_extension_host() {
                 true => Some(super::cgroup::create(
@@ -410,7 +413,7 @@ impl LinuxSandbox {
                 false => None,
             }
         };
-        let governor = if cgroup.is_some() {
+        let governor = if cgroup.is_some() || launch.root_custody {
             Governor::Cgroup
         } else {
             Governor::Rlimit
@@ -421,17 +424,34 @@ impl LinuxSandbox {
         }).transpose()?;
         let cgroup_procs = membership.as_ref().map(std::os::fd::AsRawFd::as_raw_fd);
 
-        let mut command = Command::new(bwrap);
+        let custody_gate = launch.root_custody.then(super::app_custody::Gate::new).transpose()?;
+        let mut command = if let Some(gate) = &custody_gate {
+            let runner = Path::new("/usr/local/bin/claw-app-runner");
+            let metadata = crate::provenance::fsec::require_secure_location(runner, &[0])
+                .map_err(|error| format!("Root custody requires the protected App runner: {error}"))?;
+            if !metadata.is_file || metadata.mode & 0o111 == 0 {
+                return Err("Root custody runner is not executable".into());
+            }
+            let mut command = Command::new(runner);
+            command.args(gate.arguments()).arg(&bwrap);
+            command
+        } else {
+            Command::new(&bwrap)
+        };
         command.args(&args);
         command.env_clear();
         for (name, value) in &policy.env {
             command.env(name, value);
         }
+        let mut pinned_fds = pinned.raw_fds();
+        if let Some(gate) = &custody_gate {
+            pinned_fds.push(gate.fd());
+        }
         install_pre_exec(
             &mut command,
             PreExecPlan {
                 seccomp_fd: seccomp_raw,
-                pinned_fds: pinned.raw_fds(),
+                pinned_fds,
                 cgroup_procs,
                 umask: policy.umask,
                 limits: policy.limits,
@@ -451,6 +471,11 @@ impl LinuxSandbox {
         resources.pinned = Some(pinned);
         resources.cgroup = cgroup;
         resources.cgroup_membership = membership;
+        if let Some(gate) = custody_gate {
+            let custody = super::app_custody::Custody::start(resources, gate)?;
+            resources = LaunchResources::empty();
+            resources.app_custody = Some(custody);
+        }
         Ok(PreparedLaunch {
             command,
             facts,

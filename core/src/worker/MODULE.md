@@ -58,6 +58,7 @@ and a root-owned executed artifact.
 | `linux.rs` | bubblewrap argv, `pre_exec`, rlimits, identity |
 | `seccomp.rs` | Hand-built classic-BPF syscall filter |
 | `cgroup.rs` | cgroup v2 governor and `cgroup.kill` teardown |
+| `app_custody.rs` | Ordinary App pre-sandbox gate and authenticated OS Host resource-retirement acknowledgement, separate from raw App stdio |
 | `gui_transport/` | Mandatory inherited GUI syscall mediation and trusted runner bootstrap |
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
@@ -104,16 +105,33 @@ the App input limit. Original stdin bytes and EOF behavior remain unchanged.
 Wrapped runtimes outside the system image keep their individual read-only
 mount, without replacing an authenticated entry's inode binding.
 Generic `run_captured` remains available for non-App workers; its spawn callback
-alone is not an execution barrier. Root package-mutation coordination and
-ordinary-process retirement remain separate requirements.
+alone is not an execution barrier.
+
+Brokered ordinary Apps additionally enter a private pre-sandbox custody gate.
+Before bubblewrap can fork, Root pins/stops the exact protected runner, attaches
+it to a Root-owned checked cgroup, retains its pidfd and authenticates the
+launcher's private cleanup channel. Only the successful bind releases that gate;
+the existing inner App gate still preserves exact stdin framing. Root's
+retirement independently checks the process/cgroup and provider calls, then
+requires the OS Host to acknowledge checked local broker/egress/runtime cleanup.
+Task App children retain their Host's aggregate limits in nested scopes.
+Missing required kernel facilities fail closed, including Root's ability to
+hold the gate stopped during attachment; no App permission is added.
+
+The Root Store composes this custody with GUI/MCP barriers under an App-specific
+admission fence. Failed/cancelled acknowledgement keeps non-reusable custody.
+It does not turn process-local absence into proof for independent install,
+rollback, trust-revoke or dpkg/APT mutations; those publication paths remain
+pending separate coordination. Unknown legacy execution or lost provider
+completion blocks Store replacement explicitly.
 
 The explicit real-runner check is:
 
 ```bash
 cargo build -p cos --bin claw-app-runner --locked
 COS_CAPTURED_TEST_RUNNER="$PWD/target/debug/claw-app-runner" \
-  cargo test -p cos --lib bridge::captured::tests::process::real_runner_waits_for_binding_and_preserves_app_input \
-  -- --exact --ignored --nocapture --test-threads=1
+  cargo test -p cos --lib bridge::captured::tests::process \
+  -- --ignored --nocapture --test-threads=1
 ```
 
 `cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`.

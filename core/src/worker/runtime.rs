@@ -63,6 +63,14 @@ impl LaunchDir {
     pub fn child(&self, name: &str) -> PathBuf {
         self.path.join(name)
     }
+
+    pub(crate) fn remove_checked(&self) -> Result<(), String> {
+        match std::fs::remove_dir_all(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("remove retired App runtime: {error}")),
+        }
+    }
 }
 
 impl Drop for LaunchDir {

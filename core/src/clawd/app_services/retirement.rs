@@ -60,14 +60,17 @@ fn close_admission(runtime: &mut ServiceRuntime) -> Result<(), String> {
 
 async fn stop_runtime(runtime: &mut ServiceRuntime) -> Result<(), String> {
     close_admission(runtime)?;
-    for child in crate::proc::deregister_child_sessions_for_owner(
-        &runtime.host_session_id,
-        runtime.lease.owner_uid,
-    ) {
-        crate::clawd::authority::revoke_session_for_owner(&child, runtime.lease.owner_uid);
-        crate::provenance::runtime::deregister(runtime.lease.owner_uid, &child);
+    for session in crate::proc::try_registry_sessions_for_owner(runtime.lease.owner_uid)? {
+        if session.parent.as_deref() == Some(runtime.host_session_id.as_str())
+            && matches!(session.group.as_deref(), Some("app" | "app-mcp" | "mcp"))
+            && !runtime.retiring_sessions.contains(&session.session_id)
+        {
+            runtime.retiring_sessions.push(session.session_id);
+        }
     }
-    crate::proc::deregister_session_for_owner(&runtime.host_session_id, runtime.lease.owner_uid);
+    for child in &runtime.retiring_sessions {
+        crate::clawd::authority::revoke_session_for_owner(child, runtime.lease.owner_uid);
+    }
     crate::clawd::authority::revoke_session_for_owner(
         &runtime.host_session_id,
         runtime.lease.owner_uid,
@@ -105,6 +108,11 @@ async fn stop_runtime(runtime: &mut ServiceRuntime) -> Result<(), String> {
         acl,
         crate::storage::purge_routed_extension_reader(runtime.extension_uid),
     )?;
+    for child in &runtime.retiring_sessions {
+        crate::proc::try_deregister_session_for_owner(child, runtime.lease.owner_uid)?;
+        crate::provenance::runtime::deregister_checked(runtime.lease.owner_uid, child)?;
+    }
+    crate::proc::try_deregister_session_for_owner(&runtime.host_session_id, runtime.lease.owner_uid)?;
     runtime.identity.release_checked()?;
     Ok(())
 }

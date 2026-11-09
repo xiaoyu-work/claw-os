@@ -296,6 +296,8 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let app_id = required_string(&params, "app_id")?;
+    let admission = std::sync::Arc::new(super::app_mutation::admit(&app_id)
+        .map_err(BrokerError::unavailable)?);
     let expected_package = required_package_ref(&params)?;
     let kind = launch_kind(&params)?;
     if client.extension_host.as_ref().is_some_and(|host| {
@@ -397,7 +399,11 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             ))?;
             let data_client = client.clone();
             let data_package = package.clone();
-            Some(tokio::task::spawn_blocking(move || data.bind(&data_client, &data_package))
+            let data_admission = admission.clone();
+            Some(tokio::task::spawn_blocking(move || {
+                let _admission = data_admission;
+                data.bind(&data_client, &data_package)
+            })
                 .await
                 .map_err(|error| BrokerError::unavailable(format!("Task App data preparation: {error}")))?
                 .map_err(BrokerError::unavailable)?)
@@ -483,6 +489,8 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         "caps": caps,
         "package": package_ref,
         "trust_tier": ceiling.label(),
+        "root_custody": kind != LaunchKind::Gui && !client.extension_host.as_ref().is_some_and(|host|
+            host.purpose == crate::extension_host::protocol::HostPurpose::AppService),
     });
     if kind == LaunchKind::Gui {
         let data_dir = crate::paths::RoutedPathContext::for_owner(uid, home)
@@ -575,6 +583,7 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
     // still inside the bind window, and the process being bound really
     // is the launcher's child.
     let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    let _admission = launch.subject.app_id.as_deref().map(super::app_mutation::admit).transpose()?;
     if let Some(binding) = &launch.subject.activity {
         binding.check()?;
     }
@@ -603,6 +612,15 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
         Some(app_id) => Some(installed_app_for_session(uid, &session_id, app_id)?.1),
         None => None,
     };
+    #[cfg(target_os = "linux")]
+    if let Some(app_id) = launch.subject.app_id.as_deref() {
+        let service_owned = client.extension_host.as_ref().is_some_and(|host|
+            host.purpose == crate::extension_host::protocol::HostPurpose::AppService);
+        if !service_owned {
+            let socket = required_string(&params, "custody_socket")?;
+            super::app_execution::bind(&session_id, app_id, child_pid, std::path::Path::new(&socket), &handle, client).await?;
+        }
+    }
     let bind_id = session_id.clone();
     let bound_caps = crate::paths::with_user_override(uid, home, async move {
         crate::proc::bind_session_process(&bind_id, child_pid)?;
@@ -1071,6 +1089,7 @@ pub async fn set_transient(
         );
     }
     let widening = authorization.is_some();
+    let _admission = widening.then(|| super::app_mutation::admit(&app_id)).transpose()?;
 
     // The same authoritative ceiling as `register`, resolved again from
     // the installed package. A transient re-scope is the obvious way to
@@ -1235,6 +1254,11 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
     require_launch_grant(client, &handle, &session_id, uid)?;
+    #[cfg(target_os = "linux")]
+    if super::app_execution::retire_session(uid, &session_id).await? {
+        release_session_lock(&session_id);
+        return Ok(json!({"removed": true, "retired": true}));
+    }
     #[cfg(target_os = "linux")]
     if is_gui_session(&session_id)? {
         let retire_id = session_id.clone();

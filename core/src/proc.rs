@@ -292,6 +292,14 @@ pub(crate) fn registry_sessions() -> Vec<SessionInfo> {
         .unwrap_or_default()
 }
 
+pub(crate) fn try_registry_sessions_for_owner(uid: u32) -> Result<Vec<SessionInfo>, String> {
+    let Some(data) = crate::filelock::read_locked(&owner_registry_path(uid))
+        .map_err(|error| format!("read owner {uid} process registry: {error}"))?
+    else { return Ok(Vec::new()) };
+    serde_json::from_str::<Registry>(&data).map(|registry| registry.sessions)
+        .map_err(|error| format!("parse owner {uid} process registry: {error}"))
+}
+
 /// True only after the current process has been bound to the expected
 /// session identity. Used by the launcher shim to keep third-party code
 /// from running during the pid-binding window.

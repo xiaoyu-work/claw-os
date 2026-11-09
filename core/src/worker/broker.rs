@@ -96,6 +96,8 @@ pub struct BrokerEndpoint {
     socket: PathBuf,
     stop: Arc<AtomicBool>,
     stats: Arc<Stats>,
+    listener: Option<std::thread::JoinHandle<()>>,
+    retirement_error: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -130,7 +132,7 @@ impl BrokerEndpoint {
             let stop = Arc::new(AtomicBool::new(false));
             let stats = Arc::new(Stats::default());
             let authority = Arc::new(authority);
-            {
+            let listener_thread = {
                 let stop = Arc::clone(&stop);
                 let stats = Arc::clone(&stats);
                 std::thread::Builder::new()
@@ -172,12 +174,14 @@ impl BrokerEndpoint {
                             }
                         }
                     })
-                    .map_err(|error| format!("start worker broker: {error}"))?;
-            }
+                    .map_err(|error| format!("start worker broker: {error}"))?
+            };
             Ok(Self {
                 socket,
                 stop,
                 stats,
+                listener: Some(listener_thread),
+                retirement_error: None,
             })
         }
         #[cfg(not(unix))]
@@ -189,6 +193,33 @@ impl BrokerEndpoint {
 
     pub fn socket_path(&self) -> &Path {
         &self.socket
+    }
+
+    pub(crate) fn retire(&mut self, deadline: std::time::Instant) -> Result<(), String> {
+        if let Some(error) = &self.retirement_error { return Err(error.clone()); }
+        self.stop.store(true, Ordering::Release);
+        #[cfg(unix)]
+        if let Err(error) = std::os::unix::net::UnixStream::connect(&self.socket) {
+            if self.listener.as_ref().is_some_and(|thread| !thread.is_finished()) {
+                return Err(format!("wake retiring App broker listener: {error}"));
+            }
+        }
+        while self.stats.inflight.load(Ordering::Acquire) != 0
+            || self.listener.as_ref().is_some_and(|thread| !thread.is_finished())
+        {
+            if std::time::Instant::now() >= deadline {
+                return Err("App broker requests have not drained".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if let Some(thread) = self.listener.take() {
+            if thread.join().is_err() {
+                let error = "App broker listener failed during cleanup; recovery is required".to_string();
+                self.retirement_error = Some(error.clone());
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Counters for the launch audit record. No paths, no payloads, no

@@ -74,6 +74,8 @@ and agent tasks.
 | `agent_hooks.rs` | Owner-scoped built-in runtime-hook settings for future Agent tasks; no arbitrary commands or renderer-side persistence |
 | `agent_account.rs` | Fixed owner-scoped Copilot sign-in status/logout; no caller-selected credential and no mutation while tasks are active |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
+| `app_execution.rs`, `app_mutation.rs` | Retained ordinary App process/cgroup/provider custody and global-per-App Root admission fences, independent of registry rows or owner permission policy |
+| `app_store.rs` | Protected owner review, bounded Store commit controller, checked cross-owner retirement before publication, and refusal of dpkg-owned directory replacement |
 | `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
 | `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
 | `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
@@ -638,8 +640,38 @@ The acceptor drains its bounded connection tasks instead of abandoning them.
 A five-second drain wait may return incomplete while retaining custody; it
 does not cancel admitted effects. Unexpected acceptor-task failure requires
 broker recovery, since dropping that failed task cannot prove request drainage.
-This is a checked service-lifetime primitive, not the still-required Root
-install/update/rollback transaction or an installer retirement RPC.
+The Root Store commit controller now composes this checked service-lifetime
+primitive with ordinary/GUI retirement under one per-App admission fence.
+Standalone directory install, provenance rollback and dpkg/APT mutation do not
+acquire that fence and remain separate pending integration.
+
+Ordinary App binding admits only the protected pre-sandbox runner. Root holds
+the runner stopped across cgroup attachment, retains its pidfd and a mandatory
+checked cgroup before the launcher can release either execution gate, and
+tracks App-owned provider dispatch. Task-owned scopes remain children of the
+authenticated Host's existing aggregate governor; its limits are not widened.
+The launcher's private OS cleanup socket is authenticated to its exact
+kernel peer, never to an App-supplied result. Retirement awaits actual process
+and recursive-cgroup emptiness, Root provider completion, local broker/egress
+drainage, runtime cleanup and authoritative row/provenance cleanup.
+Pidfd/cgroup/ptrace unavailability refuses binding; no rlimit-only ordinary
+App fallback or new capability grant is introduced.
+
+Store updates fence registration, bind, GUI start, MCP call/start/restart and
+transient widening for that App across all owners. Cleanup and blocking
+publication retain the fence after RPC cancellation/timeouts. Incomplete
+cleanup preserves custody and `cleanup_pending`; review is consumed only at
+publication and installed bytes are reverified afterwards. Untracked legacy
+executions, lost cleanup acknowledgements or cancelled provider completion
+remain explicit pending errors, not proof inferred from a missing row or dead
+parent. A stale ordinary cgroup also blocks containment recovery rather than
+silently discarding unknown Host cleanup.
+
+Directory Store delivery holds the existing dpkg database lock and refuses
+ownership of the destination or any subtree entry, directing the owner to APT.
+It neither transfers dpkg ownership nor invokes package/App hooks. This does
+not coordinate the independent OS-package updater with every App lifecycle
+and is not full installed-system publication acceptance.
 
 The manifest-defined `launcher` App-service sandbox receives no Wayland socket
 or session bus and must not spawn desktop binaries. Provenance-classified
