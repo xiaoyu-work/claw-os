@@ -1,0 +1,14 @@
+{
+  "schema": "claw.trust/v1",
+  "keys": [
+    {
+      "key_id": "sha256:9a41c8abdd30942c7917211cf90c3230ed48734f6329eb7ee98e57fcd6545555",
+      "algorithm": "ed25519",
+      "public_key": "1a738dec9e6d9e62806feca51bc3d715a8eebcdc5dfaa4531a9b8124f66b2e95",
+      "usages": ["package-signing"],
+      "kinds": ["app"],
+      "status": "active",
+      "comment": "Claw OS Applications official releases"
+    }
+  ]
+}
