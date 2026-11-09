@@ -32,7 +32,6 @@ pub async fn capture(
         .map_err(|error| format!("invalid screenshot request: {error}"))?;
     let directory = resolve_directory(request.directory.as_str(), authority.owner_uid())?;
     let caps = requested_caps(&directory);
-    authorize_caller(authority)?;
     let _authorized = authority.require_all(&caps)?;
     if client.require_uid()? != authority.owner_uid() {
         return Err("screenshot owner mismatch".into());
@@ -72,13 +71,6 @@ fn requested_caps(directory: &Path) -> Vec<Cap> {
     ]
 }
 
-fn authorize_caller(authority: &Decision) -> Result<(), String> {
-    if authority.app_id().is_none() && authority.task_id().is_none() {
-        return Ok(());
-    }
-    authority.require_app("cosmic-screenshot")
-}
-
 fn resolve_directory(raw: &str, owner: u32) -> Result<PathBuf, String> {
     if raw.is_empty() || raw.contains('\0') || !Path::new(raw).is_absolute() {
         return Err("capture directory must be a nonempty absolute path without NUL".into());
@@ -110,7 +102,6 @@ async fn capture_to(
     command: std::process::Command,
     timeout: Duration,
 ) -> Result<Value, String> {
-    authorize_caller(authority)?;
     let caps = requested_caps(directory);
     let _authorized = authority.require_all(&caps)?;
     let path = directory.join(

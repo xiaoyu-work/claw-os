@@ -60,9 +60,6 @@ pub async fn control(params: Value, authority: &Decision) -> Result<Value, Broke
                 "attached browser control requires root clawd",
             ));
         }
-        authority
-            .require_app("browser-attached")
-            .map_err(BrokerError::authorization)?;
         let request: BrowserControl = serde_json::from_value(params).map_err(|error| {
             BrokerError::execution(format!("invalid browser control request: {error}"))
         })?;

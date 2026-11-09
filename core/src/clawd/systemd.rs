@@ -93,7 +93,7 @@ pub async fn control(
         } else {
             Verb::SYS_SERVICE
         };
-        let (session, authorized) = authorize_session(authority, &unit, verb, true)?;
+        let (session, authorized) = authorize_session(authority, &unit, verb)?;
         prepare_control(&action, &unit, || systemctl_path().map(|_| ()))?;
 
         if action == "status" {
@@ -170,7 +170,7 @@ pub async fn restore(params: Value, authority: &Decision) -> Result<Value, Broke
         let mutation_session = required_string(&params, "mutation_session")?;
         let mutation_seq = required_u64(&params, "mutation_seq")?;
 
-        let (_session, authorized) = authorize_session(authority, &unit, Verb::SYS_SERVICE, false)?;
+        let (_session, authorized) = authorize_session(authority, &unit, Verb::SYS_SERVICE)?;
         validate_unit_name(&unit).map_err(BrokerError::execution)?;
         validate_restore_record(&mutation_session, mutation_seq, &unit, active, enabled)
             .map_err(BrokerError::execution)?;
@@ -278,13 +278,7 @@ fn authorize_session(
     authority: &Decision,
     unit: &str,
     verb: Verb,
-    require_systemd_app: bool,
 ) -> Result<(SessionInfo, Authorized), BrokerError> {
-    if require_systemd_app {
-        authority
-            .require_app("systemd")
-            .map_err(BrokerError::authorization)?;
-    }
     let proof = authority
         .require(Cap::new(verb, Scope::name(unit)))
         .map_err(BrokerError::authorization)?;

@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 
 use crate::caps::{Cap, Scope, Verb};
 
-use super::authority::Decision;
+use super::authority::{Authorized, Decision};
 use super::protocol::BrokerError;
 use super::wire::requests::NetworkDiagnose;
 
@@ -120,12 +120,7 @@ pub async fn diagnose(params: Value, authority: &Decision) -> Result<Value, Brok
             BrokerError::execution(format!("invalid network diagnostic request: {error}"))
         })?;
         let diagnostic = prepare(&request).map_err(BrokerError::execution)?;
-        authority
-            .require_app("netdiag")
-            .map_err(BrokerError::authorization)?;
-        let _authorized = authority
-            .require_all(&diagnostic.capabilities())
-            .map_err(BrokerError::authorization)?;
+        let _authorized = authorize_session(authority, &diagnostic)?;
 
         match diagnostic {
             Diagnostic::Interfaces => interfaces().map_err(BrokerError::execution),
@@ -141,6 +136,15 @@ pub async fn diagnose(params: Value, authority: &Decision) -> Result<Value, Brok
             }
         }
     }
+}
+
+fn authorize_session(
+    authority: &Decision,
+    diagnostic: &Diagnostic,
+) -> Result<Authorized, BrokerError> {
+    authority
+        .require_all(&diagnostic.capabilities())
+        .map_err(BrokerError::authorization)
 }
 
 fn prepare(request: &NetworkDiagnose) -> Result<Diagnostic, String> {

@@ -221,7 +221,6 @@ fn authorize_session(
     scope: Scope,
     credential: Option<&str>,
 ) -> Result<(SessionInfo, Authorized), String> {
-    authority.require_app("network-manager")?;
     let mut requested = vec![Cap::new(verb, scope)];
     if let Some(credential) = credential {
         let (namespace, name) = parse_credential_ref(credential)?;

@@ -54,7 +54,6 @@ pub async fn inspect(params: Value, authority: &Decision) -> Result<Value, Strin
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
 fn authorize_session(authority: &Decision) -> Result<Authorized, String> {
-    authority.require_app("hardware-center")?;
     authority.require(Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware")))
 }
 

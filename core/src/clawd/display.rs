@@ -179,7 +179,6 @@ fn requested_caps(action: &str, source: Option<&Path>) -> Vec<Cap> {
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
 fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
-    authority.require_app("display-manager")?;
     authority.require_all(requested)
 }
 
