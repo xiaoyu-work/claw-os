@@ -40,6 +40,7 @@ struct BoundDelegation {
     session: String,
     generation: u32,
     inherited_invoke: bool,
+    inherited_ceiling: CapSet,
 }
 
 impl Draft {
@@ -91,6 +92,7 @@ impl Draft {
                 session: delegation.grant_session.clone(),
                 generation,
                 inherited_invoke,
+                inherited_ceiling: delegation.ceiling.clone(),
             },
         })
     }
@@ -142,7 +144,11 @@ impl Registration {
                     );
                 }
                 let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(self.launch.app_id()));
-                if self.caps.iter().any(|cap| !current.caps.covers(cap))
+                if self
+                    .caps
+                    .iter()
+                    .filter(|cap| self.delegation.inherited_ceiling.covers(cap))
+                    .any(|cap| !current.caps.covers(cap))
                     || (self.delegation.inherited_invoke && !current.caps.covers(&invoke))
                 {
                     return Err(

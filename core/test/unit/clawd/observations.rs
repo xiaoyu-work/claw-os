@@ -48,7 +48,10 @@ fn observation_requires_live_exact_owner_and_capabilities_not_an_app_name() {
     for app in [Some("widget-rail"), Some("independent-observer"), None] {
         for (action, cap) in [
             ("tasks", Cap::new(Verb::AGENT_OBSERVE, Scope::name("tasks"))),
-            ("resources", Cap::new(Verb::SYS_OBSERVE, Scope::Wild)),
+            (
+                "resources",
+                Cap::new(Verb::SYS_OBSERVE, Scope::name("resources")),
+            ),
         ] {
             let allowed = decision(app, Some(cap.clone()));
             assert!(authorize(&allowed, owner + 1, action).is_err());

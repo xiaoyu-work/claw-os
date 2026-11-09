@@ -2218,14 +2218,8 @@ fn gui_plan(
         .flat_map(|operation| operation.needs.iter())
     {
         match &need.scope {
-            // A GUI launch is not a user-confirmed invocation of any one
-            // operation, so anything the launcher cannot already delegate
-            // is dropped rather than turned into an approval prompt.
             ScopeBinding::Fixed { scope } => {
-                let requested = Cap::new(need.verb, scope.clone());
-                if delegation.ceiling.covers(&requested) {
-                    plan.inherit([requested]);
-                }
+                plan.require(Cap::new(need.verb, scope.clone()), delegation);
             }
             // Same rule as the operation path: unsigned content never
             // borrows the launcher's reach over a resource namespace,

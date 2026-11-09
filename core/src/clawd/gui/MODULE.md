@@ -8,9 +8,11 @@ desktop label or Panel presentation as authority.
 
 Registration uses the existing App session authority and only the constrained
 union of fixed/wild **operation** needs. MCP tools and argument-bound needs do
-not join that union. Needs outside launcher delegation stay absent; GUI launch
-does not turn them into approval prompts. The union does not evaluate `when`
-conditions, so they cannot express per-tab GUI authorization.
+not join that union. Fixed needs outside launcher delegation use the ordinary
+exact-owner approval flow before registration; a signature or GUI declaration
+grants nothing. Wild needs still inherit only the launcher's bounded scopes.
+The union does not evaluate `when` conditions, so they cannot express per-tab
+GUI authorization or bind a later file-picker selection.
 
 For Binary, Node and Shell runtimes, [argument preparation](../../bridge/gui_args.rs)
 appends `[desktop.exec, ...user_args]` after any interpreter/script arguments.
@@ -47,8 +49,9 @@ such authority require a coordinated authorization path, not a manifest flag
 that bypasses policy.
 
 Every renewal rechecks package/instance validity, process identity, the existing
-App grant and App deny gate, the authenticated parent delegation and its existing
-approval revocation generation. Authority changes retire the instance rather
+App grant and App deny gate, the inherited portion of authenticated parent
+delegation and its existing approval revocation generation. Exact owner-approved
+needs are not silently reclassified as inherited parent rights. Authority changes retire the instance rather
 than widening a cached lease. The existing App-session grant expiry still
 applies; no permanent GUI grant or Admin bootstrap is created.
 

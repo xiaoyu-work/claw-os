@@ -22,7 +22,7 @@ fn authorize(authority: &Decision, owner: u32, action: &str) -> Result<Authorize
     }
     let cap = match action {
         "tasks" => Cap::new(Verb::AGENT_OBSERVE, Scope::name("tasks")),
-        "resources" => Cap::new(Verb::SYS_OBSERVE, Scope::Wild),
+        "resources" => Cap::new(Verb::SYS_OBSERVE, Scope::name("resources")),
         _ => return Err(BrokerError::execution("Unknown observation action")),
     };
     authority.require(cap).map_err(BrokerError::authorization)
