@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::caps::{Cap, Scope, Verb};
 
-use super::authority::Decision;
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 mod settings;
@@ -63,24 +63,26 @@ pub async fn control(
         let app_id = optional_string(&params, "app_id")?;
         let uris = optional_string_list(&params, "uris")?;
         validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
-        if terminal_caller(authority, &action, app_id.as_deref()) {
-            authorize_editor_target(authority, app_id.as_deref(), &uris)?;
-            return open_terminal(&uris, authority, uid, gid, home, peer_pid).await;
-        }
-        if store_caller(authority, &action, app_id.as_deref()) {
-            return open_store(&uris, authority, uid, gid, home, peer_pid).await;
-        }
-        if settings_caller(authority, &action, app_id.as_deref()) {
-            return open_settings(&uris, authority, uid, gid, home, peer_pid).await;
-        }
-        authorize_caller(authority, &action)?;
-        authorize_editor_target(authority, app_id.as_deref(), &uris)?;
-        if authority.app_is("cosmic-files") {
-            return reveal_files(&uris, authority, uid, gid, home, peer_pid).await;
+        match native_launch_target(authority, &action, app_id.as_deref()) {
+            Some(NativeLaunchTarget::Terminal) => {
+                return open_terminal(&uris, authority, uid, gid, home, peer_pid).await;
+            }
+            Some(NativeLaunchTarget::Store) => {
+                return open_store(&uris, authority, uid, gid, home, peer_pid).await;
+            }
+            Some(NativeLaunchTarget::Settings) => {
+                return open_settings(&uris, authority, uid, gid, home, peer_pid).await;
+            }
+            Some(NativeLaunchTarget::Files) => {
+                return reveal_files(&uris, authority, uid, gid, home, peer_pid).await;
+            }
+            Some(NativeLaunchTarget::Editor) => {
+                return open_editor(&uris, authority, uid, gid, home, peer_pid).await;
+            }
+            None => {}
         }
         let uris = canonicalize_launch_uris(&uris)?;
-        let requested = requested_caps(&action, app_id.as_deref(), &uris)?;
-        let _authorized = authority.require_all(&requested)?;
+        let _authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
         let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
 
         if action == "list" {
@@ -146,71 +148,104 @@ fn requested_caps(action: &str, app_id: Option<&str>, uris: &[String]) -> Result
     Ok(caps)
 }
 
-/// Final provider check, taken against the decision the broker already
-/// made.
-///
-/// The session, its App identity, the process allowed to act under it,
-/// and the capabilities it holds all come from the grant `clawd`
-/// issued and the middleware resolved. Nothing here re-reads the
-/// process registry or re-derives policy, so the two can no longer
-/// disagree; the check still runs, because a privileged mutation
-/// should be refused twice.
-fn authorize_caller(authority: &Decision, action: &str) -> Result<(), String> {
-    match action {
-        "launch" if authority.app_is("cosmic-edit") || authority.app_is("cosmic-files")
-            || authority.app_is("cosmic-term") => Ok(()),
-        "launch" => authority.require_app("launcher"),
-        "list" | "focus" | "close" | "restart" => authority.require_app("desktop-manager"),
-        _ => Err(format!("unknown desktop action: {action}")),
-    }
-}
-
-fn authorize_editor_target(
+/// Spend the action's exact scopes through the broker's live decision.
+/// The authenticated App/owner/session remains attribution, not a business-name
+/// entitlement; no process registry or policy is independently reconstructed.
+fn authorize_caller(
     authority: &Decision,
+    action: &str,
     app_id: Option<&str>,
     uris: &[String],
-) -> Result<(), String> {
-    if authority.app_is("cosmic-term")
-        && (app_id != Some("com.clawos.Term")
-            || uris.len() > 1
-            || uris.iter().any(|uri| !uri.starts_with("file://")))
-    {
-        return Err("Terminal may open only its own native target with one optional directory".into());
-    }
-    if authority.app_is("cosmic-files")
-        && (app_id != Some("com.clawos.Files") || uris.len() != 1
-            || !uris[0].starts_with("file://"))
-    {
-        return Err("Files may reveal only one local path in its own native target".into());
-    }
-    if authority.app_is("cosmic-edit")
-        && (app_id != Some("com.clawos.Edit")
-            || uris.len() > 1
-            || uris.iter().any(|uri| !uri.starts_with("file://")))
-    {
-        return Err(
-            "the editor may launch only its own native target with one optional local file".into(),
-        );
-    }
-    Ok(())
+) -> Result<Authorized, String> {
+    authority.require_all(&requested_caps(action, app_id, uris)?)
 }
 
-fn terminal_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> bool {
-    action == "launch" && app_id == Some("com.clawos.Term")
-        && (authority.app_is("cosmic-term")
-            || (authority.app_id().is_none() && authority.task_id().is_none()))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeLaunchTarget {
+    Terminal,
+    Store,
+    Settings,
+    Files,
+    Editor,
 }
 
-fn store_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> bool {
-    action == "launch" && app_id == Some("com.clawos.Store")
-        && (authority.app_is("cosmic-store")
-            || (authority.app_id().is_none() && authority.task_id().is_none()))
+impl NativeLaunchTarget {
+    fn spawn_cap(self) -> Cap {
+        let name = match self {
+            Self::Terminal => "cosmic-term",
+            Self::Store => "cosmic-store",
+            Self::Settings => "cosmic-settings",
+            Self::Files => "cosmic-files",
+            Self::Editor => "cosmic-edit",
+        };
+        Cap::new(Verb::PROC_SPAWN, Scope::name(name))
+    }
 }
 
-fn settings_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> bool {
-    action == "launch" && app_id == Some("com.clawos.Settings")
-        && (authority.app_is("cosmic-settings")
-            || (authority.app_id().is_none() && authority.task_id().is_none()))
+fn native_launch_target(
+    authority: &Decision,
+    action: &str,
+    app_id: Option<&str>,
+) -> Option<NativeLaunchTarget> {
+    if action != "launch" {
+        return None;
+    }
+    let target = match app_id? {
+        "com.clawos.Term" => NativeLaunchTarget::Terminal,
+        "com.clawos.Store" => NativeLaunchTarget::Store,
+        "com.clawos.Settings" => NativeLaunchTarget::Settings,
+        "com.clawos.Files" => NativeLaunchTarget::Files,
+        "com.clawos.Edit" => NativeLaunchTarget::Editor,
+        _ => return None,
+    };
+    // This snapshot selects only a compatibility backend. Its live capability
+    // spend below is mandatory, and a refusal never falls back to desktop.launch.
+    authority.caps().covers(&target.spawn_cap()).then_some(target)
+}
+
+fn authorize_native_launch(
+    authority: &Decision,
+    target: NativeLaunchTarget,
+    local_path: Option<&str>,
+) -> Result<Authorized, String> {
+    let mut caps = vec![target.spawn_cap()];
+    match (target, local_path) {
+        (NativeLaunchTarget::Files, Some(path)) => {
+            caps.push(Cap::new(Verb::FS_META, Scope::path(path)));
+        }
+        (NativeLaunchTarget::Files, None) => return Err("Files requires a local path".into()),
+        (NativeLaunchTarget::Editor, Some(path)) => {
+            caps.push(Cap::new(Verb::FS_READ, Scope::path(path)));
+        }
+        (_, Some(_)) => return Err("native target does not accept a file resource".into()),
+        (_, None) => {}
+    }
+    authority.require_all(&caps)
+}
+
+fn editor_launch_path(uris: &[String]) -> Result<Option<String>, String> {
+    match uris {
+        [] => Ok(None),
+        [uri] => canonical_file_uri_path(uri)?
+            .ok_or_else(|| "Editor requires a local file URI".into())
+            .map(Some),
+        _ => Err("Editor accepts at most one local file".into()),
+    }
+}
+
+async fn open_editor(
+    uris: &[String],
+    authority: &Decision,
+    uid: u32,
+    gid: u32,
+    home: PathBuf,
+    peer_pid: u32,
+) -> Result<Value, String> {
+    let path = editor_launch_path(uris)?;
+    let _authorized =
+        authorize_native_launch(authority, NativeLaunchTarget::Editor, path.as_deref())?;
+    let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
+    launch_desktop_app(&environment, "com.clawos.Edit", uris).await
 }
 
 fn settings_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
@@ -235,9 +270,7 @@ async fn open_settings(
     home: PathBuf, peer_pid: u32,
 ) -> Result<Value, String> {
     let args = settings_launch_args(uris)?;
-    let _authorized = authority.require(Cap::new(
-        Verb::PROC_SPAWN, Scope::name("cosmic-settings"),
-    ))?;
+    let _authorized = authorize_native_launch(authority, NativeLaunchTarget::Settings, None)?;
     let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
     settings::launch(args, environment).await?;
     Ok(json!({"launched": true, "app_id": "com.clawos.Settings", "launcher": settings::PROGRAM}))
@@ -264,9 +297,7 @@ async fn open_store(
     home: PathBuf, peer_pid: u32,
 ) -> Result<Value, String> {
     let args = store_launch_args(uris)?;
-    let _authorized = authority.require(Cap::new(
-        Verb::PROC_SPAWN, Scope::name("cosmic-store"),
-    ))?;
+    let _authorized = authorize_native_launch(authority, NativeLaunchTarget::Store, None)?;
     let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
     let program = PathBuf::from("/usr/bin/cosmic-store");
     let status = run_user_launch_command(program.clone(), args, environment, LAUNCH_TIMEOUT).await?;
@@ -305,9 +336,7 @@ async fn open_terminal(
     home: PathBuf, peer_pid: u32,
 ) -> Result<Value, String> {
     // Preserve the existing manifest scope, not a new desktop.launch grant.
-    let _authorized = authority.require(Cap::new(
-        Verb::PROC_SPAWN, Scope::name("cosmic-term"),
-    ))?;
+    let _authorized = authorize_native_launch(authority, NativeLaunchTarget::Terminal, None)?;
     let args = {
         let _identity = super::client_identity::FsIdentityGuard::enter(uid)?;
         terminal_launch_args(uris)?
@@ -321,16 +350,19 @@ async fn open_terminal(
     Ok(json!({"launched": true, "app_id": "com.clawos.Term", "launcher": program}))
 }
 
+fn files_reveal_path(uris: &[String]) -> Result<String, String> {
+    let [uri] = uris else {
+        return Err("Files requires exactly one local path".into());
+    };
+    canonical_local_uri_path(uri, true)?.ok_or_else(|| "Files requires a local file URI".into())
+}
+
 async fn reveal_files(
     uris: &[String], authority: &Decision, uid: u32, gid: u32,
     home: PathBuf, peer_pid: u32,
 ) -> Result<Value, String> {
-    let path = canonical_local_uri_path(&uris[0], true)?
-        .ok_or("Files requires a local file URI")?;
-    let _authorized = authority.require_all(&[
-        Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files")),
-        Cap::new(Verb::FS_META, Scope::path(&path)),
-    ])?;
+    let path = files_reveal_path(uris)?;
+    let _authorized = authorize_native_launch(authority, NativeLaunchTarget::Files, Some(&path))?;
     let path = Path::new(&path);
     let directory = if path.is_dir() { path } else {
         path.parent().ok_or("file has no containing directory")?

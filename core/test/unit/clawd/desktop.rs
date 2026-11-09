@@ -6,29 +6,120 @@ use crate::clawd::authority::{
 use serde_json::json;
 
 const APP_ID: &str = "com.example.App";
+const NATIVE_TARGETS: [(NativeLaunchTarget, &str, &str); 5] = [
+    (NativeLaunchTarget::Terminal, "com.clawos.Term", "cosmic-term"),
+    (NativeLaunchTarget::Store, "com.clawos.Store", "cosmic-store"),
+    (NativeLaunchTarget::Settings, "com.clawos.Settings", "cosmic-settings"),
+    (NativeLaunchTarget::Files, "com.clawos.Files", "cosmic-files"),
+    (NativeLaunchTarget::Editor, "com.clawos.Edit", "cosmic-edit"),
+];
 
 #[test]
-fn settings_launch_preserves_identity_without_provider_or_generic_launch_authority() {
-    let settings = decision_for_app(Some("cosmic-settings"), vec![], "settings-launch");
-    assert!(settings_caller(&settings, "launch", Some("com.clawos.Settings")));
-    assert!(!settings_caller(&settings, "launch", Some("com.clawos.Store")));
-    for action in ["launch", "restart", "list", "focus", "close"] {
-        assert!(authorize_caller(&settings, action).is_err());
-        if action != "launch" {
-            assert!(!settings_caller(&settings, action, Some("com.clawos.Settings")));
+fn caller_names_and_human_sessions_do_not_grant_desktop_authority() {
+    for (index, app) in [
+        Some("cosmic-settings"), Some("cosmic-store"), Some("cosmic-term"),
+        Some("cosmic-files"), Some("cosmic-edit"), Some("launcher"),
+        Some("desktop-manager"), Some("independent-desktop-client"), None,
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(app, vec![], &format!("desktop-no-caps-{index}"));
+        for (_, app_id, _) in NATIVE_TARGETS {
+            assert_eq!(native_launch_target(&decision, "launch", Some(app_id)), None);
+            assert!(authorize_caller(&decision, "launch", Some(app_id), &[]).is_err());
+        }
+        for (action, app_id) in [
+            ("list", None), ("focus", None), ("close", None), ("restart", Some(APP_ID)),
+        ] {
+            assert!(authorize_caller(&decision, action, app_id, &[]).is_err());
+        }
+        assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
+        assert_eq!(decision.app_id(), app);
+    }
+}
+
+#[test]
+fn native_launch_admits_independent_callers_with_only_the_existing_exact_rights() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    let file = root.path().join("report.txt");
+    fs::write(&file, "fixture").unwrap();
+    let file = fs::canonicalize(file).unwrap();
+    let path = file.to_str().unwrap();
+
+    for (target, app_id, program) in NATIVE_TARGETS {
+        let paths = match target {
+            NativeLaunchTarget::Files => vec![Some(path)],
+            NativeLaunchTarget::Editor => vec![None, Some(path)],
+            _ => vec![None],
+        };
+        for (index, app) in [Some(program), Some("independent-desktop-client"), None]
+            .into_iter().enumerate()
+        {
+            for (path_index, local_path) in paths.iter().copied().enumerate() {
+                let mut caps = vec![Cap::new(Verb::PROC_SPAWN, Scope::name(program))];
+                if let Some(path) = local_path {
+                    let verb = if target == NativeLaunchTarget::Files { Verb::FS_META } else { Verb::FS_READ };
+                    caps.push(Cap::new(verb, Scope::path(path)));
+                }
+                let session = format!("native-{program}-{index}-{path_index}");
+                let decision = decision_for_app_with_uses(app, caps.clone(), &session, Uses::Budget(1));
+                assert_eq!(native_launch_target(&decision, "launch", Some(app_id)), Some(target));
+                assert_eq!(native_launch_target(&decision, "launch", Some(APP_ID)), None);
+                assert!(authorize_caller(&decision, "launch", Some(APP_ID), &[]).is_err());
+                assert!(authorize_caller(&decision, "launch", Some(app_id), &[]).is_err());
+                for (other, other_id, _) in NATIVE_TARGETS {
+                    if other != target {
+                        assert_eq!(native_launch_target(&decision, "launch", Some(other_id)), None);
+                        let other_path = matches!(other, NativeLaunchTarget::Files | NativeLaunchTarget::Editor)
+                            .then_some(path);
+                        assert!(authorize_native_launch(&decision, other, other_path).is_err());
+                    }
+                }
+                for action in ["list", "focus", "close", "restart"] {
+                    let target_id = (action == "restart").then_some(app_id);
+                    assert_eq!(native_launch_target(&decision, action, target_id), None);
+                    assert!(authorize_caller(&decision, action, target_id, &[]).is_err());
+                }
+                let proof = authorize_native_launch(&decision, target, local_path).unwrap();
+                assert_eq!(proof.spent(), caps.as_slice());
+                assert_eq!(decision.app_id(), app);
+                assert_eq!(decision.session_id(), Some(session.as_str()));
+                assert_eq!(decision.owner_uid(), unsafe { libc::geteuid() });
+                assert!(authorize_native_launch(&decision, target, local_path).is_err());
+            }
         }
     }
-    for app in [
-        "accessibility-manager", "audio-manager", "bluetooth-manager", "camera-manager",
-        "display-manager", "desktop-manager", "location-manager", "network-manager",
-        "power-manager", "printer-manager", "user-manager", "launcher", "exec", "cosmic-store",
-    ] {
-        assert!(settings.require_app(app).is_err());
-        let other = decision_for_app(Some(app), vec![], &format!("settings-other-{app}"));
-        assert!(!settings_caller(&other, "launch", Some("com.clawos.Settings")));
+}
+
+#[test]
+fn native_launch_rechecks_revocation_for_the_source_session() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    for (target, app_id, program) in NATIVE_TARGETS {
+        let cap = Cap::new(Verb::PROC_SPAWN, Scope::name(program));
+        let local_path = matches!(target, NativeLaunchTarget::Files | NativeLaunchTarget::Editor)
+            .then_some("/work/report.txt");
+        let mut caps = vec![cap];
+        if let Some(path) = local_path {
+            let verb = if target == NativeLaunchTarget::Files { Verb::FS_META } else { Verb::FS_READ };
+            caps.push(Cap::new(verb, Scope::path(path)));
+        }
+        let app = format!("independent-{program}-client");
+        let client = decision_for_app(Some(&app), caps.clone(), &format!("revoked-{program}"));
+        let original = decision_for_app(Some(program), caps, &format!("original-{program}"));
+        assert_eq!(native_launch_target(&client, "launch", Some(app_id)), Some(target));
+        authority().revoke_session(client.session_id().unwrap());
+        assert_eq!(native_launch_target(&client, "launch", Some(app_id)), Some(target));
+        assert!(authorize_native_launch(&client, target, local_path).is_err());
+        assert!(!crate::clawd::authority::obligation_met(Some(&client)));
+        let _authorized = authorize_native_launch(&original, target, local_path).unwrap();
+        authority().revoke_session(original.session_id().unwrap());
+        assert_eq!(native_launch_target(&original, "launch", Some(app_id)), Some(target));
+        assert!(authorize_native_launch(&original, target, local_path).is_err());
+        assert_eq!(client.app_id(), Some(app.as_str()));
+        assert_eq!(original.app_id(), Some(program));
     }
-    let human = decision_for_app(None, vec![], "settings-human");
-    assert!(settings_caller(&human, "launch", Some("com.clawos.Settings")));
 }
 
 #[test]
@@ -63,25 +154,6 @@ async fn settings_launch_requires_exact_original_proc_scope_before_desktop_acces
 }
 
 #[test]
-fn store_launch_is_exact_target_without_other_app_or_transaction_authority() {
-    let store = decision_for_app(Some("cosmic-store"), vec![], "store-launch");
-    assert!(store_caller(&store, "launch", Some("com.clawos.Store")));
-    assert!(!store_caller(&store, "launch", Some("com.clawos.Term")));
-    for action in ["restart", "list", "focus", "close"] {
-        assert!(!store_caller(&store, action, Some("com.clawos.Store")));
-        assert!(authorize_caller(&store, action).is_err());
-    }
-    assert!(authorize_caller(&store, "launch").is_err());
-    assert!(store.require_app("pkg").is_err());
-    for app in ["pkg", "exec", "launcher", "cosmic-term", "cosmic-edit"] {
-        let other = decision_for_app(Some(app), vec![], &format!("store-other-{app}"));
-        assert!(!store_caller(&other, "launch", Some("com.clawos.Store")));
-    }
-    let human = decision_for_app(None, vec![], "store-human");
-    assert!(store_caller(&human, "launch", Some("com.clawos.Store")));
-}
-
-#[test]
 fn store_launch_package_is_data_not_executable_or_option() {
     assert!(store_launch_args(&[]).unwrap().is_empty());
     assert_eq!(store_launch_args(&["apt://curl:amd64".into()]).unwrap(), vec!["curl:amd64"]);
@@ -109,36 +181,6 @@ async fn store_launch_requires_original_exact_proc_scope_before_desktop_access()
 }
 
 #[test]
-fn terminal_launch_is_fixed_target_and_cannot_inherit_other_app_grants() {
-    let decision = decision_for_app(Some("cosmic-term"), vec![], "terminal-launch");
-    assert!(terminal_caller(&decision, "launch", Some("com.clawos.Term")));
-    assert!(!terminal_caller(&decision, "launch", Some("com.clawos.Edit")));
-    authorize_caller(&decision, "launch").unwrap();
-    for action in ["restart", "list", "focus", "close"] {
-        assert!(authorize_caller(&decision, action).is_err());
-    }
-    authorize_editor_target(&decision, Some("com.clawos.Term"), &[]).unwrap();
-    authorize_editor_target(&decision, Some("com.clawos.Term"), &["file:///work/".into()]).unwrap();
-    for (target, uris) in [
-        ("com.clawos.Edit", vec![]),
-        ("com.clawos.Term", vec!["https://example.test".into()]),
-        ("com.clawos.Term", vec!["file:///work/a".into(), "file:///work/b".into()]),
-    ] {
-        assert!(authorize_editor_target(&decision, Some(target), &uris).is_err());
-    }
-}
-
-#[test]
-fn terminal_human_ui_does_not_require_an_app_intercall() {
-    let human = decision_for_app(None, vec![], "terminal-human");
-    assert!(terminal_caller(&human, "launch", Some("com.clawos.Term")));
-    assert!(!terminal_caller(&human, "restart", Some("com.clawos.Term")));
-    for app in ["exec", "cosmic-files", "cosmic-edit", "launcher"] {
-        let other = decision_for_app(Some(app), vec![], &format!("terminal-other-{app}"));
-        assert!(!terminal_caller(&other, "launch", Some("com.clawos.Term")));
-    }
-}
-#[test]
 fn terminal_launch_directory_is_data_not_arguments_or_an_app() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("a #é --command");
@@ -155,7 +197,16 @@ fn terminal_launch_directory_is_data_not_arguments_or_an_app() {
     let file = root.path().join("file");
     fs::write(&file, "fixture").unwrap();
     assert!(terminal_launch_args(&[url::Url::from_file_path(file).unwrap().to_string()]).is_err());
-    assert!(terminal_launch_args(&["https://example.test".into()]).is_err());
+    for uris in [
+        vec!["https://example.test".into()],
+        vec!["file://example.test/work".into()],
+        vec!["file:///work?command=id".into()],
+        vec!["file:///work#command".into()],
+        vec!["file:///work/a".into(), "file:///work/b".into()],
+        vec!["--command".into()],
+    ] {
+        assert!(terminal_launch_args(&uris).is_err());
+    }
 }
 
 #[tokio::test]
@@ -173,30 +224,22 @@ async fn terminal_launch_requires_original_exact_proc_scope_before_desktop_acces
 }
 
 #[test]
-fn files_launch_is_fixed_target_and_metadata_only() {
-    let decision = decision_for_app(Some("cosmic-files"), vec![], "files-launch");
-    authorize_caller(&decision, "launch").unwrap();
-    for action in ["restart", "list", "focus", "close"] {
-        assert!(authorize_caller(&decision, action).is_err());
-    }
-    authorize_editor_target(&decision, Some("com.clawos.Files"), &["file:///work/a".into()]).unwrap();
-    for (target, uris) in [
-        ("com.clawos.Edit", vec!["file:///work/a".into()]),
-        ("com.clawos.Files", vec!["https://example.test".into()]),
-        ("com.clawos.Files", vec![]),
-        ("com.clawos.Files", vec!["file:///work/a".into(), "file:///work/b".into()]),
-    ] {
-        assert!(authorize_editor_target(&decision, Some(target), &uris).is_err());
-    }
-}
-
-#[test]
 fn files_local_uri_accepts_directories_without_widening_editor_uris() {
     let root = tempfile::tempdir().unwrap();
     let directory = fs::canonicalize(root.path()).unwrap();
     let uri = url::Url::from_file_path(&directory).unwrap().to_string();
     assert_eq!(canonical_local_uri_path(&uri, true).unwrap(), Some(directory.display().to_string()));
+    assert_eq!(files_reveal_path(&[uri.clone()]).unwrap(), directory.display().to_string());
     assert!(canonical_file_uri_path(&uri).is_err());
+    assert!(editor_launch_path(&[uri]).is_err());
+    for uris in [
+        vec![],
+        vec!["https://example.test".into()],
+        vec!["file://example.test/work".into()],
+        vec!["file:///work/a".into(), "file:///work/b".into()],
+    ] {
+        assert!(files_reveal_path(&uris).is_err());
+    }
     let link = directory.join("link");
     std::os::unix::fs::symlink(&directory, &link).unwrap();
     let uri = url::Url::from_file_path(link).unwrap().to_string();
@@ -210,25 +253,64 @@ async fn files_reveal_requires_both_exact_capabilities_before_desktop_access() {
     let uri = url::Url::from_file_path(&directory).unwrap().to_string();
     for (index, caps) in [
         vec![Cap::new(Verb::FS_META, Scope::path(directory.to_str().unwrap()))],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-files"))],
         vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files"))],
         vec![Cap::new(Verb::FS_META, Scope::path("/not-the-requested-directory")),
-             Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files"))],
+             Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-files"))],
+        vec![Cap::new(Verb::FS_READ, Scope::path(directory.to_str().unwrap())),
+             Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-files"))],
+        vec![Cap::new(Verb::FS_META, Scope::path(directory.to_str().unwrap())),
+             Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-edit"))],
     ].into_iter().enumerate() {
-        let decision = decision_for_app(Some("cosmic-files"), caps, &format!("files-denied-{index}"));
-        assert!(reveal_files(&[uri.clone()], &decision, 1000, 1000, directory.clone(), 1)
-            .await.is_err());
+        let decision = decision_for_app(Some("independent-files-client"), caps, &format!("files-denied-{index}"));
+        let error = reveal_files(&[uri.clone()], &decision, 1000, 1000, directory.clone(), 1)
+            .await.unwrap_err();
+        assert!(!error.contains("home"), "{error}");
+        assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
     }
 }
 
 #[test]
-fn editor_launch_is_fixed_target_and_not_cross_app_authority() {
-    let decision = decision_for_app(Some("cosmic-edit"), vec![], "editor-launch");
-    authorize_caller(&decision, "launch").unwrap();
-    assert!(authorize_caller(&decision, "restart").is_err());
-    authorize_editor_target(&decision, Some("com.clawos.Edit"), &[]).unwrap();
-    authorize_editor_target(&decision, Some("com.clawos.Edit"), &["file:///work/a".into()]).unwrap();
-    assert!(authorize_editor_target(&decision, Some(APP_ID), &[]).is_err());
-    assert!(authorize_editor_target(&decision, Some("com.clawos.Edit"), &["https://example.test".into()]).is_err());
+fn editor_launch_accepts_only_one_optional_canonical_local_file() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let file = root.path().join("report.txt");
+    fs::write(&file, "fixture").unwrap();
+    let file = fs::canonicalize(file).unwrap();
+    let uri = url::Url::from_file_path(&file).unwrap().to_string();
+    assert_eq!(editor_launch_path(&[]).unwrap(), None);
+    assert_eq!(editor_launch_path(&[uri.clone()]).unwrap(), Some(file.display().to_string()));
+    for uris in [
+        vec!["https://example.test".into()],
+        vec!["file://example.test/report.txt".into()],
+        vec![format!("{uri}?command=id")],
+        vec![uri.clone(), uri],
+    ] {
+        assert!(editor_launch_path(&uris).is_err());
+    }
+}
+
+#[tokio::test]
+async fn editor_launch_requires_original_proc_and_exact_read_before_desktop_access() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let file = root.path().join("report.txt");
+    fs::write(&file, "fixture").unwrap();
+    let file = fs::canonicalize(file).unwrap();
+    let uri = url::Url::from_file_path(&file).unwrap().to_string();
+    for (index, caps) in [
+        vec![],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-edit"))],
+        vec![Cap::new(Verb::FS_READ, Scope::path(file.to_str().unwrap()))],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-edit")),
+             Cap::new(Verb::FS_READ, Scope::path("/not-the-requested-file"))],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-files")),
+             Cap::new(Verb::FS_READ, Scope::path(file.to_str().unwrap()))],
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(Some("independent-editor-client"), caps, &format!("editor-denied-{index}"));
+        let error = open_editor(&[uri.clone()], &decision, 1000, 1000, root.path().join("missing-home"), 1)
+            .await.unwrap_err();
+        assert!(!error.contains("home"), "{error}");
+        assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
+    }
 }
 
 #[test]
@@ -381,82 +463,141 @@ fn local_file_launch_rejects_unsafe_paths() {
 
 #[test]
 fn launch_authority_must_include_every_local_file() {
-    let store = authority();
-    store.clear_for_test();
-    let directory = tempfile::tempdir().unwrap();
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", directory.path().join("data"));
     let file = directory.path().join("report.txt");
+    let other_file = directory.path().join("other.txt");
     std::fs::write(&file, b"report").unwrap();
-    let uri = url::Url::from_file_path(&file).unwrap().to_string();
-    let requested = requested_caps("launch", Some(APP_ID), &[uri]).unwrap();
+    std::fs::write(&other_file, b"other").unwrap();
+    let file = fs::canonicalize(file).unwrap();
+    let other_file = fs::canonicalize(other_file).unwrap();
+    let uris = vec![
+        url::Url::from_file_path(&file).unwrap().to_string(),
+        url::Url::from_file_path(&other_file).unwrap().to_string(),
+    ];
+    let launch = Cap::new(Verb::DESKTOP_LAUNCH, Scope::name(APP_ID));
+    let read = Cap::new(Verb::FS_READ, Scope::path(file.to_str().unwrap()));
+    let other_read = Cap::new(Verb::FS_READ, Scope::path(other_file.to_str().unwrap()));
+    for (index, caps) in [
+        vec![launch.clone()],
+        vec![launch.clone(), read.clone()],
+        vec![launch.clone(), read.clone(), Cap::new(Verb::FS_READ, Scope::path("/not-the-requested-file"))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.example.Other")), read.clone(), other_read.clone()],
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(
+            Some("independent-desktop-client"), caps, &format!("desktop-missing-file-{index}"),
+        );
+        assert!(authorize_caller(&decision, "launch", Some(APP_ID), &uris).is_err());
+        assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
+    }
     let decision = decision_for_app(
-        Some("launcher"),
-        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name(APP_ID))],
-        "desktop-launch-missing-file",
+        Some("independent-desktop-client"),
+        vec![launch, read, other_read],
+        "desktop-all-files",
     );
-
-    authorize_caller(&decision, "launch").unwrap();
-    assert!(decision.require_all(&requested).is_err());
-    store.clear_for_test();
+    let proof = authorize_caller(&decision, "launch", Some(APP_ID), &uris).unwrap();
+    assert_eq!(proof.spent(), requested_caps("launch", Some(APP_ID), &uris).unwrap().as_slice());
 }
 
 #[test]
-fn desktop_actions_reject_cross_app_authority() {
-    let store = authority();
-    store.clear_for_test();
-
-    let launch_caps = requested_caps("launch", Some(APP_ID), &[]).unwrap();
-    let launcher = decision_for_app(
-        Some("launcher"),
-        launch_caps.clone(),
-        "desktop-launcher-launch",
-    );
-    authorize_caller(&launcher, "launch").unwrap();
-    let _authorized = launcher.require_all(&launch_caps).unwrap();
-
-    for (action, app_id) in [
-        ("list", None),
-        ("focus", None),
-        ("close", None),
-        ("restart", Some(APP_ID)),
-    ] {
-        let caps = requested_caps(action, app_id, &[]).unwrap();
-        let decision = decision_for_app(
-            Some("launcher"),
-            caps.clone(),
-            &format!("desktop-launcher-{action}"),
-        );
-        assert!(authorize_caller(&decision, action).is_err());
+fn desktop_actions_admit_independently_authorized_sessions_without_rebinding_identity() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    for (index, app) in [
+        Some("independent-desktop-client"), Some("launcher"), Some("desktop-manager"),
+        Some("cosmic-settings"), None,
+    ].into_iter().enumerate() {
+        for (action, app_id) in [
+            ("launch", Some(APP_ID)), ("list", None), ("focus", None),
+            ("close", None), ("restart", Some(APP_ID)),
+        ] {
+            let caps = requested_caps(action, app_id, &[]).unwrap();
+            let session = format!("desktop-{index}-{action}");
+            let decision = decision_for_app_with_uses(app, caps.clone(), &session, Uses::Budget(1));
+            let proof = authorize_caller(&decision, action, app_id, &[]).unwrap();
+            assert_eq!(proof.spent(), caps.as_slice());
+            assert_eq!(decision.app_id(), app);
+            assert_eq!(decision.session_id(), Some(session.as_str()));
+            assert_eq!(decision.owner_uid(), unsafe { libc::geteuid() });
+            assert!(authorize_caller(&decision, action, app_id, &[]).is_err());
+        }
     }
+}
 
-    let manager_launch = decision_for_app(
-        Some("desktop-manager"),
-        launch_caps.clone(),
-        "desktop-manager-launch",
+#[test]
+fn desktop_actions_still_require_the_exact_action_and_restart_target_scopes() {
+    for (index, (action, app_id, caps)) in [
+        ("list", None, vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("network"))]),
+        ("focus", None, vec![Cap::new(Verb::DESKTOP_WINDOW, Scope::name("other"))]),
+        ("close", None, vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop"))]),
+        ("launch", Some(APP_ID), vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-term"))]),
+        ("launch", Some(APP_ID), vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.example.Other"))]),
+        ("restart", Some(APP_ID), vec![Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control"))]),
+        ("restart", Some(APP_ID), vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name(APP_ID))]),
+        ("restart", Some(APP_ID), vec![
+            Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control")),
+            Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.example.Other")),
+        ]),
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(
+            Some("independent-desktop-client"), caps, &format!("desktop-wrong-scope-{index}"),
+        );
+        assert!(authorize_caller(&decision, action, app_id, &[]).is_err());
+        assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
+    }
+}
+
+#[test]
+fn desktop_policy_revocation_tracks_the_source_app_not_the_backend() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    let uid = unsafe { libc::geteuid() };
+    let observe = Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop"));
+    let window = Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control"));
+    let client = decision_for_app(
+        Some("independent-desktop-client"), vec![observe.clone(), window], "desktop-policy-client",
     );
-    assert!(authorize_caller(&manager_launch, "launch").is_err());
-
-    let manager_list_caps = requested_caps("list", None, &[]).unwrap();
-    let manager_list = decision_for_app(
-        Some("desktop-manager"),
-        manager_list_caps.clone(),
-        "desktop-manager-list",
+    let manager = decision_for_app(
+        Some("desktop-manager"), vec![observe.clone()], "desktop-policy-manager",
     );
-    authorize_caller(&manager_list, "list").unwrap();
-    let _authorized = manager_list.require_all(&manager_list_caps).unwrap();
+    crate::approvals::app_policy::revoke(uid, "independent-desktop-client", observe).unwrap();
+    assert!(authorize_caller(&client, "list", None, &[]).unwrap_err().contains("revoked"));
+    assert!(!crate::clawd::authority::obligation_met(Some(&client)));
+    let _authorized = authorize_caller(&client, "focus", None, &[]).unwrap();
+    let _authorized = authorize_caller(&manager, "list", None, &[]).unwrap();
+    assert_eq!(client.app_id(), Some("independent-desktop-client"));
+    assert_eq!(manager.app_id(), Some("desktop-manager"));
+}
 
-    let manager_restart_caps = requested_caps("restart", Some(APP_ID), &[]).unwrap();
-    let manager_restart = decision_for_app(
-        Some("desktop-manager"),
-        manager_restart_caps.clone(),
-        "desktop-manager-restart",
-    );
-    authorize_caller(&manager_restart, "restart").unwrap();
-    let _authorized = manager_restart.require_all(&manager_restart_caps).unwrap();
-
-    let agent = decision_for_app(None, launch_caps.clone(), "desktop-agent-launch");
-    assert!(authorize_caller(&agent, "launch").is_err());
-
-    store.clear_for_test();
+#[test]
+fn canonical_launch_keeps_its_existing_rights_for_native_app_ids() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    let file = root.path().join("report.txt");
+    fs::write(&file, "fixture").unwrap();
+    let file = fs::canonicalize(file).unwrap();
+    let uri = url::Url::from_file_path(&file).unwrap().to_string();
+    for (target, app_id, _) in NATIVE_TARGETS {
+        let mut caps = vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name(app_id))];
+        let uris = if matches!(target, NativeLaunchTarget::Files | NativeLaunchTarget::Editor) {
+            caps.push(Cap::new(Verb::FS_READ, Scope::path(file.to_str().unwrap())));
+            vec![uri.clone()]
+        } else {
+            vec![]
+        };
+        let decision = decision_for_app(
+            Some("independent-launch-client"), caps.clone(), &format!("canonical-{app_id}"),
+        );
+        assert_eq!(native_launch_target(&decision, "launch", Some(app_id)), None);
+        let proof = authorize_caller(&decision, "launch", Some(app_id), &uris).unwrap();
+        assert_eq!(proof.spent(), caps.as_slice());
+        authority().revoke_session(decision.session_id().unwrap());
+        assert!(authorize_caller(&decision, "launch", Some(app_id), &uris).is_err());
+    }
 }
 
 #[test]
@@ -468,6 +609,15 @@ fn display_validation_rejects_paths_and_options() {
 }
 
 fn decision_for_app(app_id: Option<&str>, caps: Vec<Cap>, session: &str) -> Decision {
+    decision_for_app_with_uses(app_id, caps, session, Uses::Unbounded)
+}
+
+fn decision_for_app_with_uses(
+    app_id: Option<&str>,
+    caps: Vec<Cap>,
+    session: &str,
+    uses: Uses,
+) -> Decision {
     let store = authority();
     let uid = unsafe { libc::geteuid() };
     let (_handle, view) = store
@@ -479,7 +629,7 @@ fn decision_for_app(app_id: Option<&str>, caps: Vec<Cap>, session: &str) -> Deci
             audience: AudienceSet::one(Audience::SystemService),
             caps: crate::caps::CapSet::from_caps(caps),
             lifetime: std::time::Duration::from_secs(60),
-            uses: Uses::Unbounded,
+            uses,
             index_session: true,
         })
         .expect("issue a session grant");
