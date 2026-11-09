@@ -15,7 +15,7 @@ use crate::caps::manifest::Runtime;
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 static SIGNAL_OWNER: Mutex<()> = Mutex::new(());
 
-pub(super) fn cancelled() -> bool {
+pub(crate) fn cancelled() -> bool {
     CANCELLED.load(Ordering::SeqCst)
 }
 
@@ -91,6 +91,28 @@ pub fn run_app_stdio(
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<(), String> {
+    run_app_stdio_inner(launch, operation, args, data_dir, apps_dir, None)
+}
+
+pub(super) fn run_app_stdio_with_proxy(
+    launch: &AppLaunch,
+    operation: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+    proxy: fn(&mut Child) -> Result<(), String>,
+) -> Result<(), String> {
+    run_app_stdio_inner(launch, operation, args, data_dir, apps_dir, Some(proxy))
+}
+
+fn run_app_stdio_inner(
+    launch: &AppLaunch,
+    operation: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+    proxy: Option<fn(&mut Child) -> Result<(), String>>,
+) -> Result<(), String> {
     let entry = stdio_entry(launch, operation)?;
     let _signals = StdioSignals::install()?;
     validate_runtime_overrides()?;
@@ -141,6 +163,7 @@ pub fn run_app_stdio(
         &token,
         std::io::stdin().as_fd(),
         &relative,
+        proxy,
     )
 }
 
@@ -302,6 +325,7 @@ fn execute_stdio(
     token: &str,
     input: BorrowedFd<'_>,
     entry: &str,
+    proxy: Option<fn(&mut Child) -> Result<(), String>>,
 ) -> Result<(), String> {
     let policy = prepared.facts["policy"]
         .as_str()
@@ -312,6 +336,9 @@ fn execute_stdio(
         resources,
         ..
     } = prepared;
+    if proxy.is_some() {
+        command.stdout(Stdio::piped());
+    }
     let mut child = command
         .stdin(Stdio::piped())
         .spawn()
@@ -326,9 +353,21 @@ fn execute_stdio(
             crate::provenance::runtime::bind_process(owner, session.id(), pid);
         }
         let _current = launch.bind(&[entry.to_string()])?;
-        relay_stdin(&mut child, input, token, close_wait, || {
-            resources.kill_all(Some(pid));
-        })
+        require_not_cancelled()?;
+        if let Some(proxy) = proxy {
+            child
+                .stdin
+                .as_mut()
+                .ok_or("App stdio input is unavailable")?
+                .write_all(token.as_bytes())
+                .map_err(|error| format!("release App launch gate: {error}"))?;
+            proxy(&mut child)?;
+            wait_after_eof(&mut child, close_wait, || resources.kill_all(Some(pid)))
+        } else {
+            relay_stdin(&mut child, input, token, close_wait, || {
+                resources.kill_all(Some(pid));
+            })
+        }
     })();
     resources.kill_all(Some(pid));
     if result.is_err() {

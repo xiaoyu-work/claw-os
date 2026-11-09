@@ -21,6 +21,8 @@ mod local;
 mod stdio;
 #[cfg(unix)]
 pub use stdio::run_app_stdio;
+#[cfg(unix)]
+pub(crate) use stdio::cancelled as stdio_cancelled;
 
 #[cfg(not(unix))]
 pub fn run_app_stdio(
@@ -1217,65 +1219,28 @@ fn run_native_app_host_inner(
             "native host App id `{app_id}` does not match manifest `{manifest_id}`"
         ));
     }
-    let mut app_session = AppIdentitySession::for_native_host(app_id)?;
-    // The only worker class that is not sandboxed. It qualifies through
-    // this kernel-side check — a fixed App id, a root-owned package
-    // directory, a root-owned interpreter and a root-owned entry file —
-    // and no manifest field can select it. It drives privileged native
-    // desktop transports that cannot be reconstructed inside a mount
-    // and pid namespace, so the exemption is recorded rather than
-    // silently taken.
-    crate::worker::audit::exempt(
-        &format!("app:{app_id}/native-host"),
-        crate::worker::TrustTier::TrustedNativeHost.as_str(),
-        crate::worker::exemption_reason(crate::worker::TrustTier::TrustedNativeHost)
-            .unwrap_or("trusted native host"),
-    );
-    let mut command = Command::new(&runner);
-    command.arg("--").arg(&program_path);
-    reset_app_environment(&mut command, false);
-    command
-        .args(args)
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("CLAW_COS_BIN", "/usr/local/bin/cos")
-        .env("COS_APPS_DIR", "/usr/lib/cos/apps")
-        .env("COS_SDK_PYTHON_DIR", "/usr/lib/cos/python")
-        .env("PYTHONNOUSERSITE", "1")
-        .env_remove("CLAW_APP_RUNNER_BIN")
-        .env_remove("CLAW_PYTHON_LIB")
-        .env("COS_APP_ID", app_id)
-        .env("COS_SESSION", app_session.id())
-        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
-        .env("COS_DATA_DIR", crate::paths::user_data_dir());
-    apply_routed_identity(&mut command)?;
-    if proxy.is_some() {
-        command.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped());
+    crate::clawd::app_sessions::validate_native_mail_launcher(std::process::id())?;
+    let package = crate::provenance::verify::verify_package(
+        &app_dir,
+        &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
+            .expect_id(app_id),
+        &crate::provenance::trust_store(),
+    )
+    .map_err(|error| format!("verify Native Messaging App: {error}"))?;
+    let launch = AppLaunch::new(std::sync::Arc::new(package))?;
+    if launch.manifest().runtime != Runtime::Python
+        || launch.manifest().entry.as_deref() != Some("native_host.py")
+    {
+        return Err("Native Messaging App must declare its authenticated Python entry".into());
     }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("spawn native App host: {error}"))?;
-    bind_child_session(&mut app_session, &mut child)?;
+    let data = crate::paths::user_data_dir();
+    let data = data.to_str().ok_or("App data path is not UTF-8")?;
     if let Some(proxy) = proxy {
-        let result = proxy(&mut child);
-        if child.try_wait().map_err(|error| format!("inspect native App host: {error}"))?
-            .is_none()
-        {
-            child.kill().map_err(|error| format!("stop native App host: {error}"))?;
-        }
-        child.wait().map_err(|error| format!("reap native App host: {error}"))?;
-        return result;
-    }
-    let status = child
-        .wait()
-        .map_err(|error| format!("wait for native App host: {error}"))?;
-    if status.success() {
-        Ok(())
+        stdio::run_app_stdio_with_proxy(
+            &launch, "native-host", &[], data, "/usr/lib/cos/apps", proxy,
+        )
     } else {
-        Err(format!(
-            "native App host exited with code {}",
-            status.code().unwrap_or(-1)
-        ))
+        run_app_stdio(&launch, "native-host", &[], data, "/usr/lib/cos/apps")
     }
 }
 

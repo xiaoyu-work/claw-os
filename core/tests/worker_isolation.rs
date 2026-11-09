@@ -2111,7 +2111,7 @@ fn missing_isolation_facilities_fail_closed() {
 }
 
 #[test]
-fn the_trusted_native_tier_is_never_launched_through_the_sandbox() {
+fn no_worker_tier_can_request_an_unconfined_host_network() {
     let mut policy = cos::worker::derive::mcp_server(McpServerInput {
         pinned_entries: Vec::new(),
         name: "native",
@@ -2122,14 +2122,21 @@ fn the_trusted_native_tier_is_never_launched_through_the_sandbox() {
         session_id: None,
     })
     .expect("derive");
-    policy.tier = cos::worker::TrustTier::TrustedNativeHost;
-    let error = match cos::worker::prepare(&WorkerLaunch::new(policy)) {
-        Ok(_) => panic!("the launch was prepared instead of refused"),
-        Err(error) => error,
-    };
-    assert!(error.contains("not launched through"), "{error}");
-    assert!(cos::worker::exemption_reason(cos::worker::TrustTier::TrustedNativeHost).is_some());
-    assert!(cos::worker::exemption_reason(cos::worker::TrustTier::AppOperation).is_none());
+    policy.network = cos::worker::NetworkPolicy::HostShared;
+    for tier in [
+        cos::worker::TrustTier::AppOperation,
+        cos::worker::TrustTier::McpServer,
+        cos::worker::TrustTier::AgentExec,
+        cos::worker::TrustTier::DesktopSurface,
+        cos::worker::TrustTier::TrustedDesktopSession,
+    ] {
+        policy.tier = tier;
+        let error = match cos::worker::prepare(&WorkerLaunch::new(policy.clone())) {
+            Ok(_) => panic!("the launch was prepared instead of refused"),
+            Err(error) => error,
+        };
+        assert!(error.contains("host network"), "{tier:?}: {error}");
+    }
 }
 
 // ---------------------------------------------------------------------------

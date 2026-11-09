@@ -46,7 +46,9 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::apps::App;
-use crate::caps::{Cap, CapSet, Manifest, Need, Role, Scope, ScopeBinding, ScopeKind, Verb};
+use crate::caps::{Cap, CapSet, Need, Role, Scope, ScopeBinding, ScopeKind, Verb};
+#[cfg(test)]
+use crate::caps::Manifest;
 use crate::clawd::protocol::{BrokerError, BrokerErrorKind};
 use crate::proc::SessionInfo;
 use crate::provenance::Ceiling;
@@ -496,88 +498,10 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     Ok(response)
 }
 
-pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
-    let app_id = required_string(&params, "app_id")?;
-    require_trusted_native_launcher(client)?;
-    let uid = client.require_uid()?;
-    let home = client.require_home_dir()?;
-    let launcher = authenticate_launcher(client, uid, home.clone()).await?;
-    let app = installed_app(&app_id)?;
-    let package = Arc::clone(app.require_verified()?);
-    let package_ref = crate::provenance::runtime::PackageRef::of(&package);
-    // The native host is not an unauthenticated local launcher: its
-    // executable and parent are pinned root-owned binaries, so its
-    // authority is the installed manifest itself. `native_manifest_caps`
-    // still refuses argument-bound needs, which have no invocation to
-    // bind to here.
-    let ceiling = app_ceiling(&app)?;
-    let caps = native_manifest_caps(&app.manifest)?;
-    let caps = clamp_to_ceiling(&ceiling, &app_id, &caps, "register_native");
-    super::system_review::require_app_review(
-        uid,
-        &app,
-        &requester_identity(uid, launcher.pid, launcher.start_time_ticks),
-    )?;
-    let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-    let caps = authorize_plan(
-        &delegation,
-        LaunchPlan {
-            caps,
-            missing: Vec::new(),
-        },
-        &ceiling,
-        &app_id,
-    )?;
-    let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
-    let role = Role::Worker;
-    let info = SessionInfo {
-        session_id: session_id.clone(),
-        pid: 0,
-        command: vec![format!("native host for {app_id}")],
-        started_at: chrono::Utc::now().to_rfc3339(),
-        stdout_path: String::new(),
-        stderr_path: String::new(),
-        group: Some("app".to_string()),
-        parent: launcher.parent.clone(),
-        workdir: Some(app.dir.to_string_lossy().into_owned()),
-        exit_code: None,
-        ended_at: None,
-        tier: Some(role.credential_tier()),
-        scope: Some("native-host".to_string()),
-        priority: None,
-        caps: Some(caps.clone()),
-        transient_caps: None,
-        role: Some(role.name().to_string()),
-        app_id: Some(app_id.clone()),
-        pending_bind: true,
-        start_time_ticks: None,
-        client: crate::session::SessionClient::new(crate::session::SessionSource::App, false, true),
-    };
-    let proc_dir = install_session(uid, home.clone(), info).await?;
-    let handle = match issue_launch_grant(
-        &session_id,
-        Some(&app_id),
-        uid,
-        &launcher,
-        &caps,
-        Some(&ceiling),
-    ) {
-        Ok(handle) => handle,
-        Err(error) => {
-            remove_session_row(uid, home, &session_id).await;
-            return Err(error.into());
-        }
-    };
-    crate::provenance::runtime::register(uid, &session_id, &package);
-    Ok(json!({
-        "session_id": session_id,
-        "proc_data_dir": proc_dir,
-        "app_id": app_id,
-        "handle": handle,
-        "caps": caps,
-        "package": package_ref,
-        "trust_tier": ceiling.label(),
-    }))
+pub async fn register_native(_params: Value, _client: &ClientIdentity) -> Result<Value, BrokerError> {
+    Err(BrokerError::unavailable(
+        "Legacy native App registration is retired; use the declared stdin operation through the ordinary App Host",
+    ))
 }
 
 pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Value, String> {
@@ -2297,60 +2221,6 @@ fn gui_plan(
     Ok(plan)
 }
 
-fn native_manifest_caps(manifest: &Manifest) -> Result<CapSet, String> {
-    if manifest.id != "mail-ai" || !manifest.operations.is_empty() {
-        return Err("native Mail host requires the MCP-only mail-ai manifest".to_string());
-    }
-    let service = manifest
-        .mcp
-        .as_ref()
-        .ok_or_else(|| "native Mail host requires an MCP service".to_string())?;
-    // This long-lived UI host only processes supplied content. Adding mailbox
-    // tools must not silently grant it their credentials or mutation authority.
-    let allowed = CapSet::from_caps([
-        Cap::new(crate::caps::Verb::AI_CHAT_UNTRUSTED, Scope::Wild),
-        Cap::new(
-            crate::caps::Verb::MEMORY_WRITE,
-            Scope::self_ref(&manifest.id),
-        ),
-    ]);
-    let mut caps = CapSet::new();
-    for tool in &service.tools {
-        for need in &tool.needs {
-            if need.when.is_some() {
-                return Err(format!(
-                    "native host tool `{}` has a conditional capability {}",
-                    tool.name,
-                    need.verb.as_str()
-                ));
-            }
-            let scope = match &need.scope {
-                ScopeBinding::Fixed { scope } => scope.clone(),
-                ScopeBinding::Wild => Scope::Wild,
-                ScopeBinding::FromArg { .. }
-                | ScopeBinding::FromArgMap { .. }
-                | ScopeBinding::FromArgOrWild { .. } => {
-                    return Err(format!(
-                        "native host App `{}` has argument-bound capability {}",
-                        manifest.id,
-                        need.verb.as_str()
-                    ));
-                }
-            };
-            let requested = Cap::new(need.verb, scope);
-            if !allowed.covers(&requested) {
-                return Err(format!(
-                    "native Mail host cannot receive capability {}:{}",
-                    requested.verb.as_str(),
-                    requested.scope
-                ));
-            }
-            caps.insert(requested);
-        }
-    }
-    Ok(caps)
-}
-
 async fn install_session(
     uid: u32,
     home: std::path::PathBuf,
@@ -2882,14 +2752,7 @@ fn string_array(params: &Value, key: &str) -> Result<Vec<String>, String> {
     }
 }
 
-fn require_trusted_native_launcher(client: &ClientIdentity) -> Result<(), String> {
-    let pid = client
-        .pid
-        .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-    validate_native_mail_launcher(pid)
-}
-
-pub(super) fn validate_native_mail_launcher(pid: u32) -> Result<(), String> {
+pub(crate) fn validate_native_mail_launcher(pid: u32) -> Result<(), String> {
     let launcher = process_executable(pid)
         .ok_or_else(|| "native App launcher executable is unavailable".to_string())?;
     if launcher != std::path::Path::new("/usr/lib/cos/claw-mail-ai-host")

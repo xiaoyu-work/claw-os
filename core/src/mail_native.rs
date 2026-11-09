@@ -259,6 +259,9 @@ fn serve_on<N: Read + AsRawFd, O: Write, A: Write, B: Read + AsRawFd>(
     let mut mail_pending: Option<PendingMail> = None;
     let mut ready = false;
     loop {
+        if crate::bridge::stdio_cancelled() {
+            return Err("Native Messaging transport was cancelled".into());
+        }
         let mut fds = [
             libc::pollfd {
                 fd: input.as_raw_fd(),

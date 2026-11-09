@@ -22,14 +22,12 @@ adapters) are consumers of this module, not peers of it.
 | `McpServer` | App Mesh services, configured MCP servers, and adapters | yes | no | denied |
 | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
 | `TrustedDesktopSession` | the fixed vendor App session servers that need the session bus | yes | one exact socket | denied |
-| `TrustedNativeHost` | the root-owned `mail-ai` native host | no | yes | host |
 
 The tier is assigned by trusted code from how the worker is
-*installed*, never from a manifest field. `TrustedNativeHost` is the
-only exemption from the sandbox, it is reachable only through the
-kernel-side checks in `bridge::run_native_app_host` (fixed App id,
-root-owned package, root-owned interpreter, root-owned entry), and
-taking it writes a `worker.sandbox.exempt` audit record.
+*installed*, never from a manifest field. Every tier is sandboxed.
+Native Messaging's App child uses its declared `stdin` operation, the
+ordinary launch broker, signed entry binding and `AppOperation` isolation.
+There is no native-host sandbox exemption or host-network tier.
 `TrustedDesktopSession` is *not* an exemption — it is fully sandboxed —
 and is reachable only through `trusted_desktop::classify`, which
 requires a fixed App id, vendor provenance, a root-owned package tree
@@ -82,9 +80,9 @@ create local approval or capabilities. Existing capability-approval waiting
 is unchanged. The explicit local unit-fixture branch remains test-only;
 its protected-review checks are not a production lifecycle route.
 
-This guard does not change native entry selection, the fixed absolute-entry
-table, existing launch bindings or the legacy native-host route. Those
-migrations are separate from protected review.
+This guard does not change the remaining absolute-entry compatibility table or
+resource admission. Legacy native registration is retired and cannot mint
+a session; Native Messaging's App child uses the ordinary stdio route.
 
 ```bash
 cargo test -p cos --lib -- bridge::local::tests clawd::client::tests --test-threads=1
@@ -118,9 +116,12 @@ COS_CAPTURED_TEST_RUNNER="$PWD/target/debug/claw-app-runner" \
   -- --exact --ignored --nocapture --test-threads=1
 ```
 
-`cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`,
-not `run_native_app_host`. The existing Mail compatibility executable remains
-on its previous path until its paired App/package cutover. The held verified
+`cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`.
+The Mail compatibility executable retains its protected launcher/interpreter/
+Thunderbird-parent checks but runs its App child through this same worker.
+The OS-owned mailbox multiplexer remains outside App code and accepts only
+root-peer mailbox requests; App stdout can return only correlated AI replies.
+The held verified
 package's ordinary operation must declare `stdin: true`; its primary entry
 must be a declared signed regular file, package-relative and executable for a
 binary runtime. Only its own resolved operation needs enter the existing
@@ -141,9 +142,8 @@ copies a grant. A supervised Host retains its private broker's structured
 refusal rather than reaching around it. Capability status replies must match
 the complete requested ID set.
 
-The existing nine-row absolute-entry/native MCP planner, sandbox tiers and
-legacy native-host authority remain in this checkpoint for shipped App
-compatibility. Their later retirement is not stdio admission.
+The remaining absolute-entry/native MCP compatibility planner is distinct
+from stdio admission. It supplies no unconfined native-host authority.
 
 ## Runtime directories
 
