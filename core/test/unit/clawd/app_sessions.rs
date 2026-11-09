@@ -1526,6 +1526,23 @@ fn gui_caps_skip_argument_bound_needs() {
 }
 
 #[test]
+fn gui_fixed_needs_require_exact_owner_approval_before_launch() {
+    let _sandbox = approval_sandbox();
+    let launcher = delegation(unregistered_ceiling());
+    let mut app = app_from(USER_MANAGER_MANIFEST);
+    app.manifest.desktop = test_app().manifest.desktop;
+    let required = Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"));
+
+    let denied = gui_caps(&app, "--gui", &launcher).expect_err("owner approval is required");
+    assert_eq!(approval_requests(&denied).len(), 1);
+    assert!(!launcher.ceiling.covers(&required));
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Once);
+    let granted = gui_caps(&app, "--gui", &launcher).expect("exact owner approval");
+    assert_eq!(granted.iter().cloned().collect::<Vec<_>>(), [required]);
+    assert!(gui_caps(&app, "--gui", &launcher).is_err());
+}
+
+#[test]
 fn gui_wildcard_need_never_inherits_unbounded_authority() {
     let delegation = delegation(CapSet::from_caps([Cap::new(Verb::FS_META, Scope::Wild)]));
     let error = gui_caps(&test_app(), "--gui", &delegation)
