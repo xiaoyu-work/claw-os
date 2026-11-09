@@ -179,6 +179,17 @@ try {
   await wait(`document.body.innerText.includes('Isolated product UI')`);
   for (let attempt = 0; attempt < 100 && entries.get("browser-proof") !== "persisted"; attempt++) await delay(100);
   assert.equal(entries.get("browser-proof"), "persisted", "Product UI must make the owning App call");
+  await frameEvaluate(`document.querySelector('details').open=true;
+    [...document.querySelectorAll('details button')].find(button=>button.textContent==='set').click()`);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await frameEvaluate("!!document.querySelector('dialog')")) break;
+    await delay(100);
+  }
+  await frameEvaluate(`document.querySelector('dialog [name=key]').value='form-proof';
+    document.querySelector('dialog [name=value]').value='submitted';
+    document.querySelector('dialog button[type=submit]').click()`);
+  for (let attempt = 0; attempt < 100 && entries.get("form-proof") !== "submitted"; attempt++) await delay(100);
+  assert.equal(entries.get("form-proof"), "submitted", "A real submit-button click must work without allow-forms");
   const before = requests.filter((item) => item.path.endsWith("/call")).length;
   await evaluate(`window.dispatchEvent(new MessageEvent('message', {source: document.querySelector('iframe').contentWindow,
     origin:'null', data:{protocol:'claw.web-app/v1',type:'call',nonce:${JSON.stringify(nonce)},id:'forged',tool:'email.send',arguments:{}}}))`);
@@ -189,7 +200,7 @@ try {
   catalogAvailable = false;
   await send("Page.navigate", { url: `${origin}/#/apps` });
   await wait("document.body.innerText.includes('Key-Value Store')");
-  console.log("PASS signed-release Store presentation, exact-revision install review, isolated product UI, same-App calls and offline installed access");
+  console.log("PASS Store fixture presentation, exact-revision install review, isolated product UI, real form clicks, same-App calls and offline installed access (not production clawd acceptance)");
 } finally {
   if (socket?.readyState === WebSocket.OPEN) socket.close();
   chrome.kill();
