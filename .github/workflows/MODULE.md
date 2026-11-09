@@ -82,6 +82,13 @@ build, then signed and deployed once. `images` builds signed Agent/Base inputs
 without publishing those packages to APT. `website` preserves the existing
 signed package pool. Non-expiring indexes need no scheduled refresh.
 
+Successful Agent APT publication also extracts the exact tested `cos`
+executables from its same-run amd64/arm64 packages into a new
+`agent-tools-v<package-version>` Release. These bounded public signing-tool
+assets retain package notices and SHA-256 checksums. Existing tags/assets are
+never replaced. App publication pins an individual executable URL and digest;
+it does not fetch OS source or use a mutable CI artifact as a production tool.
+
 ## Dependencies
 
 Workflow commands call repository scripts that remain the implementation source
