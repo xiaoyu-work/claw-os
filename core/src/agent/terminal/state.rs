@@ -112,10 +112,10 @@ pub(super) enum PickerSelection {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NotificationPreferenceAction {
-    ToggleWeb,
-    ToggleDesktop,
-    ToggleNtfy,
-    ToggleDnd,
+    Web,
+    Desktop,
+    Ntfy,
+    Dnd,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

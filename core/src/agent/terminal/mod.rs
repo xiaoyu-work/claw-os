@@ -792,16 +792,16 @@ fn handle_key(app: &mut App, key: KeyEvent) -> InputAction {
                 InputAction::None
             }
             KeyCode::Char('w') | KeyCode::Char('W') => {
-                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleWeb)
+                InputAction::NotificationPreference(NotificationPreferenceAction::Web)
             }
             KeyCode::Char('e') | KeyCode::Char('E') => {
-                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleDesktop)
+                InputAction::NotificationPreference(NotificationPreferenceAction::Desktop)
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
-                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleNtfy)
+                InputAction::NotificationPreference(NotificationPreferenceAction::Ntfy)
             }
             KeyCode::Char('q') | KeyCode::Char('Q') => {
-                InputAction::NotificationPreference(NotificationPreferenceAction::ToggleDnd)
+                InputAction::NotificationPreference(NotificationPreferenceAction::Dnd)
             }
             _ => InputAction::None,
         };
