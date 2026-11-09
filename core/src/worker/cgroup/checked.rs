@@ -25,13 +25,26 @@ impl CheckedScope {
         instance: InstanceId,
         limits: &Limits,
     ) -> Result<Self, String> {
+        Self::create_at(
+            parent.duplicate().map_err(|error| error.to_string())?,
+            &format!("gui-{}", claw_display_control::Epoch(instance.0).label()),
+            Some(limits),
+        )
+    }
+
+    pub(super) fn create_at(
+        parent: OwnedFd,
+        label: &str,
+        limits: Option<&Limits>,
+    ) -> Result<Self, String> {
         if unsafe { libc::geteuid() } != 0 {
-            return Err("checked GUI containment is Root-owned".to_string());
+            return Err("checked App containment is Root-owned".to_string());
         }
-        let parent = parent.duplicate().map_err(|error| error.to_string())?;
         check_cgroup(parent.as_fd()).map_err(|error| error.to_string())?;
-        let label = format!("gui-{}", claw_display_control::Epoch(instance.0).label());
-        let name = CString::new(label.clone()).map_err(|error| error.to_string())?;
+        if label.is_empty() || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') {
+            return Err("invalid checked App cgroup name".into());
+        }
+        let name = CString::new(label).map_err(|error| error.to_string())?;
         let path = std::fs::read_link(format!("/proc/self/fd/{}", parent.as_raw_fd()))
             .map_err(|error| format!("locate pinned GUI cgroup parent: {error}"))?
             .join(label);
@@ -74,22 +87,24 @@ impl CheckedScope {
             ));
         }
         check_cgroup(scope.directory.as_fd()).map_err(|error| error.to_string())?;
-        for (control, value) in [
-            ("memory.max", limits.memory_bytes.to_string()),
-            ("memory.swap.max", "0".to_string()),
-            ("memory.oom.group", "1".to_string()),
-            ("pids.max", limits.pids_max.to_string()),
-            (
-                "cpu.max",
-                format!("{} 100000", u64::from(limits.cpu_percent) * 1000),
-            ),
-        ] {
-            write_file(scope.directory.as_fd(), control, value.as_bytes())
-                .map_err(|error| format!("apply checked GUI {control}: {error}"))?;
-            let actual = read_file(scope.directory.as_fd(), control, 4096)
-                .map_err(|error| format!("read back GUI {control}: {error}"))?;
-            if actual.trim() != value {
-                return Err(format!("GUI {control} readback did not match its limit"));
+        if let Some(limits) = limits {
+            for (control, value) in [
+                ("memory.max", limits.memory_bytes.to_string()),
+                ("memory.swap.max", "0".to_string()),
+                ("memory.oom.group", "1".to_string()),
+                ("pids.max", limits.pids_max.to_string()),
+                (
+                    "cpu.max",
+                    format!("{} 100000", u64::from(limits.cpu_percent) * 1000),
+                ),
+            ] {
+                write_file(scope.directory.as_fd(), control, value.as_bytes())
+                    .map_err(|error| format!("apply checked GUI {control}: {error}"))?;
+                let actual = read_file(scope.directory.as_fd(), control, 4096)
+                    .map_err(|error| format!("read back GUI {control}: {error}"))?;
+                if actual.trim() != value {
+                    return Err(format!("GUI {control} readback did not match its limit"));
+                }
             }
         }
         scope.retire(Instant::now() + Duration::from_secs(1))?;
@@ -104,6 +119,11 @@ impl CheckedScope {
         self.directory
             .try_clone()
             .map_err(|error| format!("duplicate GUI cgroup: {error}"))
+    }
+
+    pub(super) fn attach(&self, pid: u32) -> Result<(), String> {
+        write_file(self.directory.as_fd(), "cgroup.procs", pid.to_string().as_bytes())
+            .map_err(|error| format!("attach gated App to checked cgroup: {error}"))
     }
 
     pub fn retire(&self, deadline: Instant) -> Result<(), String> {

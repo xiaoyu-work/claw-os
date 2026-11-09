@@ -37,6 +37,7 @@ mod process {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::task::Poll;
+    use std::time::{Duration, Instant};
     use tokio::io::AsyncWriteExt;
     use tokio::sync::Mutex;
 
@@ -403,6 +404,20 @@ mod process {
             assert!(held.failures.is_empty());
         }
         let canary_identity = std::fs::metadata(&canary).unwrap();
+        let published = std::sync::atomic::AtomicBool::new(false);
+        let failed_mutation = crate::clawd::app_store::with_mutation(
+            &spec.app_id,
+            |_fence| async {
+                manager.retire_app(&spec.app_id, Instant::now() + Duration::from_secs(10))
+                    .await.map(|_| ())
+            },
+            |_fence| async {
+                published.store(true, std::sync::atomic::Ordering::Release);
+                Ok(())
+            },
+        ).await;
+        assert!(failed_mutation.is_err(), "blocked private-mount cleanup must refuse Store publication");
+        assert!(!published.load(std::sync::atomic::Ordering::Acquire));
         let context = crate::agent::tools::app_gateway::McpCallContext {
             wire_version: crate::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
             call_id: "retirement-call".into(),
@@ -478,6 +493,31 @@ mod process {
             .unwrap()
             .release()
             .unwrap();
+
+        let old_host = {
+            let mut held = slot.lock().await;
+            manager.start_runtime(&spec, &mut held).await.unwrap();
+            let process = held.runtime.as_ref().unwrap();
+            let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, process.host.pid, 0) };
+            assert!(raw >= 0);
+            unsafe { std::os::fd::OwnedFd::from_raw_fd(raw as i32) }
+        };
+        crate::clawd::app_store::with_mutation(
+            &spec.app_id,
+            |_fence| async {
+                manager.retire_app(&spec.app_id, Instant::now() + Duration::from_secs(10))
+                    .await.map(|_| ())
+            },
+            |_fence| async {
+                use std::os::fd::AsFd;
+                assert!(claw_display_control::identity::pidfd_exited(old_host.as_fd()).unwrap());
+                assert!(slot.lock().await.runtime.is_none());
+                published.store(true, std::sync::atomic::Ordering::Release);
+                Ok(())
+            },
+        ).await.unwrap();
+        assert!(published.load(std::sync::atomic::Ordering::Acquire));
+        held_capacity(&manager, owner.uid, 0);
 
         {
             let mut held = slot.lock().await;

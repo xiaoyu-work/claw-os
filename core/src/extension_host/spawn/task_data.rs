@@ -2,13 +2,18 @@
 //! No caller path or environment value selects the backing storage.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use super::*;
 use crate::clawd::client_identity::ClientIdentity;
 
 const MAX_APP_VIEWS: usize = 64;
 const MOUNT_HELPER_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn retained_views() -> &'static Mutex<Vec<Arc<TaskAppData>>> {
+    static VIEWS: OnceLock<Mutex<Vec<Arc<TaskAppData>>>> = OnceLock::new();
+    VIEWS.get_or_init(Default::default)
+}
 
 #[derive(Debug)]
 struct View {
@@ -86,7 +91,7 @@ impl TaskAppData {
     }
 
     pub(crate) fn bind(
-        &self,
+        self: &Arc<Self>,
         client: &ClientIdentity,
         package: &crate::provenance::VerifiedPackage,
     ) -> Result<PathBuf, String> {
@@ -97,9 +102,10 @@ impl TaskAppData {
         self.bind_app(client, &package.id)
     }
 
-    fn bind_app(&self, client: &ClientIdentity, app: &str) -> Result<PathBuf, String> {
+    fn bind_app(self: &Arc<Self>, client: &ClientIdentity, app: &str) -> Result<PathBuf, String> {
         self.require_client(client)?;
         crate::worker::derive::validate_app_id(app)?;
+        let _admission = crate::clawd::app_mutation::admit(app)?;
         let mut views = self
             .views
             .lock()
@@ -114,6 +120,13 @@ impl TaskAppData {
         }
         Self::require_capacity(views.len())?;
         let prepared = app_data::prepare_app(&self.owner, &self.execution, app, &self.paths)?;
+        {
+            let mut retained = retained_views().lock().map_err(|_| "Task App custody lock poisoned")?;
+            if !retained.iter().any(|held| Arc::ptr_eq(held, self)) {
+                if retained.len() >= 256 { return Err("retained Task App custody is at capacity".into()); }
+                retained.push(self.clone());
+            }
+        }
         self.require_client(client)?;
         // Retain the target before installing: an interrupted helper may
         // already have attached it, so cleanup must still visit that target.
@@ -154,6 +167,9 @@ impl TaskAppData {
             .lock()
             .map_err(|_| "Task App data lock poisoned")?;
         if views.is_empty() {
+            drop(views);
+            retained_views().lock().map_err(|_| "Task App custody lock poisoned")?
+                .retain(|held| !std::ptr::eq(held.as_ref(), self));
             return Ok(());
         }
         in_namespace(&self.namespace, || {
@@ -167,6 +183,34 @@ impl TaskAppData {
             Ok(())
         })?;
         views.clear();
+        drop(views);
+        retained_views().lock().map_err(|_| "Task App custody lock poisoned")?
+            .retain(|held| !std::ptr::eq(held.as_ref(), self));
+        Ok(())
+    }
+
+    pub(crate) fn retire_app_views(app: &str) -> Result<(), String> {
+        let retained = retained_views().lock().map_err(|_| "Task App custody lock poisoned")?.clone();
+        for data in retained {
+            let mut views = data.views.lock().map_err(|_| "Task App data lock poisoned")?;
+            if let Some(view) = views.get(app) {
+                in_namespace(&data.namespace, || {
+                    if unsafe { libc::umount2(view.destination.as_ptr(), 0) } != 0
+                        && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINVAL)
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                })?;
+                views.remove(app);
+            }
+            let empty = views.is_empty();
+            drop(views);
+            if empty {
+                retained_views().lock().map_err(|_| "Task App custody lock poisoned")?
+                    .retain(|held| !Arc::ptr_eq(held, &data));
+            }
+        }
         Ok(())
     }
 }

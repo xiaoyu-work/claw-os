@@ -204,6 +204,7 @@ struct ServiceRuntime {
     expires_at_ms: u64,
     always_on_ready: bool,
     retiring: bool,
+    retiring_sessions: Vec<String>,
     _capacity: CapacityLease,
 }
 
@@ -290,6 +291,8 @@ impl AppServiceManager {
         self: &Arc<Self>,
         prepared: PreparedAppServiceCall,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, BrokerError> {
+        let _admission = super::app_mutation::admit(&prepared.app_id)
+            .map_err(BrokerError::unavailable)?;
         if let Some(activity) = &prepared.activity {
             activity.check().map_err(BrokerError::authorization)?;
         }
@@ -555,6 +558,8 @@ impl AppServiceManager {
         spec: &RuntimeSpec,
         slot: &mut ServiceSlot,
     ) -> Result<(), RuntimeStartError> {
+        let _admission = super::app_mutation::admit(&spec.app_id)
+            .map_err(RuntimeStartError::admission)?;
         if slot.runtime.is_some() {
             return Err(RuntimeStartError::admission(
                 "App service still holds its previous runtime",
@@ -789,6 +794,7 @@ impl AppServiceManager {
             expires_at_ms,
             always_on_ready: false,
             retiring: true,
+            retiring_sessions: Vec::new(),
             _capacity: capacity,
         });
         crate::proc::register_session_for_owner(info, owner.uid)
@@ -902,6 +908,7 @@ impl AppServiceManager {
 
     async fn warm_always_on_for_owner(self: &Arc<Self>, owner_uid: u32) {
         for (app_id, app) in crate::apps::discover_verified(&apps_root()) {
+            let Ok(_admission) = super::app_mutation::admit(&app_id) else { continue };
             let Some(service) = app.manifest.mcp.as_ref() else {
                 continue;
             };
@@ -1170,6 +1177,29 @@ impl AppServiceManager {
             let mut slot = slot.lock().await;
             if let Err(error) = slot.retire().await {
                 errors.push(error);
+            }
+
+            pub(crate) async fn retire_app(
+                &self, app: &str, deadline: Instant,
+            ) -> Result<Vec<(u32, String)>, String> {
+                let slots: Vec<_> = self.slots.lock().await.iter()
+                    .filter(|(key, _)| key.app_id == app)
+                    .map(|(key, slot)| (key.owner_uid, slot.clone())).collect();
+                let mut completed = Vec::new();
+                for (owner, slot) in slots {
+                    let mut slot = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), slot.lock())
+                        .await.map_err(|_| "App service calls have not drained before package mutation")?;
+                    if let Some(runtime) = &slot.runtime {
+                        for session in crate::proc::try_registry_sessions_for_owner(owner)? {
+                            if session.parent.as_deref() == Some(runtime.host_session_id.as_str()) && session.app_id.as_deref() == Some(app) {
+                                completed.push((owner, session.session_id));
+                            }
+                        }
+                    }
+                    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), slot.retire())
+                        .await.map_err(|_| "App service cleanup remains pending before package mutation")??;
+                }
+                Ok(completed)
             }
         }
         if errors.is_empty() {

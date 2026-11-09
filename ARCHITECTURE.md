@@ -199,11 +199,21 @@ descriptors and descendants before success; denial remains durable on failure.
 Standalone App installation, replacement, rollback and provenance mutations
 still need authenticated Root coordination and admission fencing.
 
-Ordinary captured App operations now share the runner's private launch gate:
-the target entry cannot execute before its launcher completes exact process
-binding. Stdin bytes, limits and EOF are preserved. This closes the
-spawn-before-bind window; it is not a package-mutation fence or proof that
-ordinary App descendants have retired.
+Ordinary App operations retain both the exact-entry stdin launch gate and a
+pre-sandbox Root custody gate. Root pins/stops the protected runner across
+checked cgroup attachment before bubblewrap can fork, retains its pidfd, and
+requires checked process, provider and authenticated Host-resource cleanup.
+Stdin bytes, limits, EOF and existing parent/delegation/policy checks remain
+unchanged. Registry deletion or a dead parent is not retirement evidence.
+
+Root Store commits now hold one global-per-App admission fence, retire ordinary,
+GUI and MCP custody across owners, and only then consume the exact owner's
+protected review and publish/reverify. Incomplete/unknown cleanup remains
+pending; cancellation cannot release a blocking cleanup/publication worker's
+fence. The Store refuses dpkg-owned paths and directs updates to APT instead of
+overwriting delivery ownership. Independent CLI installation, rollback,
+trust-revoke and dpkg/APT coordination remain pending; this is not the complete
+installed-system publication gate or production acceptance.
 
 The App-service manager now retains non-reusable runtime, identity and capacity
 custody across incomplete or cancelled retirement. Cleanup errors propagate to

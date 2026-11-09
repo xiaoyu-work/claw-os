@@ -134,6 +134,8 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     // Establish the delegated subtree before Event Center or any other
     // long-lived helper can inherit the systemd service cgroup.
     agentd_broker.prime_extension_containment();
+    #[cfg(target_os = "linux")]
+    super::app_execution::initialize(&agentd_broker);
     let _event_center = event_center::start();
     if let Err(error) = firewall::reconcile_on_start().await {
         tracing::error!(error = %error, "failed to reconcile managed firewall state");
@@ -688,6 +690,17 @@ pub(crate) async fn dispatch(
     state: &DaemonState,
     client: &ClientIdentity,
 ) -> Response {
+    #[cfg(target_os = "linux")]
+    let mut provider = match decision.filter(|decision|
+        decision.app_id().is_some() && route.name != "app_session.deregister")
+        .and_then(|decision| decision.session_id().map(|session| (session, decision.owner_uid())))
+    {
+        Some((session, owner)) => match super::app_execution::provider(session, owner) {
+            Ok(provider) => provider,
+            Err(_) => return Response::fault(id, Fault::NotAuthorized),
+        },
+        None => None,
+    };
     let call = RouteCall {
         state,
         client,
@@ -708,6 +721,12 @@ pub(crate) async fn dispatch(
         // in-flight ceiling, never by cancellation.
         Deadline::Uninterruptible => running.await,
     };
+    #[cfg(target_os = "linux")]
+    if let Some(provider) = provider.as_mut() {
+        if !matches!(&result, Err(error) if error.kind == super::protocol::BrokerErrorKind::Indeterminate) {
+            provider.complete();
+        }
+    }
     // A route whose descriptor says it derives its own capability owes
     // the authority one spend. If it answered without taking one, the
     // authority has no record that anything was authorized, so there is

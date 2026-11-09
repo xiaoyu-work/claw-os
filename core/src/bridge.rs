@@ -287,6 +287,9 @@ pub(crate) struct AppIdentitySession {
     task_app_data_dir: Option<std::path::PathBuf>,
     gui_data_dir: Option<std::path::PathBuf>,
     gui_retired: bool,
+    root_custody: bool,
+    #[cfg(target_os = "linux")]
+    custody: std::sync::Mutex<Option<std::sync::Arc<crate::worker::app_custody::Custody>>>,
 }
 
 #[derive(Clone)]
@@ -533,6 +536,9 @@ impl AppIdentitySession {
             task_app_data_dir: None,
             gui_data_dir: None,
             gui_retired: false,
+            root_custody: false,
+            #[cfg(target_os = "linux")]
+            custody: std::sync::Mutex::new(None),
             relay: crate::worker::relay_slot(),
         })
     }
@@ -797,6 +803,9 @@ impl AppIdentitySession {
             task_app_data_dir,
             gui_data_dir,
             gui_retired: false,
+            root_custody: result.get("root_custody").and_then(serde_json::Value::as_bool) == Some(true),
+            #[cfg(target_os = "linux")]
+            custody: std::sync::Mutex::new(None),
             relay: crate::worker::relay_slot(),
         })
     }
@@ -859,6 +868,9 @@ impl AppIdentitySession {
             task_app_data_dir: None,
             gui_data_dir: None,
             gui_retired: false,
+            root_custody: false,
+            #[cfg(target_os = "linux")]
+            custody: std::sync::Mutex::new(None),
             relay: crate::worker::relay_slot(),
         })
     }
@@ -878,6 +890,29 @@ impl AppIdentitySession {
     }
 
     pub fn bind_process(&mut self, pid: u32) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        let custody = self.custody.lock().map_err(|_| "App custody lock poisoned")?.clone();
+        #[cfg(target_os = "linux")]
+        let socket = custody.as_ref().map(|custody| custody.socket().to_path_buf());
+        #[cfg(target_os = "linux")]
+        if let Some(custody) = &custody { custody.bind_process(pid)?; }
+        #[cfg(not(target_os = "linux"))]
+        let socket: Option<PathBuf> = None;
+        self.bind_process_with_custody(pid, socket.as_deref())?;
+        #[cfg(target_os = "linux")]
+        if let Some(custody) = custody { custody.gate.release()?; }
+        Ok(())
+    }
+
+    fn retain_custody(&self, resources: &crate::worker::LaunchResources) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        { *self.custody.lock().map_err(|_| "App custody lock poisoned")? = resources.app_custody.clone(); }
+        #[cfg(not(target_os = "linux"))]
+        let _ = resources;
+        Ok(())
+    }
+
+    fn bind_process_with_custody(&mut self, pid: u32, custody: Option<&Path>) -> Result<(), String> {
         match &self.backend {
             AppSessionBackend::Local { .. } => {
                 crate::proc::bind_session_process(&self.session_id, pid)
@@ -888,6 +923,7 @@ impl AppIdentitySession {
                     "session_id": self.session_id,
                     "handle": handle,
                     "pid": pid,
+                    "custody_socket": custody,
                 }),
             )
             .map(|result| {
@@ -1003,7 +1039,7 @@ fn prepare_app_worker(
     // The endpoint is bound to the package the sandbox is about to
     // execute, so a revocation landing mid-run is answered against the
     // same snapshot the pinned inodes came from.
-    let launch = crate::worker::WorkerLaunch::new(policy).with_authority(
+    let launch = crate::worker::WorkerLaunch::new(policy).with_root_custody(session.root_custody).with_authority(
         session
             .broker_authority(app_id)
             .with_package(binding.package_ref()),
@@ -1011,6 +1047,7 @@ fn prepare_app_worker(
     let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
         crate::worker::audit::refused(&label, tier.as_str(), error);
     })?;
+    session.retain_custody(&prepared.resources)?;
     crate::worker::audit::launched(&prepared.facts, Some(session.id()));
     Ok(prepared)
 }
@@ -1140,7 +1177,7 @@ pub(crate) fn prepare_app_session_worker(
     .inspect_err(|error| {
         crate::worker::audit::refused(&label, tier.as_str(), error);
     })?;
-    let launch = crate::worker::WorkerLaunch::new(policy).with_authority(
+    let launch = crate::worker::WorkerLaunch::new(policy).with_root_custody(session.root_custody).with_authority(
         session
             .broker_authority(app_id)
             .with_package(binding.package_ref()),
@@ -1148,6 +1185,7 @@ pub(crate) fn prepare_app_session_worker(
     let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
         crate::worker::audit::refused(&label, tier.as_str(), error);
     })?;
+    session.retain_custody(&prepared.resources)?;
     crate::worker::audit::launched(&prepared.facts, Some(session.id()));
     Ok(prepared)
 }
@@ -1836,6 +1874,17 @@ impl Drop for AppIdentitySession {
             }
             return;
         }
+        #[cfg(target_os = "linux")]
+        if let Ok(custody) = self.custody.lock() {
+            if let Some(custody) = custody.as_ref() {
+                // Drain local relays before taking the launcher's RPC connection for
+                // deregistration; those relays may still need that same connection.
+                if let Err(error) = custody.finish() {
+                    tracing::warn!(%error, "Root retains ordinary App cleanup; local Host is not drained");
+                    return;
+                }
+            }
+        }
         match &self.backend {
             AppSessionBackend::Local { .. } => deregister_session(&self.session_id),
             AppSessionBackend::Clawd { handle, .. } => {
@@ -2193,17 +2242,19 @@ fn run_python_operation(
             // the child gets any authority, so a revocation later can find
             // and stop it.
             let owner = crate::provenance::runtime::current_owner();
-            crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+            if app_session.uses_local_backend() {
+                crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+                crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+            }
             // Bind the exact process, so a revocation can signal *this*
             // group and nothing that later inherits the number.
-            crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
             app_session.bind_process(pid)
         },
     )?;
-    crate::provenance::runtime::deregister(
+    if app_session.uses_local_backend() { crate::provenance::runtime::deregister(
         crate::provenance::runtime::current_owner(),
         app_session.id(),
-    );
+    ); }
     crate::worker::audit::outcome(
         &policy_digest,
         &format!("app:{app_id}/{command}"),
@@ -2431,17 +2482,19 @@ fn run_operation(
             // the child gets any authority, so a revocation later can find
             // and stop it.
             let owner = crate::provenance::runtime::current_owner();
-            crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+            if app_session.uses_local_backend() {
+                crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+                crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+            }
             // Bind the exact process, so a revocation can signal *this*
             // group and nothing that later inherits the number.
-            crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
             app_session.bind_process(pid)
         },
     )?;
-    crate::provenance::runtime::deregister(
+    if app_session.uses_local_backend() { crate::provenance::runtime::deregister(
         crate::provenance::runtime::current_owner(),
         app_session.id(),
-    );
+    ); }
     crate::worker::audit::outcome(
         &policy_digest,
         &format!("app:{app_id}/{command}"),

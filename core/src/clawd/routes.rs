@@ -1753,7 +1753,7 @@ routes! {
         authority: peer(Audience::AppLaunch),
         body: body::AppStoreRequest,
         audit: &[("request_id", FieldRule::Token)],
-        run: |c| super::app_store::commit(c.params, c.client).await,
+        run: |c| super::app_store::commit(c.state, c.params, c.client).await,
     }
     AppStoreCancel {
         name: "app_store.cancel",
@@ -2100,7 +2100,6 @@ routes! {
             let authority = c.authority()?;
         clipboard::control(c.params, c.client, authority)
             .await
-            .map_err(BrokerError::from)
         },
     }
     SystemContainerControl {

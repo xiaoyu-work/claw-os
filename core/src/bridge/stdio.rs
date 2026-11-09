@@ -347,7 +347,9 @@ fn execute_stdio(
     let owner = crate::provenance::runtime::current_owner();
     let close_wait = crate::worker::Limits::operation().runtime;
     let result = (|| {
-        session.bind_process(pid)?;
+        resources.bind_custody_process(pid)?;
+        session.bind_process_with_custody(pid, resources.custody_socket())?;
+        resources.release_custody_gate()?;
         if session.uses_local_backend() {
             crate::provenance::runtime::register(owner, session.id(), launch.package());
             crate::provenance::runtime::bind_process(owner, session.id(), pid);

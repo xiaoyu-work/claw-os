@@ -50,6 +50,54 @@ mod process {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
+    #[test]
+    #[ignore = "requires COS_CAPTURED_TEST_RUNNER pointing at the real Linux runner"]
+    fn pre_sandbox_custody_gate_preserves_stdio_and_refuses_unbound_execution() {
+        use std::io::Write;
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let runner = std::env::var_os("COS_CAPTURED_TEST_RUNNER").expect("real runner input");
+        let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let marker = root.path().join("custody-started");
+        let payload = vec![0, 1, b'\n', 255, b'{', b'}'];
+        for admitted in [false, true] {
+            let gate = crate::worker::app_custody::Gate::new().unwrap();
+            let descriptor = gate.fd();
+            let mut command = Command::new(&runner);
+            command.args(gate.arguments()).arg("/usr/bin/python3").args([
+                "-I",
+                "-c",
+                "import pathlib,sys;pathlib.Path(sys.argv[1]).write_bytes(b'started');sys.stdout.buffer.write(sys.stdin.buffer.read())",
+                marker.to_str().unwrap(),
+            ]).env_clear().env("PATH", "/usr/bin:/bin")
+                .env("HOME", root.path()).env("COS_DATA_DIR", root.path().join("state"))
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::fcntl(descriptor, libc::F_SETFD, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            child.stdin.take().unwrap().write_all(&payload).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            assert!(!marker.exists(), "App code escaped the pre-sandbox bind gate");
+            if admitted { gate.release().unwrap(); }
+            drop(gate);
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(output.status.success(), admitted);
+            assert_eq!(marker.exists(), admitted);
+            if admitted {
+                assert_eq!(output.stdout, payload, "custody framing must never consume App stdin or enter App stdout");
+            } else {
+                assert!(output.stdout.is_empty());
+            }
+        }
+    }
+
     fn prepare(
         root: &Path,
         program: PathBuf,

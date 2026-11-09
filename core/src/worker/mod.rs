@@ -30,6 +30,8 @@
 //! every hostile-worker launch outright.
 
 pub mod audit;
+#[cfg(target_os = "linux")]
+pub(crate) mod app_custody;
 pub mod broker;
 #[cfg(target_os = "linux")]
 pub mod cgroup;

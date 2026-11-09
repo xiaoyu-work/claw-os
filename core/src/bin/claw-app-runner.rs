@@ -8,7 +8,30 @@ fn main() {
         fail(&refusal.message);
     }
     let mut args = std::env::args_os().skip(1);
-    let launch_gate = match args.next().as_deref() {
+    let first = args.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--custody-gate")) {
+        use std::os::fd::FromRawFd;
+        let descriptor = args.next().and_then(|value| value.to_str()?.parse::<i32>().ok())
+            .filter(|descriptor| *descriptor >= 3)
+            .unwrap_or_else(|| fail("invalid Root custody gate descriptor"));
+        let token = args.next().and_then(|value| value.into_string().ok())
+            .filter(|value| value.len() == 32 && value.bytes().all(|byte|
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+            .unwrap_or_else(|| fail("invalid Root custody gate token"));
+        if args.next().as_deref() != Some(std::ffi::OsStr::new("--")) {
+            fail("Root custody gate must precede `--`");
+        }
+        let program = args.next().unwrap_or_else(|| fail("Root custody gate requires PROGRAM"));
+        disable_dumpability();
+        let mut input = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        let mut received = [0; 32];
+        if input.read_exact(&mut received).is_err() || received != token.as_bytes() {
+            fail("Root App execution custody was not bound");
+        }
+        drop(input);
+        exec(&program, &args.collect::<Vec<_>>());
+    }
+    let launch_gate = match first.as_deref() {
         Some(value) if value == std::ffi::OsStr::new("--") => None,
         Some(value) if value == std::ffi::OsStr::new("--launch-gate") => {
             let token = args

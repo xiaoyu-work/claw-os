@@ -38,6 +38,9 @@ impl Scope {
     /// `fork` but before the worker can do anything meaningful,
     /// because bubblewrap's own setup happens after we write here.
     pub fn attach(&self, pid: u32) -> Result<(), String> {
+        if let Some(checked) = &self.checked {
+            return checked.attach(pid);
+        }
         std::fs::write(self.path.join("cgroup.procs"), pid.to_string())
             .map_err(|error| format!("attach worker to cgroup: {error}"))
     }
@@ -160,6 +163,36 @@ pub(crate) fn create_gui(
     limits: &Limits,
 ) -> Result<Scope, String> {
     let checked = checked::CheckedScope::create(parent, instance, limits)?;
+    Ok(Scope {
+        path: checked.path().to_path_buf(),
+        checked: Some(checked),
+    })
+}
+
+pub(crate) fn create_app(
+    parent: &crate::extension_host::spawn::ContainmentRoot,
+    session: &str,
+    limits: &Limits,
+    task_parent: Option<&claw_display_control::ProcessIdentity>,
+) -> Result<Scope, String> {
+    let (directory, limits) = match task_parent {
+        None => (
+            claw_display_control::workload::open_directory(parent.path())
+                .map_err(|error| error.to_string())?,
+            Some(limits),
+        ),
+        Some(host) => {
+            let group = claw_display_control::workload::SessionGroup::of(host)
+                .map_err(|error| error.to_string())?;
+            if !group.path().starts_with(parent.path()) || group.path() == parent.path() {
+                return Err("Task App custody is outside its authenticated Host containment".into());
+            }
+            // The Host's existing aggregate controllers cover this child recursively.
+            // Enabling new controllers on its populated leaf would change that policy.
+            (group.open().map_err(|error| error.to_string())?, None)
+        }
+    };
+    let checked = checked::CheckedScope::create_at(directory, session, limits)?;
     Ok(Scope {
         path: checked.path().to_path_buf(),
         checked: Some(checked),

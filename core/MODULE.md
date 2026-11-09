@@ -93,9 +93,9 @@ The App directory-install backend consumes provenance verification and the
 shared App lint provider, never router or broker orchestration. Its review
 callback runs before publication, followed by fresh verification and comparison
 with the reviewed package. The CLI owns presentation and consent; the backend
-supplies neither permission nor App execution. This is a reusable prerequisite
-for future Root installation/rollback coordination, not that coordination or
-an admission fence. See
+supplies neither permission nor App execution. Root Store commits now wrap it
+with checked cross-owner custody and an App admission fence; independent CLI
+installation/rollback and OS-package mutation are not thereby coordinated. See
 [installation review](../docs/app-development.md#installation-permission-review).
 
 `cos app stdio <id> <operation> [args...]` is a human/host transport, not a

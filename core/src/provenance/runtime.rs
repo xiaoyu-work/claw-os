@@ -674,6 +674,14 @@ pub fn deregister(owner: u32, session_id: &str) {
     });
 }
 
+/// Checked counterpart for a supervisor that must acknowledge retirement.
+pub fn deregister_checked(owner: u32, session_id: &str) -> Result<(), String> {
+    with_mutate(owner, |state| {
+        state.running.remove(session_id);
+        state.shutdown.remove(session_id);
+    })
+}
+
 /// The package a session is running, if any.
 pub fn package_for(owner: u32, session_id: &str) -> Result<Option<PackageRef>, String> {
     with_read(owner, |state| {

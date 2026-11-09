@@ -261,6 +261,8 @@ pub(crate) async fn launch(params: Value, client: &ClientIdentity) -> Result<Val
         .map_err(|_| BrokerError::execution("invalid GUI launch arguments"))?;
     let manager = Manager::get().map_err(BrokerError::unavailable)?;
     let job = manager.lookup(request.session_id.as_str(), client)?;
+    let admission = crate::clawd::app_mutation::admit(job.registration.launch.app_id())
+        .map_err(BrokerError::unavailable)?;
     job.registration
         .require_launch(request.handle.as_str(), client)
         .map_err(BrokerError::authorization)?;
@@ -291,6 +293,7 @@ pub(crate) async fn launch(params: Value, client: &ClientIdentity) -> Result<Val
         return Err(BrokerError::unavailable("GUI supervisor could not start"));
     }
     let deadline = Instant::now() + Duration::from_secs(20);
+    drop(admission);
     loop {
         {
             let state = job
@@ -383,6 +386,15 @@ pub(crate) fn retire_app(owner: u32, app: &str, deadline: Instant) -> Result<(),
             |registration, _| registration.owner() == owner && registration.launch.app_id() == app,
             deadline,
         )?;
+    }
+
+    pub(crate) fn retire_installed_app(app: &str, deadline: Instant) -> Result<Vec<(u32, String)>, String> {
+        let manager = Manager::get()?;
+        let completed = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
+            .values().filter(|job| job.registration.launch.app_id() == app)
+            .map(|job| (job.registration.owner(), job.registration.session_id.clone())).collect();
+        manager.retire_where(|registration, _| registration.launch.app_id() == app, deadline)?;
+        Ok(completed)
     }
     Ok(())
 }

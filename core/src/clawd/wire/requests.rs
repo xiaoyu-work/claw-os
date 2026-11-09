@@ -1170,6 +1170,8 @@ pub struct AppSessionBind {
     pub session_id: Token,
     pub handle: Token,
     pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custody_socket: Option<Text<4096>>,
 }
 
 pub type AppGuiLaunch = crate::clawd::gui::inputs::LaunchRequest;
