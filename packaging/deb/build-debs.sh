@@ -522,6 +522,8 @@ esac
 install -Dm0644 "$PAM_DISPLAY_MODULE" \
     "$AGENT_STAGE/usr/lib/$PAM_MULTIARCH/security/pam_claw_display.so"
 install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"
+install -Dm0644 "$PROJECT_DIR/tools/browser_native_host.py" \
+    "$AGENT_STAGE/usr/lib/cos/browser-native-host.py"
 install -m 755 "$SECURITY_FLOOR_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-security-floor"
 install -m 755 "$SCRIPT_DIR/common/security-floor-hook" \
     "$AGENT_STAGE/usr/lib/cos/apt/security-floor-hook"
