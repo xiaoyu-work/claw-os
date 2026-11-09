@@ -110,10 +110,7 @@ fn local_registration_checks_root_and_review_before_deriving_capabilities() {
 
 #[cfg(unix)]
 #[test]
-fn non_root_launchers_keep_the_broker_and_cannot_select_local_owner_authority() {
-    if unsafe { libc::geteuid() } == 0 {
-        return;
-    }
+fn all_launchers_keep_the_broker_and_cannot_select_local_owner_authority() {
     let _lock = crate::test_env::lock_env();
     let _fixture = TestEnvVarGuard::remove("COS_TEST_LOCAL_APP_SESSIONS");
     let root = tempfile::tempdir().unwrap();

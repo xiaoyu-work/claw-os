@@ -173,14 +173,14 @@ every session category, including WSL processes without a logind seat/session.
 No category gets implicit or cached authorization. Polkit owns the password
 exchange; the helper derives the caller from `PKEXEC_UID`, and broker decisions
 remain scoped to that owner's exact request.
-In-process Root App registration also consults that protected owner review and
-the existing App deny gate before deriving local capabilities or creating a
-session. Non-root callers retain their authenticated broker path; an owner
-override is not a local authorization shortcut. Registration checks the root
-peer on the actual connection and preserves structured review refusals.
-Store/package-channel delivery, generic local-launch cutover and complete
-per-resource allow/ask/deny enforcement still need integration. Unsupported
-resource controls are disclosed, not simulated with unenforced switches.
+Ordinary App registration, including UID 0, uses the authenticated broker.
+Root is not a standalone App lifecycle bypass when `clawd` is unavailable.
+An owner override is not a local authorization shortcut. Registration checks
+the root peer on the actual connection and preserves structured review
+refusals. The local registration backend remains an explicit unit fixture only.
+Store/package-channel delivery and complete per-resource allow/ask/deny
+enforcement still need integration. Unsupported resource controls are
+disclosed, not simulated with unenforced switches.
 
 The [Root display runtime](core/src/display_session/MODULE.md) binds the
 PAM-authenticated account to the kernel login identity before user startup

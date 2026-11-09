@@ -70,19 +70,17 @@ and a root-owned executed artifact.
 
 ## Protected App registration
 
-[`bridge::local`](../bridge/local.rs) checks the existing protected owner/App
-review before in-process Root registration derives capabilities or writes a
-session. It uses the held verified package, the trusted routed owner and the
-authenticated non-App parent; the existing owner/App deny gate remains in
-force after review. No caller flag, comparison digest or copied grant store
-substitutes for that controller.
+All ordinary launchers, including UID 0, and supervised Hosts use the
+authenticated broker. Root cannot run an App independently of `clawd` or
+select a separate local registration backend. A routed owner override cannot
+be forwarded as the launcher's kernel identity and therefore remains refused;
+supervised Hosts retain their private owner-bound broker.
 
-Ordinary non-root launchers and supervised Hosts use the authenticated broker;
-non-root owner overrides cannot select a local path. Activation-review
-refusals retain their broker code and private `system_review_required` details
-for the existing controller. They do not cause a local approval or a request
-through the daemon's own public socket. Existing capability-approval waiting
-is unchanged. The explicit local unit-fixture branch remains test-only.
+Activation-review refusals retain their broker code and private
+`system_review_required` details for the existing controller. They never
+create local approval or capabilities. Existing capability-approval waiting
+is unchanged. The explicit local unit-fixture branch remains test-only;
+its protected-review checks are not a production lifecycle route.
 
 This guard does not change native entry selection, the fixed absolute-entry
 table, existing launch bindings or the legacy native-host route. Those
