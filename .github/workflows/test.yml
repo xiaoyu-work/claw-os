@@ -26,6 +26,9 @@ jobs:
       - name: Validate image provisioning scripts
         run: bash scripts/ci/check-provisioning.sh
 
+      - name: Install APT validation tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends apt-utils gnupg
+
       - name: Test APT package synchronization
         run: bash packaging/apt-repo/tests/test-sync-existing-packages.sh
 
