@@ -9,9 +9,6 @@ pub(super) fn use_clawd_backend() -> Result<bool, String> {
     }
     #[cfg(unix)]
     {
-        if unsafe { libc::geteuid() } == 0 {
-            return Ok(false);
-        }
         if crate::paths::current_owner_uid_override().is_some() {
             return Err(
                 "owner-overridden App launches require the authenticated App Host; \
