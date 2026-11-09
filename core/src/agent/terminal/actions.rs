@@ -239,16 +239,16 @@ pub(super) fn prepare(
                 return Ok(None);
             };
             match action {
-                NotificationPreferenceAction::ToggleWeb => {
+                NotificationPreferenceAction::Web => {
                     preferences.web_enabled = !preferences.web_enabled
                 }
-                NotificationPreferenceAction::ToggleDesktop => {
+                NotificationPreferenceAction::Desktop => {
                     preferences.desktop_enabled = !preferences.desktop_enabled
                 }
-                NotificationPreferenceAction::ToggleNtfy => {
+                NotificationPreferenceAction::Ntfy => {
                     preferences.ntfy_enabled = !preferences.ntfy_enabled
                 }
-                NotificationPreferenceAction::ToggleDnd => {
+                NotificationPreferenceAction::Dnd => {
                     if preferences.dnd_start_minute_utc.is_some()
                         && preferences.dnd_end_minute_utc.is_some()
                     {

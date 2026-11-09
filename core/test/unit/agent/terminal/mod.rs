@@ -2140,7 +2140,7 @@ fn notification_inbox_uses_durable_mutations_and_preferences() {
                 crossterm::event::KeyModifiers::NONE,
             ),
         ),
-        InputAction::NotificationPreference(NotificationPreferenceAction::ToggleWeb)
+        InputAction::NotificationPreference(NotificationPreferenceAction::Web)
     );
 }
 
