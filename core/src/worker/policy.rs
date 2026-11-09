@@ -65,12 +65,6 @@ pub enum TrustTier {
     /// field, publisher signature, developer grant, path alias or App
     /// id alone selects it.
     TrustedDesktopSession,
-    /// A built-in, root-owned native host that cannot run inside the
-    /// sandbox (it drives privileged desktop/native transports).
-    ///
-    /// Reaching this tier requires an authenticated, kernel-side
-    /// allowlist entry: no manifest field selects it.
-    TrustedNativeHost,
 }
 
 impl TrustTier {
@@ -81,26 +75,21 @@ impl TrustTier {
             TrustTier::AgentExec => "agent-exec",
             TrustTier::DesktopSurface => "desktop-surface",
             TrustTier::TrustedDesktopSession => "trusted-desktop-session",
-            TrustTier::TrustedNativeHost => "trusted-native-host",
         }
     }
 
     /// Does this tier execute under the hostile-worker sandbox?
     ///
-    /// Only [`TrustTier::TrustedNativeHost`] is exempt, and only
-    /// because it cannot function inside a mount/PID namespace. Every
-    /// other tier fails closed when the sandbox is unavailable.
+    /// Every worker fails closed when the sandbox is unavailable.
     pub const fn is_sandboxed(self) -> bool {
-        !matches!(self, TrustTier::TrustedNativeHost)
+        true
     }
 
     /// May this tier receive a display / session transport?
     pub const fn allows_display(self) -> bool {
         matches!(
             self,
-            TrustTier::DesktopSurface
-                | TrustTier::TrustedDesktopSession
-                | TrustTier::TrustedNativeHost
+            TrustTier::DesktopSurface | TrustTier::TrustedDesktopSession
         )
     }
 }
@@ -278,9 +267,8 @@ pub enum NetworkPolicy {
     /// Private network namespace plus a per-launch egress broker that
     /// admits exactly these endpoints.
     Brokered { endpoints: Vec<Endpoint> },
-    /// The host network namespace. Reserved for
-    /// [`TrustTier::TrustedNativeHost`]; a hostile tier that reaches
-    /// this value is a bug and the provider rejects it.
+    /// Retained for parsing/auditing historical policies. Every current
+    /// worker rejects host-network sharing.
     HostShared,
 }
 

@@ -170,7 +170,7 @@ impl RootBroker {
                     };
                     assert!(!stream.has_pending_input());
                     let peer = peer::verify(frame.credentials).expect("kernel-verified CLI sender");
-                    assert_eq!(peer.uid, OWNER);
+                    assert!(peer.uid == 0 || peer.uid == OWNER);
                     let client = crate::clawd::client_identity::ClientIdentity::from_peer(peer);
                     let request = serde_json::from_slice(&frame.body).unwrap();
                     let response = crate::clawd::server::dispatch_verified_request(
@@ -469,16 +469,26 @@ impl Drop for Running {
     }
 }
 
-fn refused(root: &Path, parent: &crate::proc::SessionInfo) -> Value {
+fn awaiting_review(root: &Path, parent: &crate::proc::SessionInfo) -> reviews::ReviewRecord {
     let mut process = Running::start(root, parent, &["app", "stdio", APP, "host"]);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let review = loop {
+        let shown = process.diagnostics();
+        if let Some(review) = reviews::pending(0, 100).unwrap().into_iter()
+            .find(|review| review.manifest.id == APP && shown.contains(&review.id))
+        {
+            break review;
+        }
+        assert!(process.child.try_wait().unwrap().is_none(), "{shown}");
+        assert!(Instant::now() < deadline, "CLI did not present its broker review: {shown}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(unsafe { libc::kill(process.child.id() as libc::pid_t, libc::SIGTERM) }, 0);
     let (status, stdout, stderr) = process.finish(Duration::from_secs(10));
     assert!(!status.success());
     assert!(stdout.is_empty(), "refusal polluted protocol stdout");
-    let error: Value = serde_json::from_str(stderr.trim()).unwrap();
-    assert_eq!(error["code"], "not_authorized");
-    assert_eq!(error["details"]["status"], "system_review_required");
-    assert_eq!(error["details"]["app_id"], APP);
-    error
+    assert!(stderr.contains(&review.id) && stderr.contains("cancelled"), "{stderr}");
+    review
 }
 
 #[test]
@@ -528,19 +538,20 @@ fn root_stdio_cli_preserves_opaque_transport_and_authority() {
         before,
         "CLI manufactured a parent"
     );
-
-    let missing = refused(root.path(), &parent);
-    let missing_id = missing["details"]["system_review_id"].as_str().unwrap();
-    reviews::decide(0, missing_id, false, None).unwrap();
-    refused(root.path(), &parent);
-    accept(42425, &launch);
-    refused(root.path(), &parent);
-    accept(0, &launch);
-    accept(OWNER, &launch);
+    let mut offline = Running::start(root.path(), &parent, &["app", "stdio", APP, "host"]);
+    let (status, stdout, stderr) = offline.finish(Duration::from_secs(10));
+    assert!(!status.success() && stdout.is_empty() && stderr.contains("clawd"), "{stderr}");
     let _broker_proc = TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker_session = TestEnvVarGuard::remove("COS_SESSION");
     let _broker = RootBroker::start(crate::paths::clawd_socket_path());
 
+    let missing = awaiting_review(root.path(), &parent);
+    reviews::decide(0, &missing.id, false, None).unwrap();
+    awaiting_review(root.path(), &parent);
+    accept(42425, &launch);
+    awaiting_review(root.path(), &parent);
+    accept(0, &launch);
+    accept(OWNER, &launch);
     let mut app_parent = parent.clone();
     app_parent.client.source = crate::session::SessionSource::App;
     let mut nested = Running::start(root.path(), &app_parent, &["app", "stdio", APP, "host"]);
@@ -606,13 +617,13 @@ fn root_stdio_cli_preserves_opaque_transport_and_authority() {
     held.frame(b"original stream survives atomic package replacement");
     held.child.stdin.take();
     assert!(held.finish(Duration::from_secs(10)).0.success());
-    refused(root.path(), &parent);
+    awaiting_review(root.path(), &parent);
     accept(0, &replacement);
     crate::approvals::generations::revoke(&crate::approvals::RevocationScope::Owner {
         uid: Some(0),
     })
     .unwrap();
-    refused(root.path(), &parent);
+    awaiting_review(root.path(), &parent);
 
     assert!(
         reviews::has_accepted(OWNER, replacement.package()).unwrap(),

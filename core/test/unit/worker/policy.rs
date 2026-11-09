@@ -22,25 +22,25 @@ fn sample() -> LaunchPolicy {
 }
 
 #[test]
-fn only_the_native_host_tier_escapes_the_sandbox() {
+fn every_worker_tier_requires_the_sandbox() {
     for tier in [
         TrustTier::AppOperation,
         TrustTier::McpServer,
         TrustTier::AgentExec,
         TrustTier::DesktopSurface,
+        TrustTier::TrustedDesktopSession,
     ] {
         assert!(tier.is_sandboxed(), "{tier:?} must be sandboxed");
     }
-    assert!(!TrustTier::TrustedNativeHost.is_sandboxed());
 }
 
 #[test]
-fn display_is_reserved_for_desktop_and_native_tiers() {
+fn display_is_reserved_for_admitted_desktop_tiers() {
     assert!(!TrustTier::AppOperation.allows_display());
     assert!(!TrustTier::McpServer.allows_display());
     assert!(!TrustTier::AgentExec.allows_display());
     assert!(TrustTier::DesktopSurface.allows_display());
-    assert!(TrustTier::TrustedNativeHost.allows_display());
+    assert!(TrustTier::TrustedDesktopSession.allows_display());
 }
 
 #[test]

@@ -1749,7 +1749,24 @@ fn native_mail_manifest() -> Manifest {
             "safety": "strict",
             "origins": ["external-content"]
           },
-          "operations": {},
+          "operations": {
+            "native-host": {
+              "label": {"en": "Opaque supplied-content processing"},
+              "stdin": true,
+              "needs": [
+                {
+                  "verb": "ai.chat.untrusted",
+                  "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                  "why": {"en": "Process explicitly supplied content"}
+                },
+                {
+                  "verb": "memory.write",
+                  "scope": {"kind": "fixed", "scope": {"kind": "self-ref", "value": "mail-ai"}},
+                  "why": {"en": "Remember only this App's results"}
+                }
+              ]
+            }
+          },
           "mcp": {
             "entry": "fixture.py",
             "transport": "stdio",
@@ -1777,34 +1794,31 @@ fn native_mail_manifest() -> Manifest {
 }
 
 #[test]
-fn native_mail_caps_use_the_shared_mcp_contract() {
-    let manifest = native_mail_manifest();
-    assert!(manifest.operations.is_empty());
-    let caps = native_manifest_caps(&manifest).unwrap();
+fn native_mail_stdio_caps_use_only_the_declared_operation() {
+    let mut app = test_app();
+    app.manifest = native_mail_manifest();
+    let plan = operation_plan(&app, "native-host", &[], &omnipotent_delegation(), &publisher_ceiling()).unwrap();
+    let caps = plan.caps;
     assert!(caps.covers(&Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild)));
     assert!(caps.covers(&Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("mail-ai"))));
     assert_eq!(caps.len(), 2);
 }
 
 #[test]
-fn native_mail_caps_reject_other_products_and_missing_mcp() {
-    let mut manifest = native_mail_manifest();
-    manifest.id = "email".to_string();
-    assert!(native_manifest_caps(&manifest).is_err());
-    manifest.id = "mail-ai".to_string();
-    manifest.mcp = None;
-    assert!(native_manifest_caps(&manifest).is_err());
+fn native_stdio_operation_does_not_require_an_mcp_service_or_a_mail_identity() {
+    let mut app = test_app();
+    app.manifest = native_mail_manifest();
+    app.manifest.id = "independent-stdio".into();
+    app.manifest.mcp = None;
+    app.manifest.operations.get_mut("native-host").unwrap().needs[1].scope =
+        ScopeBinding::Fixed { scope: Scope::self_ref("independent-stdio") };
+    let plan = operation_plan(&app, "native-host", &[], &omnipotent_delegation(), &publisher_ceiling()).unwrap();
+    assert!(plan.caps.covers(&Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild)));
+    assert_eq!(plan.caps.len(), 2);
 }
 
 #[test]
-fn native_mail_caps_do_not_fall_back_to_operations() {
-    let mut manifest = native_mail_manifest();
-    manifest.operations = test_app().manifest.operations;
-    assert!(native_manifest_caps(&manifest).is_err());
-}
-
-#[test]
-fn native_mail_caps_reject_mailbox_and_cross_product_authority() {
+fn native_stdio_operation_does_not_inherit_mailbox_or_cross_product_tools() {
     for (verb, scope) in [
         (Verb::NET_DIAL, Scope::host("smtp.example.com:587")),
         (Verb::SECRET_READ, Scope::name("default/SMTP_PASSWORD")),
@@ -1812,31 +1826,32 @@ fn native_mail_caps_reject_mailbox_and_cross_product_authority() {
         (Verb::MEMORY_WRITE, Scope::Wild),
         (Verb::AGENT_INVOKE, Scope::name("calendar/create")),
     ] {
-        let mut manifest = native_mail_manifest();
-        let need = &mut manifest.mcp.as_mut().unwrap().tools[0].needs[0];
+        let requested = Cap::new(verb, scope.clone());
+        let mut app = test_app();
+        app.manifest = native_mail_manifest();
+        let need = &mut app.manifest.mcp.as_mut().unwrap().tools[0].needs[0];
         need.verb = verb;
         need.scope = ScopeBinding::Fixed { scope };
-        assert!(
-            native_manifest_caps(&manifest).is_err(),
-            "native host accepted {verb}"
-        );
+        let plan = operation_plan(&app, "native-host", &[], &omnipotent_delegation(), &publisher_ceiling()).unwrap();
+        assert_eq!(plan.caps.len(), 2, "MCP declaration changed stdio authority for {verb}");
+        assert!(!plan.caps.covers(&requested));
     }
 }
 
-#[test]
-fn native_mail_caps_reject_argument_dependent_authority() {
-    let mut manifest = native_mail_manifest();
-    manifest.mcp.as_mut().unwrap().tools[0].needs[0].when =
-        Some(crate::caps::manifest::NeedCondition::ArgPresent {
-            arg: "body".to_string(),
-        });
-    assert!(native_manifest_caps(&manifest).is_err());
-    manifest.mcp.as_mut().unwrap().tools[0].needs[0].when = None;
-    manifest.mcp.as_mut().unwrap().tools[0].needs[0].scope = ScopeBinding::FromArg {
-        arg: "body".to_string(),
-        transform: crate::caps::manifest::ScopeTransform::Identity,
-    };
-    assert!(native_manifest_caps(&manifest).is_err());
+#[tokio::test]
+async fn legacy_native_registration_cannot_mint_a_session_for_any_app() {
+    let _lock = crate::test_env::lock_env();
+    let root = crate::test_env::secure_scratch_dir("retired-native-registration");
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", &root);
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", &root);
+    let client = test_client();
+    let before = crate::proc::registry_sessions().len();
+    for app_id in ["mail-ai", "email", "independent-stdio"] {
+        let error = register_native(json!({"app_id": app_id}), &client).await.unwrap_err();
+        assert!(error.to_string().contains("retired"));
+    }
+    assert_eq!(crate::proc::registry_sessions().len(), before);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

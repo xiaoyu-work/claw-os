@@ -477,6 +477,7 @@ while True:
         TOKEN,
         input.as_fd(),
         "host.py",
+        None,
     );
     assert!(
         result.is_ok(),
@@ -537,6 +538,7 @@ fn package_local_binary_uses_the_same_authorized_stdio_sandbox() {
         TOKEN,
         input.as_fd(),
         "program",
+        None,
     );
     assert!(
         result.is_ok(),
@@ -571,7 +573,8 @@ fn denied_process_binding_never_releases_package_code() {
         prepared,
         TOKEN,
         input.as_fd(),
-        "host.py"
+        "host.py",
+        None,
     )
     .is_err());
     assert!(fs::read(fixture.root.join("output")).unwrap().is_empty());
@@ -598,6 +601,7 @@ fn changed_package_bytes_are_rechecked_before_gate_release() {
         TOKEN,
         input.as_fd(),
         "host.py",
+        None,
     )
     .unwrap_err();
     assert!(

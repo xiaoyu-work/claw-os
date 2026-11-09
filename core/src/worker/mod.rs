@@ -16,11 +16,9 @@
 //! | `McpServer` | a configured stdio MCP server, an adapter, an App session server | yes | no | denied |
 //! | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
 //! | `TrustedDesktopSession` | a vendor App session server that needs the session bus | yes | one exact socket | denied |
-//! | `TrustedNativeHost` | the root-owned `mail-ai` native host | no | yes | host |
 //!
-//! Only the last tier is exempt, it is selected by a kernel-side
-//! allowlist rather than by anything in a manifest, and it is the only
-//! place [`provider::exemption_reason`] returns a value.
+//! Every tier is sandboxed. Native Messaging uses the ordinary declared
+//! stdin operation with no display, host network or native-host exemption.
 //!
 //! ## Failing closed
 //!
@@ -57,9 +55,8 @@ pub use policy::{
     SeccompProfile, StdioPlan, TrustTier,
 };
 pub use provider::{
-    availability, exemption_reason, install_relay, prepare, relay_slot, Availability,
-    BrokerAuthority, Governor, LaunchResources, PreparedLaunch, RelayHandle, WorkerLaunch,
-    WorkerSandbox,
+    availability, install_relay, prepare, relay_slot, Availability, BrokerAuthority, Governor,
+    LaunchResources, PreparedLaunch, RelayHandle, WorkerLaunch, WorkerSandbox,
 };
 
 /// Set inside every sandboxed worker. Its presence is what tells the

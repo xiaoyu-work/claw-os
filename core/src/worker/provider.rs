@@ -12,7 +12,7 @@
 
 use std::process::Command;
 
-use super::policy::{LaunchPolicy, TrustTier};
+use super::policy::LaunchPolicy;
 use crate::caps::CapSet;
 
 /// Authority the per-launch broker endpoint answers with.
@@ -385,15 +385,4 @@ pub fn prepare(launch: &WorkerLaunch) -> Result<PreparedLaunch, String> {
         return Err(availability.refusal());
     }
     provider.prepare(launch)
-}
-
-/// Human-readable reason a tier is exempt from the sandbox, for audit.
-pub fn exemption_reason(tier: TrustTier) -> Option<&'static str> {
-    match tier {
-        TrustTier::TrustedNativeHost => Some(
-            "root-owned native host: drives privileged desktop transports that cannot \
-             be reconstructed inside a mount and PID namespace",
-        ),
-        _ => None,
-    }
 }
