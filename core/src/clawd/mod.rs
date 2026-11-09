@@ -61,6 +61,7 @@ pub mod nearby;
 pub mod network;
 pub mod network_diagnostics;
 pub mod notifications;
+pub mod observations;
 pub mod operation_previews;
 pub mod packages;
 pub mod permissions;

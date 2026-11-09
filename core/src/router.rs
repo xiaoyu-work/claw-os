@@ -1035,6 +1035,19 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__observe" {
+        if args.len() != 2 || !matches!(args[1].as_str(), "tasks" | "resources") {
+            return Err("internal observation bridge requires `tasks` or `resources`".into());
+        }
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal observation command requires COS_SESSION")?;
+        let value = request_wire_clawd(
+            Command::SystemObservationQuery,
+            json!({"session": session, "action": args[1]}),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__calendar" {
         if args.len() != 5 || args[1] != "day" {
             return Err("internal Calendar bridge requires `day <year> <month> <day>`".into());
@@ -1686,6 +1699,38 @@ fn dispatch_with_stdin_impl(
             .ok_or_else(|| "internal clipboard command required".to_string())?;
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal clipboard command requires COS_SESSION".to_string())?;
+        if action.starts_with("history-") {
+            let mut identity = None;
+            let mut deadline = None;
+            let mut confirm = false;
+            let mut index = 2;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--identity" if identity.is_none() => {
+                        identity = Some(args.get(index + 1).ok_or("--identity requires a value")?.clone());
+                        index += 2;
+                    }
+                    "--deadline" if deadline.is_none() => {
+                        deadline = Some(args.get(index + 1).ok_or("--deadline requires a value")?
+                            .parse::<u64>().map_err(|_| "invalid clipboard history deadline")?);
+                        index += 2;
+                    }
+                    "--confirm" if !confirm => {
+                        confirm = true;
+                        index += 1;
+                    }
+                    _ => return Err("invalid clipboard history flag".into()),
+                }
+            }
+            let params = json!({
+                "session": session, "action": action, "identity": identity,
+                "confirm": confirm,
+                "deadline_unix_ms": deadline.ok_or("clipboard history requires --deadline")?,
+            });
+            crate::clawd::clipboard::validate_history_request(&params)?;
+            let value = request_wire_clawd(Command::SystemClipboardControl, params)?;
+            return Ok(Some(value.to_string()));
+        }
         let mut mime = None;
         let mut source = None;
         let mut primary = false;

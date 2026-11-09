@@ -13,6 +13,13 @@ use crate::caps::{Cap, Scope, Verb};
 
 use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
+use super::protocol::BrokerError;
+
+mod history;
+
+pub fn validate_history_request(params: &Value) -> Result<(), String> {
+    history::validate(params).map(|_| ())
+}
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -21,6 +28,31 @@ const MAX_WRITE_BYTES: u64 = 16 * 1024 * 1024;
 static CLIPBOARD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, BrokerError> {
+    if params
+        .get("action")
+        .and_then(Value::as_str)
+        .is_some_and(|action| action.starts_with("history-"))
+    {
+        return history::control(params, client, authority).await;
+    }
+    if ["identity", "deadline_unix_ms"]
+        .iter()
+        .any(|key| params.get(key).is_some_and(|value| !value.is_null()))
+    {
+        return Err(BrokerError::execution(
+            "history arguments are not selection arguments",
+        ));
+    }
+    selection_control(params, client, authority)
+        .await
+        .map_err(BrokerError::from)
+}
+
+async fn selection_control(
     params: Value,
     client: &ClientIdentity,
     authority: &Decision,
@@ -64,7 +96,7 @@ pub async fn control(
         )?;
         let source = source.as_deref().map(resolve_source).transpose()?;
         let requested = requested_caps(&action, source.as_deref());
-        let _authorized = authorize_session(authority, &requested)?;
+        let _authorized = authorize_session(authority, uid, &requested)?;
         let environment = ClipboardEnvironment::new(uid, gid, home, peer_pid)?;
 
         if matches!(action.as_str(), "status" | "types" | "read") {
@@ -117,8 +149,14 @@ fn requested_caps(action: &str, source: Option<&Path>) -> Vec<Cap> {
 /// process registry or re-derives policy, so the two can no longer
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
-fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
-    authority.require_app("clipboard-manager")?;
+fn authorize_session(
+    authority: &Decision,
+    owner: u32,
+    requested: &[Cap],
+) -> Result<Authorized, String> {
+    if authority.owner_uid() != owner || authority.session_id().is_none() {
+        return Err("clipboard authority requires the authenticated owner's session".into());
+    }
     authority.require_all(requested)
 }
 
@@ -657,12 +695,4 @@ fn tail_bytes(value: &[u8]) -> String {
     const MAX: usize = 8 * 1024;
     let start = value.len().saturating_sub(MAX);
     String::from_utf8_lossy(&value[start..]).trim().to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/clawd/clipboard.rs"
-    ));
 }

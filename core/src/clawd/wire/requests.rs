@@ -1396,6 +1396,10 @@ pub struct ClipboardControl {
     pub primary: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Text<64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

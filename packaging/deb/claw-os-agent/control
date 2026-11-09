@@ -5,7 +5,7 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Provides: claw-os-abi-__ABI__, claw-os-app-runtime-v1, claw-os-display-session-v1, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1, claw-os-nearby-v1
+Provides: claw-os-abi-__ABI__, claw-os-app-runtime-v1, claw-os-display-session-v1, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1 (= 1), claw-os-observation-v1 (= 1), claw-os-clipboard-history-v1 (= 1), claw-os-nearby-v1
 Breaks: claw-os-base (<< __MIN_BASE__), claw-os-desktop (<< __MIN_DESKTOP__)
 Conflicts: owly
 XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__

@@ -90,6 +90,7 @@ and agent tasks.
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
 | `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
+| `clipboard.rs`, `clipboard/history.rs` | Independent selection/history capabilities; owner/session-bound wl-clipboard and CopyQ execution, pinned provider process and private history relay, with no App-name entitlement |
 | `calendar.rs`, `calendar/files.rs` | Owner-scoped Calendar read service; exact named grant, pinned live database view and bounded unprivileged reader, with no App data mount delivered to callers |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
@@ -112,13 +113,13 @@ Before allocating an oversized body, the transport reserves one of two
 oversized-request slots, held through dispatch. Typed image validation still
 enforces four originals and 20 MiB decoded total before task side effects.
 
-The trusted Mail Native Messaging host derives its standing capabilities from
-the same MCP-only manifest as Agent calls. Its compiled ceiling allows only
-untrusted-content AI and `mail-ai`-scoped memory writes. Conditional,
-argument-bound and mailbox/credential capabilities are refused, not inherited
-when the product gains another tool. Native launch still requires the
-root-owned launcher and Thunderbird parent; consent and AI accounting remain
-in the broker gate.
+The Mail Native Messaging App child derives authority only from its declared
+`native-host` stdin operation through ordinary App registration and sandboxing.
+Its existing needs are untrusted-content AI and its own memory writes; adding
+another MCP tool cannot expand this operation. Package verification, protected
+review and normal capability/AI decisions remain mandatory. The root-owned
+launcher/interpreter/Thunderbird-parent checks still admit the OS transport,
+not an App privilege tier. The legacy native-registration route is retired.
 
 `system.mail.control` uses the normal authenticated SystemService route and
 requires named `mail.read`, `mail.draft`, or `mail.send` rights, or unscoped
@@ -126,9 +127,9 @@ requires named `mail.read`, `mail.draft`, or `mail.send` rights, or unscoped
 qualified accounts bind to the owner's authenticated Thunderbird bridge.
 Closed action inputs cannot choose an owner, socket, executable or profile
 path. The OS-owned gateway alone forwards root broker mailbox requests; it
-filters AI child stdout to correlated AI replies. The native AI manifest
-ceiling remains unchanged and the existing native-host integration exception
-still blocks publication until its generic-contract replacement.
+filters AI child stdout to correlated AI replies. The App child has no raw
+desktop transport or host network. This Host cutover does not establish
+unrelated native resource or full installed-system publication acceptance.
 
 The `system.app-permissions` service accepts any authenticated session holding
 the existing High-risk `sys.permissions:manage` capability for the request's
@@ -150,6 +151,40 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.clipboard.control` retains the selection actions and adds four closed
+history actions through `cos __clipboard history-{list,restore,remove,clear}
+--deadline <unix-ms> [--identity <packed-item-sha256-base64>] [--confirm]`.
+Only restore/remove accept a canonical SHA-256 identity; clear requires exact
+true confirmation. History requests reject MIME, source, primary selection,
+owner, executable, endpoint, path, tab and arbitrary script selectors.
+
+List spends `clipboard.read:history` only. Remove preserves history read/write;
+clear spends only history write. Restore additionally spends the independent
+`clipboard.write:selection` right because CopyQ selects into the live clipboard.
+No authenticated App name grants or excludes access. Caller owner/session,
+live grants and provider process credentials are checked by Root; skipping an
+App preflight cannot reach an unchecked operation.
+
+Root pins the default owner's `.config/copyq/.copyq_s` connection, validates
+the owner's protected directories and installed `/usr/bin/copyq` process, and
+runs only fixed scripts. Its owner-UID CLI receives a root-controlled private
+relay, not the owner's home, Wayland socket or user bus. The accepted relay peer
+must be the exact launched system CopyQ child; the grant is spent immediately
+before bytes reach the already authenticated provider connection. An authorized
+unavailable reply also spends one request use, preserving its typed error
+through mandatory route middleware without a second spend. Requests have
+a two-second end-to-end ceiling, a four-MiB response bound, at most 20 text
+previews and 180 Unicode preview characters plus an ellipsis. Items are relocated
+by their packed identity, never a stale row. Missing services are unavailable;
+mutation deadline expiry is indeterminate and never automatically retried.
+
+`cargo test -p cos --lib clipboard -- --test-threads=1` covers real capability
+authority and closed input/result contracts. The ignored typed-client/process
+relay fixture additionally requires root in a root-owned Linux source tree:
+run the same filter with `--include-ignored`.
+It must not connect to installed CopyQ, the owner's live home/bus or Wayland.
+Native and Web acceptance remains product-owned and separately gated.
 
 `system.calendar.day` accepts only a session and Gregorian year/month/day.
 It derives the authenticated owner's existing `apps/calendar/calendar/events.db`,
@@ -323,7 +358,7 @@ The older `permission.*` routes and capability-helper mode remain compatible
 with existing clients. This typed terminal/native cutover does not establish
 that every Settings or Agent Web approval caller has migrated to it.
 
-App operation/GUI registration, native-host registration and prepared MCP
+App operation/GUI registration and prepared MCP
 calls require an owner review before capability settlement. Unreviewed
 `always-on` services are not started automatically. Service maintenance retires
 stale review/permission-policy snapshots; this does not claim instantaneous

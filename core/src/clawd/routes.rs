@@ -2094,6 +2094,7 @@ routes! {
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("mime", FieldRule::Identifier),
+            ("deadline_unix_ms", FieldRule::Count),
         ],
         run: |c| {
             let authority = c.authority()?;
@@ -2231,6 +2232,19 @@ routes! {
         run: |c| {
             let authority = c.authority()?;
             super::app_notifications::control(c.params, c.client, authority)
+        },
+    }
+    SystemObservationQuery {
+        name: "system.observation.query",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: session(Audience::SystemService),
+        body: body::SessionAction,
+        audit: &[("session", FieldRule::Token), ("action", FieldRule::Enum(&["tasks", "resources"]))],
+        run: |c| {
+            let authority = c.authority()?;
+            super::observations::query(c.params, c.client, authority).await
         },
     }
     SystemCalendarDay {
