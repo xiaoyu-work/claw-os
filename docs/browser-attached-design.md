@@ -28,11 +28,11 @@ CLI or Agent
   -> hidden cos __browser bridge
   -> typed system.browser.control route
   -> clawd verifies:
-       authenticated browser-attached App identity
+       authenticated caller App/session identity, without a business-name entitlement
        exact action capability
        owner uid and owner-only runtime/socket metadata
   -> $XDG_RUNTIME_DIR/claw-browser.sock
-       native_host.py accepts only a root peer
+       OS browser_native_host.py accepts only a root peer
   -> Chromium Native Messaging
   -> background.js
        verifies daemon-injected expected_origin
@@ -116,15 +116,18 @@ origin-bound capability and frame identity.
 
 ## Installed layout
 
-The App, Native Host and MV3 extension source are owned by
+The App, transport launchers and MV3 extension source are owned by
 [`clawos-app/products/browser`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/browser).
-The App payload is assembled from `packaging/apps.lock.json`. Extension and
-Native Messaging installation remains an explicit
+The Native Messaging/socket transport is OS-owned and installed by Agent's
+`claw-os-browser-bridge-v1 (= 1)` interface. It is not another App, an App
+permission bypass or an App-owned privileged socket server.
+Native Messaging registration remains an explicit
 [`tools/install-browser-agent.sh`](../tools/install-browser-agent.sh) operation;
-it resolves both sources through the same immutable pin, not a sibling checkout.
-The script configures an allowlist for a manually loaded unpacked extension,
-not automatic force-installation. Extension files and native registration are
-not automatically updated by APT in this migration.
+it validates installed protected assets, without fetching source or copying
+another transport. The script configures an allowlist for a manually loaded
+unpacked extension, not automatic force-installation. Browser package upgrades
+update the extension and launchers together; profile data, grants and OS
+registration remain unchanged. Reload the extension/browser explicitly.
 
 | Path | Contents |
 | --- | --- |
@@ -132,7 +135,7 @@ not automatically updated by APT in this migration.
 | `/etc/chromium/policies/managed/claw-agent.json` | extension policy |
 | `/etc/chromium/native-messaging-hosts/com.clawos.browser.json` | native-host registration pinned to the extension id |
 | `/usr/lib/cos/claw-browser-host` | fixed native-host launcher |
-| `/usr/lib/cos/browser-agent/native_host.py` | Native Messaging/socket bridge |
+| `/usr/lib/cos/browser-native-host.py` | OS-owned Native Messaging/socket bridge |
 | `$XDG_RUNTIME_DIR/claw-browser.sock` | owner-owned mode-`0600` socket; root clients only |
 
 The Native Messaging host validates that `XDG_RUNTIME_DIR` resolves exactly to

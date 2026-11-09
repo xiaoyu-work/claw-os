@@ -26,7 +26,8 @@ Debian packages and a signed multi-architecture APT repository.
 | `../scripts/app_sources.py` | Resolve main once per build, retain its immutable source lock and stage explicitly kinded payloads |
 | `../scripts/app_sources.py --stage-shared <root>` | Invoke App-owned common support staging once into `usr/lib/cos/python`, separately from SDK/runtime and product payloads |
 | External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
-| `../tools/install-browser-agent.sh` | Manual Browser extension/Native Host deployment from the same product pin |
+| `../tools/install-browser-agent.sh` | Native Messaging/policy registration for already installed Browser assets; never fetches or replaces product files |
+| `../tools/browser_native_host.py` | OS-owned owner-bound Native Messaging transport for the capability-gated Browser service |
 | `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
 | `deb/build-desktop-deb.sh`, `deb/tests/test_applet_provider.py` | Require the actual native Applet provider before declaring the Desktop-owned `claw-os-applet-services-v1` interface; no App/GUI grant or publication cutover |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |
@@ -81,6 +82,14 @@ mixed repository.
 Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
+
+Agent provides `claw-os-browser-bridge-v1 (= 1)` and installs the bounded
+Native Messaging transport at `/usr/lib/cos/browser-native-host.py`. Root-peer
+admission, owner-only runtime/socket checks and message correlation remain
+OS-owned. Browser's independently owned extension and compatibility launchers
+consume this interface; they do not supply a socket server, privileged policy
+or another App identity. The manual registration command checks installed
+protected assets rather than cloning or overwriting App package files.
 
 Agent depends on `pkexec` and `polkitd`, which provide the polkit runtime and
 password verifier used by the installed `claw-approval-helper`. Headless/WSL Web

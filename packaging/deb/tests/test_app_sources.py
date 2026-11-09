@@ -523,58 +523,70 @@ def test_agent_package_keeps_native_authority_in_os():
     assert '"$PROJECT_DIR/extensions/claw-mail-ai"' not in script
 
 
-def test_browser_installer_resolves_both_sources_from_the_os_pin(locked_source):
-    root, lock = locked_source
-    upstream = Path(lock["repository"])
-    for relative in (
-        "products/browser/extension/manifest.json",
-        "products/browser/apps/browser-attached/native_host.py",
-    ):
-        path = upstream / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("fixture\n")
-    git = ["git", "-C", str(upstream)]
-    subprocess.run([*git, "add", "products/browser"], check=True)
-    subprocess.run([*git, "commit", "--quiet", "-m", "browser fixture"], check=True)
-    lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
-    lock["products"] = ["browser"]
-    lock["apps"] = ["browser-attached"]
-    (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
-    (root / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/app_sources.py", root / "scripts/app_sources.py")
+def _browser_asset_check(tmp_path, *, writable=False):
+    extension = tmp_path / "extension"
+    extension.mkdir()
+    for name in ("manifest.json", "background.js", "content.js", "popup.html", "popup.js"):
+        (extension / name).write_text("installed product resource\n")
+    host = tmp_path / "browser-native-host.py"
+    host.write_bytes((ROOT / "tools/browser_native_host.py").read_bytes())
+    launcher = tmp_path / "claw-browser-host"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o755)
+    if writable:
+        host.chmod(0o666)
+    else:
+        host.unlink()
     script = (ROOT / "tools/install-browser-agent.sh").read_text()
-    block = script.split('APP_SOURCES=', 1)[1].split('\nEXT_DEST=', 1)[0]
+    block = script[script.index('if [[ -n "${EXT_ID}"'):script.index('echo "[claw] installing Native Messaging')]
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
     result = subprocess.run(
-        ["bash", "-euc", 'APP_SOURCES=' + block + '\nprintf "%s\\n" "$EXT_SRC" "$APP_SRC"'],
-        check=True, capture_output=True, text=True,
-        env={**os.environ, "REPO_ROOT": str(root)},
+        ["bash", "-euc", block], capture_output=True, text=True,
+        env={**os.environ, "EXT_ID": "", "EXT_DEST": str(extension),
+             "HOST_IMPL": str(host), "HOST_LAUNCHER": str(launcher)},
     )
-    cached = root / "build/app-sources" / lock["revision"]
-    assert result.stdout.splitlines() == [
-        str(cached / "products/browser/extension"),
-        str(cached / "products/browser/apps/browser-attached"),
-    ]
-    assert (cached / "products/browser/extension/manifest.json").is_file()
-    assert (cached / "products/browser/apps/browser-attached/native_host.py").is_file()
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+    assert result.returncode != 0
+    return result.stderr
 
 
-def test_browser_installer_copies_extension_assets_without_development_tests(tmp_path):
-    source = tmp_path / "extension"
-    source.mkdir()
-    assets = {"manifest.json", "background.js", "content.js", "popup.html", "popup.js", "README.md"}
-    for name in assets | {"test_contract.py"}:
-        (source / name).write_text(name)
-    target = tmp_path / "installed"
-    script = (ROOT / "tools/install-browser-agent.sh").read_text()
-    start = script.index('install -d -m 0755 "${EXT_DEST}"')
-    end = script.index('echo "[claw] installing native host')
-    subprocess.run(["bash", "-euc", script[start:end]], check=True, env={
-        **os.environ, "EXT_SRC": str(source), "EXT_DEST": str(target),
-    })
-    assert {path.name for path in target.iterdir()} == assets
-    for path in target.iterdir():
-        assert path.read_bytes() == (source / path.name).read_bytes()
-        assert path.stat().st_mode & 0o777 == 0o644
+def test_browser_installer_requires_the_installed_os_transport_without_copying_assets(tmp_path):
+    assert "missing installed Browser asset" in _browser_asset_check(tmp_path)
+
+
+def test_browser_installer_refuses_writable_transport_before_registering_it(tmp_path):
+    assert "root-owned and not group/world writable" in _browser_asset_check(tmp_path, writable=True)
+
+
+@pytest.fixture
+def browser_transport():
+    spec = importlib.util.spec_from_file_location("browser_native_host", ROOT / "tools/browser_native_host.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_browser_transport_refuses_socket_overrides(browser_transport, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/tmp/not-the-runtime-dir")
+    monkeypatch.setenv("CLAW_BROWSER_SOCK", "/tmp/attacker.sock")
+    with pytest.raises(RuntimeError, match="must resolve"):
+        browser_transport._socket_path()
+
+
+def test_browser_transport_request_schema_is_closed(browser_transport):
+    browser_transport._validate_request({"id": "1", "verb": "tabs.list", "args": {}})
+    with pytest.raises(ValueError, match="unexpected fields"):
+        browser_transport._validate_request(
+            {"id": "1", "verb": "tabs.list", "args": {}, "allow_eval": True}
+        )
+
+
+def test_browser_transport_peer_identity_comes_from_kernel(browser_transport):
+    import socket
+
+    left, right = socket.socketpair()
+    with left, right:
+        assert browser_transport._peer_uid(left) == os.getuid()
 
 
 def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp_path):
