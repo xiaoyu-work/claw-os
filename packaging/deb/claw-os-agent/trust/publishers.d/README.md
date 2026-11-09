@@ -4,12 +4,17 @@ Files placed here are installed to `/usr/lib/cos/trust/publishers.d/`
 and become the **vendor** trust tier for extension packages (Apps,
 Skills and MCP/adapter packages).
 
-## This directory ships empty, on purpose
+## Explicitly approved release publishers
 
-Claw OS has **no project release signing key** at present. Rather than
-ship a placeholder, a self-signed throwaway, or a key whose private half
-nobody can account for, the vendor store is empty and the system fails
-closed:
+`clawos-app.json` contains the owner-approved public key for official App
+releases. Its private half is held outside source control and in the App
+repository's dedicated signing Secret. It is restricted to package signing
+for `app` packages; it cannot authenticate Skills, MCP packages or Agent
+extensions. The existing GPG APT archive key is separate and unchanged.
+
+Publisher authentication verifies package bytes, not runtime permission.
+Every installed App still requires the ordinary protected review, Host,
+capability and sandbox gates. There is no business-name entitlement.
 
 * **Built-in content still works.** Apps and Skills the Debian package
   installs under `/usr/lib/cos` are trusted through *package-manager
@@ -21,10 +26,10 @@ closed:
   deliberately installs that publisher's public key. `cos app`, the
   skill loader and MCP discovery all report the package with its reason
   instead of running it.
-* **There is no "default publisher".** Any documentation or tooling
-  that implies otherwise is wrong; the packaging contract test asserts
-  this store is either empty or contains real, structurally valid public
-  keys.
+* **No fallback publisher is selected.** The packaging contract checks
+  that every supplied key is a real, structurally valid public entry.
+  Unknown signatures remain quarantined rather than falling back to
+  package-manager trust.
 
 Shipping an unknown key would be strictly worse than shipping none: it
 would create a trusted signer nobody controls.
@@ -51,8 +56,9 @@ in this directory contains a `private_key` field.
 - Installed mode `0644`, directories `0755`, owner `root`. The loader
   refuses any trust root whose path — or any ancestor up to `/` — is a
   symlink, is owned by a non-root user, or is group- or world-writable.
-- A key id is `sha256:<hex>` over the raw 32-byte Ed25519 verifying key.
-  The loader recomputes it and rejects an entry whose declared id does
+- A key id uses the canonical `key_id_for` digest: SHA-256 over
+  `claw-provenance/v1\0publisher-key\0` followed by the raw 32-byte
+  Ed25519 verifying key. The loader recomputes it and rejects an entry whose declared id does
   not bind to its key material, so an id can never be aliased onto a
   different publisher's key.
 
