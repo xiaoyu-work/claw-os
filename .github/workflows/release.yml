@@ -504,6 +504,63 @@ jobs:
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
 
+  publish-provenance-tool:
+    needs: [prepare, build-agent, publish-pages]
+    if: ${{ !failure() && !cancelled() && needs.prepare.outputs.agent == 'true' && needs.prepare.outputs.pages == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: claw-os-agent-*
+          path: build/debs
+          merge-multiple: true
+      - name: Extract the exact tested public signing executables
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p build/provenance-tool
+          for arch in amd64 arm64; do
+            packages=(build/debs/claw-os-agent_*_"$arch".deb)
+            [ "${#packages[@]}" -eq 1 ]
+            [ "$(dpkg-deb --field "${packages[0]}" Package)" = claw-os-agent ]
+            [ "$(dpkg-deb --field "${packages[0]}" Version)" = "$COS_PACKAGE_VERSION" ]
+            [ "$(dpkg-deb --field "${packages[0]}" Architecture)" = "$arch" ]
+            dpkg-deb --extract "${packages[0]}" "build/provenance-$arch"
+            install -m 0755 "build/provenance-$arch/usr/local/bin/cos" \
+              "build/provenance-tool/cos-provenance-linux-$arch"
+            [ "$(stat -c %s "build/provenance-tool/cos-provenance-linux-$arch")" -le 134217728 ]
+          done
+          install -m 0644 LICENSE build/provenance-tool/LICENSE
+          tar -C build/provenance-amd64/usr/share/doc/claw-os-agent \
+            -czf build/provenance-tool/package-notices.tar.gz .
+          (cd build/provenance-tool && sha256sum cos-provenance-linux-* LICENSE package-notices.tar.gz > SHA256SUMS)
+      - name: Publish new immutable-version tool assets
+        run: |
+          set -euo pipefail
+          version="${COS_PACKAGE_VERSION#*:}"
+          version="${version//\~/-}"
+          tag="agent-tools-v$version"
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" > build/provenance-tool-tag
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Refusing to replace existing signing-tool release $tag" >&2
+            exit 1
+          fi
+          [ "$status" -eq 2 ]
+          gh release create "$tag" build/provenance-tool/* --repo "$GITHUB_REPOSITORY" \
+            --draft --target "$GITHUB_SHA" --title "Agent tools $version" \
+            --notes "Exact cos executables from the tested and published Agent packages. Source: $GITHUB_SHA. App publication must pin the selected HTTPS asset and its SHA-256."
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+
   publish-docker:
     needs: [prepare, build-images]
     if: ${{ !failure() && !cancelled() && needs.prepare.outputs.images == 'true' }}
