@@ -402,7 +402,6 @@ async fn detect_backend() -> Result<BackendStatus, String> {
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
 fn authorize_session(authority: &Decision, verb: Verb, scope: Scope) -> Result<Authorized, String> {
-    authority.require_app("system-snapshot")?;
     authority.require(Cap::new(verb, scope))
 }
 

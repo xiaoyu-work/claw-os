@@ -1,7 +1,129 @@
 use super::*;
+use crate::clawd::authority::{
+    authority, Audience, AudienceSet, Binding, Issuance, Issuer, Presentation, Principal,
+    Requirement, Subject, Uses,
+};
+use crate::test_env::TestEnvVarGuard;
+
+fn decision(app: &str, caps: Vec<Cap>) -> Decision {
+    let uid = unsafe { libc::geteuid() };
+    let pid = std::process::id();
+    let session = format!(
+        "network-diagnostic-fixture-{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let (_, view) = authority()
+        .issue(Issuance {
+            issuer: Issuer::AppSessionAuthority,
+            principal: Principal::of_process(uid, pid).unwrap(),
+            binding: Binding::ProcessTree,
+            subject: Subject::session(&session).with_app(Some(app.to_string())),
+            audience: AudienceSet::one(Audience::SystemService),
+            caps: crate::caps::CapSet::from_caps(caps),
+            lifetime: Duration::from_secs(60),
+            uses: Uses::Budget(1),
+            index_session: true,
+        })
+        .unwrap();
+    Decision::for_test(
+        view,
+        "system.network.diagnose",
+        Audience::SystemService,
+        Presentation {
+            uid,
+            pid,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+            audience: Audience::SystemService,
+            route: "system.network.diagnose",
+            session_id: Some(session),
+        },
+        None,
+        &Requirement::RouteDerived,
+    )
+}
 
 fn request(value: Value) -> NetworkDiagnose {
     serde_json::from_value(value).expect("network diagnostic request")
+}
+
+#[test]
+fn origin_neutral_diagnostics_keep_all_live_exact_host_and_port_rights() {
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::Builder::new()
+        .prefix(".origin-neutral-network-diagnostic-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", directory.path());
+    let _caps = TestEnvVarGuard::set("COS_CAPS_DATA_DIR", directory.path());
+    let tcp = prepare(&request(json!({
+        "session": "fixture",
+        "action": "tcp",
+        "target": "example.invalid:443",
+        "attempts": 1,
+        "timeout_ms": 100,
+    })))
+    .unwrap();
+    let other_port = prepare(&request(json!({
+        "session": "fixture",
+        "action": "tcp",
+        "target": "example.invalid:8443",
+        "attempts": 1,
+        "timeout_ms": 100,
+    })))
+    .unwrap();
+    let combined = prepare(&request(json!({
+        "session": "fixture",
+        "action": "diagnose",
+        "target": "example.invalid:443",
+    })))
+    .unwrap();
+    for app in ["netdiag", "independent-network-diagnostic-client"] {
+        let allowed = decision(app, tcp.capabilities());
+        for diagnostic in [&other_port, &combined] {
+            let error = authorize_session(&allowed, diagnostic).unwrap_err();
+            assert_eq!(
+                error.kind,
+                crate::clawd::protocol::BrokerErrorKind::Unauthorized
+            );
+            assert!(!crate::clawd::authority::obligation_met(Some(&allowed)));
+        }
+        let proof = authorize_session(&allowed, &tcp).unwrap();
+        assert_eq!(proof.spent(), tcp.capabilities().as_slice());
+        assert_eq!(allowed.app_id(), Some(app));
+        assert!(authorize_session(&allowed, &tcp).is_err());
+        let complete = decision(app, combined.capabilities());
+        let proof = authorize_session(&complete, &combined).unwrap();
+        assert_eq!(proof.spent(), combined.capabilities().as_slice());
+
+        for caps in [
+            vec![],
+            vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("network"))],
+            vec![Cap::new(
+                Verb::NET_RESOLVE,
+                Scope::host("example.invalid:443"),
+            )],
+            vec![Cap::new(
+                Verb::NET_PROBE,
+                Scope::host("example.invalid:443"),
+            )],
+            vec![
+                Cap::new(Verb::NET_RESOLVE, Scope::host("other.invalid:443")),
+                Cap::new(Verb::NET_PROBE, Scope::host("example.invalid:443")),
+            ],
+            vec![
+                Cap::new(Verb::NET_RESOLVE, Scope::host("example.invalid:443")),
+                Cap::new(Verb::NET_PROBE, Scope::host("example.invalid:8443")),
+            ],
+        ] {
+            let denied = decision(app, caps);
+            assert!(authorize_session(&denied, &tcp).is_err());
+            assert!(!crate::clawd::authority::obligation_met(Some(&denied)));
+            authority().revoke_session(denied.session_id().unwrap());
+        }
+    }
+    let revoked = decision("independent-network-diagnostic-client", tcp.capabilities());
+    authority().revoke_session(revoked.session_id().unwrap());
+    assert!(authorize_session(&revoked, &tcp).is_err());
 }
 
 #[test]

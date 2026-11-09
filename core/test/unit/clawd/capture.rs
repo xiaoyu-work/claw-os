@@ -91,7 +91,7 @@ async fn revoked_capture_cannot_start_the_native_process() {
 }
 
 #[tokio::test]
-async fn capture_requires_own_identity_screen_and_exact_output_before_execution() {
+async fn capture_requires_screen_and_exact_output_before_execution() {
     let _lock = crate::test_env::lock_env();
     let dir = fixture();
     let marker = dir.path().join("ran");
@@ -111,7 +111,6 @@ async fn capture_requires_own_identity_screen_and_exact_output_before_execution(
                 valid[1].clone(),
             ],
         ),
-        decision("cosmic-player", valid.clone()),
     ] {
         let mut fake = command("touch \"$MARKER\"");
         fake.env("MARKER", &marker);
@@ -139,7 +138,7 @@ async fn capture_persists_private_png_and_never_clobbers_existing_output() {
     let _lock = crate::test_env::lock_env();
     use std::os::unix::fs::PermissionsExt;
     let dir = fixture();
-    let allowed = decision("cosmic-screenshot", requested_caps(dir.path()));
+    let allowed = decision("independent-capture-client", requested_caps(dir.path()));
     let result = capture_to(dir.path(), &allowed, command(PNG), Duration::from_secs(1))
         .await
         .unwrap();

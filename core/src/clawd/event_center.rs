@@ -92,7 +92,6 @@ pub async fn control(params: Value, authority: &Decision) -> Result<Value, Strin
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
 fn authorize_session(authority: &Decision) -> Result<Authorized, String> {
-    authority.require_app("event-center")?;
     authority.require(Cap::new(Verb::SYS_EVENTS, Scope::name("observe")))
 }
 

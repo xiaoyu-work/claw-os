@@ -204,7 +204,6 @@ fn authorize_session(
     authority: &Decision,
     requested: &[Cap],
 ) -> Result<(SessionInfo, Authorized), String> {
-    authority.require_app("user-manager")?;
     let proof = authority.require_all(requested)?;
     Ok((authority.session()?.clone(), proof))
 }

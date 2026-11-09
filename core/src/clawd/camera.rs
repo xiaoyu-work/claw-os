@@ -111,7 +111,6 @@ pub async fn control(
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
 fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
-    authority.require_app("camera-manager")?;
     authority.require_all(requested)
 }
 

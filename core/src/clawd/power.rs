@@ -86,9 +86,6 @@ fn backend_unavailable(message: String) -> BrokerError {
 /// it carries the same stable code every other one does.
 fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, BrokerError> {
     authority
-        .require_app("power-manager")
-        .map_err(BrokerError::authorization)?;
-    authority
         .require_all(std::slice::from_ref(&requested))
         .map_err(BrokerError::authorization)
 }
