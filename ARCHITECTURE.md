@@ -370,8 +370,9 @@ Standalone consumers use the public Rust SDK's versioned
 [`applet` pipe protocol](claw-os-sdk/wire/v1/applet-services.md) and the OS-owned
 `/usr/libexec/claw-os-applet-provider`, built independently from
 `desktop/applets/claw-applet-services`. Its Calendar, task and telemetry access
-checks the same separate resource scopes; Clipboard history checks are preflight
-only. Provider/data/authority implementation is excluded from the public
+checks the same separate resource scopes; its legacy Clipboard history checks
+are preflight only. Current panel history clients use the actual OS clipboard
+broker below instead. Provider/data/authority implementation is excluded from the public
 development export. This source interface does not release a new SDK, replace
 the current App pin, complete authenticated GUI/resource admission, or authorize
 CopyQ/Wayland access. The existing linked shell paths above remain until their
@@ -574,12 +575,18 @@ grants separate, exact source-file read authority and explicit clear confirmatio
 Primary selection stays opt-in and MIME defaults remain OS-owned. Wayland session
 validation, wl-clipboard execution, bounded content transfer, source descriptors
 and write serialization remain here. No clipboard contents or history are copied.
-The complete native `panel-clipboard` popup, CopyQ adapter/scripts, resources and
-tests are now product-owned. The OS host maps its typed `HistoryPermission`
-requests to `clipboard.read`/`clipboard.write:Name(history)` via shared policy.
-Its existing refresh, restore, delete and confirmed-clear behavior remains
-unchanged. CopyQ history is not unified with Wayland selection, and history
-scopes are not merged into selection authority.
+The complete native `panel-clipboard` popup, MCP tools, Web history workflow,
+resources and client tests are product-owned. Root's existing clipboard service
+owns the closed CopyQ scripts and actual history execution. It validates the
+authenticated owner/session, protected default endpoint and installed provider
+process, then spends exact history rights before forwarding through a private
+credential-checked CLI relay. No App-name gate confers authority. List needs
+only history read; restore additionally requires independent selection write,
+while remove preserves history read/write and confirmed clear only history
+write. Stable packed-item identities, bounded previews and deadlines preserve
+the old workflow without App-side CopyQ execution or a raw owner bus/home.
+Existing identity, history and stored grants are unchanged; live installed
+GUI/CopyQ acceptance and publication remain separately gated.
 Messaging Channels owns the `gateway-discord` connector source, preserving
 its operations/MCP adapter, installed nested path and per-App state layout.
 It imports pinned `gateway._shared` libraries explicitly; credential, egress,

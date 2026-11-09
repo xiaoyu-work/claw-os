@@ -103,6 +103,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.screenshot.capture",
     "system.media-player.control",
     "system.calendar.day",
+    "system.observation.query",
     "system.notification.control",
     "system.browser.control",
     "system.display.control",
