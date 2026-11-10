@@ -2,6 +2,24 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn gui_registration_carries_only_a_canonical_optional_entry_name() {
+    let mut request = json!({
+        "app_id":"independent-widget", "kind":"gui", "operation":"panel",
+        "gui_entry":"applet", "package":{}
+    });
+    let parsed: AppSessionRegister = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(parsed.gui_entry.unwrap().as_str(), "applet");
+    for name in ["", "Applet", "applet/other", "../applet", "applet ", &"a".repeat(65)] {
+        request["gui_entry"] = json!(name);
+        assert!(serde_json::from_value::<AppSessionRegister>(request.clone()).is_err(), "{name}");
+    }
+    request.as_object_mut().unwrap().remove("gui_entry");
+    assert!(serde_json::from_value::<AppSessionRegister>(request.clone()).unwrap().gui_entry.is_none());
+    request["entry"] = json!("bin/unreviewed");
+    assert!(serde_json::from_value::<AppSessionRegister>(request).is_err());
+}
+
+#[test]
 fn activity_work_controls_cannot_carry_progress_authority_or_dispatch_identity() {
     let id="00000000-0000-4000-8000-000000000001";
     let config=json!({"id":id,"expected_revision":null,"work":{

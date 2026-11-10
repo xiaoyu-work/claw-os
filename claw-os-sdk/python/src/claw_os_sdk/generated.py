@@ -299,6 +299,7 @@ class Scopebinding(_ScopebindingRequired, total=False):
     reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is
     an explicit wildcard (no implicit '*').
     """
+    path: str
     arg: str
     transform: str
     values: Dict[str, Any]
@@ -375,15 +376,33 @@ class Mcptool(_McptoolRequired, total=False):
 class Desktop(TypedDict, total=False):
     """desktop.
 
-    Desktop GUI surface. Drives generation of
-    /usr/share/applications/com.clawos.<Id>.desktop at install time.
+    Default desktop GUI and optional additional named surfaces, all sharing one
+    authenticated App identity. Presentation grants no authority.
     """
     exec: str
+    entry: str
+    needs: List["Need"]
+    entries: Dict[str, "DesktopEntry"]
     name: "Localizedtext"
     icon: str
     categories: List[str]
     mime_types: List[str]
     single_instance: bool
+    panel_applet: bool
+
+class _DesktopEntryRequired(TypedDict):
+    entry: str
+    exec: str
+    name: "Localizedtext"
+    needs: List["Need"]
+
+class DesktopEntry(_DesktopEntryRequired, total=False):
+    """DesktopEntry.
+
+    An additional explicitly selected signed GUI executable under the same
+    authenticated App identity. Required needs are exclusive to this surface; no
+    default-GUI, operation or MCP union.
+    """
     panel_applet: bool
 
 class _McpCallContextRequired(TypedDict):
@@ -424,6 +443,22 @@ class ObjectRef(_ObjectRefRequired, total=False):
     helpers.
     """
     revision: str
+
+class OwnerPathNeed(TypedDict):
+    """Owner-relative path need.
+
+    Bounded request data, never a grant. Only Root resolves the authenticated
+    owner's home; SDK resolution is a lexical preview without filesystem or
+    authorization effects.
+    """
+    verb: str
+    scope: "OwnerPathNeedScope"
+
+class OwnerPathNeedScope(TypedDict):
+    """owner_path_need_scope.
+    """
+    kind: str
+    path: str
 
 class _PermsRequired(TypedDict):
     decision: str
@@ -494,6 +529,13 @@ def validate_manifest_runtime(value: str) -> None:
     allowed = ['python', 'node', 'shell', 'binary']
     if value not in allowed:
         raise ValueError(f"invalid manifest.runtime value: {value!r}")
+
+def validate_owner_path_need_verb(value: str) -> None:
+    """Raise ValueError if value is not in the owner_path_need.verb
+    enum. Mirrors generated::validate_owner_path_need_verb."""
+    allowed = ['fs.read', 'fs.write', 'fs.delete', 'fs.exec', 'fs.watch', 'fs.meta', 'sys.config', 'sys.mount', 'data.backup']
+    if value not in allowed:
+        raise ValueError(f"invalid owner_path_need.verb value: {value!r}")
 
 def validate_perms_decision(value: str) -> None:
     """Raise ValueError if value is not in the perms.decision
@@ -854,6 +896,12 @@ _WIRE_SCHEMA_OBJECT_REF: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://c
 def validate_object_ref(value: Any) -> None:
     """Validate a value against wire/v1/object_ref.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value, "ObjectRef", "$")
+
+_WIRE_SCHEMA_OWNER_PATH_NEED: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/owner_path_need.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Bounded request data, never a grant. Only Root resolves the authenticated owner's home; SDK resolution is a lexical preview without filesystem or authorization effects.","properties":{"scope":{"additionalProperties":false,"properties":{"kind":{"const":"owner-path","type":"string"},"path":{"description":"Normalized relative path or trailing /** subtree; ** alone means the authenticated home subtree. No absolute path, empty/dot/dotdot segment, backslash, colon, environment placeholder, control or other * pattern. SDK helpers also enforce 4096 UTF-8 bytes and 255 bytes per literal segment.","maxLength":4096,"minLength":1,"pattern":"^(\\*\\*|([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*(/([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*)*(/\\*\\*)?)$","type":"string","x-full-match":true}},"required":["kind","path"],"type":"object"},"verb":{"enum":["fs.read","fs.write","fs.delete","fs.exec","fs.watch","fs.meta","sys.config","sys.mount","data.backup"],"type":"string"}},"required":["verb","scope"],"title":"Owner-relative path need","type":"object"}''')
+
+def validate_owner_path_need(value: Any) -> None:
+    """Validate a value against wire/v1/owner_path_need.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_OWNER_PATH_NEED, _WIRE_SCHEMA_OWNER_PATH_NEED, value, "OwnerPathNeed", "$")
 
 _WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
 

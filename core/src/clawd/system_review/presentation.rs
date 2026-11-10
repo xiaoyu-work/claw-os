@@ -32,7 +32,11 @@ fn stamped(owner: u32, mut review: SystemReview) -> Result<SystemReview, String>
 pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
     use crate::approvals::system_review::{ReviewKind as StoredKind, ReviewState};
 
-    let disclosure = record.permission_review()?;
+    let mut disclosure = record.permission_review()?;
+    if disclosure.permissions.iter().any(|permission| matches!(permission.scope, ScopeBinding::OwnerPath { .. })) {
+        let home = crate::paths::verified_home_for_uid(record.owner_uid)?;
+        disclosure.resolve_owner_paths(&crate::caps::args::PathContext { home, cwd: None })?;
+    }
     let status = match record.effective_state()? {
         ReviewState::Pending => ReviewStatus::Pending,
         ReviewState::Approved => ReviewStatus::Confirmed,
@@ -56,12 +60,15 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
             blurb: permission.description.clone(),
             risk: risk(permission.risk),
             scope: ReviewScope {
-                kind: if matches!(permission.scope, ScopeBinding::Fixed { .. }) {
+                kind: if matches!(permission.scope, ScopeBinding::Fixed { .. }) || permission.resolved_scope.is_some() {
                     ScopeKind::Fixed
                 } else {
                     ScopeKind::LateBound
                 },
-                description: crate::apps::permission_review::scope_description(&permission.scope)?,
+                description: match &permission.resolved_scope {
+                    Some(scope) => scope.to_string(),
+                    None => crate::apps::permission_review::scope_description(&permission.scope)?,
+                },
             },
             condition: permission.when.as_ref().map(serde_json::to_string).transpose()
                 .map_err(|error| format!("encode displayed permission condition: {error}"))?,
@@ -112,6 +119,18 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
             label: "Desktop entry and file types requested".into(),
             value: serde_json::to_string(&desktop.mime_types).map_err(|error| error.to_string())?,
         });
+    }
+    for gui in &disclosure.gui_entries {
+        disclosures.push(ReviewDetail {
+            label: format!("GUI {}: execution target and exact needs", gui.name.as_deref().unwrap_or("(default)")),
+            value: serde_json::to_string(gui).map_err(|error| format!("encode displayed GUI entry: {error}"))?,
+        });
+        if !gui.unbound_needs.is_empty() {
+            disclosures.push(ReviewDetail {
+                label: format!("GUI {}: unsupported/unbound needs", gui.name.as_deref().unwrap_or("(default)")),
+                value: format!("Need indexes {:?} have no GUI argument binding and are not granted at startup.", gui.unbound_needs),
+            });
+        }
     }
     let actions = if status == ReviewStatus::Pending {
         vec![

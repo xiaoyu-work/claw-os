@@ -41,6 +41,26 @@ fn install_scratch_entries(root: &Path, id: &str) -> Vec<String> {
 }
 
 #[test]
+fn invalid_named_gui_selection_is_refused_before_any_app_execution() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", root.path());
+    let source = root.path().join("independent-widget");
+    write_min_app(&source, "independent-widget", r#"{
+        "id":"independent-widget","version":"1","name":{"en":"Widget"},
+        "desktop":{"entries":{"applet":{
+            "entry":"main.py","exec":"panel open","name":{"en":"Widget panel"},"needs":[]
+        }}}
+    }"#);
+    for selector in ["--gui:", "--gui:unknown", "--gui:../main.py", "--gui:Applet"] {
+        let error = dispatch_app(
+            &["independent-widget".into(), selector.into(), "--schema".into()], None,
+        ).unwrap_err();
+        assert!(error.contains("GUI entry"), "{error}");
+    }
+}
+
+#[test]
 fn lint_cli_projects_the_shared_violations_and_preserves_its_envelope() {
     let _lock = crate::test_env::lock_env();
     let root = tempfile::tempdir().unwrap();

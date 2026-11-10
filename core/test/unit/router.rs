@@ -1122,7 +1122,7 @@ fn with_runtime_app_test_env(
     let runner = root.path().join("claw-app-runner");
     write_runtime_test_executable(
         &runner,
-        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexport TEST_LAUNCH_PROGRAM=\"$1\"\nexec \"$@\"\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--launch-gate\" ]; then\n  token=\"$2\"\n  [ \"$3\" = \"--\" ] || exit 1\n  received=\"$(dd bs=1 count=32 2>/dev/null)\"\n  [ \"$received\" = \"$token\" ] || exit 1\n  shift 3\nelif [ \"$1\" = \"--\" ]; then\n  shift\nelse\n  exit 1\nfi\nexport TEST_LAUNCH_PROGRAM=\"$1\"\nexec \"$@\"\n",
     );
     write_runtime_test_executable(&bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n");
 
@@ -1402,7 +1402,7 @@ fn polyglot_app_operations_report_missing_and_invalid_entries() {
 
 #[cfg(unix)]
 #[test]
-fn polyglot_app_desktop_exec_still_uses_gui_bridge() {
+fn polyglot_app_desktop_exec_refuses_local_execution_without_root_gui_custody() {
     with_runtime_app_test_env(|apps, data, _| {
         let app_dir =
             write_runtime_app_manifest(apps, "desktop-shell", "shell", Some("gui.sh"), true);
@@ -1413,32 +1413,21 @@ fn polyglot_app_desktop_exec_still_uses_gui_bridge() {
             &runtime_test_entry_source("shell"),
         );
 
-        let output = dispatch(&[
+        let error = dispatch(&[
             "app".to_string(),
             "desktop-shell".to_string(),
             "--gui".to_string(),
             "document.txt".to_string(),
         ])
-        .unwrap();
-        assert!(output.is_none());
-
-        let gui: Value = serde_json::from_slice(
-            &std::fs::read(data.join("apps").join("desktop-shell").join("gui.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(gui["runtime"], "shell");
-        assert_eq!(gui["command"], "--gui");
-        assert_eq!(gui["args"], json!(["document.txt"]));
-        assert_eq!(gui["app_id"], "desktop-shell");
-        assert_eq!(gui["gui"], "1");
-        assert!(gui["session"]
-            .as_str()
-            .is_some_and(|session| session.starts_with("app-")));
+        .unwrap_err();
+        assert!(error.contains("Root GUI custody") && error.contains("local execution is unavailable"), "{error}");
+        assert!(!data.join("apps").join("desktop-shell").join("gui.json").exists());
+        assert!(!data.join("desktop-shell.ran").exists());
 
         let audit = runtime_test_audit(data);
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0]["command"], "--gui");
-        assert_eq!(audit[0]["status"], "ok");
+        assert_eq!(audit[0]["status"], "error");
     });
 }
 #[test]

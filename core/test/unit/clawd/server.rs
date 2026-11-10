@@ -32,6 +32,42 @@ fn admission() -> Arc<Admission> {
     Admission::new(Limits::default())
 }
 
+struct TaskAdmissionFixture {
+    peer: ClientIdentity,
+    _proc: crate::test_env::TestEnvVarGuard,
+    _data: crate::test_env::TestEnvVarGuard,
+    _dir: tempfile::TempDir,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl TaskAdmissionFixture {
+    fn new() -> Self {
+        let lock = crate::test_env::lock_env();
+        let dir = tempfile::tempdir().unwrap();
+        let process = super::super::transport::peer::verify(
+            super::super::transport::peer::Credentials {
+                pid: std::process::id(),
+                uid: unsafe { libc::geteuid() },
+                gid: unsafe { libc::getegid() },
+            },
+        )
+        .expect("current process has verified kernel credentials");
+        Self {
+            peer: ClientIdentity::from_peer(process),
+            _proc: crate::test_env::TestEnvVarGuard::set(
+                "COS_PROC_DATA_DIR",
+                dir.path().join("proc"),
+            ),
+            _data: crate::test_env::TestEnvVarGuard::set(
+                "COS_DATA_DIR",
+                dir.path().join("data"),
+            ),
+            _dir: dir,
+            _lock: lock,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Admission order
 // ---------------------------------------------------------------------------
@@ -63,14 +99,15 @@ async fn a_well_formed_request_is_admitted_with_its_typed_body() {
 
 #[tokio::test]
 async fn large_request_allowance_is_limited_to_image_task_submissions() {
+    let fixture = TaskAdmissionFixture::new();
     assert_eq!(super::super::wire::MAX_TASK_SUBMIT_BYTES, clawd_client::MAX_TASK_SUBMIT_BYTES);
     let params = json!({"prompt":"inspect", "attachments":[{
         "name":"large.png","media_type":"image/png","data":"A".repeat(2 * MAX_REQUEST_BYTES),
     }]});
     let allowed = envelope("large-task", "task.submit", params.clone());
-    assert!(admit(&allowed, &peer(1000), &admission()).await.is_ok());
+    assert!(admit(&allowed, &fixture.peer, &admission()).await.is_ok());
     let refused = envelope("large-other", "memory.history", params);
-    assert_eq!(admit(&refused, &peer(1000), &admission()).await.err().expect("large ordinary request refused").fault, Fault::FrameTooLarge);
+    assert_eq!(admit(&refused, &fixture.peer, &admission()).await.err().expect("large ordinary request refused").fault, Fault::FrameTooLarge);
     assert_eq!(super::super::wire::bounded::APP_ARGS_STDIN_MAX_BYTES, MAX_REQUEST_BYTES - 16 * 1024);
 }
 
@@ -242,21 +279,35 @@ async fn a_request_without_verified_credentials_is_refused() {
 
 #[tokio::test]
 async fn a_replayed_mutation_is_refused_but_a_replayed_query_is_not() {
+    let fixture = TaskAdmissionFixture::new();
     let admission = admission();
     let mutation = envelope("r-dup", "task.cancel", json!({"id": "task-1"}));
-    assert!(admit(&mutation, &peer(1000), &admission).await.is_ok());
-    let refusal = admit(&mutation, &peer(1000), &admission)
+    assert!(admit(&mutation, &fixture.peer, &admission).await.is_ok());
+    let refusal = admit(&mutation, &fixture.peer, &admission)
         .await
         .err()
         .expect("a repeated mutation id must be refused");
     assert_eq!(refusal.fault, Fault::DuplicateRequest);
 
     let query = envelope("r-dup", "task.get", json!({"id": "task-1"}));
-    assert!(admit(&query, &peer(1000), &admission).await.is_ok());
+    assert!(admit(&query, &fixture.peer, &admission).await.is_ok());
     assert!(
-        admit(&query, &peer(1000), &admission).await.is_ok(),
+        admit(&query, &fixture.peer, &admission).await.is_ok(),
         "an idempotent read may be repeated"
     );
+}
+
+#[tokio::test]
+async fn task_admission_refuses_a_peer_claiming_another_process_owner() {
+    let fixture = TaskAdmissionFixture::new();
+    let mut forged = fixture.peer.clone();
+    forged.uid = Some(fixture.peer.uid.unwrap().wrapping_add(1));
+    let body = envelope("wrong-owner", "task.list", json!({}));
+    let refusal = admit(&body, &forged, &admission())
+        .await
+        .err()
+        .expect("a fabricated peer owner must not pass task admission");
+    assert_eq!(refusal.fault, Fault::NotAuthorized);
 }
 
 #[tokio::test]
@@ -295,14 +346,18 @@ async fn one_principal_cannot_hold_every_in_flight_slot() {
     });
     let mut held = Vec::new();
     for index in 0..2 {
-        let body = envelope(&format!("r-{index}"), "task.list", json!({}));
+        let body = envelope(
+            &format!("r-{index}"),
+            "memory.history",
+            json!({"session_id": "sess-1"}),
+        );
         held.push(
             admit(&body, &peer(1000), &admission)
                 .await
                 .expect("within budget"),
         );
     }
-    let body = envelope("r-over", "task.list", json!({}));
+    let body = envelope("r-over", "memory.history", json!({"session_id": "sess-1"}));
     assert_eq!(
         admit(&body, &peer(1000), &admission)
             .await
@@ -311,7 +366,7 @@ async fn one_principal_cannot_hold_every_in_flight_slot() {
         Some(Fault::TooManyRequests)
     );
     // A different principal is unaffected.
-    let other = envelope("r-other", "task.list", json!({}));
+    let other = envelope("r-other", "memory.history", json!({"session_id": "sess-1"}));
     assert!(admit(&other, &peer(1001), &admission).await.is_ok());
     drop(held);
 }

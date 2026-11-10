@@ -568,10 +568,22 @@ pub const CATALOG: &[CapMeta] = &[
     CapMeta::new(
         Verb::UI_WINDOW,
         ScopeKind::None,
-        LocalizedStr::new("Open windows and panels"),
-        LocalizedStr::new("Create graphical or terminal windows on your desktop."),
+        LocalizedStr::new("Open windows"),
+        LocalizedStr::new(
+            "Create graphical or terminal windows on your desktop. Desktop panels and overlays require separate ui.panel authority.",
+        ),
         "🪟",
         Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::UI_PANEL,
+        ScopeKind::None,
+        LocalizedStr::new("Show desktop panels and overlays"),
+        LocalizedStr::new(
+            "Show always-on-top desktop panels and overlays with their own keyboard focus. Does not grant global input, clipboard, or screen capture access.",
+        ),
+        "🪟",
+        Risk::High,
     ),
     CapMeta::new(
         Verb::UI_INPUT,

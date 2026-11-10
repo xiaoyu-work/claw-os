@@ -80,6 +80,27 @@ MCP-only Apps need no shadow operation. Missing declarations still mean unknown
 effects, not an inferred read-only classification. See the normative
 object/effect contracts above.
 
+The optional `desktop.entry`, `desktop.needs` and `desktop.entries` contract
+retains separate signed GUI executables under one App identity. Every named
+entry requires `entry`, one literal `exec`, localized `name`, and its own
+`needs`; optional `panel_applet` is presentation only. Explicit default GUI
+needs, including `[]`, never recover the legacy operation union; omission does.
+Named selection is `cos app <id> --gui:<name>`, not an executable/path argument.
+All four generated manifest types retain these fields, including Go's
+presence-sensitive default needs. See
+[the GUI contract](../docs/app-development.md#multiple-gui-entries-under-one-app-identity).
+Wire/ABI 1 is unchanged; source changes alone publish no new SDK or platform.
+
+`wire/v1/owner_path_need.schema.json` and `owner_path.vectors.json` define
+bounded `scope: {kind: "owner-path", path: "Documents/**"}` requests. The public
+four-language `manifest` helpers validate syntax and provide lexical previews,
+without environment/filesystem access, grants or mounts. MCP loaders check the
+binding on every declared operation/MCP/default/named-GUI surface. Root supplies
+the authenticated owner home, rechecks canonical containment and retains normal
+protected-resource checks and exact-owner capability approval. A preview is
+never authorization. Root resolution without authenticated context fails closed;
+SDK preview arguments do not authenticate an owner.
+
 ## Dependencies
 
 Wire schemas and `wire/v1/contract.json` are the source of truth. Core, MCP,

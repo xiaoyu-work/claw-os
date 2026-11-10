@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {"name":"home-delete","verb":"fs.delete","path":"**","home":"/home/alice","expected":"/home/alice/**"},
+    {"name":"desktop-subtree","verb":"fs.write","path":"Desktop/**","home":"/home/alice","expected":"/home/alice/Desktop/**"},
+    {"name":"literal-unicode-spaces","verb":"fs.read","path":"文档/Some Folder/note.txt","home":"/home/alice","expected":"/home/alice/文档/Some Folder/note.txt"},
+    {"name":"hidden-prefix","verb":"fs.meta","path":".config/workbench/**","home":"/home/alice","expected":"/home/alice/.config/workbench/**"},
+    {"name":"absolute-foreign-owner","verb":"fs.delete","path":"/home/bob/**","home":"/home/alice"},
+    {"name":"parent-escape","verb":"fs.delete","path":"../bob/**","home":"/home/alice"},
+    {"name":"dot-segment","verb":"fs.read","path":"Desktop/./note","home":"/home/alice"},
+    {"name":"nested-parent","verb":"fs.read","path":"Desktop/../note","home":"/home/alice"},
+    {"name":"backslash","verb":"fs.read","path":"Desktop\\note","home":"/home/alice"},
+    {"name":"drive-path","verb":"fs.read","path":"C:/note","home":"/home/alice"},
+    {"name":"empty-segment","verb":"fs.read","path":"Desktop//note","home":"/home/alice"},
+    {"name":"trailing-separator","verb":"fs.read","path":"Desktop/","home":"/home/alice"},
+    {"name":"middle-glob","verb":"fs.read","path":"Desktop/**/note","home":"/home/alice"},
+    {"name":"single-glob","verb":"fs.read","path":"Desktop/*","home":"/home/alice"},
+    {"name":"environment-placeholder","verb":"fs.read","path":"$HOME/**","home":"/home/alice"},
+    {"name":"control","verb":"fs.read","path":"Desktop/\u0000note","home":"/home/alice"},
+    {"name":"host-verb","verb":"net.dial","path":"Desktop/**","home":"/home/alice"},
+    {"name":"name-verb","verb":"sys.observe","path":"Desktop/**","home":"/home/alice"},
+    {"name":"panel-is-not-a-path","verb":"ui.panel","path":"Desktop/**","home":"/home/alice"},
+    {"name":"no-root-home","verb":"fs.read","path":"**","home":"/"},
+    {"name":"relative-home","verb":"fs.read","path":"**","home":"home/alice"},
+    {"name":"unnormalized-home","verb":"fs.read","path":"**","home":"/home/alice/../bob"},
+    {"name":"pattern-home","verb":"fs.read","path":"**","home":"/home/**"},
+    {"name":"empty-path","verb":"fs.read","path":"","home":"/home/alice"}
+  ]
+}

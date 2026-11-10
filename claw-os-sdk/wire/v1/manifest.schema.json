@@ -20,7 +20,7 @@
       "description": "Optional human CLI operations keyed by command name. Each is invokable as `cos app <id> <op>` but is never an Agent tool. Values conform to #/$defs/operation.",
       "additionalProperties": { "$ref": "#/$defs/operation" }
     },
-    "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation or MCP tool declares an ai.* need." },
+    "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation, MCP tool or GUI entry declares an ai.* need." },
     "mcp": { "$ref": "#/$defs/mcpService", "description": "The App's authenticated MCP service and sole Agent/App tool interface." },
     "objects": {
       "type": "object",
@@ -233,6 +233,10 @@
         "properties": { "verb": { "const": "ai.bypass" } },
         "required": ["verb"]
       },
+      "allOf": [{
+        "if": {"properties": {"scope": {"properties": {"kind": {"const": "owner-path"}}, "required": ["kind"]}}, "required": ["scope"]},
+        "then": {"properties": {"verb": {"enum": ["fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta", "sys.config", "sys.mount", "data.backup"]}}}
+      }],
       "properties": {
         "verb": {
           "type": "string",
@@ -248,7 +252,7 @@
             "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write", "data.backup",
             "memory.write", "memory.read",
             "ipc.publish", "ipc.subscribe", "ipc.invoke",
-            "ui.notify", "ui.prompt", "ui.window", "ui.input", "ui.accessibility",
+            "ui.notify", "ui.prompt", "ui.window", "ui.panel", "ui.input", "ui.accessibility",
             "clipboard.read", "clipboard.write",
             "device.audio", "device.bluetooth", "device.media-route", "device.printer", "device.display", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
             "time.cron", "time.delay",
@@ -293,39 +297,51 @@
           "if": { "properties": { "kind": { "const": "from-arg" } }, "required": ["kind"] },
           "then": {
             "required": ["arg"],
-            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["path"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "from-arg-map" } }, "required": ["kind"] },
           "then": {
             "required": ["arg", "values"],
-            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["wild_when"] }, { "required": ["transform"] }, { "required": ["path"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "from-arg-or-wild" } }, "required": ["kind"] },
           "then": {
             "required": ["arg", "wild_when"],
-            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["transform"] }] }
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["transform"] }, { "required": ["path"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "fixed" } }, "required": ["kind"] },
           "then": {
             "required": ["scope"],
-            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }, { "required": ["path"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "wild" } }, "required": ["kind"] },
           "then": {
-            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }, { "required": ["path"] }] }
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "owner-path"}}, "required": ["kind"]},
+          "then": {
+            "required": ["path"],
+            "not": {"anyOf": [{"required": ["arg"]}, {"required": ["scope"]}, {"required": ["values"]}, {"required": ["wild_when"]}, {"required": ["transform"]}]}
           }
         }
       ],
       "properties": {
-        "kind": { "type": "string", "enum": ["from-arg", "from-arg-map", "from-arg-or-wild", "fixed", "wild"] },
+        "kind": { "type": "string", "enum": ["from-arg", "from-arg-map", "from-arg-or-wild", "fixed", "wild", "owner-path"] },
+        "path": {
+          "type": "string", "minLength": 1, "maxLength": 4096, "x-full-match": true,
+          "pattern": "^(\\*\\*|([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*(/([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*)*(/\\*\\*)?)$",
+          "description": "Owner-relative Path-kind request; Root joins only authenticated PathContext.home and applies normal scope/protected-resource checks. See owner_path_need.schema.json."
+        },
         "arg": { "type": "string", "description": "Arg name to bind from (kind=from-arg)." },
         "transform": { "type": "string", "enum": ["identity", "parent", "url-host"], "description": "Safe transformation applied after binding a scope source." },
         "values": { "type": "object", "additionalProperties": { "$ref": "#/$defs/scope" }, "description": "Explicit argument-value to scope mapping for kind=from-arg-map." },
@@ -424,16 +440,59 @@
     },
     "desktop": {
       "type": "object",
-      "description": "Desktop GUI surface. Drives generation of /usr/share/applications/com.clawos.<Id>.desktop at install time.",
+      "description": "Default desktop GUI and optional additional named surfaces, all sharing one authenticated App identity. Presentation grants no authority.",
       "additionalProperties": true,
       "properties": {
-        "exec": { "type": "string", "description": "Command/args appended after `cos app <id>` in the generated Exec line. Defaults to \"--gui\". The kernel always routes launch through `cos app` so the GUI inherits the app's identity." },
+        "exec": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f-\\u009f]+$(?![\\s\\S])", "description": "One literal selector, never a command line or executable. Defaults to --gui. Core limits it to 1024 UTF-8 bytes. The exact existing selector and --gui select the default GUI." },
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?:[\\x20-\\x2e\\x30-\\x5b\\x5d-\\x7e]{0,127}[\\x21-\\x2d\\x30-\\x5b\\x5d-\\x7e]/){0,15}[\\x20-\\x2e\\x30-\\x5b\\x5d-\\x7e]{0,127}[\\x21-\\x2d\\x30-\\x5b\\x5d-\\x7e]$(?![\\s\\S])",
+          "description": "Canonical package-relative signed regular-file entry for the default GUI only. Omission uses top-level entry or the runtime default; never changes the operation or MCP entry."
+        },
+        "needs": {
+          "type": "array",
+          "x-go-type": "*[]Need",
+          "items": { "$ref": "#/$defs/need" },
+          "description": "Default GUI's own needs. Present [] means no needs; omission retains legacy constrained fixed/wild operation needs, never MCP needs. Explicit argument-bound/conditional needs remain unsupported and unbound at GUI startup."
+        },
+        "entries": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$(?![\\s\\S])", "maxLength": 64 },
+          "additionalProperties": { "$ref": "#/$defs/DesktopEntry" },
+          "x-rust-type": "std::collections::BTreeMap<String, DesktopEntry>",
+          "x-python-type": "Dict[str, \"DesktopEntry\"]",
+          "x-ts-type": "Record<string, DesktopEntry>",
+          "x-go-type": "map[string]DesktopEntry",
+          "description": "Additional GUI surfaces, selected only by cos app <id> --gui:<name> [literal user args...]. No executable/path input or capability inheritance from other surfaces."
+        },
         "name": { "$ref": "#/$defs/localizedText", "description": "Display name for the launcher entry. Defaults to the manifest name." },
         "icon": { "type": "string", "description": "Icon name (XDG icon theme) or path for the .desktop Icon= field. Defaults to com.clawos.<Id>." },
         "categories": { "type": "array", "items": { "type": "string" }, "description": "XDG menu categories (e.g. [\"Utility\"]). ClawOS is always prepended." },
         "mime_types": { "type": "array", "items": { "type": "string" }, "description": "MIME types this app can open (generates MimeType= + file associations)." },
         "single_instance": { "type": "boolean", "description": "If true, the launcher reuses a running instance instead of spawning a new one." },
-        "panel_applet": { "type": "boolean", "description": "If true, the GUI is intentionally hosted by cosmic-panel and may inherit its restricted Wayland socket and layout environment." }
+        "panel_applet": { "type": "boolean", "description": "Presentation metadata only: admit panel layout environment. Defaults false; grants no LayerShell, display or capability authority." }
+      }
+    },
+    "DesktopEntry": {
+      "type": "object",
+      "description": "An additional explicitly selected signed GUI executable under the same authenticated App identity. Required needs are exclusive to this surface; no default-GUI, operation or MCP union.",
+      "required": ["entry", "exec", "name", "needs"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?:[\\x20-\\x2e\\x30-\\x5b\\x5d-\\x7e]{0,127}[\\x21-\\x2d\\x30-\\x5b\\x5d-\\x7e]/){0,15}[\\x20-\\x2e\\x30-\\x5b\\x5d-\\x7e]{0,127}[\\x21-\\x2d\\x30-\\x5b\\x5d-\\x7e]$(?![\\s\\S])",
+          "description": "Canonical package-relative regular file, required in both signed tree and envelope entrypoints; binary runtime requires executable mode."
+        },
+        "exec": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f-\\u009f]+$(?![\\s\\S])", "description": "One exact literal selector passed to this entry, not a command line. Core enforces 1024 UTF-8 bytes." },
+        "name": { "$ref": "#/$defs/localizedText", "description": "Localized presentation name, English required; never authority." },
+        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "This GUI's own needs, explicitly [] for none. Fixed needs use existing owner authorization; wild needs inherit bounded same-verb delegation. Argument-bound/conditional needs remain unsupported/unbound." },
+        "panel_applet": { "type": "boolean", "description": "Presentation metadata only, defaults false independently of the default desktop; grants no LayerShell or resource authority." }
       }
     }
   }

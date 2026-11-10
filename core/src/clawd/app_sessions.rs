@@ -300,6 +300,13 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         .map_err(BrokerError::unavailable)?);
     let expected_package = required_package_ref(&params)?;
     let kind = launch_kind(&params)?;
+    let gui_entry = params
+        .get("gui_entry")
+        .map(|_| required_string(&params, "gui_entry"))
+        .transpose()?;
+    if gui_entry.is_some() && kind != LaunchKind::Gui {
+        return Err(BrokerError::execution("GUI entry selection requires a GUI registration"));
+    }
     if client.extension_host.as_ref().is_some_and(|host| {
         host.purpose == crate::extension_host::protocol::HostPurpose::Task
     }) && kind != LaunchKind::Operation {
@@ -335,6 +342,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         Some(
             gui::Draft::new(
                 package.clone(),
+                gui_entry.as_deref(),
                 &required_string(&params, "operation")?,
                 client,
                 &launcher,
@@ -365,9 +373,11 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
         LaunchKind::Gui => {
             let exec = required_string(&params, "operation")?;
-            let plan = gui_plan(&app, &exec, &delegation, &ceiling)?;
+            let selected = app.manifest.gui_entry(gui_entry.as_deref())?;
+            let command = selected.cli_selector();
+            let plan = gui_plan(&app, gui_entry.as_deref(), &exec, &delegation, &ceiling)?;
             (
-                format!("cos app {app_id} {exec}"),
+                format!("cos app {app_id} {command}"),
                 plan,
                 Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
             )
@@ -2192,32 +2202,28 @@ fn verb_addresses_a_resource(verb: Verb) -> bool {
 /// wildcard needs can be bound; argument-bound needs are left out.
 fn gui_plan(
     app: &App,
+    gui_entry: Option<&str>,
     exec: &str,
     delegation: &Delegation,
     ceiling: &Ceiling,
 ) -> Result<LaunchPlan, BrokerError> {
-    let desktop = app
-        .manifest
-        .desktop
-        .as_ref()
-        .ok_or_else(|| format!("App `{}` declares no desktop surface", app.manifest.id))?;
-    if desktop.exec != exec {
+    let selected = app.manifest.gui_entry(gui_entry)?;
+    if selected.exec != exec {
         return Err(format!(
             "App `{}` declares desktop entrypoint `{}`, not `{exec}`",
-            app.manifest.id, desktop.exec
+            app.manifest.id, selected.exec
         )
         .into());
     }
 
     let mut plan = LaunchPlan::default();
     let mut refused_wild = Vec::new();
-    for need in app
-        .manifest
-        .operations
-        .values()
-        .flat_map(|operation| operation.needs.iter())
-    {
+    for need in selected.launch_needs() {
         match &need.scope {
+            ScopeBinding::OwnerPath { path } => {
+                let scope = crate::caps::manifest::resolve_owner_path(need.verb, path, &delegation.paths)?;
+                plan.require(Cap::new(need.verb, scope), delegation);
+            }
             ScopeBinding::Fixed { scope } => {
                 plan.require(Cap::new(need.verb, scope.clone()), delegation);
             }

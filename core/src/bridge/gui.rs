@@ -11,6 +11,7 @@ use super::{gui_args, AppLaunch, LaunchBindingRef};
 
 pub(crate) fn launch(
     launch: &AppLaunch,
+    gui_entry: Option<&str>,
     selector: &str,
     args: &[String],
     data_dir: &str,
@@ -18,6 +19,10 @@ pub(crate) fn launch(
     use crate::clawd::gui::inputs::{LaunchReply, PresentationKey, StopReply, WaitReply};
     use std::io::Write;
 
+    let selected = launch.manifest().gui_entry(gui_entry)?;
+    if selected.exec != selector {
+        return Err("GUI selector differs from the verified desktop declaration".into());
+    }
     gui_args::prepare(launch.manifest().runtime, selector, args)?;
     if !super::use_clawd_app_session_backend()? {
         return Err("GUI launch requires an authenticated login and Root GUI custody; local execution is unavailable".to_string());
@@ -36,7 +41,8 @@ pub(crate) fn launch(
             }
         }
     }
-    let mut session = super::AppIdentitySession::for_gui(launch, launch.app_id(), selector)?;
+    let mut session =
+        super::AppIdentitySession::for_gui_entry(launch, launch.app_id(), gui_entry, selector)?;
     let result = (|| {
         let expected = session
             .gui_data_dir
@@ -137,6 +143,7 @@ pub(crate) struct PreparedPlan {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan(
     launch: &AppLaunch,
+    gui_entry: Option<&str>,
     selector: &str,
     args: &[String],
     presentation: &Presentation,
@@ -146,12 +153,14 @@ pub(crate) fn plan(
     display: &Path,
 ) -> Result<PreparedPlan, String> {
     let manifest = launch.manifest();
+    let selected = manifest.gui_entry(gui_entry)?;
+    if selected.exec != selector {
+        return Err("GUI selector differs from the registered manifest entry".into());
+    }
     let runtime = manifest.runtime;
     let arguments = gui_args::prepare(runtime, selector, args)?;
-    let entry = manifest
-        .entry
-        .clone()
-        .unwrap_or_else(|| runtime.default_entry().to_string());
+    let entry_path = launch.gui_entrypoint(gui_entry)?;
+    let entry = selected.entry.to_string();
     let binding = launch.bind(std::slice::from_ref(&entry))?;
     let data = crate::paths::user_data_dir();
     let apps = launch
@@ -161,14 +170,13 @@ pub(crate) fn plan(
     let data = data.to_str().ok_or("GUI data directory is not UTF-8")?;
     let apps = apps.to_str().ok_or("GUI package parent is not UTF-8")?;
     let (program, mut argv) = if matches!(runtime, Runtime::Python) {
-        let wrapper =
-            super::python_wrapper(&launch.dir().join("main.py"), selector, args, data, apps)?;
+        let wrapper = super::python_wrapper(&entry_path, selector, args, data, apps)?;
         (
             super::interpreter_path("python3")?,
             vec!["-c".to_string(), wrapper],
         )
     } else {
-        super::session_program(runtime, &launch.dir().join(&entry))?
+        super::session_program(runtime, &entry_path)?
     };
     argv.extend(arguments.entry_argv);
     let app_runner = super::app_runner_path();
@@ -189,10 +197,7 @@ pub(crate) fn plan(
             .to_string(),
     ];
     gated.extend(argv);
-    let panel = manifest
-        .desktop
-        .as_ref()
-        .is_some_and(|desktop| desktop.panel_applet);
+    let panel = selected.panel_applet;
     let mut environment = BTreeMap::from([
         ("COS_APP_GUI".to_string(), "1".to_string()),
         ("COS_COMMAND".to_string(), selector.to_string()),

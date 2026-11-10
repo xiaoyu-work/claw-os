@@ -65,9 +65,7 @@ pub async fn control(
         let app_id = super::permissions::required_string(&params, "app_id")?;
         let app = super::app_sessions::installed_app(&app_id)?;
         let ceiling = app.require_verified()?.ceiling();
-        let needs: Vec<&Need> = app.manifest.operations.values().flat_map(|operation| operation.needs.iter())
-            .chain(app.manifest.mcp.iter().flat_map(|mcp| mcp.tools.iter()).flat_map(|tool| tool.needs.iter()))
-            .collect();
+        let needs: Vec<&Need> = declared_needs(&app.manifest).collect();
         let blocks = app_policy::blocks(uid, &app_id)?;
         if action == "show" {
             let live = super::authority::authority().app_caps(uid, &app_id);
@@ -166,6 +164,12 @@ fn fixed_cap(need: &Need) -> Option<Cap> {
     Some(Cap::new(need.verb, scope))
 }
 
+fn declared_needs(manifest: &crate::caps::Manifest) -> impl Iterator<Item = &Need> {
+    manifest.operations.values().flat_map(|operation| &operation.needs)
+        .chain(manifest.mcp.iter().flat_map(|mcp| &mcp.tools).flat_map(|tool| &tool.needs))
+        .chain(manifest.declared_gui_needs())
+}
+
 pub(crate) fn validate_approval(request: &approvals::Request) -> Result<(), String> {
     approval_app(request).map(|_| ())
 }
@@ -177,18 +181,7 @@ pub(crate) fn approval_app(request: &approvals::Request) -> Result<crate::apps::
         Verb::parse(&request.verb).ok_or("unknown permission verb")?,
         request.scope.clone(),
     );
-    let declared = app
-        .manifest
-        .operations
-        .values()
-        .flat_map(|operation| operation.needs.iter())
-        .chain(
-            app.manifest
-                .mcp
-                .iter()
-                .flat_map(|mcp| mcp.tools.iter())
-                .flat_map(|tool| tool.needs.iter()),
-        )
+    let declared = declared_needs(&app.manifest)
         .any(|need| fixed_cap(need).as_ref() == Some(&cap));
     if !declared {
         return Err("permission is no longer declared by the verified App".into());

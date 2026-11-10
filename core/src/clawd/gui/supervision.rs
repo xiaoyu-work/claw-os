@@ -67,8 +67,9 @@ impl Supervised {
         let display_listener = runtime
             .bind(Socket::WaylandTransport, job.registration.owner())
             .map_err(|error| error.to_string())?;
-        let plan = crate::bridge::gui::plan(
+        let mut plan = crate::bridge::gui::plan(
             &job.registration.launch,
+            job.registration.gui_entry.as_deref(),
             &job.registration.selector,
             request.args.as_slice(),
             &request.presentation,
@@ -77,6 +78,11 @@ impl Supervised {
             job.instance,
             &runtime.socket(Socket::WaylandTransport),
         )?;
+        plan.launch.policy.env.insert(
+            "COS_OWNER_HOME".to_string(),
+            job.registration.home.to_str()
+                .ok_or("Authenticated GUI owner home is not UTF-8")?.to_string(),
+        );
         let egress_listener = if matches!(
             plan.launch.policy.network,
             crate::worker::NetworkPolicy::Brokered { .. }
@@ -218,6 +224,7 @@ impl Supervised {
         self.transport = Some(guard);
         let view = self.job.registration.snapshot(&process)?;
         let expires = lease_expiry(&view)?;
+        let layer_shell = view.caps.covers(&Cap::new(Verb::UI_PANEL, Scope::Wild));
         if self.job.stopping() {
             return Err("GUI authority was retired before creator installation".to_string());
         }
@@ -236,7 +243,7 @@ impl Supervised {
                     selection_write: view
                         .caps
                         .covers(&Cap::new(Verb::CLIPBOARD_WRITE, Scope::name("selection"))),
-                    layer_shell: false,
+                    layer_shell,
                 },
                 process.pidfd().map_err(|error| error.to_string())?,
                 resources.gui_cgroup()?,
@@ -256,7 +263,7 @@ impl Supervised {
             .write_all(Epoch(self.job.instance.0).label().as_bytes())
             .map_err(|error| format!("release exact GUI execution gate: {error}"))?;
         drop(input);
-        self.job.running()?;
+        self.job.running(layer_shell)?;
         crate::provenance::audit(
             "gui.instance.bound",
             serde_json::json!({
@@ -265,7 +272,7 @@ impl Supervised {
                 "instance": Epoch(self.job.instance.0).label(),
                 "grant": view.id.audit_ref(),
                 "generation": view.generation,
-                "layer_shell": false,
+                "layer_shell": layer_shell,
             }),
         );
         Ok(view)

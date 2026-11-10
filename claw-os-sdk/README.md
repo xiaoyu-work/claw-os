@@ -13,6 +13,24 @@ or through App-owned AI agents. Cross-App orchestration belongs to the built-in
 system Agent. Apps may use gated AI, controlled system services, and shared
 libraries; `tools.call` addresses the fixed AI primitive catalog, not App MCP.
 
+An App may declare separate signed GUI executables in optional
+`desktop.entries`, without another installed identity or renderer unification.
+`cos app <id> --gui:<name> [literal args...]` selects one declared entry;
+each supplies its own localized name, literal selector and capability needs.
+Optional `desktop.entry` and `desktop.needs` affect only the default GUI.
+An explicit empty needs array means none, while omission preserves the legacy
+operation-only needs behavior. See
+[the manifest contract](../docs/app-development.md#multiple-gui-entries-under-one-app-identity).
+The generated Rust/Python/Node/Go manifest types retain these additive fields;
+they create no capability, resource mount or new runtime privilege.
+
+The shared `scope: {"kind":"owner-path","path":"Documents/**"}` binding requests
+only an authenticated owner's bounded Path scope. Public `manifest` helpers
+validate and preview it without environment/filesystem access; Root independently
+resolves identity/home, canonical containment, protected resources and approval.
+High-risk deletion and `ui.panel` require their own ordinary owner approval;
+neither new metadata nor a panel label supplies a default grant.
+
 ## Layout
 
 ```

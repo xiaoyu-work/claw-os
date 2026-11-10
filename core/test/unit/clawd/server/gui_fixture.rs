@@ -140,11 +140,41 @@ fn install_packages() {
                 "why":{"en":"Exercise the existing owner/App deny-and-retire controller"}
             }));
         }
+        let mut desktop = serde_json::json!({"exec":"surface","panel_applet":true});
+        let mut entrypoints = vec!["gui-probe".to_string()];
+        if id == "gui-boundary-test" {
+            std::fs::copy(dir.join("gui-probe"), dir.join("gui-widget")).unwrap();
+            std::fs::set_permissions(
+                dir.join("gui-widget"), std::fs::Permissions::from_mode(0o755),
+            ).unwrap();
+            desktop["entries"] = serde_json::json!({"applet":{
+                "entry":"gui-widget","exec":"surface","name":{"en":"Independent widget"},"needs":[]
+            }});
+            let panel = serde_json::json!({
+                "verb":"ui.panel","scope":{"kind":"fixed","scope":{"kind":"wild"}},
+                "why":{"en":"Show the private overlay fixture"}
+            });
+            for (name, needs) in [
+                ("panel", vec![panel.clone()]),
+                ("panel-read", vec![panel.clone(), selection[0].clone()]),
+                ("panel-write", vec![panel, selection[1].clone()]),
+                ("window", vec![serde_json::json!({
+                    "verb":"ui.window","scope":{"kind":"fixed","scope":{"kind":"wild"}},
+                    "why":{"en":"Show an ordinary private fixture window"}
+                })]),
+            ] {
+                desktop["entries"][name] = serde_json::json!({
+                    "entry":"gui-widget","exec":"surface","name":{"en":"Private presentation"},
+                    "panel_applet":true,"needs":needs
+                });
+            }
+            entrypoints.push("gui-widget".to_string());
+        }
         let manifest = serde_json::json!({
             "id":id, "version":"1.0.0", "schema_version":2,
             "name":{"en":"Private authenticated GUI fixture"},
             "runtime":crate::caps::manifest::Runtime::Binary, "entry":"gui-probe",
-            "desktop":{"exec":"surface","panel_applet":true},
+            "desktop":desktop,
             "operations":{"surface":{"label":{"en":"Exercise the GUI resource boundary"},"needs":needs}},
             "mcp":{"entry":"gui-probe","transport":"stdio","tools":[{
                 "name":"fixture-selection","summary":{"en":"Must not grant GUI authority"},
@@ -162,7 +192,7 @@ fn install_packages() {
                 version: "1.0.0".to_string(),
                 manifest_schema: "integration".to_string(),
                 manifest_path: "app.json".to_string(),
-                entrypoints: vec!["gui-probe".to_string()],
+                entrypoints,
                 resources: vec![],
             },
             &key,
@@ -199,11 +229,17 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     let mut caps = CapSet::new();
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));
     caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/gui-public")));
-    if [0, 1, 3, 4, 6, 7, 8, 9, 10, 11].contains(&case) {
+    if [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 14, 17, 18].contains(&case) {
         caps.insert(Cap::new(Verb::CLIPBOARD_READ, Scope::name("selection")));
     }
-    if [0, 2, 3].contains(&case) {
+    if [0, 2, 3, 15].contains(&case) {
         caps.insert(Cap::new(Verb::CLIPBOARD_WRITE, Scope::name("selection")));
+    }
+    if [13, 14, 15, 17, 18].contains(&case) {
+        caps.insert(Cap::unscoped(Verb::UI_PANEL));
+    }
+    if case == 16 {
+        caps.insert(Cap::unscoped(Verb::UI_WINDOW));
     }
     if case == 11 {
         caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("audio")));
@@ -367,7 +403,7 @@ fn creator_refusals(
             },
             selection_read: false,
             selection_write: false,
-            layer_shell: false,
+            layer_shell: true,
         };
         let reply = control
             .exchange(
@@ -570,7 +606,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
         *b"AUTH"
     );
     println!("private GUI case {case}: authenticated PAM display");
-    let host = if [8, 9].contains(&case) {
+    let host = if [8, 9, 18].contains(&case) {
         command(&control, b"HOST");
         let host = bootstrap::receive(
             control.as_fd(),
@@ -626,7 +662,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
         .unwrap();
     let display = crate::display_session::registry::GuiControl::of(&display).unwrap();
     let data = Path::new("/run/display-home/.local/share/cos/apps/gui-boundary-test");
-    if [4, 6, 7, 8, 9, 10, 11].contains(&case) {
+    if [4, 6, 7, 8, 9, 10, 11, 17, 18].contains(&case) {
         match std::fs::remove_file(data.join("revoke-ready")) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -634,7 +670,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
         }
     }
     command(&control, b"RUN!");
-    if [4, 6, 7, 8, 9, 10, 11].contains(&case) {
+    if [4, 6, 7, 8, 9, 10, 11, 17, 18].contains(&case) {
         wait_marker(&data.join("revoke-ready"), &mut pam);
         let instances = crate::provenance::runtime::running_instances(OWNER).unwrap();
         let (session, _) = instances
@@ -648,7 +684,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
             .expect("actual signed GUI instance");
         let retained = retained_instance(session);
         match case {
-            4 => {
+            4 | 17 => {
                 creator_refusals(&display, &retained, false);
                 crate::clawd::authority::authority().revoke_session(session);
                 crate::clawd::gui::retire_session(
@@ -764,7 +800,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
                         ).is_err());
                     });
             }
-            8 | 9 => {
+            8 | 9 | 18 => {
                 let host = host.as_ref().unwrap();
                 assert_eq!(
                     unsafe {
@@ -792,7 +828,8 @@ async fn run_case(case: usize, group: &std::fs::File) {
                     );
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
-                if case == 9 && !claw_display_control::identity::pidfd_exited(host.as_fd()).unwrap()
+                if [9, 18].contains(&case)
+                    && !claw_display_control::identity::pidfd_exited(host.as_fd()).unwrap()
                 {
                     assert_eq!(
                         unsafe {
@@ -827,7 +864,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
             "the exact checked-empty cgroup must be detached: {}",
             group_link.display(),
         );
-        if case == 4 {
+        if [4, 17].contains(&case) {
             creator_refusals(&display, &retained, true);
         }
     }
@@ -867,7 +904,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
         );
     } else {
         command(&control, b"WAIT");
-        let expected = if [4, 6, 7, 8, 9, 10, 11].contains(&case) {
+        let expected = if [4, 6, 7, 8, 9, 10, 11, 17, 18].contains(&case) {
             *b"FAIL"
         } else {
             *b"PASS"
@@ -881,7 +918,7 @@ async fn run_case(case: usize, group: &std::fs::File) {
     }
     command(&control, b"CLSE");
     let pam_status = pam.wait().unwrap();
-    if [8, 9].contains(&case) {
+    if [8, 9, 18].contains(&case) {
         assert_eq!(
             pam_status.code(),
             Some(4),
@@ -890,8 +927,8 @@ async fn run_case(case: usize, group: &std::fs::File) {
     } else {
         assert!(pam_status.success());
     }
-    if case == 2 {
-        let log = std::fs::read_to_string("/run/gui-fixture/pam-2.log").unwrap();
+    if [2, 15].contains(&case) {
+        let log = std::fs::read_to_string(format!("/run/gui-fixture/pam-{case}.log")).unwrap();
         assert!(
             log.lines()
                 .any(|line| line == "private write-only witness: 6 payloads, 6 clears"),
@@ -1031,7 +1068,7 @@ fn private_gui_fixture(session_only: bool) {
         if !session_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
-            for case in 0..12 {
+            for case in 0..19 {
                 let group = session_group(root, &case.to_string());
                 run_case(case, &group).await;
             }

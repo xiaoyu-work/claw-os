@@ -264,8 +264,30 @@ impl WlrLayerShellHandler for State {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
         &mut self.layer
     }
-    fn new_layer_surface(&mut self, _: LayerSurface, _: Option<WlOutput>, _: Layer, _: String) {
-        panic!("the private GUI fixture does not issue layer-shell authority");
+    fn new_layer_surface(
+        &mut self,
+        surface: LayerSurface,
+        _: Option<WlOutput>,
+        layer: Layer,
+        namespace: String,
+    ) {
+        let client = self
+            .common
+            .display_handle
+            .get_client(surface.wl_surface().id())
+            .unwrap();
+        let origin = client
+            .get_data::<ClientState>()
+            .unwrap()
+            .display_origin
+            .as_ref()
+            .unwrap();
+        assert!(origin.layer_shell());
+        assert!(!origin.os_session());
+        assert_eq!(layer, Layer::Overlay);
+        assert_eq!(namespace, "private-authenticated-panel");
+        surface.with_pending_state(|state| state.size = Some((320, 48).into()));
+        surface.send_configure();
     }
 }
 impl PrimarySelectionHandler for State {

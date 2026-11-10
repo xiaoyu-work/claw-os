@@ -9,9 +9,9 @@ use sha2::{Digest, Sha256};
 
 use crate::caps::manifest::{
     AiPolicy, Arg, Desktop, Manifest, McpAccess, McpLifecycle, Need, NeedCondition, ScopeBinding,
-    ScopeTransform,
+    ScopeTransform, Runtime,
 };
-use crate::caps::{catalog, Risk, Verb};
+use crate::caps::{catalog, Risk, Scope, Verb};
 use crate::i18n::LocalizedText;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,6 +28,8 @@ pub struct RequestedPermission {
     pub description: String,
     pub risk: Risk,
     pub scope: ScopeBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_scope: Option<Scope>,
     pub when: Option<NeedCondition>,
     pub uses: Vec<PermissionUse>,
 }
@@ -36,6 +38,19 @@ pub struct RequestedPermission {
 pub struct ServiceDisclosure {
     pub lifecycle: McpLifecycle,
     pub access: McpAccess,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GuiDisclosure {
+    pub name: Option<String>,
+    pub label: LocalizedText,
+    pub runtime: Runtime,
+    pub entry: String,
+    pub exec: String,
+    pub needs: Vec<Need>,
+    pub legacy_operation_needs: bool,
+    pub unbound_needs: Vec<usize>,
+    pub panel_applet: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,11 +63,23 @@ pub struct PermissionReview {
     pub ai_policy: Option<AiPolicy>,
     pub service: Option<ServiceDisclosure>,
     pub desktop: Option<Desktop>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gui_entries: Vec<GuiDisclosure>,
     pub contract_digest: String,
     pub permissions_granted: bool,
 }
 
 impl PermissionReview {
+    /// Presentation only. Root supplies the authenticated owner context.
+    pub fn resolve_owner_paths(&mut self, paths: &crate::caps::args::PathContext) -> Result<(), String> {
+        for permission in &mut self.permissions {
+            if let ScopeBinding::OwnerPath { path } = &permission.scope {
+                permission.resolved_scope = Some(crate::caps::manifest::resolve_owner_path(permission.verb, path, paths)?);
+            }
+        }
+        Ok(())
+    }
+
     pub fn from_manifest(manifest: &Manifest) -> Result<Self, String> {
         let mut requested = BTreeMap::new();
         for (name, operation) in &manifest.operations {
@@ -73,6 +100,34 @@ impl PermissionReview {
                 )?;
             }
         }
+        let mut gui_entries = Vec::new();
+        if let Some(desktop) = &manifest.desktop {
+            for name in std::iter::once(None).chain(desktop.entries.keys().map(|name| Some(name.as_str()))) {
+                let selected = manifest.gui_entry(name)?;
+                let needs: Vec<Need> = selected.needs.iter().map(|need| (**need).clone()).collect();
+                if !selected.legacy_needs {
+                    let usage = match name {
+                        Some(name) => format!("gui:{name}"),
+                        None => "gui".to_string(),
+                    };
+                    collect(&mut requested, &usage, &[], &needs)?;
+                }
+                gui_entries.push(GuiDisclosure {
+                    name: selected.name.map(str::to_string),
+                    label: selected.label.clone(),
+                    runtime: manifest.runtime,
+                    entry: selected.entry.to_string(),
+                    exec: selected.exec.to_string(),
+                    needs,
+                    legacy_operation_needs: selected.legacy_needs,
+                    unbound_needs: selected.needs.iter().enumerate()
+                        .filter(|(_, need)| !selected.need_is_bound(need))
+                        .map(|(index, _)| index)
+                        .collect(),
+                    panel_applet: selected.panel_applet,
+                });
+            }
+        }
         let mut review = Self {
             schema_version: 1,
             app_id: manifest.id.clone(),
@@ -85,6 +140,7 @@ impl PermissionReview {
                 access: service.access.clone(),
             }),
             desktop: manifest.desktop.clone(),
+            gui_entries,
             contract_digest: String::new(),
             permissions_granted: false,
         };
@@ -130,14 +186,22 @@ impl PermissionReview {
                 })
             })
             .collect();
-        json!({
+        let mut contract = json!({
             "schema_version": self.schema_version,
             "app_id": self.app_id,
             "permissions": permissions,
             "ai_policy": self.ai_policy,
             "service": self.service,
             "desktop": self.desktop,
-        })
+        });
+        // Old protected reviews retain their digest when no new GUI fields
+        // are used. Their package identity still binds the execution bytes.
+        if self.desktop.as_ref().is_some_and(|desktop| {
+            desktop.entry.is_some() || desktop.needs.is_some() || !desktop.entries.is_empty()
+        }) {
+            contract["gui_entries"] = json!(self.gui_entries);
+        }
+        contract
     }
 
     pub fn format_for_review(&self) -> Result<String, String> {
@@ -153,7 +217,7 @@ impl PermissionReview {
         );
         text.push_str("Installing this App does not grant these permissions.\n");
         if self.permissions.is_empty() {
-            text.push_str("No capability requests are declared by its operations or MCP tools.\n");
+            text.push_str("No capability requests are declared by its operations, MCP tools or GUI entries.\n");
         }
         for permission in &self.permissions {
             text.push_str(&format!(
@@ -162,7 +226,10 @@ impl PermissionReview {
                 permission.label,
                 permission.verb,
                 permission.description,
-                scope_description(&permission.scope)?,
+                match &permission.resolved_scope {
+                    Some(scope) => quote(&scope.to_string())?,
+                    None => scope_description(&permission.scope)?,
+                },
             ));
             if let Some(condition) = &permission.when {
                 text.push_str(&format!(
@@ -193,6 +260,27 @@ impl PermissionReview {
                 serde_json::to_string(&desktop.mime_types)
                     .map_err(|error| format!("format App file types: {error}"))?,
             ));
+        }
+        for gui in &self.gui_entries {
+            text.push_str(&format!(
+                "\nGUI {} - App's name: {}\n  Runtime: {}\n  Package entry: {}\n  Literal selector: {}\n  Exact declared needs and purposes: {}\n",
+                quote(gui.name.as_deref().unwrap_or("(default)"))?,
+                quote(gui.label.current())?,
+                gui.runtime.as_str(),
+                quote(&gui.entry)?,
+                quote(&gui.exec)?,
+                serde_json::to_string(&gui.needs)
+                    .map_err(|error| format!("format GUI needs: {error}"))?,
+            ));
+            if gui.legacy_operation_needs {
+                text.push_str("  Legacy constrained operation needs; MCP needs are excluded.\n");
+            }
+            if !gui.unbound_needs.is_empty() {
+                text.push_str(&format!(
+                    "  Unsupported/unbound GUI need indexes (not granted at startup): {:?}\n",
+                    gui.unbound_needs,
+                ));
+            }
         }
         if let Some(policy) = &self.ai_policy {
             text.push_str(&format!(
@@ -226,6 +314,7 @@ fn collect(
             description: metadata.blurb.current().to_string(),
             risk: metadata.risk,
             scope: need.scope.clone(),
+            resolved_scope: None,
             when: need.when.clone(),
             uses: Vec::new(),
         });
@@ -246,6 +335,10 @@ pub(crate) fn scope_description(scope: &ScopeBinding) -> Result<String, String> 
         serde_json::to_string(value).map_err(|error| format!("format permission scope: {error}"))
     };
     Ok(match scope {
+        ScopeBinding::OwnerPath { path } => format!(
+            "authenticated owner's home-relative path {}; Root resolves the exact bounded target",
+            quote(path)?,
+        ),
         ScopeBinding::Fixed { scope } => quote(&scope.to_string())?,
         ScopeBinding::FromArg { arg, transform } => {
             let selection = match transform {

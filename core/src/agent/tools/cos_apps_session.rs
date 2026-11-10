@@ -2421,8 +2421,21 @@ fn resolve_daemon_authorized_call(
             "App arguments changed after daemon authorization; refusing execution".to_string(),
         );
     }
+    let owner_paths = if manifest.mcp.as_ref()
+        .and_then(|service| service.tools.iter().find(|tool| tool.name == tool_name))
+        .is_some_and(|tool| tool.needs.iter().any(|need| matches!(need.scope, crate::caps::manifest::ScopeBinding::OwnerPath { .. })))
+    {
+        let owner = crate::paths::current_owner_uid_override()
+            .ok_or("owner-path MCP needs require the Root-bound App Host owner")?;
+        Some(crate::caps::args::PathContext {
+            home: crate::paths::verified_home_for_uid(owner)?,
+            cwd: None,
+        })
+    } else {
+        None
+    };
     let caps = manifest
-        .resolve_mcp_tool_needs(tool_name, &args)
+        .resolve_mcp_tool_needs_with_paths(tool_name, &args, owner_paths.as_ref())
         .map_err(|error| format!("capability resolution failed: {error}"))?
         .into_iter()
         .flatten()

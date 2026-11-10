@@ -2,6 +2,20 @@
 
 use super::{AppLaunch, CapSet, ClawdCallError, SessionInfo};
 
+pub(super) fn root_custody_response(
+    result: &serde_json::Value,
+    ordinary: bool,
+) -> Result<bool, String> {
+    match result.get("root_custody") {
+        Some(serde_json::Value::Bool(true)) => Ok(true),
+        Some(serde_json::Value::Bool(false)) | None if !ordinary => Ok(false),
+        _ => Err(
+            "Root registration did not establish mandatory ordinary App custody; update/restart the matching OS broker and runtime"
+                .into(),
+        ),
+    }
+}
+
 pub(super) fn use_clawd_backend() -> Result<bool, String> {
     #[cfg(test)]
     if std::env::var_os("COS_TEST_LOCAL_APP_SESSIONS").is_some() {

@@ -307,7 +307,7 @@ fn tick_one(
         .map_err(|e|e.to_string())?.map(|workspace|workspace.id);
     let checkpoint=match work.last_checkpoint.as_ref(){
         Some(record)=>{
-            let meta=crate::clawd::tasks::task_session_meta(&record.session_id,owner)?;
+            let meta=checkpoint_session_meta(record,owner,activity_id)?;
             if meta.workspace_id!=domain || crate::workspaces::context_access::has_temporary(&meta.id)?{None}
             else{Some(record)}
         }
@@ -342,6 +342,29 @@ fn tick_one(
         .publish(job)
         .map_err(|error| format!("publish Activity work: {error}"))?;
     Ok(())
+}
+
+fn checkpoint_session_meta(
+    record: &crate::activities::ActivityWorkRecord,
+    owner: u32,
+    activity_id: &str,
+) -> Result<crate::session::SessionMeta, String> {
+    let sid = record
+        .session_id
+        .parse::<crate::session::SessionId>()
+        .map_err(|error| error.to_string())?;
+    let meta = crate::session::get_meta(&sid).map_err(|error| error.to_string())?;
+    // Automatic segments belong to the scheduler, not resumable Agent conversations.
+    if meta.id != sid
+        || meta.owner_uid != Some(owner)
+        || meta.activity_id.as_deref() != Some(activity_id)
+        || meta.creator_runtime.as_deref() != Some("trigger")
+        || meta.origin != Some(crate::session::SessionOrigin::TriggerDelegation)
+        || meta.client != trigger_client()
+    {
+        return Err("automatic work checkpoint has a mismatched scheduler session".into());
+    }
+    Ok(meta)
 }
 
 pub(crate) fn handoff_segment(

@@ -97,18 +97,12 @@ pub(super) fn dispatch_app(
         return show_app_schema(app_name, &discovered[app_name.as_str()]);
     }
 
-    // cos app <name> <desktop.exec> [files...] → launch the GUI surface.
-    // Only apps that declare a `desktop` block respond to this; the
-    // generated `.desktop` invokes exactly this path so the GUI process
-    // is kernel-spawned (identity/audit/consent apply).
+    // GUI selection consumes exactly one token; all following argv is literal.
     {
         let app = &discovered[app_name.as_str()];
-        if let Some(desktop) = app.manifest.desktop.as_ref() {
-            if args.len() >= 2 && args[1] == desktop.exec {
-                require_runnable(app)?;
-                let files: Vec<String> = args[2..].to_vec();
-                return launch_app_gui(app_name, desktop.exec.as_str(), &files, app);
-            }
+        if let Some(selected) = app.manifest.gui_entry_for_cli(&args[1])? {
+            require_runnable(app)?;
+            return launch_app_gui(app_name, selected.name, selected.exec, &args[2..], app);
         }
     }
 

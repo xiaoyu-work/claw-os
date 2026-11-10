@@ -156,6 +156,7 @@ impl Verb {
     pub const UI_NOTIFY: Verb = Verb::new("ui.notify");
     pub const UI_PROMPT: Verb = Verb::new("ui.prompt");
     pub const UI_WINDOW: Verb = Verb::new("ui.window");
+    pub const UI_PANEL: Verb = Verb::new("ui.panel");
     pub const UI_INPUT: Verb = Verb::new("ui.input");
 
     // -- Clipboard ---------------------------------------------------------
@@ -299,6 +300,7 @@ pub const ALL_VERBS: &[Verb] = &[
     Verb::UI_NOTIFY,
     Verb::UI_PROMPT,
     Verb::UI_WINDOW,
+    Verb::UI_PANEL,
     Verb::UI_INPUT,
     Verb::CLIPBOARD_READ,
     Verb::CLIPBOARD_WRITE,

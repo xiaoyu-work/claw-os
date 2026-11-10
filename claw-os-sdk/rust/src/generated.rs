@@ -312,6 +312,8 @@ pub struct Needcondition {
 pub struct Scopebinding {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<String>,
@@ -397,12 +399,18 @@ pub struct Mcptool {
 }
 
 /// desktop
-/// Desktop GUI surface. Drives generation of
-/// /usr/share/applications/com.clawos.<Id>.desktop at install time.
+/// Default desktop GUI and optional additional named surfaces, all sharing one
+/// authenticated App identity. Presentation grants no authority.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Desktop {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<Vec<Need>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<std::collections::BTreeMap<String, DesktopEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Localizedtext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -413,6 +421,20 @@ pub struct Desktop {
     pub mime_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub single_instance: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_applet: Option<bool>,
+}
+
+/// DesktopEntry
+/// An additional explicitly selected signed GUI executable under the same
+/// authenticated App identity. Required needs are exclusive to this surface; no
+/// default-GUI, operation or MCP union.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DesktopEntry {
+    pub entry: String,
+    pub exec: String,
+    pub name: Localizedtext,
+    pub needs: Vec<Need>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel_applet: Option<bool>,
 }
@@ -454,6 +476,23 @@ pub struct ObjectRef {
     pub object_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+}
+
+/// Owner-relative path need
+/// Bounded request data, never a grant. Only Root resolves the authenticated
+/// owner's home; SDK resolution is a lexical preview without filesystem or
+/// authorization effects.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OwnerPathNeed {
+    pub verb: String,
+    pub scope: OwnerPathNeedScope,
+}
+
+/// owner_path_need_scope
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OwnerPathNeedScope {
+    pub kind: String,
+    pub path: String,
 }
 
 /// Permissions request / reply
@@ -550,6 +589,19 @@ pub fn validate_manifest_runtime(value: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("invalid manifest.runtime value: {value}"))
+    }
+}
+
+/// Reject values outside the owner_path_need.verb enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_owner_path_need_verb(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta", "sys.config", "sys.mount", "data.backup"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid owner_path_need.verb value: {value}"))
     }
 }
 
@@ -933,6 +985,19 @@ pub fn validate_object_ref(value: &serde_json::Value) -> Result<(), WireDecodeEr
 
 pub fn normalize_object_ref_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OBJECT_REF)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_OWNER_PATH_NEED: &str = r###"{"$id":"https://claw-os.dev/wire/v1/owner_path_need.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Bounded request data, never a grant. Only Root resolves the authenticated owner's home; SDK resolution is a lexical preview without filesystem or authorization effects.","properties":{"scope":{"additionalProperties":false,"properties":{"kind":{"const":"owner-path","type":"string"},"path":{"description":"Normalized relative path or trailing /** subtree; ** alone means the authenticated home subtree. No absolute path, empty/dot/dotdot segment, backslash, colon, environment placeholder, control or other * pattern. SDK helpers also enforce 4096 UTF-8 bytes and 255 bytes per literal segment.","maxLength":4096,"minLength":1,"pattern":"^(\\*\\*|([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*(/([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*)*(/\\*\\*)?)$","type":"string","x-full-match":true}},"required":["kind","path"],"type":"object"},"verb":{"enum":["fs.read","fs.write","fs.delete","fs.exec","fs.watch","fs.meta","sys.config","sys.mount","data.backup"],"type":"string"}},"required":["verb","scope"],"title":"Owner-relative path need","type":"object"}"###;
+pub fn validate_owner_path_need(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OWNER_PATH_NEED)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "OwnerPathNeed", "$")
+}
+
+pub fn normalize_owner_path_need_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OWNER_PATH_NEED)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

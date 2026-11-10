@@ -78,6 +78,7 @@ fn the_dangerous_families_are_all_denied() {
             || name == "ui.input"
             || name == "ui.accessibility"
             || name == "ui.window"
+            || name == "ui.panel"
             || name == "ui.prompt"
             || name == "data.backup";
         if dangerous {
@@ -109,6 +110,7 @@ fn clamp_reports_what_it_dropped() {
     caps.insert(Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts")));
     caps.insert(Cap::new(Verb::NET_DIAL, Scope::host("example.com")));
     caps.insert(Cap::new(Verb::SECRET_READ, Scope::name("token")));
+    caps.insert(Cap::unscoped(Verb::UI_PANEL));
 
     let (kept, dropped) = developer().clamp(&caps);
     assert!(kept.covers(&Cap::new(Verb::FS_READ, Scope::path("/tmp/app"))));
@@ -117,12 +119,15 @@ fn clamp_reports_what_it_dropped() {
     assert!(dropped_verbs.contains("sys.identity"));
     assert!(dropped_verbs.contains("net.dial"));
     assert!(dropped_verbs.contains("secret.read"));
-    assert_eq!(dropped.len(), 3);
+    assert!(dropped_verbs.contains("ui.panel"));
+    assert!(!kept.covers(&Cap::unscoped(Verb::UI_PANEL)));
+    assert_eq!(dropped.len(), 4);
 
     // A signed package loses nothing.
     let (kept, dropped) = publisher().clamp(&caps);
     assert!(dropped.is_empty());
     assert!(kept.covers(&Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"))));
+    assert!(kept.covers(&Cap::unscoped(Verb::UI_PANEL)));
 }
 
 #[test]

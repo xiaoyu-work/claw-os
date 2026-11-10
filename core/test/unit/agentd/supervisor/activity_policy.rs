@@ -45,7 +45,7 @@ fn boundary(lease: &Lease, mode: &str) -> (String, Arc<ActivityBoundary>) {
 #[tokio::test]
 async fn denied_boundaries_refuse_direct_consent_requests_without_spending_existing_approvals() {
     let _store = ConsentStore::new();
-    let lease = new_lease();
+    let lease = _store.lease();
     let resource = crate::caps::Scope::path("/home/user/notes.txt");
     approve_once(&lease, crate::caps::Verb::FS_READ, &resource);
     let (_, boundary) = boundary(&lease, "deny");
@@ -87,7 +87,7 @@ async fn denied_boundaries_refuse_direct_consent_requests_without_spending_exist
 #[tokio::test]
 async fn activity_consent_is_exact_single_use_and_cannot_select_another_lease() {
     let _store = ConsentStore::new();
-    let lease = new_lease();
+    let lease = _store.lease();
     let resource = crate::caps::Scope::path("/home/user/notes.txt");
     approve_once(
         &lease,
@@ -123,14 +123,14 @@ async fn activity_consent_is_exact_single_use_and_cannot_select_another_lease() 
         )
         .unwrap();
         for owner in [0, lease.owner_uid + 1] {
-            let mut foreign = new_lease();
+            let mut foreign = _store.lease();
             foreign.owner_uid = owner;
             assert!(matches!(
                 mediate_approval(&mut used, &foreign, &consume_ask(&resource)),
                 ApprovalReply::Refused { .. }
             ));
         }
-        let mut foreign = new_lease();
+        let mut foreign = _store.lease();
         foreign.session_id = Some("another-session".into());
         assert!(matches!(
             mediate_approval(&mut used, &foreign, &consume_ask(&resource)),
@@ -151,7 +151,7 @@ async fn activity_consent_is_exact_single_use_and_cannot_select_another_lease() 
 #[tokio::test]
 async fn changed_policy_refuses_even_a_direct_consumption_message_and_has_a_separate_bound() {
     let _store = ConsentStore::new();
-    let lease = new_lease();
+    let lease = _store.lease();
     let resource = crate::caps::Scope::path("/home/user/notes.txt");
     let (id, boundary) = boundary(&lease, "normal");
     policy_scope(Some(boundary), async {

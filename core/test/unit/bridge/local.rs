@@ -59,6 +59,45 @@ fn refused<T>(result: Result<T, String>) -> String {
     }
 }
 
+#[test]
+fn ordinary_registration_refuses_old_or_disabled_root_custody() {
+    let package = crate::provenance::runtime::PackageRef {
+        kind: crate::provenance::PackageKind::App, id: "ordinary-fixture".into(),
+        content_digest: format!("sha256:{}", "a".repeat(64)),
+        publisher_key_id: None, tier: "publisher".into(),
+    };
+    for response in [json!({}), json!({"root_custody": false}), json!({"root_custody": "true"})] {
+        let mut complete = json!({
+            "session_id": "app-fixture", "proc_data_dir": "/unopened/fixture",
+            "handle": "fixture-handle", "caps": CapSet::new(),
+        });
+        if let Some(value) = response.get("root_custody") {
+            complete["root_custody"] = value.clone();
+        }
+        let result = AppIdentitySession::from_clawd_registration(
+            "ordinary-fixture", complete, None, None, &package, true,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(session) => {
+                // This synthetic response has no real broker or cleanup authority.
+                std::mem::forget(session);
+                panic!("obsolete Root registration constructed an ordinary launch session");
+            }
+        };
+        assert!(error.contains("mandatory ordinary App custody"), "{error}");
+    }
+    assert!(root_custody_response(&json!({"root_custody": true}), true).unwrap());
+}
+
+#[test]
+fn existing_gui_and_service_owned_registration_do_not_acquire_ordinary_custody() {
+    for response in [json!({}), json!({"root_custody": false})] {
+        assert!(!root_custody_response(&response, false).unwrap());
+    }
+    assert!(root_custody_response(&json!({"root_custody": []}), false).is_err());
+}
+
 fn review_id(error: &str, app_id: &str) -> String {
     let value: Value =
         serde_json::from_str(error).unwrap_or_else(|_| panic!("lost structured review: {error}"));
@@ -298,6 +337,7 @@ fn check_root_broker_registration(root: &Path, parent_caps: &CapSet) {
                             "proc_data_dir": proc_dir,
                             "handle": "fixture-handle",
                             "caps": reply_caps,
+                            "root_custody": true,
                         }),
                     ),
                     4 => {
@@ -324,7 +364,7 @@ fn check_root_broker_registration(root: &Path, parent_caps: &CapSet) {
                     operation: "probe",
                     args: &[],
                 },
-                parent_caps.clone(),
+                Some(parent_caps.clone()),
                 Some(&launch.ceiling()),
                 &launch.package_ref(),
             )

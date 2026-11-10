@@ -1102,14 +1102,43 @@ fn container_mcp_removal_requires_explicit_confirmation() {
     );
 }
 
+fn recipient_flag_manifest(kind: &str, required: bool) -> Manifest {
+    Manifest::from_json(
+        &serde_json::json!({
+            "id":"flag-binding-fixture","version":"1","name":{"en":"Flag binding fixture"},
+            "operations":{"send":{"label":{"en":"Send"},"args":[
+                {"name":"text","kind":"text","required":true},
+                {"name":"recipient","kind":kind,"binding":"flag","required":required}
+            ]}}
+        })
+        .to_string(),
+    )
+    .unwrap()
+}
+
 #[test]
-fn googlechat_recipient_requires_flag_binding() {
-    let manifest = Manifest::from_json(
-        &std::fs::read_to_string(app_sources::app_dir("gateway/googlechat").join("app.json"))
-            .unwrap(),
+fn optional_name_recipient_requires_flag_binding() {
+    let manifest = recipient_flag_manifest("name", false);
+    let operation = &manifest.operations["send"];
+    assert!(bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err());
+    let canonical = bind_operation_args(
+        operation,
+        &["hello".into(), "--recipient".into(), "destination".into()],
     )
     .unwrap();
+    assert_eq!(canonical.values["text"], "hello");
+    assert_eq!(canonical.values["recipient"], "destination");
+    assert!(!bind_operation_args(operation, &["hello".into()])
+        .unwrap()
+        .values
+        .contains_key("recipient"));
+}
+
+#[test]
+fn required_recipient_cannot_bind_from_a_positional() {
+    let manifest = recipient_flag_manifest("name", true);
     let operation = &manifest.operations["send"];
+    assert!(bind_operation_args(operation, &["hello".into()]).is_err());
     assert!(bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err());
     let canonical = bind_operation_args(
         operation,
@@ -1121,34 +1150,13 @@ fn googlechat_recipient_requires_flag_binding() {
 }
 
 #[test]
-fn mattermost_recipient_requires_flag_binding() {
-    let manifest = Manifest::from_json(
-        &std::fs::read_to_string(app_sources::app_dir("gateway/mattermost").join("app.json"))
-            .unwrap(),
-    )
-    .unwrap();
+fn text_recipient_accepts_only_the_declared_flag() {
+    let manifest = recipient_flag_manifest("text", false);
     let operation = &manifest.operations["send"];
     assert!(bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err());
     let canonical = bind_operation_args(
         operation,
-        &["hello".into(), "--recipient".into(), "destination".into()],
-    )
-    .unwrap();
-    assert_eq!(canonical.values["text"], "hello");
-    assert_eq!(canonical.values["recipient"], "destination");
-}
-
-#[test]
-fn teams_recipient_requires_flag_binding() {
-    let manifest = Manifest::from_json(
-        &std::fs::read_to_string(app_sources::app_dir("gateway/teams").join("app.json")).unwrap(),
-    )
-    .unwrap();
-    let operation = &manifest.operations["send"];
-    assert!(bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err());
-    let canonical = bind_operation_args(
-        operation,
-        &["hello".into(), "--recipient".into(), "destination".into()],
+        &["hello".into(), "--recipient=destination".into()],
     )
     .unwrap();
     assert_eq!(canonical.values["text"], "hello");

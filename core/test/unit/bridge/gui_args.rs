@@ -54,6 +54,29 @@ fn gui_selector_is_one_argument_not_a_command_line_or_executable() {
 }
 
 #[test]
+fn named_manifest_selection_preserves_default_and_literal_user_arguments() {
+    let manifest = crate::caps::Manifest::from_json(r#"{
+        "id":"independent-widget","version":"1","name":{"en":"Widget"},"runtime":"binary",
+        "entry":"bin/window","desktop":{"exec":"open","entries":{
+            "applet":{"entry":"bin/widget","exec":"panel open","name":{"en":"Widget panel"},"needs":[]}
+        }}
+    }"#).unwrap();
+    for selector in ["--gui", "open"] {
+        let selected = manifest.gui_entry_for_cli(selector).unwrap().unwrap();
+        assert_eq!((selected.name, selected.exec, selected.entry), (None, "open", "bin/window"));
+    }
+    let selected = manifest.gui_entry_for_cli("--gui:applet").unwrap().unwrap();
+    let args = user_arguments();
+    let prepared = prepare(manifest.runtime, selected.exec, &args).unwrap();
+    assert_eq!(prepared.entry_argv, expected_arguments("panel open", &args));
+    assert_eq!(serde_json::from_str::<Vec<String>>(&prepared.user_args_json).unwrap(), args);
+    for selector in ["--gui:", "--gui:missing", "--gui:../widget", "--gui:Applet", "--gui:applet/other"] {
+        assert!(manifest.gui_entry_for_cli(selector).is_err(), "{selector}");
+    }
+    assert!(manifest.gui_entry_for_cli("bin/widget").unwrap().is_none());
+}
+
+#[test]
 fn gui_selector_and_argument_limits_are_checked_without_normalization() {
     assert!(prepare(Runtime::Binary, &"s".repeat(SELECTOR_BYTES), &[]).is_ok());
     for selector in [

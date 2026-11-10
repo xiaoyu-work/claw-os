@@ -323,6 +323,7 @@ pub(crate) fn gui_operation(
 ) -> Result<LaunchPolicy, String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
+    let app_dir = canonical_dir(input.app_dir, "App package")?;
     input.desktop = false;
     let mut policy = app_operation(input)?;
     policy.tier = TrustTier::DesktopSurface;
@@ -335,6 +336,23 @@ pub(crate) fn gui_operation(
     policy.env.insert("XDG_RUNTIME_DIR".to_string(), "/run/cos".to_string());
     policy.env.insert("XDG_SESSION_TYPE".to_string(), "wayland".to_string());
     policy.env.insert("XDG_CURRENT_DESKTOP".to_string(), "COSMIC".to_string());
+    policy.env.remove("COS_APP_RESOURCE_DIR");
+    policy.env.remove("XDG_DATA_DIRS");
+    let resources = app_dir.join("resources");
+    match std::fs::symlink_metadata(&resources) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            policy.env.insert("COS_APP_RESOURCE_DIR".to_string(),
+                resources.to_str().ok_or("GUI resources are not UTF-8")?.to_string());
+            let share = resources.join("usr/share");
+            if share.is_dir() {
+                policy.env.insert("XDG_DATA_DIRS".to_string(),
+                    format!("{}:/usr/local/share:/usr/share", share.display()));
+            }
+        }
+        Ok(_) => return Err("GUI resources must be a package-local directory".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect GUI resources: {error}")),
+    }
     match std::fs::read_dir("/dev/dri") {
         Ok(entries) => {
             for (index, entry) in entries.enumerate() {
@@ -975,6 +993,7 @@ fn resolve_write_target(pattern: &str) -> Result<Option<PathBuf>, String> {
     };
 
     let prefix = PathBuf::from(format!("/{}", segments[..literal_depth].join("/")));
+    reject_forbidden(&prefix)?;
     // A write grant for a file that does not exist yet is normal; the
     // parent directory is what has to be mounted.
     let target = if prefix.exists() {
@@ -1021,6 +1040,7 @@ fn resolve_read_targets(pattern: &str) -> Result<Vec<PathBuf>, String> {
         return Ok(Vec::new());
     }
     let prefix = PathBuf::from(format!("/{}", segments[..literal_depth].join("/")));
+    reject_forbidden(&prefix)?;
     if !prefix.exists() {
         return Ok(Vec::new());
     }

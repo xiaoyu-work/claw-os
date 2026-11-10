@@ -92,11 +92,20 @@ fn gui_policy_projects_only_its_explicit_instance_transport() {
     let _x11 = crate::test_env::TestEnvVarGuard::set("DISPLAY", ":12345");
     let _xauth = crate::test_env::TestEnvVarGuard::set("XAUTHORITY", root.path().join("xauth"));
     let granted = CapSet::new();
-    let input = app_input(root.path(), data.to_str().unwrap(), &granted);
+    let resources = root.path().join("resources");
+    std::fs::create_dir_all(resources.join("usr/share/cosmic")).unwrap();
+    let mut input = app_input(root.path(), data.to_str().unwrap(), &granted);
+    input.extra_env.insert("COS_APP_RESOURCE_DIR".into(), "/not-the-package".into());
+    input.extra_env.insert("XDG_DATA_DIRS".into(), "/not-the-package".into());
     let policy = gui_operation(input, &socket, Path::new("/usr/bin/true")).unwrap();
     assert_eq!(policy.tier, TrustTier::DesktopSurface);
     assert_eq!(policy.env["WAYLAND_DISPLAY"], super::super::linux::GUI_WAYLAND_SOCKET);
     assert_eq!(policy.env["XDG_RUNTIME_DIR"], "/run/cos");
+    assert_eq!(Path::new(&policy.env["COS_APP_RESOURCE_DIR"]), resources);
+    assert_eq!(policy.env["XDG_DATA_DIRS"],
+        format!("{}:/usr/local/share:/usr/share", resources.join("usr/share").display()));
+    assert!(policy.mounts.iter().filter(|mount| resources.starts_with(&mount.target))
+        .all(|mount| mount.mode == MountMode::ReadOnly));
     for key in ["DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "XAUTHORITY", "WAYLAND_SOCKET"] {
         assert!(!policy.env.contains_key(key), "inherited {key}");
     }
@@ -380,6 +389,14 @@ fn a_grant_reaching_a_kernel_owned_root_fails_the_launch() {
         let error = granted_path_mounts(&caps(vec![Cap::new(Verb::FS_READ, Scope::path(path))]))
             .unwrap_err();
         assert!(error.contains("kernel-owned"), "{path} produced `{error}`");
+    }
+    for verb in [Verb::FS_READ, Verb::FS_WRITE] {
+        let error = granted_path_mounts(&caps(vec![Cap::new(
+            verb,
+            Scope::path("/run/cos/absent-resource-fixture/**"),
+        )]))
+        .unwrap_err();
+        assert!(error.contains("kernel-owned"), "{error}");
     }
 }
 

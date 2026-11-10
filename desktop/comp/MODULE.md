@@ -15,7 +15,10 @@ clients and listeners. `context_created` consumes an installed creator once;
 client-supplied engine/App/instance strings cannot bind authority.
 Ordinary login clients have a separate kernel-login origin, never App selection
 rights. Layer-shell admission is separate from selection and cannot come from
-a Panel label.
+a Panel label. The Root GUI Host projects only the live grant's explicit
+`ui.panel:Wild` into that lease field. It authorizes the App's own overlay
+surface/focus, not OS-session-only virtual keyboard/input method, capture,
+desktop-management or other global protocols.
 
 `src/wayland/handlers/selection.rs` applies independently granted read/write
 rights to the [pinned Smithay hooks](vendor/README.md). Unbound, retired or
@@ -31,6 +34,9 @@ write witness verifies real write-only data and clears without giving the
 writer read authority. No real desktop, clipboard/history or renderer backend
 is used. Existing dispatch/privacy/default-allow regressions remain under
 `test/selection-read/`.
+The authenticated process fixture creates real overlay surfaces with explicit
+panel grants, keeps selection read/write independent, rejects an ordinary
+window's Panel label, and checks panel revocation/display-control expiry.
 
 From the OS repository root:
 

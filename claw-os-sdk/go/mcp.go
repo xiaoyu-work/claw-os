@@ -918,6 +918,9 @@ func rejectMCPUnknownFields(object map[string]any, context string, allowed ...st
 }
 
 func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
+	if err := validateOwnerPathBindings(manifest); err != nil {
+		return nil, &MCPManifestError{Message: err.Error()}
+	}
 	if err := rejectMCPUnknownFields(
 		manifest,
 		"App manifest",

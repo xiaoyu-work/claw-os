@@ -40,6 +40,12 @@ resume normal consumption or in-flight Job recovery. There is no reset flag.
 Legacy-only stores that have never initialized Activity progress retain their
 original missing-cursor behavior.
 
+Automatic Activity handoffs validate the previous segment's same-owner,
+same-Activity scheduler session (`trigger` runtime, `TriggerDelegation` origin,
+unattended `ScheduledTrigger` client), not the system-Agent conversation-resume
+contract. Workspace equality and temporary-context exclusions still gate the
+checkpoint projection; this lookup never supplies new delegation authority.
+
 Observed blocked events are consumed, not backlogged for resume. Submission
 persists a delivery UUID, then its Session correlation, before publishing a Job
 with that UUID through the shared queue. Recovery only recognizes an existing

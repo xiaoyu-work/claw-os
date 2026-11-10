@@ -445,7 +445,13 @@ fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
         args.insert("content".into(), serde_json::json!(""));
         let call = manifest.resolve_mcp_tool_call(tool, &args, &paths).unwrap();
         assert_eq!(call.values["content"], serde_json::json!(""));
-        assert_eq!(call.needs[0][0].scope, Scope::path(&note));
+        assert_eq!(
+            call.needs,
+            vec![
+                vec![crate::caps::Cap::new(Verb::IPC_PUBLISH, Scope::name("app:fs"))],
+                vec![crate::caps::Cap::new(Verb::FS_WRITE, Scope::path(&note))],
+            ],
+        );
     }
     for tool in ["fs.stat", "fs.tag"] {
         let mut args = BTreeMap::from([("path".into(), serde_json::json!("note.txt"))]);
@@ -453,14 +459,21 @@ fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
             args.insert("tags".into(), serde_json::json!(["blue"]));
         }
         let call = manifest.resolve_mcp_tool_call(tool, &args, &paths).unwrap();
-        assert_eq!(call.needs[0][0].verb.to_string(), "fs.meta");
-        assert_eq!(call.needs[0][0].scope, Scope::path(&note));
-        assert_eq!(call.needs[1][0].verb.to_string(), "fs.read");
-        assert_eq!(call.needs[1][0].scope, Scope::path(root));
+        let mut expected = Vec::new();
         if tool == "fs.tag" {
-            assert_eq!(call.needs[2][0].verb.to_string(), "fs.write");
-            assert_eq!(call.needs[2][0].scope, Scope::path(root));
+            expected.push(vec![crate::caps::Cap::new(
+                Verb::IPC_PUBLISH,
+                Scope::name("app:fs"),
+            )]);
         }
+        expected.extend([
+            vec![crate::caps::Cap::new(Verb::FS_META, Scope::path(&note))],
+            vec![crate::caps::Cap::new(Verb::FS_READ, Scope::path(root))],
+        ]);
+        if tool == "fs.tag" {
+            expected.push(vec![crate::caps::Cap::new(Verb::FS_WRITE, Scope::path(root))]);
+        }
+        assert_eq!(call.needs, expected);
     }
 }
 
@@ -1417,7 +1430,7 @@ fn mcp_first_service_bundled_access_contract() {
     )
     .unwrap();
     let apps = lock["apps"].as_array().unwrap();
-    assert_eq!(apps.len(), 75);
+    assert_eq!(apps.len(), 63);
     let mut checked = 0;
     for id in apps {
         let path = app_sources::app_dir(id.as_str().unwrap()).join("app.json");
@@ -2019,4 +2032,166 @@ fn desktop_rejects_control_char_in_exec() {
         err,
         ManifestError::DesktopInvalid { field: "exec", .. }
     ));
+}
+
+fn multi_gui_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "id": "independent-workbench", "version": "1.0.0", "schema_version": 2,
+        "name": {"en": "Independent workbench"}, "runtime": "binary", "entry": "bin/command",
+        "operations": {"inspect": {"label": {"en": "Inspect"}, "needs": [{
+            "verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "hardware"}},
+            "why": {"en": "Inspect command data"}
+        }]}},
+        "mcp": {"entry": "bin/service", "tools": [{
+            "name": "independent-workbench.get", "summary": {"en": "Read service data"},
+            "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "accounts"}},
+                "why": {"en": "Service-only account access"}}]
+        }]},
+        "desktop": {"entry": "bin/window", "exec": "open", "needs": [], "entries": {
+            "applet": {"entry": "bin/widget", "exec": "open panel",
+                "name": {"en": "Workbench widget", "zh-CN": "工作台组件"}, "needs": [{
+                    "verb": "ui.notify", "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                    "why": {"en": "Report widget results"}
+                }, {
+                    "verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"},
+                    "why": {"en": "Unbound selection"}
+                }, {
+                    "verb": "fs.write", "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/work/output"}},
+                    "when": {"kind": "arg-present", "arg": "path"}, "why": {"en": "Unbound condition"}
+                }]}
+        }}
+    })
+}
+
+#[test]
+fn named_gui_entries_keep_independent_targets_needs_and_localized_names() {
+    let value = multi_gui_manifest();
+    let manifest = parse(&value.to_string());
+    assert_eq!(manifest.entry.as_deref(), Some("bin/command"));
+    assert_eq!(manifest.mcp.as_ref().unwrap().entry.as_deref(), Some("bin/service"));
+    let default = manifest.gui_entry(None).unwrap();
+    assert_eq!((default.entry, default.exec), ("bin/window", "open"));
+    assert!(default.needs.is_empty());
+    assert!(!default.legacy_needs);
+    let applet = manifest.gui_entry(Some("applet")).unwrap();
+    assert_eq!((applet.entry, applet.exec), ("bin/widget", "open panel"));
+    assert_eq!(applet.name, Some("applet"));
+    assert_eq!(applet.launch_needs().map(|need| need.verb).collect::<Vec<_>>(), [Verb::UI_NOTIFY]);
+    assert_eq!(manifest.gui_entrypoints().unwrap(), ["bin/window", "bin/widget"]);
+    let round_trip = parse(&serde_json::to_string(&manifest).unwrap());
+    assert_eq!(
+        serde_json::to_value(round_trip.desktop.unwrap().entries["applet"].name.clone()).unwrap(),
+        value["desktop"]["entries"]["applet"]["name"]
+    );
+
+    let mut legacy = value;
+    legacy["desktop"].as_object_mut().unwrap().remove("needs");
+    legacy["desktop"].as_object_mut().unwrap().remove("entry");
+    let legacy = parse(&legacy.to_string());
+    let default = legacy.gui_entry(None).unwrap();
+    assert_eq!(default.entry, "bin/command");
+    assert!(default.legacy_needs);
+    assert_eq!(default.launch_needs().map(|need| need.verb).collect::<Vec<_>>(), [Verb::SYS_OBSERVE]);
+    assert_eq!(legacy.gui_entry(Some("applet")).unwrap().launch_needs().count(), 1);
+}
+
+#[test]
+fn gui_entry_names_paths_required_fields_and_explicit_nulls_fail_closed() {
+    let original = multi_gui_manifest();
+    for name in ["", "Applet", "../applet", "bin/widget", "applet.name", "applet ", &"a".repeat(65)] {
+        let mut value = original.clone();
+        let entry = value["desktop"]["entries"].as_object_mut().unwrap().remove("applet").unwrap();
+        value["desktop"]["entries"][name] = entry;
+        assert!(Manifest::from_json(&value.to_string()).is_err(), "{name}");
+    }
+    for path in ["", "/bin/widget", "../widget", "bin/../widget", "bin\\widget", "bin//widget", "bin/./widget", "bin/widget."] {
+        for field in ["entry", "entries"] {
+            let mut value = original.clone();
+            if field == "entry" {
+                value["desktop"]["entry"] = serde_json::json!(path);
+            } else {
+                value["desktop"]["entries"]["applet"]["entry"] = serde_json::json!(path);
+            }
+            assert!(Manifest::from_json(&value.to_string()).is_err(), "{path}");
+        }
+    }
+    for field in ["entry", "exec", "name", "needs"] {
+        let mut value = original.clone();
+        value["desktop"]["entries"]["applet"].as_object_mut().unwrap().remove(field);
+        assert!(Manifest::from_json(&value.to_string()).is_err(), "{field}");
+        let mut value = original.clone();
+        value["desktop"]["entries"]["applet"][field] = serde_json::Value::Null;
+        assert!(Manifest::from_json(&value.to_string()).is_err(), "{field}: null");
+    }
+    for field in ["entry", "needs", "entries"] {
+        let mut value = original.clone();
+        value["desktop"][field] = serde_json::Value::Null;
+        assert!(Manifest::from_json(&value.to_string()).is_err(), "{field}");
+    }
+    for verb in ["ai.chat", "ai.bypass"] {
+        let mut value = original.clone();
+        value["desktop"]["entries"]["applet"]["needs"][0]["verb"] = serde_json::json!(verb);
+        assert!(Manifest::from_json(&value.to_string()).is_err(), "{verb}");
+    }
+    let mut value = original;
+    value["desktop"]["entries"]["applet"]["needs"][2]["when"] =
+        serde_json::json!({"kind":"arg-equals","arg":"path","value":null});
+    assert!(Manifest::from_json(&value.to_string()).is_err());
+}
+
+#[test]
+fn owner_path_needs_use_only_explicit_owner_context_for_operations_and_mcp() {
+    let _lock = crate::test_env::lock_env();
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", "/foreign/environment-home");
+    let value = serde_json::json!({
+        "id":"owner-path-example","version":"1","schema_version":2,"name":{"en":"Owner path example"},
+        "operations":{"remove":{"label":{"en":"Remove"},"needs":[{
+            "verb":"fs.delete","scope":{"kind":"owner-path","path":"Desktop/**"},"why":{"en":"Remove selected desktop files"}
+        }]}},
+        "mcp":{"tools":[{"name":"owner-path-example.read","summary":{"en":"Read"},"needs":[{
+            "verb":"fs.read","scope":{"kind":"owner-path","path":"Documents/**"},"why":{"en":"Read owner documents"}
+        }]}]}
+    });
+    let manifest = parse(&value.to_string());
+    let paths = super::super::args::PathContext {
+        home: "/home/alice".into(), cwd: Some("/home/bob".into()),
+    };
+    let empty = BTreeMap::new();
+    let operation = manifest.resolve_operation_call("remove", &empty, &paths).unwrap();
+    assert_eq!(operation.needs, [vec![super::super::Cap::new(Verb::FS_DELETE, Scope::path("/home/alice/Desktop/**"))]]);
+    let mcp = manifest.resolve_mcp_tool_call("owner-path-example.read", &empty, &paths).unwrap();
+    assert_eq!(mcp.needs, [vec![super::super::Cap::new(Verb::FS_READ, Scope::path("/home/alice/Documents/**"))]]);
+    assert!(manifest.resolve_needs("remove", &empty).is_err());
+    assert!(manifest.resolve_mcp_tool_needs("owner-path-example.read", &empty).is_err());
+    for path in ["/home/bob/**", "../bob/**", "Desktop/../Documents/**", "Desktop\\file", "Desktop/**/file", "$HOME/**"] {
+        let mut changed = value.clone();
+        changed["operations"]["remove"]["needs"][0]["scope"]["path"] = serde_json::json!(path);
+        assert!(Manifest::from_json(&changed.to_string()).is_err(), "{path}");
+    }
+    for field in ["owner_uid", "home", "owner_home"] {
+        let mut changed = value.clone();
+        changed["operations"]["remove"]["needs"][0]["scope"][field] = serde_json::json!("/home/bob");
+        assert!(Manifest::from_json(&changed.to_string()).is_err(), "{field}");
+    }
+    for verb in ["net.dial", "sys.observe", "ui.panel"] {
+        let mut changed = value.clone();
+        changed["operations"]["remove"]["needs"][0]["verb"] = serde_json::json!(verb);
+        assert!(Manifest::from_json(&changed.to_string()).is_err(), "{verb}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn owner_path_rejects_an_existing_symlink_escape_even_for_a_missing_leaf() {
+    let root = crate::test_env::secure_scratch_dir("owner-path-containment");
+    let home = root.join("owner");
+    let other = root.join("foreign");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    std::os::unix::fs::symlink(&other, home.join("Documents")).unwrap();
+    let paths = super::super::args::PathContext { home, cwd: None };
+    for path in ["Documents/**", "Documents/missing/file.txt"] {
+        assert!(resolve_owner_path(Verb::FS_DELETE, path, &paths).is_err(), "{path}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }

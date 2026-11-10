@@ -37,9 +37,14 @@ use wayland_protocols::{
         zwp_primary_selection_source_v1 as primary_source,
     },
 };
-use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_device_v1 as wlr_device, zwlr_data_control_manager_v1 as wlr_manager,
-    zwlr_data_control_offer_v1 as wlr_offer, zwlr_data_control_source_v1 as wlr_source,
+use wayland_protocols_wlr::{
+    data_control::v1::client::{
+        zwlr_data_control_device_v1 as wlr_device, zwlr_data_control_manager_v1 as wlr_manager,
+        zwlr_data_control_offer_v1 as wlr_offer, zwlr_data_control_source_v1 as wlr_source,
+    },
+    layer_shell::v1::client::{
+        zwlr_layer_shell_v1 as layer_shell, zwlr_layer_surface_v1 as layer_surface,
+    },
 };
 
 use super::{DEADLINE, MIME};
@@ -131,6 +136,7 @@ struct Events {
     dnd: Option<(wl_data_offer::WlDataOffer, u32)>,
     keyboard_serial: Option<u32>,
     pointer_serial: Option<u32>,
+    layer_configures: usize,
 }
 
 impl Events {
@@ -161,6 +167,7 @@ pub struct Peer {
     device: Device,
     surface: wl_surface::WlSurface,
     sources: Vec<Source>,
+    layers: Vec<(wl_surface::WlSurface, layer_surface::ZwlrLayerSurfaceV1)>,
 }
 
 impl Peer {
@@ -236,6 +243,7 @@ impl Peer {
             device,
             surface,
             sources: Vec::new(),
+            layers: Vec::new(),
         };
         peer.roundtrip();
         peer
@@ -258,6 +266,37 @@ impl Peer {
     #[allow(dead_code)]
     pub fn has_global(&self, name: &str) -> bool {
         self.events.globals.contains_key(name)
+    }
+
+    #[allow(dead_code)]
+    pub fn create_layer_surface(&mut self) {
+        let qh = self.queue.handle();
+        let registry = self.connection.display().get_registry(&qh, ());
+        let (id, version) = self.events.globals["wl_compositor"];
+        let compositor =
+            registry.bind::<wl_compositor::WlCompositor, _, _>(id, version.min(6), &qh, ());
+        let surface = compositor.create_surface(&qh, ());
+        let (id, version) = self.events.globals["zwlr_layer_shell_v1"];
+        let manager =
+            registry.bind::<layer_shell::ZwlrLayerShellV1, _, _>(id, version.min(4), &qh, ());
+        let layer = manager.get_layer_surface(
+            &surface,
+            None,
+            layer_shell::Layer::Overlay,
+            "private-authenticated-panel".to_string(),
+            &qh,
+            (),
+        );
+        layer.set_size(320, 48);
+        layer.set_keyboard_interactivity(layer_surface::KeyboardInteractivity::Exclusive);
+        self.events.keyboard_serial = None;
+        let configured = self.events.layer_configures;
+        surface.commit();
+        self.roundtrip();
+        assert!(self.events.layer_configures > configured);
+        assert!(self.events.keyboard_serial.is_some());
+        self.roundtrip();
+        self.layers.push((surface, layer));
     }
 
     #[allow(dead_code)]
@@ -488,6 +527,22 @@ impl Dispatch<wl_callback::WlCallback, ()> for Events {
     }
 }
 
+impl Dispatch<layer_surface::ZwlrLayerSurfaceV1, ()> for Events {
+    fn event(
+        state: &mut Self,
+        surface: &layer_surface::ZwlrLayerSurfaceV1,
+        event: layer_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let layer_surface::Event::Configure { serial, .. } = event {
+            surface.ack_configure(serial);
+            state.layer_configures += 1;
+        }
+    }
+}
+
 impl Dispatch<wl_data_device::WlDataDevice, ()> for Events {
     fn event(
         state: &mut Self,
@@ -630,6 +685,7 @@ source_events!(ext_source, ExtDataControlSourceV1);
 delegate_noop!(Events: ignore wl_compositor::WlCompositor);
 delegate_noop!(Events: ignore wl_surface::WlSurface);
 delegate_noop!(Events: ignore wl_seat::WlSeat);
+delegate_noop!(Events: ignore layer_shell::ZwlrLayerShellV1);
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for Events {
     fn event(
         state: &mut Self,

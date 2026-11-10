@@ -109,6 +109,7 @@ fn reject_unknown_fields(
 }
 
 fn parse(manifest: Value) -> Result<Manifest, AppError> {
+    crate::manifest::validate_owner_path_bindings(&manifest).map_err(AppError::Manifest)?;
     let object = manifest
         .as_object()
         .ok_or_else(|| AppError::Manifest("App manifest must be a JSON object".into()))?;

@@ -337,7 +337,7 @@ fn operation_caps(
 }
 
 fn gui_caps(app: &App, exec: &str, delegation: &Delegation) -> Result<CapSet, BrokerError> {
-    let plan = gui_plan(app, exec, delegation, &publisher_ceiling())?;
+    let plan = gui_plan(app, None, exec, delegation, &publisher_ceiling())?;
     authorize_plan(delegation, plan, &publisher_ceiling(), &app.manifest.id)
 }
 
@@ -1523,6 +1523,129 @@ fn gui_caps_skip_argument_bound_needs() {
         "a GUI launch has no arguments, so argument-bound needs stay unbound"
     );
     assert!(!caps.covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("vim"))));
+}
+
+#[test]
+fn explicit_gui_needs_never_borrow_operation_mcp_or_another_gui_authority() {
+    let app = app_from(r#"{
+        "id":"independent-widget","version":"1","schema_version":2,
+        "name":{"en":"Independent widget"},"runtime":"binary","entry":"bin/command",
+        "operations":{"inspect":{"label":{"en":"Inspect"},"needs":[{
+            "verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"hardware"}},"why":{"en":"Command only"}
+        }]}},
+        "mcp":{"entry":"bin/service","tools":[{"name":"independent-widget.get","summary":{"en":"Get"},"needs":[{
+            "verb":"sys.identity","scope":{"kind":"fixed","scope":{"kind":"name","value":"accounts"}},"why":{"en":"MCP only"}
+        }]}]},
+        "desktop":{"entry":"bin/window","exec":"open","needs":[],"entries":{
+            "applet":{"entry":"bin/widget","exec":"panel","name":{"en":"Widget"},"needs":[{
+                "verb":"fs.meta","scope":{"kind":"wild"},"why":{"en":"Inspect delegated widget files"}
+            },{
+                "verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":{"en":"Unbound file selection"}
+            },{
+                "verb":"fs.write","scope":{"kind":"fixed","scope":{"kind":"path","value":"/work/output"}},
+                "when":{"kind":"arg-present","arg":"path"},"why":{"en":"Unbound condition"}
+            }]}
+        }}
+    }"#);
+    let granted = Cap::new(Verb::FS_META, Scope::path("/work/widget/**"));
+    let launcher = delegation(CapSet::from_caps([
+        granted.clone(), Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware")),
+        Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts")),
+        Cap::new(Verb::FS_READ, Scope::path("/work/**")),
+        Cap::new(Verb::FS_WRITE, Scope::path("/work/output")),
+    ]));
+    let default = gui_plan(&app, None, "open", &launcher, &publisher_ceiling()).unwrap();
+    assert!(default.caps.is_empty());
+    let extra = gui_plan(&app, Some("applet"), "panel", &launcher, &publisher_ceiling()).unwrap();
+    assert_eq!(extra.caps.iter().cloned().collect::<Vec<_>>(), [granted]);
+    assert!(extra.missing.is_empty());
+    assert!(gui_plan(&app, Some("applet"), "open", &launcher, &publisher_ceiling()).is_err());
+    assert!(gui_plan(&app, Some("missing"), "panel", &launcher, &publisher_ceiling()).is_err());
+    let unbounded = delegation(CapSet::from_caps([Cap::new(Verb::FS_META, Scope::Wild)]));
+    assert!(gui_plan(&app, Some("applet"), "panel", &unbounded, &publisher_ceiling()).is_err());
+}
+
+#[test]
+fn additional_gui_fixed_needs_use_exact_owner_approval_not_default_needs() {
+    let _sandbox = approval_sandbox();
+    let app = app_from(r#"{
+        "id":"independent-widget","version":"1","name":{"en":"Widget"},
+        "desktop":{"needs":[],"entries":{"applet":{
+            "entry":"widget.py","exec":"panel","name":{"en":"Widget panel"},"needs":[{
+                "verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"audio"}},"why":{"en":"Widget audio status"}
+            }]
+        }}}
+    }"#);
+    let launcher = delegation(CapSet::new());
+    let plan = || gui_plan(&app, Some("applet"), "panel", &launcher, &publisher_ceiling()).unwrap();
+    let denied = authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap_err();
+    assert_eq!(approval_requests(&denied).len(), 1);
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Once);
+    let caps = authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap();
+    assert_eq!(caps.iter().cloned().collect::<Vec<_>>(), [Cap::new(Verb::SYS_OBSERVE, Scope::name("audio"))]);
+    assert!(authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).is_err());
+    assert!(gui_plan(&app, None, "--gui", &launcher, &publisher_ceiling()).unwrap().caps.is_empty());
+}
+
+#[test]
+fn gui_owner_path_delete_requests_bounded_exact_owner_approval_without_wild_inheritance() {
+    let _sandbox = approval_sandbox();
+    let app = app_from(r#"{
+        "id":"owner-path-widget","version":"1","name":{"en":"Owner path widget"},
+        "desktop":{"needs":[
+            {"verb":"fs.read","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Read owner files"}},
+            {"verb":"fs.delete","scope":{"kind":"owner-path","path":"Documents/**"},"why":{"en":"Delete owner documents"}}
+        ]}
+    }"#);
+    let launcher = delegation(unregistered_ceiling());
+    let required = Cap::new(Verb::FS_DELETE, Scope::path("/home/u/Documents/**"));
+    assert!(!launcher.ceiling.covers(&required));
+    let plan = || gui_plan(&app, None, "--gui", &launcher, &publisher_ceiling()).unwrap();
+    assert_eq!(plan().missing, [required.clone()]);
+    assert!(plan().caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/home/u/**"))));
+    assert!(!plan().caps.iter().any(|cap| cap.scope.is_wildcard()));
+    let denied = authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap_err();
+    assert_eq!(approval_requests(&denied).len(), 1);
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Once);
+    let mut foreign = delegation(unregistered_ceiling());
+    foreign.uid += 1;
+    let foreign_plan = gui_plan(&app, None, "--gui", &foreign, &publisher_ceiling()).unwrap();
+    assert!(authorize_plan(&foreign, foreign_plan, &publisher_ceiling(), &app.manifest.id).is_err());
+    let granted = authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap();
+    assert!(granted.covers(&required));
+    assert!(authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).is_err());
+}
+
+#[test]
+fn gui_panel_authority_requires_its_own_exact_approval_and_never_escapes_developer_ceiling() {
+    let _sandbox = approval_sandbox();
+    let app = app_from(r#"{
+        "id":"independent-panel","version":"1","name":{"en":"Independent panel"},
+        "desktop":{"panel_applet":true,"needs":[
+            {"verb":"ui.panel","scope":{"kind":"fixed","scope":{"kind":"wild"}},"why":{"en":"Host this panel"}}
+        ]}
+    }"#);
+    let launcher = delegation(unregistered_ceiling());
+    let required = Cap::new(Verb::UI_PANEL, Scope::Wild);
+    assert!(!launcher.ceiling.covers(&required));
+    let plan = || gui_plan(&app, None, "--gui", &launcher, &publisher_ceiling()).unwrap();
+    let denied = authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap_err();
+    assert_eq!(approval_requests(&denied).len(), 1);
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Once);
+    let granted = authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap();
+    assert_eq!(granted.iter().cloned().collect::<Vec<_>>(), [required.clone()]);
+    assert!(authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).is_err());
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Once);
+    for caps in [CapSet::new(), CapSet::from_caps([required.clone()])] {
+        let developer_launcher = delegation(caps);
+        let developer = gui_plan(&app, None, "--gui", &developer_launcher, &developer_ceiling()).unwrap();
+        assert!(!authorize_plan(&developer_launcher, developer, &developer_ceiling(), &app.manifest.id).unwrap().covers(&required));
+    }
+    assert!(authorize_plan(&launcher, plan(), &publisher_ceiling(), &app.manifest.id).unwrap().covers(&required));
+    let mut window = app;
+    window.manifest.desktop.as_mut().unwrap().needs.as_mut().unwrap()[0].verb = Verb::UI_WINDOW;
+    let window = gui_plan(&window, None, "--gui", &launcher, &publisher_ceiling()).unwrap();
+    assert!(!window.caps.covers(&required));
 }
 
 #[test]
@@ -3155,12 +3278,12 @@ fn a_signed_package_keeps_everything_the_same_plan_asked_for() {
 fn a_developer_gui_launch_is_clamped_on_the_same_path() {
     let app = dev_app();
     let delegation = omnipotent_delegation();
-    let signed = gui_plan(&app, "--gui", &delegation, &publisher_ceiling()).expect("gui plan");
+    let signed = gui_plan(&app, None, "--gui", &delegation, &publisher_ceiling()).expect("gui plan");
     assert!(signed
         .caps
         .covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
 
-    let plan = gui_plan(&app, "--gui", &delegation, &developer_ceiling()).expect("gui plan");
+    let plan = gui_plan(&app, None, "--gui", &delegation, &developer_ceiling()).expect("gui plan");
     let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
         .expect("gui authorization");
     assert_within_developer_ceiling(&granted);

@@ -4,7 +4,7 @@ use crate::caps::manifest::Runtime;
 #[cfg(unix)]
 struct EntryFixture {
     root: PathBuf,
-    package: crate::provenance::VerifiedPackage,
+    package: std::sync::Arc<crate::provenance::VerifiedPackage>,
 }
 
 #[cfg(unix)]
@@ -55,7 +55,44 @@ impl EntryFixture {
             &crate::provenance::trust_store(),
         )
         .unwrap();
-        Self { root, package }
+        Self { root, package: std::sync::Arc::new(package) }
+    }
+
+    fn with_gui_entries(auxiliary_mode: Option<u32>, declare_auxiliary: bool) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let root = crate::test_env::secure_scratch_dir("named-gui-entry");
+        let id = "independent-workbench";
+        let dir = root.join(id);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("app.json"), serde_json::json!({
+            "id":id, "version":"1.0.0", "schema_version":2, "name":{"en":"Independent workbench"},
+            "runtime":"binary", "entry":"command",
+            "desktop":{"entry":"window","exec":"open","needs":[],"entries":{
+                "applet":{"entry":"widget","exec":"panel","name":{"en":"Workbench widget"},"needs":[]}
+            }},
+            "mcp":{"entry":"service","tools":[{"name":"independent-workbench.get","summary":{"en":"Get"}}]}
+        }).to_string()).unwrap();
+        for entry in ["command", "window", "service"] {
+            std::fs::write(dir.join(entry), b"#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(dir.join(entry), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        if let Some(mode) = auxiliary_mode {
+            std::fs::write(dir.join("widget"), b"#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(dir.join("widget"), std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let mut entries = vec!["command", "window", "service"];
+        if declare_auxiliary {
+            entries.push("widget");
+        }
+        crate::test_env::sign_test_package_with_entrypoints(
+            &dir, crate::provenance::PackageKind::App, id, &entries,
+        );
+        let package = crate::provenance::verify::verify_package(
+            &dir,
+            &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App).expect_id(id),
+            &crate::provenance::trust_store(),
+        ).unwrap();
+        Self { root, package: std::sync::Arc::new(package) }
     }
 }
 
@@ -162,6 +199,37 @@ fn a_signed_resource_is_not_automatically_an_entry() {
     )
     .unwrap_err()
     .contains("not a declared, signed entrypoint"));
+}
+
+#[cfg(unix)]
+#[test]
+fn named_gui_targets_require_their_own_signed_executable_binding() {
+    let _lock = crate::test_env::lock_env();
+    for (mode, declared, accepted) in [
+        (Some(0o755), true, true),
+        (Some(0o755), false, false),
+        (None, false, false),
+        (Some(0o644), true, false),
+    ] {
+        let fixture = EntryFixture::with_gui_entries(mode, declared);
+        let launch = crate::bridge::AppLaunch::new(fixture.package.clone()).unwrap();
+        assert_eq!(launch.gui_entrypoint(None).unwrap(), launch.dir().join("window"));
+        assert_eq!(launch.manifest().entry.as_deref(), Some("command"));
+        assert_eq!(launch.manifest().mcp.as_ref().unwrap().entry.as_deref(), Some("service"));
+        let selected = launch.gui_entrypoint(Some("applet"));
+        assert_eq!(selected.is_ok(), accepted, "{selected:?}");
+        for name in ["missing", "service", "../widget", "window", "/usr/bin/true"] {
+            assert!(launch.gui_entrypoint(Some(name)).is_err(), "{name}");
+        }
+        if accepted {
+            let selected = selected.unwrap();
+            assert_eq!(selected, launch.dir().join("widget"));
+            let binding = launch.bind(&["widget".to_string()]).unwrap();
+            assert!(binding.entries().iter().any(|(path, _)| path == &selected));
+            std::fs::write(selected, b"#!/bin/sh\nexit 1\n").unwrap();
+            assert!(launch.gui_entrypoint(Some("applet")).is_err());
+        }
+    }
 }
 
 #[cfg(unix)]

@@ -155,8 +155,25 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
             "fs manifest omitted `{command}`"
         );
     }
-    assert_eq!(mcp_tool_for_command(&fs, "rename").unwrap().needs.len(), 2);
-    assert_eq!(mcp_tool_for_command(&fs, "copy").unwrap().needs.len(), 2);
+    for (command, source_verb) in [
+        ("rename", crate::caps::Verb::FS_DELETE),
+        ("move", crate::caps::Verb::FS_DELETE),
+        ("copy", crate::caps::Verb::FS_READ),
+    ] {
+        assert_eq!(
+            mcp_tool_for_command(&fs, command)
+                .unwrap()
+                .needs
+                .iter()
+                .map(|need| need.verb)
+                .collect::<Vec<_>>(),
+            [
+                crate::caps::Verb::IPC_PUBLISH,
+                source_verb,
+                crate::caps::Verb::FS_WRITE,
+            ],
+        );
+    }
     assert_eq!(
         mcp_tool_for_command(&fs, "read_bytes").unwrap().args[1].effective_binding(),
         crate::caps::manifest::ArgBinding::Flag
@@ -164,7 +181,9 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
 }
 
 #[test]
-fn slack_schema_preserves_outbound_only_operations() {
+fn slack_schema_preserves_outbound_send_and_brokered_channel_controls() {
+    use crate::caps::{Cap, Scope, Verb};
+
     let slack = Manifest::from_json(
         &std::fs::read_to_string(app_sources::app_dir("gateway/slack").join("app.json")).unwrap(),
     )
@@ -175,8 +194,29 @@ fn slack_schema_preserves_outbound_only_operations() {
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
-        ["send", "status"]
+        ["reply", "send", "start", "status", "stop"]
     );
+    let reply = operation_schema(&slack.operations["reply"]);
+    assert_eq!(reply["parameters"][2]["required"], true);
+    assert_eq!(reply["parameters"][2]["enum"], serde_json::json!([true]));
+    for command in ["status", "start", "stop", "reply"] {
+        let args = if command == "reply" {
+            BTreeMap::from([
+                ("event_id".into(), serde_json::json!("reported-event")),
+                ("text".into(), serde_json::json!(["Reviewed reply"])),
+                ("confirm".into(), serde_json::json!(true)),
+            ])
+        } else {
+            BTreeMap::new()
+        };
+        assert_eq!(
+            slack.resolve_needs(command, &args).unwrap(),
+            vec![vec![Cap::new(
+                Verb::IPC_PUBLISH,
+                Scope::name("channel:gateway-slack"),
+            )]],
+        );
+    }
 }
 
 #[test]
@@ -416,14 +456,20 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
 }
 
 #[test]
-fn googlechat_schema_preserves_recipient_flag_binding() {
-    let googlechat = Manifest::from_json(
-        &std::fs::read_to_string(app_sources::app_dir("gateway/googlechat").join("app.json"))
-            .unwrap(),
+fn operation_schema_preserves_recipient_flag_binding() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"flag-binding-fixture","version":"1","name":{"en":"Flag binding fixture"},
+            "operations":{"send":{"label":{"en":"Send"},"args":[
+                {"name":"text","kind":"text","required":true},
+                {"name":"recipient","kind":"name","binding":"flag"}
+            ]}}
+        }"#,
     )
     .unwrap();
-    let schema = operation_schema(&googlechat.operations["send"]);
+    let schema = operation_schema(&manifest.operations["send"]);
     assert_eq!(schema["parameters"][1]["binding"], "flag");
+    assert_eq!(schema["parameters"][1]["required"], false);
 }
 
 #[test]

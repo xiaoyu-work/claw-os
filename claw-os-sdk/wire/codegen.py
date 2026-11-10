@@ -637,6 +637,8 @@ def _emit_rust_validation(
 # --- python ------------------------------------------------------------
 
 def py_type(schema: dict, defs: dict, ctx: str) -> str:
+    if "x-python-type" in schema:
+        return schema["x-python-type"]
     if "$ref" in schema:
         ref = schema["$ref"].split("/")[-1]
         return f'"{_camel(ref)}"'

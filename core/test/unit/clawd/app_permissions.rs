@@ -56,6 +56,52 @@ fn manage_cap() -> Cap {
 }
 
 #[tokio::test]
+async fn gui_only_permissions_share_the_existing_owner_deny_and_restore_gate() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", dir.path().join("data"));
+    let _caps = TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path().join("caps"));
+    let _proc = TestEnvVarGuard::set("COS_PROC_DATA_DIR", dir.path().join("proc"));
+    let apps = dir.path().join("apps");
+    let _apps = TestEnvVarGuard::set("COS_APPS_DIR", &apps);
+    let source = apps.join("independent-widget");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("app.json"), r#"{
+        "id":"independent-widget","version":"1","name":{"en":"Widget"},
+        "desktop":{"needs":[],"entries":{"applet":{
+            "entry":"main.py","exec":"panel","name":{"en":"Widget panel"},"needs":[{
+                "verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"audio"}},"why":{"en":"Widget audio status"}
+            }]
+        }}}
+    }"#).unwrap();
+    std::fs::write(source.join("main.py"), "# never executed\n").unwrap();
+    crate::test_env::sign_test_package(&source, crate::provenance::PackageKind::App, "independent-widget");
+    let uid = unsafe { libc::geteuid() };
+    let owner = client(uid);
+    let manager = manager_decision(
+        "independent-permission-manager", vec![manage_cap()], Uses::Unbounded, Duration::from_secs(60),
+    );
+    let query = json!({"action":"show","app_id":"independent-widget"});
+    let shown = control(query.clone(), &owner, Some(&manager)).await.unwrap();
+    assert_eq!(shown["permissions"].as_array().unwrap().len(), 1);
+    assert_eq!(shown["permissions"][0]["declared"]["why"]["en"], "Widget audio status");
+    assert_eq!(shown["permissions"][0]["live_granted"], false);
+    let key = shown["permissions"][0]["permission_id"].as_str().unwrap();
+    let denied = control(json!({
+        "action":"revoke","app_id":"independent-widget","permission_id":key,
+    }), &owner, Some(&manager)).await.unwrap();
+    assert_eq!(denied["revoked"], true);
+    let cap = Cap::new(Verb::SYS_OBSERVE, Scope::name("audio"));
+    assert!(app_policy::require(uid, "independent-widget", &crate::caps::CapSet::from_caps([cap])).is_err());
+    let pending = control(json!({
+        "action":"request","app_id":"independent-widget","permission_id":key,"reason":"Restore widget status",
+    }), &owner, Some(&manager)).await.unwrap();
+    let request = approvals::lookup_pending(pending["id"].as_str().unwrap()).unwrap();
+    validate_approval(&request).unwrap();
+    assert_eq!(control(query, &owner, Some(&manager)).await.unwrap()["permissions"][0]["enabled"], false);
+}
+
+#[tokio::test]
 async fn any_explicitly_authorized_app_can_use_the_owner_permission_service() {
     let _lock = crate::test_env::lock_env();
     let directory = tempfile::tempdir().unwrap();

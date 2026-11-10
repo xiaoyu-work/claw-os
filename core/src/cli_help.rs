@@ -81,7 +81,7 @@ pub(crate) fn show_apps(
         "apps": app_list,
         "total": app_list.len(),
         "quarantined": quarantined,
-        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Human/host opaque transport: cos app stdio <name> <operation> [args...] (requires declared stdin; see cos app stdio --schema). Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: cos app install <source-dir> --review. Install with permission disclosure: cos app install <source-dir>. Installation does not grant the requested permissions.",
+        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Declared GUI surfaces: cos app <name> --gui or --gui:<entry-name> [literal args...]. Human/host opaque transport: cos app stdio <name> <operation> [args...] (requires declared stdin; see cos app stdio --schema). Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: cos app install <source-dir> --review. Install with permission disclosure: cos app install <source-dir>. Installation does not grant the requested permissions.",
     });
     Ok(Some(output.to_string()))
 }
@@ -96,6 +96,9 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
         "hint": format!("Run: cos app {name} <command> [args]"),
     });
     append_object_schema(&mut output, app);
+    if let Some(desktop) = &app.manifest.desktop {
+        output["desktop"] = json!(desktop);
+    }
     Ok(Some(output.to_string()))
 }
 
@@ -1465,6 +1468,9 @@ pub(crate) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<
         "commands": commands,
     });
     append_object_schema(&mut output, app);
+    if let Some(desktop) = &app.manifest.desktop {
+        output["desktop"] = json!(desktop);
+    }
     Ok(Some(output.to_string()))
 }
 

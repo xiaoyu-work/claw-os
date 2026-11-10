@@ -119,6 +119,17 @@ impl AppLaunch {
         crate::provenance::runtime::PackageRef::of(&self.package)
     }
 
+    /// Admit the selected GUI target through the ordinary signed-file gate.
+    pub fn gui_entrypoint(&self, name: Option<&str>) -> Result<std::path::PathBuf, String> {
+        let entry = self.manifest.gui_entry(name)?;
+        crate::worker::entry::verified_entrypoint(
+            self.app_id(),
+            &self.package,
+            entry.entry,
+            self.manifest.runtime,
+        )
+    }
+
     /// Re-assert the snapshot against the current trust store, then
     /// open and re-hash the files this launch will execute.
     ///
@@ -316,6 +327,7 @@ enum LaunchRequest<'a> {
     },
     Gui {
         exec: &'a str,
+        gui_entry: Option<&'a str>,
     },
     Mcp {
         tool: &'a str,
@@ -334,7 +346,10 @@ impl LaunchRequest<'_> {
     fn command(&self, app_id: &str) -> String {
         match self {
             LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
-            LaunchRequest::Gui { exec } => format!("cos app {app_id} {exec}"),
+            LaunchRequest::Gui { exec, gui_entry } => match gui_entry {
+                Some(name) => format!("cos app {app_id} --gui:{name}"),
+                None => format!("cos app {app_id} {exec}"),
+            },
             LaunchRequest::Mcp { tool } => format!("cos app {app_id} mcp {tool}"),
         }
     }
@@ -581,7 +596,17 @@ impl AppIdentitySession {
         let effective_args = bound.argv.clone();
         let resolved = manifest
             .as_ref()
-            .map(|manifest| manifest.resolve_needs(operation, &bound.values))
+            .map(|manifest| {
+                if declared.is_some_and(|operation| operation.needs.iter().any(|need| matches!(need.scope, ScopeBinding::OwnerPath { .. }))) {
+                    if !use_clawd_app_session_backend()? {
+                        return Err("owner-path App needs require authenticated Root registration".to_string());
+                    }
+                    // Root rederives the actual owner; local preview is not authority.
+                    Ok(Vec::new())
+                } else {
+                    manifest.resolve_needs(operation, &bound.values).map_err(|error| error.to_string())
+                }
+            })
             .transpose()
             .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
         let local_ceiling = ceiling.clone();
@@ -609,30 +634,34 @@ impl AppIdentitySession {
         Ok((session, effective_args))
     }
 
-    /// Register a GUI identity with the constrained union of all operation needs.
+    /// Register the default GUI without changing legacy caller semantics.
     pub fn for_gui(launch: &AppLaunch, app_id: &str, exec: &str) -> Result<Self, String> {
-        let desktop = launch
-            .manifest()
-            .desktop
-            .as_ref()
-            .ok_or_else(|| "App does not declare a desktop surface".to_string())?;
-        if desktop.exec != exec {
+        Self::for_gui_entry(launch, app_id, None, exec)
+    }
+
+    pub fn for_gui_entry(
+        launch: &AppLaunch,
+        app_id: &str,
+        gui_entry: Option<&str>,
+        exec: &str,
+    ) -> Result<Self, String> {
+        let selected = launch.manifest().gui_entry(gui_entry)?;
+        if selected.exec != exec {
             return Err("GUI selector differs from the verified desktop declaration".to_string());
         }
+        launch.gui_entrypoint(gui_entry)?;
         let ceiling = launch.ceiling();
         let local_ceiling = ceiling.clone();
         let manifest = launch.manifest().clone();
+        let local_gui_entry = gui_entry.map(str::to_string);
         Self::start(
             app_id,
-            LaunchRequest::Gui { exec },
+            LaunchRequest::Gui { exec, gui_entry },
             Some(ceiling),
             launch,
             move |parent_caps| {
-                let needs = manifest
-                    .operations
-                    .values()
-                    .flat_map(|operation| operation.needs.iter())
-                    .collect();
+                let selected = manifest.gui_entry(local_gui_entry.as_deref())?;
+                let needs = selected.launch_needs().collect();
                 let caps = constrained_caps(parent_caps, needs);
                 Ok(apply_provenance_ceiling(&local_ceiling, caps))
             },
@@ -676,6 +705,20 @@ impl AppIdentitySession {
             ));
         }
         let clawd_backend = use_clawd_app_session_backend()?;
+        // A named desktop launcher need not manufacture a local parent row.
+        // Root still derives its real ancestry/delegation from the kernel peer.
+        if clawd_backend
+            && matches!(&request, LaunchRequest::Gui { gui_entry: Some(_), .. })
+            && std::env::var_os("COS_SESSION").is_none_or(|value| value.is_empty())
+        {
+            return Self::register_with_clawd(
+                app_id,
+                &request,
+                None,
+                ceiling.as_ref(),
+                &launch.package_ref(),
+            );
+        }
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
             return Err(
@@ -695,7 +738,7 @@ impl AppIdentitySession {
             return Self::register_with_clawd(
                 app_id,
                 &request,
-                parent_caps,
+                Some(parent_caps),
                 ceiling.as_ref(),
                 &launch.package_ref(),
             );
@@ -706,7 +749,7 @@ impl AppIdentitySession {
     fn register_with_clawd(
         app_id: &str,
         request: &LaunchRequest<'_>,
-        parent_caps: CapSet,
+        parent_caps: Option<CapSet>,
         ceiling: Option<&crate::provenance::Ceiling>,
         package: &crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
@@ -714,7 +757,7 @@ impl AppIdentitySession {
         // what the daemon already resolved. The launcher's identity —
         // including the session an approval grant binds to — is derived
         // by `clawd` from this connection, never reported here.
-        let params = app_registration_params(app_id, request, Some(&parent_caps), package)?;
+        let params = app_registration_params(app_id, request, parent_caps.as_ref(), package)?;
 
         // A launch that needs capability consent is answered with the ids of the
         // requests the daemon filed. This process stays alive and waits,
@@ -731,7 +774,10 @@ impl AppIdentitySession {
                 clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
             }
         };
-        Self::from_clawd_registration(app_id, result, Some(parent_caps), ceiling, package)
+        Self::from_clawd_registration(
+            app_id, result, parent_caps, ceiling, package,
+            matches!(request, LaunchRequest::Operation { .. }),
+        )
     }
 
     fn from_clawd_registration(
@@ -740,7 +786,9 @@ impl AppIdentitySession {
         parent_caps: Option<CapSet>,
         ceiling: Option<&crate::provenance::Ceiling>,
         package: &crate::provenance::runtime::PackageRef,
+        ordinary: bool,
     ) -> Result<Self, String> {
+        let root_custody = local::root_custody_response(&result, ordinary)?;
         let session_id = result
             .get("session_id")
             .and_then(serde_json::Value::as_str)
@@ -803,7 +851,7 @@ impl AppIdentitySession {
             task_app_data_dir,
             gui_data_dir,
             gui_retired: false,
-            root_custody: result.get("root_custody").and_then(serde_json::Value::as_bool) == Some(true),
+            root_custody,
             #[cfg(target_os = "linux")]
             custody: std::sync::Mutex::new(None),
             relay: crate::worker::relay_slot(),
@@ -1423,8 +1471,11 @@ fn app_registration_params(
             params["args"] = serde_json::to_value(args)
                 .map_err(|error| format!("failed to serialize App arguments: {error}"))?;
         }
-        LaunchRequest::Gui { exec } => {
+        LaunchRequest::Gui { exec, gui_entry } => {
             params["operation"] = serde_json::Value::String((*exec).to_string());
+            if let Some(name) = gui_entry {
+                params["gui_entry"] = serde_json::Value::String((*name).to_string());
+            }
         }
         LaunchRequest::Mcp { tool } => {
             params["tool"] = serde_json::Value::String((*tool).to_string());
@@ -1600,7 +1651,8 @@ fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
             }
             ScopeBinding::FromArg { .. }
             | ScopeBinding::FromArgMap { .. }
-            | ScopeBinding::FromArgOrWild { .. } => {}
+            | ScopeBinding::FromArgOrWild { .. }
+            | ScopeBinding::OwnerPath { .. } => {}
         }
     }
     caps
@@ -2555,14 +2607,26 @@ pub fn launch_gui(
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<(), String> {
+    launch_gui_entry(launch, None, exec, files, data_dir, apps_dir)
+}
+
+/// Launch a declared GUI surface; the name is not an executable selector.
+pub fn launch_gui_entry(
+    launch: &AppLaunch,
+    gui_entry: Option<&str>,
+    exec: &str,
+    files: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         let _ = apps_dir;
-        gui::launch(launch, exec, files, data_dir)
+        gui::launch(launch, gui_entry, exec, files, data_dir)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (launch, exec, files, data_dir, apps_dir);
+        let _ = (launch, gui_entry, exec, files, data_dir, apps_dir);
         Err("GUI launch requires Linux Root display custody".to_string())
     }
 }

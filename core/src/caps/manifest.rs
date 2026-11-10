@@ -87,6 +87,10 @@ mod objects;
 pub use objects::{ObjectResolver, ObjectType};
 mod effects;
 pub use effects::{EffectKind, EffectRecovery, OperationEffect};
+mod desktop;
+pub use desktop::{is_valid_gui_entry_name, DesktopEntry, GuiEntry};
+mod owner_path;
+pub use owner_path::resolve_owner_path;
 
 // ---------------------------------------------------------------------------
 // Top-level manifest
@@ -710,6 +714,28 @@ pub struct Desktop {
     #[serde(default = "default_desktop_exec")]
     pub exec: String,
 
+    /// Optional package-relative entry for the default GUI only. The
+    /// top-level operation entry and MCP entry remain unchanged.
+    #[serde(
+        default,
+        deserialize_with = "desktop::deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub entry: Option<String>,
+
+    /// Explicit default-GUI needs. An empty list means no GUI needs;
+    /// omission retains the legacy constrained operation-needs union.
+    #[serde(
+        default,
+        deserialize_with = "desktop::deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub needs: Option<Vec<Need>>,
+
+    /// Additional named GUI surfaces sharing this App's identity.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub entries: BTreeMap<String, DesktopEntry>,
+
     /// Display name for the launcher entry. Falls back to the
     /// manifest's top-level `name` when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -736,10 +762,8 @@ pub struct Desktop {
     #[serde(default)]
     pub single_instance: bool,
 
-    /// Whether this GUI is intentionally hosted by `cosmic-panel` and may
-    /// inherit the panel's restricted Wayland socket and layout environment.
-    /// Leave false for ordinary GUI apps so panel credentials cannot leak
-    /// through launches triggered by panel buttons.
+    /// Admit panel layout presentation environment for this GUI. This
+    /// confers no display, LayerShell or capability authority.
     #[serde(default)]
     pub panel_applet: bool,
 }
@@ -794,6 +818,9 @@ pub enum NeedCondition {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ScopeBinding {
+    OwnerPath {
+        path: String,
+    },
     FromArg {
         arg: String,
         #[serde(default, skip_serializing_if = "ScopeTransform::is_identity")]
@@ -848,6 +875,9 @@ enum NeedConditionWire {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ScopeBindingWire {
+    OwnerPath {
+        path: String,
+    },
     FromArg {
         arg: String,
         #[serde(default)]
@@ -933,11 +963,13 @@ impl<'de> Deserialize<'de> for ScopeBinding {
                 ("from-arg-or-wild", &["arg", "wild_when"]),
                 ("fixed", &["scope"]),
                 ("wild", &[]),
+                ("owner-path", &["path"]),
             ],
         )?;
         let wire: ScopeBindingWire =
             serde_json::from_value(value).map_err(serde::de::Error::custom)?;
         Ok(match wire {
+            ScopeBindingWire::OwnerPath { path } => Self::OwnerPath { path },
             ScopeBindingWire::FromArg { arg, transform } => Self::FromArg { arg, transform },
             ScopeBindingWire::FromArgMap { arg, values } => Self::FromArgMap { arg, values },
             ScopeBindingWire::FromArgOrWild { arg, wild_when } => {
@@ -1432,6 +1464,11 @@ impl Manifest {
                             });
                         }
                     }
+                    ScopeBinding::OwnerPath { path } => {
+                        owner_path::validate(need.verb, path).map_err(|detail| ManifestError::NeedInvalid {
+                            op: op_name.clone(), idx, detail,
+                        })?;
+                    }
                     ScopeBinding::Fixed { scope: _ } => {}
                     ScopeBinding::Wild => {}
                 }
@@ -1604,6 +1641,11 @@ impl Manifest {
                                 });
                             }
                         }
+                        ScopeBinding::OwnerPath { path } => {
+                            owner_path::validate(need.verb, path).map_err(|detail| ManifestError::McpNeedInvalid {
+                                tool: tool.name.clone(), idx, detail,
+                            })?;
+                        }
                         ScopeBinding::Fixed { scope: _ } => {}
                         ScopeBinding::Wild => {}
                     }
@@ -1667,6 +1709,7 @@ impl Manifest {
                 }
             }
         }
+        desktop::validate(self)?;
         objects::validate(self)?;
         effects::validate(self)?;
         Ok(())
@@ -1701,7 +1744,7 @@ impl Manifest {
                 detail,
             },
         )?;
-        let needs = self.resolve_needs(op_name, &values)?;
+        let needs = self.resolve_needs_with_paths(op_name, &values, Some(paths))?;
         Ok(EffectiveCall {
             values,
             needs,
@@ -1717,6 +1760,15 @@ impl Manifest {
         &self,
         op_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
+        self.resolve_needs_with_paths(op_name, args, None)
+    }
+
+    pub fn resolve_needs_with_paths(
+        &self,
+        op_name: &str,
+        args: &BTreeMap<String, serde_json::Value>,
+        paths: Option<&super::args::PathContext>,
     ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
         let op = self
             .operations
@@ -1814,6 +1866,13 @@ impl Manifest {
                         )?
                     }
                 }
+                ScopeBinding::OwnerPath { path } => vec![paths
+                    .ok_or_else(|| ManifestError::NeedInvalid {
+                        op: op_name.to_string(), idx,
+                        detail: "owner-path requires an authenticated owner context".into(),
+                    })
+                    .and_then(|paths| resolve_owner_path(need.verb, path, paths)
+                        .map_err(|detail| ManifestError::NeedInvalid { op: op_name.to_string(), idx, detail }))?],
                 ScopeBinding::Fixed { scope } => vec![scope.clone()],
                 ScopeBinding::Wild => vec![Scope::Wild],
             };
@@ -1836,6 +1895,15 @@ impl Manifest {
         &self,
         tool_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
+        self.resolve_mcp_tool_needs_with_paths(tool_name, args, None)
+    }
+
+    pub fn resolve_mcp_tool_needs_with_paths(
+        &self,
+        tool_name: &str,
+        args: &BTreeMap<String, serde_json::Value>,
+        paths: Option<&super::args::PathContext>,
     ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
         let args = self.resolve_mcp_tool_args(tool_name, args)?;
         let service = self
@@ -1931,6 +1999,13 @@ impl Manifest {
                         )?
                     }
                 }
+                ScopeBinding::OwnerPath { path } => vec![paths
+                    .ok_or_else(|| ManifestError::McpNeedInvalid {
+                        tool: tool_name.to_string(), idx,
+                        detail: "owner-path requires an authenticated owner context".into(),
+                    })
+                    .and_then(|paths| resolve_owner_path(need.verb, path, paths)
+                        .map_err(|detail| ManifestError::McpNeedInvalid { tool: tool_name.to_string(), idx, detail }))?],
                 ScopeBinding::Fixed { scope } => vec![scope.clone()],
                 ScopeBinding::Wild => vec![Scope::Wild],
             };
@@ -1972,7 +2047,7 @@ impl Manifest {
                 detail,
             }
         })?;
-        let needs = self.resolve_mcp_tool_needs(tool_name, &values)?;
+        let needs = self.resolve_mcp_tool_needs_with_paths(tool_name, &values, Some(paths))?;
         Ok(EffectiveCall {
             values,
             needs,
@@ -2095,7 +2170,7 @@ fn validate_optional_need_binding(need: &Need, args: &BTreeMap<&str, &Arg>) -> R
         ScopeBinding::FromArg { arg, .. }
         | ScopeBinding::FromArgMap { arg, .. }
         | ScopeBinding::FromArgOrWild { arg, .. } => arg,
-        ScopeBinding::Fixed { .. } | ScopeBinding::Wild => return Ok(()),
+        ScopeBinding::Fixed { .. } | ScopeBinding::Wild | ScopeBinding::OwnerPath { .. } => return Ok(()),
     };
     let Some(declaration) = args.get(bound_arg.as_str()) else {
         return Ok(());
