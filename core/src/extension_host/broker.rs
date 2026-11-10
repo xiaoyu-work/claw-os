@@ -158,7 +158,8 @@ impl ExtensionLease {
         self
     }
 
-    pub(crate) fn with_task_session(mut self, session: Option<crate::proc::SessionInfo>) -> Self {
+    /// Attach the trusted controller's task snapshot, never a peer-provided session.
+    pub fn with_task_session(mut self, session: Option<crate::proc::SessionInfo>) -> Self {
         self.task_session = session.map(Arc::new);
         self
     }
