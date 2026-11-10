@@ -1765,6 +1765,16 @@ routes! {
         audit: &[("request_id", FieldRule::Token)],
         run: |c| super::app_store::cancel(c.params, c.client).await,
     }
+    AppStoreAptHook {
+        name: "app_store.apt_hook",
+        access: Access::Root,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 1, deadline: Deadline::Uninterruptible },
+        authority: peer(Audience::AppLaunch),
+        body: body::AppStoreAptHook,
+        audit: &[("request_id", FieldRule::Token)],
+        run: |c| super::app_store::apt_hook(c.params, c.client).await,
+    }
     AppStoreOpen {
         name: "app_store.open",
         access: Access::User,

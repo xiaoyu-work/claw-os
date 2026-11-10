@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, ExternalLink, Loader2, Package, RefreshCw, Search, ShieldCheck } from "lucide-react";
 
 import { api } from "@/lib/api";
-import { readAppReview, readInstalled, readStore, readInstallHistory, type AppReview, type InstalledApp, type StoreApp, type StoreView } from "@/lib/apps";
+import { readAppReview, readInstalled, readStore, readInstallHistory, type AppReview, type InstalledApp, type InstallHistory, type StoreApp, type StoreView } from "@/lib/apps";
 import { navigate } from "@/lib/router";
 import { AppReviewDialog } from "@/components/app-review";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,8 @@ function size(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
+type Installation = { request_id: string; app_id: string; reviews: AppReview[]; index: number };
+
 export function AppStorePage() {
   const [store, setStore] = useState<StoreView | null>(null);
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
@@ -21,9 +23,9 @@ export function AppStorePage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [busy, setBusy] = useState<string | null>(null);
-  const [pending, setPending] = useState<{ request_id: string; review: AppReview } | null>(null);
+  const [pending, setPending] = useState<Installation | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [requests, setRequests] = useState<{request_id:string;review_id:string;app_id:string;name:string;phase:string}[]>([]);
+  const [requests, setRequests] = useState<InstallHistory[]>([]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -71,13 +73,22 @@ export function AppStorePage() {
 
   async function install(app: StoreApp) {
     setBusy(app.app_id);
-    setNotice("Downloading and verifying the official release...");
+    setNotice("Preparing authenticated APT packages and their dependencies...");
     try {
       const result = await api.post(`/api/apps/${encodeURIComponent(app.app_id)}/install`,
         { sha256: app.artifact.sha256 }, { signal: AbortSignal.timeout(240_000) });
       if (result?.status !== "review_required" || typeof result.request_id !== "string" ||
           !/^[a-f0-9]{32}$/.test(result.request_id)) throw new Error("The OS did not prepare a reviewed installation.");
-      setPending({ request_id: result.request_id, review: readAppReview(result.review) });
+      if (!Array.isArray(result.reviews) || result.reviews.length === 0 || result.reviews.length > 32) {
+        throw new Error("The OS omitted the APT transaction's App reviews.");
+      }
+      const reviews = result.reviews.map(readAppReview);
+      if (new Set(reviews.map((review) => review.id)).size !== reviews.length ||
+          !reviews.some((review) => review.subject.app_id === app.app_id)) {
+        throw new Error("The OS returned inconsistent package reviews.");
+      }
+      reviews.sort((left, right) => Number(right.subject.app_id === app.app_id) - Number(left.subject.app_id === app.app_id));
+      setPending({ request_id: result.request_id, app_id: app.app_id, reviews, index: 0 });
       setNotice(null);
     } catch (failure) {
       setNotice(failure instanceof Error ? failure.message : "The download outcome is not confirmed.");
@@ -86,16 +97,14 @@ export function AppStorePage() {
     }
   }
 
-  async function commit() {
-    if (!pending) return;
-    const current = pending;
+  async function commit(current: Installation) {
     setPending(null);
-    setBusy(current.review.subject.app_id);
-    setNotice("Installing the reviewed package...");
+    setBusy(current.app_id);
+    setNotice("Installing the reviewed APT transaction...");
     try {
       const result = await api.post(`/api/app-installs/${current.request_id}/commit`, undefined,
-        { signal: AbortSignal.timeout(60_000) });
-      if (result?.status !== "installed" || result.app?.id !== current.review.subject.app_id) {
+        { signal: AbortSignal.timeout(16 * 60_000) });
+      if (result?.status !== "installed" || result.app?.id !== current.app_id) {
         throw new Error("Installation was not confirmed. Refresh installed Apps before retrying.");
       }
       setNotice(`${result.app.name} installed. Its declared tools are discoverable by the Agent's next task.`);
@@ -105,6 +114,15 @@ export function AppStorePage() {
       setNotice(failure instanceof Error ? failure.message : "Installation was not confirmed. Refresh before retrying.");
     } finally {
       setBusy(null);
+    }
+  }
+
+  function confirmed() {
+    if (!pending) return;
+    if (pending.index + 1 < pending.reviews.length) {
+      setPending({ ...pending, index: pending.index + 1 });
+    } else {
+      void commit(pending);
     }
   }
 
@@ -120,10 +138,12 @@ export function AppStorePage() {
     }
   }
 
-  async function resume(request: {request_id:string;review_id:string}) {
+  async function resume(request: InstallHistory) {
     try {
-      const result = await api.get(`/api/app-reviews/${encodeURIComponent(request.review_id)}`);
-      setPending({ request_id: request.request_id, review: readAppReview(result.review) });
+      const results = await Promise.all(request.review_ids.map((id) =>
+        api.get(`/api/app-reviews/${encodeURIComponent(id)}`)));
+      const reviews = results.map((result) => readAppReview(result.review));
+      setPending({ request_id: request.request_id, app_id: request.app_id, reviews, index: 0 });
     } catch (failure) {
       setNotice(failure instanceof Error ? failure.message : "Installation state could not be inspected.");
     }
@@ -152,10 +172,12 @@ export function AppStorePage() {
       </select>
     </div>
     {notice && <p role="status" className="mt-4 rounded-lg border p-3 text-sm">{notice}</p>}
-    {requests.filter((item) => item.phase === "ready" || item.phase === "committing" || item.phase === "failed").map((item) =>
+    {requests.filter((item) => ["ready", "cleanup_pending", "committing", "installing", "indeterminate", "failed"].includes(item.phase)).map((item) =>
       <div key={item.request_id} className="mt-3 flex items-center justify-between rounded-lg border p-3 text-sm">
-        <p>{item.name} · {item.phase === "ready" ? "Waiting for installation review" : "Inspect installation outcome"}</p>
-        {item.phase === "ready" && <Button variant="outline" size="sm" onClick={() => void resume(item)}>Resume review</Button>}
+        <p>{item.name} · {["ready", "cleanup_pending"].includes(item.phase) ? "Waiting for reviewed APT installation"
+          : item.phase === "indeterminate" ? "Package outcome is indeterminate; inspect OS state before recovery"
+            : "Inspect installation outcome"}</p>
+        {["ready", "cleanup_pending"].includes(item.phase) && <Button variant="outline" size="sm" onClick={() => void resume(item)}>Resume review</Button>}
       </div>)}
     {error && <div role="alert" className="mt-4 rounded-lg border border-destructive/30 p-4 text-sm">
       <p className="font-medium">Official release catalog unavailable</p><p className="mt-1 text-muted-foreground">{error}</p>
@@ -172,11 +194,11 @@ export function AppStorePage() {
               <p className="text-xs text-muted-foreground">{app.app_id}</p>
               <p className="mt-1 text-[11px] text-muted-foreground">{app.display.source_kind === "capability" ? "Shared capability client" : app.display.source_name}</p></div></div>
           <p className="my-4 text-sm text-muted-foreground">{app.display.description}</p>
-          <p className="mb-4 text-xs text-muted-foreground">Release {app.release_version} · {app.architecture} · {size(app.artifact.size)}</p>
+          <p className="mb-4 text-xs text-muted-foreground">Release {app.release_version} · {app.architecture} · {size(app.package.size)} APT package</p>
           <div className="mt-auto flex gap-2">
             {local?.web_ready && <Button className="flex-1" variant={current ? "default" : "outline"}
               onClick={() => navigate(`/apps/${app.app_id}`)}><ExternalLink className="mr-2 h-4 w-4" /> Open</Button>}
-            {!current && <Button className="flex-1" disabled={!!busy || app.artifact.size > 256 * 1024 * 1024}
+            {!current && <Button className="flex-1" disabled={!!busy}
               onClick={() => void install(app)}>
               {busy === app.app_id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
               {local ? "Update" : "Install"}</Button>}
@@ -191,6 +213,8 @@ export function AppStorePage() {
         <Button variant="ghost" size="sm" onClick={() => navigate("/apps")}>View all Apps</Button></div>
       <p className="text-xs text-muted-foreground">Installed availability is separate from the release catalog and runtime authorization.</p>
     </div>}
-    {pending && <AppReviewDialog review={pending.review} onConfirmed={() => void commit()} onCancel={() => void cancel()} />}
+    {pending && <AppReviewDialog key={pending.reviews[pending.index].id}
+      review={pending.reviews[pending.index]} progress={{ current: pending.index + 1, total: pending.reviews.length }}
+      onConfirmed={confirmed} onCancel={() => void cancel()} />}
   </div>;
 }

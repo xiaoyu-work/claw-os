@@ -215,7 +215,7 @@ pub fn wait_bounded(
 /// Read to EOF, keeping at most `ceiling` bytes and reporting whether
 /// anything was dropped. The stream is still drained so the worker
 /// never blocks on a full pipe.
-fn read_bounded(reader: impl Read, ceiling: u64) -> (Vec<u8>, bool) {
+pub(crate) fn read_bounded(reader: impl Read, ceiling: u64) -> (Vec<u8>, bool) {
     let mut reader = reader;
     let mut kept: Vec<u8> = Vec::new();
     let mut buffer = [0_u8; 32 * 1024];

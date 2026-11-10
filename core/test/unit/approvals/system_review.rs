@@ -130,6 +130,36 @@ fn system_review_confirmation_is_consumed_once_without_execution_authority() {
 }
 
 #[test]
+fn delivery_confirmation_is_plan_bound_and_cannot_inherit_app_permission_acceptance() {
+    let environment = Environment::new();
+    let package = environment.package("1.0.0", false);
+    let previous = submit(1000, ReviewKind::AppInstall, &package, "terminal".into()).unwrap();
+    decide(1000, &previous.id, true, Some(&package)).unwrap();
+    consume(1000, &previous.id, &package).unwrap();
+    let plan = DeliveryReview {
+        digest: "a".repeat(64),
+        packages: vec![DeliveryPackage {
+            package: "claw-app-review".into(),
+            version: "1.0.0".into(),
+            architecture: "all".into(),
+        }],
+    };
+    let review = submit_delivery(1000, &package, "App Store".into(), plan.clone()).unwrap();
+    assert_eq!(review.state, ReviewState::Pending);
+    assert!(review.inherited_from.is_none());
+    decide(1000, &review.id, true, Some(&package)).unwrap();
+    assert!(consume(1000, &review.id, &package).is_err());
+    assert!(consume_delivery(1000, &review.id, &package, &"b".repeat(64)).is_err());
+    consume_delivery(1000, &review.id, &package, &plan.digest).unwrap();
+    assert!(consume_delivery(1000, &review.id, &package, &plan.digest).is_err());
+    let changed = DeliveryReview { digest: "b".repeat(64), ..plan };
+    assert_eq!(
+        submit_delivery(1000, &package, "App Store".into(), changed).unwrap().state,
+        ReviewState::Pending,
+    );
+}
+
+#[test]
 fn system_review_refuses_a_different_package_after_the_user_saw_the_request() {
     let environment = Environment::new();
     let old = environment.package("1.0.0", false);

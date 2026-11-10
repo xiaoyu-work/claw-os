@@ -14,6 +14,8 @@ const nonce = "a".repeat(64);
 const digest = "b".repeat(64);
 const requestId = "c".repeat(32);
 const reviewId = "rv-browser-fixture";
+const companionReviewId = "rv-browser-fixture-db";
+const confirmedReviews = new Set();
 const requests = [];
 const browserIssues = [];
 const entries = new Map();
@@ -31,6 +33,10 @@ const review = {
   permissions: [{ id: "kv-write", label: "Write named key", blurb: "Store the requested value.",
     risk: "low", scope: { description: "Exact requested key" }, condition: null, uses: [] }],
   disclosures: [{ label: "Execution", value: "Authenticated MCP service in the normal App Host" }],
+};
+const companionReview = {
+  ...review, id: companionReviewId, revision: "9007199254740995",
+  subject: { ...review.subject, app_id: "db", name: "Companion database client" },
 };
 const authorization = { id: "d".repeat(64), review_id: reviewId, revision: review.revision,
   label: app.name, target: "kv", choice: null, action: "confirm_install",
@@ -56,24 +62,43 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/app-store") {
       if (!catalogAvailable) return json({ error: "Official release catalog unavailable" }, 503);
       return json({ architecture: "amd64", installed: installed ? [app] : [], catalog: {
-        schema: "claw.app-store/v1", repository: "xiaoyu-work/clawos-app", runtime_abi: 1,
+        schema: "claw.app-store/v2", repository: "xiaoyu-work/clawos-app", runtime_abi: 1,
         generation: "1", expires_at: new Date(Date.now() + 86400000).toISOString(),
+        packages: [{ package: "claw-cap-storage-sdk", version: "1.0.0", architecture: "all",
+          size: 8192, sha256: "f".repeat(64), apps: ["db", "kv"] }],
         apps: [{ app_id: "kv", app_version: app.version, release_version: "1.0.0", architecture: "all",
           artifact: { file: `claw-app-snapshot-${digest}.tar.gz`, size: 4096, sha256: digest, media_type: "application/gzip" },
           provenance: { content_digest: app.content_digest },
+          delivery: { kind: "apt", package_sha256: "f".repeat(64) },
           display: { name: app.name, description: "Persistent string key-value storage",
             source_name: "storage-sdk", source_kind: "capability" } }],
       } });
     }
     if (url.pathname === "/api/apps/kv/install") {
       assert.deepEqual(body, { sha256: digest });
-      return json({ request_id: requestId, app_id: "kv", status: "review_required", review });
+      return json({ request_id: requestId, app_id: "kv", status: "review_required", review,
+        reviews: [review, companionReview], delivery: "apt" });
     }
     if (url.pathname === `/api/app-reviews/${reviewId}/authorization`) {
       assert.equal(body.revision, review.revision); return json({ ...authorization, phase: "starting" });
     }
-    if (url.pathname === `/api/authorizations/${authorization.id}`) return json(authorization);
-    if (url.pathname === `/api/app-installs/${requestId}/commit`) { installed = true; return json({ status: "installed", app }); }
+    if (url.pathname === `/api/app-reviews/${companionReviewId}/authorization`) {
+      assert.equal(body.revision, companionReview.revision);
+      return json({ ...authorization, id: "e".repeat(64), review_id: companionReviewId,
+        revision: companionReview.revision, target: "db", phase: "starting" });
+    }
+    if (url.pathname === `/api/authorizations/${authorization.id}`) {
+      confirmedReviews.add(reviewId); return json(authorization);
+    }
+    if (url.pathname === `/api/authorizations/${"e".repeat(64)}`) {
+      confirmedReviews.add(companionReviewId);
+      return json({ ...authorization, id: "e".repeat(64), review_id: companionReviewId,
+        revision: companionReview.revision, target: "db" });
+    }
+    if (url.pathname === `/api/app-installs/${requestId}/commit`) {
+      assert.deepEqual([...confirmedReviews].sort(), [reviewId, companionReviewId].sort());
+      installed = true; return json({ status: "installed", app });
+    }
     if (url.pathname === "/api/apps/kv/open") return json({ status: "ready", view_id: nonce, nonce,
       src: `/app-ui/${nonce}/index.html`, app });
     if (url.pathname.startsWith("/api/app-views/")) return json({ closed: true });
@@ -148,6 +173,10 @@ try {
   await wait("document.body.innerText.includes('Persistent string key-value storage')");
   await clickText("Install");
   await wait("document.body.innerText.includes('Review and install App')");
+  await clickText("Confirm and install");
+  await wait("document.body.innerText.includes('App review 2 of 2')");
+  assert.equal(installed, false, "The first App's approval cannot install the companion App");
+  assert.equal(requests.filter((item) => item.path.endsWith("/commit")).length, 0);
   await clickText("Confirm and install");
   await wait("document.body.innerText.includes('installed.')");
   assert.ok(installed);

@@ -8,8 +8,9 @@ import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { OsAuthorizationDialog } from "./os-authorization";
 
-export function AppReviewDialog({ review, onConfirmed, onCancel }: {
+export function AppReviewDialog({ review, onConfirmed, onCancel, progress }: {
   review: AppReview; onConfirmed: () => void; onCancel: () => void;
+  progress?: { current: number; total: number };
 }) {
   const [authorization, setAuthorization] = useState<AuthorizationView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,6 +43,7 @@ export function AppReviewDialog({ review, onConfirmed, onCancel }: {
           {review.kind === "activation" ? "Review App access" : "Review and install App"}</DialogTitle>
         <DialogDescription>
           {review.subject.name} · {review.subject.app_id} · {review.subject.version}
+          {progress && <span className="mt-1 block">App review {progress.current} of {progress.total} in this APT transaction</span>}
         </DialogDescription>
       </DialogHeader>
       <div className="rounded-lg border bg-muted/30 p-3 text-xs">

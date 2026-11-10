@@ -58,6 +58,9 @@ persistence, and structured primitive dispatch.
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/apps/installation.rs` | Reusable directory-install source preparation, verified preview, review-before-publication, in-place validation and atomic replacement/recovery |
+| `src/apps/debian.rs` | Bounded final App Debian-byte/control/resource inspection and common-Host export checks; never package execution authority |
+| `src/clawd/app_store/apt.rs`, `src/bin/claw-app-apt-hook.rs` | Official APT plan preparation, separately confirmed bundle reviews, tracked pre-dpkg gate and installed-outcome checks |
+| `../tools/app_apt_metadata.py` | OS-owned read-only exact-hash APT index/source classification through python3-apt, never App-supplied resolver code |
 | `src/apps/lint.rs` | Shared static provider-import and MCP-entry checks for installation and CLI lint; never executes App code |
 | `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
 | `src/bridge/captured.rs` | Private launch-gate commands for ordinary Python/polyglot operations; App code waits for exact process binding |
@@ -94,9 +97,12 @@ The App directory-install backend consumes provenance verification and the
 shared App lint provider, never router or broker orchestration. Its review
 callback runs before publication, followed by fresh verification and comparison
 with the reviewed package. The CLI owns presentation and consent; the backend
-supplies neither permission nor App execution. Root Store commits now wrap it
-with checked cross-owner custody and an App admission fence; independent CLI
-installation/rollback and OS-package mutation are not thereby coordinated. See
+supplies neither permission nor App execution. Official Store v2 delivery uses
+signed APT product packages instead of directory replacement, with concrete
+dependency-plan disclosure, separate bundle-App confirmations and checked
+cross-owner retirement. Directory fixtures still exercise the common retirement
+boundary; they are not production APT acceptance. Independent CLI installation,
+trust/rollback and other OS-package mutations are not thereby coordinated. See
 [installation review](../docs/app-development.md#installation-permission-review).
 
 `cos app stdio <id> <operation> [args...]` is a human/host transport, not a
