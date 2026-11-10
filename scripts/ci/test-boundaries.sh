@@ -18,6 +18,24 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 }
 
+private_extension_case() {
+    local seconds=$1
+    shift
+    sudo timeout "$seconds" unshare --mount --net --fork \
+        bash --noprofile --norc -c '
+            set -euo pipefail
+            mount --make-rprivate /
+            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+            mkdir -m0755 /run/lock
+            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/lib
+            mount -t tmpfs -o mode=0700,nosuid,nodev tmpfs /root
+            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/local/bin
+            install -o root -g root -m0755 "$1" /usr/local/bin/claw-app-runner
+            shift
+            exec "$@"
+        ' private-extension-case "$CARGO_TARGET_DIR/debug/claw-app-runner" "$@"
+}
+
 nearby() {
     cargo test --manifest-path crates/claw-nearby/Cargo.toml --locked
     cargo clippy --manifest-path crates/claw-nearby/Cargo.toml --all-targets --locked -- -D warnings
@@ -138,15 +156,11 @@ extensions() {
     cargo test -p cos --lib --locked --no-run --message-format=json \
         > "$RUNNER_TEMP/service-retirement-tests.jsonl"
     service_test_binary="$(cos_test_binary "$RUNNER_TEMP/service-retirement-tests.jsonl")"
-    sudo timeout 120 unshare --mount --net --fork \
+    private_extension_case 120 \
         env COS_SERVICE_RETIREMENT_HOST="$CARGO_TARGET_DIR/debug/claw-extension-host" \
-        bash --noprofile --norc -c '
-            set -euo pipefail
-            mount --make-rprivate /
-            exec "$1" --exact clawd::app_services::retirement::tests::process::service_retirement_keeps_custody_until_cleanup_succeeds \
-                --ignored --nocapture --test-threads=1
-        ' private-service-retirement "$service_test_binary"
-    sudo timeout 30 "$service_test_binary" \
+        "$service_test_binary" --exact clawd::app_services::retirement::tests::process::service_retirement_keeps_custody_until_cleanup_succeeds \
+            --ignored --nocapture --test-threads=1
+    private_extension_case 30 "$service_test_binary" \
         --exact extension_host::identity::tests::checked_release_retries_authenticated_marker_cleanup \
         --ignored --nocapture --test-threads=1
 
@@ -201,30 +215,23 @@ extensions() {
     sudo install -o root -g root -m 0755 \
         "$lib_test" "$root/cos_lib_tests"
 
-    sudo env \
+    private_extension_case 120 env \
         HOME=/root \
         SUDO_UID="$(id -u)" \
         COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
         "$root/agentd_process_boundary" --test-threads=1
-    sudo unshare --mount --net --fork env \
+    private_extension_case 120 env \
         HOME=/root \
         SUDO_UID="$(id -u)" \
         COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
-        bash --noprofile --norc -c '
-            set -euo pipefail
-            root=$1
-            mount --make-rprivate /
-            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/local/bin
-            install -o root -g root -m 0755 "$root/claw-app-runner" /usr/local/bin/claw-app-runner
-            exec "$root/extension_host_boundary" --test-threads=1
-        ' private-extension-boundary "$root"
-    sudo env \
+        "$root/extension_host_boundary" --test-threads=1
+    private_extension_case 120 env \
         HOME=/root \
         SUDO_UID="$(id -u)" \
         COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1 \
         "$root/cos_lib_tests" extension_host::child_isolation::tests \
         --test-threads=1
-    sudo env \
+    private_extension_case 30 env \
         HOME=/root \
         SUDO_UID="$(id -u)" \
         "$root/cos_lib_tests" \
