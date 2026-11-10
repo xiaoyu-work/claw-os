@@ -32,6 +32,14 @@ verbatim, as required by GPL / MPL / Apache / MIT / CC-BY-SA.
 files, .desktop files, and `com.system76.*` App IDs still carry
 upstream identifiers; rename them before any commercial release.
 
+The two desktop/AccountsService polkit resources in `initial-setup/res/`
+were separated from the external Settings product's `703a934b096b` upstream
+fork. They retain their GPL-3.0-only terms under `initial-setup/LICENSE`,
+translated text, action identifiers and authorization decisions. The OS
+initial-setup installer now owns these shared desktop policies; App installers
+neither supply nor remove them. This is authority ownership, not a new App
+grant, account/home migration or replacement of first-boot transactions.
+
 ## Vendored components
 
 | Local directory | Upstream repo | Upstream commit | License |

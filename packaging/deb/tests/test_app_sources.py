@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -587,6 +588,29 @@ def test_browser_transport_peer_identity_comes_from_kernel(browser_transport):
     left, right = socket.socketpair()
     with left, right:
         assert browser_transport._peer_uid(left) == os.getuid()
+
+
+def test_os_installer_owns_shared_desktop_policy_without_app_sources(tmp_path):
+    source = ROOT / "desktop/initial-setup"
+    recipe = (source / "justfile").read_text()
+    for name, variable, relative in [
+        ("cosmic-settings.rules", "desktop-rules-dst", "rules.d/cosmic-settings.rules"),
+        ("com.clawos.Settings.Users.policy", "accounts-policy-dst", "actions/com.clawos.Settings.Users.policy"),
+    ]:
+        destination = tmp_path / "package root/usr/share/polkit-1" / relative
+        command = next(line.strip() for line in recipe.splitlines()
+                       if line.strip().startswith("install -Dm0644 res/" + name))
+        command = command.replace("'{{" + variable + "}}'", shlex.quote(str(destination)))
+        subprocess.run(["bash", "-euc", command], cwd=source, check=True)
+        assert destination.read_bytes() == (source / "res" / name).read_bytes()
+        assert destination.stat().st_mode & 0o777 == 0o644
+    import xml.etree.ElementTree as ET
+
+    action = ET.parse(source / "res/com.clawos.Settings.Users.policy").find("action")
+    assert action.get("id") == "com.clawos.Settings.Users.Admin"
+    assert {node.tag: node.text for node in action.find("defaults")} == {
+        "allow_any": "no", "allow_inactive": "no", "allow_active": "auth_admin_keep",
+    }
 
 
 def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp_path):
