@@ -63,6 +63,23 @@ fn fd_path(file: &File) -> Result<PathBuf, i32> {
     std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(errno)
 }
 
+fn request_leader(pid: u32) -> Result<i32, i32> {
+    let mut status = String::new();
+    File::open(format!("/proc/{pid}/status"))
+        .map_err(errno)?
+        .take(16385)
+        .read_to_string(&mut status)
+        .map_err(errno)?;
+    if status.len() > 16384 {
+        return Err(libc::EACCES);
+    }
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Tgid:"))
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .ok_or(libc::EACCES)
+}
+
 fn checked_object(shared: &Shared, file: &File) -> Result<(), i32> {
     let actual = fd_path(file)?;
     if !actual.starts_with(&shared.root_path) {
@@ -176,7 +193,9 @@ impl Filesystem {
             panic!("private native filesystem worker failure");
         }
         self.shared.live()?;
-        if metadata && req.uid() == 0 && req.pid() == self.shared.controller.pid() as u32 {
+        if metadata && req.uid() == 0 && req.pid() != 0
+            && request_leader(req.pid())? == self.shared.controller.pid()
+        {
             self.shared
                 .controller
                 .assert_current()
@@ -198,20 +217,7 @@ impl Filesystem {
         if req.uid() != self.shared.owner || req.pid() <= 1 {
             return Err(libc::EACCES);
         }
-        let mut status = String::new();
-        File::open(format!("/proc/{}/status", req.pid()))
-            .map_err(errno)?
-            .take(16385)
-            .read_to_string(&mut status)
-            .map_err(errno)?;
-        if status.len() > 16384 {
-            return Err(libc::EACCES);
-        }
-        let leader = status
-            .lines()
-            .find_map(|line| line.strip_prefix("Tgid:"))
-            .and_then(|value| value.trim().parse::<i32>().ok())
-            .ok_or(libc::EACCES)?;
+        let leader = request_leader(req.pid())?;
         let peer = crate::worker::gui_transport::kernel::sender(libc::ucred {
             pid: leader,
             uid: req.uid(),
