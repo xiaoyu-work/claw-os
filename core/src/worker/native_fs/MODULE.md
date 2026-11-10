@@ -44,6 +44,8 @@ Failed checked cleanup retains the view and refuses replacement.
 The existing private GUI fixture's native-FS increment uses a synthetic owner
 tree and a normal-UID native probe. Its Root fixture stands in for the future
 OS selection controller, not an App-selected path or authority-bearing CLI.
+The probe enters through the common App runner, which consumes its launch gate
+and closes inherited setup descriptors before executing native code.
 Unavailable FUSE, namespaces or cgroup facilities fail this explicit fixture.
 
 Write/atomic-save/journal/watch semantics, real OS selection UI, persistent

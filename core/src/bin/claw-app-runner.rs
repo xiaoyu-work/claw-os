@@ -29,7 +29,7 @@ fn main() {
             fail("Root App execution custody was not bound");
         }
         drop(input);
-        exec(&program, &args.collect::<Vec<_>>());
+        exec_setup(&program, &args.collect::<Vec<_>>());
     }
     let launch_gate = match first.as_deref() {
         Some(value) if value == std::ffi::OsStr::new("--") => None,
@@ -104,6 +104,15 @@ fn main() {
 
 #[cfg(unix)]
 fn exec(program: &std::ffi::OsStr, argv: &[std::ffi::OsString]) -> ! {
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC) } != 0 {
+        fail(&format!("close inherited App descriptors on exec: {}", std::io::Error::last_os_error()));
+    }
+    exec_setup(program, argv);
+}
+
+#[cfg(unix)]
+fn exec_setup(program: &std::ffi::OsStr, argv: &[std::ffi::OsString]) -> ! {
     use std::os::unix::process::CommandExt;
 
     let error = std::process::Command::new(program).args(argv).exec();

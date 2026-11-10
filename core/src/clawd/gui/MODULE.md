@@ -53,7 +53,7 @@ bytes; there are at most 64 additional entries. Only
 `cos app <id> --gui:<name> [literal args...]` selects one. Default `--gui` and the
 exact existing `desktop.exec` remain supported. No user-supplied path or
 executable is interpreted.
-Named launchers without `COS_SESSION` use the existing authenticated Root
+Default and named launchers without `COS_SESSION` use the existing authenticated Root
 registration directly, not an Admin/bootstrap parent. Root independently
 retains their actual registered ancestry or bounded unregistered-launcher
 policy; unsetting an environment variable cannot erase App ownership.
