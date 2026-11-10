@@ -1992,6 +1992,7 @@ async fn the_calendar_list_reaches_its_endpoint_only_through_the_broker() {
             "id": "fixture-event", "title": "Brokered calendar",
             "start": "2026-01-01T12:00:00Z", "end": "2026-01-01T13:00:00Z",
             "description": "", "location": "",
+            "attendees": [], "object": "app://calendar/google-event?id=fixture-event",
         })
     );
     assert_eq!(call.egress.targets, ["www.googleapis.com:443"]);
