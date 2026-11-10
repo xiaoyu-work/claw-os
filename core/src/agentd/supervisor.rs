@@ -156,6 +156,11 @@ impl BrokerContext {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn initialize_app_custody(&self) {
+        crate::clawd::app_execution::initialize(self);
+    }
+
     pub(crate) fn extension_identity_pool(
         &self,
     ) -> Result<Arc<crate::extension_host::identity::ExtensionIdentityPool>, String> {

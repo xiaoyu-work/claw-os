@@ -1170,13 +1170,22 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .with_task_app_data(&host)
         .with_task_session(Some(task_session_info)),
     );
+    let state = cos::clawd::state::DaemonState::try_new().expect("daemon state");
+    let admission = cos::clawd::transport::limits::Admission::new(
+        cos::clawd::transport::limits::Limits::default(),
+    );
+    cos::agentd::supervisor::BrokerContext::new(
+        state.clone(),
+        admission.clone(),
+        primary_path,
+    )
+    .expect("fixture Root context")
+    .initialize_app_custody();
     let broker_task = tokio::spawn(broker::serve(
         listener,
         lease.clone(),
-        cos::clawd::state::DaemonState::try_new().expect("daemon state"),
-        cos::clawd::transport::limits::Admission::new(
-            cos::clawd::transport::limits::Limits::default(),
-        ),
+        state,
+        admission,
     ));
     let host_environment =
         String::from_utf8_lossy(&std::fs::read(format!("/proc/{}/environ", host.pid)).unwrap())

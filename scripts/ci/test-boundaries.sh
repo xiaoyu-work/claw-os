@@ -129,7 +129,7 @@ calendar() {
 
 extensions() {
     sudo apt-get install -y --no-install-recommends acl binutils
-    cargo build -p cos --bin claw-agentd --bin claw-extension-host
+    cargo build -p cos --bin claw-agentd --bin claw-extension-host --bin claw-app-runner
     cargo test -p cos \
         --test agentd_process_boundary \
         --test extension_host_boundary \
@@ -193,6 +193,8 @@ extensions() {
     sudo install -o root -g root -m 0755 \
         target/debug/claw-extension-host "$root/claw-extension-host"
     sudo install -o root -g root -m 0755 \
+        target/debug/claw-app-runner "$root/claw-app-runner"
+    sudo install -o root -g root -m 0755 \
         "$agentd_test" "$root/agentd_process_boundary"
     sudo install -o root -g root -m 0755 \
         "$extension_test" "$root/extension_host_boundary"
@@ -204,11 +206,17 @@ extensions() {
         SUDO_UID="$(id -u)" \
         COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
         "$root/agentd_process_boundary" --test-threads=1
-    sudo env \
+    sudo unshare --mount --net --fork env \
         HOME=/root \
         SUDO_UID="$(id -u)" \
         COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
-        "$root/extension_host_boundary" --test-threads=1
+        bash --noprofile --norc -c '
+            set -euo pipefail
+            mount --make-rprivate /
+            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/local/bin
+            install -o root -g root -m 0755 "$1/claw-app-runner" /usr/local/bin/claw-app-runner
+            exec "$1/extension_host_boundary" --test-threads=1
+        ' private-extension-boundary "$root"
     sudo env \
         HOME=/root \
         SUDO_UID="$(id -u)" \
