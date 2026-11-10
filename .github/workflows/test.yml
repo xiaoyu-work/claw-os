@@ -166,6 +166,52 @@ jobs:
           scripts/tests/test_app_platform.py packaging/deb/tests/test_applet_provider.py
           core/tests/test_app_apt_metadata.py
 
+      - name: Retain matching Linux acceptance executables
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, tarfile
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
+          selected = set()
+          helpers = {
+              "cos", "claw-agentd", "claw-extension-host", "claw-app-runner",
+              "claw-app-apt-hook", "claw-file-manager",
+              "extension_host_boundary", "agentd_process_boundary",
+          }
+          for directory in (root / "target", pathlib.Path(os.environ["RUNNER_TEMP"])):
+              for report in directory.glob("*-tests.jsonl"):
+                  for line in report.read_text().splitlines():
+                      row = json.loads(line)
+                      if (row.get("reason") == "compiler-artifact" and row.get("executable")
+                              and row.get("target", {}).get("name") in helpers):
+                          selected.add(pathlib.Path(row["executable"]))
+          records = []
+          output = root / "build/linux-acceptance"
+          output.mkdir(parents=True, exist_ok=True)
+          with tarfile.open(output / "executables.tar.gz", "w:gz") as archive:
+              for path in sorted(selected):
+                  if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
+                      continue
+                  with path.open("rb") as stream:
+                      if stream.read(4) != b"\x7fELF":
+                          continue
+                      stream.seek(0)
+                      digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                  archive.add(path, arcname=path.name, recursive=False)
+                  records.append({"file": path.name, "size": path.stat().st_size, "sha256": digest})
+          (output / "source.json").write_text(json.dumps({
+              "revision": os.environ["GITHUB_SHA"], "architecture": os.uname().machine,
+              "purpose": "private-validation-only", "files": records,
+          }, sort_keys=True, indent=2) + "\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-acceptance-${{ github.sha }}
+          path: build/linux-acceptance/*
+          if-no-files-found: error
+          retention-days: 7
+
   sdk-bindings:
     runs-on: ubuntu-latest
     env:

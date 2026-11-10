@@ -133,7 +133,8 @@ extensions() {
     cargo test -p cos \
         --test agentd_process_boundary \
         --test extension_host_boundary \
-        --no-run
+        --no-run --message-format=json-render-diagnostics \
+        > "$RUNNER_TEMP/extension-tests.jsonl"
     cargo test -p cos --lib --locked --no-run --message-format=json \
         > "$RUNNER_TEMP/service-retirement-tests.jsonl"
     service_test_binary="$(cos_test_binary "$RUNNER_TEMP/service-retirement-tests.jsonl")"

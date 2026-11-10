@@ -1,12 +1,10 @@
 # Cosmic Panel (WIP)
 
-Claw OS builds consume the Notifications product's exported configuration
-library from the immutable App pin at
-`build/native-apps/cosmic-notifications/cosmic-notifications-config`.
-Use `just build-debug` / `just build-release`, which prepare those inputs; for
-direct Cargo commands run `python3 ../../scripts/app_sources.py --native`
-first. The panel's existing toolkit graph and installed configuration remain
-unchanged.
+Claw OS builds consume the OS SDK's notification-presentation interface, not
+the Notifications product's private configuration or UI libraries. Direct Cargo
+builds do not require preparing App source exports. The independently packaged
+product panels enter through their authenticated App Hosts; the panel's
+existing toolkit graph and installed configuration remain unchanged.
 
 ### Building and Installing .deb
 
