@@ -705,10 +705,10 @@ impl AppIdentitySession {
             ));
         }
         let clawd_backend = use_clawd_app_session_backend()?;
-        // A named desktop launcher need not manufacture a local parent row.
+        // A desktop launcher need not manufacture a local parent row.
         // Root still derives its real ancestry/delegation from the kernel peer.
         if clawd_backend
-            && matches!(&request, LaunchRequest::Gui { gui_entry: Some(_), .. })
+            && matches!(&request, LaunchRequest::Gui { .. })
             && std::env::var_os("COS_SESSION").is_none_or(|value| value.is_empty())
         {
             return Self::register_with_clawd(

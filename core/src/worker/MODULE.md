@@ -105,6 +105,8 @@ run App code first. The gate is consumed before exec and is not charged to
 the App input limit. Original stdin bytes and EOF behavior remain unchanged.
 Wrapped runtimes outside the system image keep their individual read-only
 mount, without replacing an authenticated entry's inode binding.
+The final App runner marks all nonstandard inherited descriptors close-on-exec;
+the outer custody gate alone retains bind-source pins until bubblewrap setup.
 Generic `run_captured` remains available for non-App workers; its spawn callback
 alone is not an execution barrier.
 

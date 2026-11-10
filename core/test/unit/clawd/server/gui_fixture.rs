@@ -1144,10 +1144,12 @@ fn private_native_fs_kernel() {
         std::fs::write(group_path.join("memory.max"), b"268435456").unwrap();
         std::fs::write(group_path.join("cpu.max"), b"100000 100000").unwrap();
         let directory = claw_display_control::workload::open_directory(&group_path).unwrap();
+        let entry_token = uuid::Uuid::new_v4().simple().to_string();
         let policy = LaunchPolicy {
             tier: TrustTier::AppOperation, label: "private-native-fs-kernel".into(),
-            program: "/usr/lib/cos/bin/claw-gui-probe".into(),
-            argv: vec!["native-fs-kernel".into(), "/resource-view".into()],
+            program: "/usr/local/bin/claw-app-runner".into(),
+            argv: vec!["--launch-gate".into(), entry_token.clone(), "--".into(),
+                "/usr/lib/cos/bin/claw-gui-probe".into(), "native-fs-kernel".into(), "/resource-view".into()],
             workdir: "/data".into(),
             mounts: vec![Mount::read_only(&mountpoint, "/resource-view", MountClass::Input),
                 Mount::read_write(&data, "/data", MountClass::AppData)],
@@ -1166,6 +1168,7 @@ fn private_native_fs_kernel() {
             .stderr(Stdio::inherit()).spawn().unwrap();
         view.bind(&ProcessIdentity::child(&child).unwrap(), directory).unwrap();
         gate.release().unwrap();
+        child.stdin.as_mut().unwrap().write_all(entry_token.as_bytes()).unwrap();
         receive(&mut child, b"META");
         // This fixture is the trusted selection controller; probe tokens only
         // synchronize fixed stages and never choose resources or grant rights.

@@ -967,7 +967,6 @@ async fn ordinary_root_foreign_and_lost_ack_cannot_authorize_publication() {
     actor.ready().await;
     let original_pid = actor.child.id();
     let socket = actor.observed.lock().unwrap().socket.clone();
-    actor.kill_host();
     std::fs::remove_file(&socket).unwrap();
     let mut command = std::process::Command::new(Path::new(BASE).join("actor"));
     command.args(["--exact", FOREIGN, "--ignored", "--nocapture", "--test-threads=1"])
@@ -1004,6 +1003,9 @@ async fn ordinary_root_foreign_and_lost_ack_cannot_authorize_publication() {
     let error = crate::worker::app_custody::connect(&socket, original_pid, OWNER)
         .await.err().expect("foreign cleanup peer was accepted");
     assert!(error.contains("authenticated launcher"), "{error}");
+    actor.kill_host();
+    assert!(crate::worker::app_custody::connect(&socket, original_pid, OWNER).await.is_err(),
+        "exited launcher was replaced by a same-named endpoint");
     let result = fixture.publish().await;
     wait_fence_release().await;
     foreign.0.kill().unwrap();
