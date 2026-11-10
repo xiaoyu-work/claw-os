@@ -162,10 +162,24 @@ impl Custody {
 }
 
 pub(crate) async fn connect(path: &Path, pid: u32, uid: u32) -> Result<UnixStream, String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+
     if !path.is_absolute() || path.as_os_str().len() > 4096 {
         return Err("invalid App cleanup endpoint".into());
     }
-    let stream = tokio::time::timeout(Duration::from_secs(2), tokio::net::UnixStream::connect(path))
+    // The launcher may own a private /tmp mount. Pin its endpoint, not a
+    // same-named path in Root's namespace or a pathname that can be replaced.
+    let target = PathBuf::from(format!("/proc/{pid}/root"))
+        .join(path.strip_prefix("/").map_err(|error| error.to_string())?);
+    let pin = std::fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(target).map_err(|error| format!("pin App cleanup custody: {error}"))?;
+    let metadata = pin.metadata().map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_socket() || metadata.uid() != uid {
+        return Err("App cleanup endpoint is not its launcher's socket".into());
+    }
+    let pinned = format!("/proc/self/fd/{}", pin.as_raw_fd());
+    let stream = tokio::time::timeout(Duration::from_secs(2), tokio::net::UnixStream::connect(pinned))
         .await.map_err(|_| "App cleanup custody connection deadline exceeded")?
         .map_err(|error| format!("connect App cleanup custody: {error}"))?
         .into_std().map_err(|error| error.to_string())?;
