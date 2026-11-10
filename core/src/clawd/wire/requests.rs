@@ -48,6 +48,9 @@ pub struct AppDirectoryPublish {
     pub source: Text<PATH_BYTES>,
     /// Comparison only; the daemon's configured App root selects the destination.
     pub expected_apps_root: Text<PATH_BYTES>,
+    /// When present, require this already-installed, daemon-derived destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_installed_destination: Option<Text<PATH_BYTES>>,
     pub expected_package: Structured,
     pub review_id: Token,
     pub force: bool,

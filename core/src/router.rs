@@ -25,7 +25,6 @@ use crate::engine_pkg;
 use crate::mem_bridge;
 use crate::model;
 use crate::perms;
-use crate::provenance;
 use crate::service;
 use crate::sysinfo;
 use crate::triggers;
@@ -2064,7 +2063,7 @@ fn dispatch_with_stdin_impl(
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
-        "provenance" => dispatch_builtin(args, "provenance", provenance::cli::run),
+        "provenance" => dispatch_builtin(args, "provenance", app_commands::provenance_cmd),
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();

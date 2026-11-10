@@ -60,7 +60,7 @@ fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
     let mut oversized = request.clone();
     oversized["source"] = json!("x".repeat(PATH_BYTES + 1));
     assert!(serde_json::from_value::<SystemReviewPrepare>(oversized).is_err());
-    let install = json!({
+    let mut install = json!({
         "action": "publish",
         "source": "/root/downloads/app",
         "expected_apps_root": "/usr/lib/cos/apps",
@@ -68,6 +68,8 @@ fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
         "review_id": "rv-0123456789abcdef0123456789abcdef",
         "force": false,
     });
+    assert!(serde_json::from_value::<AppDirectoryInstall>(install.clone()).is_ok());
+    install["expected_installed_destination"] = json!("/usr/lib/cos/apps/example");
     assert!(serde_json::from_value::<AppDirectoryInstall>(install.clone()).is_ok());
     for field in [
         "owner_uid", "destination", "apps_root", "executable", "command", "capabilities",
@@ -77,7 +79,7 @@ fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
         forged[field] = json!(true);
         assert!(serde_json::from_value::<AppDirectoryInstall>(forged).is_err(), "{field}");
     }
-    for field in ["source", "expected_apps_root"] {
+    for field in ["source", "expected_apps_root", "expected_installed_destination"] {
         let mut oversized = install.clone();
         oversized[field] = json!("x".repeat(PATH_BYTES + 1));
         assert!(serde_json::from_value::<AppDirectoryInstall>(oversized).is_err());
@@ -89,7 +91,7 @@ fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
         "action": "recover", "app_id": "example", "expected_apps_root": "/usr/lib/cos/apps",
     });
     assert!(serde_json::from_value::<AppDirectoryInstall>(recover.clone()).is_ok());
-    for field in ["source", "expected_package", "force", "review_id", "owner_uid", "destination"] {
+    for field in ["source", "expected_package", "force", "review_id", "owner_uid", "destination", "expected_installed_destination"] {
         let mut forged = recover.clone();
         forged[field] = json!(true);
         assert!(serde_json::from_value::<AppDirectoryInstall>(forged).is_err(), "{field}");

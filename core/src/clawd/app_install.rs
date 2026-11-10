@@ -226,7 +226,7 @@ fn canonical_root(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn prepare_apps_root(expected: &Path) -> Result<PathBuf, String> {
+fn prepare_apps_root(expected: &Path, require_installed: bool) -> Result<PathBuf, String> {
     let root = canonical_root(&app_store::apps_root())?;
     if canonical_root(expected).ok().as_ref() != Some(&root) {
         return Err("A different local App root is unsupported; directory installation uses only the daemon App root".into());
@@ -236,6 +236,9 @@ fn prepare_apps_root(expected: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("daemon App root parent is not protected: {error}"))?;
     if !metadata.is_dir {
         return Err("Daemon App root parent is not a directory".into());
+    }
+    if require_installed && !root.is_dir() {
+        return Err("App rollback requires an existing daemon App root".into());
     }
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -280,10 +283,21 @@ fn prepare(
     {
         return Err("Directory installation source must be an absolute canonical path".into());
     }
-    let apps_root = prepare_apps_root(Path::new(body.expected_apps_root.as_str()))?;
+    let apps_root = prepare_apps_root(
+        Path::new(body.expected_apps_root.as_str()),
+        body.expected_installed_destination.is_some(),
+    )?;
     let existing = crate::apps::discover(&apps_root)
         .remove(&expected.id)
         .map(|app| app.dir);
+    if let Some(comparison) = &body.expected_installed_destination {
+        let installed = existing.as_deref()
+            .ok_or("App rollback requires an existing App in the daemon's installed root")?;
+        let comparison = Path::new(comparison.as_str());
+        if !comparison.is_absolute() || comparison != installed {
+            return Err("App rollback destination differs from Root's installed App path".into());
+        }
+    }
     let install = DirectoryInstall::prepare_at(&source, &apps_root, existing.as_deref())?;
     let app: App = install.preview()?;
     let pending = Pending {
@@ -409,6 +423,7 @@ async fn publish_request(
     body: AppDirectoryPublish,
 ) -> Result<Value, BrokerError> {
     let force = body.force;
+    let require_installed = body.expected_installed_destination.is_some();
     let (install, delivery, pending) = tokio::task::spawn_blocking(move || prepare(&body))
         .await
         .map_err(|error| BrokerError::unavailable(error.to_string()))?
@@ -423,6 +438,14 @@ async fn publish_request(
             |fence| async move {
                 require_publishable(&retiring.package)?;
                 paths(&retiring)?;
+                if require_installed
+                    && crate::apps::discover(&retiring.apps_root)
+                        .remove(&retiring.package.id)
+                        .map(|app| app.dir)
+                        .as_deref() != Some(retiring.destination.as_path())
+                {
+                    return Err("App rollback no longer matches Root's installed App path".into());
+                }
                 require_review(&retiring)?;
                 if app_store::delivery_pending(&retiring.package.id)? {
                     return Err("An official App delivery needs checked recovery first".into());

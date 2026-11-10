@@ -226,7 +226,7 @@ Protected mount/credential-root refusals remain unchanged. Mandatory
 instance cgroups, inherited syscall mediation and credential-checked relays
 confine the transport. Checked permission/session retirement includes retained
 descriptors and descendants before success; denial remains durable on failure.
-Provenance rollback/trust mutations and generic OS package changes still need
+Provenance trust mutations and generic OS package changes still need
 authenticated Root coordination and admission fencing.
 
 Ordinary App operations retain both the exact-entry stdin launch gate and a
@@ -257,9 +257,17 @@ daemons fail explicitly, without direct writes.
 Unsigned `--dev-trust` installation is blocked: the installed vendor path or an
 existing developer grant could authenticate it before a new independent trust
 decision. A quarantined Root publication contract is still required; no flag
-creates trust or capabilities. Rollback, trust-revoke and generic dpkg/APT
-coordination remain pending. This is not complete installed-system publication
-or production acceptance.
+creates trust or capabilities.
+Public `cos provenance rollback --kind app` resolves only an exact, currently
+verifiable retained publisher-signed artifact and reuses this same directory
+controller and protected App review. Its `--dest` is only an installed-path
+comparison: Root requires the existing App at its own derived destination,
+including nested layouts, and refuses dpkg ownership. Direct provenance App
+rollback writes are disabled; unavailable Root services never select a local
+fallback. Rollback grants neither trust, AI consent nor capabilities, and an
+uncertain publication uses the same read-only recovery, never replay.
+Trust-revoke and generic dpkg/APT coordination remain pending. This is not
+complete installed-system publication or production acceptance.
 
 The App-service manager now retains non-reusable runtime, identity and capacity
 custody across incomplete or cancelled retirement. Cleanup errors propagate to

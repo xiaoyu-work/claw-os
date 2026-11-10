@@ -164,11 +164,12 @@ These functions are not a standalone installer RPC. `MANAGER` is process-local,
 and its absence in a standalone `cos` process says nothing about instances held
 by the Root broker. Root Store commits now require this actual manager and
 retire the App across all owners under the shared per-App admission fence,
-alongside checked ordinary and MCP custody. Independent directory installation,
-provenance rollback, trust-revoke completion and OS-package mutation still
-need their own Root coordination; these barriers alone do not solve that
-publication gate. The Store refuses dpkg-owned replacement rather than
-inventing an ownership transfer. Provenance has no `clawd` dependency.
+alongside checked ordinary and MCP custody. Signed directory installation and
+the public provenance App rollback frontend reuse that fence and retirement
+through the Root directory controller, not this process-local manager.
+Trust-revoke completion and independent OS-package mutation still need their
+own Root coordination. Directory delivery refuses dpkg-owned replacement rather
+than inventing an ownership transfer. Provenance has no `clawd` dependency.
 
 `Scope::kill` and
 `LaunchResources::kill_all` remain best-effort APIs for their other callers;

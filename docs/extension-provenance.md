@@ -607,6 +607,30 @@ with a shortened digest, so the value copied out of
 `cos provenance artifacts` resolves). An ambiguous prefix lists the
 candidates instead of guessing.
 
+For **Apps**, use this public CLI as a direct Root operator on Linux. The
+frontend only resolves and verifies retained bytes; actual publication uses
+the existing `app.directory_install` Root controller and protected App permission
+review. `--dest` must name Root's existing installed App path (including any
+nested layout); it is comparison state, never a Root destination selector.
+Root uses its own configured App root and authenticated App identity, holds
+the shared admission fence, checks retirement of ordinary/GUI/MCP custody
+across owners, and consumes the exact signed-package confirmation inside
+publication. Missing/unavailable Root services, mismatched paths, unsigned or
+developer/vendor-only artifacts, revoked publishers/digests and dpkg-owned
+Apps are refusals, never local-write or Store-directory fallbacks. Direct
+provenance library App rollback publication is disabled.
+
+App rollback preserves installed identity, data and permission state; it
+does not grant trust, capabilities or AI consent and does not restore data
+snapshots or synthesize missing retained artifacts. After an uncertain
+publication, do not replay rollback, even for the same digest. Use
+`cos app install --recover <app-id>` for the existing read-only exact-outcome
+check; mismatched bytes or transaction scratch keep admission blocked.
+APT-managed App rollback and coordination of independent trust/OS-package
+mutations remain separate work. Other provenance kinds retain their existing
+local verified rollback behavior. This source path is not installed-system
+or publication acceptance.
+
 ### Developer (unsigned local trees)
 
 Unsigned development content is permitted only through an explicit

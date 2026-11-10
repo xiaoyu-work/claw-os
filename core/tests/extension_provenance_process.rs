@@ -1237,12 +1237,16 @@ fn rollback_only_activates_a_still_verifiable_artifact() {
     let trust = fx.store();
     let limits = Limits::default();
     let live = fx.root.join("live").join("notes");
-    let source = app_package(&fx, "notes", "print('v1')\n");
+    let source = fx.root.join("notes");
+    fs::create_dir_all(&source).unwrap();
+    write(&source.join("SKILL.md"), "# Notes\n");
+    write(&source.join("main.py"), "print('v1')\n");
+    fx.sign(&source, PackageKind::Skill, "notes", &["main.py"]);
 
     let staged = install::stage_directory(
         &source,
         &live,
-        PackageKind::App,
+        PackageKind::Skill,
         Some("notes"),
         &trust,
         &limits,
@@ -1253,11 +1257,11 @@ fn rollback_only_activates_a_still_verifiable_artifact() {
 
     write(&source.join("main.py"), "print('v2')\n");
     fs::set_permissions(source.join("main.py"), fs::Permissions::from_mode(0o755)).unwrap();
-    fx.sign(&source, PackageKind::App, "notes", &["main.py"]);
+    fx.sign(&source, PackageKind::Skill, "notes", &["main.py"]);
     let staged = install::stage_directory(
         &source,
         &live,
-        PackageKind::App,
+        PackageKind::Skill,
         Some("notes"),
         &trust,
         &limits,
@@ -1268,7 +1272,7 @@ fn rollback_only_activates_a_still_verifiable_artifact() {
     assert_ne!(v1, v2);
 
     // Roll back to the earlier verified artifact.
-    install::rollback(PackageKind::App, "notes", &v1, &live, &trust, &limits).unwrap();
+    install::rollback(PackageKind::Skill, "notes", &v1, &live, &trust, &limits).unwrap();
     assert_eq!(
         fs::read_to_string(live.join("main.py")).unwrap(),
         "print('v1')\n"
@@ -1278,7 +1282,7 @@ fn rollback_only_activates_a_still_verifiable_artifact() {
     fx.write_trust(&[], &[v2.clone()]);
     let revoked = fx.store();
     let err =
-        install::rollback(PackageKind::App, "notes", &v2, &live, &revoked, &limits).unwrap_err();
+        install::rollback(PackageKind::Skill, "notes", &v2, &live, &revoked, &limits).unwrap_err();
     assert_eq!(err.code(), "provenance.untrusted_key");
 
     std::env::remove_var("COS_DATA_DIR");
