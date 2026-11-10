@@ -85,12 +85,15 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("daemon.") || name.starts_with("journal.") => Audience::Daemon,
             name if name.starts_with("task.")
                 || name.starts_with("activity.")
+                || name.starts_with("agent.conversation.")
                 || name == "operation.preview" =>
             {
                 Audience::Task
             }
             name if name.starts_with("memory.")
                 || name.starts_with("context.")
+                || name.starts_with("workspace.")
+                || name.starts_with("agent.hooks.")
                 || name == "agent.usage"
                 || name == "system.operations" =>
             {
@@ -103,6 +106,7 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("transaction.") => Audience::Transaction,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
+                || name.starts_with("app_store.")
                 || name.starts_with("app.gui.")
                 || name.starts_with("app_session.")
                 || name.starts_with("mcp_session.") =>
@@ -117,9 +121,18 @@ fn route_audiences_match_their_families() {
                     Audience::AppLaunch
                 }
             }
-            name if name.starts_with("scheduler.") => Audience::Scheduler,
-            name if name.starts_with("credential.") => Audience::Credential,
-            name if name.starts_with("system.") || name == "ai.chat" => Audience::SystemService,
+            name if name.starts_with("scheduler.") || name.starts_with("channel.") => {
+                Audience::Scheduler
+            }
+            name if name.starts_with("credential.") || name.starts_with("agent.account.") => {
+                Audience::Credential
+            }
+            name if name.starts_with("system.")
+                || name.starts_with("nearby.")
+                || name == "ai.chat" =>
+            {
+                Audience::SystemService
+            }
             other => panic!("route {other} belongs to no declared audience family"),
         };
         assert_eq!(

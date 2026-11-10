@@ -308,7 +308,7 @@ async fn editor_launch_requires_original_proc_and_exact_read_before_desktop_acce
         let decision = decision_for_app(Some("independent-editor-client"), caps, &format!("editor-denied-{index}"));
         let error = open_editor(&[uri.clone()], &decision, 1000, 1000, root.path().join("missing-home"), 1)
             .await.unwrap_err();
-        assert!(!error.contains("home"), "{error}");
+        assert!(error.contains("capability"), "{error}");
         assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
     }
 }

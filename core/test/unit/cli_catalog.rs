@@ -20,6 +20,7 @@ fn catalogue_contains_every_public_router_namespace() {
     assert_eq!(
         namespace_names(),
         vec![
+            "workspace",
             "share",
             "review",
             "activity",
@@ -41,8 +42,8 @@ fn catalogue_contains_every_public_router_namespace() {
 
 #[test]
 fn nearby_is_a_human_os_surface_not_an_implicit_model_tool() {
-    let help=command_help("share","receive").unwrap();
-    assert_eq!(help["model_callable"],false);
+    let help = command_help("share", "receive").unwrap();
+    assert_eq!(help["model_callable"], false);
     assert!(help["model_tool"].is_null());
 }
 
@@ -51,12 +52,37 @@ fn activity_commands_are_discoverable_without_model_authority() {
     assert_eq!(
         command_names("activity").unwrap(),
         vec![
-            "create", "list", "show", "attention", "update", "run", "pause", "resume", "complete",
-            "cancel", "export", "import", "objects", "attach-object", "receipts", "record-receipt", "object-state",
-            "observe", "relate", "retract-object-state", "record-object-state", "execution-limits",
-            "set-execution-limits", "enable-execution-limits", "disable-execution-limits",
-            "monetary-budget", "set-monetary-budget", "enable-monetary-budget",
-            "disable-monetary-budget", "capability-policy", "set-capability-policy",
+            "create",
+            "list",
+            "show",
+            "attention",
+            "update",
+            "run",
+            "pause",
+            "resume",
+            "complete",
+            "cancel",
+            "export",
+            "import",
+            "objects",
+            "attach-object",
+            "receipts",
+            "record-receipt",
+            "object-state",
+            "observe",
+            "relate",
+            "retract-object-state",
+            "record-object-state",
+            "execution-limits",
+            "set-execution-limits",
+            "enable-execution-limits",
+            "disable-execution-limits",
+            "monetary-budget",
+            "set-monetary-budget",
+            "enable-monetary-budget",
+            "disable-monetary-budget",
+            "capability-policy",
+            "set-capability-policy",
             "enable-capability-policy",
             "disable-capability-policy",
             "priority",
