@@ -197,6 +197,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
 /// happened to an unresolved privileged mutation is an administrative
 /// statement, and it is what ends that operation's replay refusal.
 const EXPECTED_ROOT_COMMANDS: &[&str] = &[
+    "app_store.apt_hook",
     "context.update",
     "journal.mutation.resolve",
     "permission.revoke",
