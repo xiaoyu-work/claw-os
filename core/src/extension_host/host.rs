@@ -507,6 +507,7 @@ async fn serve_authenticated(
             }
         }
     }
+    let response_id = id.clone();
     let response = match result {
         Ok(Ok(Ok(result))) => ControlResponse::ok(id, result),
         Ok(Ok(Err(error))) => ControlResponse::error(id, error.category, error.message),
@@ -533,7 +534,7 @@ async fn serve_authenticated(
                 id,
                 ExtensionErrorCategory::Timeout,
                 format!(
-                    "Agent extension event exceeded its absolute deadline after {}ms",
+                    "Agent extension event timed out at its absolute deadline after {}ms",
                     timeout.as_millis()
                 ),
             )
@@ -555,6 +556,18 @@ async fn serve_authenticated(
     if let Some(deadline) = event_deadline {
         if let Ok(remaining) = deadline.remaining() {
             write_response_with_timeout(&mut stream, response, remaining).await;
+        } else {
+            // The work deadline must not suppress its terminal control error
+            // or turn a bounded timeout into a truncated protocol response.
+            write_response(
+                &mut stream,
+                ControlResponse::error(
+                    response_id,
+                    ExtensionErrorCategory::Timeout,
+                    "Agent extension event timed out before its response",
+                ),
+            )
+            .await;
         }
     } else {
         write_response(&mut stream, response).await;
