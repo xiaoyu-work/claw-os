@@ -2391,6 +2391,7 @@ fn launch_app_gui(
 ) -> Result<Option<String>, String> {
     let start = Instant::now();
     let audit = audit_path();
+    let audit_args = mcp_audit_projection(files);
     let data = data_dir();
     let apps = apps_dir().to_string_lossy().to_string();
 
@@ -2403,11 +2404,19 @@ fn launch_app_gui(
     };
     match bridge::launch_gui_entry(&launch, gui_entry, exec, files, &data, &apps) {
         Ok(()) => {
-            audit::log_entry(&audit, app_name, &command, files, start, "ok", None);
+            audit::log_entry(&audit, app_name, &command, &audit_args, start, "ok", None);
             Ok(None)
         }
         Err(e) => {
-            audit::log_entry(&audit, app_name, &command, files, start, "error", Some(&e));
+            audit::log_entry(
+                &audit,
+                app_name,
+                &command,
+                &audit_args,
+                start,
+                "error",
+                Some("gui_launch_failed"),
+            );
             Err(e)
         }
     }

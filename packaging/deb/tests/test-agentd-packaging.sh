@@ -65,7 +65,7 @@ assert_contains "$CARGO_TOML" 'path = "src/bin/claw-extension-host.rs"' \
     "the extension host binary must have an entry point"
 [ -f "$PROJECT_DIR/core/src/bin/claw-extension-host.rs" ] ||
     fail "core/src/bin/claw-extension-host.rs is missing"
-for helper in claw-gui-runner claw-display-host claw-display-session; do
+for helper in claw-gui-runner claw-display-host claw-display-session claw-file-manager; do
     assert_contains "$CARGO_TOML" "name = \"$helper\"" \
         "the GUI helper must be a first-class cargo binary"
     assert_contains "$BUILD_DEBS" "ensure_bin $helper cos" \
@@ -87,6 +87,26 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'polkitd' \
     "Agent must install the unprivileged pkttyagent authentication presenter"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-display-session-v1' \
     "Desktop must require the Agent display runtime"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-file-manager-v1 (= 1)' \
+    "Agent must provide the unprivileged file-manager transport interface"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-file-manager-v1 (= 1)' \
+    "Desktop must require the file-manager interface without an App entitlement"
+assert_contains "$BUILD_DEBS" 'install -m 755 "$FILE_MANAGER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-file-manager"' \
+    "Agent must own the actual file-manager transport binary"
+assert_contains "$PROJECT_DIR/desktop/session/Justfile" \
+    'install -Dm0644 data/claw-file-manager.desktop {{ autostartdir }}/claw-file-manager.desktop' \
+    "Desktop session installation must own the optional autostart resource"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/conffiles" \
+    '/etc/xdg/autostart/claw-file-manager.desktop' \
+    "Desktop must preserve administrator changes to the optional autostart resource"
+assert_contains "$PROJECT_DIR/desktop/session/data/claw-file-manager.desktop" 'OnlyShowIn=COSMIC;' \
+    "Agent-only or other desktop sessions must not claim FileManager1"
+assert_contains "$PROJECT_DIR/desktop/session/data/claw-file-manager.desktop" 'X-systemd-skip=true' \
+    "the file-manager facade must not inherit unauthenticated user-manager ancestry"
+assert_contains "$PROJECT_DIR/desktop/session/src/main.rs" 'let file_manager = file_manager::start(&env_vars);' \
+    "the authenticated session must start and retain the OS intent transport itself"
+assert_contains "$PROJECT_DIR/desktop/session/src/main.rs" 'file_manager.stop().await;' \
+    "session teardown must wait for its retained intent transport"
 assert_contains "$RELEASE_WORKFLOW" 'libpam0g-dev' \
     "the native package build must install PAM development inputs"
 assert_contains "$RELEASE_WORKFLOW" 'bash scripts/ci/test-agent-package.sh installed' \

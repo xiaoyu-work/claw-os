@@ -8,6 +8,7 @@ bindir := usrdir / 'bin'
 systemddir := usrdir / 'lib' / 'systemd' / 'user'
 sessiondir := usrdir / 'share' / 'wayland-sessions'
 applicationdir := usrdir / 'share' / 'applications'
+autostartdir := absolute_path(clean(rootdir / '/etc' / 'xdg' / 'autostart'))
 
 default: build-release
 
@@ -43,6 +44,9 @@ install:
 
     # session
     install -Dm0644 data/cosmic.desktop {{ sessiondir }}/cosmic.desktop
+
+    # OS intent transport: cosmic-session launches this itself, never systemd activation.
+    install -Dm0644 data/claw-file-manager.desktop {{ autostartdir }}/claw-file-manager.desktop
 
     # mimeapps
     install -Dm0644 data/cosmic-mimeapps.list {{ applicationdir }}/cosmic-mimeapps.list

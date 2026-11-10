@@ -2,6 +2,7 @@
 /etc/polkit-1/rules.d/40-clawos.rules
 /etc/profile.d/claw-cursor.sh
 /etc/systemd/zram-generator.conf
+/etc/xdg/autostart/claw-file-manager.desktop
 /etc/xdg/autostart/copyq.desktop
 /etc/xdg/mimeapps.list
 /etc/pam.d/cosmic-greeter
