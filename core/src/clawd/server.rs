@@ -135,7 +135,7 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     // long-lived helper can inherit the systemd service cgroup.
     agentd_broker.prime_extension_containment();
     #[cfg(target_os = "linux")]
-    super::app_execution::initialize(&agentd_broker);
+    agentd_broker.initialize_app_custody();
     let _event_center = event_center::start();
     if let Err(error) = firewall::reconcile_on_start().await {
         tracing::error!(error = %error, "failed to reconcile managed firewall state");

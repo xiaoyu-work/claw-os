@@ -178,13 +178,12 @@ jobs:
               "claw-app-apt-hook", "claw-file-manager",
               "extension_host_boundary", "agentd_process_boundary",
           }
-          for directory in (root / "target", pathlib.Path(os.environ["RUNNER_TEMP"])):
-              for report in directory.glob("*-tests.jsonl"):
-                  for line in report.read_text().splitlines():
-                      row = json.loads(line)
-                      if (row.get("reason") == "compiler-artifact" and row.get("executable")
-                              and row.get("target", {}).get("name") in helpers):
-                          selected.add(pathlib.Path(row["executable"]))
+          for report in pathlib.Path(os.environ["RUNNER_TEMP"]).glob("*-tests.jsonl"):
+              for line in report.read_text().splitlines():
+                  row = json.loads(line)
+                  if (row.get("reason") == "compiler-artifact" and row.get("executable")
+                          and row.get("target", {}).get("name") in helpers):
+                      selected.add(pathlib.Path(row["executable"]))
           records = []
           output = root / "build/linux-acceptance"
           output.mkdir(parents=True, exist_ok=True)
