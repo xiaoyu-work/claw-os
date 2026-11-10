@@ -22,27 +22,28 @@ func TestOwnerPathSharedVectors(t *testing.T) {
 		})
 	}
 
+	if ValidateOwnerPath("fs.read", strings.Repeat("é", 128)) == nil { t.Fatal("UTF-8 segment bound not enforced") }
+	for _, field := range []string{"owner_uid", "home", "owner_home"} {
+		if ValidateOwnerPathNeed(map[string]any{"verb":"fs.read", "scope":map[string]any{"kind":"owner-path", "path":"Documents/**", field:"/home/bob"}}) == nil {
+			t.Fatalf("caller-controlled owner selector accepted: %s", field)
+		}
+	}
+
 	func TestOptionalGUIOwnerPathValidation(t *testing.T) {
 		for _, invalid := range []any{nil, "not-an-array", map[string]any{}, []any{
-			map[string]any{"verb":"fs.read", "scope":map[string]any{"kind":"owner-path", "path":"../other/**"}},
+			map[string]any{"verb": "fs.read", "scope": map[string]any{"kind": "owner-path", "path": "../other/**"}},
 		}} {
 			for _, manifest := range []map[string]any{
-				{"desktop":map[string]any{"optional_needs":invalid}},
-				{"desktop":map[string]any{"entries":map[string]any{"applet":map[string]any{"optional_needs":invalid}}}},
+				{"desktop": map[string]any{"optional_needs": invalid}},
+				{"desktop": map[string]any{"entries": map[string]any{"applet": map[string]any{"optional_needs": invalid}}}},
 			} {
 				if validateOwnerPathBindings(manifest) == nil {
 					t.Fatal("invalid optional GUI declaration accepted")
 				}
 			}
 		}
-		if err := validateOwnerPathBindings(map[string]any{"desktop":map[string]any{"optional_needs":[]any{}}}); err != nil {
+		if err := validateOwnerPathBindings(map[string]any{"desktop": map[string]any{"optional_needs": []any{}}}); err != nil {
 			t.Fatal(err)
-		}
-	}
-	if ValidateOwnerPath("fs.read", strings.Repeat("é", 128)) == nil { t.Fatal("UTF-8 segment bound not enforced") }
-	for _, field := range []string{"owner_uid", "home", "owner_home"} {
-		if ValidateOwnerPathNeed(map[string]any{"verb":"fs.read", "scope":map[string]any{"kind":"owner-path", "path":"Documents/**", field:"/home/bob"}}) == nil {
-			t.Fatalf("caller-controlled owner selector accepted: %s", field)
 		}
 	}
 }
