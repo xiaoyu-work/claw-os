@@ -1081,37 +1081,35 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     )
     .expect("spawn host");
 
-    cos::proc::register_session_for_owner(
-        cos::proc::SessionInfo {
-            session_id: task_session.to_string(),
-            pid: worker_pid,
-            command: vec!["claw-agentd-worker".to_string()],
-            started_at: chrono::Utc::now().to_rfc3339(),
-            stdout_path: String::new(),
-            stderr_path: String::new(),
-            group: Some("agent".to_string()),
-            parent: None,
-            workdir: Some(identity.home.to_string_lossy().into_owned()),
-            exit_code: None,
-            ended_at: None,
-            tier: None,
-            scope: None,
-            priority: None,
-            caps: Some(caps.clone()),
-            transient_caps: None,
-            role: Some("agent-host".to_string()),
-            app_id: None,
-            pending_bind: false,
-            start_time_ticks: Some(worker_start),
-            client: cos::session::SessionClient::new(
-                cos::session::SessionSource::BrokerTask,
-                false,
-                true,
-            ),
-        },
-        uid,
-    )
-    .expect("register task session");
+    let task_session_info = cos::proc::SessionInfo {
+        session_id: task_session.to_string(),
+        pid: worker_pid,
+        command: vec!["claw-agentd-worker".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("agent".to_string()),
+        parent: None,
+        workdir: Some(identity.home.to_string_lossy().into_owned()),
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(caps.clone()),
+        transient_caps: None,
+        role: Some("agent-host".to_string()),
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: Some(worker_start),
+        client: cos::session::SessionClient::new(
+            cos::session::SessionSource::BrokerTask,
+            false,
+            true,
+        ),
+    };
+    cos::proc::register_session_for_owner(task_session_info.clone(), uid)
+        .expect("register task session");
     cos::proc::register_session_for_owner(
         cos::proc::SessionInfo {
             session_id: host_session.to_string(),
@@ -1143,21 +1141,25 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         uid,
     )
     .expect("register host session");
-    let lease = Arc::new(broker::ExtensionLease::new(
-        cos::extension_host::protocol::HostPurpose::Task,
-        task_id.to_string(),
-        Some(task_session.to_string()),
-        Some(host_session.to_string()),
-        uid,
-        extension_identity.uid,
-        execution_gid,
-        capability_generation,
-        worker_pid,
-        Some(worker_start),
-        host.pid,
-        host.start_time_ticks,
-        expires,
-    ).with_task_app_data(&host));
+    let lease = Arc::new(
+        broker::ExtensionLease::new(
+            cos::extension_host::protocol::HostPurpose::Task,
+            task_id.to_string(),
+            Some(task_session.to_string()),
+            Some(host_session.to_string()),
+            uid,
+            extension_identity.uid,
+            execution_gid,
+            capability_generation,
+            worker_pid,
+            Some(worker_start),
+            host.pid,
+            host.start_time_ticks,
+            expires,
+        )
+        .with_task_app_data(&host)
+        .with_task_session(Some(task_session_info)),
+    );
     let broker_task = tokio::spawn(broker::serve(
         listener,
         lease.clone(),
