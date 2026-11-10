@@ -231,8 +231,107 @@ fn aliases() {
     assert_eq!(libc::WEXITSTATUS(status), 0);
 }
 
+fn file_manager(args: &[String]) {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../../crates/claw-display-login/test/fixtures/file_manager_intents.json"
+    )))
+    .unwrap();
+    assert!(std::env::var("COS_APP_ID").ok().as_deref() == vectors["app_id"].as_str());
+    assert_eq!(std::env::var("COS_APP_GUI").as_deref(), Ok("1"));
+    assert_eq!(std::env::var("COS_WORKER_SANDBOX").as_deref(), Ok("1"));
+    assert_eq!(unsafe { libc::getuid() }, 62050);
+    check_inherited_descriptors();
+    let call = vectors["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|call| {
+            let expected: Vec<_> = call["uris"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|uri| uri.as_str().unwrap())
+                .collect();
+            args.iter().map(String::as_str).eq(expected)
+        })
+        .expect("private FileManager1 argv was not preserved");
+    let name = call["name"].as_str().unwrap();
+    let encoded: Vec<String> = serde_json::from_str(&std::env::var("COS_ARGS_JSON").unwrap()).unwrap();
+    assert!(
+        encoded == args,
+        "private FileManager1 GUI envelope changed argv"
+    );
+    let surface = peer(Protocol::Core);
+    assert_eq!(surface.offer_count(), 0);
+    assert_eq!(surface.mime_count(), 0);
+    for denied in [
+        "zwlr_layer_shell_v1",
+        "zwlr_data_control_manager_v1",
+        "ext_data_control_manager_v1",
+    ] {
+        assert!(!surface.has_global(denied));
+    }
+    for path in [
+        "/run/user/62050/bus",
+        "/run/gui-public/file-manager-bus/bus",
+    ] {
+        let error = UnixStream::connect(path).expect_err("GUI App reached the raw user bus");
+        assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+    }
+    if name == "hold" {
+        let group = unsafe { libc::getpgrp() };
+        let (mut ready, mut report) = UnixStream::pair().unwrap();
+        ready.set_read_timeout(Some(DEADLINE)).unwrap();
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            drop(ready);
+            own_process_group(group);
+            report.write_all(b"ready").unwrap();
+            drop(report);
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+        drop(report);
+        let mut confirmation = [0; 5];
+        ready.read_exact(&mut confirmation).unwrap();
+        assert_eq!(&confirmation, b"ready");
+        assert_eq!(unsafe { libc::getpgid(child) }, child);
+    }
+    std::fs::write(
+        private_marker(&format!("file-manager-{name}-ready.json")),
+        serde_json::to_vec(&serde_json::json!({
+            "passed": true, "literal_argv": true, "raw_bus_denied": true,
+            "name": name, "argument_count": args.len(), "retained_descendant": name == "hold",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(15);
+    while name == "hold" || !private_marker(&format!("file-manager-{name}-release")).exists() {
+        assert!(
+            name == "hold" || std::time::Instant::now() < until,
+            "private GUI release deadline"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if name == "failure" {
+        std::process::exit(7);
+    }
+    println!("private FileManager1 signed GUI completed");
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|selector| selector == "file-manager-surface")
+    {
+        file_manager(&args[1..]);
+        return;
+    }
     assert_eq!(args.len(), 4);
     assert_eq!(args[0], "surface");
     assert_eq!(args[2], "literal ; quote' --flag");

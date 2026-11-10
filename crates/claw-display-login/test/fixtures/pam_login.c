@@ -65,6 +65,8 @@ static int display_hook(pam_handle_t *handle, int opening) {
 int main(int argc, char **argv) {
     if (argc > 2 && strcmp(argv[1], "--entry") == 0)
         return gui_entry(argc - 2, argv + 2);
+    if (argc == 1 && getuid() == 62050)
+        return session_component();
     if (getuid() != 0 || geteuid() != 0 || argc != 3)
         return 64;
     struct pam_conv conv = {
@@ -160,6 +162,8 @@ int main(int argc, char **argv) {
         printf("40 completed display subscribers release their slots\n");
     } else if (strcmp(argv[2], "session-startup-failure") == 0) {
         fixture_result = session_startup_failure();
+    } else if (strcmp(argv[2], "session-file-manager") == 0) {
+        fixture_result = file_manager_session();
     } else if (strcmp(argv[2], "gui") == 0) {
         if (gui_fixture() != 0) {
             pam_close_session(handle, PAM_SILENT);
@@ -184,6 +188,9 @@ int main(int argc, char **argv) {
     if (strcmp(argv[2], "session-startup-failure") == 0
         && result == PAM_SUCCESS && ended == PAM_SUCCESS)
         fprintf(stderr, "private PAM retired after cosmic-session startup failure\n");
+    if (strcmp(argv[2], "session-file-manager") == 0
+        && result == PAM_SUCCESS && ended == PAM_SUCCESS && fixture_result == 0)
+        fprintf(stderr, "private PAM retired after actual FileManager1 session forwarding\n");
     if (fixture_result != 0)
         return 8;
     return result == PAM_SUCCESS && ended == PAM_SUCCESS ? 0 : 4;

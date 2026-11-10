@@ -193,7 +193,9 @@ display() {
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
     cargo build -p cos --locked --bin cos --bin claw-display-host \
-        --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner
+        --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
+        --bin claw-file-manager
+    cargo test -p cos --bin claw-file-manager --locked -- --test-threads=1
     cargo build -p claw-display-login --locked
     cargo test -p cos --lib --locked --no-run --message-format=json \
         > "$CARGO_TARGET_DIR/gui-tests.jsonl"
@@ -203,11 +205,15 @@ display() {
     cargo build --manifest-path desktop/comp/test/display-control/Cargo.toml --locked
     cargo clippy --manifest-path desktop/session/Cargo.toml --locked -- -D warnings
     cargo build --manifest-path desktop/session/Cargo.toml --locked
+    cargo test --manifest-path desktop/session/Cargo.toml --locked file_manager::tests \
+        -- --test-threads=1
     cc -std=c11 -Wall -Wextra -Werror \
         crates/claw-display-login/test/fixtures/pam_login.c \
         -lpam -ldl -o "$CARGO_TARGET_DIR/pam-login-fixture"
-    private="$(mktemp -d "$RUNNER_TEMP/cos-gui.XXXXXX")"
-    sudo timeout 180 unshare --mount --net --ipc --uts --fork \
+    private="$GITHUB_WORKSPACE/build/gui-authenticated.$BASHPID"
+    mkdir -p "$GITHUB_WORKSPACE/build"
+    mkdir -m0700 "$private"
+    sudo timeout 240 unshare --mount --net --ipc --uts --fork \
         bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
         "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
         "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
@@ -215,7 +221,8 @@ display() {
         "$CARGO_TARGET_DIR/pam-login-fixture" "$private" \
         "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
         "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
-        "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session"
+        "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session" \
+        "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop
     sudo timeout 30 unshare --mount --net --ipc --uts --fork \
         "$test_binary" \
         --exact display_session::registry::tests::private_deferred_retirement_reclaims_the_exact_slot_and_workload \

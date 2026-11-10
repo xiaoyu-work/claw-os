@@ -94,8 +94,9 @@ desktop, user selection/history, provider model or account data is used.
 
 Inputs, in order, are the core libtest executable, display host, headless
 compositor, PAM library, compiled PAM C fixture, private scratch directory,
-`cos`, GUI runner, App runner, native protocol probe, display-session client and
-the actual `cosmic-session` executable. The fixture also requires `dbus-daemon`.
+`cos`, GUI runner, App runner, native protocol probe, display-session client,
+the actual `cosmic-session`, actual `claw-file-manager` and its desktop-session
+autostart source resource. The fixture also requires `dbus-daemon`.
 The separate six-input activation-only mode remains available. Build commands
 and the private fixture entry points are documented in the
 [PAM module guide](../../../crates/claw-display-login/MODULE.md).
@@ -112,6 +113,19 @@ The startup-unwind case keeps an authenticated display subscription and private
 bus alive while a missing component makes the actual session panic; both that
 session and PAM must exit within bounds, retaining the original diagnostic.
 It is not a real greetd/logind/KMS login or an installed-image acceptance test.
+
+`clawd::server::gui_fixture::private_file_manager_session` is the isolated
+FileManager1 acceptance selection (`--file-manager-only` on the fourteen-input
+runner); the full GUI selection includes it. It runs actual PAM, display
+attachment, cosmic-session, the session-child facade and protected cos through
+ordinary signed zero-needs GUI hosting. Literal URIs, successful and failed
+checked outcomes, exact kernel login ancestry, no borrowed parent grants,
+cross-UID facade refusal before fork/vfork, raw App bus denial, private logs
+and live-GUI/descendant/session/PAM teardown are asserted. The unmodified
+autostart resource is staged, with only an owner-local default-handler
+preference selecting the signed test App. Other COSMIC components are explicit
+idle availability fixtures, not product UI or full Files acceptance; see the
+[complete evidence boundary](../../../crates/claw-display-login/MODULE.md#private-authenticated-process-fixture).
 
 The separate ignored
 `display_session::registry::tests::private_deferred_retirement_reclaims_the_exact_slot_and_workload`
