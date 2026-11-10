@@ -7,7 +7,7 @@ use cosmic::{
     iced::{Subscription, stream},
 };
 use futures_util::StreamExt;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Receiver, channel};
 use tracing::{error, warn};
 use zbus::Connection;
 
@@ -25,7 +25,6 @@ pub enum Input {
 
 #[derive(Debug, Clone)]
 pub enum Output {
-    Ready(Sender<Input>),
     CloseEvent(u32),
 }
 
@@ -54,11 +53,6 @@ pub fn proxy() -> Subscription<Output> {
                                 continue;
                             };
                             let tx = sender.clone();
-                            if let Err(err) = output.send(Output::Ready(sender)).await {
-                                error!("Failed to send sender: {}", err);
-                                state = State::Finished;
-                                continue;
-                            }
                             state = match proxy.receive_notification_closed().await {
                                 Ok(mut s) => {
                                     tokio::spawn(async move {

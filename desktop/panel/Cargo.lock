@@ -707,11 +707,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "cosmic-notifications-config"
+name = "claw-notification-presentation"
 version = "0.1.0"
 dependencies = [
- "cosmic-config",
  "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -720,8 +721,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "calloop",
+ "claw-notification-presentation",
  "cosmic-client-toolkit",
- "cosmic-notifications-config",
  "cosmic-panel-config",
  "cosmic-theme",
  "freedesktop-desktop-entry",

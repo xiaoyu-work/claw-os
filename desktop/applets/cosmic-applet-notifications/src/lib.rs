@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod localize;
+mod presentation;
 mod subscriptions;
 use cosmic::{
     Element, Task, app,
@@ -10,7 +11,6 @@ use cosmic::{
         token::subscription::{TokenRequest, TokenUpdate, activation_token_subscription},
     },
     cctk::sctk::reexports::calloop,
-    cosmic_config::{Config, CosmicConfigEntry},
     cosmic_theme::Spacing,
     iced::{
         Alignment, Length, Subscription,
@@ -23,14 +23,10 @@ use cosmic::{
     widget::{Column, button, cards, container, divider, icon, scrollable, space, text, toggler},
 };
 
-use cosmic::iced::futures::executor::block_on;
-
-use cosmic_notifications_config::NotificationsConfig;
-use cosmic_notifications_util::{ActionId, Image, Notification, markup};
-use std::{borrow::Cow, collections::HashMap, path::PathBuf, sync::LazyLock};
-use subscriptions::notifications::{self, NotificationsAppletProxy};
+use presentation::{PreferenceState, PresentedCard};
+use std::{borrow::Cow, collections::HashMap};
+use subscriptions::notifications;
 use tokio::sync::mpsc::Sender;
-use tracing::info;
 
 pub fn run() -> cosmic::iced::Result {
     localize::localize();
@@ -39,21 +35,17 @@ pub fn run() -> cosmic::iced::Result {
 
 struct Notifications {
     core: cosmic::app::Core,
-    config: NotificationsConfig,
-    config_helper: Option<Config>,
+    preferences: PreferenceState,
     icon_name: String,
     popup: Option<window::Id>,
-    // notifications: Vec<Notification>,
-    dbus_sender: Option<Sender<subscriptions::dbus::Input>>,
-    cards: Vec<(widget::Id, Vec<Notification>, bool, String, String, String)>,
+    cards: Vec<(widget::Id, Vec<PresentedCard>, bool, String, String, String)>,
     token_tx: Option<calloop::channel::Sender<TokenRequest>>,
-    proxy: NotificationsAppletProxy<'static>,
     notifications_tx: Option<Sender<notifications::Input>>,
 }
 
 impl Notifications {
     fn update_icon(&mut self) {
-        self.icon_name = if self.config.do_not_disturb {
+        self.icon_name = if self.preferences.muted() {
             "cosmic-applet-notification-disabled-symbolic"
         } else if self.cards.is_empty() {
             "cosmic-applet-notification-symbolic"
@@ -61,6 +53,40 @@ impl Notifications {
             "cosmic-applet-notification-new-symbolic"
         }
         .to_string();
+    }
+
+    fn remove_card(&mut self, id: u32) {
+        for group in &mut self.cards {
+            group.1.retain(|notification| notification.card.id != id);
+            group.3 = fl!(
+                "show-more",
+                HashMap::from([("more", group.1.len().saturating_sub(1))])
+            );
+        }
+        self.cards.retain(|group| !group.1.is_empty());
+    }
+
+    fn request(&self, input: notifications::Input) -> app::Task<Message> {
+        let preference = matches!(input, notifications::Input::SetMuted(_));
+        let sender = self.notifications_tx.clone();
+        cosmic::task::future(async move {
+            let result = async {
+                let sender = sender.ok_or("Notification presentation controls are unavailable.")?;
+                tokio::time::timeout(notifications::CALL_TIMEOUT, sender.send(input))
+                    .await
+                    .map_err(|_| "Notification presentation controls timed out.")?
+                    .map_err(|_| "Notification presentation controls closed.")?;
+                Ok::<(), &str>(())
+            }
+            .await;
+            Message::NotificationEvent(match result {
+                Ok(()) => notifications::Output::Queued,
+                Err(error) if preference => {
+                    notifications::Output::PreferenceResult(Err(error.to_string()))
+                }
+                Err(error) => notifications::Output::RequestFailed(error.to_string()),
+            })
+        })
     }
 }
 
@@ -70,7 +96,6 @@ enum Message {
     CloseRequested(window::Id),
     DoNotDisturb(bool),
     NotificationEvent(notifications::Output),
-    Config(NotificationsConfig),
     DbusEvent(subscriptions::dbus::Output),
     Dismissed(u32),
     ActivateNotification(u32),
@@ -88,34 +113,13 @@ impl cosmic::Application for Notifications {
     const APP_ID: &'static str = "com.clawos.AppletNotifications";
 
     fn init(core: cosmic::app::Core, _flags: Self::Flags) -> (Self, app::Task<Self::Message>) {
-        let helper = Config::new(
-            cosmic_notifications_config::ID,
-            NotificationsConfig::VERSION,
-        )
-        .ok();
-
-        let config: NotificationsConfig = helper
-            .as_ref()
-            .map(|helper| {
-                NotificationsConfig::get_entry(helper).unwrap_or_else(|(errors, config)| {
-                    for err in errors {
-                        tracing::error!("{:?}", err);
-                    }
-                    config
-                })
-            })
-            .unwrap_or_default();
         let mut _self = Self {
             core,
-            config_helper: helper,
-            config,
+            preferences: PreferenceState::default(),
             icon_name: String::default(),
             popup: None,
-            dbus_sender: Option::default(),
             cards: Vec::new(),
             token_tx: Option::default(),
-            proxy: block_on(crate::subscriptions::notifications::get_proxy())
-                .expect("Failed to get proxy"),
             notifications_tx: None,
         };
         _self.update_icon();
@@ -136,17 +140,8 @@ impl cosmic::Application for Notifications {
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            self.core
-                .watch_config(cosmic_notifications_config::ID)
-                .map(|res| {
-                    for err in res.errors {
-                        tracing::error!("{:?}", err);
-                    }
-                    Message::Config(res.config)
-                }),
             subscriptions::dbus::proxy().map(Message::DbusEvent),
-            subscriptions::notifications::notifications(self.proxy.clone())
-                .map(Message::NotificationEvent),
+            subscriptions::notifications::notifications().map(Message::NotificationEvent),
             activation_token_subscription(0).map(Message::Token),
         ])
     }
@@ -172,32 +167,43 @@ impl cosmic::Application for Notifications {
                 }
             }
             Message::DoNotDisturb(b) => {
-                self.config.do_not_disturb = b;
-                if let Some(helper) = &self.config_helper {
-                    if let Err(err) = self.config.write_entry(helper) {
-                        tracing::error!("{:?}", err);
-                    }
+                if self.preferences.begin(b) {
+                    return self.request(notifications::Input::SetMuted(b));
                 }
             }
             Message::NotificationEvent(event) => match event {
-                notifications::Output::Notification(n) => {
+                notifications::Output::Card(card) => {
+                    let n = match PresentedCard::new(card) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.preferences.fail(error.to_string());
+                            return Task::none();
+                        }
+                    };
+                    let label = &n.card.source_label;
+                    if let Some(existing) = self.cards.iter_mut().find_map(|group| {
+                        group
+                            .1
+                            .iter_mut()
+                            .find(|old| old.card.id == n.card.id && old.card.source_label == *label)
+                    }) {
+                        *existing = n;
+                        return Task::none();
+                    }
+                    self.remove_card(n.card.id);
                     if let Some(c) = self
                         .cards
                         .iter_mut()
-                        .find(|c| c.1.iter().any(|notif| n.app_name == notif.app_name))
+                        .find(|c| c.1.iter().any(|notif| *label == notif.card.source_label))
                     {
-                        if let Some(notif) = c.1.iter_mut().find(|notif| n.id == notif.id) {
-                            *notif = n;
-                        } else {
-                            c.1.push(n);
-                            c.3 = fl!(
-                                "show-more",
-                                HashMap::from([("more", c.1.len().saturating_sub(1))])
-                            );
-                        }
+                        c.1.push(n);
+                        c.3 = fl!(
+                            "show-more",
+                            HashMap::from([("more", c.1.len().saturating_sub(1))])
+                        );
                     } else {
                         self.cards.push((
-                            widget::Id::new(n.app_name.clone()),
+                            widget::Id::new(n.card.source_label.clone()),
                             vec![n],
                             false,
                             fl!("show-more", HashMap::from([("more", "1")])),
@@ -208,87 +214,51 @@ impl cosmic::Application for Notifications {
                 }
                 notifications::Output::Ready(tx) => {
                     self.notifications_tx = Some(tx);
+                    self.preferences.connected = true;
+                    self.preferences.error = None;
                 }
+                notifications::Output::Preferences(value) => self.preferences.observe(value),
+                notifications::Output::PreferenceResult(result) => self.preferences.finish(result),
+                notifications::Output::Dismissed(id) => self.remove_card(id),
+                notifications::Output::RequestFailed(error) => self.preferences.fail(error),
+                notifications::Output::Disconnected(error) => {
+                    self.notifications_tx = None;
+                    self.preferences.disconnect(error);
+                    self.cards.clear();
+                }
+                notifications::Output::Queued => {}
             },
-            Message::Config(config) => {
-                self.config = config;
-            }
             Message::Dismissed(id) => {
-                info!("Dismissed {}", id);
-                for c in &mut self.cards {
-                    c.1.retain(|n| n.id != id);
-                }
-                self.cards.retain(|c| !c.1.is_empty());
-
-                if let Some(tx) = &self.notifications_tx {
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(err) = tx.send(subscriptions::notifications::Input::Dismiss(id)).await {
-                            tracing::error!("{:?}", err);
-                        }
-                    });
-                }
+                return self.request(notifications::Input::Dismiss(id));
             }
             Message::DbusEvent(e) => match e {
-                subscriptions::dbus::Output::Ready(tx) => {
-                    self.dbus_sender.replace(tx);
-                }
-                subscriptions::dbus::Output::CloseEvent(id) => {
-                    for c in &mut self.cards {
-                        c.1.retain(|n| n.id != id);
-                        c.3 = fl!(
-                            "show-more",
-                            HashMap::from([("more", c.1.len().saturating_sub(1))])
-                        );
-                    }
-                    self.cards.retain(|c| !c.1.is_empty());
-                }
+                subscriptions::dbus::Output::CloseEvent(id) => self.remove_card(id),
             },
-            Message::ClearAll(Some(app_name)) => {
-                if let Some(pos) = self
+            Message::ClearAll(label) => {
+                let ids = self
                     .cards
-                    .iter_mut()
-                    .position(|c| c.1.iter().any(|notif| app_name == notif.app_name))
-                {
-                    for n in self.cards.remove(pos).1 {
-                        if let Some(tx) = &self.notifications_tx {
-                            let tx = tx.clone();
-                            tokio::spawn(async move {
-                                if let Err(err) =
-                                    tx.send(subscriptions::notifications::Input::Dismiss(n.id)).await
-                                {
-                                    tracing::error!("{:?}", err);
-                                }
-                            });
-                        }
-                    }
-                }
-            }
-            Message::ClearAll(None) => {
-                for n in self.cards.drain(..).flat_map(|n| n.1) {
-                    if let Some(tx) = &self.notifications_tx {
-                        let tx = tx.clone();
-                        tokio::spawn(async move {
-                            if let Err(err) =
-                                tx.send(subscriptions::notifications::Input::Dismiss(n.id)).await
-                            {
-                                tracing::error!("{:?}", err);
-                            }
-                        });
-                    }
-                }
+                    .iter()
+                    .flat_map(|group| &group.1)
+                    .filter(|notification| {
+                        label
+                            .as_ref()
+                            .is_none_or(|label| *label == notification.card.source_label)
+                    })
+                    .map(|notification| notification.card.id)
+                    .collect::<Vec<_>>();
+                return Task::batch(
+                    ids.into_iter()
+                        .map(|id| self.request(notifications::Input::Dismiss(id))),
+                );
             }
             Message::CardsToggled(name, expanded) => {
-                let id = if let Some((id, _, n_expanded, ..)) = self
+                if let Some((_, _, n_expanded, ..)) = self
                     .cards
                     .iter_mut()
-                    .find(|c| c.1.iter().any(|notif| name == notif.app_name))
+                    .find(|c| c.1.iter().any(|notif| name == notif.card.source_label))
                 {
                     *n_expanded = expanded;
-                    id.clone()
-                } else {
-                    return Task::none();
-                };
+                }
             }
             Message::CloseRequested(id) => {
                 if Some(id) == self.popup {
@@ -296,7 +266,7 @@ impl cosmic::Application for Notifications {
                 }
             }
             Message::OpenSettings => {
-                let exec = "cosmic-settings notifications".to_string();
+                let exec = "/usr/local/bin/cos app cosmic-settings --gui notifications".to_string();
                 if let Some(tx) = self.token_tx.as_ref() {
                     let _ = tx.send(TokenRequest {
                         app_id: Self::APP_ID.to_string(),
@@ -312,8 +282,8 @@ impl cosmic::Application for Notifications {
                     self.token_tx = None;
                 }
                 TokenUpdate::ActivationToken { token, .. } => {
-                    let mut cmd = std::process::Command::new("cosmic-settings");
-                    cmd.arg("notifications");
+                    let mut cmd = std::process::Command::new("/usr/local/bin/cos");
+                    cmd.args(["app", "cosmic-settings", "--gui", "notifications"]);
                     if let Some(token) = token {
                         cmd.env("XDG_ACTIVATION_TOKEN", &token);
                         cmd.env("DESKTOP_STARTUP_ID", &token);
@@ -322,44 +292,17 @@ impl cosmic::Application for Notifications {
                 }
             },
             Message::ActivateNotification(id) => {
-                tracing::error!("Received notification action Message");
                 let Some(notification) = self
                     .cards
                     .iter()
-                    .find_map(|list| list.1.iter().find(|n| n.id == id))
+                    .find_map(|list| list.1.iter().find(|n| n.card.id == id))
                 else {
-                    return cosmic::task::message(Message::Dismissed(id));
+                    return Task::none();
                 };
-                tracing::error!("Found notification for id");
-
-                let maybe_action = if notification
-                    .actions
-                    .iter()
-                    .any(|a| matches!(a.0, ActionId::Default))
-                {
-                    Some(ActionId::Default.to_string())
-                } else {
-                    notification.actions.first().map(|a| a.0.to_string())
+                let Some(action) = notification.card.activation.clone() else {
+                    return self.request(notifications::Input::Dismiss(id));
                 };
-
-                let Some(action) = maybe_action else {
-                    return cosmic::task::message(Message::Dismissed(id));
-                };
-                tracing::error!("Found default action for notification");
-
-                if let Some(tx) = &self.notifications_tx {
-                    tracing::error!("Sending notification action");
-
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(err) = tx.send(notifications::Input::Activated(id, action)).await
-                        {
-                            tracing::error!("{:?}", err);
-                        } else {
-                            tracing::error!("Sent notification action");
-                        }
-                    });
-                }
+                return self.request(notifications::Input::Activated(id, action));
             }
             Message::Surface(a) => {
                 return cosmic::task::message(cosmic::Action::Cosmic(
@@ -388,8 +331,8 @@ impl cosmic::Application for Notifications {
         } = theme::active().cosmic().spacing;
 
         let do_not_disturb = padded_control(row![
-            toggler(self.config.do_not_disturb)
-                .on_toggle(Message::DoNotDisturb)
+            toggler(self.preferences.muted())
+                .on_toggle_maybe(self.preferences.enabled().then_some(Message::DoNotDisturb))
                 .text_size(14)
                 .width(Length::Fill)
                 .label(fl!("do-not-disturb"))
@@ -424,13 +367,13 @@ impl cosmic::Application for Notifications {
                 if c.1.is_empty() {
                     continue;
                 }
-                let name = c.1[0].app_name.clone();
+                let name = c.1[0].card.source_label.clone();
                 let (ids, notif_elems): (Vec<_>, Vec<_>) = c
                     .1
                     .iter()
                     .rev()
                     .map(|n| {
-                        let app_name = text::caption(Cow::from(&n.app_name))
+                        let app_name = text::caption(Cow::from(&n.card.source_label))
                             .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
                             .width(Length::Fill);
 
@@ -441,26 +384,31 @@ impl cosmic::Application for Notifications {
                                 .size(16)
                                 .symbolic(true),
                         )
-                        .on_press(Message::Dismissed(n.id))
+                        .on_press(Message::Dismissed(n.card.id))
                         .class(cosmic::theme::Button::Text);
                         (
-                            n.id,
+                            n.card.id,
                             Element::from(
                                 column!(
-                                    if let Some(icon) = n.notification_icon() {
-                                        row![icon.size(16), app_name, duration_since, close_notif]
-                                            .spacing(space_xxs)
-                                            .align_y(Alignment::Center)
+                                    if let Some(icon) = n.icon.clone() {
+                                        row![
+                                            icon.icon().size(16),
+                                            app_name,
+                                            duration_since,
+                                            close_notif
+                                        ]
+                                        .spacing(space_xxs)
+                                        .align_y(Alignment::Center)
                                     } else {
                                         row![app_name, duration_since, close_notif]
                                             .spacing(space_xxs)
                                             .align_y(Alignment::Center)
                                     },
                                     column![
-                                        text::body(n.summary.lines().next().unwrap_or_default())
+                                        text::body(n.card.title.lines().next().unwrap_or_default())
                                             .width(Length::Fill),
                                         Element::from(
-                                            rich_text(markup::html_to_spans(&n.body))
+                                            rich_text(presentation::spans(&n.card.body))
                                                 .size(12.0)
                                                 .width(Length::Fill)
                                         )
@@ -471,34 +419,8 @@ impl cosmic::Application for Notifications {
                         )
                     })
                     .unzip();
-                let show_more_icon = c.1.last().and_then(|n| {
-                    info!("app_icon: {:?}", &n.app_icon);
-                    if n.app_icon.is_empty() {
-                        match n.image().cloned() {
-                            Some(Image::File(p)) => Some(cosmic::widget::icon::from_path(p)),
-                            Some(Image::Name(name)) => {
-                                Some(cosmic::widget::icon::from_name(name).handle())
-                            }
-                            Some(Image::Data {
-                                width,
-                                height,
-                                data,
-                            }) => Some(cosmic::widget::icon::from_raster_pixels(
-                                width, height, data,
-                            )),
-                            None => None,
-                        }
-                    } else if let Some(path) = url::Url::parse(&n.app_icon)
-                        .ok()
-                        .and_then(|u| u.to_file_path().ok())
-                    {
-                        Some(cosmic::widget::icon::from_path(path))
-                    } else {
-                        Some(cosmic::widget::icon::from_name(n.app_icon.as_str()).handle())
-                    }
-                });
+                let show_more_icon = c.1.last().and_then(|n| n.group_icon.clone());
                 let card_list = cards(
-                    //cards
                     c.0.clone(),
                     notif_elems,
                     Message::ClearAll(Some(name.clone())),
@@ -510,7 +432,6 @@ impl cosmic::Application for Notifications {
                     show_more_icon,
                     c.2,
                 );
-                // let card_list = space::horizontal().width(Length::Fixed(10.));
                 notifs.push(card_list.into());
             }
 
@@ -530,7 +451,12 @@ impl cosmic::Application for Notifications {
             notifications,
         ];
 
-        let content = column![do_not_disturb, main_content]
+        let mut content = column![do_not_disturb];
+        if let Some(error) = &self.preferences.error {
+            content = content.push(padded_control(text::caption(error)));
+        }
+        let content = content
+            .push(main_content)
             .align_x(Alignment::Start)
             .padding([space_xxs, 0]);
 
@@ -546,16 +472,12 @@ fn text_icon(name: &str, size: u16) -> cosmic::widget::Icon {
     icon::from_name(name).size(size).symbolic(true).icon()
 }
 
-fn duration_ago_msg(notification: &Notification) -> String {
-    if let Some(d) = notification.duration_since() {
-        let min = d.as_secs() / 60;
-        let hrs = min / 60;
-        if hrs > 0 {
-            fl!("hours-ago", HashMap::from([("duration", hrs)]))
-        } else {
-            fl!("minutes-ago", HashMap::from([("duration", min)]))
-        }
+fn duration_ago_msg(notification: &PresentedCard) -> String {
+    let min = notification.received.elapsed().as_secs() / 60;
+    let hrs = min / 60;
+    if hrs > 0 {
+        fl!("hours-ago", HashMap::from([("duration", hrs)]))
     } else {
-        String::new()
+        fl!("minutes-ago", HashMap::from([("duration", min)]))
     }
 }

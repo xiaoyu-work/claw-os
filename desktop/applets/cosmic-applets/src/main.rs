@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-mod widget_rail;
 
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt().with_env_filter("warn").init();
@@ -42,45 +41,7 @@ fn main() -> cosmic::iced::Result {
         "cosmic-applet-input-sources" => cosmic_applet_input_sources::run(),
         "claw-applet-approval-gate" => claw_applet_approval_gate::run(),
         "claw-applet-agent-activity" => claw_applet_agent_activity::run(),
-        "claw-applet-calendar" => claw_applet_calendar::run(|day| {
-            Box::pin(async move {
-                claw_applet_services::calendar::load_day(day).await.map(|events| {
-                    events.into_iter().map(|event| claw_applet_calendar::CalendarEvent {
-                        id: event.id,
-                        title: event.title,
-                        start: event.start,
-                        end: event.end,
-                        location: event.location,
-                    }).collect()
-                })
-            })
-        }),
-        "claw-applet-clipboard" => claw_applet_clipboard::run(clipboard_policy),
-        "claw-applet-widget-rail" => claw_applet_widget_rail::run(widget_rail::providers()),
         "cosmic-panel-button" => cosmic_panel_button::run(),
         _ => Ok(()),
     }
-}
-
-fn clipboard_policy(
-    permission: claw_applet_clipboard::HistoryPermission,
-) -> claw_applet_clipboard::PolicyFuture {
-    let (verb, scope) = clipboard_request(permission);
-    Box::pin(claw_applet_services::policy::require(verb, scope))
-}
-
-fn clipboard_request(
-    permission: claw_applet_clipboard::HistoryPermission,
-) -> (&'static str, claw_applet_services::policy::Scope<'static>) {
-    use claw_applet_clipboard::HistoryPermission;
-    let verb = match permission {
-        HistoryPermission::Read => "clipboard.read",
-        HistoryPermission::Write => "clipboard.write",
-    };
-    (verb, claw_applet_services::policy::Scope::Name("history"))
-}
-
-#[cfg(test)]
-mod tests {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/main.rs"));
 }

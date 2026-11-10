@@ -1,0 +1,14 @@
+{
+  "format": "claw.app-package-consumer/v1",
+  "url": "https://xiaoyu-work.github.io/clawos-app/",
+  "suite": "trixie",
+  "component": "main",
+  "architectures": ["amd64", "arm64"],
+  "signing_key": "core/assets/app-store-archive-key.asc",
+  "signing_fingerprint": "ADBA1957E712B6C80B4CC8736C044D6F411416AF",
+  "runtime_minimum": "0.2.1",
+  "sets": {
+    "agent": "claw-apps-agent",
+    "desktop": "claw-apps-desktop"
+  }
+}

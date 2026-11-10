@@ -5,26 +5,27 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Provides: claw-os-abi-__ABI__, claw-os-app-runtime-v1, claw-os-display-session-v1, claw-os-file-manager-v1 (= 1), claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1 (= 1), claw-os-observation-v1 (= 1), claw-os-clipboard-history-v1 (= 1), claw-os-browser-bridge-v1 (= 1), claw-os-nearby-v1
+Provides: claw-os-abi-__ABI__, claw-os-app-runtime-v1 (= __APP_RUNTIME_VERSION__), claw-os-display-session-v1, claw-os-file-manager-v1 (= 1), claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1 (= 1), claw-os-observation-v1 (= 1), claw-os-clipboard-history-v1 (= 1), claw-os-browser-bridge-v1 (= 1), claw-os-nearby-v1
 Breaks: claw-os-base (<< __MIN_BASE__), claw-os-desktop (<< __MIN_DESKTOP__)
 Conflicts: owly
 XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
 XB-Claw-Os-Abi: __ABI__
-Depends: bash, coreutils, libc-bin, ca-certificates, bubblewrap (>= 0.8.0), curl, gpgv, python3,
+Depends: bash, coreutils, libc-bin, ca-certificates, bubblewrap (>= 0.8.0), curl, gpgv, python3, python3-apt,
  python3-idna (>= 3.3), python3-idna (<< 4), sudo, systemd, pkexec, polkitd, libpam0g,
  init-system-helpers (>= 1.52),
  libnss3, libxss1, libasound2, libatk1.0-0, libatk-bridge2.0-0,
  libcups2, libdrm2, libdbus-1-3, libxcomposite1, libxdamage1,
  libxfixes3, libxrandr2, libgbm1, libpango-1.0-0, libcairo2,
  fonts-liberation, xdg-utils
-Recommends: chromium | chromium-browser | google-chrome-stable,
+Recommends: claw-apps-agent, chromium | chromium-browser | google-chrome-stable,
  nodejs, python3-pip, git, ripgrep, jq, sqlite3
 Suggests: systemd-coredump, network-manager, bluez, hostapd, iw, iproute2
 Description: reusable Claw OS system agent for Debian and Ubuntu
  Installs the complete headless Claw OS agent stack: `cos`, `clawd`,
  `claw-agentd`, `claw-extension-host`, the Claw-owned terminal UI, browser and
  semantic runtimes, capability and approval enforcement, audit/session
- persistence, skills, SDKs, and bundled headless apps.
+ persistence, skills and SDK/runtime libraries. Headless Apps and their common
+ libraries are separately owned packages recommended through claw-apps-agent.
  .
  The package also installs and enables the privileged `clawd` system
  service. Agent work itself runs in unprivileged, per-task

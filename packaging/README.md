@@ -36,9 +36,60 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, headless apps, skills, SDKs, extension-provenance trust roots, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec` |
+| `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, skills, SDK/runtime, trust roots, Agent system/user units and App channel configuration; no App payloads | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec`; recommends `claw-apps-agent` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
-| `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
+| `claw-os-desktop` | COSMIC shell/services, graphical Agent UI/bridge, initial setup, PAM/policy and system assets; no product-native payloads | `amd64`, `arm64` | `claw-os-base`; recommends `claw-apps-desktop` |
+
+### Coordinated 0.2.1 source ownership cutover
+
+The approved source boundary is **`1:0.2.1`**, not `1:0.3.0`. App packages
+bound `Breaks`/`Replaces` to the former Agent/Desktop owners strictly below
+that boundary. Installed paths, all 63 retained identities (51 headless and
+12 native), data and grants are unchanged. No updater, identity migration or
+new privilege is introduced.
+
+The separately signed App channel owns product/capability packages, native
+ELFs/resources, Browser assets, Mail's XPI, `claw-app-support` and named Python
+libraries. Support provides `claw-app-support-v1`; Files alone provides
+`claw-app-python-claw-files-v1`. App packages cannot provide OS/package/authority
+ABIs. Agent retains `claw_os_sdk`, `cos_runtime`, toolkit/system services and
+Root helpers. Its `claw-os-app-runtime-v1 (= 0.2.1)` implementation version
+comes from `app-platform.json`; App packages require `>= 0.2.1`, still ABI 1.
+
+`scripts/app_packages.py prepare` authenticates the official App APT release,
+bounded freshness and package index, downloads the selected dependency closure,
+then verifies final Debian bytes and one dpkg owner per payload path. Exact
+native/headless product dependencies can select retained matching versions.
+Release jobs retain those public APT inputs, reverify them before assembly and
+refuse any OS/App file overlap. Missing, stale, incomplete or changed inputs
+fail closed; there is no production source fallback. Images install the same
+checked independent `.deb` files in the ordinary APT transaction.
+
+Bootstrap order is approved SDK artifact → independent App APT packages →
+payload-free OS Agent/Desktop. Agent only *recommends* the headless set, so
+App runtime dependencies create no circular hard dependency and Agent-only
+Ubuntu/WSL installs do not require the full Desktop. Configure both signed
+channels before a default install; Agent also ships `claw-apps.sources` and
+the public key. An existing minimal `--no-install-recommends` Agent can run
+`apt update` and explicitly select `claw-apps-agent`, native App packages or
+the protected Store later. Maintainer scripts do not run nested APT installs.
+
+**Desktop source links are cut over:** Calendar, Clipboard and Widget Rail
+binaries, desktop entries, translations/icons and common-Host launchers are
+App-owned; the OS retains their panel layout IDs without linking product UI
+or installing duplicate aliases. Notifications uses the existing public SDK
+presentation records/proxy/FD constants instead of private config/util or
+direct product preference writes. Grouping, styles, actions, bounded decoded
+icons and confirmed popup mute are retained without merging renderer graphs.
+`native-boundary` still rejects reintroduced App source links.
+`desktop/justfile` keeps source-only `build-source-fixtures` and
+`install-source-fixtures` with an explicit immutable `CLAW_APP_SOURCE_LOCK`;
+production no longer fetches/mounts native App sources or copies manifests.
+Desktop requires runtime-v1 implementation 0.2.1 through the normal template.
+Actual Linux native builds and installed native/GUI acceptance remain
+required. Public 0.2.1 SDK/App artifacts are not adopted or published here;
+App development still pins real published platform 0.2.0 and publication gates
+remain pending.
 
 The Desktop source also installs `/usr/libexec/claw-os-applet-provider` and
 provides `claw-os-applet-services-v1 (= 1)`. Assembly refuses a missing,
@@ -55,7 +106,13 @@ neither package availability nor a consumer name grants Calendar access.
 This source wiring does not cut over existing App payloads, change grants or
 clear GUI/Clipboard resource-admission gates; see [updating](../docs/updating.md).
 
-`claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
+### Pre-cutover compatibility history (not production 0.2.1 ownership)
+
+The source-composition descriptions below record the earlier bundled layout.
+The ownership graph and guarded APT consumers above supersede those delivery
+claims; their source staging is retained only for explicit fixtures.
+
+`claw-os-agent` was the exact same package on Ubuntu and Claw OS. It included
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
 It also owns the Mail XPI at
 `/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi`, built
@@ -463,6 +520,7 @@ cargo build --release -p cos --target x86_64-unknown-linux-musl
 cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
 # Build only the reusable Agent
+python3 scripts/app_packages.py prepare --variant agent --architecture amd64
 ./packaging/deb/build-debs.sh agent
 # -> build/debs/claw-os-agent_<version>_amd64.deb
 
@@ -487,13 +545,9 @@ GPG_KEY_ID=<signing-key-fingerprint> ./packaging/apt-repo/build-repo.sh
 # -> build/apt-repo/pool/main/c/claw-os-{agent,base,desktop}/*.deb
 ```
 
-When the checkout is on a Windows-mounted WSL path whose directories always
-report mode `0777`, point staging at the Linux filesystem so `dpkg-deb` can
-enforce its control-directory permissions:
-
-```bash
-COS_DEB_STAGE_DIR=/tmp/claw-os-deb-staging ./packaging/deb/build-debs.sh
-```
+Build from a Linux-filesystem checkout. Windows-mounted WSL directories may
+report mode `0777`, which cannot preserve Debian control permissions or native
+source modes; they are not supported native build/staging roots.
 
 The terminal renderer is part of the musl-built `cos` binary. Packaging has no
 separate TUI source acquisition, executable, runtime dependency or update
@@ -513,10 +567,11 @@ The **Release Claw OS** workflow (`release.yml`) has one target selector:
 | `website` | Website and Pages composition; preserves every existing package |
 | `all` | Shared tests, all packages, Docker/WSL and one Pages publication |
 
-Each run freezes one commit-derived package version and, when needed, one
-immutable App-main snapshot. The shared test suite in `all`, Agent packaging
-and Desktop native preparation all consume that snapshot. Package checks bind
-the embedded App selection back to it before upload. Images download the
+Each run freezes one commit-derived package version and the authenticated
+App APT package closure for selected architectures. Only the shared test suite
+in `all` separately receives an explicit immutable App-source fixture; no
+production builder consumes it. Package checks reverify official APT evidence
+and refuse App/support/library ownership before upload. Images download the
 signed Agent/Base packages instead of rebuilding the common binaries; Docker
 and WSL share one stamped rootfs per architecture.
 

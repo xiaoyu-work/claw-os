@@ -12,7 +12,6 @@ default-schema-target := INSTALL_DIR / 'cosmic'
 cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
 bin-src := cargo-target-dir / 'release' / name
 bin-dst := base-dir / 'bin' / name
-notifications-config := '../../build/native-apps/cosmic-notifications/cosmic-notifications-config'
 
 # Default recipe which runs `just build-release`
 default: build-release
@@ -26,11 +25,8 @@ clean-dist: clean
     rm -rf .cargo vendor vendor.tar
 
 # Compiles with debug profile
-build-debug *args: prepare-apps
+build-debug *args:
     cargo build {{args}}
-
-prepare-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ notifications-config }}/Cargo.toml; else python3 ../../scripts/app_sources.py --native; fi
 
 # Compiles with release profile
 build-release *args: (build-debug '--release' args)
@@ -39,7 +35,7 @@ build-release *args: (build-debug '--release' args)
 build-vendored *args: vendor-extract (build-release '--frozen --offline' args)
 
 # Runs a clippy check
-check *args: prepare-apps
+check *args:
     cargo clippy --all-features {{args}} -- -W clippy::pedantic
 
 # Runs a clippy check with JSON message format
@@ -56,7 +52,7 @@ uninstall:
     rm -rf {{default-schema-target}}/{{APPID}}*
     
 # Vendor dependencies locally
-vendor: prepare-apps
+vendor:
     mkdir -p .cargo
     cargo vendor --sync Cargo.toml \
         | head -n -1 > .cargo/config

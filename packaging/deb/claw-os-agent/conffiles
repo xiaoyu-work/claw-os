@@ -1,2 +1,3 @@
 /etc/apt/apt.conf.d/50claw-os-security-floor
+/etc/apt/sources.list.d/claw-apps.sources
 /etc/cos/profile.sh

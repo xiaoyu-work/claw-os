@@ -16,6 +16,37 @@ This update path applies to:
 
 ## Normal update
 
+### Coordinated 0.2.1 ownership boundary (source only)
+
+The initial independent App packaging boundary is `1:0.2.1`, not `1:0.3.0`.
+New Agent/Desktop builders do not stage product Apps, native payloads or
+App-owned common/named Python libraries. Separate App APT packages replace
+former owners only `(<< 1:0.2.1)`; no new OS package may be overwritten.
+SDK/runtime Python and OS toolkit/services, PAM, initial setup, keyboard and
+policy stay OS-owned. Identities, installed App paths, data, credentials and
+existing grants do not migrate.
+
+The existing runtime ABI remains 1, but Agent provides
+`claw-os-app-runtime-v1 (= 0.2.1)` from platform metadata, and App packages
+require `claw-os-app-runtime-v1 (>= 0.2.1)`. Old/unversioned Provides cannot
+satisfy that dependency. Agent recommends only `claw-apps-agent`; native
+packages can be selected independently on Ubuntu/WSL without the full OS
+Desktop. A default graphical OS install recommends `claw-apps-desktop`.
+Publish the approved SDK and independent App APT artifacts before releasing
+the payload-free Agent/OS, with both signed channels configured for the normal
+transaction. The release guard refuses unavailable or changed App artifacts.
+
+Shell App UI/private-library source links are removed without deleting native
+UX: matching App packages retain the three panel binaries/resources and
+common-Host launchers, and the OS notification renderer uses the public SDK
+presentation protocol instead of product configuration/utilities.
+This is not installed update acceptance: actual native builds,
+protected APT review/custody and installed
+GUI/update/rollback need their coordinated validation. No package is published,
+production pin replaced or `integration_contract` cleared here. The following
+source-relocation notes retain pre-cutover compatibility history and do not
+override [the new package ownership graph](../packaging/README.md#coordinated-021-source-ownership-cutover).
+
 Agent provides `claw-os-notifications-v1`; matching Desktop packages depend on
 it. Native `cosmic-notifications` keeps its identity and `ui.notify` grant, but
 MCP 0.2 returns durable `notif-` string IDs rather than D-Bus integers.

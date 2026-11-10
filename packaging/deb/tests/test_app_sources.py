@@ -1,6 +1,8 @@
 """App main resolves to coherent build snapshots without a runtime fallback."""
 
 import fnmatch
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 import importlib.util
 import json
 import os
@@ -31,6 +33,9 @@ def test_brokered_desktop_service_is_an_installed_dependency(service):
 SPEC = importlib.util.spec_from_file_location("app_sources", ROOT / "scripts" / "app_sources.py")
 sources = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sources)
+PACKAGE_SPEC = importlib.util.spec_from_file_location("app_packages", ROOT / "scripts/app_packages.py")
+packages = importlib.util.module_from_spec(PACKAGE_SPEC)
+PACKAGE_SPEC.loader.exec_module(packages)
 
 
 @pytest.fixture(scope="module")
@@ -519,8 +524,11 @@ def test_unexpected_installed_identity_is_rejected(locked_source, tmp_path):
 
 def test_agent_package_keeps_native_authority_in_os():
     script = (ROOT / "packaging/deb/build-debs.sh").read_text()
-    assert '"$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE"' in script
+    assert "scripts/app_sources.py" not in script
+    assert '--variant agent --architecture "$DEB_ARCH" --stage "$AGENT_STAGE"' in script
     assert '$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host' in script
+    assert '$AGENT_STAGE/usr/lib/cos/bin/claw-app-apt-hook' in script
+    assert '$AGENT_STAGE/usr/lib/cos/app-apt-metadata.py' in script
     assert '"$PROJECT_DIR/extensions/claw-mail-ai"' not in script
 
 
@@ -613,61 +621,221 @@ def test_os_installer_owns_shared_desktop_policy_without_app_sources(tmp_path):
     }
 
 
-def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp_path):
-    project = tmp_path / "project"
-    packaging = project / "packaging/deb"
-    (packaging / "claw-os-desktop").mkdir(parents=True)
-    (packaging / "claw-os-desktop/apps.list").write_text("desktop-app\n")
-    (project / "scripts").mkdir()
-    (project / "scripts/app_sources.py").write_text(
-        'import json, os\n'
-        'from pathlib import Path\n'
-        'import sys\n'
-        'with Path(__file__).with_name("calls.jsonl").open("a") as log:\n'
-        '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
-        'if "--write-lock" in sys.argv:\n'
-        '    snapshot = Path(sys.argv[sys.argv.index("--write-lock") + 1])\n'
-        '    snapshot.parent.mkdir(parents=True)\n'
-        '    snapshot.write_text("RESOLVED_MAIN_SNAPSHOT")\n'
-        'else:\n'
-        '    assert Path(os.environ["CLAW_APP_SOURCE_LOCK"]).read_text() == "RESOLVED_MAIN_SNAPSHOT"\n'
-        'if "--stage" in sys.argv:\n'
-        '    for relative in ("alpha", "gateway/slack", "gateway/email"):\n'
-        '        app = Path(sys.argv[sys.argv.index("--stage") + 1]) / "usr/lib/cos/apps" / relative\n'
-        '        app.mkdir(parents=True)\n'
-        '        (app / "app.json").write_text(json.dumps({"id": relative.replace("/", "-")}))\n'
-        'elif "--stage-shared" in sys.argv:\n'
-        '    python = Path(sys.argv[sys.argv.index("--stage-shared") + 1]) / "usr/lib/cos/python"\n'
-        '    (python / "canonical_argv.py").write_text("SHARED_PARSER = True\\n")\n'
-        'elif "--app-path" in sys.argv:\n'
-        '    assert sys.argv[-1] == "desktop-app"\n'
-        'print(4)\n'
-    )
+@pytest.mark.parametrize("relative", [
+    "usr/lib/cos/apps/alpha/app.json",
+    "usr/lib/cos/python/_shared/atomic.py",
+    "usr/lib/cos/python/canonical_argv.py",
+    "usr/lib/cos/python/claw_files/document.py",
+    "usr/share/applications/com.clawos.Files.desktop",
+    "usr/bin/claw-applet-calendar",
+])
+def test_os_package_refuses_app_support_library_and_native_resource_ownership(tmp_path, relative):
     stage = tmp_path / "stage"
-    (stage / "usr/lib/cos/apps").mkdir(parents=True)
-    (stage / "usr/lib/cos/python").mkdir()
-    script = (ROOT / "packaging/deb/build-debs.sh").read_text()
-    block = script.split("# All non-graphical apps", 1)[1]
-    block = block[block.index("APP_SOURCE_LOCK="):]
-    block = block.split('if [ -d "$PROJECT_DIR/skills" ]; then', 1)[0]
-    subprocess.run(["bash", "-euc", block], check=True, env={
-        **os.environ, "PROJECT_DIR": str(project), "SCRIPT_DIR": str(packaging),
-        "AGENT_STAGE": str(stage),
-    })
-    assert (stage / "usr/lib/cos/apps/gateway/email/app.json").is_file()
-    assert (stage / "usr/lib/cos/apps/gateway/slack/app.json").is_file()
-    assert not (stage / "usr/lib/cos/apps/desktop-app").exists()
-    assert not (stage / "usr/lib/cos/apps/gateway/email/__pycache__").exists()
-    assert not (stage / "usr/lib/cos/apps/_shared").exists()
-    assert not (stage / "usr/lib/cos/apps/gateway/_shared").exists()
-    assert (stage / "usr/lib/cos/python/canonical_argv.py").read_text() == "SHARED_PARSER = True\n"
-    calls = [json.loads(line) for line in (project / "scripts/calls.jsonl").read_text().splitlines()]
-    assert calls == [
-        ["--write-lock", str(stage / "usr/share/doc/claw-os-agent/app-sources.json")],
-        ["--app-path", "desktop-app"], ["--stage-shared", str(stage)],
-        ["--stage", str(stage), "--package", "agent"], ["--count"],
+    sdk = stage / "usr/lib/cos/python/claw_os_sdk/__init__.py"
+    sdk.parent.mkdir(parents=True)
+    sdk.write_text("OS-owned public SDK\n")
+    packages.check_stage(stage, {})
+    payload = stage / relative
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_text("App-owned bytes\n")
+    with pytest.raises(ValueError, match="still owns"):
+        packages.check_stage(stage, {relative: "claw-app-fixture"})
+    assert payload.read_text() == "App-owned bytes\n"
+
+
+@pytest.fixture
+def apt_selection(tmp_path, monkeypatch):
+    root = tmp_path / "os"
+    (root / "packaging/deb/claw-os-desktop").mkdir(parents=True)
+    (root / "packaging/apps.lock.json").write_text(json.dumps({"apps": ["alpha", "beta", "native"]}))
+    (root / "packaging/deb/claw-os-desktop/apps.list").write_text("native\n")
+    (root / "packaging/app-platform.json").write_text(json.dumps({
+        "schema": "claw.app-platform/v1", "version": "0.2.1", "runtime_abi": 1,
+    }))
+    monkeypatch.setattr(packages, "ROOT", root)
+    configuration = {"sets": {"agent": "claw-apps-agent", "desktop": "claw-apps-desktop"}}
+    runtime = "claw-os-app-runtime-v1 (>= 0.2.1)"
+    records = [
+        {"Package": "claw-apps-agent", "Version": "0.2.1", "Depends": "claw-app-alpha, claw-cap-beta"},
+        {"Package": "claw-apps-desktop", "Version": "0.2.1", "Depends": "claw-apps-agent, claw-app-native-desktop"},
+        {"Package": "claw-app-support", "Version": "0.2.1", "Depends": runtime, "Provides": "claw-app-support-v1"},
+        {"Package": "claw-app-alpha", "Version": "0.2.1", "X-Claw-App-Ids": "alpha",
+         "Depends": runtime + ", claw-app-support-v1, claw-app-python-beta-v1"},
+        {"Package": "claw-cap-beta", "Version": "0.2.1", "X-Claw-App-Ids": "beta",
+         "Depends": runtime + ", claw-app-support-v1", "Provides": "claw-app-python-beta-v1"},
+        {"Package": "claw-app-native-desktop", "Version": "0.2.1", "X-Claw-App-Ids": "native",
+         "Depends": runtime + ", claw-app-support-v1"},
     ]
-    assert not (project / "apps").exists()
+    return records, configuration
+
+
+def test_official_package_selection_resolves_one_library_owner_without_a_desktop(apt_selection):
+    records, configuration = apt_selection
+    agent = packages.selection(records, "agent", configuration)
+    assert {record["Package"] for record in agent} == {
+        "claw-apps-agent", "claw-app-alpha", "claw-cap-beta", "claw-app-support",
+    }
+    desktop = packages.selection(records, "desktop", configuration)
+    assert len(desktop) == len(agent) + 2
+    with pytest.raises(ValueError, match="Missing"):
+        packages.selection([record for record in records if record["Package"] != "claw-cap-beta"],
+                           "agent", configuration)
+    records[3]["Depends"] = "claw-os-app-runtime-v1, claw-app-support-v1"
+    with pytest.raises(ValueError, match="runtime floor"):
+        packages.selection(records, "agent", configuration)
+
+
+def test_official_package_selection_refuses_duplicate_or_incomplete_identity_owners(apt_selection):
+    records, configuration = apt_selection
+    records[4]["X-Claw-App-Ids"] = "alpha"
+    with pytest.raises(ValueError, match="Multiple App"):
+        packages.selection(records, "agent", configuration)
+    records[4]["X-Claw-App-Ids"] = ""
+    with pytest.raises(ValueError, match="retained identity"):
+        packages.selection(records, "agent", configuration)
+
+
+def test_official_native_selection_uses_the_retained_matching_product_version(apt_selection):
+    records, configuration = apt_selection
+    records.append({**records[3], "Version": "0.2.2"})
+    records[5]["Depends"] += ", claw-app-alpha (= 0.2.1)"
+    assert next(record for record in packages.selection(records, "agent", configuration)
+                if record["Package"] == "claw-app-alpha")["Version"] == "0.2.2"
+    assert next(record for record in packages.selection(records, "desktop", configuration)
+                if record["Package"] == "claw-app-alpha")["Version"] == "0.2.1"
+
+
+def test_os_build_refuses_missing_official_artifacts_without_fetching_source(tmp_path):
+    with pytest.raises(ValueError, match="Official App artifacts are required"):
+        packages.check("agent", "amd64", tmp_path)
+    assert list(tmp_path.iterdir()) == []
+    result = subprocess.run(
+        ["bash", str(ROOT / "packaging/deb/build-debs.sh"), "agent"],
+        capture_output=True, text=True, env={
+            **os.environ, "COS_PACKAGE_VERSION": "1:0.2.0", "ARCH": "amd64",
+            "COS_DEB_OUT_DIR": str(tmp_path / "debs"), "COS_DEB_STAGE_DIR": str(tmp_path / "staging"),
+            "CLAW_APP_SOURCE_LOCK": str(tmp_path / "must-not-resolve-source.json"),
+        },
+    )
+    assert result.returncode != 0
+    assert "ownership cutover requires Agent/Desktop >= 1:0.2.1" in result.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_saved_app_apt_evidence_is_reauthenticated_and_fresh_before_use(tmp_path, monkeypatch):
+    generation = tmp_path / "key-generation"
+    generation.mkdir(mode=0o700)
+    gpg = ["gpg", "--no-options", "--batch", "--homedir", str(generation)]
+    subprocess.run([*gpg, "--pinentry-mode", "loopback", "--passphrase", "",
+                    "--quick-generate-key", "Private App Consumer Fixture", "ed25519", "sign", "1d"],
+                   check=True, capture_output=True)
+    try:
+        listing = subprocess.check_output([*gpg, "--with-colons", "--list-keys"], text=True)
+        fingerprint = next(line.split(":")[9] for line in listing.splitlines() if line.startswith("fpr:"))
+        key = tmp_path / "archive-key.asc"
+        key.write_bytes(subprocess.check_output([*gpg, "--armor", "--export", fingerprint]))
+        monkeypatch.setattr(packages, "ROOT", tmp_path)
+        configuration = {
+            "signing_key": "archive-key.asc", "signing_fingerprint": fingerprint,
+            "suite": "trixie", "component": "main",
+        }
+        directory = tmp_path / "evidence"
+        lists = directory / "state/lists"
+        lists.mkdir(parents=True)
+        index = lists / "fixture_binary-amd64_Packages"
+        data = b"Package: claw-app-fixture\nVersion: 0.2.1\nArchitecture: all\n\n"
+        index.write_bytes(data)
+        source = directory / "Release"
+        issued = datetime.now(timezone.utc).replace(microsecond=0)
+
+        def sign(start, end):
+            source.write_text(
+                f"Suite: trixie\nArchitectures: amd64 arm64\nComponents: main\n"
+                f"Date: {format_datetime(start)}\nValid-Until: {format_datetime(end)}\n"
+                f"SHA256:\n {packages.sha256(index)} {len(data)} main/binary-amd64/Packages\n"
+            )
+            subprocess.run([*gpg, "--yes", "--output", str(lists / "fixture_InRelease"),
+                            "--clearsign", str(source)], check=True, capture_output=True)
+
+        sign(issued, issued + timedelta(days=1))
+        assert packages.authenticated_records(directory, "amd64", configuration) == [
+            {"Package": "claw-app-fixture", "Version": "0.2.1", "Architecture": "all"},
+        ]
+        index.write_bytes(data + b"changed index")
+        with pytest.raises(ValueError, match="differs from its signed release"):
+            packages.authenticated_records(directory, "amd64", configuration)
+        index.write_bytes(data)
+        sign(issued - timedelta(days=2), issued - timedelta(days=1))
+        with pytest.raises(ValueError, match="stale"):
+            packages.authenticated_records(directory, "amd64", configuration)
+    finally:
+        subprocess.run(["gpgconf", "--homedir", str(generation), "--kill", "gpg-agent"],
+                       check=False, capture_output=True)
+
+
+def test_official_package_bytes_have_one_dpkg_owner_and_never_own_the_os_sdk(tmp_path):
+    archives = tmp_path / "archives"
+    archives.mkdir()
+
+    def build(name, relative, provides=""):
+        stage = tmp_path / name
+        (stage / "DEBIAN").mkdir(parents=True)
+        (stage / "DEBIAN/control").write_text(
+            f"Package: {name}\nVersion: 0.2.1\nArchitecture: all\n"
+            "Maintainer: Fixture <fixture@example.invalid>\nDescription: Private ownership fixture\n"
+            + (f"Provides: {provides}\n" if provides else "")
+        )
+        payload = stage / relative
+        payload.parent.mkdir(parents=True)
+        payload.write_bytes(b"fixture bytes")
+        artifact = archives / (name + ".deb")
+        subprocess.run(["dpkg-deb", "--root-owner-group", "--build", stage, artifact],
+                       check=True, capture_output=True)
+        return {
+            "Package": name, "Version": "0.2.1", "Architecture": "all",
+            "SHA256": packages.sha256(artifact), "Size": str(artifact.stat().st_size),
+            **({"Provides": provides} if provides else {}),
+        }
+
+    common = "usr/lib/cos/python/_shared/atomic.py"
+    first = build("claw-app-support", common)
+    assert packages.verify_packages(tmp_path, [first]) == {common: first["Package"]}
+    duplicate = build("claw-app-duplicate", common)
+    with pytest.raises(ValueError, match="Multiple dpkg owners"):
+        packages.verify_packages(tmp_path, [first, duplicate])
+    sdk = build("claw-app-bad-sdk", "usr/lib/cos/python/claw_os_sdk/__init__.py")
+    with pytest.raises(ValueError, match="OS-owned SDK"):
+        packages.verify_packages(tmp_path, [sdk])
+    authority = build("claw-app-bad-abi", "usr/share/clawos-fixture/not-an-authority",
+                      "claw-os-app-runtime-v1 (= 0.2.1)")
+    with pytest.raises(ValueError, match="cannot provide"):
+        packages.verify_packages(tmp_path, [authority])
+    (archives / (first["Package"] + ".deb")).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="changed official App artifact"):
+        packages.verify_packages(tmp_path, [first])
+
+
+def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
+    script = (ROOT / "packaging/deb/build-debs.sh").read_text()
+    function = script[script.index("render_control() {"):script.index(
+        "###############################################################################\n# Release-security metadata.",
+    )]
+    rendered = tmp_path / "control"
+    subprocess.run(["bash", "-euc", function + '\nrender_control "$CONTROL" "$OUTPUT"'], check=True, env={
+        **os.environ, "CONTROL": str(ROOT / "packaging/deb/claw-os-agent/control"),
+        "OUTPUT": str(rendered), "VERSION": "1:0.2.1", "DEB_ARCH": "amd64",
+        "APP_RUNTIME_VERSION": packages.platform()["version"], "SECURITY_ABI": "1",
+        "SECURITY_EPOCH": "1", "MIN_AGENT_VERSION": "1:0.2.0",
+        "MIN_BASE_VERSION": "1:0.2.0", "MIN_DESKTOP_VERSION": "1:0.2.0",
+    })
+    control = packages.fields(rendered.read_text())
+    assert "claw-os-app-runtime-v1 (= 0.2.1)" in control["Provides"]
+    assert "claw-apps-agent" in control["Recommends"]
+    assert "claw-app-support" not in control["Depends"]
+    assert "claw-apps-desktop" not in control["Depends"]
+    desktop = (ROOT / "packaging/deb/claw-os-desktop/control").read_text()
+    desktop = desktop.replace("__APP_RUNTIME_VERSION__", packages.platform()["version"])
+    assert "claw-os-app-runtime-v1 (>= 0.2.1)" in packages.fields(desktop)["Depends"]
 
 
 def _app_payload(directory, *, source=False):
@@ -817,7 +985,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     lock = sources.read_lock()
     assert lock["capabilities"] == ["document-engine", "storage-sdk", "http", "ai-helpers"]
     assert len(lock["products"]) == 24
-    assert len(lock["apps"]) == 75
+    assert len(lock["apps"]) == 63
     source = sources.prepare_sources(lock)
     lock = sources.resolved_lock(lock, source)
     snapshot = tmp_path / "selected-apps.json"
@@ -825,7 +993,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     expected = set(lock["apps"])
     desktop = expected & set(sources.desktop_apps())
     assert len(desktop) == 12
-    assert len(expected - desktop) == 63
+    assert len(expected - desktop) == 51
     assert set(sources.stage_products(tmp_path / "all", lock=lock)) == expected
     assert set(sources.stage_products(tmp_path / "agent", "agent", lock=lock)) == expected - desktop
     assert set(sources.stage_products(tmp_path / "desktop", "desktop", lock=lock)) == desktop
@@ -852,17 +1020,9 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     for library in ("claw-os-sdk/python/src/claw_os_sdk", "cos-runtime/python/src/cos_runtime"):
         shutil.copytree(ROOT / library, python / Path(library).name,
                         ignore=shutil.ignore_patterns("__pycache__", "test_*.py"))
-    script = (ROOT / "packaging/deb/build-debs.sh").read_text()
-    block = script.split("# All non-graphical apps", 1)[1]
-    block = block[block.index("APP_SOURCE_LOCK="):]
-    block = block.split('if [ -d "$PROJECT_DIR/skills" ]; then', 1)[0]
-    subprocess.run(["bash", "-euc", block], check=True, env={
-        **os.environ, "PROJECT_DIR": str(ROOT), "SCRIPT_DIR": str(ROOT / "packaging/deb"),
-        "AGENT_STAGE": str(staged), sources.SOURCE_LOCK_ENV: str(snapshot),
-    })
-    assert json.loads(
-        (staged / "usr/share/doc/claw-os-agent/app-sources.json").read_text()
-    ) == lock
+    sources.stage_shared(staged, lock=lock)
+    sources.stage_products(staged, "agent", lock=lock)
+    assert json.loads(snapshot.read_text()) == lock
     for name in ("_shared", "gateway", "canonical_argv.py"):
         assert _app_payload(python / name) == _app_payload(source / "shared/python" / name, source=True)
     assert not (staged / "usr/lib/cos/apps/_shared").exists()
@@ -1165,26 +1325,35 @@ def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
 def test_native_manual_image_and_asset_build_paths_agree():
     applets = ROOT / "desktop/applets"
     cargo = (applets / "cosmic-applets/Cargo.toml").read_text()
-    assert '../../../build/native-apps/claw-applet-calendar' in cargo
-    assert '../../../build/native-apps/claw-applet-clipboard' in cargo
-    assert '../../../build/native-apps/claw-applet-widget-rail' in cargo
+    assert "build/native-apps" not in cargo
+    build = (applets / "cosmic-applets/build.rs").read_text()
+    dispatcher = (applets / "cosmic-applets/src/main.rs").read_text()
     just = (applets / "justfile").read_text()
-    assert 'build-debug *args: prepare-apps' in just
-    assert 'python3 ../../scripts/app_sources.py --native' in just
-    assert "(_install_icons calendar-src)" in just
-    assert "_install_calendar" in just.split("install:", 1)[1]
-    assert "_install_clipboard" in just.split("install:", 1)[1]
-    assert "_install_widget_rail" in just.split("install:", 1)[1]
-    assert "test -f {{ widget-rail-src }}/Cargo.toml" in just
-    assert "test -f {{ clipboard-src }}/Cargo.toml" in just
+    for product in ("calendar", "clipboard", "widget-rail"):
+        assert f"claw-applet-{product}" not in cargo + build + just
+        assert f"claw_applet_{product.replace('-', '_')}" not in dispatcher
+    assert "scripts/app_sources.py" not in just
+    assert "install-applet-provider" in just
+    layout = (ROOT / "desktop/panel/cosmic-panel-config/src/container_config.rs").read_text()
+    for identity in ("PanelCalendarButton", "AppletClipboard", "AppletWidgetRail"):
+        assert f"com.clawos.{identity}" in layout
     script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
-    assert 'CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"' in script
-    assert 'mount --bind "$NATIVE_APP_SOURCES" "$CHROOT_NATIVE_APPS"' in script
-    assert 'CLAW_NATIVE_APPS_PREPARED=1' in script
-    assert 'umount "$CHROOT_NATIVE_APPS"' in script
-    assert '../../../build/native-apps/{name}/data/{id}.desktop' in (
-        applets / "cosmic-applets/build.rs"
-    ).read_text()
+    assert "scripts/app_sources.py" not in script
+    assert "CHROOT_NATIVE_APPS" not in script
+    assert '"$PROJECT_DIR/scripts/app_packages.py" native-boundary' in script
+    assert '"$APP_PACKAGE_INPUTS"/archives/*.deb' in script
+    packages.native_boundary()
+
+
+def test_native_source_guard_still_rejects_reintroduced_product_dependencies(tmp_path, monkeypatch):
+    source = tmp_path / "desktop/applets/consumer"
+    source.mkdir(parents=True)
+    (source / "Cargo.toml").write_text(
+        '[dependencies]\nproduct = { path = "../../../build/native-apps/product" }\n'
+    )
+    monkeypatch.setattr(packages, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="still links App-owned"):
+        packages.native_boundary()
 
 
 @pytest.mark.parametrize(("product", "app_id"), [
@@ -1234,16 +1403,9 @@ def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path
     assert sources.app_path(app_id).name == app_id
     with pytest.raises(ValueError, match="not in the source lock"):
         sources.app_path("unknown")
-    (root / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/app_sources.py", root / "scripts/app_sources.py")
     script = (ROOT / "packaging/deb/build-desktop-deb.sh").read_text()
-    block = script[script.index("DESKTOP_APPS_FILE="):script.index("THERMALD_DEP=")]
-    stage = tmp_path / "desktop-deb"
-    subprocess.run(["bash", "-euc", block], check=True, env={
-        **os.environ, "PROJECT_DIR": str(root), "SCRIPT_DIR": str(root / "packaging/deb"),
-        "STAGE_ROOT": str(stage),
-    })
-    assert (stage / "usr/lib/cos/apps" / app_id / "app.json").is_file()
+    assert "scripts/app_sources.py" not in script
+    assert '--variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT"' in script
 
 
 @pytest.mark.parametrize("components", [
@@ -1286,8 +1448,11 @@ def test_standalone_app_uses_external_source_and_matching_chroot_layout(product,
     assert f"{product} := '../build/native-apps/cosmic-{component}/justfile'" in just
     assert f"{product}-build: prepare-native-apps" in just
     assert f"test -f {{{{ {product} }}}}" in just
-    assert "[default]\nbuild:" in just
-    assert "build: prepare-native-apps\n    #!/usr/bin/env bash" in just
+    assert "default: build" in just
+    assert "build-source-fixtures: prepare-native-apps\n    #!/usr/bin/env bash" in just
+    production = just.split("\nbuild:", 1)[1].split("# Explicit development fixtures", 1)[0]
+    assert "scripts/app_packages.py native-boundary" in production
+    assert "--justfile" not in production
     assert "export CLAW_NATIVE_APPS_PREPARED=1" in just
     assert "{{ just }} --justfile {{ " + product + " }} build-release --locked" in just
     assert "{{ just }} --justfile {{ " + product + " }} rootdir={{rootdir}} prefix={{prefix}} install" in just
@@ -1323,9 +1488,12 @@ def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
     runner.chmod(0o755)
     env = os.environ.copy()
     env.pop("CLAW_NATIVE_APPS_PREPARED", None)
+    snapshot = tmp_path / "source-fixture.json"
+    snapshot.write_text('{"version":1,"revision":"explicit-test-fixture"}\n')
+    env["CLAW_APP_SOURCE_LOCK"] = str(snapshot)
     subprocess.run(
         ["just", "--justfile", str(desktop / "justfile"),
-         f"just={runner}", f"make={runner}", "build"],
+         f"just={runner}", f"make={runner}", "build-source-fixtures"],
         check=True, env=env, capture_output=True, text=True,
     )
     assert (tmp_path / "prepared").read_text() == "prepared\n"
@@ -1339,7 +1507,10 @@ def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
     assert calls.count("capture-build") == 1
     assert calls.count("player-build") == 1
     assert calls.count("notifications-build") == 1
-    assert calls.count("applets/build-release") == 1
+    assert calls.count("calendar-build") == 1
+    assert calls.count("clipboard-build") == 1
+    assert calls.count("widgets-build") == 1
+    assert calls.count("build-shell") == 1
 
 
 def test_media_player_is_package_only_for_hot_swap(tmp_path):
@@ -1375,8 +1546,8 @@ def test_native_notifications_keep_private_inputs_and_legacy_state_separate(publ
     applet = (ROOT / "desktop/applets/cosmic-applet-notifications/Cargo.toml").read_text()
     panel = (ROOT / "desktop/panel/cosmic-panel-bin/Cargo.toml").read_text()
     for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
-        assert f'../../../build/native-apps/cosmic-notifications/{library}' in applet
-        assert f'cosmic-notifications/{library}/Cargo.toml' in (
+        assert library not in applet + panel
+        assert f'cosmic-notifications/{library}/Cargo.toml' not in (
             ROOT / "rootfs/features/desktop/install.sh"
         ).read_text()
     product = published_source / "products/notifications"
@@ -1392,12 +1563,11 @@ def test_native_notifications_keep_private_inputs_and_legacy_state_separate(publ
     component = product / package["native"]["cosmic-notifications"]
     for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
         assert _app_payload(staged / "cosmic-notifications" / library) == _app_payload(component / library)
-    assert "../../../build/native-apps/cosmic-notifications/cosmic-notifications-config" in panel
+    assert "claw-notification-presentation" in applet + panel
     assert 'git = "https://github.com/pop-os/cosmic-notifications"' not in applet + panel
     panel_just = (ROOT / "desktop/panel/justfile").read_text()
-    assert "build-debug *args: prepare-apps" in panel_just
-    assert "check *args: prepare-apps" in panel_just
-    assert "python3 ../../scripts/app_sources.py --native" in panel_just
+    assert "prepare-apps" not in panel_just
+    assert "scripts/app_sources.py" not in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
     assert "Source migration covered all original 75 identities" in status

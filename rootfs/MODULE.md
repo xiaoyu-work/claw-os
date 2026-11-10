@@ -31,12 +31,25 @@ Installed Claw OS binaries arrive through packages built from the current
 source. Reuse is allowed only when the complete stamp, artifacts, environment,
 architecture, and feature list match.
 
-The release workflow downloads its same-run, signed Agent/Base packages before
+The release workflow downloads its same-run, signed Agent/Base packages and
+separately authenticated App APT inputs before
 headless image composition. `cos-core/install.sh` looks up the exact version,
 including Debian's `%3a` filename encoding for the security epoch, so existing
-artifacts satisfy composition without a second binary/package build.
+artifacts satisfy composition without a second binary/package build. It
+configures the signed App channel and installs the checked App/support/library
+`.deb` closure in the ordinary transaction, without deleting an existing Apps
+root or copying product source into Agent. Desktop uses the same independent
+package graph, including matching native packages.
 
-Desktop builds resolve App `main` once and prepare its native inputs on the host, then
+Production Desktop no longer resolves App `main`, mounts native App sources or
+copies App manifests. Shell product UI/private-library links are removed,
+while independent App packages preserve the original native surfaces.
+The OS notification renderer consumes public SDK presentation records/proxy.
+Native build and installed UX acceptance remain required.
+Source-only fixtures preserve a development layout, described below,
+without becoming a production fallback.
+
+Historically, desktop fixture builds resolved App `main` once and prepared its native inputs on the host, then
 bind `build/native-apps` at the matching relative dependency path inside the
 chroot. The shell, shared services and forked toolkit stay OS-owned; the App
 source cache and generated inputs never enter the installed image.
@@ -46,11 +59,11 @@ and nested Settings workspace dependencies.
 The native preparation's resolved source lock is copied into the desktop
 package stage before compilation, so packaging cannot pair an older binary
 with a newly fetched App manifest. Source selection adds no runtime Git updater.
-Notifications' standalone daemon and exported config/util crates use that
-same layout; image preparation verifies both libraries before binding the
-native tree. The applet/panel retain their own toolkit graphs and the
-daemon retains its independent original graph. Its descriptor/binary remain
-desktop-owned; durable service state and legacy `notify` JSON are not image inputs.
+Notifications' standalone daemon keeps its private config/util crates inside
+that App source fixture. They are not OS build inputs or exported interfaces.
+The applet/panel retain their own toolkit graphs and the daemon retains its
+independent original graph. Its descriptor/binary are App-owned; durable
+service state and legacy `notify` JSON are not image inputs.
 Capture keeps its original portal-client graph rather than inheriting the
 shell renderer; its binary/resources remain desktop-package assets while
 the shared portal and capture authority stay OS-owned.

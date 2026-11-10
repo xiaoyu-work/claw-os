@@ -13,7 +13,7 @@
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
 #   target/<RUST_TARGET:gnu>/release/cos-browser  (glibc — V8 needs it)
-#   packaging/apps.lock.json                  (App main selection and owned payloads)
+#   build/app-packages/                       (authenticated independent App APT inputs)
 #   skills/                                               (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
 #   rootfs/features/systemd/overlay/usr/lib/systemd/...   (source tree)
@@ -51,6 +51,12 @@ DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
     echo "error: dpkg-deb not found. Install it with: apt-get install dpkg-dev" >&2
     exit 1
+fi
+APP_RUNTIME_VERSION="$(python3 "$PROJECT_DIR/scripts/app_packages.py" runtime-version)"
+if [ "$PACKAGE_SET" = all ] || [ "$PACKAGE_SET" = agent ]; then
+    python3 "$PROJECT_DIR/scripts/app_packages.py" check-version --version "$VERSION"
+    python3 "$PROJECT_DIR/scripts/app_packages.py" check \
+        --variant agent --architecture "$DEB_ARCH" >/dev/null
 fi
 
 # Prefer fakeroot so files in the .deb are owned by root even when this
@@ -285,6 +291,7 @@ render_control() {
     sed -e "s/__VERSION__/$VERSION/g" \
         -e "s/__ARCH__/$DEB_ARCH/g" \
         -e "s/__ABI__/$SECURITY_ABI/g" \
+        -e "s/__APP_RUNTIME_VERSION__/$APP_RUNTIME_VERSION/g" \
         -e "s/__SECURITY_EPOCH__/$SECURITY_EPOCH/g" \
         -e "s/__MIN_AGENT__/$MIN_AGENT_VERSION/g" \
         -e "s/__MIN_BASE__/$MIN_BASE_VERSION/g" \
@@ -385,7 +392,6 @@ mkdir -p \
     "$AGENT_STAGE/etc/apt/apt.conf.d" \
     "$AGENT_STAGE/etc/cos" \
     "$AGENT_STAGE/etc/cos/trust/publishers.d" \
-    "$AGENT_STAGE/usr/lib/cos/apps" \
     "$AGENT_STAGE/usr/lib/cos/apt" \
     "$AGENT_STAGE/usr/lib/cos/bin" \
     "$AGENT_STAGE/usr/lib/cos/python" \
@@ -428,6 +434,10 @@ fi
 
 render_control "$SCRIPT_DIR/claw-os-agent/control" "$AGENT_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffiles"
+install -Dm0644 "$PROJECT_DIR/core/assets/app-store-archive-key.asc" \
+    "$AGENT_STAGE/usr/share/keyrings/claw-apps-archive-key.asc"
+install -Dm0644 "$SCRIPT_DIR/claw-os-agent/claw-apps.sources" \
+    "$AGENT_STAGE/etc/apt/sources.list.d/claw-apps.sources"
 render_control "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst.body"
 {
     cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
@@ -472,6 +482,8 @@ DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session cos)" || {
     echo "error: claw-display-session binary not built" >&2; exit 1; }
 FILE_MANAGER_BIN="$(ensure_bin claw-file-manager cos)" || {
     echo "error: claw-file-manager binary not built" >&2; exit 1; }
+APP_APT_HOOK_BIN="$(ensure_bin claw-app-apt-hook cos)" || {
+    echo "error: claw-app-apt-hook binary not built" >&2; exit 1; }
 PAM_DISPLAY_MODULE="$(ensure_bin libpam_claw_display.so claw-display-login "${RUST_TARGET/-musl/-gnu}")" || {
     echo "error: native GNU PAM display module not built (libpam0g-dev is required)" >&2; exit 1; }
 MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
@@ -492,6 +504,7 @@ echo "  :: claw-gui-runner        <- $GUI_RUNNER_BIN"
 echo "  :: claw-display-host      <- $DISPLAY_HOST_BIN"
 echo "  :: claw-display-session   <- $DISPLAY_SESSION_BIN"
 echo "  :: claw-file-manager      <- $FILE_MANAGER_BIN"
+echo "  :: claw-app-apt-hook      <- $APP_APT_HOOK_BIN"
 echo "  :: pam_claw_display.so    <- $PAM_DISPLAY_MODULE"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
 echo "  :: claw-security-floor    <- $SECURITY_FLOOR_BIN"
@@ -518,6 +531,9 @@ install -m 755 "$GUI_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-gui-runner"
 install -m 755 "$DISPLAY_SESSION_BIN" "$AGENT_STAGE/usr/local/bin/claw-display-session"
 install -m 755 "$DISPLAY_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-display-host"
 install -m 755 "$FILE_MANAGER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-file-manager"
+install -m 755 "$APP_APT_HOOK_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-app-apt-hook"
+install -Dm0644 "$PROJECT_DIR/tools/app_apt_metadata.py" \
+    "$AGENT_STAGE/usr/lib/cos/app-apt-metadata.py"
 case "$DEB_ARCH" in
     amd64) PAM_MULTIARCH=x86_64-linux-gnu ;;
     arm64) PAM_MULTIARCH=aarch64-linux-gnu ;;
@@ -569,31 +585,6 @@ install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/profile.sh" \
 sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" \
     "$AGENT_STAGE/etc/cos/profile.sh"
 
-# All non-graphical apps belong to the reusable agent. The manifests in
-# apps.list are COSMIC/panel integrations owned by claw-os-desktop.
-APP_SOURCE_LOCK="$AGENT_STAGE/usr/share/doc/claw-os-agent/app-sources.json"
-python3 "$PROJECT_DIR/scripts/app_sources.py" --write-lock "$APP_SOURCE_LOCK" >/dev/null
-export CLAW_APP_SOURCE_LOCK="$APP_SOURCE_LOCK"
-DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
-while IFS= read -r app_id; do
-    [ -n "$app_id" ] || continue
-    python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id" >/dev/null
-done < "$DESKTOP_APPS_FILE"
-# Compatibility delivery remains in Agent; the common source and staging
-# contract belong to Apps, independently of OS SDK/runtime and App payloads.
-python3 "$PROJECT_DIR/scripts/app_sources.py" --stage-shared "$AGENT_STAGE"
-python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE" --package agent
-
-source_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --count)"
-agent_app_count="$(find "$AGENT_STAGE/usr/lib/cos/apps" -mindepth 2 \
-    -name app.json -type f | wc -l)"
-desktop_app_count="$(grep -cve '^[[:space:]]*$' "$DESKTOP_APPS_FILE")"
-if [ $((agent_app_count + desktop_app_count)) -ne "$source_app_count" ]; then
-    echo "error: app package partition is incomplete" >&2
-    echo "       source=$source_app_count agent=$agent_app_count desktop=$desktop_app_count" >&2
-    exit 1
-fi
-
 if [ -d "$PROJECT_DIR/skills" ]; then
     cp -a "$PROJECT_DIR/skills/." "$AGENT_STAGE/usr/lib/cos/skills/"
     find "$AGENT_STAGE/usr/lib/cos/skills" -type d -exec chmod 0755 {} +
@@ -644,6 +635,8 @@ install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
     "$AGENT_STAGE/usr/lib/systemd/user/claw-semantic.service"
 
 echo "  :: dpkg-deb --build claw-os-agent"
+python3 "$PROJECT_DIR/scripts/app_packages.py" check \
+    --variant agent --architecture "$DEB_ARCH" --stage "$AGENT_STAGE" >/dev/null
 write_release_manifest claw-os-agent "$AGENT_STAGE" "$DEB_ARCH"
 render_security_preinst claw-os-agent "$AGENT_STAGE"
 mv "$AGENT_STAGE/DEBIAN/preinst" "$AGENT_STAGE/DEBIAN/preinst.security"

@@ -3,26 +3,11 @@ use xdgen::{App, Context, FluentString};
 
 fn main() {
     println!("cargo:rerun-if-changed=../i18n");
-    println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-calendar/i18n");
-    println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-clipboard/i18n");
-    println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-widget-rail/i18n");
     let ctx = Context::new("../i18n/", "desktop_entries").unwrap();
-    let calendar_ctx = Context::new(
-        "../../../build/native-apps/claw-applet-calendar/i18n/",
-        "desktop_entries",
-    ).unwrap();
-    let clipboard_ctx = Context::new(
-        "../../../build/native-apps/claw-applet-clipboard/i18n/",
-        "desktop_entries",
-    ).unwrap();
     let workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("cosmic-applets is a direct workspace member")
         .to_path_buf();
-    let widget_rail_ctx = Context::new(
-        "../../../build/native-apps/claw-applet-widget-rail/i18n/",
-        "desktop_entries",
-    ).unwrap();
     let target_dir = env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .map(|path| {
@@ -60,18 +45,6 @@ fn main() {
             "claw-applet-approval-gate",
             "claw-applet-approval-gate-comment",
             "claw-applet-approval-gate-keywords",
-        ),
-        (
-            "com.clawos.AppletClipboard",
-            "claw-applet-clipboard",
-            "claw-applet-clipboard-comment",
-            "claw-applet-clipboard-keywords",
-        ),
-        (
-            "com.clawos.AppletWidgetRail",
-            "claw-applet-widget-rail",
-            "claw-applet-widget-rail-comment",
-            "claw-applet-widget-rail-keywords",
         ),
         (
             "com.clawos.AppletAudio",
@@ -158,12 +131,6 @@ fn main() {
             "claw-panel-brand-button-keywords",
         ),
         (
-            "com.clawos.PanelCalendarButton",
-            "claw-applet-calendar",
-            "claw-applet-calendar-comment",
-            "claw-applet-calendar-keywords",
-        ),
-        (
             "com.clawos.PanelDockDivider",
             "claw-panel-dock-divider",
             "claw-panel-dock-divider-comment",
@@ -184,24 +151,14 @@ fn main() {
     ]
     .into_iter()
     .map(|(id, name, comment, keywords)| {
-        let template_path = if matches!(name, "claw-applet-calendar" | "claw-applet-clipboard" | "claw-applet-widget-rail") {
-            format!("../../../build/native-apps/{name}/data/{id}.desktop")
-        } else {
-            format!("../{name}/data/{id}.desktop")
-        };
+        let template_path = format!("../{name}/data/{id}.desktop");
         println!("cargo:rerun-if-changed={template_path}");
 
         let app = App::new(FluentString(name))
             .comment(FluentString(comment))
             .keywords(FluentString(keywords));
 
-        let context = match name {
-            "claw-applet-calendar" => &calendar_ctx,
-            "claw-applet-clipboard" => &clipboard_ctx,
-            "claw-applet-widget-rail" => &widget_rail_ctx,
-            _ => &ctx,
-        };
-        (id, app.expand_desktop(&template_path, context).unwrap())
+        (id, app.expand_desktop(&template_path, &ctx).unwrap())
     })
     .for_each(|(id, contents)| {
         fs::write(desktop_dir.join(format!("{id}.desktop")), contents).unwrap();

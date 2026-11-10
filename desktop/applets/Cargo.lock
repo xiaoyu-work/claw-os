@@ -895,33 +895,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-applet-calendar"
-version = "0.1.0"
-dependencies = [
- "i18n-embed",
- "i18n-embed-fl",
- "jiff",
- "libcosmic",
- "rust-embed",
- "tracing",
-]
-
-[[package]]
-name = "claw-applet-clipboard"
-version = "0.1.0"
-dependencies = [
- "i18n-embed",
- "i18n-embed-fl",
- "jiff",
- "libcosmic",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "claw-applet-services"
 version = "0.1.0"
 dependencies = [
@@ -933,16 +906,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-applet-widget-rail"
+name = "claw-notification-presentation"
 version = "0.1.0"
 dependencies = [
- "i18n-embed",
- "i18n-embed-fl",
- "jiff",
- "libcosmic",
- "rust-embed",
- "tokio",
- "tracing",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "zbus",
 ]
 
 [[package]]
@@ -1336,8 +1306,7 @@ name = "cosmic-applet-notifications"
 version = "1.0.2"
 dependencies = [
  "anyhow",
- "cosmic-notifications-config",
- "cosmic-notifications-util",
+ "claw-notification-presentation",
  "futures-util",
  "i18n-embed",
  "i18n-embed-fl",
@@ -1347,7 +1316,6 @@ dependencies = [
  "tracing",
  "tracing-log",
  "tracing-subscriber",
- "url",
  "zbus",
 ]
 
@@ -1445,10 +1413,6 @@ version = "1.0.2"
 dependencies = [
  "claw-applet-agent-activity",
  "claw-applet-approval-gate",
- "claw-applet-calendar",
- "claw-applet-clipboard",
- "claw-applet-services",
- "claw-applet-widget-rail",
  "cosmic-app-list",
  "cosmic-applet-a11y",
  "cosmic-applet-audio",
@@ -1564,27 +1528,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "xdg",
-]
-
-[[package]]
-name = "cosmic-notifications-config"
-version = "0.1.0"
-dependencies = [
- "cosmic-config",
- "serde",
-]
-
-[[package]]
-name = "cosmic-notifications-util"
-version = "0.1.0"
-dependencies = [
- "fast_image_resize",
- "libcosmic",
- "serde",
- "tl",
- "tracing",
- "url",
- "zbus",
 ]
 
 [[package]]

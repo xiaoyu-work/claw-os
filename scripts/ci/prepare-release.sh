@@ -24,8 +24,19 @@ fi
 version="$(bash scripts/lib/package-version.sh)"
 mkdir -p build/release
 if [ "$agent" = true ] || [ "$desktop" = true ]; then
-    # Freeze the ref without an extra checkout/LFS download. Build jobs
-    # verify and stage that exact commit through the existing source helper.
+    python3 scripts/app_packages.py check-version --version "$version"
+fi
+export CLAW_APP_PACKAGE_ROOT="$GITHUB_WORKSPACE/build/release/app-packages"
+for variant in agent desktop; do
+    if [ "$variant" = agent ] && [ "$agent" != true ]; then continue; fi
+    if [ "$variant" = desktop ] && [ "$desktop" != true ]; then continue; fi
+    for architecture in amd64 arm64; do
+        python3 scripts/app_packages.py prepare --variant "$variant" --architecture "$architecture"
+    done
+done
+if [ "$target" = all ]; then
+    # Test-only immutable sources are separate from production APT inputs.
+    # The reusable test workflow consumes this lock; no package builder does.
     python3 - <<'PY'
 from scripts import app_sources
 
