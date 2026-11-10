@@ -165,3 +165,70 @@ jobs:
           packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py
           scripts/tests/test_app_platform.py packaging/deb/tests/test_applet_provider.py
           core/tests/test_app_apt_metadata.py
+
+  desktop-sdk-presentation:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [notifications, panel, applets]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install existing Desktop build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config git ca-certificates gettext clang libclang-dev \
+            libwayland-dev libxkbcommon-dev libegl-dev libgbm-dev libdrm-dev \
+            libdbus-1-dev libudev-dev libinput-dev libpulse-dev libpipewire-0.3-dev \
+            libfontconfig1-dev libfreetype6-dev libssl-dev
+
+      - name: Cache Desktop cargo inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-desktop-sdk-${{ matrix.component }}-${{ hashFiles('desktop/applets/Cargo.lock', 'desktop/panel/Cargo.lock', 'claw-os-sdk/rust/notification-presentation/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-desktop-sdk-${{ matrix.component }}-
+
+      - name: Test and build public SDK notification consumer
+        if: matrix.component == 'notifications'
+        run: |
+          tests="$(cargo test --locked --manifest-path desktop/applets/Cargo.toml \
+            -p cosmic-applet-notifications --lib -- --list)"
+          for name in \
+            presentation::tests::popup_mute_requires_confirmation_and_preserves_last_value_on_failure_or_disconnect \
+            presentation::tests::rendering_preserves_text_runs_and_independent_row_and_symbolic_group_icons \
+            presentation::tests::invalid_image_work_is_rejected_before_render_handle_creation \
+            subscriptions::notifications::tests::actual_public_client_requires_negotiation_and_confirmed_preferences_and_actions \
+            subscriptions::notifications::tests::incompatible_presenter_never_enables_controls_or_falls_back_to_config
+          do
+            grep -Fq "$name: test" <<< "$tests" || { echo "missing notification contract: $name" >&2; exit 1; }
+          done
+          cargo test --locked --manifest-path desktop/applets/Cargo.toml \
+            -p cosmic-applet-notifications --lib -- --test-threads=1
+          cargo build --locked --manifest-path desktop/applets/Cargo.toml \
+            -p cosmic-applet-notifications --bin cosmic-applet-notifications
+
+      - name: Build actual Panel SDK consumer
+        if: matrix.component == 'panel'
+        run: |
+          cargo build --locked --manifest-path desktop/panel/Cargo.toml \
+            -p cosmic-panel-bin --bin cosmic-panel
+
+      - name: Build remaining OS applet multiplexor
+        if: matrix.component == 'applets'
+        run: |
+          cargo build --locked --manifest-path desktop/applets/Cargo.toml \
+            -p cosmic-applets --bin cosmic-applets
