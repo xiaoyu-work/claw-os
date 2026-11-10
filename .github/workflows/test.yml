@@ -59,6 +59,12 @@ jobs:
       - name: Install worker sandbox dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna python3-apt openssl libpam0g-dev dbus-daemon iproute2
 
+      - name: Pin Cargo cache identity before private fixtures
+        id: cargo-inputs
+        env:
+          CARGO_INPUTS: ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+        run: printf 'hash=%s\n' "$CARGO_INPUTS" >> "$GITHUB_OUTPUT"
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:
@@ -66,7 +72,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-nodebug-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-test-nodebug-${{ steps.cargo-inputs.outputs.hash }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-nodebug-
 
@@ -231,13 +237,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libpam0g-dev libxkbcommon-dev libwayland-dev \
             bubblewrap python3-idna openssl dbus-daemon iproute2 acl binutils
+      - name: Pin Cargo cache identity before private fixtures
+        id: cargo-inputs
+        env:
+          CARGO_INPUTS: ${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+        run: printf 'hash=%s\n' "$CARGO_INPUTS" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-display-nodebug-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-display-nodebug-${{ steps.cargo-inputs.outputs.hash }}
           restore-keys: |
             ${{ runner.os }}-cargo-display-nodebug-
             ${{ runner.os }}-cargo-test-nodebug-
