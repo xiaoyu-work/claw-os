@@ -128,9 +128,6 @@ jobs:
       - name: Test owner-scoped Calendar reads
         run: bash scripts/ci/test-boundaries.sh calendar
 
-      - name: Test authenticated OS display and GUI lifetime
-        run: bash scripts/ci/test-boundaries.sh display
-
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real
       # OpenPGP signatures. The signing keys are generated inside the
@@ -210,6 +207,53 @@ jobs:
           path: build/linux-acceptance/*
           if-no-files-found: error
           retention-days: 7
+
+  display-boundaries:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          lfs: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install authenticated display fixture dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libpam0g-dev libxkbcommon-dev libwayland-dev \
+            bubblewrap python3-idna openssl dbus-daemon iproute2 acl binutils
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-display-nodebug-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-display-nodebug-
+            ${{ runner.os }}-cargo-test-nodebug-
+      - name: Download prepared release inputs
+        if: inputs.app_source_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.app_source_artifact }}
+          path: build/release
+      - name: Resolve immutable App fixture inputs
+        env:
+          APP_SOURCE_ARTIFACT: ${{ inputs.app_source_artifact }}
+        run: |
+          if [ -n "$APP_SOURCE_ARTIFACT" ]; then
+            export CLAW_APP_SOURCE_LOCK="$GITHUB_WORKSPACE/build/release/app-sources.json"
+            echo "CLAW_APP_SOURCE_LOCK=$CLAW_APP_SOURCE_LOCK" >> "$GITHUB_ENV"
+          fi
+          python3 scripts/app_sources.py
+      - name: Test authenticated OS display and GUI lifetime
+        run: bash scripts/ci/test-boundaries.sh display
 
   sdk-bindings:
     runs-on: ubuntu-latest
