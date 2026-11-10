@@ -212,10 +212,11 @@ extensions() {
         COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
         bash --noprofile --norc -c '
             set -euo pipefail
+            root=$1
             mount --make-rprivate /
             mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/local/bin
-            install -o root -g root -m 0755 "$1/claw-app-runner" /usr/local/bin/claw-app-runner
-            exec "$1/extension_host_boundary" --test-threads=1
+            install -o root -g root -m 0755 "$root/claw-app-runner" /usr/local/bin/claw-app-runner
+            exec "$root/extension_host_boundary" --test-threads=1
         ' private-extension-boundary "$root"
     sudo env \
         HOME=/root \
