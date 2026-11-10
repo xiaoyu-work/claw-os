@@ -278,17 +278,7 @@ pub(super) fn confirm_install(
             review.id
         ));
     }
-    let consumed = parse_review(request(
-        Command::SystemReviewConsume,
-        json!({"id": review.id, "source": source, "expected_package": expected}),
-    )?)?;
-    if consumed.id != review.id
-        || consumed.status != ReviewStatus::Consumed
-        || !matches_install(&consumed, &expected, &local)
-    {
-        return Err("system review confirmation was not consumed for the staged package".into());
-    }
-    Ok((local, consumed.id))
+    Ok((local, review.id))
 }
 
 pub(super) fn dispatch(args: &[String]) -> Result<Option<String>, String> {

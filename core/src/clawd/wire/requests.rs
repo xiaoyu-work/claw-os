@@ -36,6 +36,31 @@ const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 pub type NoBody = NoParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AppDirectoryInstall {
+    Publish(AppDirectoryPublish),
+    Recover(AppDirectoryRecover),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppDirectoryPublish {
+    pub source: Text<PATH_BYTES>,
+    /// Comparison only; the daemon's configured App root selects the destination.
+    pub expected_apps_root: Text<PATH_BYTES>,
+    pub expected_package: Structured,
+    pub review_id: Token,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppDirectoryRecover {
+    pub app_id: Name,
+    pub expected_apps_root: Text<PATH_BYTES>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppStoreSelection {
     pub app_id: Name,

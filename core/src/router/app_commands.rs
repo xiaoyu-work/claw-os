@@ -365,10 +365,10 @@ fn tool_cmd(
 }
 
 /// `cos app install <source-dir> [--review] [--yes] [--no-consent] [--force]`
+/// `cos app install --recover <app-id>` checks a recorded outcome without publication.
 ///
-/// Validates an App manifest, copies the App tree under `apps_dir()`,
-/// and (unless `--no-consent`) walks the operator through the AI
-/// consent prompt for the App's manifest `ai` block.
+/// Reviews a signed App, asks Root to publish under its configured App root,
+/// and separately presents the App's AI consent policy.
 ///
 /// Validation:
 ///   * `<source>/app.json` must parse via `Manifest::from_json` — same
@@ -381,11 +381,13 @@ fn tool_cmd(
 ///     authoritative.
 ///
 /// Disk layout:
-///   * Default destination is `apps_dir()/<id>/`. If the source already
+///   * The destination derives from the daemon App root and verified ID,
+///     retaining an existing normalized nested layout. A different CLI-local
+///     App root is refused. If the source already
 ///     resolves to that exact path (the in-tree dev workflow where
 ///     someone runs `cos app install apps/<id>` against the bundled
 ///     tree), the copy step is skipped and only validation +
-///     consent run.
+///     review and checked retirement run.
 ///   * Otherwise the source is copied to a hidden sibling staging
 ///     directory, linted and fsynced there, then renamed into place.
 ///   * If the destination already exists and `--force` was not passed,
@@ -399,28 +401,115 @@ fn tool_cmd(
 /// including for non-AI Apps, replacement installs and deferred AI consent.
 /// `--review` returns the authenticated request without installing anything.
 /// `--yes` can use existing OS confirmation, never replace first review or
-/// grant AI consent. Developer trust remains a separate interactive decision.
+/// grant AI consent. Publication requires the authenticated Root broker.
+/// Developer installation is blocked until quarantined Root publication exists.
 pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
-    install_cmd_with_confirmation(args, &mut |app, source, auto_yes, dev_trust| {
-        if dev_trust {
-            review_install_permissions(app, auto_yes).map(|review| (review, None))
-        } else {
-            super::system_review::confirm_install(app, source, auto_yes)
-                .map(|(review, id)| (review, Some(id)))
-        }
-    })
+    if args.iter().any(|arg| arg == "--recover") {
+        return recover_directory(args);
+    }
+    install_cmd_with_publisher(args, &mut publish_directory)
 }
 
-type InstallConfirmation<'a> = dyn FnMut(
-    &apps::App,
+type InstallPublisher<'a> = dyn FnMut(
+    &installation::DirectoryInstall,
+    &Path,
     &Path,
     bool,
     bool,
-) -> Result<(apps::permission_review::PermissionReview, Option<String>), String> + 'a;
+) -> Result<installation::DirectoryPublication, String> + 'a;
 
-fn install_cmd_with_confirmation(
+fn require_directory_root() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::getuid() } != 0 || unsafe { libc::geteuid() } != 0 {
+        return Err("Global App directory installation requires Root; --review remains nonmutating".into());
+    }
+    Ok(())
+}
+
+fn request_directory(params: Value, app_id: &str) -> Result<installation::DirectoryPublication, String> {
+    let response = crate::clawd::client::request_blocking(
+        crate::clawd::config::socket_path(),
+        crate::clawd::protocol::Request::build(
+            crate::clawd::routes::Command::AppDirectoryInstall,
+            params,
+        ),
+    ).map_err(|error| {
+        if error.may_have_dispatched() {
+            format!("Root directory installation outcome is unknown: {error}; check with `cos app install --recover {app_id}`, never replay publication")
+        } else {
+            format!("Root directory installation service is unavailable: {error}")
+        }
+    })?;
+    if !response.ok {
+        let error = response.error.ok_or("Root directory installation returned no error detail")?;
+        return Err(crate::errors::error_with_details(
+            &error.code, &error.message, error.data.unwrap_or(Value::Null),
+        ).to_string());
+    }
+    serde_json::from_value(
+        response.result.ok_or_else(|| format!("Root directory installation returned no result; check with `cos app install --recover {app_id}`"))?,
+    ).map_err(|error| format!("invalid Root directory installation response: {error}; check with `cos app install --recover {app_id}`"))
+}
+
+fn recover_directory(args: &[String]) -> Result<Option<String>, String> {
+    if args.len() != 2 || args[0] != "--recover" || args[1].starts_with("--") {
+        return Err("usage: cos app install --recover <app-id> (read-only outcome check)".into());
+    }
+    require_directory_root()?;
+    let app_id = &args[1];
+    let root = std::path::absolute(apps_dir()).map_err(|error| format!("resolve CLI App root: {error}"))?;
+    let published = request_directory(json!({
+        "action": "recover", "app_id": app_id, "expected_apps_root": root,
+    }), app_id)?;
+    if published.manifest.id != *app_id {
+        return Err("Root outcome check returned another App identity".into());
+    }
+    Ok(Some(json!({
+        "app": app_id, "installed": true, "recovered": true, "copied": false,
+        "dest": published.destination, "provenance": published.provenance,
+        "system_review_id": published.review_id, "permissions_granted": false,
+    }).to_string()))
+}
+
+fn publish_directory(
+    install: &installation::DirectoryInstall,
+    source: &Path,
+    local_root: &Path,
+    force: bool,
+    auto_yes: bool,
+) -> Result<installation::DirectoryPublication, String> {
+    require_directory_root()?;
+    let app = install.preview()?;
+    let verified = app.require_verified()?;
+    if !matches!(verified.source(), crate::provenance::verify::TrustSource::Publisher { .. }) {
+        return Err("Root directory publication currently requires a publisher-signed App".into());
+    }
+    let expected = crate::provenance::runtime::PackageRef::of(verified);
+    let (_, review_id) = super::system_review::confirm_install(&app, source, auto_yes)?;
+    let source = source.canonicalize().map_err(|error| format!("resolve App source: {error}"))?;
+    let local_root = std::path::absolute(local_root)
+        .map_err(|error| format!("resolve CLI App root: {error}"))?;
+    let published = request_directory(json!({
+        "action": "publish", "source": source, "expected_apps_root": local_root,
+        "expected_package": expected, "review_id": review_id, "force": force,
+    }), &app.manifest.id)?;
+    if published.review_id.as_deref() != Some(review_id.as_str())
+        || serde_json::to_value(&published.manifest).map_err(|error| error.to_string())?
+            != serde_json::to_value(&app.manifest).map_err(|error| error.to_string())?
+    {
+        return Err(format!("Root directory publication does not match the confirmed App; check with `cos app install --recover {}`", app.manifest.id));
+    }
+    let installed = installation::verify_installed_app(&published.destination, &app.manifest.id)
+        .map_err(|error| format!("{error}; check with `cos app install --recover {}`", app.manifest.id))?;
+    if crate::provenance::runtime::PackageRef::of(&installed) != expected {
+        return Err(format!("Installed App differs from Root's confirmed directory publication; check with `cos app install --recover {}`", app.manifest.id));
+    }
+    Ok(published)
+}
+
+fn install_cmd_with_publisher(
     args: &[String],
-    confirm: &mut InstallConfirmation<'_>,
+    publisher: &mut InstallPublisher<'_>,
 ) -> Result<Option<String>, String> {
     let source_arg = args
         .iter()
@@ -434,16 +523,11 @@ fn install_cmd_with_confirmation(
     let auto_yes = args.iter().any(|a| a == "--yes");
     let no_consent = args.iter().any(|a| a == "--no-consent");
     let force = args.iter().any(|a| a == "--force");
-    // The only route that installs unsigned content. `record_dev_trust`
-    // demands an interactive, phrase-matched confirmation on a real
-    // terminal with no session active — `--yes` does not satisfy it,
-    // and neither does anything the model can reach.
     let dev_trust = args.iter().any(|a| a == "--dev-trust");
 
     let source = PathBuf::from(&source_arg);
-    let install = installation::DirectoryInstall::prepare(&source, &apps_dir())?;
-    let dest = install.destination();
-    let same_path = install.is_in_place();
+    let local_root = apps_dir();
+    let install = installation::DirectoryInstall::prepare(&source, &local_root)?;
 
     if review_only {
         let app = install.preview()?;
@@ -460,38 +544,23 @@ fn install_cmd_with_confirmation(
         ));
     }
 
-    let mut permission_review = None;
-    let mut system_review_id = None;
-    let mut review_permissions = |candidate: &apps::App| {
-        let (review, id) = confirm(candidate, &source, auto_yes, dev_trust)?;
-        permission_review = Some(review);
-        system_review_id = id;
-        Ok(())
-    };
-    let manifest = install.publish(force, dev_trust, &mut review_permissions)?;
-    let copied = !same_path;
-
-    // Registration only happens after provenance succeeded, or after
-    // the operator's explicit developer decision has been persisted.
-    let provenance = if dev_trust {
-        record_dev_trust(dest, &manifest.id)?
-    } else {
-        let verified = installation::verify_installed_app(dest, &manifest.id)?;
-        crate::provenance::audit("provenance.app_installed", verified.audit_facts());
-        verified.audit_facts()
-    };
+    if dev_trust {
+        return Err("Developer directory installation is blocked until Root can publish a complete quarantined tree without vendor or existing developer trust; sign the App instead. No files or trust grants were changed".into());
+    }
+    let published = publisher(&install, &source, &local_root, force, auto_yes)?;
+    let manifest = published.manifest;
+    let permission_review = apps::permission_review::PermissionReview::from_manifest(&manifest)?;
 
     let mut envelope = json!({
         "app": manifest.id,
         "installed": true,
         "source": source.display().to_string(),
-        "dest": dest.display().to_string(),
-        "copied": copied,
-        "in_place": same_path,
-        "provenance": provenance,
-        "permission_review": permission_review
-            .ok_or("App installation completed without a permission review")?,
-        "system_review_id": system_review_id,
+        "dest": published.destination.display().to_string(),
+        "copied": !published.in_place,
+        "in_place": published.in_place,
+        "provenance": published.provenance,
+        "permission_review": permission_review,
+        "system_review_id": published.review_id,
     });
 
     // If the app declares a `desktop` surface, emit a freedesktop
@@ -566,63 +635,6 @@ fn install_cmd_with_confirmation(
         "path": consent::consent_path(&manifest.id).display().to_string(),
     });
     Ok(Some(envelope.to_string()))
-}
-
-fn review_install_permissions(
-    app: &apps::App,
-    auto_yes: bool,
-) -> Result<apps::permission_review::PermissionReview, String> {
-    use std::io::{BufRead, IsTerminal, Write};
-
-    let review = apps::permission_review::PermissionReview::from_manifest(&app.manifest)?;
-    let mut stderr = std::io::stderr().lock();
-    if let Some(reason) = app.quarantine_reason() {
-        writeln!(
-            stderr,
-            "Unverified development source; separate developer trust is still required: {}",
-            serde_json::to_string(reason)
-                .map_err(|error| format!("format development trust warning: {error}"))?,
-        )
-        .map_err(|error| format!("display development trust warning: {error}"))?;
-    } else {
-        writeln!(stderr, "Verified package: {}", app.provenance_facts())
-            .map_err(|error| format!("display App publisher identity: {error}"))?;
-    }
-    writeln!(stderr, "{}", review.format_for_review()?)
-        .map_err(|error| format!("display App permission review: {error}"))?;
-    stderr
-        .flush()
-        .map_err(|error| format!("flush App permission review: {error}"))?;
-    if auto_yes {
-        return Ok(review);
-    }
-    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-        return Err(
-            "App installation requires permission review confirmation. Use --review to inspect \
-             the authenticated request, or explicitly acknowledge installation with --yes. \
-             Neither option grants the requested permissions."
-                .to_string(),
-        );
-    }
-    write!(
-        stderr,
-        "Install this App without granting its requested permissions? [y/N] "
-    )
-    .map_err(|error| format!("display App installation confirmation: {error}"))?;
-    stderr
-        .flush()
-        .map_err(|error| format!("flush App installation confirmation: {error}"))?;
-    let mut answer = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut answer)
-        .map_err(|error| format!("read App installation confirmation: {error}"))?;
-    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        return Err(
-            "App installation cancelled; the existing installation was not replaced".into(),
-        );
-    }
-    Ok(review)
 }
 
 /// `cos app create <id> [--kind cli|desktop|both] [--dir <parent>]
@@ -894,45 +906,6 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
         .status();
 
     Ok(Some(file.display().to_string()))
-}
-
-/// Persist an explicit developer trust decision for an unsigned App and
-/// re-verify the installed tree through it.
-///
-/// The grant is written to the segregated per-user developer root, is
-/// bound to the installed content digest, and is surfaced in the
-/// install envelope so the decision stays visible.
-fn record_dev_trust(dest: &Path, id: &str) -> Result<Value, String> {
-    let dir = dest
-        .canonicalize()
-        .map_err(|e| format!("resolve {}: {e}", dest.display()))?;
-    let args = vec![
-        "--kind".to_string(),
-        "app".to_string(),
-        "--id".to_string(),
-        id.to_string(),
-        "--path".to_string(),
-        dir.display().to_string(),
-        "--note".to_string(),
-        "cos app install --dev-trust".to_string(),
-    ];
-    // Routed through the same command an operator would run by hand, so
-    // there is exactly one implementation of the consent gate.
-    let grant = crate::provenance::cli::run("dev-trust", &args)?;
-    let verified = installation::verify_installed_app(&dir, id)?;
-    crate::provenance::audit("provenance.app_installed", verified.audit_facts());
-    let mut facts = verified.audit_facts();
-    if let Some(map) = facts.as_object_mut() {
-        map.insert("developer_grant".to_string(), grant);
-        map.insert(
-            "warning".to_string(),
-            json!(
-                "Unsigned developer install: restricted capability ceiling, no privileged routes. \
-                 Editing the installed tree invalidates the grant."
-            ),
-        );
-    }
-    Ok(facts)
 }
 
 /// `cos app consent <sub> [...]` — review / grant / revoke the user's

@@ -60,6 +60,7 @@ persistence, and structured primitive dispatch.
 | `src/apps/installation.rs` | Reusable directory-install source preparation, verified preview, review-before-publication, in-place validation and atomic replacement/recovery |
 | `src/apps/debian.rs` | Bounded final App Debian-byte/control/resource inspection and common-Host export checks; never package execution authority |
 | `src/clawd/app_store/apt.rs`, `src/bin/claw-app-apt-hook.rs` | Official APT plan preparation, separately confirmed bundle reviews, tracked pre-dpkg gate and installed-outcome checks |
+| `src/clawd/app_install.rs` | Root-peer-only signed directory publisher; shared checked retirement, fenced review consumption and durable pending admission |
 | `../tools/app_apt_metadata.py` | OS-owned read-only exact-hash APT index/source classification through python3-apt, never App-supplied resolver code |
 | `src/apps/lint.rs` | Shared static provider-import and MCP-entry checks for installation and CLI lint; never executes App code |
 | `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
@@ -101,8 +102,11 @@ supplies neither permission nor App execution. Official Store v2 delivery uses
 signed APT product packages instead of directory replacement, with concrete
 dependency-plan disclosure, separate bundle-App confirmations and checked
 cross-owner retirement. Directory fixtures still exercise the common retirement
-boundary; they are not production APT acceptance. Independent CLI installation,
-trust/rollback and other OS-package mutations are not thereby coordinated. See
+boundary; they are not production APT acceptance. Signed CLI directory installs
+now use the separate Root-only controller and the same fence/retirement, never a
+local or Store fallback. Developer installs remain blocked pending genuinely
+quarantined publication; trust/rollback and generic OS-package mutations remain
+uncoordinated. See
 [installation review](../docs/app-development.md#installation-permission-review).
 
 `cos app stdio <id> <operation> [args...]` is a human/host transport, not a

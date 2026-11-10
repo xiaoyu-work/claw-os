@@ -91,6 +91,7 @@ fn transport_error(fault: Fault) -> String {
 
 fn requires_root_peer(command: super::routes::Command) -> bool {
     command == super::routes::Command::AppSessionRegister
+        || command == super::routes::Command::AppDirectoryInstall
         || matches!(command, super::routes::Command::AppGuiLaunch
             | super::routes::Command::AppGuiWait | super::routes::Command::AppGuiStop)
         || command == super::routes::Command::SystemRegionalSettingsControl
@@ -157,7 +158,7 @@ fn require_root_broker_peer(stream: &std::os::unix::net::UnixStream) -> Result<(
     }
     if credentials.uid != 0 {
         return Err(ClientError::before_dispatch(
-            "App registration and system review require a root OS broker; a user-selected socket is not approval authority",
+            "App lifecycle, directory installation and system review require a root OS broker; a user-selected socket is not approval authority",
         ));
     }
     Ok(())
@@ -166,7 +167,7 @@ fn require_root_broker_peer(stream: &std::os::unix::net::UnixStream) -> Result<(
 #[cfg(all(unix, not(target_os = "linux")))]
 fn require_root_broker_peer(_stream: &std::os::unix::net::UnixStream) -> Result<(), ClientError> {
     Err(ClientError::before_dispatch(
-        "protected App registration and system reviews require Linux",
+        "protected App lifecycle, directory installation and system reviews require Linux",
     ))
 }
 
@@ -198,7 +199,7 @@ pub async fn request(
             .uid();
         if uid != 0 {
             return Err(ClientError::before_dispatch(
-                "App registration and system review require a root OS broker",
+                "App lifecycle, directory installation and system review require a root OS broker",
             ));
         }
     }

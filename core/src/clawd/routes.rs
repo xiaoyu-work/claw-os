@@ -1705,6 +1705,16 @@ routes! {
     // -----------------------------------------------------------------
     // App / MCP session authority
     // -----------------------------------------------------------------
+    AppDirectoryInstall {
+        name: "app.directory_install",
+        access: Access::Root,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 2, deadline: Deadline::Uninterruptible },
+        authority: peer(Audience::AppLaunch),
+        body: body::AppDirectoryInstall,
+        audit: &[("action", FieldRule::Enum(&["publish", "recover"])), ("app_id", FieldRule::Token), ("review_id", FieldRule::Token), ("expected_package", FieldRule::Size), ("force", FieldRule::Flag)],
+        run: |c| super::app_install::install(c.state, c.params, c.client).await,
+    }
     AppStoreList {
         name: "app_store.list",
         access: Access::User,

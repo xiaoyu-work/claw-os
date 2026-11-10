@@ -282,6 +282,12 @@ fn copy_dir(
         }
         if meta.is_dir {
             copy_dir(&from, &to, limits, depth + 1, count, total)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&to, std::fs::Permissions::from_mode(meta.mode & !0o022))
+                    .map_err(|error| io_err(&to, error))?;
+            }
             continue;
         }
         if !meta.is_file {

@@ -294,7 +294,7 @@ impl Fixture {
             serde_json::to_vec(&key.trust_entry(&[PackageKind::App])).unwrap()).unwrap();
         crate::test_env::record_trust_state(&roots());
         install_trust();
-        let installed = Path::new(BASE).join("apps").join(ID);
+        let installed = Path::new(BASE).join("apps").join("ordinary").join("custody");
         sign_app(&installed, "1.0.0", &key);
         let old = crate::apps::find_verified(&Path::new(BASE).join("apps"), ID).unwrap();
         let review = crate::approvals::system_review::submit(
@@ -349,7 +349,7 @@ impl Fixture {
 
     fn version(&self) -> String {
         let value: Value = serde_json::from_slice(
-            &std::fs::read(Path::new(BASE).join("apps").join(&self.record.app_id).join("app.json")).unwrap(),
+            &std::fs::read(Path::new(BASE).join("apps").join("ordinary").join("custody").join("app.json")).unwrap(),
         ).unwrap();
         value["version"].as_str().unwrap().into()
     }
@@ -363,6 +363,69 @@ impl Fixture {
         app_store::commit_fixture(
             &self.state, OWNER, self.request.clone(), self.review.clone(), self.record.clone(),
         ).await
+    }
+
+    fn directory_request(&self) -> (Value, crate::clawd::client_identity::ClientIdentity) {
+        let source = Path::new("/var/lib/cos/app-store/staging").join(&self.request).join("package");
+        let apps = Path::new(BASE).join("apps");
+        let app = crate::apps::installation::DirectoryInstall::prepare(&source, &apps)
+            .unwrap().preview().unwrap();
+        let package = app.require_verified().unwrap();
+        let review = crate::approvals::system_review::submit(
+            0, crate::approvals::system_review::ReviewKind::AppInstall,
+            package, "private Root CLI directory publication".into(),
+        ).unwrap();
+        if review.effective_state().unwrap() == crate::approvals::system_review::ReviewState::Pending {
+            crate::approvals::system_review::decide(0, &review.id, true, Some(package)).unwrap();
+        }
+        let client = crate::clawd::client_identity::ClientIdentity {
+            pid: Some(std::process::id()), uid: Some(0), gid: Some(0), execution_uid: None,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+            attended_local: false, extension_host: None,
+        };
+        let body = json!({
+            "action": "publish",
+            "source": source, "expected_apps_root": apps,
+            "expected_package": crate::provenance::runtime::PackageRef::of(package),
+            "review_id": review.id, "force": true,
+        });
+        (body, client)
+    }
+
+    async fn publish_directory(&self) -> Result<Value, String> {
+        let (body, client) = self.directory_request();
+        let review = body["review_id"].as_str().unwrap().to_string();
+        let mut foreign = client.clone();
+        foreign.uid = Some(OWNER);
+        let error = crate::clawd::app_install::install(&self.state, body.clone(), &foreign).await.unwrap_err();
+        assert!(error.message.contains("kernel UID 0"));
+        let mut delegated = client.clone();
+        delegated.execution_uid = Some(EXECUTION);
+        let error = crate::clawd::app_install::install(&self.state, body.clone(), &delegated).await.unwrap_err();
+        assert!(error.message.contains("kernel UID 0"));
+        let mut different_root = body.clone();
+        different_root["expected_apps_root"] = json!(BASE);
+        let error = crate::clawd::app_install::install(&self.state, different_root, &client).await.unwrap_err();
+        assert!(error.message.contains("different local App root"));
+        assert_eq!(self.version(), "1.0.0");
+        let status = std::fs::read("/var/lib/dpkg/status").unwrap();
+        let list = Path::new("/var/lib/dpkg/info/custody-owner.list");
+        std::fs::write("/var/lib/dpkg/status",
+            "Package: custody-owner\nStatus: install ok installed\nArchitecture: all\nVersion: 1.0\nDescription: private fixture\n\n",
+        ).unwrap();
+        std::fs::write(list, format!("{BASE}/apps/ordinary/custody/web/index.html\n")).unwrap();
+        let refusal = crate::clawd::app_install::install(&self.state, body.clone(), &client).await;
+        std::fs::write("/var/lib/dpkg/status", status).unwrap();
+        std::fs::remove_file(list).unwrap();
+        assert!(refusal.unwrap_err().message.contains("APT"));
+        assert_eq!(self.version(), "1.0.0");
+        assert!(!crate::clawd::app_install::pending(ID).unwrap());
+        let result = crate::clawd::app_install::install(&self.state, body, &client)
+            .await.map_err(|error| error.message)?;
+        assert_eq!(crate::approvals::system_review::get(0, &review).unwrap().state,
+            crate::approvals::system_review::ReviewState::Consumed);
+        assert!(!crate::clawd::app_install::pending(ID).unwrap());
+        Ok(result)
     }
 }
 
@@ -622,19 +685,64 @@ fn group_empty(path: &Path) -> bool {
 async fn ordinary_root_standalone_retires_host_before_publication() {
     let _environment = crate::test_env::lock_env();
     let fixture = Fixture::new();
+    let fresh_root = Path::new(BASE).join("empty-apps");
+    assert!(!fresh_root.exists());
+    {
+        let _root = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &fresh_root);
+        let (mut body, client) = fixture.directory_request();
+        body["expected_apps_root"] = json!(fresh_root);
+        let installed = crate::clawd::app_install::install(&fixture.state, body, &client).await.unwrap();
+        assert_eq!(installed["destination"], fresh_root.join(ID).to_str().unwrap());
+        let metadata = std::fs::metadata(&fresh_root).unwrap();
+        assert_eq!(metadata.uid(), 0);
+        assert_eq!(metadata.mode() & 0o777, 0o755);
+    }
     let mut actor = Actor::start(&fixture, false, false);
     actor.ready().await;
     let pid = actor.observed.lock().unwrap().pid;
     let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
     assert!(raw >= 0);
     let process = unsafe { OwnedFd::from_raw_fd(raw as i32) };
-    let result = fixture.publish().await.unwrap();
-    assert_eq!(result["version"], "2.0.0");
+    let result = fixture.publish_directory().await.unwrap();
+    assert_eq!(result["manifest"]["version"], "2.0.0");
+    assert_eq!(result["destination"], format!("{BASE}/apps/ordinary/custody"));
+    assert!(!Path::new(BASE).join("apps").join(ID).exists(), "directory publication created a duplicate flat App");
     assert_eq!(fixture.version(), "2.0.0");
-    assert!(!fixture.approved());
+    assert!(fixture.approved(), "Root's separate directory review must not consume the Store owner's review");
     assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
     assert!(!actor.group(&fixture).exists());
     assert!(!actor.observed.lock().unwrap().socket.parent().unwrap().exists());
+    let installed = Path::new(BASE).join("apps").join("ordinary").join("custody");
+    let inode = std::fs::metadata(&installed).unwrap().ino();
+    let record_path = Path::new("/var/lib/cos/app-directory-installs")
+        .join(format!("{}.json", crate::crypto::sha256_hex(ID.as_bytes())));
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    let (body, client) = fixture.directory_request();
+    let review = body["review_id"].as_str().unwrap();
+    for phase in ["publishing", "indeterminate"] {
+        record["phase"] = json!(phase);
+        crate::agent::util::atomic_write_with_fsync(&record_path, &serde_json::to_vec(&record).unwrap()).unwrap();
+        let error = crate::clawd::app_install::install(&fixture.state, body.clone(), &client).await.unwrap_err();
+        assert!(error.message.contains("cannot be replayed"), "{phase}: {}", error.message);
+        assert_eq!(std::fs::metadata(&installed).unwrap().ino(), inode);
+        assert!(crate::clawd::app_install::pending(ID).unwrap());
+    }
+    let recover = json!({
+        "action": "recover", "app_id": ID, "expected_apps_root": Path::new(BASE).join("apps"),
+    });
+    let scratch = installed.parent().unwrap().join(format!(".{ID}.install-staging-outcome"));
+    std::fs::create_dir(&scratch).unwrap();
+    std::fs::remove_dir_all(body["source"].as_str().unwrap()).unwrap();
+    let error = crate::clawd::app_install::install(&fixture.state, recover.clone(), &client).await.unwrap_err();
+    assert!(error.message.contains("scratch"), "{}", error.message);
+    assert!(crate::clawd::app_install::pending(ID).unwrap());
+    std::fs::remove_dir(&scratch).unwrap();
+    let recovered = crate::clawd::app_install::install(&fixture.state, recover, &client).await.unwrap();
+    assert_eq!(recovered["manifest"]["version"], "2.0.0");
+    assert_eq!(std::fs::metadata(&installed).unwrap().ino(), inode);
+    assert_eq!(crate::approvals::system_review::get(0, review).unwrap().state,
+        crate::approvals::system_review::ReviewState::Approved, "outcome checking consumed a fresh review");
+    assert!(!crate::clawd::app_install::pending(ID).unwrap());
     actor.finish().await;
 }
 
@@ -648,11 +756,11 @@ async fn ordinary_root_standalone_cancel_retry_publishes_only_after_cleanup() {
     let session = actor.session();
     let mut provider = app_execution::provider(&session, OWNER).unwrap().unwrap();
     let state = fixture.state.clone();
-    let request = fixture.request.clone();
-    let review = fixture.review.clone();
-    let record = fixture.record.clone();
+    let (body, client) = fixture.directory_request();
+    let review = body["review_id"].as_str().unwrap().to_string();
+    let recovery_client = client.clone();
     let pending = tokio::spawn(async move {
-        app_store::commit_fixture(&state, OWNER, request, review, record).await
+        crate::clawd::app_install::install(&state, body, &client).await
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     while !group_empty(&actor.group(&fixture)) {
@@ -667,11 +775,15 @@ async fn ordinary_root_standalone_cancel_retry_publishes_only_after_cleanup() {
     provider.record_result(&Ok(json!({"completed": true})));
     drop(provider);
     wait_fence_release().await;
-    assert_eq!(fixture.version(), "1.0.0", "cancelled publication resumed after cleanup");
-    let result = fixture.publish().await.unwrap();
-    assert_eq!(result["version"], "2.0.0");
+    assert_eq!(fixture.version(), "2.0.0", "client loss cancelled the Root publication controller");
+    assert_eq!(crate::approvals::system_review::get(0, &review).unwrap().state,
+        crate::approvals::system_review::ReviewState::Consumed);
+    let result = crate::clawd::app_install::install(&fixture.state, json!({
+        "action": "recover", "app_id": ID, "expected_apps_root": Path::new(BASE).join("apps"),
+    }), &recovery_client).await.unwrap();
+    assert_eq!(result["manifest"]["version"], "2.0.0");
     assert_eq!(fixture.version(), "2.0.0");
-    assert!(!fixture.approved());
+    assert!(fixture.approved());
     assert!(!actor.group(&fixture).exists());
     assert!(!actor.observed.lock().unwrap().socket.parent().unwrap().exists());
     actor.finish().await;
@@ -705,9 +817,12 @@ async fn ordinary_root_indeterminate_provider_blocks_store_publication() {
         "synthetic provider has no completion receipt",
     )));
     drop(provider);
-    let error = fixture.publish().await.unwrap_err();
-    wait_fence_release().await;
+    let error = fixture.publish_directory().await.unwrap_err();
+    let released = crate::clawd::app_mutation::fence(ID).await.unwrap();
+    drop(released);
     assert!(error.contains("provider completion is unknown"), "{error}");
+    assert!(crate::clawd::app_install::pending(ID).unwrap());
+    assert!(crate::clawd::app_mutation::admit(ID).is_err(), "durable pending custody disappeared with the in-process fence");
     assert_eq!(fixture.version(), "1.0.0");
     assert!(fixture.approved());
     assert!(group_empty(&actor.group(&fixture)));

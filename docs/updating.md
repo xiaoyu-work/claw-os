@@ -875,11 +875,24 @@ command as success. Full Agent/Desktop transactions and real
 greetd/logind/KMS/LSM acceptance remain rollout requirements.
 
 Independent App replacement needs an authenticated Root, owner/App-scoped
-retirement barrier and admission fencing, not a display-wide restart. Current
-standalone `cos app install` and provenance rollback/trust mutation do not yet
-provide that acknowledgement. Calling the broker's process-local GUI manager
-from another process would not retire its instances. This remains separate
-from the checked permission/session revocation paths already implemented.
+retirement barrier and admission fencing, not a display-wide restart. Signed
+standalone `cos app install` now uses a direct Root-peer-only controller with
+the same checked ordinary/GUI/MCP cross-owner retirement and admission fence as
+official APT Store delivery. Root consumes the protected install review inside
+publication and verifies the installed bytes and transaction cleanup. Client
+loss cannot cancel the controller; incomplete/uncertain results durably block
+admission until `cos app install --recover <app-id>` confirms the exact original
+installed destination, package/manifest, directory ownership and absent
+transaction scratch. Publication is durably checkpointed before tree writes;
+an unknown/dispatched publication cannot be replayed, even for the same bytes.
+Outcome recovery does not require the original source and never copies, renames
+or consumes review. A pre-publication cleanup failure may instead retry checked
+retirement with current confirmation.
+Different CLI-local roots and unavailable daemons fail without direct writes.
+Unsigned `--dev-trust` installation remains explicitly blocked pending genuine
+quarantined publication; provenance rollback/trust and generic package mutation
+coordination remain separate work. Calling a process-local GUI manager from
+another process is never retirement acknowledgement.
 
 Terminal-only installations retain their existing worker restart behavior and
 do not require a display. Missing GUI kernel facilities are explicit GUI
