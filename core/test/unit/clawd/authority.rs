@@ -199,7 +199,7 @@ fn the_root_only_access_class_is_unchanged() {
     // direction. `journal.mutation.resolve` is the second: it states
     // what happened to a privileged mutation the machine could not
     // resolve, and that statement is what lifts the replay refusal.
-    // Protected review decisions also remain Root-only.
+    // Protected review decisions and the tracked pre-dpkg helper stay Root-only.
     let root: Vec<&str> = ROUTES
         .iter()
         .filter(|route| route.access == Access::Root)
@@ -211,7 +211,8 @@ fn the_root_only_access_class_is_unchanged() {
             "context.update",
             "journal.mutation.resolve",
             "system.review.decide",
-            "permission.revoke"
+            "permission.revoke",
+            "app_store.apt_hook"
         ]
     );
 }
