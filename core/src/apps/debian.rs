@@ -362,103 +362,100 @@ fn control_fields(text: &str) -> Result<BTreeMap<String, String>, String> {
         }
         previous = Some(key.to_string());
     }
-
-    fn shell_word(value: &str) -> String {
-        if !value.is_empty()
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"_/@%+=:,.-".contains(&byte))
-        {
-            value.to_string()
-        } else {
-            format!("'{}'", value.replace('\'', "'\"'\"'"))
-        }
-    }
-
-    pub(crate) fn validate_exports(
-        root: &Path,
-        apps: &BTreeMap<String, super::App>,
-    ) -> Result<(), String> {
-        let mut exports = BTreeMap::new();
-        for app in apps.values() {
-            let Some(desktop) = &app.manifest.desktop else {
-                continue;
-            };
-            for name in
-                std::iter::once(None).chain(desktop.entries.keys().map(|name| Some(name.as_str())))
-            {
-                let gui = app.manifest.gui_entry(name)?;
-                let program = Path::new(gui.entry)
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .ok_or("GUI entry has no canonical exported program")?;
-                let body = format!(
-                    "#!/bin/sh\nexec /usr/local/bin/cos app {} {} \"$@\"\n",
-                    shell_word(&app.manifest.id),
-                    shell_word(&gui.cli_selector())
-                );
-                if exports.insert(program.to_string(), body).is_some() {
-                    return Err("App package exports an ambiguous program".into());
-                }
-            }
-        }
-        let binaries = root.join("usr/bin");
-        if binaries.exists() {
-            for entry in std::fs::read_dir(binaries).map_err(|error| error.to_string())? {
-                let entry = entry.map_err(|error| error.to_string())?;
-                let name = entry
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| "invalid App export name")?;
-                let metadata =
-                    std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
-                if !metadata.is_file()
-                    || metadata.len() > 8192
-                    || exports.get(&name).map(String::as_bytes)
-                        != Some(
-                            std::fs::read(entry.path())
-                                .map_err(|error| error.to_string())?
-                                .as_slice(),
-                        )
-                {
-                    return Err("App executable export bypasses its declared common Host".into());
-                }
-            }
-        }
-        for directory in ["usr/share/applications", "usr/share/thumbnailers"] {
-            let directory = root.join(directory);
-            if !directory.exists() {
-                continue;
-            }
-            for entry in std::fs::read_dir(directory).map_err(|error| error.to_string())? {
-                let entry = entry.map_err(|error| error.to_string())?;
-                let text =
-                    std::fs::read_to_string(entry.path()).map_err(|error| error.to_string())?;
-                for line in text.lines() {
-                    let Some((key, value)) = line.split_once('=') else {
-                        continue;
-                    };
-                    let value = value.trim();
-                    if key.trim() == "DBusActivatable" && value.eq_ignore_ascii_case("true") {
-                        return Err("App metadata cannot request unmanaged bus activation".into());
-                    }
-                    if matches!(key.trim(), "Exec" | "TryExec") {
-                        let first = value
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .trim_matches('"');
-                        let program = first.strip_prefix("/usr/bin/").unwrap_or(first);
-                        if !exports.contains_key(program) {
-                            return Err(
-                                "App launch metadata bypasses its declared Host export".into()
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
     Ok(fields)
+}
+
+fn shell_word(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_/@%+=:,.-".contains(&byte))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
+pub(crate) fn validate_exports(
+    root: &Path,
+    apps: &BTreeMap<String, super::App>,
+) -> Result<(), String> {
+    let mut exports = BTreeMap::new();
+    for app in apps.values() {
+        let Some(desktop) = &app.manifest.desktop else {
+            continue;
+        };
+        for name in
+            std::iter::once(None).chain(desktop.entries.keys().map(|name| Some(name.as_str())))
+        {
+            let gui = app.manifest.gui_entry(name)?;
+            let program = Path::new(gui.entry)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or("GUI entry has no canonical exported program")?;
+            let body = format!(
+                "#!/bin/sh\nexec /usr/local/bin/cos app {} {} \"$@\"\n",
+                shell_word(&app.manifest.id),
+                shell_word(&gui.cli_selector())
+            );
+            if exports.insert(program.to_string(), body).is_some() {
+                return Err("App package exports an ambiguous program".into());
+            }
+        }
+    }
+    let binaries = root.join("usr/bin");
+    if binaries.exists() {
+        for entry in std::fs::read_dir(binaries).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| "invalid App export name")?;
+            let metadata =
+                std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+            if !metadata.is_file()
+                || metadata.len() > 8192
+                || exports.get(&name).map(String::as_bytes)
+                    != Some(
+                        std::fs::read(entry.path())
+                            .map_err(|error| error.to_string())?
+                            .as_slice(),
+                    )
+            {
+                return Err("App executable export bypasses its declared common Host".into());
+            }
+        }
+    }
+    for directory in ["usr/share/applications", "usr/share/thumbnailers"] {
+        let directory = root.join(directory);
+        if !directory.exists() {
+            continue;
+        }
+        for entry in std::fs::read_dir(directory).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let text = std::fs::read_to_string(entry.path()).map_err(|error| error.to_string())?;
+            for line in text.lines() {
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let value = value.trim();
+                if key.trim() == "DBusActivatable" && value.eq_ignore_ascii_case("true") {
+                    return Err("App metadata cannot request unmanaged bus activation".into());
+                }
+                if matches!(key.trim(), "Exec" | "TryExec") {
+                    let first = value
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .trim_matches('"');
+                    let program = first.strip_prefix("/usr/bin/").unwrap_or(first);
+                    if !exports.contains_key(program) {
+                        return Err("App launch metadata bypasses its declared Host export".into());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
