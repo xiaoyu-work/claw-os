@@ -1,6 +1,6 @@
 [package]
 name = "claw-os-sdk"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Official Rust SDK for Claw OS. Lets apps and desktop binaries call the kernel's `cos` CLI for every fs / exec / pkg / notify / ai / tool / policy operation, so capability gating, audit, and session checkpointing apply uniformly to terminal and GUI callers."

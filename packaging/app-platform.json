@@ -1,6 +1,6 @@
 {
   "schema": "claw.app-platform/v1",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "runtime_abi": 1,
   "exports": {
     "python-sdk": "claw-os-sdk/python/src",

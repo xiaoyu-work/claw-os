@@ -1,6 +1,6 @@
 {
   "name": "@claw-os/sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Official Node.js SDK for Claw OS Apps — manifest-bound MCP services, gated AI and tools, and desktop GUI bootstrap.",
   "license": "Apache-2.0",
   "repository": {
