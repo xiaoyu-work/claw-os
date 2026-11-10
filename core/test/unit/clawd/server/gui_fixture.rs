@@ -304,6 +304,27 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     session
 }
 
+fn private_audit_tail() -> String {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut output = String::new();
+    for path in [
+        "/var/lib/cos/clawd/audit.jsonl",
+        "/run/display-home/.local/share/cos/logs/audit.jsonl",
+    ] {
+        if let Ok(mut file) = std::fs::File::open(path) {
+            let size = file.metadata().map(|value| value.len()).unwrap_or(0);
+            if file.seek(SeekFrom::Start(size.saturating_sub(8192))).is_ok() {
+                let mut bytes = Vec::new();
+                if file.take(8192).read_to_end(&mut bytes).is_ok() {
+                    output.push_str(&format!("\n{path}:\n{}", String::from_utf8_lossy(&bytes)));
+                }
+            }
+        }
+    }
+    output
+}
+
 fn wait_marker(path: &Path, pam: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(25);
     while !path.exists() {
@@ -313,8 +334,8 @@ fn wait_marker(path: &Path, pam: &mut Child) {
         );
         assert!(
             Instant::now() < deadline,
-            "GUI marker missing: {}",
-            path.display()
+            "GUI marker missing: {}{}",
+            path.display(), private_audit_tail()
         );
         std::thread::sleep(Duration::from_millis(20));
     }

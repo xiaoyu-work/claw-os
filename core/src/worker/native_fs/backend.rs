@@ -188,6 +188,18 @@ impl Filesystem {
     }
 
     fn authorize(&self, req: &Request<'_>, metadata: bool, kernel_handle: bool) -> Result<(), i32> {
+        let result = self.authorize_request(req, metadata, kernel_handle);
+        if let Err(error) = result {
+            tracing::warn!(
+                pid = req.pid(), uid = req.uid(), gid = req.gid(),
+                owner = self.shared.owner, controller = self.shared.controller.pid(),
+                metadata, kernel_handle, error, "private native filesystem peer refused"
+            );
+        }
+        result
+    }
+
+    fn authorize_request(&self, req: &Request<'_>, metadata: bool, kernel_handle: bool) -> Result<(), i32> {
         #[cfg(test)]
         if self.shared.fail_worker.swap(false, Ordering::AcqRel) {
             panic!("private native filesystem worker failure");
