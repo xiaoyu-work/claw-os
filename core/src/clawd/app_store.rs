@@ -656,6 +656,25 @@ fn delivery_owner_result(status: Option<i32>, output: &[u8]) -> Result<(), Strin
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) async fn commit_fixture(
+    state: &super::state::DaemonState,
+    owner_uid: u32,
+    request_id: String,
+    review_id: String,
+    record: Record,
+) -> Result<Value, String> {
+    initialize()?;
+    if reviews::get(owner_uid, &review_id)?.effective_state()? != reviews::ReviewState::Approved {
+        return Err("fixture Store mutation requires protected owner confirmation".into());
+    }
+    commit_prepared(state, &Prepared {
+        owner_uid, request_id, review_id, record,
+        expires_at: Utc::now() + chrono::Duration::hours(1),
+        phase: "ready".into(),
+    }).await
+}
+
 pub async fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let owner_uid = owner(client).await?;
     let id = super::permissions::required_string(&params, "request_id")?;

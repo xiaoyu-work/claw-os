@@ -723,9 +723,7 @@ pub(crate) async fn dispatch(
     };
     #[cfg(target_os = "linux")]
     if let Some(provider) = provider.as_mut() {
-        if !matches!(&result, Err(error) if error.kind == super::protocol::BrokerErrorKind::Indeterminate) {
-            provider.complete();
-        }
+        provider.record_result(&result);
     }
     // A route whose descriptor says it derives its own capability owes
     // the authority one spend. If it answered without taking one, the

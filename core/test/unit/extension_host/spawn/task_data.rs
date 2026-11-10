@@ -9,6 +9,14 @@ use crate::provenance::trust::TrustRootSpec;
 const ACTOR_TEST: &str = "extension_host::spawn::task_data::tests::ordinary_task_app_actor";
 const APP: &str = "task-storage";
 
+#[cfg(target_os = "linux")]
+mod store_custody {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/extension_host/spawn/ordinary_store_custody.rs"
+    ));
+}
+
 #[test]
 fn task_app_data_bounds_distinct_views_without_replacing_existing_ones() {
     TaskAppData::require_capacity(0).unwrap();

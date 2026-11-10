@@ -249,8 +249,12 @@ pub(crate) struct Provider {
 }
 
 impl Provider {
-    pub(crate) fn complete(&mut self) {
-        self.completed = true;
+    pub(crate) fn record_result(
+        &mut self,
+        result: &Result<serde_json::Value, super::protocol::BrokerError>,
+    ) {
+        self.completed = !matches!(result,
+            Err(error) if error.kind == super::protocol::BrokerErrorKind::Indeterminate);
     }
 }
 

@@ -18,7 +18,7 @@ adapters) are consumers of this module, not peers of it.
 | Tier | Selected for | Sandbox | Display | Egress |
 | --- | --- | --- | --- | --- |
 | `AppOperation` | one manifest operation | yes | no | brokered, exact hosts |
-| `DesktopSurface` | a manifest `desktop.exec` launch | yes | yes | brokered, exact hosts |
+| `DesktopSurface` | one declared default/named GUI entry and its literal selector | yes | yes | brokered, exact hosts |
 | `McpServer` | App Mesh services, configured MCP servers, and adapters | yes | no | denied |
 | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
 | `TrustedDesktopSession` | the fixed vendor App session servers that need the session bus | yes | one exact socket | denied |
@@ -51,7 +51,7 @@ and a root-owned executed artifact.
 | --- | --- |
 | `policy.rs` | `LaunchPolicy`, tiers, mounts, limits, digest, audit facts |
 | `derive.rs` | Trusted derivation from manifest/caps/runtime |
-| `entry.rs` | Generic signed package-local stdio entry admission; no product, origin or native-table exemption |
+| `entry.rs` | Generic signed package-local stdio/GUI entry admission; no product, origin or native-table exemption |
 | `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids/programs; no current row receives a session bus or other desktop transport |
 | `migrate.rs` | One-time move of legacy App state into its partition |
 | `provider.rs` | `WorkerSandbox` seam, availability, fail-closed `prepare` |
@@ -118,6 +118,14 @@ Task App children retain their Host's aggregate limits in nested scopes.
 Missing required kernel facilities fail closed, including Root's ability to
 hold the gate stopped during attachment; no App permission is added.
 
+Ordinary registration responses must explicitly contain `root_custody: true`
+before the launcher prepares a worker. Missing, false or malformed values from
+an older Root broker refuse the launch; protocol-v2 framing or an optional bind
+field is not feature attestation. Managed GUI and service-MCP registrations keep
+their existing custody path and do not silently become ordinary workers.
+The response selects the mandatory path, not execution authority: Root must
+still verify the real gate, pidfd, cgroup and Host connection during binding.
+
 The Root Store composes this custody with GUI/MCP barriers under an App-specific
 admission fence. Failed/cancelled acknowledgement keeps non-reusable custody.
 It does not turn process-local absence into proof for independent install,
@@ -133,6 +141,27 @@ COS_CAPTURED_TEST_RUNNER="$PWD/target/debug/claw-app-runner" \
   cargo test -p cos --lib bridge::captured::tests::process \
   -- --ignored --nocapture --test-threads=1
 ```
+
+`scripts/ci/test-boundaries.sh app-bind` selects both real-runner cases and the
+six ignored `extension_host::spawn::task_data::tests::store_custody` process
+cases. They require Root, private mount/network namespaces, writable cgroup v2,
+ptrace/pidfd support, ACL tools, and `COS_ORDINARY_TEST_COS` /
+`COS_ORDINARY_TEST_RUNNER` pointing at the matching compiled OS binaries.
+Each case runs in its own process with isolated synthetic NSS accounts, signed
+packages and trust, an empty private dpkg database, and project-local backing
+data. They exercise standalone and Task Host execution through the protected
+runner and actual `commit_prepared` directory-publication backend after
+synthetic catalog selection and protected owner review. They do not download
+the production catalog, use production signing keys, call a model or require
+a live display/PAM session.
+
+The cases check cancellation with retained provider/fence custody and checked
+retry, Task data-view unmount before replacement, a still-alive ptraced
+grandchild, a foreign same-UID positive reply after genuine Host loss, and a
+typed indeterminate provider outcome. The positive acknowledgement comes from
+the real OS Host cleanup implementation. It is authenticated peer testimony,
+not independent cryptographic Host attestation. These fixtures do not replace
+native GUI/panel acceptance or coordinate independent CLI/rollback/APT paths.
 
 `cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`.
 The Mail compatibility executable retains its protected launcher/interpreter/
@@ -180,6 +209,9 @@ cannot select this authority. `gui_operation` projects only the private Wayland
 endpoint. The Linux provider adds mandatory checked cgroup custody and
 connect mediation; neither the existing stdio/native compatibility paths nor
 their documented tiers gain an exemption into this GUI instance.
+Optional named GUI entries use this same provider and signed regular-file
+admission, with their own declared needs and literal selector. Neither a
+second ELF nor a panel label creates another App identity or mount authority.
 
 Notifications is a normal hostile MCP worker. Its original `ui.notify`
 capability admits bounded native post/close or `notify` send intent; the
