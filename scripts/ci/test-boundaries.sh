@@ -30,6 +30,39 @@ nearby() {
     python3 -B packaging/deb/tests/test_nearby.py
 }
 
+app_apt() {
+    local program
+    for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare; do
+        command -v "$program" > /dev/null
+    done
+    python3 -I -c 'import apt_pkg'
+    cargo build -p cos --bin claw-app-apt-hook --locked
+    cargo test -p cos --lib --locked --no-run --message-format=json \
+        > "$CARGO_TARGET_DIR/app-apt-tests.jsonl"
+    local test_binary listing fixture
+    test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/app-apt-tests.jsonl")"
+    listing="$("$test_binary" --list)"
+    local fixtures=(
+        private_apt_bundle_requires_both_reviews_and_owns_shared_dependency
+        private_apt_refuses_substituted_bytes_plan_and_status_before_dpkg
+        private_apt_hook_identity_and_lost_reply_never_replay
+        private_apt_completed_dispatch_failure_recovers_read_only
+    )
+    for fixture in "${fixtures[@]}" private_apt_foreign_uid_probe; do
+        grep -Fx -- "clawd::app_store::apt::tests::$fixture: test" \
+            <<< "$listing" > /dev/null
+    done
+    for fixture in "${fixtures[@]}"; do
+        sudo timeout 150 unshare --mount --net --fork \
+            env COS_APP_APT_TEST_HOOK="$CARGO_TARGET_DIR/debug/claw-app-apt-hook" \
+            bash --noprofile --norc -c '
+                set -euo pipefail
+                mount --make-rprivate /
+                exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
+            ' private-app-apt "$test_binary" "clawd::app_store::apt::tests::$fixture"
+    done
+}
+
 app_bind() {
     cargo build -p cos --bin cos --bin claw-app-runner --locked
     sudo apt-get install -y --no-install-recommends acl
@@ -302,6 +335,7 @@ PY
 }
 
 case "${1:-}" in
+    app-apt) app_apt ;;
     app-bind) app_bind ;;
     nearby) nearby ;;
     calendar) calendar ;;
@@ -309,7 +343,7 @@ case "${1:-}" in
     display) display ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-bind|nearby|calendar|extensions|display|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|applets}" >&2
         exit 2
         ;;
 esac

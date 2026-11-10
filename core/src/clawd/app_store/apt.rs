@@ -792,3 +792,11 @@ pub async fn hook(params: Value, client: &ClientIdentity) -> Result<Value, Broke
     .map_err(BrokerError::indeterminate)?;
     Ok(json!({"proceed": true}))
 }
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/app_store/apt.rs"
+    ));
+}

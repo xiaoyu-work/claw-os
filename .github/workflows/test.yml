@@ -116,6 +116,9 @@ jobs:
       - name: Test ordinary App bind gate
         run: bash scripts/ci/test-boundaries.sh app-bind
 
+      - name: Test official App APT delivery and protected plan custody
+        run: bash scripts/ci/test-boundaries.sh app-apt
+
       - name: Test nearby transport and owner-file boundaries without wireless hardware
         run: bash scripts/ci/test-boundaries.sh nearby
 
