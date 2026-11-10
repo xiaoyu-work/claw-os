@@ -127,6 +127,7 @@ fn activity_extension_worker_child() {
         .block_on(crate::extension_host::client::install_for_worker(
             binding.clone(),
             io.state.tx.clone(),
+            io.state.extension_deadline.clone(),
         ))
         .unwrap();
     let client = crate::extension_host::client::current().expect("installed task Host client");

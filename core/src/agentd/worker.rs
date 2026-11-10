@@ -123,7 +123,11 @@ fn run() -> Result<(), String> {
 
     let _extension_host = match assignment.extension.clone() {
         Some(binding) => Some(runtime.block_on(
-            crate::extension_host::client::install_for_worker(binding, io.state.tx.clone()),
+            crate::extension_host::client::install_for_worker(
+                binding,
+                io.state.tx.clone(),
+                io.state.extension_deadline.clone(),
+            ),
         )?),
         None => None,
     };
@@ -289,6 +293,7 @@ impl LocalIdentity {
 struct ChannelState {
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
+    extension_deadline: Arc<AtomicU64>,
     waiters: Mutex<HashMap<u64, ApprovalWaiter>>,
     receipt_waiters: Mutex<HashMap<u64, SyncSender<ReceiptReply>>>,
     monetary_waiters: Mutex<HashMap<u64, SyncSender<MonetaryBudgetReply>>>,
@@ -472,6 +477,7 @@ impl ChannelIo {
         let state = Arc::new(ChannelState {
             tx,
             cancelled: Arc::new(AtomicBool::new(false)),
+            extension_deadline: Arc::new(AtomicU64::new(0)),
             waiters: Mutex::new(HashMap::new()),
             receipt_waiters: Mutex::new(HashMap::new()),
             monetary_waiters: Mutex::new(HashMap::new()),
@@ -627,6 +633,13 @@ async fn io_main(
         return;
     }
     let task_id = assignment.job.id.clone();
+    state.extension_deadline.store(
+        assignment.extension.as_ref().filter(|binding| {
+            binding.purpose == crate::extension_host::protocol::HostPurpose::Task
+                && binding.task_id == task_id
+        }).map_or(0, |binding| binding.expires_at_ms),
+        Ordering::SeqCst,
+    );
     if handshake.send(Ok(assignment)).is_err() {
         return;
     }
@@ -864,7 +877,9 @@ where
                 expires_at_ms,
             })) if target == task_id => {
                 if let Err(error) =
-                    crate::extension_host::client::renew_current_task_lease(&target, expires_at_ms)
+                    crate::extension_host::client::renew_current_task_lease(
+                        &task_id, &target, expires_at_ms, &state.extension_deadline,
+                    )
                 {
                     state.refuse_all(&error);
                     state.cancelled.store(true, Ordering::SeqCst);

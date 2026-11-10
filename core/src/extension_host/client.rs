@@ -72,7 +72,7 @@ pub struct ExtensionHostClient {
     binding: ExtensionBinding,
     binding_digest: String,
     lease_digest: String,
-    lease_deadline_ms: AtomicU64,
+    lease_deadline_ms: Arc<AtomicU64>,
     audit: Option<UnboundedSender<crate::agentd::protocol::WorkerFrame>>,
 }
 
@@ -118,27 +118,55 @@ pub fn is_available() -> bool {
     current().is_some()
 }
 
-pub(crate) fn renew_current_task_lease(task_id: &str, expires_at_ms: u64) -> Result<(), String> {
-    let client = current().ok_or_else(|| {
-        "extension-host lease renewed before its client was installed".to_string()
-    })?;
-    client.renew_task_lease(task_id, expires_at_ms)
+pub(crate) fn renew_current_task_lease(
+    expected_task_id: &str,
+    task_id: &str,
+    expires_at_ms: u64,
+    deadline: &Arc<AtomicU64>,
+) -> Result<(), String> {
+    if expected_task_id != task_id {
+        return Err("extension-host lease renewal belongs to a different task".into());
+    }
+    if let Some(client) = current() {
+        if !Arc::ptr_eq(&client.lease_deadline_ms, deadline) {
+            return Err("extension-host lease renewal belongs to another worker context".into());
+        }
+        return client.renew_task_lease(task_id, expires_at_ms);
+    }
+    if deadline.load(Ordering::SeqCst) == 0 {
+        return Err("extension-host lease renewal has no bound task assignment".into());
+    }
+    renew_deadline(deadline, expires_at_ms)
+}
+
+fn renew_deadline(deadline: &AtomicU64, expires_at_ms: u64) -> Result<(), String> {
+    let now = crate::agentd::grant::now_ms();
+    if expires_at_ms <= now
+        || expires_at_ms > now.saturating_add(super::protocol::MAX_TASK_LEASE_DURATION_MS)
+    {
+        return Err("extension-host lease renewal deadline is invalid".into());
+    }
+    deadline.fetch_max(expires_at_ms, Ordering::SeqCst);
+    Ok(())
 }
 
 pub async fn install(binding: ExtensionBinding) -> Result<InstallGuard, String> {
-    install_with_audit(binding, None).await
+    let deadline = Arc::new(AtomicU64::new(binding.expires_at_ms));
+    install_with_audit(binding, None, deadline).await
 }
 
 pub async fn install_for_worker(
     binding: ExtensionBinding,
     audit: UnboundedSender<crate::agentd::protocol::WorkerFrame>,
+    deadline: Arc<AtomicU64>,
 ) -> Result<InstallGuard, String> {
-    install_with_audit(binding, Some(audit)).await
+    install_with_audit(binding, Some(audit), deadline).await
 }
 
 async fn install_with_audit(
     binding: ExtensionBinding,
     audit: Option<UnboundedSender<crate::agentd::protocol::WorkerFrame>>,
+    deadline: Arc<AtomicU64>,
 ) -> Result<InstallGuard, String> {
     binding.validate_fresh_worker(
         std::process::id(),
@@ -147,7 +175,7 @@ async fn install_with_audit(
     let binding_digest = binding.digest()?;
     let lease_digest = crate::crypto::sha256_hex(binding.lease_nonce.as_bytes());
     let client = Arc::new(ExtensionHostClient {
-        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+        lease_deadline_ms: deadline,
         binding,
         binding_digest,
         lease_digest,
@@ -183,7 +211,7 @@ impl ExtensionHostClient {
             crate::proc::read_start_time_ticks_pub(std::process::id()),
         )?;
         let client = Arc::new(Self {
-            lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+            lease_deadline_ms: Arc::new(AtomicU64::new(binding.expires_at_ms)),
             binding_digest: binding.digest()?,
             lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
             binding,
@@ -207,15 +235,7 @@ impl ExtensionHostClient {
         {
             return Err("extension-host lease renewal belongs to a different task".to_string());
         }
-        let now = crate::agentd::grant::now_ms();
-        if expires_at_ms <= now
-            || expires_at_ms > now.saturating_add(super::protocol::MAX_TASK_LEASE_DURATION_MS)
-        {
-            return Err("extension-host lease renewal deadline is invalid".to_string());
-        }
-        self.lease_deadline_ms
-            .fetch_max(expires_at_ms, Ordering::SeqCst);
-        Ok(())
+        renew_deadline(&self.lease_deadline_ms, expires_at_ms)
     }
 
     fn validate_live_controller(&self) -> Result<(), String> {

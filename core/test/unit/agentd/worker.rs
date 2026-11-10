@@ -274,6 +274,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
     let state = Arc::new(ChannelState {
         tx,
         cancelled: Arc::new(AtomicBool::new(false)),
+        extension_deadline: Arc::new(AtomicU64::new(0)),
         waiters: Mutex::new(HashMap::new()),
         receipt_waiters: Mutex::new(HashMap::new()),
         monetary_waiters: Mutex::new(HashMap::new()),
@@ -318,6 +319,7 @@ fn cancelled_worker_refuses_reservations_but_can_settle_an_existing_turn() {
     let state = Arc::new(ChannelState {
         tx,
         cancelled: Arc::new(AtomicBool::new(true)),
+        extension_deadline: Arc::new(AtomicU64::new(0)),
         waiters: Mutex::new(HashMap::new()),
         receipt_waiters: Mutex::new(HashMap::new()),
         monetary_waiters: Mutex::new(HashMap::new()),
