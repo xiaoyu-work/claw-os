@@ -252,6 +252,10 @@ const BASELINE: &[(Verb, Baseline)] = &[
     (Verb::BROWSER_DOM_WRITE, Baseline::Denied),
     (Verb::BROWSER_INPUT_SECRET, Baseline::Denied),
     (Verb::BROWSER_EVAL, Baseline::Denied),
+    (Verb::MAIL_ACCOUNTS, Baseline::Denied),
+    (Verb::MAIL_READ, Baseline::Denied),
+    (Verb::MAIL_DRAFT, Baseline::Denied),
+    (Verb::MAIL_SEND, Baseline::Denied),
 ];
 
 /// Baseline decision for one verb. Anything the table does not name is

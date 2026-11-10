@@ -296,20 +296,26 @@ fn accounts_require_authenticated_owner_session_exact_icon_read_and_live_authori
     assert!(validate_owner(&wrong, &client, &grant).is_err());
     assert!(account_preflight(&change, owner + 1, &grant).is_err());
     assert!(validate_owner(&params, &ClientIdentity::unknown(), &grant).is_err());
+    let mut missing_params = params.clone();
+    missing_params["session"] = json!(format!("identity-{}", uuid::Uuid::new_v4().simple()));
     let missing = account_decision(
-        &params,
+        &missing_params,
         vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("manage"))],
         Uses::Unbounded,
     );
+    validate_owner(&missing_params, &client, &missing).unwrap();
     assert!(account_preflight(&change, owner, &missing).is_err());
+    let mut unrelated_params = params.clone();
+    unrelated_params["session"] = json!(format!("identity-{}", uuid::Uuid::new_v4().simple()));
     let unrelated = account_decision(
-        &params,
+        &unrelated_params,
         vec![
             Cap::new(Verb::SYS_IDENTITY, Scope::name("manage")),
             Cap::new(Verb::FS_READ, Scope::path("/home/fixture/other.png")),
         ],
         Uses::Unbounded,
     );
+    validate_owner(&unrelated_params, &client, &unrelated).unwrap();
     assert!(account_preflight(&change, owner, &unrelated).is_err());
     authority().revoke_session(params["session"].as_str().unwrap());
     assert!(account_preflight(&change, owner, &grant).is_err());
