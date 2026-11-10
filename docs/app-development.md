@@ -809,8 +809,11 @@ trust grants. A Root-owned unsigned tree in the installed vendor root, or one
 matching an old developer grant, cannot yet be guaranteed quarantined before a
 new independent trust decision. The existing standalone developer-trust
 terminal/phrase/no-active-session gate is unchanged; no Root request flag
-creates trust or runtime permission. Provenance rollback/trust coordination
-remains separate work.
+creates trust or runtime permission. Public signed App rollback reuses the same
+Root directory controller and protected review, while trust-mutation
+coordination remains separate work. See
+[provenance rollback](extension-provenance.md#operator) for its retained-artifact,
+installed-destination and APT restrictions.
 
 Brokered operation/GUI/native registration and prepared MCP calls also require
 owner review before activation, including preinstalled Apps. Unreviewed

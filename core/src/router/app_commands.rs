@@ -1,4 +1,4 @@
-//! App developer and management commands for the `cos app` namespace.
+//! App management frontends, including signed provenance rollback through Root.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -480,20 +480,37 @@ fn publish_directory(
 ) -> Result<installation::DirectoryPublication, String> {
     require_directory_root()?;
     let app = install.preview()?;
+    publish_confirmed_directory(&app, source, local_root, force, auto_yes, None)
+}
+
+fn publish_confirmed_directory(
+    app: &apps::App,
+    source: &Path,
+    local_root: &Path,
+    force: bool,
+    auto_yes: bool,
+    expected_installed_destination: Option<&Path>,
+) -> Result<installation::DirectoryPublication, String> {
+    require_directory_root()?;
     let verified = app.require_verified()?;
     if !matches!(verified.source(), crate::provenance::verify::TrustSource::Publisher { .. }) {
         return Err("Root directory publication currently requires a publisher-signed App".into());
     }
     let expected = crate::provenance::runtime::PackageRef::of(verified);
-    let (_, review_id) = super::system_review::confirm_install(&app, source, auto_yes)?;
+    let (_, review_id) = super::system_review::confirm_install(app, source, auto_yes)?;
     let source = source.canonicalize().map_err(|error| format!("resolve App source: {error}"))?;
     let local_root = std::path::absolute(local_root)
         .map_err(|error| format!("resolve CLI App root: {error}"))?;
-    let published = request_directory(json!({
+    let mut params = json!({
         "action": "publish", "source": source, "expected_apps_root": local_root,
         "expected_package": expected, "review_id": review_id, "force": force,
-    }), &app.manifest.id)?;
+    });
+    if let Some(destination) = expected_installed_destination {
+        params["expected_installed_destination"] = json!(destination);
+    }
+    let published = request_directory(params, &app.manifest.id)?;
     if published.review_id.as_deref() != Some(review_id.as_str())
+        || expected_installed_destination.is_some_and(|path| path != published.destination.as_path())
         || serde_json::to_value(&published.manifest).map_err(|error| error.to_string())?
             != serde_json::to_value(&app.manifest).map_err(|error| error.to_string())?
     {
@@ -505,6 +522,43 @@ fn publish_directory(
         return Err(format!("Installed App differs from Root's confirmed directory publication; check with `cos app install --recover {}`", app.manifest.id));
     }
     Ok(published)
+}
+
+pub(super) fn provenance_cmd(command: &str, args: &[String]) -> Result<Value, String> {
+    if command != "rollback" {
+        return crate::provenance::cli::run(command, args);
+    }
+    let Some((retained, destination)) = crate::provenance::cli::resolve_app_rollback(args)? else {
+        return crate::provenance::cli::run(command, args);
+    };
+    require_directory_root()?;
+    let destination = destination.canonicalize()
+        .map_err(|error| format!("App rollback requires its existing installed destination: {error}"))?;
+    let local_root = apps_dir();
+    let source = retained.dir();
+    let install = installation::DirectoryInstall::prepare(source, &local_root)?;
+    let app = install.preview()?;
+    let expected = crate::provenance::runtime::PackageRef::of(&retained);
+    if crate::provenance::runtime::PackageRef::of(app.require_verified()?) != expected {
+        return Err("Retained App artifact changed after rollback selection".into());
+    }
+    let published = publish_confirmed_directory(
+        &app, source, &local_root, true, false, Some(&destination),
+    )?;
+    crate::provenance::audit("provenance.rollback", json!({
+        "package_kind": expected.kind.as_str(),
+        "package_id": expected.id,
+        "content_digest": expected.content_digest,
+    }));
+    Ok(json!({
+        "rolled_back": true,
+        "kind": expected.kind.as_str(),
+        "id": expected.id,
+        "content_digest": expected.content_digest,
+        "live_dir": published.destination,
+        "system_review_id": published.review_id,
+        "permissions_granted": false,
+    }))
 }
 
 fn install_cmd_with_publisher(

@@ -239,7 +239,7 @@ fn publish_is_atomic_and_retains_a_verifiable_artifact() {
 
 #[cfg(unix)]
 #[test]
-fn rollback_only_lands_on_a_verified_artifact() {
+fn app_rollback_resolves_read_only_and_refuses_local_publication() {
     let root = tmpdir("rollback");
     let data = root.join("data");
     let _guard = crate::test_env::lock_env();
@@ -291,44 +291,53 @@ fn rollback_only_lands_on_a_verified_artifact() {
     assert_eq!(fs::read_to_string(dest.join("main.py")).unwrap(), "print('v2')\n");
     assert_eq!(list_artifacts(PackageKind::App, "notes").len(), 2);
 
-    // Roll back to the earlier verified artifact.
-    let back = rollback(
+    let back = retained_artifact(
         PackageKind::App,
         "notes",
         &v1,
-        &dest,
         &trust,
         &Limits::default(),
     )
     .unwrap();
-    assert_eq!(back.content_digest, v1);
-    assert_eq!(fs::read_to_string(dest.join("main.py")).unwrap(), "print('v1')\n");
-
-    // An unknown digest is refused rather than guessed at.
+    assert_eq!(back.content_digest(), v1);
     let err = rollback(
+        PackageKind::App, "notes", &v1, &dest, &trust, &Limits::default(),
+    ).unwrap_err();
+    assert_eq!(err.code(), "provenance.app_rollback_requires_root");
+    assert_eq!(fs::read_to_string(dest.join("main.py")).unwrap(), "print('v2')\n");
+
+    let err = retained_artifact(
         PackageKind::App,
         "notes",
         &format!("sha256:{}", "0".repeat(64)),
-        &dest,
         &trust,
         &Limits::default(),
     )
     .unwrap_err();
     assert!(format!("{err}").contains("no retained artifact"), "{err}");
 
-    // A tampered artifact cannot be rolled back onto.
+    let err = retained_artifact(
+        PackageKind::App, "notes", &v1, &TrustStore::default(), &Limits::default(),
+    ).unwrap_err();
+    assert_eq!(err.code(), "provenance.untrusted_key");
+
     let artifact = artifact_dir(PackageKind::App, "notes", &v2);
     write_file(&artifact.join("main.py"), "print('evil')\n");
-    let err = rollback(
+    let err = retained_artifact(
         PackageKind::App,
         "notes",
         &v2,
-        &dest,
         &trust,
         &Limits::default(),
     )
     .unwrap_err();
     assert_eq!(err.code(), "provenance.content_mismatch");
+    fs::remove_file(artifact_dir(PackageKind::App, "notes", &v1).join(ENVELOPE_FILE)).unwrap();
+    let err = retained_artifact(
+        PackageKind::App, "notes", &v1, &trust, &Limits::default(),
+    ).unwrap_err();
+    assert_eq!(err.code(), "provenance.unsigned");
+    assert_eq!(fs::read_to_string(dest.join("main.py")).unwrap(), "print('v2')\n");
     let _ = fs::remove_dir_all(&root);
 }
 

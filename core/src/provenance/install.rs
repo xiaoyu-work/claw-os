@@ -62,6 +62,8 @@ pub enum InstallError {
     Provenance(#[from] ProvenanceError),
     #[error("destination `{0}` already exists; pass --force to replace it")]
     DestinationExists(PathBuf),
+    #[error("App rollback requires the authenticated Root directory controller through `cos provenance rollback --kind app`; local App replacement is refused")]
+    ManagedAppRollback,
 }
 
 impl InstallError {
@@ -72,6 +74,7 @@ impl InstallError {
             Self::Limit { .. } => "limit.bundle",
             Self::Provenance(e) => e.code(),
             Self::DestinationExists(_) => "resource.exists",
+            Self::ManagedAppRollback => "provenance.app_rollback_requires_root",
         }
     }
 }
@@ -502,10 +505,49 @@ pub fn publish(
     })
 }
 
-/// Re-activate a previously verified artifact.
+/// Resolve an exact retained signed artifact without staging or publication.
+pub(super) fn retained_artifact(
+    kind: PackageKind,
+    id: &str,
+    content_digest: &str,
+    trust: &TrustStore,
+    limits: &Limits,
+) -> Result<VerifiedPackage, InstallError> {
+    validate_tree_path(id).map_err(|reason| InstallError::UnsafeEntry {
+        path: id.to_string(),
+        reason,
+    })?;
+    if id.contains('/') || !super::envelope::is_sha256_ref(content_digest) {
+        return Err(InstallError::UnsafeEntry {
+            path: id.to_string(),
+            reason: "retained artifact requires one package id and its full SHA-256 digest".into(),
+        });
+    }
+    let artifact = artifact_dir(kind, id, content_digest);
+    if std::fs::symlink_metadata(&artifact).is_err() {
+        return Err(InstallError::Io {
+            path: artifact,
+            reason: "no retained artifact with that content digest".into(),
+        });
+    }
+    assert_safe_tree(&artifact, limits)?;
+    let mut options = VerifyOptions::new(kind).expect_id(id).signature_only();
+    options.max_bytes = limits.max_total_bytes;
+    let verified = verify_package(&artifact, &options, trust)?;
+    if verified.content_digest() != content_digest {
+        return Err(InstallError::Io {
+            path: artifact,
+            reason: "retained artifact digest changed".into(),
+        });
+    }
+    Ok(verified)
+}
+
+/// Re-activate a previously verified non-App artifact.
 ///
 /// The artifact is verified again before activation, so a rollback
 /// target that was revoked or tampered with in the store is refused.
+/// Apps require Root's checked retirement, review and admission controller.
 pub fn rollback(
     kind: PackageKind,
     id: &str,
@@ -514,6 +556,9 @@ pub fn rollback(
     trust: &TrustStore,
     limits: &Limits,
 ) -> Result<Published, InstallError> {
+    if kind == PackageKind::App {
+        return Err(InstallError::ManagedAppRollback);
+    }
     let artifact = artifact_dir(kind, id, content_digest);
     if std::fs::symlink_metadata(&artifact).is_err() {
         return Err(InstallError::Io {

@@ -393,7 +393,7 @@ impl Fixture {
     }
 
     async fn publish_directory(&self) -> Result<Value, String> {
-        let (body, client) = self.directory_request();
+        let (mut body, client) = self.directory_request();
         let review = body["review_id"].as_str().unwrap().to_string();
         let mut foreign = client.clone();
         foreign.uid = Some(OWNER);
@@ -407,6 +407,11 @@ impl Fixture {
         different_root["expected_apps_root"] = json!(BASE);
         let error = crate::clawd::app_install::install(&self.state, different_root, &client).await.unwrap_err();
         assert!(error.message.contains("different local App root"));
+        let mut different_destination = body.clone();
+        different_destination["expected_installed_destination"] = json!(Path::new(BASE).join("apps").join(ID));
+        let error = crate::clawd::app_install::install(&self.state, different_destination, &client).await.unwrap_err();
+        assert!(error.message.contains("destination differs"), "{}", error.message);
+        body["expected_installed_destination"] = json!(Path::new(BASE).join("apps").join("ordinary").join("custody"));
         assert_eq!(self.version(), "1.0.0");
         let status = std::fs::read("/var/lib/dpkg/status").unwrap();
         let list = Path::new("/var/lib/dpkg/info/custody-owner.list");
@@ -691,6 +696,11 @@ async fn ordinary_root_standalone_retires_host_before_publication() {
         let _root = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &fresh_root);
         let (mut body, client) = fixture.directory_request();
         body["expected_apps_root"] = json!(fresh_root);
+        body["expected_installed_destination"] = json!(fresh_root.join(ID));
+        let refusal = crate::clawd::app_install::install(&fixture.state, body.clone(), &client).await.unwrap_err();
+        assert!(refusal.message.contains("existing daemon App root"), "{}", refusal.message);
+        assert!(!fresh_root.exists(), "rollback initialized an absent installed App root");
+        body.as_object_mut().unwrap().remove("expected_installed_destination");
         let installed = crate::clawd::app_install::install(&fixture.state, body, &client).await.unwrap();
         assert_eq!(installed["destination"], fresh_root.join(ID).to_str().unwrap());
         let metadata = std::fs::metadata(&fresh_root).unwrap();

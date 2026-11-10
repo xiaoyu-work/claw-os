@@ -26,13 +26,13 @@ schemas or model-visible metadata are trusted.
 | `trust.rs` | Trust roots, key ids, usage/kind constraints, revocation, developer grants |
 | `verify.rs` | Signature + tree verification, `VerifiedPackage` snapshots, vendor pins, cache |
 | `sign.rs` | Publisher signing key handling and envelope construction |
-| `install.rs` | Bounded staging, hostile-tree rejection, atomic publish, rollback |
+| `install.rs` | Bounded staging, hostile-tree rejection, atomic publish, read-only retained verification and non-App rollback |
 | `fsec.rs` | Ownership/mode gating and TOCTOU-resistant `openat` reads |
 | `state.rs` | Durable per-domain generation/fingerprint so daemons notice revocations cheaply |
 | `ceiling.rs` | The capability ceiling each trust tier implies |
 | `runtime.rs` | Which package and which exact process a running session is, immediate denial on use, and the bounded lifecycle pass that stops it |
 | `consent.rs` | Interactive, phrase-matched human approval for unsigned code |
-| `cli.rs` | `cos provenance keygen/sign/verify/trust/dev-trust/artifacts/rollback` |
+| `cli.rs` | Provenance command mechanics and read-only App rollback selection; public App rollback orchestration lives in the router |
 
 ## Dependencies
 
@@ -41,6 +41,13 @@ Depends only on `crypto` (SHA-256), `ed25519-dalek`, `paths` and
 consumers. Trust roots are compiled-in absolute paths plus the passwd
 home of the effective uid — never environment-derived, so no caller can
 widen trust by setting a variable.
+
+App rollback is a consumer-owned lifecycle operation, not local provenance
+publication. The public router uses the read-only, signature-only retained
+artifact resolver and the existing signed Root directory controller. Direct
+`install::rollback` and `cli::run` App publication are refused. Non-App rollback
+keeps its existing staging/verification/publication behavior; no App/broker
+dependency is introduced here.
 
 ## Tests
 

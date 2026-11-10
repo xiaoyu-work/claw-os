@@ -255,6 +255,53 @@ fn install_yes_cannot_replace_os_confirmation_when_the_broker_is_unavailable() {
     assert!(!destination.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn public_app_rollback_requires_root_review_without_local_replacement() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let source = root.path().join("source");
+    let installed = root.path().join("apps");
+    let destination = installed.join("rollback-managed");
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &installed);
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    let _socket = crate::test_env::TestEnvVarGuard::set("CLAWD_SOCKET", root.path().join("missing.sock"));
+    write_min_app(&source, "rollback-managed",
+        r#"{"id":"rollback-managed","version":"1.0.0","name":{"en":"Rollback"}}"#);
+    let limits = crate::provenance::install::Limits::default();
+    let staged = crate::provenance::install::stage_directory(
+        &source, &destination, crate::provenance::PackageKind::App, Some("rollback-managed"),
+        &crate::provenance::trust_store(), &limits,
+    ).unwrap();
+    let digest = staged.verified.content_digest().to_string();
+    crate::provenance::install::publish(staged, &destination, false, &limits).unwrap();
+    std::fs::write(destination.join("main.py"), "# current installed version\n").unwrap();
+    reseal_app(&destination, "rollback-managed");
+    let command = vec![
+        "provenance".into(), "rollback".into(), "--kind=app".into(),
+        "--id=rollback-managed".into(),
+        format!("--digest={}", digest.strip_prefix("sha256:").unwrap()[..32].to_ascii_uppercase()),
+        "--dest".into(), destination.display().to_string(),
+    ];
+    let (selected, selected_destination) =
+        crate::provenance::cli::resolve_app_rollback(&command[2..]).unwrap().unwrap();
+    assert_eq!(selected.content_digest(), digest);
+    assert_eq!(selected_destination, destination);
+    let error = crate::router::dispatch(&command).unwrap_err();
+    assert!(error.contains("system review service is unavailable") || error.contains("requires Root"), "{error}");
+    let error = crate::provenance::cli::run("rollback", &command[2..]).unwrap_err();
+    assert!(error.contains("provenance.app_rollback_requires_root"), "{error}");
+    assert_eq!(std::fs::read_to_string(destination.join("main.py")).unwrap(), "# current installed version\n");
+    assert!(install_scratch_entries(&installed, "rollback-managed").is_empty());
+
+    crate::test_env::revoke_test_package(&digest);
+    let result = crate::router::dispatch(&command);
+    crate::test_env::clear_test_revocations();
+    let error = result.unwrap_err();
+    assert!(error.contains("no retained, still-verifiable artifact"), "{error}");
+    assert_eq!(std::fs::read_to_string(destination.join("main.py")).unwrap(), "# current installed version\n");
+}
+
 #[test]
 fn install_review_only_reports_permissions_without_publishing() {
     let root = tempfile::tempdir().unwrap();

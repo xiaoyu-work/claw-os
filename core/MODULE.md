@@ -104,9 +104,12 @@ dependency-plan disclosure, separate bundle-App confirmations and checked
 cross-owner retirement. Directory fixtures still exercise the common retirement
 boundary; they are not production APT acceptance. Signed CLI directory installs
 now use the separate Root-only controller and the same fence/retirement, never a
-local or Store fallback. Developer installs remain blocked pending genuinely
-quarantined publication; trust/rollback and generic OS-package mutations remain
-uncoordinated. See
+local or Store fallback. The public provenance App rollback frontend selects
+an exact retained signed artifact read-only and uses that same Root controller,
+with `--dest` compared only against Root's existing installed path. Direct
+provenance App rollback publication is refused. Developer installs remain
+blocked pending genuinely quarantined publication; trust and generic OS-package
+mutations remain uncoordinated. See
 [installation review](../docs/app-development.md#installation-permission-review).
 
 `cos app stdio <id> <operation> [args...]` is a human/host transport, not a

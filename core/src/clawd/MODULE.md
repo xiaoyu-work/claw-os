@@ -692,9 +692,14 @@ and is not full installed-system publication acceptance.
 kernel UID 0 peer and existing non-App ancestry check. Its closed bounded body
 selects `publish` or `recover`. Publication carries canonical source,
 comparison-only `expected_apps_root`, exact expected package, protected review
-ID and force intent; recovery carries only App ID and the root comparison.
-Neither accepts a destination, owner, executable, command, capabilities or
-unsigned/trust input. Root derives the
+ID and force intent. Its optional `expected_installed_destination` tightens
+publication to an already-installed App and exact daemon-derived path; it is a
+comparison, never a destination selector. Public provenance App rollback uses
+this constraint after read-only retained signed-artifact selection, and reuses
+the same confirmation, custody and publication controller. A missing installed
+App/root is refused without initializing a new App root. Recovery carries only
+App ID and the root comparison. Neither action accepts a destination selector,
+owner, executable, command, capabilities or unsigned/trust input. Root derives the
 destination from its configured root and verified ID, preserving existing
 normalized nested layouts. Agent packaging supplies the protected `/usr/lib/cos`
 parent, not an App package: a first install may create just the daemon-configured
@@ -720,6 +725,9 @@ CLI `--review` stays nonmutating; mismatched local roots and missing daemons
 fail explicitly. `--dev-trust` installation is blocked until vendor trust and
 old developer grants cannot bypass a genuinely quarantined publication step.
 No new trust/grant API or default Admin authority is introduced.
+Rollback does not restore App data, change permissions, grant AI consent or
+withdraw a revocation. Dpkg-owned Apps remain APT-only; trust and independent
+OS-package coordination remain separate work.
 
 The manifest-defined `launcher` App-service sandbox receives no Wayland socket
 or session bus and must not spawn desktop binaries. Provenance-classified

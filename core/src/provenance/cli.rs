@@ -18,6 +18,7 @@
 //! Every mutation reloads the trust store and invalidates cached
 //! verifications, so a revocation takes effect for the next launch,
 //! disclosure or attach without a restart.
+//! Public App rollback uses the router's Root orchestration, not local publication here.
 
 use std::path::{Path, PathBuf};
 
@@ -652,6 +653,29 @@ fn resolve_artifact_digest(kind: PackageKind, id: &str, supplied: &str) -> Resul
             matches.join(", ")
         )),
     }
+}
+
+/// Read-only App rollback selection for the public frontend's Root orchestration.
+pub(crate) fn resolve_app_rollback(
+    args: &[String],
+) -> Result<Option<(verify::VerifiedPackage, PathBuf)>, String> {
+    require_unix("rollback")?;
+    let kind = parse_kind(args)?;
+    if kind != PackageKind::App {
+        return Ok(None);
+    }
+    let id = require(args, "id")?;
+    let digest = resolve_artifact_digest(kind, &id, &require(args, "digest")?)?;
+    let dest = PathBuf::from(require(args, "dest")?);
+    let package = install::retained_artifact(
+        kind,
+        &id,
+        &digest,
+        &super::trust_store(),
+        &install::Limits::default(),
+    )
+    .map_err(|error| crate::errors::error(error.code(), &error.to_string()).to_string())?;
+    Ok(Some((package, dest)))
 }
 
 fn rollback(args: &[String]) -> Result<Value, String> {
