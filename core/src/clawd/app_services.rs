@@ -291,7 +291,7 @@ impl AppServiceManager {
         self: &Arc<Self>,
         prepared: PreparedAppServiceCall,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, BrokerError> {
-        let _admission = super::app_mutation::admit(&prepared.app_id)
+        let _admission = super::app_mutation::admit_for_owner(&prepared.app_id, prepared.owner_uid)
             .map_err(BrokerError::unavailable)?;
         if let Some(activity) = &prepared.activity {
             activity.check().map_err(BrokerError::authorization)?;
@@ -302,6 +302,9 @@ impl AppServiceManager {
             ));
         }
         let current = current_app(&prepared.app_id).map_err(BrokerError::authorization)?;
+        super::trust_withdrawal::check_package(
+            prepared.owner_uid, current.require_verified().map_err(BrokerError::authorization)?,
+        ).map_err(BrokerError::authorization)?;
         if PackageRef::of(
             current
                 .require_verified()
@@ -408,6 +411,8 @@ impl AppServiceManager {
                     .as_ref()
                     .is_some_and(|runtime| !runtime.always_on_ready));
         if should_warm {
+            require_current_trust(prepared.owner_uid, &prepared.app_id, &prepared.package)
+                .map_err(BrokerError::authorization)?;
             let warm_timeout = prepared
                 .context
                 .remaining(Duration::from_millis(
@@ -455,6 +460,8 @@ impl AppServiceManager {
             .runtime
             .as_ref()
             .ok_or_else(|| BrokerError::unavailable("App service failed to start"))?;
+        require_current_trust(prepared.owner_uid, &prepared.app_id, &prepared.package)
+            .map_err(BrokerError::authorization)?;
         let authorization_expiry = prepared.deadline_ms;
         let receipt = prepared.receipt_binding().map(|(activity, task)| {
             (
@@ -558,7 +565,7 @@ impl AppServiceManager {
         spec: &RuntimeSpec,
         slot: &mut ServiceSlot,
     ) -> Result<(), RuntimeStartError> {
-        let _admission = super::app_mutation::admit(&spec.app_id)
+        let _admission = super::app_mutation::admit_for_owner(&spec.app_id, spec.owner_uid)
             .map_err(RuntimeStartError::admission)?;
         if slot.runtime.is_some() {
             return Err(RuntimeStartError::admission(
@@ -568,6 +575,9 @@ impl AppServiceManager {
         let permission_policy = crate::approvals::app_policy::blocks(spec.owner_uid, &spec.app_id)
             .map_err(RuntimeStartError::admission)?;
         let app = current_app(&spec.app_id).map_err(RuntimeStartError::admission)?;
+        super::trust_withdrawal::check_package(
+            spec.owner_uid, app.require_verified().map_err(RuntimeStartError::admission)?,
+        ).map_err(RuntimeStartError::admission)?;
         let package = PackageRef::of(
             app.require_verified()
                 .map_err(RuntimeStartError::admission)?,
@@ -711,6 +721,13 @@ impl AppServiceManager {
             package: Some(package.clone()),
         };
         let cleanup_paths = paths.clone();
+        if let Err(error) = require_current_trust(spec.owner_uid, &spec.app_id, &spec.package) {
+            drop(listener);
+            let cleanup = cleanup_service_allocation(
+                identity, owner.uid, extension.uid, &paths, false,
+            );
+            return Err(RuntimeStartError::admission(join_cleanup_error(error, cleanup)));
+        }
         let mut host = match crate::extension_host::spawn::spawn_host(
             &owner,
             &extension,
@@ -812,6 +829,8 @@ impl AppServiceManager {
         let startup = retirement::StartupGuard::new(runtime);
         let client =
             crate::extension_host::client::ExtensionHostClient::connect_controller(binding).await?;
+        require_current_trust(spec.owner_uid, &spec.app_id, &spec.package)
+            .map_err(RuntimeStartError::admission)?;
         startup.ready(client);
         Ok(())
     }
@@ -908,7 +927,7 @@ impl AppServiceManager {
 
     async fn warm_always_on_for_owner(self: &Arc<Self>, owner_uid: u32) {
         for (app_id, app) in crate::apps::discover_verified(&apps_root()) {
-            let Ok(_admission) = super::app_mutation::admit(&app_id) else { continue };
+            let Ok(_admission) = super::app_mutation::admit_for_owner(&app_id, owner_uid) else { continue };
             let Some(service) = app.manifest.mcp.as_ref() else {
                 continue;
             };
@@ -918,6 +937,9 @@ impl AppServiceManager {
             let Ok(verified) = app.require_verified() else {
                 continue;
             };
+            if super::trust_withdrawal::check_package(owner_uid, verified).is_err() {
+                continue;
+            }
             match crate::approvals::system_review::has_accepted(owner_uid, verified) {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -1015,6 +1037,10 @@ impl AppServiceManager {
             {
                 continue;
             }
+            if require_current_trust(owner_uid, &spec.app_id, &spec.package).is_err() {
+                let _ = slot.retire().await;
+                continue;
+            }
             let warm = match slot
                 .runtime
                 .as_ref()
@@ -1094,6 +1120,7 @@ impl AppServiceManager {
                     .unwrap_or(false);
             let current_contract = current_app(&key.app_id).ok().and_then(|app| {
                 let verified = app.require_verified().ok()?;
+                super::trust_withdrawal::check_package(key.owner_uid, verified).ok()?;
                 match crate::approvals::system_review::has_accepted(key.owner_uid, verified) {
                     Ok(true) => {}
                     Ok(false) => return None,
@@ -1189,8 +1216,14 @@ impl AppServiceManager {
     pub(crate) async fn retire_app(
         &self, app: &str, deadline: Instant,
     ) -> Result<Vec<(u32, String)>, String> {
+        self.retire_app_for_owner(app, None, deadline).await
+    }
+
+    pub(crate) async fn retire_app_for_owner(
+        &self, app: &str, owner: Option<u32>, deadline: Instant,
+    ) -> Result<Vec<(u32, String)>, String> {
         let slots: Vec<_> = self.slots.lock().await.iter()
-            .filter(|(key, _)| key.app_id == app)
+            .filter(|(key, _)| key.app_id == app && owner.is_none_or(|owner| key.owner_uid == owner))
             .map(|(key, slot)| (key.owner_uid, slot.clone())).collect();
         let mut completed = Vec::new();
         for (owner, slot) in slots {
@@ -1207,6 +1240,26 @@ impl AppServiceManager {
                 .await.map_err(|_| "App service cleanup remains pending before package mutation")??;
         }
         Ok(completed)
+    }
+
+    pub(crate) async fn retained_trust_bindings(
+        &self, owner: Option<u32>,
+    ) -> Result<Vec<super::trust_withdrawal::Binding>, String> {
+        let slots: Vec<_> = self.slots.lock().await.iter()
+            .filter(|(key, _)| owner.is_none_or(|owner| key.owner_uid == owner))
+            .map(|(key, slot)| (key.clone(), slot.clone())).collect();
+        let mut bindings = Vec::new();
+        for (key, slot) in slots {
+            let slot = slot.lock().await;
+            if let Some(runtime) = &slot.runtime {
+                bindings.push(super::trust_withdrawal::Binding {
+                    owner: key.owner_uid, app: key.app_id,
+                    package: Some(runtime.package.clone()), trust_context_uid: Some(0),
+                    context_generation_invalidated: false,
+                });
+            }
+        }
+        Ok(bindings)
     }
 }
 
@@ -1280,6 +1333,15 @@ fn drain_host_output(child: &mut tokio::process::Child, service_id: &str) {
 
 fn current_app(app_id: &str) -> Result<crate::apps::App, String> {
     crate::apps::find_verified_fresh(&apps_root(), app_id)
+}
+
+fn require_current_trust(owner: u32, app: &str, expected: &PackageRef) -> Result<(), String> {
+    let current = current_app(app)?;
+    let verified = current.require_verified()?;
+    if PackageRef::of(verified) != *expected {
+        return Err("App package changed while service authority was waiting".into());
+    }
+    super::trust_withdrawal::check_package(owner, verified)
 }
 
 fn apps_root() -> std::path::PathBuf {

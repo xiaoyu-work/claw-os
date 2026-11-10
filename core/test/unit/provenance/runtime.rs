@@ -14,6 +14,7 @@ fn reference(digest: &str, key_id: Option<&str>) -> PackageRef {
         content_digest: digest.to_string(),
         publisher_key_id: key_id.map(str::to_string),
         tier: "user".to_string(),
+        developer_path: None,
     }
 }
 
@@ -33,6 +34,7 @@ fn app_instance(digest: &str, key_id: Option<&str>) -> Instance {
         package: Some(reference(digest, key_id)),
         process: None,
         started_at: chrono::Utc::now().to_rfc3339(),
+        trust_context_uid: None,
     }
 }
 
@@ -109,6 +111,43 @@ fn a_revoked_or_removed_publisher_key_stops_a_running_instance() {
     let gone = store_with(&[], &[], None);
     let err = reference(&digest, Some(&key_id)).is_live(&gone).unwrap_err();
     assert!(err.contains("no longer trusted"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn developer_liveness_requires_the_exact_retained_path_kind_and_digest() {
+    let root = tmpdir("developer-support");
+    let tree = tmpdir("developer-tree");
+    let other_tree = tmpdir("developer-other-tree");
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let roots = vec![TrustRootSpec {
+        path: root.clone(), tier: TrustTier::Developer,
+        allowed_uids: vec![crate::provenance::fsec::effective_uid()],
+        domain: crate::provenance::state::TrustDomain::Owner(crate::provenance::fsec::effective_uid()),
+    }];
+    let load = |kind: PackageKind, path: &Path, digest: &str| {
+        let file = root.join("grants.json");
+        std::fs::write(&file, serde_json::to_vec(&serde_json::json!({
+            "schema": crate::provenance::trust::DEV_TRUST_SCHEMA_V1,
+            "grants": [{
+                "kind": kind, "id": "notes", "path": path,
+                "content_digest": digest, "granted_at": "2026-01-01T00:00:00Z",
+            }],
+        })).unwrap()).unwrap();
+        crate::test_env::record_trust_state(&roots);
+        TrustStore::load_roots(&roots)
+    };
+    let mut package = reference(&digest, None);
+    package.tier = "developer".into();
+    package.developer_path = Some(tree.clone());
+    assert!(package.is_live(&load(PackageKind::App, &tree, &digest)).is_ok());
+    assert!(package.is_live(&load(PackageKind::Mcp, &tree, &digest)).is_err());
+    assert!(package.is_live(&load(PackageKind::App, &other_tree, &digest)).is_err());
+    assert!(package.is_live(&load(PackageKind::App, &tree, &format!("sha256:{}", "b".repeat(64)))).is_err());
+    assert!(package.is_live(&TrustStore::default()).is_err());
+    package.developer_path = None;
+    assert!(package.is_live(&load(PackageKind::App, &tree, &digest)).is_err());
+    for path in [root, tree, other_tree] { let _ = std::fs::remove_dir_all(path); }
 }
 
 #[cfg(unix)]
@@ -264,7 +303,7 @@ fn a_marked_session_is_denied_before_it_is_stopped() {
 
 #[cfg(unix)]
 #[test]
-fn enforcing_a_shutdown_without_a_process_releases_the_record() {
+fn an_app_without_a_process_is_not_a_checked_retirement_receipt() {
     let _guard = crate::test_env::lock_env();
     let data = tmpdir("release");
     let _env = crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", &data);
@@ -274,13 +313,13 @@ fn enforcing_a_shutdown_without_a_process_releases_the_record() {
     seed(me, "sess-noproc", &digest);
     mark_for_shutdown(me, "sess-noproc", "revoked before the child was bound");
 
-    // Nothing was ever bound, so there is nothing to signal — but the
-    // record must not survive, or a later pass would keep retrying it.
     let report = enforce_shutdowns(me, std::time::Duration::from_millis(50));
-    assert_eq!(report.released, vec!["sess-noproc".to_string()]);
+    assert!(report.released.is_empty());
     assert!(report.terminated.is_empty());
-    assert!(instance_for(me, "sess-noproc").expect("readable").is_none());
-    assert!(pending_shutdowns(me).unwrap().is_empty());
+    assert!(instance_for(me, "sess-noproc").expect("readable").is_some());
+    assert_eq!(pending_shutdowns(me).unwrap().len(), 1);
+    assert!(terminate(me, "sess-noproc", Duration::ZERO).unwrap_err().contains("Root custody"));
+    deregister(me, "sess-noproc");
 
     let _ = std::fs::remove_dir_all(&data);
 }

@@ -30,6 +30,7 @@ struct Job {
     home: PathBuf,
     app: String,
     session: String,
+    package: crate::provenance::runtime::PackageRef,
     process: OwnedFd,
     launcher: ProcessIdentity,
     launch_handle: String,
@@ -115,12 +116,21 @@ pub(crate) async fn bind(
     launcher.assert_current().map_err(|error| error.to_string())?;
     let task_parent = client.extension_host.as_ref().filter(|host|
         host.purpose == crate::extension_host::protocol::HostPurpose::Task).map(|_| &launcher);
+    let supporting = crate::provenance::runtime::instance_for(client.require_uid()?, session)?
+        .ok_or("Root App bind has no retained supporting instance")?;
+    let package = supporting.package.ok_or("Root App bind has no retained package")?;
+    if supporting.trust_context_uid != Some(0) || package.kind != crate::provenance::PackageKind::App
+        || package.id != app
+    {
+        return Err("Root App bind has no authenticated default-context supporting package".into());
+    }
     let group = crate::worker::cgroup::create_app(root, session, &crate::worker::Limits::operation(), task_parent)?;
     let job = Arc::new(Job {
         owner: client.require_uid()?,
         home: client.require_home_dir()?,
         app: app.into(),
         session: session.into(),
+        package,
         process: pidfd,
         launcher,
         launch_handle: handle.into(),
@@ -186,6 +196,7 @@ fn authorized_for_owner(job: &Job) -> bool {
         && grant.subject.app_id.as_deref() == Some(job.app.as_str())
         && grant.subject.activity.as_ref().is_none_or(|binding| binding.check().is_ok())
         && crate::provenance::runtime::assert_live_instance_now(job.owner, &job.session).is_ok()
+        && super::trust_withdrawal::check_session(job.owner, &job.session).is_ok()
 }
 
 struct BindingStop {
@@ -318,9 +329,15 @@ fn retire(job: &Arc<Job>, deadline: Instant) -> Result<(), String> {
 }
 
 pub(crate) fn retire_app(app: &str, deadline: Instant) -> Result<Vec<(u32, String)>, String> {
+    retire_app_for_owner(app, None, deadline)
+}
+
+pub(crate) fn retire_app_for_owner(
+    app: &str, owner: Option<u32>, deadline: Instant,
+) -> Result<Vec<(u32, String)>, String> {
     initialized_root()?;
     let retained: Vec<_> = jobs().lock().map_err(|_| "ordinary App custody lock poisoned")?
-        .values().filter(|job| job.app == app).cloned().collect();
+        .values().filter(|job| job.app == app && owner.is_none_or(|owner| job.owner == owner)).cloned().collect();
     let mut completed = Vec::new();
     let mut errors = Vec::new();
     for job in retained {
@@ -345,4 +362,17 @@ pub(crate) async fn retire_session(owner: u32, session: &str) -> Result<bool, St
         .await.map_err(|_| "ordinary App retirement remains pending")?
         .map_err(|error| error.to_string())??;
     Ok(true)
+}
+
+pub(crate) fn retained_trust_bindings(
+    owner: Option<u32>,
+) -> Result<Vec<super::trust_withdrawal::Binding>, String> {
+    initialized_root()?;
+    let retained = jobs().lock().map_err(|_| "ordinary App custody lock poisoned")?;
+    Ok(retained.values().filter(|job| owner.is_none_or(|owner| job.owner == owner))
+        .map(|job| super::trust_withdrawal::Binding {
+            owner: job.owner, app: job.app.clone(), package: Some(job.package.clone()),
+            trust_context_uid: Some(0),
+            context_generation_invalidated: false,
+        }).collect())
 }

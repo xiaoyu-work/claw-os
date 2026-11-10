@@ -264,7 +264,9 @@ pub(crate) async fn launch(params: Value, client: &ClientIdentity) -> Result<Val
         .map_err(|_| BrokerError::execution("invalid GUI launch arguments"))?;
     let manager = Manager::get().map_err(BrokerError::unavailable)?;
     let job = manager.lookup(request.session_id.as_str(), client)?;
-    let admission = crate::clawd::app_mutation::admit(job.registration.launch.app_id())
+    let admission = crate::clawd::app_mutation::admit_for_owner(
+        job.registration.launch.app_id(), job.registration.owner(),
+    )
         .map_err(BrokerError::unavailable)?;
     job.registration
         .require_launch(request.handle.as_str(), client)
@@ -394,12 +396,43 @@ pub(crate) fn retire_app(owner: u32, app: &str, deadline: Instant) -> Result<(),
 }
 
 pub(crate) fn retire_installed_app(app: &str, deadline: Instant) -> Result<Vec<(u32, String)>, String> {
+    retire_installed_app_for_owner(app, None, deadline)
+}
+
+pub(crate) fn retire_installed_app_for_owner(
+    app: &str, owner: Option<u32>, deadline: Instant,
+) -> Result<Vec<(u32, String)>, String> {
     let manager = Manager::get()?;
     let completed = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
-        .values().filter(|job| job.registration.launch.app_id() == app)
+        .values().filter(|job| job.registration.launch.app_id() == app
+            && owner.is_none_or(|owner| job.registration.owner() == owner))
         .map(|job| (job.registration.owner(), job.registration.session_id.clone())).collect();
-    manager.retire_where(|registration, _| registration.launch.app_id() == app, deadline)?;
+    manager.retire_where(|registration, _| registration.launch.app_id() == app
+        && owner.is_none_or(|owner| registration.owner() == owner), deadline)?;
     Ok(completed)
+}
+
+pub(crate) fn retained_trust_bindings(
+    owner: Option<u32>,
+) -> Result<Vec<crate::clawd::trust_withdrawal::Binding>, String> {
+    let manager = Manager::get()?;
+    let trust = crate::provenance::trust_store();
+    let jobs = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?;
+    let mut bindings = Vec::new();
+    for job in jobs.values().filter(|job| owner.is_none_or(|owner| job.registration.owner() == owner)) {
+        if job.state.lock().map_err(|_| "GUI status lock poisoned")?.phase == Phase::Finished {
+            continue;
+        }
+        bindings.push(crate::clawd::trust_withdrawal::Binding {
+            owner: job.registration.owner(),
+            app: job.registration.launch.app_id().to_string(),
+            package: Some(job.registration.launch.package_ref()),
+            trust_context_uid: Some(0),
+            context_generation_invalidated:
+                job.registration.launch.package().trust_generation() != trust.generation(),
+        });
+    }
+    Ok(bindings)
 }
 
 pub(crate) fn retire_owner(owner: u32, deadline: Instant) -> Result<(), String> {

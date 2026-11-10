@@ -372,7 +372,11 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
         ] {
             let mut forged = client.clone();
             mutate(&mut forged);
-            assert!(data.bind_app(&forged, APP).is_err());
+            assert!(data.bind_app(&forged, &PackageRef {
+                kind: crate::provenance::PackageKind::App, id: APP.into(),
+                content_digest: format!("sha256:{}", "a".repeat(64)),
+                publisher_key_id: None, tier: "vendor".into(), developer_path: None,
+            }).is_err());
             assert!(data.views.lock().unwrap().is_empty());
         }
         crate::proc::register_session_for_owner(
@@ -460,7 +464,11 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
         data.close();
-        assert!(data.bind_app(&task_client(&data), APP).is_err());
+        assert!(data.bind_app(&task_client(&data), &PackageRef {
+            kind: crate::provenance::PackageKind::App, id: APP.into(),
+            content_digest: format!("sha256:{}", "a".repeat(64)),
+            publisher_key_id: None, tier: "vendor".into(), developer_path: None,
+        }).is_err());
         let stopped = stop.send(());
         let served = broker.await;
         let count = data.views.lock().unwrap().len();

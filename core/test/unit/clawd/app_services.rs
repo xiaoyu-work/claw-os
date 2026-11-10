@@ -63,6 +63,7 @@ fn automatic_receipts_require_a_task_and_do_not_double_record_human_cli_calls() 
             content_digest: format!("sha256:{}", "a".repeat(64)),
             publisher_key_id: None,
             tier: "vendor".into(),
+            developer_path: None,
         },
         caps: CapSet::new(),
         placement: crate::agent::tools::cos_apps_session::CallPlacement::Reusable,

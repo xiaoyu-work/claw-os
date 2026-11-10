@@ -121,6 +121,37 @@ fn default_roots_are_compiled_in_and_env_free() {
 
 #[cfg(unix)]
 #[test]
+fn private_withdrawal_policy_only_denies_and_invalid_generations_stay_unknown() {
+    use crate::provenance::runtime::PackageRef;
+    use crate::provenance::withdrawal::OwnerPolicy;
+    let root = tmpdir("denial-only");
+    let revoked = format!("sha256:{}", "a".repeat(64));
+    let key = SigningKeyFile::generate(None).unwrap();
+    let mut body = entry(&key, &["app"], "active");
+    body["revoked_packages"] = serde_json::json!([revoked]);
+    let file = root.join("operator.json");
+    write(&file, &body);
+    let roots = [user_root(&root)];
+    let policy = OwnerPolicy::load_roots(me(), &roots).unwrap();
+    let mut package = PackageRef {
+        kind: PackageKind::App, id: "synthetic".into(),
+        content_digest: format!("sha256:{}", "b".repeat(64)),
+        publisher_key_id: Some(format!("sha256:{}", "c".repeat(64))),
+        tier: "user".into(), developer_path: None,
+    };
+    assert!(policy.check_denials(&package).is_ok(), "an absent consumer key is not a grant or a denial");
+    package.publisher_key_id = Some(key.key_id.clone());
+    assert!(package.is_live(&TrustStore::default()).is_err(), "consumer keys do not widen the positive verifier");
+    package.content_digest = revoked;
+    assert!(policy.check_denials(&package).is_err());
+    body["revoked_keys"] = serde_json::json!([key.key_id]);
+    fs::write(&file, serde_json::to_vec(&body).unwrap()).unwrap();
+    assert!(OwnerPolicy::load_roots(me(), &roots).is_err(), "unrecorded edits cannot discard protective denial");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
 fn trusted_key_authorises_matching_kind() {
     let dir = tmpdir("authorize");
     let key = SigningKeyFile::generate(None).unwrap();

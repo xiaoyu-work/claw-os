@@ -534,6 +534,31 @@ impl Authority {
         self.consume_inner(id, required, presentation, Some(proof))
     }
 
+    fn check_app_withdrawal(
+        &self, id: GrantId, presentation: &Presentation, relay: Option<&RelayProof>,
+    ) -> Result<(), AuthorityError> {
+        if matches!(presentation.route, "app_session.deregister" | "app_session.set_transient") {
+            return Ok(());
+        }
+        let binding = {
+            let now = Instant::now();
+            let mut inner = self.lock();
+            inner.sweep(now);
+            if let Some(proof) = relay { proof.validate(&inner, presentation, now)?; }
+            let key = *inner.id_index.get(&id).ok_or(AuthorityError::UnknownGrant)?;
+            let grant = inner.grants.get(&key).ok_or(AuthorityError::UnknownGrant)?;
+            check_presentation_with(grant, presentation, now, relay)?;
+            if grant.subject.app_id.is_some() {
+                Some((grant.principal.uid, grant.subject.session_id.clone().ok_or(AuthorityError::Subject)?))
+            } else { None }
+        };
+        if let Some((owner, session)) = binding {
+            crate::clawd::trust_withdrawal::check_session(owner, &session)
+                .map_err(AuthorityError::AppPolicy)?;
+        }
+        Ok(())
+    }
+
     fn consume_inner(
         &self,
         id: GrantId,
@@ -541,6 +566,7 @@ impl Authority {
         presentation: &Presentation,
         relay: Option<&RelayProof>,
     ) -> Result<GrantView, AuthorityError> {
+        self.check_app_withdrawal(id, presentation, relay)?;
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);

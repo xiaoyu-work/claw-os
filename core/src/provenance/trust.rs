@@ -323,6 +323,7 @@ pub struct TrustStore {
     diagnostics: Vec<String>,
     /// Durable per-domain generation state observed at load time.
     domains: BTreeMap<String, TrustState>,
+    usable_domains: BTreeSet<String>,
     /// Cheap stamps a long-lived process re-checks to decide whether
     /// this store is still current.
     watch: TrustWatch,
@@ -398,6 +399,7 @@ impl TrustStore {
             }
             store.load_root(root);
         }
+        store.usable_domains = usable;
         store.watch = TrustWatch::observe(&Self::watch_paths(roots));
         store.recompute_generation();
         store
@@ -422,6 +424,7 @@ impl TrustStore {
             }
             if let Ok(entries) = std::fs::read_dir(&root.path) {
                 let mut files: Vec<PathBuf> = entries
+                    .take(MAX_TRUST_FILES + 1)
                     .filter_map(Result::ok)
                     .map(|e| e.path())
                     .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
@@ -538,6 +541,10 @@ impl TrustStore {
         self.domains.get(&domain.as_key()).map(|s| s.generation)
     }
 
+    pub fn domain_is_usable(&self, domain: TrustDomain) -> bool {
+        self.usable_domains.contains(&domain.as_key())
+    }
+
     fn note(&mut self, message: impl Into<String>) {
         let message = message.into();
         tracing::warn!(target: "provenance", "{message}");
@@ -567,7 +574,7 @@ impl TrustStore {
                 return;
             }
         };
-        let entries = match handle.entries(None) {
+        let entries = match handle.entries_bounded(None, MAX_TRUST_FILES) {
             Ok(e) => e,
             Err(e) => {
                 self.note(format!("trust root {}: {e}", root.path.display()));

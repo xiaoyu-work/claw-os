@@ -65,6 +65,7 @@ fn ordinary_registration_refuses_old_or_disabled_root_custody() {
         kind: crate::provenance::PackageKind::App, id: "ordinary-fixture".into(),
         content_digest: format!("sha256:{}", "a".repeat(64)),
         publisher_key_id: None, tier: "publisher".into(),
+        developer_path: None,
     };
     for response in [json!({}), json!({"root_custody": false}), json!({"root_custody": "true"})] {
         let mut complete = json!({

@@ -205,6 +205,7 @@ fn trust_cmd(args: &[String]) -> Result<Value, String> {
         "list" => trust_list(),
         "add" => trust_add(rest),
         "revoke" => trust_revoke(rest),
+        "status" | "recover" => Err("Trust withdrawal status/recovery requires the public router and authenticated Root controller".into()),
         "roots" => Ok(json!({
             "roots": TrustStore::default_roots()
                 .iter()
@@ -217,7 +218,7 @@ fn trust_cmd(args: &[String]) -> Result<Value, String> {
             "note": "Trust roots are compiled in. No environment variable can add one.",
         })),
         other => Err(format!(
-            "unknown trust command `{other}`; try: list, roots, add, revoke"
+            "unknown trust command `{other}`; try: list, roots, add, revoke, status, recover"
         )),
     }
 }
@@ -388,11 +389,13 @@ fn trust_add(args: &[String]) -> Result<Value, String> {
 fn trust_revoke(args: &[String]) -> Result<Value, String> {
     let key_id = flag(args, "key-id");
     let digest = flag(args, "digest");
-    if key_id.is_none() && digest.is_none() {
-        return Err("pass --key-id <sha256:…> and/or --digest <sha256:…>".to_string());
-    }
+    let target = super::withdrawal::Target::Revocation {
+        key_id: key_id.clone(), digest: digest.clone(),
+    };
+    target.validate()?;
     let path = user_trust_file()?;
-    let mut current = read_trust_file(&path);
+    let _lock = WithdrawalLock::acquire(&path)?;
+    let mut current = read_withdrawal_file(&path, false)?;
     if let Some(id) = &key_id {
         let list = current
             .get_mut("revoked_keys")
@@ -411,41 +414,30 @@ fn trust_revoke(args: &[String]) -> Result<Value, String> {
             list.push(Value::String(d.clone()));
         }
     }
-    write_owner_file(&path, &current)?;
-    let domain_generation = record_owner_generation()?;
+    write_withdrawal_file(&path, &current)?;
+    let generation = record_owner_generation();
     let store = super::reload_trust();
-    // No notification is sent, and none is needed. The generation this
-    // just bumped is the hot path: every daemon re-stats it before each
-    // authority decision, relay and tool call, and rebuilds the store
-    // when it moved. A message could only ever be an optimisation on
-    // top of that, and a message that failed to arrive must never be
-    // the difference between revoked and not.
-    //
-    // What this pass does add is the *local* half: instances this
-    // process can see are stopped now rather than at the next
-    // supervision tick.
-    let report = super::runtime::lifecycle_tick(
-        super::runtime::current_owner(),
-        &store,
-        super::runtime::SHUTDOWN_GRACE,
-    );
     super::audit(
         "provenance.revoked",
         json!({
             "publisher_key_id": key_id,
             "content_digest": digest,
-            "marked_sessions": report.marked.len(),
-            "terminated_sessions": report.terminated.len(),
+            "policy_withdrawn": true,
+            "root_retirement_confirmed": false,
         }),
     );
     Ok(json!({
         "revoked_key": key_id,
         "revoked_digest": digest,
         "generation": store.generation(),
-        "domain_generation": domain_generation,
-        "sessions_marked_for_shutdown": report.marked,
-        "sessions_terminated": report.terminated,
-        "note": "Cached verifications were invalidated. A running instance is denied on its very next authority call, relay or tool call; an idle one is stopped by the next supervision pass. Neither waits for a grant to expire and neither needs a daemon restart.",
+        "domain_generation": generation.as_ref().ok(),
+        "generation_error": generation.err(),
+        "policy_withdrawn": true,
+        "policy_scope": "effective_uid_private_file",
+        "root_retirement": { "scope": "apps_only", "root_retirement_confirmed": false, "state": "unconfirmed" },
+        "non_app_retirement": { "confirmed": false, "state": "unknown" },
+        "withdrawal_target": target,
+        "note": "Own policy was narrowed without waiting for cleanup. Only the authenticated Root controller can confirm App retirement; local process inspection is not a retirement receipt.",
     }))
 }
 
@@ -545,8 +537,11 @@ fn dev_trust(args: &[String]) -> Result<Value, String> {
 fn dev_untrust(args: &[String]) -> Result<Value, String> {
     let kind = parse_kind(args)?;
     let id = require(args, "id")?;
+    let target = super::withdrawal::Target::Developer { kind, id: id.clone() };
+    target.validate()?;
     let path = dev_trust_file()?;
-    let mut current = read_dev_file(&path);
+    let _lock = WithdrawalLock::acquire(&path)?;
+    let mut current = read_withdrawal_file(&path, true)?;
     let list = current
         .get_mut("grants")
         .and_then(Value::as_array_mut)
@@ -557,14 +552,9 @@ fn dev_untrust(args: &[String]) -> Result<Value, String> {
             && g.get("id").and_then(Value::as_str) == Some(id.as_str()))
     });
     let removed = before - list.len();
-    write_owner_file(&path, &current)?;
-    let domain_generation = record_owner_generation()?;
+    write_withdrawal_file(&path, &current)?;
+    let generation = record_owner_generation();
     let store = super::reload_trust();
-    let report = super::runtime::lifecycle_tick(
-        super::runtime::current_owner(),
-        &store,
-        super::runtime::SHUTDOWN_GRACE,
-    );
     super::audit(
         "provenance.developer_untrusted",
         json!({ "package_kind": kind.as_str(), "package_id": id }),
@@ -574,10 +564,199 @@ fn dev_untrust(args: &[String]) -> Result<Value, String> {
         "kind": kind.as_str(),
         "id": id,
         "generation": store.generation(),
-        "domain_generation": domain_generation,
-        "sessions_marked_for_shutdown": report.marked.len(),
-        "sessions_terminated": report.terminated.len(),
+        "domain_generation": generation.as_ref().ok(),
+        "generation_error": generation.err(),
+        "policy_withdrawn": true,
+        "policy_scope": "effective_uid_private_file",
+        "developer_grant_remaining": store.diagnostics().is_empty().then(|| store.dev_grant(kind, &id).is_some()),
+        "root_retirement": { "scope": "apps_only", "root_retirement_confirmed": false, "state": "unconfirmed" },
+        "non_app_retirement": { "confirmed": false, "state": "unknown" },
+        "withdrawal_target": target,
     }))
+}
+
+pub enum WithdrawalCommand {
+    Reconcile(super::withdrawal::Target),
+    Status(String),
+    Recover(String),
+}
+
+pub fn withdrawal_command(command: &str, args: &[String]) -> Result<Option<WithdrawalCommand>, String> {
+    let selected = match command {
+        "trust" if args.first().is_some_and(|arg| arg == "revoke") => {
+            WithdrawalCommand::Reconcile(super::withdrawal::Target::Revocation {
+                key_id: flag(&args[1..], "key-id"),
+                digest: flag(&args[1..], "digest"),
+            })
+        }
+        "dev-untrust" => WithdrawalCommand::Reconcile(super::withdrawal::Target::Developer {
+            kind: parse_kind(args)?, id: require(args, "id")?,
+        }),
+        "trust" if args.first().is_some_and(|arg| arg == "status" || arg == "recover") => {
+            if args.len() != 2 || args[1].len() != 32
+                || !args[1].bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err("usage: cos provenance trust status|recover <32-lowercase-hex-request-id>".into());
+            }
+            if args[0] == "status" { WithdrawalCommand::Status(args[1].clone()) }
+            else { WithdrawalCommand::Recover(args[1].clone()) }
+        }
+        _ => return Ok(None),
+    };
+    require_unix(command)?;
+    if let WithdrawalCommand::Reconcile(target) = &selected { target.validate()?; }
+    Ok(Some(selected))
+}
+
+fn read_withdrawal_file(path: &Path, developer: bool) -> Result<Value, String> {
+    let parent = path.parent().ok_or("own trust file has no parent")?;
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(if developer {
+                json!({ "schema": trust::DEV_TRUST_SCHEMA_V1, "grants": [] })
+            } else {
+                json!({ "schema": trust::TRUST_SCHEMA_V1, "keys": [], "revoked_keys": [], "revoked_packages": [] })
+            });
+        }
+        Err(error) => return Err(format!("inspect own trust policy: {error}")),
+        Ok(_) => {}
+    }
+    let metadata = super::fsec::require_secure_location(path, &[super::fsec::effective_uid()])
+        .map_err(|error| error.to_string())?;
+    if !metadata.is_file {
+        return Err("own trust policy is not a regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        let directory = super::fsec::DirHandle::open(parent).map_err(|error| error.to_string())?;
+        let file = directory.open_file(path.file_name().and_then(|name| name.to_str()).ok_or("trust file has no UTF-8 name")?)
+            .map_err(|error| error.to_string())?;
+        let bytes = file.read_bounded(1024 * 1024).map_err(|error| error.to_string())?;
+        let value: Value = serde_json::from_slice(&bytes).map_err(|error| format!("own trust policy is malformed: {error}"))?;
+        let schema = if developer { trust::DEV_TRUST_SCHEMA_V1 } else { trust::TRUST_SCHEMA_V1 };
+        if value.get("schema").and_then(Value::as_str) != Some(schema) {
+            return Err("own trust policy has an unsupported schema; no revocations were discarded".into());
+        }
+        Ok(value)
+    }
+    #[cfg(not(unix))]
+    { let _ = parent; Err("own policy withdrawal requires Unix".into()) }
+}
+
+fn write_withdrawal_file(path: &Path, value: &Value) -> Result<(), String> {
+    use std::io::Write;
+    let parent = path.parent().ok_or("own trust policy has no parent")?;
+    create_withdrawal_directory(parent)?;
+    let metadata = super::fsec::require_secure_location(parent, &[super::fsec::effective_uid()])
+        .map_err(|error| error.to_string())?;
+    if !metadata.is_dir { return Err("own trust policy parent is not protected".into()); }
+    let temporary = parent.join(format!(".withdrawal-{}", uuid::Uuid::new_v4().simple()));
+    let result = (|| {
+        let body = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+        if body.len() > 1024 * 1024 {
+            return Err("own withdrawal policy would exceed its bounded file size".into());
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options.open(&temporary).map_err(|error| error.to_string())?;
+        file.write_all(&body).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(&temporary, path).map_err(|error| error.to_string())?;
+        super::fsec::sync_dir(parent).map_err(|error| error.to_string())
+    })();
+    let _ = std::fs::remove_file(temporary);
+    result.map_err(|error| format!("Own policy withdrawal durability is unconfirmed: {error}; Root retirement is unconfirmed"))
+}
+
+fn create_withdrawal_directory(path: &Path) -> Result<(), String> {
+    let mut missing = Vec::new();
+    let mut ancestor = path;
+    loop {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(ancestor.to_path_buf());
+                if missing.len() > 64 { return Err("own trust directory depth exceeds its bound".into()); }
+                ancestor = ancestor.parent().ok_or("own trust directory has no protected ancestor")?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    super::fsec::require_secure_location(ancestor, &[0, super::fsec::effective_uid()])
+        .map_err(|error| error.to_string())?;
+    for directory in missing.into_iter().rev() {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        super::fsec::require_secure_location(&directory, &[super::fsec::effective_uid()])
+            .map_err(|error| error.to_string())?;
+        super::fsec::sync_dir(&directory).map_err(|error| error.to_string())?;
+        super::fsec::sync_dir(directory.parent().ok_or("own trust directory lost its parent")?)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+struct WithdrawalLock(std::fs::File);
+
+impl WithdrawalLock {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        let directory = path.parent().and_then(Path::parent).ok_or("own trust domain has no directory")?;
+        create_withdrawal_directory(directory)?;
+        let metadata = super::fsec::require_secure_location(directory, &[super::fsec::effective_uid()])
+            .map_err(|error| error.to_string())?;
+        if !metadata.is_dir { return Err("own trust domain is not protected".into()); }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            let file = std::fs::OpenOptions::new().read(true).write(true).create(true)
+                .mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(directory.join(".withdrawal.lock")).map_err(|error| error.to_string())?;
+            let metadata = file.metadata().map_err(|error| error.to_string())?;
+            if !metadata.is_file() || metadata.uid() != super::fsec::effective_uid()
+                || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0
+            {
+                return Err("own withdrawal lock is not a protected single-link file".into());
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                    return Ok(Self(file));
+                }
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::WouldBlock || std::time::Instant::now() >= deadline {
+                    return Err(format!("own withdrawal serialization is unavailable: {error}; policy withdrawal is unconfirmed"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        #[cfg(not(unix))]
+        { Err("own policy withdrawal requires Unix".into()) }
+    }
+}
+
+impl Drop for WithdrawalLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN); }
+        }
+    }
 }
 
 fn artifacts(args: &[String]) -> Result<Value, String> {

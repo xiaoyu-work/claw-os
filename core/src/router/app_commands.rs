@@ -525,11 +525,123 @@ fn publish_confirmed_directory(
 }
 
 pub(super) fn provenance_cmd(command: &str, args: &[String]) -> Result<Value, String> {
+    if let Some(withdrawal) = crate::provenance::cli::withdrawal_command(command, args)? {
+        use crate::provenance::cli::WithdrawalCommand;
+        let (params, mut policy) = match withdrawal {
+            WithdrawalCommand::Reconcile(target) => {
+                // This own-policy write must happen even if Root cannot be reached.
+                let policy = crate::provenance::cli::run(command, args)?;
+                (json!({ "action": "reconcile", "target": target }), Some(policy))
+            }
+            WithdrawalCommand::Status(request_id) => (json!({
+                "action": "status", "request_id": request_id,
+            }), None),
+            WithdrawalCommand::Recover(request_id) => (json!({
+                "action": "recover", "request_id": request_id,
+            }), None),
+        };
+        let root = request_withdrawal(params);
+        return match policy.as_mut() {
+            Some(policy) => {
+                policy["root_retirement"] = match root {
+                    Ok(result) => result,
+                    Err(error) => json!({
+                        "root_retirement_confirmed": false,
+                        "scope": "apps_only", "state": "unconfirmed", "error": error,
+                    }),
+                };
+                Ok(policy.clone())
+            }
+            None => root,
+        };
+    }
     if command != "rollback" {
         return crate::provenance::cli::run(command, args);
     }
+    provenance_app_rollback(args)
+}
+
+fn request_withdrawal(params: Value) -> Result<Value, String> {
+    let expected = params.clone();
+    let response = crate::clawd::client::request_blocking(
+        crate::clawd::config::socket_path(),
+        crate::clawd::protocol::Request::build(
+            crate::clawd::routes::Command::ProvenanceTrustWithdrawal, params,
+        ),
+    ).map_err(|error| format!(
+        "Root retirement is unconfirmed: {error}. Own policy was not restored; reconcile or query the retained outcome."
+    ))?;
+    if !response.ok {
+        let error = response.error.ok_or("Root reconciliation returned no error detail")?;
+        return Err(crate::errors::error_with_details(
+            &error.code, &error.message, error.data.unwrap_or(Value::Null),
+        ).to_string());
+    }
+    let result = response.result.ok_or("Root reconciliation returned no outcome")?;
+    validate_withdrawal_outcome(&expected, &result)?;
+    Ok(result)
+}
+
+fn validate_withdrawal_outcome(expected: &Value, result: &Value) -> Result<(), String> {
+    let invalid = || "Root retirement response is incomplete or inconsistent; retirement remains unconfirmed".to_string();
+    let id = result.get("request_id").and_then(Value::as_str).ok_or_else(invalid)?;
+    if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || result.get("scope").and_then(Value::as_str) != Some("apps_only")
+        || expected.get("request_id").is_some_and(|expected| expected.as_str() != Some(id))
+        || expected.get("target").is_some_and(|target| result.get("target") != Some(target))
+    {
+        return Err(invalid());
+    }
+    let confirmed = result.get("root_retirement_confirmed").and_then(Value::as_bool).ok_or_else(invalid)?;
+    let state = result.get("state").and_then(Value::as_str).ok_or_else(invalid)?;
+    if !matches!(state, "selecting" | "retiring" | "indeterminate" | "retired")
+        || confirmed != (state == "retired")
+    {
+        return Err(invalid());
+    }
+    let apps = result.get("apps").and_then(Value::as_array).ok_or_else(invalid)?;
+    if apps.len() > 1024 { return Err(invalid()); }
+    let me = crate::provenance::fsec::effective_uid();
+    for app in apps {
+        let owner = app.get("owner_uid").and_then(Value::as_u64).ok_or_else(invalid)?;
+        let name = app.get("app_id").and_then(Value::as_str).ok_or_else(invalid)?;
+        let retired = app.get("retired").and_then(Value::as_bool).ok_or_else(invalid)?;
+        let missing = app.get("supporting_evidence_missing").and_then(Value::as_bool).ok_or_else(invalid)?;
+        if owner > u32::MAX as u64 || me != 0 && owner != me as u64
+            || name.is_empty() || name.len() > 128 || name.chars().any(char::is_control)
+            || confirmed && (!retired || missing)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod withdrawal_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_or_pending_outcomes_never_confirm_retirement() {
+        let expected = json!({"request_id": "a".repeat(32)});
+        assert!(validate_withdrawal_outcome(&expected, &json!({
+            "root_retirement_confirmed": true,
+        })).is_err());
+        let mut outcome = json!({
+            "request_id": "a".repeat(32), "scope": "apps_only",
+            "root_retirement_confirmed": true, "state": "indeterminate", "apps": [],
+        });
+        assert!(validate_withdrawal_outcome(&expected, &outcome).is_err());
+        outcome["state"] = json!("retired");
+        assert!(validate_withdrawal_outcome(&expected, &outcome).is_ok());
+        outcome["request_id"] = json!("b".repeat(32));
+        assert!(validate_withdrawal_outcome(&expected, &outcome).is_err());
+    }
+}
+
+fn provenance_app_rollback(args: &[String]) -> Result<Value, String> {
     let Some((retained, destination)) = crate::provenance::cli::resolve_app_rollback(args)? else {
-        return crate::provenance::cli::run(command, args);
+        return crate::provenance::cli::run("rollback", args);
     };
     require_directory_root()?;
     let destination = destination.canonicalize()

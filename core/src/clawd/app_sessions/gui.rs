@@ -199,6 +199,7 @@ impl Registration {
     pub fn require_launch(&self, handle: &str, client: &ClientIdentity) -> Result<(), String> {
         self.require_client(client)?;
         self.require_delegation()?;
+        crate::clawd::trust_withdrawal::check_package(self.owner(), self.launch.package())?;
         let selected = self.launch.manifest().gui_entry(self.gui_entry.as_deref())?;
         if selected.entry != self.entry || selected.exec != self.selector {
             return Err("GUI target differs from the Root-held registration".into());
@@ -246,6 +247,7 @@ impl Registration {
         if caps != self.caps {
             return Err("GUI authority changed before process binding".to_string());
         }
+        crate::clawd::trust_withdrawal::check_package(self.owner(), self.launch.package())?;
         super::issue_session_grant_with_gui(
             handle,
             &self.session_id,
@@ -268,6 +270,7 @@ impl Registration {
             .assert_current()
             .map_err(|error| error.to_string())?;
         self.require_delegation()?;
+        crate::clawd::trust_withdrawal::check_session(self.owner(), &self.session_id)?;
         let trust = crate::provenance::trust_store();
         self.launch
             .package()

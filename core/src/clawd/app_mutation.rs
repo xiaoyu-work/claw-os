@@ -71,3 +71,46 @@ pub(crate) async fn fence(app: &str) -> Result<OwnedRwLockWriteGuard<()>, String
         .await
         .map_err(|_| format!("App `{app}` admission has not drained; package mutation remains pending"))
 }
+
+type OwnerGates = Mutex<HashMap<(u32, String), Weak<RwLock<()>>>>;
+
+fn owner_gate(app: &str, owner: u32) -> Result<Arc<RwLock<()>>, String> {
+    static GATES: OnceLock<OwnerGates> = OnceLock::new();
+    let mut gates = GATES.get_or_init(Default::default).lock()
+        .map_err(|_| "Root owner/App admission is unavailable")?;
+    gates.retain(|_, gate| gate.strong_count() != 0);
+    let key = (owner, app.to_string());
+    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) { return Ok(gate); }
+    let gate = Arc::new(RwLock::new(()));
+    gates.insert(key, Arc::downgrade(&gate));
+    Ok(gate)
+}
+
+pub(crate) struct OwnerAdmission {
+    _package: OwnedRwLockReadGuard<()>,
+    _owner: OwnedRwLockReadGuard<()>,
+}
+
+pub(crate) fn admit_for_owner(app: &str, owner: u32) -> Result<OwnerAdmission, String> {
+    let package = admit(app)?;
+    if super::trust_withdrawal::pending(owner, app)? {
+        return Err("Root retirement remains pending for this owner/App".into());
+    }
+    let owner = owner_gate(app, owner)?.try_read_owned()
+        .map_err(|_| "Root owner/App retirement is active")?;
+    Ok(OwnerAdmission { _package: package, _owner: owner })
+}
+
+pub(crate) struct OwnerFence {
+    _package: OwnedRwLockReadGuard<()>,
+    _owner: OwnedRwLockWriteGuard<()>,
+}
+
+pub(crate) async fn fence_owner(app: &str, owner: u32) -> Result<OwnerFence, String> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let package = tokio::time::timeout_at(deadline, gate(app)?.read_owned()).await
+        .map_err(|_| "Shared App publication is still active; owner retirement remains pending")?;
+    let owner = tokio::time::timeout_at(deadline, owner_gate(app, owner)?.write_owned()).await
+        .map_err(|_| "Owner/App admissions have not drained; retirement remains pending")?;
+    Ok(OwnerFence { _package: package, _owner: owner })
+}

@@ -1810,9 +1810,9 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
 // groups, and with the revocation written by a genuinely separate
 // process that sends this one no notification of any kind. What is
 // being proved is the timing guarantee: a revoked instance is denied on
-// its very next authority call and its process group is stopped by the
-// next lifecycle pass, without a daemon restart and without waiting for
-// any grant to expire.
+// its very next authority call. App records stay denied and retained
+// until Root checks actual resource retirement; a local process-group
+// observation is not a Root custody receipt.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -2002,7 +2002,7 @@ fn package_ref_of(fx: &Fixture, dir: &Path, id: &str) -> PackageRef {
 }
 
 #[test]
-fn a_revocation_from_another_process_denies_the_next_broker_call_and_kills_the_group() {
+fn a_revocation_denies_the_next_broker_call_without_claiming_local_app_retirement() {
     let fx = Fixture::new("revoke-live");
     let _scope = RuntimeScope::new(fx.root.join("procdata"));
     fx.activate();
@@ -2076,8 +2076,7 @@ fn a_revocation_from_another_process_denies_the_next_broker_call_and_kills_the_g
         .assert_live()
         .expect("a sibling package is unaffected by another package's revocation");
 
-    // The denial also marked it, and the lifecycle pass stops the whole
-    // group — the `sleep` the shell backgrounded included.
+    // A CLI-local pass cannot acknowledge Root-owned App resource retirement.
     let marked = runtime::pending_shutdowns(me()).expect("pending");
     assert_eq!(marked.len(), 1);
     assert_eq!(marked[0].session_id, "app-doomed");
@@ -2087,43 +2086,35 @@ fn a_revocation_from_another_process_denies_the_next_broker_call_and_kills_the_g
         &cos::provenance::trust_store(),
         runtime::SHUTDOWN_GRACE,
     );
-    assert!(
-        report.terminated.contains(&"app-doomed".to_string()),
-        "expected the revoked group to be terminated, got {report:?}"
-    );
-    // The descendant is the real proof: a pid-only kill would have left
-    // it running.
-    assert!(
-        wait_until_gone(doomed_group.descendant_pid, Duration::from_secs(5)),
-        "a descendant of the revoked instance survived; the group was not signalled"
-    );
-    let _ = doomed_group.leader.wait();
-    assert!(
-        !alive(doomed_pid) || wait_until_gone(doomed_pid, Duration::from_secs(2)),
-        "the revoked instance's group leader is still alive"
-    );
+    assert!(report.terminated.is_empty());
+    assert!(report.released.is_empty());
+    assert!(alive(doomed_pid));
+    assert!(alive(doomed_group.descendant_pid));
     assert!(alive(sibling_pid), "the sibling process was killed too");
     assert!(
         alive(sibling_group.descendant_pid),
         "the sibling's descendant was killed too"
     );
 
-    // The record is cleared, so nothing is left claiming to be running.
+    // Missing checked retirement must not discard supporting custody evidence.
     assert!(runtime::instance_for(me(), "app-doomed")
         .expect("readable")
-        .is_none());
+        .is_some());
     assert!(runtime::pending_shutdowns(me())
         .expect("pending")
-        .is_empty());
+        .iter().any(|entry| entry.session_id == "app-doomed"));
     assert!(runtime::instance_for(me(), "app-sibling")
         .expect("readable")
         .is_some());
 
+    doomed_group.kill();
     sibling_group.kill();
+    runtime::deregister(me(), "app-doomed");
+    runtime::deregister(me(), "app-sibling");
 }
 
 #[test]
-fn an_idle_instance_is_stopped_by_the_bounded_lifecycle_pass() {
+fn an_idle_app_stays_marked_until_checked_root_retirement() {
     let fx = Fixture::new("revoke-idle");
     let _scope = RuntimeScope::new(fx.root.join("procdata"));
     fx.activate();
@@ -2156,15 +2147,15 @@ fn an_idle_instance_is_stopped_by_the_bounded_lifecycle_pass() {
         runtime::SHUTDOWN_GRACE,
     );
     assert!(report.marked.contains(&"app-idle".to_string()));
-    assert!(report.terminated.contains(&"app-idle".to_string()));
-    assert!(
-        wait_until_gone(group.descendant_pid, Duration::from_secs(5)),
-        "an idle instance's descendant survived the lifecycle pass"
-    );
-    let _ = group.leader.wait();
+    assert!(report.terminated.is_empty());
+    assert!(report.released.is_empty());
+    assert!(alive(pid));
+    assert!(alive(group.descendant_pid));
     assert!(runtime::instance_for(me(), "app-idle")
         .expect("readable")
-        .is_none());
+        .is_some());
+    group.kill();
+    runtime::deregister(me(), "app-idle");
     let _ = reference;
     let _ = pid;
 }
@@ -2197,6 +2188,9 @@ fn a_recycled_pid_is_never_signalled() {
     );
     runtime::bind_process(me(), "app-ghost", bystander_pid);
     runtime::mark_for_shutdown(me(), "app-ghost", "test");
+    runtime::register_operator_mcp(me(), "mcp-ghost");
+    runtime::bind_process(me(), "mcp-ghost", bystander_pid);
+    runtime::mark_for_shutdown(me(), "mcp-ghost", "test");
 
     // Rewrite the recorded start time so the identity no longer matches
     // the process holding that pid.
@@ -2204,11 +2198,15 @@ fn a_recycled_pid_is_never_signalled() {
     let mut state: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
     state["shutdown"]["app-ghost"]["process"]["start_time_ticks"] = serde_json::json!(u64::MAX);
+    state["shutdown"]["mcp-ghost"]["process"]["start_time_ticks"] = serde_json::json!(u64::MAX);
     fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
     runtime::reset_cache();
 
-    let signalled = runtime::terminate(me(), "app-ghost", Duration::from_millis(200))
-        .expect("terminate is decided, not skipped");
+    let error = runtime::terminate(me(), "app-ghost", Duration::from_millis(200))
+        .expect_err("a mismatched PID is not checked Root App retirement");
+    assert!(error.contains("Root custody"), "{error}");
+    let signalled = runtime::terminate(me(), "mcp-ghost", Duration::from_millis(200))
+        .expect("a mismatched non-App PID remains a decided legacy outcome");
     assert!(
         !signalled,
         "a pid whose identity no longer matches must not be signalled"
@@ -2217,13 +2215,17 @@ fn a_recycled_pid_is_never_signalled() {
         alive(bystander_pid),
         "an unrelated process holding a recycled pid was killed"
     );
-    // The record is still released: there is nothing left to govern.
+    // An App keeps custody evidence; the non-App identity guard is unchanged.
     assert!(runtime::instance_for(me(), "app-ghost")
+        .expect("readable")
+        .is_some());
+    assert!(runtime::instance_for(me(), "mcp-ghost")
         .expect("readable")
         .is_none());
 
     let _ = reference;
     bystander.kill();
+    runtime::deregister(me(), "app-ghost");
 }
 
 #[test]
