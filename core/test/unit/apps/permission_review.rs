@@ -231,3 +231,48 @@ fn owner_path_review_retains_declared_purpose_and_displays_root_resolved_scope_w
     assert_eq!(review.contract_digest, digest);
     assert!(!review.permissions_granted);
 }
+
+#[test]
+fn optional_gui_review_preserves_purpose_classification_and_contract_digest() {
+    let mut value = serde_json::json!({
+        "id":"optional-review","version":"1","name":{"en":"Optional review"},
+        "desktop":{"needs":[{"verb":"ui.panel","scope":{"kind":"fixed","scope":{"kind":"wild"}},"why":{"en":"Required panel display"}}],
+            "optional_needs":[{"verb":"sys.identity","scope":{"kind":"fixed","scope":{"kind":"name","value":"accounts"}},"why":{"en":"Optional management"}}],
+            "entries":{"applet":{"entry":"widget.py","exec":"panel","name":{"en":"Widget"},"needs":[],
+                "optional_needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":{"en":"Unbound optional selection"}}]}}
+        }
+    });
+    let review = PermissionReview::from_manifest(&Manifest::from_json(&value.to_string()).unwrap()).unwrap();
+    let management = review.permissions.iter().find(|permission| permission.verb == Verb::SYS_IDENTITY).unwrap();
+    assert_eq!(management.uses[0].entry, "gui:(default):optional");
+    assert!(management.uses[0].optional);
+    assert_eq!(management.uses[0].purpose.en_str(), "Optional management");
+    assert_eq!(review.gui_entries[0].needs[0].verb, Verb::UI_PANEL);
+    assert_eq!(review.gui_entries[1].unbound_optional_needs, [0]);
+    assert!(review.format_for_review().unwrap().contains("startup continues"));
+    assert!(!review.permissions_granted);
+    value["desktop"]["optional_needs"] = json!([]);
+    let changed = PermissionReview::from_manifest(&Manifest::from_json(&value.to_string()).unwrap()).unwrap();
+    assert_ne!(review.contract_digest, changed.contract_digest);
+    let required = value["desktop"]["needs"][0].clone();
+    value["desktop"]["needs"] = json!([]);
+    value["desktop"]["optional_needs"] = json!([required]);
+    let relaxed = PermissionReview::from_manifest(&Manifest::from_json(&value.to_string()).unwrap()).unwrap();
+    assert_ne!(changed.contract_digest, relaxed.contract_digest);
+}
+
+#[test]
+fn a_gui_named_optional_does_not_make_its_required_permissions_optional() {
+    let manifest = Manifest::from_json(r#"{
+        "id":"required-widget","version":"1","name":{"en":"Widget"},
+        "desktop":{"needs":[],"entries":{"optional":{
+            "entry":"widget.py","exec":"panel","name":{"en":"Widget"},"needs":[{
+                "verb":"fs.read","scope":{"kind":"owner-path","path":"Documents/**"},"why":{"en":"Required documents"}
+            }]
+        }}}
+    }"#).unwrap();
+    let mut review = PermissionReview::from_manifest(&manifest).unwrap();
+    assert_eq!(review.permissions[0].uses[0].entry, "gui:optional");
+    assert!(!review.permissions[0].uses[0].optional);
+    assert!(review.resolve_owner_paths(&crate::caps::args::PathContext { home: "/".into(), cwd: None }).is_err());
+}

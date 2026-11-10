@@ -382,6 +382,7 @@ class Desktop(TypedDict, total=False):
     exec: str
     entry: str
     needs: List["Need"]
+    optional_needs: List["Need"]
     entries: Dict[str, "DesktopEntry"]
     name: "Localizedtext"
     icon: str
@@ -403,6 +404,7 @@ class DesktopEntry(_DesktopEntryRequired, total=False):
     authenticated App identity. Required needs are exclusive to this surface; no
     default-GUI, operation or MCP union.
     """
+    optional_needs: List["Need"]
     panel_applet: bool
 
 class _McpCallContextRequired(TypedDict):

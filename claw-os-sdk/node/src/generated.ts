@@ -352,6 +352,7 @@ export interface Desktop {
   exec?: string;
   entry?: string;
   needs?: Need[];
+  optional_needs?: Need[];
   entries?: Record<string, DesktopEntry>;
   name?: Localizedtext;
   icon?: string;
@@ -372,6 +373,7 @@ export interface DesktopEntry {
   exec: string;
   name: Localizedtext;
   needs: Need[];
+  optional_needs?: Need[];
   panel_applet?: boolean;
 }
 

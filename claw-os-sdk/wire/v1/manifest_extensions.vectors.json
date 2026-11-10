@@ -9,15 +9,11 @@
         "name": {"en": "Notes"},
         "mcp": {
           "transport": "stdio",
-          "tools": [
-            {
-              "name": "notes.get",
-              "summary": {"en": "Read a note"},
-              "args": [
-                {"name": "note_id", "kind": "name", "binding": "flag", "required": true}
-              ]
-            }
-          ]
+          "tools": [{
+            "name": "notes.get",
+            "summary": {"en": "Read a note"},
+            "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}]
+          }]
         },
         "objects": {
           "note": {
@@ -37,16 +33,12 @@
         "mcp": {
           "transport": "stdio",
           "access": {"system_agent": true, "external_agents": true},
-          "tools": [
-            {
-              "name": "notes.get",
-              "summary": {"en": "Read a note"},
-              "effects": [],
-              "args": [
-                {"name": "note_id", "kind": "name", "binding": "flag", "required": true}
-              ]
-            }
-          ]
+          "tools": [{
+            "name": "notes.get",
+            "summary": {"en": "Read a note"},
+            "effects": [],
+            "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}]
+          }]
         },
         "objects": {
           "note": {
@@ -58,64 +50,12 @@
           "inspect": {
             "label": {"en": "Inspect a requested path"},
             "args": [{"name": "path", "kind": "path", "required": true}],
-            "effects": [
-              {
-                "kind": "read",
-                "label": {"en": "Read the requested path"},
-                "target_arg": "path",
-                "recovery": "not_applicable"
-              },
-              {
-                "name": "mcp-with-independent-gui-entries",
-                "manifest": {
-                  "id": "notes",
-                  "version": "1.0.0",
-                  "schema_version": 2,
-                  "name": {"en": "Notes"},
-                  "runtime": "binary",
-                  "entry": "bin/command",
-                  "mcp": {
-                    "entry": "bin/service",
-                    "tools": [{
-                      "name": "notes.get",
-                      "summary": {"en": "Read a note"},
-                      "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}],
-                      "needs": [{
-                        "verb": "sys.observe",
-                        "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "hardware"}},
-                        "why": {"en": "Inspect the requested service data"}
-                      }]
-                    }]
-                  },
-                  "desktop": {
-                    "entry": "bin/window",
-                    "exec": "--gui",
-                    "needs": [],
-                    "entries": {
-                      "applet": {
-                        "entry": "bin/widget",
-                        "exec": "open panel",
-                        "name": {"en": "Notes widget"},
-                        "needs": [{
-                          "verb": "ui.notify",
-                          "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
-                          "why": {"en": "Report this widget's results"}
-              }, {
-                          "verb": "fs.delete",
-                          "scope": {"kind": "owner-path", "path": "Documents/**"},
-                          "why": {"en": "Delete documents only after exact owner authorization"}
-              }, {
-                          "verb": "ui.panel",
-                          "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
-                          "why": {"en": "Host this widget as an independently authorized panel"}
-                        }],
-                        "panel_applet": true
-                      }
-                    }
-                  }
-                }
-              }
-            ]
+            "effects": [{
+              "kind": "read",
+              "label": {"en": "Read the requested path"},
+              "target_arg": "path",
+              "recovery": "not_applicable"
+            }]
           }
         }
       }
@@ -129,28 +69,132 @@
         "name": {"en": "Notes"},
         "mcp": {
           "transport": "stdio",
-          "tools": [
-            {
-              "name": "notes.get",
-              "summary": {"en": "Read a note"},
-              "args": [
-                {"name": "note_id", "kind": "name", "binding": "flag", "required": true}
-              ],
-              "effects": [
-                {
-                  "kind": "read",
-                  "label": {"en": "Read the requested note"},
-                  "target_arg": "note_id",
-                  "recovery": "not_applicable"
-                }
-              ]
-            }
-          ]
+          "tools": [{
+            "name": "notes.get",
+            "summary": {"en": "Read a note"},
+            "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}],
+            "effects": [{
+              "kind": "read",
+              "label": {"en": "Read the requested note"},
+              "target_arg": "note_id",
+              "recovery": "not_applicable"
+            }]
+          }]
         },
         "objects": {
           "note": {
             "label": {"en": "Note"},
             "resolve": {"operation": "get", "id_arg": "note_id"}
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp-with-independent-gui-entries",
+      "manifest": {
+        "id": "notes",
+        "version": "1.0.0",
+        "schema_version": 2,
+        "name": {"en": "Notes"},
+        "runtime": "binary",
+        "entry": "bin/command",
+        "mcp": {
+          "entry": "bin/service",
+          "tools": [{
+            "name": "notes.get",
+            "summary": {"en": "Read a note"},
+            "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}],
+            "needs": [{
+              "verb": "sys.observe",
+              "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "hardware"}},
+              "why": {"en": "Inspect the requested service data"}
+            }]
+          }]
+        },
+        "desktop": {
+          "entry": "bin/window",
+          "exec": "--gui",
+          "needs": [],
+          "optional_needs": [],
+          "entries": {
+            "applet": {
+              "entry": "bin/widget",
+              "exec": "open panel",
+              "name": {"en": "Notes widget"},
+              "needs": [{
+                "verb": "ui.notify",
+                "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                "why": {"en": "Report this widget's results"}
+              }, {
+                "verb": "fs.delete",
+                "scope": {"kind": "owner-path", "path": "Documents/**"},
+                "why": {"en": "Delete documents only after exact owner authorization"}
+              }, {
+                "verb": "ui.panel",
+                "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                "why": {"en": "Host this widget as an independently authorized panel"}
+              }],
+              "optional_needs": [],
+              "panel_applet": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp-with-per-gui-optional-features",
+      "manifest": {
+        "id": "notes",
+        "version": "1.0.0",
+        "schema_version": 2,
+        "name": {"en": "Notes"},
+        "runtime": "binary",
+        "entry": "bin/command",
+        "ai": {
+          "budget": {"monthly_units": 10},
+          "safety": "strict",
+          "origins": ["external-content"]
+        },
+        "mcp": {
+          "entry": "bin/service",
+          "tools": [{
+            "name": "notes.get",
+            "summary": {"en": "Read a note"},
+            "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}]
+          }]
+        },
+        "desktop": {
+          "entry": "bin/window",
+          "needs": [],
+          "optional_needs": [{
+            "verb": "sys.observe",
+            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "hardware"}},
+            "why": {"en": "Optional window status"}
+          }],
+          "entries": {
+            "applet": {
+              "entry": "bin/widget",
+              "exec": "panel",
+              "name": {"en": "Notes widget"},
+              "needs": [{
+                "verb": "ui.panel",
+                "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                "why": {"en": "Required panel display"}
+              }],
+              "optional_needs": [{
+                "verb": "sys.identity",
+                "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "accounts"}},
+                "why": {"en": "Manage accounts only when already authorized"}
+              }, {
+                "verb": "ai.chat.untrusted",
+                "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                "why": {"en": "Optional AI assistance"}
+              }, {
+                "verb": "fs.read",
+                "scope": {"kind": "owner-path", "path": "Documents/**"},
+                "why": {"en": "Optional owner document access"}
+              }]
+            }
           }
         }
       }

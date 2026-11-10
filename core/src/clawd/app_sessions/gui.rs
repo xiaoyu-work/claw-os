@@ -34,6 +34,8 @@ pub(crate) struct Registration {
     pub control: GuiControl,
     pub session_id: String,
     pub caps: CapSet,
+    pub optional_needs_ungranted: Vec<usize>,
+    optional_approval_expiry: Option<u64>,
     pub registered_at: Instant,
     pub authority_alias: Epoch,
     delegation: BoundDelegation,
@@ -102,7 +104,13 @@ impl Draft {
         })
     }
 
-    pub fn finish(self, session_id: String, caps: CapSet) -> Result<Registration, String> {
+    pub fn finish(
+        self,
+        session_id: String,
+        caps: CapSet,
+        optional_needs_ungranted: Vec<usize>,
+        optional_approval_expiry: Option<u64>,
+    ) -> Result<Registration, String> {
         Ok(Registration {
             launch: self.launch,
             gui_entry: self.gui_entry,
@@ -114,6 +122,8 @@ impl Draft {
             control: self.control,
             session_id,
             caps,
+            optional_needs_ungranted,
+            optional_approval_expiry,
             registered_at: Instant::now(),
             authority_alias: Epoch::random().map_err(|error| error.to_string())?,
             delegation: self.delegation,
@@ -131,6 +141,9 @@ impl Registration {
     }
 
     fn require_delegation(&self) -> Result<(), String> {
+        if self.optional_approval_remaining()?.is_some_and(|remaining| remaining.is_zero()) {
+            return Err("GUI optional approval expired; fresh registration is required".into());
+        }
         crate::paths::RoutedPathContext::for_owner(self.owner(), self.home.clone()).scope_sync(
             || {
                 let current = super::launcher_authority(
@@ -165,6 +178,15 @@ impl Registration {
                 Ok(())
             },
         )
+    }
+
+    fn optional_approval_remaining(&self) -> Result<Option<std::time::Duration>, String> {
+        let Some(expiry) = self.optional_approval_expiry else {
+            return Ok(None);
+        };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("GUI approval clock: {error}"))?;
+        Ok(Some(std::time::Duration::from_secs(expiry).saturating_sub(now)))
     }
 
     pub fn require_client(&self, client: &ClientIdentity) -> Result<(), String> {
@@ -271,13 +293,17 @@ impl Registration {
         }
         // Session grants are unbounded; this rechecks the real grant and App policy,
         // rather than treating a cached CapSet or a successful preflight as authority.
-        authority::authority()
+        let mut view = authority::authority()
             .consume(
                 view.id,
                 &view.caps.iter().cloned().collect::<Vec<_>>(),
                 &presentation,
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if let Some(remaining) = self.optional_approval_remaining()? {
+            view.expires_in = view.expires_in.min(remaining);
+        }
+        Ok(view)
     }
 
     pub fn clear_after_retirement(&self) {

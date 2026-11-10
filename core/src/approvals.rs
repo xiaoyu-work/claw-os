@@ -1979,6 +1979,42 @@ pub fn has_approved_grant_for_owner(
     has_approved_grant_for_context(session, cap, owner_uid, None)
 }
 
+/// Spend one existing reusable exact-owner approval for an optional GUI
+/// feature. Never files a request, consumes a once-grant or widens its scope.
+pub(crate) fn redeem_reusable_gui_grant_for_owner(
+    session: &str,
+    cap: &Cap,
+    owner_uid: u32,
+) -> Result<Option<ConsumedGrant>, String> {
+    let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
+    let expected = ApprovalAuthorization {
+        owner_uid: Some(owner_uid),
+        session: session.to_string(),
+        capability,
+        risk,
+        context: None,
+        execution: None,
+        resume_request_id: None,
+        resumable_until: None,
+        operation_digest: None,
+    };
+    ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        for path in list_dir(&approved_dir()) {
+            let Some(resolved) = load_matching_grant(&path, &expected, None) else {
+                continue;
+            };
+            if !matches!(resolved.decision.duration, Some(GrantDuration::Session | GrantDuration::Forever)) {
+                continue;
+            }
+            if let Some(grant) = spend_grant(&path, resolved, false)? {
+                return Ok(Some(grant));
+            }
+        }
+        Ok(None)
+    })
+}
+
 pub fn has_approved_grant_for_context(
     session: &str,
     cap: &Cap,

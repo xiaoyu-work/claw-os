@@ -19,6 +19,12 @@ pub struct PermissionUse {
     pub entry: String,
     pub purpose: LocalizedText,
     pub arguments: Vec<Arg>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,8 +54,12 @@ pub struct GuiDisclosure {
     pub entry: String,
     pub exec: String,
     pub needs: Vec<Need>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_needs: Vec<Need>,
     pub legacy_operation_needs: bool,
     pub unbound_needs: Vec<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unbound_optional_needs: Vec<usize>,
     pub panel_applet: bool,
 }
 
@@ -74,7 +84,13 @@ impl PermissionReview {
     pub fn resolve_owner_paths(&mut self, paths: &crate::caps::args::PathContext) -> Result<(), String> {
         for permission in &mut self.permissions {
             if let ScopeBinding::OwnerPath { path } = &permission.scope {
-                permission.resolved_scope = Some(crate::caps::manifest::resolve_owner_path(permission.verb, path, paths)?);
+                match crate::caps::manifest::resolve_owner_path(permission.verb, path, paths) {
+                    Ok(scope) => permission.resolved_scope = Some(scope),
+                    Err(_) if permission.uses.iter().all(|usage| usage.optional) => {
+                        permission.resolved_scope = None;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
         Ok(())
@@ -88,6 +104,7 @@ impl PermissionReview {
                 &format!("operation:{name}"),
                 &operation.args,
                 &operation.needs,
+                false,
             )?;
         }
         if let Some(service) = &manifest.mcp {
@@ -97,6 +114,7 @@ impl PermissionReview {
                     &format!("mcp:{}", tool.name),
                     &tool.args,
                     &tool.needs,
+                    false,
                 )?;
             }
         }
@@ -110,8 +128,14 @@ impl PermissionReview {
                         Some(name) => format!("gui:{name}"),
                         None => "gui".to_string(),
                     };
-                    collect(&mut requested, &usage, &[], &needs)?;
+                    collect(&mut requested, &usage, &[], &needs, false)?;
                 }
+                let optional_needs: Vec<Need> = selected.optional_needs.iter().map(|need| (**need).clone()).collect();
+                let optional_usage = match name {
+                    Some(name) => format!("gui:{name}:optional"),
+                    None => "gui:(default):optional".to_string(),
+                };
+                collect(&mut requested, &optional_usage, &[], &optional_needs, true)?;
                 gui_entries.push(GuiDisclosure {
                     name: selected.name.map(str::to_string),
                     label: selected.label.clone(),
@@ -119,9 +143,14 @@ impl PermissionReview {
                     entry: selected.entry.to_string(),
                     exec: selected.exec.to_string(),
                     needs,
+                    optional_needs,
                     legacy_operation_needs: selected.legacy_needs,
                     unbound_needs: selected.needs.iter().enumerate()
                         .filter(|(_, need)| !selected.need_is_bound(need))
+                        .map(|(index, _)| index)
+                        .collect(),
+                    unbound_optional_needs: selected.optional_needs.iter().enumerate()
+                        .filter(|(_, need)| !selected.optional_need_is_bound(need))
                         .map(|(index, _)| index)
                         .collect(),
                     panel_applet: selected.panel_applet,
@@ -175,7 +204,11 @@ impl PermissionReview {
                                 })
                             })
                             .collect();
-                        json!({ "entry": usage.entry, "arguments": arguments })
+                        let mut value = json!({ "entry": usage.entry, "arguments": arguments });
+                        if usage.optional {
+                            value["optional"] = json!(true);
+                        }
+                        value
                     })
                     .collect();
                 json!({
@@ -197,7 +230,7 @@ impl PermissionReview {
         // Old protected reviews retain their digest when no new GUI fields
         // are used. Their package identity still binds the execution bytes.
         if self.desktop.as_ref().is_some_and(|desktop| {
-            desktop.entry.is_some() || desktop.needs.is_some() || !desktop.entries.is_empty()
+            desktop.entry.is_some() || desktop.needs.is_some() || !desktop.entries.is_empty() || !desktop.optional_needs.is_empty()
         }) {
             contract["gui_entries"] = json!(self.gui_entries);
         }
@@ -281,6 +314,19 @@ impl PermissionReview {
                     gui.unbound_needs,
                 ));
             }
+            if !gui.optional_needs.is_empty() {
+                text.push_str(&format!(
+                    "  Optional feature needs (startup continues without ungranted rights): {}\n",
+                    serde_json::to_string(&gui.optional_needs)
+                        .map_err(|error| format!("format optional GUI needs: {error}"))?,
+                ));
+            }
+            if !gui.unbound_optional_needs.is_empty() {
+                text.push_str(&format!(
+                    "  Unsupported/unbound optional GUI need indexes: {:?}\n",
+                    gui.unbound_optional_needs,
+                ));
+            }
         }
         if let Some(policy) = &self.ai_policy {
             text.push_str(&format!(
@@ -302,6 +348,7 @@ fn collect(
     entry: &str,
     arguments: &[Arg],
     needs: &[Need],
+    optional: bool,
 ) -> Result<(), String> {
     for need in needs {
         let key = serde_json::to_string(&(need.verb, &need.scope, &need.when))
@@ -322,6 +369,7 @@ fn collect(
             entry: entry.to_string(),
             purpose: need.why.clone(),
             arguments: arguments.to_vec(),
+            optional,
         });
         permission
             .uses

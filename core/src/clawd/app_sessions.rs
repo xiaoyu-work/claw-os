@@ -399,7 +399,12 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     };
     plan.require(caller_invoke.clone(), &delegation);
     super::system_review::require_app_review(uid, &app, &delegation.requester)?;
-    let grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
+    let mut grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
+    let optional_gui = if kind == LaunchKind::Gui {
+        authorize_optional_gui_needs(&app, gui_entry.as_deref(), &delegation, &ceiling, &mut grant_caps)
+    } else {
+        OptionalGuiAuthorization::default()
+    };
     let caps = target_session_caps(grant_caps.clone(), &caller_invoke);
     #[cfg(unix)]
     let task_data_root = match client.extension_host.as_ref() {
@@ -478,7 +483,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     #[cfg(target_os = "linux")]
     if let Some(draft) = gui_draft {
         let reserved = draft
-            .finish(session_id.clone(), caps.clone())
+            .finish(session_id.clone(), caps.clone(), optional_gui.ungranted.clone(), optional_gui.approval_expiry)
             .and_then(|registration| super::gui::Manager::get()?.reserve(registration));
         if let Err(error) = reserved {
             authority::authority().revoke_session(&session_id);
@@ -503,6 +508,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             host.purpose == crate::extension_host::protocol::HostPurpose::AppService),
     });
     if kind == LaunchKind::Gui {
+        response["optional_needs_ungranted"] = json!(optional_gui.ungranted);
         let data_dir = crate::paths::RoutedPathContext::for_owner(uid, home)
             .scope_sync(crate::paths::user_data_dir);
         response["gui_data_dir"] = serde_json::to_value(data_dir).map_err(|error| {
@@ -2243,6 +2249,91 @@ fn gui_plan(
     }
     record_ceiling_drop(ceiling, &app.manifest.id, "wild_binding", &refused_wild);
     Ok(plan)
+}
+
+#[derive(Default)]
+struct OptionalGuiAuthorization {
+    ungranted: Vec<usize>,
+    approval_expiry: Option<u64>,
+}
+
+/// Optional startup features never enter the mandatory approval plan. Every
+/// accepted cap still passes package, App, Activity, Workspace and resource
+/// policy before using existing parent authority or spending a reusable grant.
+fn authorize_optional_gui_needs(
+    app: &App,
+    gui_entry: Option<&str>,
+    delegation: &Delegation,
+    ceiling: &Ceiling,
+    granted: &mut CapSet,
+) -> OptionalGuiAuthorization {
+    let mut result = OptionalGuiAuthorization::default();
+    let selected = match app.manifest.gui_entry(gui_entry) {
+        Ok(selected) => selected,
+        Err(_) => return result,
+    };
+    for (index, need) in selected.optional_needs.iter().enumerate() {
+        let requested = if !selected.optional_need_is_bound(need) {
+            None
+        } else {
+            match &need.scope {
+                ScopeBinding::Fixed { scope } => Some(vec![Cap::new(need.verb, scope.clone())]),
+                ScopeBinding::OwnerPath { path } => crate::caps::manifest::resolve_owner_path(
+                    need.verb, path, &delegation.paths,
+                ).ok().map(|scope| vec![Cap::new(need.verb, scope)]),
+                ScopeBinding::Wild if ceiling.allows_wild_binding(need.verb) => {
+                    inherited_wild_caps(need.verb, delegation).ok()
+                }
+                _ => None,
+            }
+        };
+        let Some(requested) = requested else {
+            result.ungranted.push(index);
+            continue;
+        };
+        let mut complete = !requested.is_empty();
+        for cap in requested {
+            let cap = match crate::approvals::canonical_capability(cap.verb, cap.scope) {
+                Ok((cap, _)) => cap,
+                Err(_) => { complete = false; continue; }
+            };
+            if granted.covers(&cap) {
+                continue;
+            }
+            let caps = CapSet::from_caps([cap.clone()]);
+            let mut prospective = granted.clone();
+            prospective.insert(cap.clone());
+            let allowed = ceiling.clamp(&caps).0.covers(&cap)
+                && crate::approvals::app_policy::require(delegation.uid, &app.manifest.id, &caps).is_ok()
+                && delegation.activity.as_ref().is_none_or(|boundary|
+                    boundary.approval_needs(&caps).is_ok_and(|needs| needs.is_empty()))
+                && delegation.workspace.as_ref().is_none_or(|workspace| workspace.check(std::slice::from_ref(&cap)).is_ok())
+                && crate::paths::RoutedPathContext::for_owner(delegation.uid, delegation.paths.home.clone()).scope_sync(||
+                    crate::worker::derive::granted_path_mounts(&prospective).is_ok());
+            if !allowed {
+                complete = false;
+                continue;
+            }
+            if delegation.ceiling.covers(&cap) {
+                granted.insert(cap);
+                continue;
+            }
+            match crate::approvals::redeem_reusable_gui_grant_for_owner(
+                &delegation.grant_session, &cap, delegation.uid,
+            ) {
+                Ok(Some(approval)) => {
+                    result.approval_expiry = Some(result.approval_expiry
+                        .map_or(approval.expires_at, |expiry| expiry.min(approval.expires_at)));
+                    granted.insert(cap);
+                }
+                Ok(None) | Err(_) => complete = false,
+            }
+        }
+        if !complete {
+            result.ungranted.push(index);
+        }
+    }
+    result
 }
 
 async fn install_session(

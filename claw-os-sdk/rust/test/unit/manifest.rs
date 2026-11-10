@@ -11,6 +11,24 @@ fn owner_path_shared_vectors_are_bounded_lexical_previews() {
             Some(expected) => assert_eq!(result.unwrap(), expected, "{}", case["name"]),
             None => assert!(result.is_err(), "{}", case["name"]),
         }
+
+        #[test]
+        fn optional_gui_lists_reject_null_and_invalid_owner_paths_on_both_surfaces() {
+            for invalid in [Value::Null, json!("not-an-array"), json!({}), json!([{
+                "verb":"fs.read","scope":{"kind":"owner-path","path":"../other/**"},
+            }])] {
+                for value in [
+                    json!({"desktop":{"optional_needs":invalid.clone()}}),
+                    json!({"desktop":{"entries":{"applet":{"optional_needs":invalid.clone()}}}}),
+                ] {
+                    assert!(validate_owner_path_bindings(&value).is_err());
+                }
+            }
+            validate_owner_path_bindings(&json!({"desktop":{"optional_needs":[]}})).unwrap();
+            validate_owner_path_bindings(&json!({"desktop":{"entries":{"applet":{"optional_needs":[{
+                "verb":"fs.read","scope":{"kind":"owner-path","path":"Documents/**"},
+            }]}}}})).unwrap();
+        }
     }
     assert!(validate_owner_path("fs.read", &"é".repeat(128)).is_err());
     for field in ["owner_uid", "home", "owner_home"] {

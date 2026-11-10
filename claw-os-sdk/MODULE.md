@@ -101,6 +101,17 @@ protected-resource checks and exact-owner capability approval. A preview is
 never authorization. Root resolution without authenticated context fails closed;
 SDK preview arguments do not authenticate an owner.
 
+The additive GUI-only `optional_needs` arrays use the existing Need/localized
+purpose models on the default desktop and each named entry. They default empty,
+never weaken mandatory needs, and are included in authenticated review/digest
+and deny inventory. Missing or denied optional rights do not block startup or
+prompt: Root admits only existing authenticated parent/reusable exact-owner
+authority and retains policy, provenance, lifetime and checked retirement.
+All four generated bindings preserve the arrays; pure owner-path validation
+also checks them. Root startup indexes in
+`COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON` are presentation only. Existing live
+policy/provider errors remain authoritative; no dynamic widening is implied.
+
 ## Dependencies
 
 Wire schemas and `wire/v1/contract.json` are the source of truth. Core, MCP,

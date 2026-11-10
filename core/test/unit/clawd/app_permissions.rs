@@ -69,7 +69,7 @@ async fn gui_only_permissions_share_the_existing_owner_deny_and_restore_gate() {
     std::fs::write(source.join("app.json"), r#"{
         "id":"independent-widget","version":"1","name":{"en":"Widget"},
         "desktop":{"needs":[],"entries":{"applet":{
-            "entry":"main.py","exec":"panel","name":{"en":"Widget panel"},"needs":[{
+            "entry":"main.py","exec":"panel","name":{"en":"Widget panel"},"needs":[],"optional_needs":[{
                 "verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"audio"}},"why":{"en":"Widget audio status"}
             }]
         }}}

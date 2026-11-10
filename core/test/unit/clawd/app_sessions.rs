@@ -1648,6 +1648,180 @@ fn gui_panel_authority_requires_its_own_exact_approval_and_never_escapes_develop
     assert!(!window.caps.covers(&required));
 }
 
+fn optional_gui_app() -> App {
+    app_from(r#"{
+        "id":"optional-workbench","version":"1","schema_version":2,"name":{"en":"Optional workbench"},
+        "ai":{"budget":{"monthly_units":10},"safety":"strict","origins":["external-content"]},
+        "desktop":{"needs":[],"optional_needs":[
+            {"verb":"sys.identity","scope":{"kind":"fixed","scope":{"kind":"name","value":"accounts"}},"why":{"en":"Manage accounts when authorized"}},
+            {"verb":"ai.chat.untrusted","scope":{"kind":"fixed","scope":{"kind":"wild"}},"why":{"en":"Optional AI assistance"}}
+        ],"entries":{"applet":{
+            "entry":"widget.py","exec":"panel","name":{"en":"Widget"},"needs":[],
+            "optional_needs":[{"verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"hardware"}},"why":{"en":"Optional widget status"}}]
+        }}},
+        "mcp":{"tools":[{"name":"optional-workbench.inspect","summary":{"en":"Inspect"},"needs":[
+            {"verb":"sys.power","scope":{"kind":"fixed","scope":{"kind":"name","value":"suspend"}},"why":{"en":"MCP-only power action"}}
+        ]}]}
+    }"#)
+}
+
+fn optional_gui_caps(
+    app: &App, entry: Option<&str>, exec: &str, launcher: &Delegation,
+) -> Result<(CapSet, OptionalGuiAuthorization), BrokerError> {
+    let plan = gui_plan(app, entry, exec, launcher, &publisher_ceiling())?;
+    let mut granted = authorize_plan(launcher, plan, &publisher_ceiling(), &app.manifest.id)?;
+    let optional = authorize_optional_gui_needs(app, entry, launcher, &publisher_ceiling(), &mut granted);
+    Ok((granted, optional))
+}
+
+#[test]
+fn optional_gui_permissions_do_not_prompt_and_never_borrow_other_surface_or_mcp_needs() {
+    let _sandbox = approval_sandbox();
+    let app = optional_gui_app();
+    let launcher = delegation(CapSet::from_caps([
+        Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware")),
+        Cap::new(Verb::SYS_POWER, Scope::name("suspend")),
+    ]));
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert!(caps.is_empty());
+    assert_eq!(optional.ungranted, [0, 1]);
+    assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());
+    let (caps, optional) = optional_gui_caps(&app, Some("applet"), "panel", &launcher).unwrap();
+    assert_eq!(caps.iter().cloned().collect::<Vec<_>>(), [Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware"))]);
+    assert!(optional.ungranted.is_empty());
+}
+
+#[test]
+fn optional_gui_once_or_unapproved_grants_cannot_be_promoted_but_reusable_grants_spend_one_use() {
+    let _sandbox = approval_sandbox();
+    let app = optional_gui_app();
+    let launcher = delegation(CapSet::new());
+    let required = Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"));
+    let id = crate::approvals::submit_owned(
+        required.verb, required.scope.clone(), &launcher.grant_session, "Optional management",
+        Some(launcher.requester.clone()), Some(launcher.uid),
+    ).unwrap();
+    let (caps, _) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert!(caps.is_empty());
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Once);
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert!(caps.is_empty());
+    assert_eq!(optional.ungranted, [0, 1]);
+    assert_eq!(crate::approvals::status_for_owner(&id, Some(launcher.uid)), crate::approvals::RequestStatus::Approved);
+
+    let reusable = crate::approvals::submit_owned(
+        required.verb, required.scope.clone(), &launcher.grant_session, "Reusable management",
+        Some(launcher.requester.clone()), Some(launcher.uid),
+    ).unwrap();
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Session);
+    let before = crate::approvals::list_recent_for_owner(100, Some(launcher.uid)).into_iter()
+        .find(|record| record.request.id == reusable).unwrap().decision.grant.unwrap();
+    let mut foreign = delegation(CapSet::new());
+    foreign.uid += 1;
+    assert!(optional_gui_caps(&app, None, "--gui", &foreign).unwrap().0.is_empty());
+    let mut other_session = delegation(CapSet::new());
+    other_session.grant_session = "different-launcher".into();
+    assert!(optional_gui_caps(&app, None, "--gui", &other_session).unwrap().0.is_empty());
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert_eq!(caps.iter().cloned().collect::<Vec<_>>(), [required]);
+    assert_eq!(optional.ungranted, [1]);
+    assert_eq!(optional.approval_expiry, Some(before.expires_at));
+    let after = crate::approvals::list_recent_for_owner(100, Some(launcher.uid)).into_iter()
+        .find(|record| record.request.id == reusable).unwrap().decision.grant.unwrap();
+    assert_eq!(after.uses_remaining, before.uses_remaining - 1);
+    assert_eq!(crate::approvals::status_for_owner(&id, Some(launcher.uid)), crate::approvals::RequestStatus::Approved);
+}
+
+#[test]
+fn optional_gui_app_denial_and_package_ceiling_remove_features_without_refusing_startup() {
+    let _sandbox = approval_sandbox();
+    let app = optional_gui_app();
+    let management = Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"));
+    let launcher = delegation(CapSet::from_caps([management.clone()]));
+    assert!(optional_gui_caps(&app, None, "--gui", &launcher).unwrap().0.covers(&management));
+    let mut developer_caps = CapSet::new();
+    let developer = authorize_optional_gui_needs(&app, None, &launcher, &developer_ceiling(), &mut developer_caps);
+    assert!(developer_caps.is_empty());
+    assert_eq!(developer.ungranted, [0, 1]);
+    crate::approvals::app_policy::revoke(launcher.uid, &app.manifest.id, management).unwrap();
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert!(caps.is_empty());
+    assert_eq!(optional.ungranted, [0, 1]);
+    let mut caps = CapSet::new();
+    let optional = authorize_optional_gui_needs(&app, None, &launcher, &developer_ceiling(), &mut caps);
+    assert!(caps.is_empty());
+    assert_eq!(optional.ungranted, [0, 1]);
+    assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());
+}
+
+#[test]
+fn optional_gui_denied_or_expired_reusable_approval_remains_ungranted_without_new_requests() {
+    let _sandbox = approval_sandbox();
+    let app = optional_gui_app();
+    let launcher = delegation(CapSet::new());
+    let cap = Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"));
+    let request = || crate::approvals::submit_owned(
+        cap.verb, cap.scope.clone(), &launcher.grant_session, "Optional management",
+        Some(launcher.requester.clone()), Some(launcher.uid),
+    ).unwrap();
+    let denied = request();
+    crate::approvals::deny_for_owner(&denied, Some("uid:0".into()), None, Some(launcher.uid)).unwrap();
+    assert!(optional_gui_caps(&app, None, "--gui", &launcher).unwrap().0.is_empty());
+    let expired = request();
+    approve_only_pending(launcher.uid, crate::approvals::GrantDuration::Session);
+    let path = crate::paths::caps_data_dir().join("approvals").join("approved").join(format!("{expired}.json"));
+    let mut record: crate::approvals::Resolved = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    record.decision.grant.as_mut().unwrap().expires_at = 0;
+    std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert!(caps.is_empty());
+    assert_eq!(optional.ungranted, [0, 1]);
+    assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());
+}
+
+#[test]
+fn optional_gui_declarations_never_relax_a_required_panel_right_or_legacy_operation_union() {
+    let _sandbox = approval_sandbox();
+    let mut app = optional_gui_app();
+    app.manifest.desktop.as_mut().unwrap().needs = Some(vec![serde_json::from_value(json!({
+        "verb":"ui.panel","scope":{"kind":"fixed","scope":{"kind":"wild"}},"why":{"en":"Required panel display"}
+    })).unwrap()]);
+    let launcher = delegation(CapSet::new());
+    let refused = optional_gui_caps(&app, None, "--gui", &launcher).err().unwrap();
+    assert_eq!(approval_requests(&refused).len(), 1);
+    let pending = crate::approvals::list_pending_for_owner(Some(launcher.uid));
+    assert_eq!(pending[0].verb, "ui.panel");
+    assert_eq!(pending[0].scope, Scope::Wild);
+    let mut legacy = app_from(USER_MANAGER_MANIFEST);
+    legacy.manifest.desktop = app.manifest.desktop;
+    legacy.manifest.desktop.as_mut().unwrap().needs = None;
+    assert!(optional_gui_caps(&legacy, None, "--gui", &launcher).is_err());
+}
+
+#[test]
+fn optional_gui_unbound_or_unsupported_resources_are_ungranted_without_startup_refusal() {
+    let _sandbox = approval_sandbox();
+    let mut app = optional_gui_app();
+    let desktop = app.manifest.desktop.as_mut().unwrap();
+    desktop.needs = None;
+    desktop.optional_needs = serde_json::from_value(json!([
+        {"verb":"fs.meta","scope":{"kind":"wild"},"why":{"en":"Cannot inherit an unbounded resource"}},
+        {"verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"hardware"}},
+            "when":{"kind":"arg-present","arg":"path"},"why":{"en":"Unbound conditional feature"}},
+        {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":{"en":"Unbound file choice"}},
+        {"verb":"fs.read","scope":{"kind":"fixed","scope":{"kind":"path","value":"/proc"}},"why":{"en":"Forbidden optional mount"}}
+    ])).unwrap();
+    let launcher = delegation(CapSet::from_caps([
+        Cap::new(Verb::FS_META, Scope::Wild),
+        Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware")),
+        Cap::new(Verb::FS_READ, Scope::path("/proc")),
+    ]));
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert!(caps.is_empty());
+    assert_eq!(optional.ungranted, [0, 1, 2, 3]);
+    assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());
+}
+
 #[test]
 fn gui_fixed_needs_require_exact_owner_approval_before_launch() {
     let _sandbox = approval_sandbox();
