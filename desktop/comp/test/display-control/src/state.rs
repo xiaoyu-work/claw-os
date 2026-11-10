@@ -177,6 +177,18 @@ impl CompositorHandler for State {
             SERIAL_COUNTER.next_serial(),
         );
         let pointer = self.seat.get_pointer().unwrap();
+        if !self.dragging {
+            // End the previous synthetic press before moving to another client.
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: 0,
+                    button: 0x110,
+                    state: ButtonState::Released,
+                },
+            );
+        }
         pointer.motion(
             self,
             Some((surface.clone(), (0.0, 0.0).into())),
@@ -187,17 +199,15 @@ impl CompositorHandler for State {
             },
         );
         if !self.dragging {
-            for state in [ButtonState::Released, ButtonState::Pressed] {
-                pointer.button(
-                    self,
-                    &ButtonEvent {
-                        serial: SERIAL_COUNTER.next_serial(),
-                        time: 2,
-                        button: 0x110,
-                        state,
-                    },
-                );
-            }
+            pointer.button(
+                self,
+                &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: 2,
+                    button: 0x110,
+                    state: ButtonState::Pressed,
+                },
+            );
         }
     }
 }
