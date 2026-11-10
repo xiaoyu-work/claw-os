@@ -184,7 +184,7 @@ fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let binding = binding();
     let client = ExtensionHostClient {
-        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+        lease_deadline_ms: Arc::new(AtomicU64::new(binding.expires_at_ms)),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
@@ -234,7 +234,7 @@ fn mcp_gateway_and_host_audit_share_exact_opaque_identity() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let binding = binding();
     let client = ExtensionHostClient {
-        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+        lease_deadline_ms: Arc::new(AtomicU64::new(binding.expires_at_ms)),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
@@ -412,7 +412,7 @@ fn transport_test_client(path: &std::path::Path) -> ExtensionHostClient {
     binding.host_pid = std::process::id();
     binding.host_start_time_ticks = crate::proc::read_start_time_ticks_pub(std::process::id());
     ExtensionHostClient {
-        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+        lease_deadline_ms: Arc::new(AtomicU64::new(binding.expires_at_ms)),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
@@ -421,18 +421,22 @@ fn transport_test_client(path: &std::path::Path) -> ExtensionHostClient {
 }
 
 #[test]
-fn authenticated_heartbeat_renews_only_the_matching_task_client() {
+fn authenticated_heartbeat_survives_client_startup_and_renews_only_its_task() {
     let mut binding = binding();
     binding.expires_at_ms = crate::agentd::grant::now_ms() + 1_000;
     let original_deadline = binding.expires_at_ms;
+    let deadline = Arc::new(AtomicU64::new(original_deadline));
+    let renewed = crate::agentd::grant::now_ms() + 60_000;
+    assert!(renew_current_task_lease("task-a", "task-b", renewed, &deadline).is_err());
+    renew_current_task_lease("task-a", "task-a", renewed, &deadline).unwrap();
     let client = ExtensionHostClient {
-        lease_deadline_ms: AtomicU64::new(original_deadline),
+        lease_deadline_ms: deadline,
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
         audit: None,
     };
-    let renewed = crate::agentd::grant::now_ms() + 60_000;
+    assert_eq!(client.lease_deadline_ms(), renewed);
     client.renew_task_lease("task-a", renewed).unwrap();
     assert_eq!(client.lease_deadline_ms(), renewed);
     assert_eq!(client.binding.expires_at_ms, original_deadline);
@@ -448,7 +452,7 @@ fn authenticated_heartbeat_renews_only_the_matching_task_client() {
 fn task_lease_renewal_rejects_unbounded_deadlines() {
     let binding = binding();
     let client = ExtensionHostClient {
-        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+        lease_deadline_ms: Arc::new(AtomicU64::new(binding.expires_at_ms)),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
