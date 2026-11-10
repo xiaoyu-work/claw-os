@@ -50,6 +50,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `apt-repo/verify-release-security.sh` | Refuse a publication that regresses, is incoherent, or has no authenticated baseline |
 | `deb/tests/test-agentd-packaging.sh` | Worker/extension-host binary, identity, service, and isolation contract |
 | `deb/claw-os-agent/nearby/`, `deb/tests/test_nearby.py` | D-Bus-only Root radio activation, network/link policies and isolated nearby transport package contract |
+| `../core/src/bin/claw-file-manager.rs`, `../desktop/session/data/claw-file-manager.desktop` | Agent-owned unprivileged FileManager1 transport and Desktop-owned session-child-only autostart |
 | `../crates/claw-display-login/MODULE.md`, `../core/src/display_session/MODULE.md` | Native GNU PAM/display helpers, OS-only Agent-to-Desktop interface, private installation fixture and logout boundary |
 | `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |
 | `deb/tests/test-remove-home-overlay.sh` | Merged-tree, metadata, whiteout, and opaque-directory removal regression tests |
@@ -96,6 +97,18 @@ password verifier used by the installed `claw-approval-helper`. Headless/WSL Web
 review and the protected `cos review` path need these without a Desktop package.
 The Web process supplies a process-bound authentication dialog, not permission
 authority; ordinary attended TUI one-shot decisions stay inline.
+
+Agent provides `claw-os-file-manager-v1 (= 1)` and owns only the
+`/usr/lib/cos/bin/claw-file-manager` transport executable. Desktop requires
+that interface and owns its optional COSMIC-only XDG autostart resource.
+The session launches it directly under the authenticated PAM/kernel login,
+including on systemd systems; `X-systemd-skip=true` excludes user-manager
+activation. Agent installs no FileManager1 D-Bus activation file, user unit,
+autostart entry or GNOME/Nautilus configuration. The helper routes bounded
+same-owner URI intents through ordinary `cos app --gui`; package/review,
+delegation, capability, sandbox and GUI lifetime checks remain Root-owned.
+The product owns the UI, separate ELFs and resources. See
+[intent acceptance versus GUI outcomes](README.md#file-manager-desktop-intents).
 
 The fixed helper action requires `auth_self` even without a local logind
 seat/session, as on WSL. This allows a password challenge but never automatic

@@ -4,6 +4,7 @@ extern crate tracing;
 
 mod a11y;
 mod comp;
+mod file_manager;
 mod notifications;
 mod service;
 mod systemd;
@@ -334,6 +335,8 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 	let span = info_span!(parent: None, "cosmic-idle");
 	start_component("cosmic-idle", span, &process_manager, &env_vars).await;
 
+	let file_manager = file_manager::start(&env_vars);
+
 	#[cfg(feature = "autostart")]
 	if !*is_systemd_used() {
 		info!("looking for autostart folders");
@@ -368,6 +371,10 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 		let iter = freedesktop_desktop_entry::Iter::new(directories_to_scan.into_iter());
 		let autostart_env = env_vars.clone();
 		for entry in iter.entries::<&str>(None) {
+			// This OS transport must remain a child of the authenticated session.
+			if entry.appid == file_manager::AUTOSTART_ID {
+				continue;
+			}
 			// we've already tried to execute this!
 			if dedupe.contains(&entry.appid) {
 				continue;
@@ -477,6 +484,9 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 	};
 
 	token.cancel();
+	if let Some(file_manager) = file_manager {
+		file_manager.stop().await;
+	}
 	if let Err(err) = process_manager.stop_process(settings_daemon).await {
 		tracing::error!(?err, "Failed to gracefully stop settings daemon.");
 	} else {

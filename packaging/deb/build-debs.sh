@@ -470,6 +470,8 @@ DISPLAY_HOST_BIN="$(ensure_bin claw-display-host cos)" || {
     echo "error: claw-display-host binary not built" >&2; exit 1; }
 DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session cos)" || {
     echo "error: claw-display-session binary not built" >&2; exit 1; }
+FILE_MANAGER_BIN="$(ensure_bin claw-file-manager cos)" || {
+    echo "error: claw-file-manager binary not built" >&2; exit 1; }
 PAM_DISPLAY_MODULE="$(ensure_bin libpam_claw_display.so claw-display-login "${RUST_TARGET/-musl/-gnu}")" || {
     echo "error: native GNU PAM display module not built (libpam0g-dev is required)" >&2; exit 1; }
 MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
@@ -489,6 +491,7 @@ echo "  :: claw-app-runner        <- $APP_RUNNER_BIN"
 echo "  :: claw-gui-runner        <- $GUI_RUNNER_BIN"
 echo "  :: claw-display-host      <- $DISPLAY_HOST_BIN"
 echo "  :: claw-display-session   <- $DISPLAY_SESSION_BIN"
+echo "  :: claw-file-manager      <- $FILE_MANAGER_BIN"
 echo "  :: pam_claw_display.so    <- $PAM_DISPLAY_MODULE"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
 echo "  :: claw-security-floor    <- $SECURITY_FLOOR_BIN"
@@ -514,6 +517,7 @@ install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
 install -m 755 "$GUI_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-gui-runner"
 install -m 755 "$DISPLAY_SESSION_BIN" "$AGENT_STAGE/usr/local/bin/claw-display-session"
 install -m 755 "$DISPLAY_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-display-host"
+install -m 755 "$FILE_MANAGER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-file-manager"
 case "$DEB_ARCH" in
     amd64) PAM_MULTIARCH=x86_64-linux-gnu ;;
     arm64) PAM_MULTIARCH=aarch64-linux-gnu ;;

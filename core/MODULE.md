@@ -4,7 +4,7 @@
 
 `core/` builds the `cos` CLI/library, the `clawd` system broker, the
 unprivileged `claw-agentd` agent worker, the task-owned
-`claw-extension-host`, and small privileged helper binaries.
+`claw-extension-host`, and small OS helper binaries.
 It owns system authority, capability enforcement, agent orchestration,
 persistence, and structured primitive dispatch.
 
@@ -31,6 +31,7 @@ persistence, and structured primitive dispatch.
 | `src/bin/clawd.rs` | System daemon entry |
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/bin/claw-mail-ai-host.rs` | Trusted Thunderbird launcher for the canonical `/usr/lib/cos/apps/mail-ai` implementation |
+| `src/bin/claw-file-manager.rs` | Unprivileged, same-owner FileManager1 URI intents through the ordinary authenticated `cos app --gui` path |
 | `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
 | `src/display_session/` | Root PAM/display activation, private compositor control, kernel login identity and checked display teardown |
 | `src/clawd/gui/` | Verified native GUI argv, instance-bound transport/authority and checked resource/process retirement |
@@ -114,6 +115,15 @@ available. It never consults those rows or acquires a native exemption.
 The legacy native-host API, authority routes and Mail compatibility executable
 remain unchanged until their paired App/package cutover is consumable.
 
+`claw-file-manager` owns only the standard `org.freedesktop.FileManager1`
+desktop transport. It authenticates every method sender with the bus daemon's
+kernel UID, bounds literal URL arguments and pending launches, and runs only
+`/usr/local/bin/cos app <configured-id> --gui [URIs...]`. The default
+`cosmic-files` is a routing preference, not an App entitlement. No App receives
+the user bus or an invocation bridge. Root still authenticates package,
+ancestry/delegation, owner, PAM/kernel login, review, capabilities, sandbox and
+GUI lifetime. See [desktop activation and intent semantics](../packaging/README.md#file-manager-desktop-intents).
+
 `bridge::run_task_app` preserves ordinary App execution but requires the
 Root registration's persistent data binding. It shares the existing Python
 and polyglot operation implementation, not a second runtime or App kind.
@@ -180,6 +190,9 @@ cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # Update downgrade protection, including the dpkg ordering cross-check
 cargo test -p cos --test security_floor_process -- --test-threads=1
+
+# Same-owner FileManager1 methods and fake-cos/private-bus process fixtures
+cargo test -p cos --bin claw-file-manager -- --test-threads=1
 
 # CI lint
 (cd core && cargo clippy -- -D warnings)

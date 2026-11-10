@@ -52,6 +52,10 @@ path = "src/bin/claw-display-host.rs"
 name = "claw-display-session"
 path = "src/bin/claw-display-session.rs"
 
+[[bin]]
+name = "claw-file-manager"
+path = "src/bin/claw-file-manager.rs"
+
 [features]
 default = []
 

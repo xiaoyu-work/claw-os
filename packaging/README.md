@@ -307,6 +307,68 @@ an App GUI resources. Coordinate the package set and
 the private fixture does not establish a full Debian transaction or image
 acceptance. No release or version change is implied by this source wiring.
 
+### File-manager desktop intents
+
+Agent provides `claw-os-file-manager-v1 (= 1)` and installs the unprivileged
+`/usr/lib/cos/bin/claw-file-manager` (`0755`). Desktop requires that public OS
+interface and installs `/etc/xdg/autostart/claw-file-manager.desktop` as a
+`0644` conffile.
+`cosmic-session` consumes this optional entry directly, retains its child and
+terminates/waits it on session exit or restart. This works independently of
+the general autostart feature. `OnlyShowIn=COSMIC;` limits availability, while
+`X-systemd-skip=true` prevents activation under a user manager without the
+authenticated session's kernel login ancestry. Neither label grants authority.
+Agent-only Ubuntu/WSL installs no activation file, user service, autostart or
+GNOME/Nautilus override and never starts or claims this desktop interface.
+
+The helper owns `org.freedesktop.FileManager1` at
+`/org/freedesktop/FileManager1` without replacing or queuing behind another
+owner. `ShowFolders`, `ShowItems` and `ShowItemProperties` accept URI arrays
+and StartupID. Each authenticates `header.sender()` with the bus daemon's
+`GetConnectionUnixUser` and requires the helper's kernel-derived non-root UID.
+The three methods forward the literal URIs through only
+`/usr/local/bin/cos app <configured-id> --gui [URIs...]`; they do not supply
+method-specific executable flags. StartupID retains the existing ignored
+presentation semantics. No shell, legacy executable, owner/session/socket
+selector or new installed App identity is involved.
+
+`--app <canonical-id>` selects the OS routing preference, defaulting to
+`cosmic-files`, not an exclusive App entitlement. CLI management namespaces
+cannot be targets. Normal Root admission still
+verifies that target's signed GUI, actual ancestry and delegation, owner,
+PAM/kernel login, protected review, capabilities, sandbox and managed lifetime.
+The helper clears inherited authority/override environment, including all
+`COS_*` and `CLAW*` markers, and forwards only basic owner/presentation settings.
+Apps still have no raw user bus, FileManager1 bridge or weakened IPC sandbox.
+
+Each request permits at most 128 URLs, 4096 UTF-8 bytes per URL and 64 KiB of
+JSON-encoded GUI arguments; URLs and the bounded StartupID reject controls.
+Eight pending/running launcher children retain capacity through `wait`.
+Shutdown cancels queued intents and kills/waits owned CLI children; parent
+session death signals the facade, and facade death also kills those CLIs.
+Root, not the facade, owns actual GUI retirement.
+No intent is automatically retried. Diagnostics report only launcher status,
+never URIs, StartupIDs, credentials or captured App output.
+
+A successful D-Bus method means **intent accepted**, not GUI started or
+completed. The ordinary `cos --gui` child awaits Root's real checked outcome;
+process creation alone is not that evidence. The private core bin tests use
+their own bus and an explicit test-only fake executable, never installed
+`cos`, a live GUI, real PAM, accounts or clipboard. Run on Linux:
+
+```bash
+cargo test -p cos --bin claw-file-manager -- --test-threads=1
+cargo test --manifest-path desktop/session/Cargo.toml --locked file_manager::tests
+```
+
+The full Files product/App-owned FileManager1 removal and real authenticated
+COSMIC autostart/GUI acceptance are separate coordinated cutover checks.
+The existing GUI CLI audit in `core/src/router.rs::launch_app_gui` still passes
+raw GUI arguments to `audit::log_entry`; its parent-owned privacy projection
+must be corrected before this transport is installed. Discarding child output
+does not sanitize that durable log, and the facade does not bypass OS auditing.
+This source wiring changes no release, App pin, security floor or update gate.
+
 ## Extension trust roots
 
 `claw-os-agent` creates two root-owned publisher trust roots:

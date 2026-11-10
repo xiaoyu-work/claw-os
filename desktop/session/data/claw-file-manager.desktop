@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Claw OS file manager intents
+Comment=Forward desktop URI intents through the authenticated App GUI Host
+Exec=/usr/lib/cos/bin/claw-file-manager --app cosmic-files
+TryExec=/usr/lib/cos/bin/claw-file-manager
+OnlyShowIn=COSMIC;
+NoDisplay=true
+Terminal=false
+StartupNotify=false
+X-systemd-skip=true

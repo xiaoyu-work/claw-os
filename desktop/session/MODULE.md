@@ -27,7 +27,37 @@ watcher, so a downstream component startup panic cannot leave Tokio runtime
 shutdown waiting on a live display subscription. Normal exits still cancel
 and check the watcher join; startup failures retain their original diagnostic.
 
+## File-manager desktop intents
+
+The optional `data/claw-file-manager.desktop` resource installs in
+`/etc/xdg/autostart/`. `file_manager.rs` consumes this specific XDG entry even
+when the general `autostart` feature is disabled or systemd is running.
+It honors the first user/system resource's Hidden/OnlyShowIn/NotShowIn
+availability, accepts only the Agent-installed helper with an optional
+`--app <canonical-id>`, and starts it directly after authenticated display
+attachment. The helper is an ordinary same-owner child of `cosmic-session`,
+not a systemd-user or D-Bus-activated service. The already-declared desktop
+entry parser is therefore a normal session dependency, not optional startup
+authority.
+
+`X-systemd-skip=true` prevents the user manager's autostart generator from
+starting a second helper without this kernel login ancestry. The general
+non-systemd loop skips the same entry. Session exit/restart sends SIGTERM,
+waits, and escalates only its retained helper if needed; there is no automatic
+restart. Drop also contains startup unwinds. This does not replace the Root
+display watcher, user/display-epoch retirement or PAM logout.
+
+Desktop owns this COSMIC-only resource, while Agent provides the
+`claw-os-file-manager-v1 (= 1)` executable interface. OnlyShowIn is availability,
+not authority: a forged desktop label or a user-manager launch still cannot
+satisfy Root GUI admission without a real PAM/kernel login. Apps keep no raw
+bus/IPC access. Full Files UI/ELF/resources and its coordinated App-owned
+FileManager1 removal remain a separate product cutover.
+
 From this directory, use `cargo build --locked` and `cargo clippy --locked`.
+`cargo test --locked file_manager::tests` checks optional startup selection;
+the core `claw-file-manager` bin tests exercise the actual private-bus
+transport with a test-only executable, not an installed GUI or real login.
 The private [PAM/runtime fixture](../../core/src/display_session/MODULE.md)
 exercises the installed subscription wrapper, credentials, environment
 replacement, FD custody, repeated subscribers and display loss. Its additional
