@@ -2256,7 +2256,12 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
     // With no provider configured for the owner, the honest outcome is
     // a provider failure reported *through the worker* — which is the
     // point: the queue's result now arrives from outside the broker.
-    assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(
+        finished.status,
+        JobStatus::Error,
+        "config-less worker outcome: {:?}",
+        finished.error
+    );
     let error = finished.error.unwrap_or_default();
     assert!(
         error.contains("provider"),
