@@ -162,7 +162,7 @@ fn observation_wire_rejects_owner_path_and_task_mutation_selectors() {
     for field in ["owner_uid", "path", "task_id", "limit"] {
         let mut request = json!({"session": "fixture", "action": "tasks"});
         request[field] = json!("caller-selected");
-        assert!(route.decode_body(request).is_err());
+        assert!((route.decode)(request).is_err());
     }
     let _lock = crate::test_env::lock_env();
     let root = tempfile::tempdir().unwrap();
