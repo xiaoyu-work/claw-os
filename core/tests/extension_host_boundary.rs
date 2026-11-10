@@ -1035,7 +1035,17 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let listener =
         broker::bind_listener(&paths, extension_identity.uid, execution_gid).expect("listener");
     let cgroup_root = CgroupRootGuard::create();
-    let containment = spawn::ContainmentRoot::establish().expect("extension containment");
+    let state = cos::clawd::state::DaemonState::try_new().expect("daemon state");
+    let admission = cos::clawd::transport::limits::Admission::new(
+        cos::clawd::transport::limits::Limits::default(),
+    );
+    let context = cos::agentd::supervisor::BrokerContext::new(
+        state.clone(),
+        admission.clone(),
+        primary_path,
+    )
+    .expect("fixture Root context");
+    let containment = context.initialize_app_custody().expect("extension containment");
     let task_id = "extension-host-integration";
     let task_session = "task-session";
     let host_session = "extension-session";
@@ -1170,17 +1180,6 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .with_task_app_data(&host)
         .with_task_session(Some(task_session_info)),
     );
-    let state = cos::clawd::state::DaemonState::try_new().expect("daemon state");
-    let admission = cos::clawd::transport::limits::Admission::new(
-        cos::clawd::transport::limits::Limits::default(),
-    );
-    cos::agentd::supervisor::BrokerContext::new(
-        state.clone(),
-        admission.clone(),
-        primary_path,
-    )
-    .expect("fixture Root context")
-    .initialize_app_custody();
     let broker_task = tokio::spawn(broker::serve(
         listener,
         lease.clone(),
