@@ -233,6 +233,7 @@ extensions() {
 }
 
 display() {
+    local selection="${1:-display}"
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
     cargo build -p cos --locked --bin cos --bin claw-display-host \
@@ -253,9 +254,14 @@ display() {
     cc -std=c11 -Wall -Wextra -Werror \
         crates/claw-display-login/test/fixtures/pam_login.c \
         -lpam -ldl -o "$CARGO_TARGET_DIR/pam-login-fixture"
-    private="$GITHUB_WORKSPACE/build/gui-authenticated.$BASHPID"
+    private="$GITHUB_WORKSPACE/build/$selection-authenticated.$BASHPID"
     mkdir -p "$GITHUB_WORKSPACE/build"
     mkdir -m0700 "$private"
+    local selectors=()
+    if [[ "$selection" == native-fs ]]; then
+        test -c /dev/fuse
+        selectors=(--native-fs-only)
+    fi
     sudo timeout 240 unshare --mount --net --ipc --uts --fork \
         bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
         "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
@@ -265,7 +271,11 @@ display() {
         "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
         "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
         "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session" \
-        "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop
+        "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop \
+        "${selectors[@]}"
+    if [[ "$selection" == native-fs ]]; then
+        return
+    fi
     sudo timeout 30 unshare --mount --net --ipc --uts --fork \
         "$test_binary" \
         --exact display_session::registry::tests::private_deferred_retirement_reclaims_the_exact_slot_and_workload \
@@ -351,9 +361,10 @@ case "${1:-}" in
     calendar) calendar ;;
     extensions) extensions ;;
     display) display ;;
+    native-fs) display native-fs ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|applets}" >&2
         exit 2
         ;;
 esac

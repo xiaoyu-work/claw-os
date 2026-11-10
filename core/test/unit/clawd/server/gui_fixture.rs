@@ -162,6 +162,20 @@ fn install_packages() {
             desktop["entries"] = serde_json::json!({"applet":{
                 "entry":"gui-widget","exec":"surface","name":{"en":"Independent widget"},"needs":[]
             }});
+            for (name, label, surface_needs) in [
+                ("read", "Private read-only selection", vec![needs[0].clone(), selection[0].clone()]),
+                ("write", "Private write-only selection", vec![needs[0].clone(), selection[1].clone()]),
+                ("both", "Private independent selection rights",
+                    vec![needs[0].clone(), selection[0].clone(), selection[1].clone()]),
+                ("aliases", "Private transport-alias refusal", vec![needs[0].clone()]),
+                ("read-observe", "Private owner-policy retirement",
+                    vec![needs[0].clone(), selection[0].clone(), needs.last().unwrap().clone()]),
+            ] {
+                desktop["entries"][name] = serde_json::json!({
+                    "entry":"gui-probe", "exec":"surface", "name":{"en":label},
+                    "needs":surface_needs
+                });
+            }
             let panel = serde_json::json!({
                 "verb":"ui.panel","scope":{"kind":"fixed","scope":{"kind":"wild"}},
                 "why":{"en":"Show the private overlay fixture"}
@@ -1030,6 +1044,154 @@ fn private_session_startup_failure() {
 #[ignore = "requires the private authenticated PAM/COSMIC/FileManager1 fixture"]
 fn private_file_manager_session() {
     private_gui_fixture(false, true);
+}
+
+#[test]
+#[ignore = "requires the private Root namespace, /dev/fuse, bubblewrap and writable cgroup v2"]
+fn private_native_fs_kernel() {
+    use std::fs::Permissions;
+    use std::io::{Read, Write};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use crate::worker::native_fs::NativeFsView;
+    use crate::worker::policy::{LaunchPolicy, Mount, MountClass, NetworkPolicy, SeccompProfile, StdioPlan, TrustTier};
+
+    fn own(path: &Path) {
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chown(path.as_ptr(), OWNER, OWNER) }, 0);
+    }
+    fn receive(child: &mut Child, expected: &[u8; 4]) {
+        let output = child.stdout.as_mut().unwrap();
+        let mut poll = libc::pollfd { fd: output.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        assert!(unsafe { libc::poll(&mut poll, 1, 15000) } > 0, "native filesystem probe timed out");
+        let mut tag = [0; 4];
+        output.read_exact(&mut tag).unwrap();
+        assert_eq!(&tag, expected);
+    }
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    assert_ne!(std::fs::read_link("/proc/self/ns/mnt").unwrap(), std::fs::read_link("/proc/1/ns/mnt").unwrap());
+    assert_eq!(std::fs::read("/run/gui-fixture/isolated").unwrap(), b"private-v1");
+    assert_eq!(std::fs::read_to_string("/proc/self/loginuid").unwrap().trim(), "4294967295");
+    let cgroup = std::fs::read_to_string("/run/gui-fixture/cgroup").unwrap();
+    assert!(cgroup.trim().starts_with("/sys/fs/cgroup/claw-display-fixture."));
+    let cgroup = Path::new(cgroup.trim());
+    std::fs::write(cgroup.join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
+    let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr).try_init();
+    for ending in ["revoke", "expiry", "worker-failure"] {
+        let source = Path::new("/run/display-home").join(format!("native-fs-source-{ending}"));
+        let data = Path::new("/run/display-home").join(format!("native-fs-data-{ending}"));
+        let mountpoint = Path::new("/run/gui-fixture").join(format!("native-fs-view-{ending}"));
+        for directory in [&source, &data, &source.join("selected-dir"), &source.join("selected-dir/deeper"), &source.join(".ssh")] {
+            std::fs::create_dir(directory).unwrap();
+            std::fs::set_permissions(directory, Permissions::from_mode(0o700)).unwrap();
+            own(directory);
+        }
+        std::fs::create_dir(&mountpoint).unwrap();
+        std::fs::set_permissions(&mountpoint, Permissions::from_mode(0o700)).unwrap();
+        let binary: Vec<u8> = (0_usize..2 * 1024 * 1024 + 29)
+            .map(|index| index.wrapping_mul(37).wrapping_add(11) as u8).collect();
+        let raw = std::ffi::OsString::from_vec(b"binary-\xff".to_vec());
+        for (name, bytes) in [
+            (std::ffi::OsString::from("binary"), binary.as_slice()),
+            ("unselected".into(), b"unselected content".as_slice()),
+            (raw.clone(), b"\0\xffbinary-name\n".as_slice()),
+            ("selected-dir/child".into(), b"selected directory content\0".as_slice()),
+            ("selected-dir/deeper/child".into(), b"selected nested content\xff".as_slice()),
+            (".ssh/secret".into(), b"synthetic credential: must never cross the view".as_slice()),
+        ] {
+            let path = source.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+            own(&path);
+        }
+        std::fs::hard_link(source.join(".ssh/secret"), source.join("hardlink-alias")).unwrap();
+        std::os::unix::fs::symlink(".ssh/secret", source.join("symlink-alias")).unwrap();
+        std::fs::write(source.join("owner-denied"), b"synthetic Root-only file").unwrap();
+        std::fs::set_permissions(source.join("owner-denied"), Permissions::from_mode(0o600)).unwrap();
+
+        let duration = Duration::from_secs(if ending == "expiry" { 15 } else { 60 });
+        let mut view = NativeFsView::create(OWNER, &source, &mountpoint, duration).unwrap();
+        view.health().unwrap();
+        for denied in [Path::new(".ssh/secret"), Path::new("symlink-alias"), Path::new("hardlink-alias"),
+            Path::new("../outside"), Path::new("owner-denied")]
+        {
+            assert!(view.choose_read(denied).is_err(), "Root selection unexpectedly admitted {denied:?}");
+        }
+        let group = session_group(cgroup, &format!("native-fs-{ending}"));
+        let group_path = cgroup.join(format!("login-native-fs-{ending}"));
+        std::fs::write(group_path.join("pids.max"), b"16").unwrap();
+        std::fs::write(group_path.join("memory.max"), b"268435456").unwrap();
+        std::fs::write(group_path.join("cpu.max"), b"100000 100000").unwrap();
+        let directory = claw_display_control::workload::open_directory(&group_path).unwrap();
+        let policy = LaunchPolicy {
+            tier: TrustTier::AppOperation, label: "private-native-fs-kernel".into(),
+            program: "/usr/lib/cos/bin/claw-gui-probe".into(),
+            argv: vec!["native-fs-kernel".into(), "/resource-view".into()],
+            workdir: "/data".into(),
+            mounts: vec![Mount::read_only(&mountpoint, "/resource-view", MountClass::Input),
+                Mount::read_write(&data, "/data", MountClass::AppData)],
+            network: NetworkPolicy::Denied,
+            env: [
+                ("PATH", "/usr/bin:/bin"), ("HOME", "/data"), ("XDG_CONFIG_HOME", "/data/config"),
+                ("XDG_DATA_HOME", "/data/share"), ("XDG_CACHE_HOME", "/data/cache"),
+                ("COS_OWNER_HOME", "/run/display-home"),
+            ].into_iter().map(|(key, value)| (key.into(), value.into())).collect(),
+            limits: crate::worker::policy::Limits { memory_bytes: 268435456, pids_max: 16,
+                runtime: Duration::from_secs(60), ..crate::worker::policy::Limits::operation() },
+            seccomp: SeccompProfile::Strict, stdio: StdioPlan::Streamed, broker: false, umask: 0o077,
+        };
+        let (mut prepared, gate) = crate::worker::linux::prepare_native_fs_fixture(&policy, OWNER, &group).unwrap();
+        let mut child = prepared.command.stdin(Stdio::piped()).stdout(Stdio::piped())
+            .stderr(Stdio::inherit()).spawn().unwrap();
+        view.bind(&ProcessIdentity::child(&child).unwrap(), directory).unwrap();
+        gate.release().unwrap();
+        receive(&mut child, b"META");
+        // This fixture is the trusted selection controller; probe tokens only
+        // synchronize fixed stages and never choose resources or grant rights.
+        view.choose_read(Path::new("binary")).unwrap();
+        view.choose_read(Path::new(&raw)).unwrap();
+        child.stdin.as_mut().unwrap().write_all(b"F").unwrap();
+        receive(&mut child, b"FILE");
+        view.choose_read(Path::new("selected-dir")).unwrap();
+        child.stdin.as_mut().unwrap().write_all(b"D").unwrap();
+        receive(&mut child, b"HELD");
+        let held: Vec<OwnedFd> = std::fs::read_to_string(group_path.join("cgroup.procs")).unwrap()
+            .lines().map(|value| {
+                let pid: i32 = value.parse().unwrap();
+                let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+                assert!(fd >= 0);
+                unsafe { OwnedFd::from_raw_fd(fd as i32) }
+            }).collect();
+        assert!(held.len() >= 3, "probe must retain an escaped process-tree descendant");
+        match ending {
+            "revoke" => view.revoke().unwrap(),
+            "worker-failure" => view.fail_worker_for_fixture().unwrap(),
+            "expiry" => {}
+            _ => unreachable!(),
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() { break status; }
+            assert!(Instant::now() < deadline, "native view did not retire its retained-FD process tree");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(!status.success());
+        assert!(view.health().is_err());
+        claw_display_control::workload::retire_cgroup(
+            claw_display_control::workload::open_directory(&group_path).unwrap().as_fd(), deadline,
+        ).unwrap();
+        for fd in held {
+            let mut poll = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            assert_eq!(unsafe { libc::poll(&mut poll, 1, 0) }, 1, "retained process identity survived retirement");
+        }
+        // Provider source pins are released only after checked process death.
+        drop(prepared.resources);
+        view.retire_checked(deadline).unwrap();
+        assert!(std::fs::read_dir(&mountpoint).unwrap().next().is_none());
+        assert!(!source.join("must-not-exist").exists());
+        assert_eq!(std::fs::read(source.join("binary")).unwrap(), binary);
+        println!("private native FUSE metadata/selection/mmap/{ending} custody passed");
+    }
 }
 
 fn private_gui_fixture(session_only: bool, file_manager_only: bool) {

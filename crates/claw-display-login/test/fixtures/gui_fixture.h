@@ -204,6 +204,11 @@ static int gui_fixture(void) {
                 execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                       "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos", "app",
                       scenario == 0 ? "gui-boundary-zero" : "gui-boundary-test",
+                      scenario == 1 || scenario == 4 || (scenario >= 6 && scenario <= 10) ? "--gui:read" :
+                      scenario == 2 ? "--gui:write" :
+                      scenario == 3 ? "--gui:both" :
+                      scenario == 5 ? "--gui:aliases" :
+                      scenario == 11 ? "--gui:read-observe" :
                       scenario == 12 ? "--gui:applet" :
                       scenario == 13 ? "--gui:panel" :
                       scenario == 14 || scenario == 17 || scenario == 18 ? "--gui:panel-read" :
