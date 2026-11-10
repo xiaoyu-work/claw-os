@@ -83,7 +83,14 @@ pub(in crate::extension_host::spawn) fn chown(path: &Path, uid: u32, gid: u32) {
 }
 
 pub(in crate::extension_host::spawn) fn copy_executable(source: &Path, target: &Path) {
-    std::fs::copy(source, target).unwrap();
+    std::fs::copy(source, target).unwrap_or_else(|error| {
+        panic!(
+            "copy real fixture executable {} ({} bytes) to {}: {error}",
+            source.display(),
+            source.metadata().unwrap().len(),
+            target.display(),
+        )
+    });
     std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).unwrap();
     chown(target, 0, 0);
 }
