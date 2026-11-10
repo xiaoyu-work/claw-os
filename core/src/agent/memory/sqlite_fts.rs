@@ -682,10 +682,10 @@ impl MemoryDb {
              WHERE session_id = ?1
                AND (?3 IS NULL OR ((session_id IN (SELECT value FROM json_each(?3))) != ?4))
              ORDER BY started_at_ms DESC
-             LIMIT ?",
+             LIMIT ?2",
         )?;
         let mut rows = stmt
-            .query_map(params![session_id, limit as i64], |row| {
+            .query_map(params![session_id, limit as i64, self.read_scope(), self.exclude_sessions], |row| {
                 Ok(ToolInvocationRow {
                     session_id: row.get(0)?,
                     tool_call_id: row.get(1)?,
@@ -850,7 +850,8 @@ impl MemoryDb {
              FROM (
                  SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
                  FROM messages
-                 WHERE session_id = ?
+                 WHERE session_id = ?1
+                   AND (?3 IS NULL OR ((session_id IN (SELECT value FROM json_each(?3))) != ?4))
                  ORDER BY ts_ms DESC, id DESC
                  LIMIT ?2
              )

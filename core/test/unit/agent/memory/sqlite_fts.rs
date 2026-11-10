@@ -24,6 +24,43 @@ fn tool_invocations_are_separate_from_messages_and_clear_with_session() {
 }
 
 #[test]
+fn scoped_recent_messages_and_tools_enforce_visibility_before_limits() {
+    let db = db();
+    for session in ["visible", "hidden"] {
+        db.record_message(session, "user", "first").unwrap();
+        db.record_message(session, "assistant", "last").unwrap();
+        for call in ["one", "two"] {
+            db.record_tool_start(session, call, "fixture", "{}")
+                .unwrap();
+        }
+    }
+    for (exclude, allowed) in [(false, "visible"), (true, "hidden")] {
+        let scoped = db
+            .clone()
+            .with_session_scope(&["visible".into()], exclude)
+            .unwrap();
+        for session in ["visible", "hidden"] {
+            let rows = scoped.recent(session, 1).unwrap();
+            let tools = scoped.recent_tool_invocations(session, 1).unwrap();
+            if session == allowed {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].content, "last");
+                assert_eq!(tools.len(), 1);
+            } else {
+                assert!(rows.is_empty());
+                assert!(tools.is_empty());
+            }
+        }
+    }
+    let empty = db.with_session_scope(&[], false).unwrap();
+    assert!(empty.recent("visible", 10).unwrap().is_empty());
+    assert!(empty
+        .recent_tool_invocations("visible", 10)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn render_message_content_uses_underlying_bridged_tool_identity() {
     let message = Message {
         role: Role::Assistant,
@@ -125,10 +162,14 @@ fn recent_replayable_excludes_injected_before_limit_but_recent_retains_them() {
 fn source_reads_and_filtered_search_preserve_provenance_columns() {
     use crate::agent::trust::{LabeledSegment, SourceKind, TrustClass};
     let db = db();
-    let segment = LabeledSegment::of(SourceKind::MemoryNotes, "needle user context")
-        .concat(&LabeledSegment::of(SourceKind::BuiltinToolResult, "needle external content"));
-    let id = db.record_labeled_message("s", "assistant", &segment, segment.content()).unwrap();
-    db.record_injected("s", "memory_notes", "needle injected").unwrap();
+    let segment = LabeledSegment::of(SourceKind::MemoryNotes, "needle user context").concat(
+        &LabeledSegment::of(SourceKind::BuiltinToolResult, "needle external content"),
+    );
+    let id = db
+        .record_labeled_message("s", "assistant", &segment, segment.content())
+        .unwrap();
+    db.record_injected("s", "memory_notes", "needle injected")
+        .unwrap();
 
     let row = db.message(id).unwrap().unwrap();
     assert_eq!(row.trust_class(), TrustClass::UntrustedExternalContent);
@@ -155,17 +196,26 @@ fn injected_context_keeps_exact_bytes_and_labels_beyond_message_preview_limit() 
     let db = db();
     let text = format!("{}TAIL_SENTINEL", "界".repeat(70_000));
     let segment = LabeledSegment::of(SourceKind::SessionExtras, &text);
-    let id = db.record_labeled_message("s", INJECTED_ROLE, &segment, &text).unwrap();
+    let id = db
+        .record_labeled_message("s", INJECTED_ROLE, &segment, &text)
+        .unwrap();
     let row = db.message(id).unwrap().unwrap();
     assert_eq!(row.content, text);
     assert_eq!(row.trust_source(), SourceKind::SessionExtras);
     assert_eq!(row.trust_lineage(), vec![SourceKind::SessionExtras]);
-    let tagged = db.record_injected("s", SourceKind::MemoryNotes.tag(), &text).unwrap();
+    let tagged = db
+        .record_injected("s", SourceKind::MemoryNotes.tag(), &text)
+        .unwrap();
     let row = db.message(tagged).unwrap().unwrap();
     assert_eq!(row.content, format!("[memory_notes]\n{text}"));
     assert_eq!(row.trust_source(), SourceKind::MemoryNotes);
     let ordinary = db.record_message("s", "tool", &text).unwrap();
-    assert!(!db.message(ordinary).unwrap().unwrap().content.contains("TAIL_SENTINEL"));
+    assert!(!db
+        .message(ordinary)
+        .unwrap()
+        .unwrap()
+        .content
+        .contains("TAIL_SENTINEL"));
     assert_eq!(db.recent_replayable("s", 1).unwrap()[0].id, ordinary);
 }
 
@@ -265,7 +315,13 @@ fn search_handles_punctuation_safely() {
 #[test]
 fn literal_fts_terms_preserve_punctuation_instead_of_joining_tokens() {
     let db = db();
-    let id = db.record_message("s", "user", r#"us-west-2 contains body:foo and "quoted" text"#).unwrap();
+    let id = db
+        .record_message(
+            "s",
+            "user",
+            r#"us-west-2 contains body:foo and "quoted" text"#,
+        )
+        .unwrap();
     db.record_message("s", "user", "uswest2 bodyfoo").unwrap();
     for query in ["us-west-2", "body:foo", r#""quoted""#] {
         let hits = db.search(query, 10).unwrap();
@@ -297,7 +353,8 @@ fn has_session_requires_conversation_messages() {
     let db = db();
     db.set_title("claimed", "Title only").unwrap();
     assert!(!db.has_session("claimed").unwrap());
-    db.record_message("claimed", "user", "real history").unwrap();
+    db.record_message("claimed", "user", "real history")
+        .unwrap();
     assert!(db.has_session("claimed").unwrap());
 }
 
