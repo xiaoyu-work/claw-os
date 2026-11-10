@@ -320,6 +320,7 @@ fn assignment(
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
             workspace: home.to_string_lossy().into_owned(),
+            workspace_id: None,
         },
         consent_context: cos::caps::ConsentContext::Attended,
         session: None,
