@@ -274,16 +274,16 @@ impl LaunchResources {
         if let Some(custody) = &self.app_custody {
             custody.gate.release()?;
         }
+        Ok(())
+    }
 
-        pub(crate) fn bind_custody_process(&self, pid: u32) -> Result<(), String> {
-            #[cfg(target_os = "linux")]
-            if let Some(custody) = &self.app_custody {
-                custody.bind_process(pid)?;
-            }
-            #[cfg(not(target_os = "linux"))]
-            let _ = pid;
-            Ok(())
+    pub(crate) fn bind_custody_process(&self, pid: u32) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let Some(custody) = &self.app_custody {
+            custody.bind_process(pid)?;
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
         Ok(())
     }
 

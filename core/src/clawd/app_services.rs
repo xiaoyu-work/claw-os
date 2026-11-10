@@ -1178,35 +1178,35 @@ impl AppServiceManager {
             if let Err(error) = slot.retire().await {
                 errors.push(error);
             }
-
-            pub(crate) async fn retire_app(
-                &self, app: &str, deadline: Instant,
-            ) -> Result<Vec<(u32, String)>, String> {
-                let slots: Vec<_> = self.slots.lock().await.iter()
-                    .filter(|(key, _)| key.app_id == app)
-                    .map(|(key, slot)| (key.owner_uid, slot.clone())).collect();
-                let mut completed = Vec::new();
-                for (owner, slot) in slots {
-                    let mut slot = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), slot.lock())
-                        .await.map_err(|_| "App service calls have not drained before package mutation")?;
-                    if let Some(runtime) = &slot.runtime {
-                        for session in crate::proc::try_registry_sessions_for_owner(owner)? {
-                            if session.parent.as_deref() == Some(runtime.host_session_id.as_str()) && session.app_id.as_deref() == Some(app) {
-                                completed.push((owner, session.session_id));
-                            }
-                        }
-                    }
-                    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), slot.retire())
-                        .await.map_err(|_| "App service cleanup remains pending before package mutation")??;
-                }
-                Ok(completed)
-            }
         }
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors.join("; "))
         }
+    }
+
+    pub(crate) async fn retire_app(
+        &self, app: &str, deadline: Instant,
+    ) -> Result<Vec<(u32, String)>, String> {
+        let slots: Vec<_> = self.slots.lock().await.iter()
+            .filter(|(key, _)| key.app_id == app)
+            .map(|(key, slot)| (key.owner_uid, slot.clone())).collect();
+        let mut completed = Vec::new();
+        for (owner, slot) in slots {
+            let mut slot = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), slot.lock())
+                .await.map_err(|_| "App service calls have not drained before package mutation")?;
+            if let Some(runtime) = &slot.runtime {
+                for session in crate::proc::try_registry_sessions_for_owner(owner)? {
+                    if session.parent.as_deref() == Some(runtime.host_session_id.as_str()) && session.app_id.as_deref() == Some(app) {
+                        completed.push((owner, session.session_id));
+                    }
+                }
+            }
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), slot.retire())
+                .await.map_err(|_| "App service cleanup remains pending before package mutation")??;
+        }
+        Ok(completed)
     }
 }
 

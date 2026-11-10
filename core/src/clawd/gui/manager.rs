@@ -387,16 +387,16 @@ pub(crate) fn retire_app(owner: u32, app: &str, deadline: Instant) -> Result<(),
             deadline,
         )?;
     }
-
-    pub(crate) fn retire_installed_app(app: &str, deadline: Instant) -> Result<Vec<(u32, String)>, String> {
-        let manager = Manager::get()?;
-        let completed = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
-            .values().filter(|job| job.registration.launch.app_id() == app)
-            .map(|job| (job.registration.owner(), job.registration.session_id.clone())).collect();
-        manager.retire_where(|registration, _| registration.launch.app_id() == app, deadline)?;
-        Ok(completed)
-    }
     Ok(())
+}
+
+pub(crate) fn retire_installed_app(app: &str, deadline: Instant) -> Result<Vec<(u32, String)>, String> {
+    let manager = Manager::get()?;
+    let completed = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
+        .values().filter(|job| job.registration.launch.app_id() == app)
+        .map(|job| (job.registration.owner(), job.registration.session_id.clone())).collect();
+    manager.retire_where(|registration, _| registration.launch.app_id() == app, deadline)?;
+    Ok(completed)
 }
 
 pub(crate) fn retire_owner(owner: u32, deadline: Instant) -> Result<(), String> {
