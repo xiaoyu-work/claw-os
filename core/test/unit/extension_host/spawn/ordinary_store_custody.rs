@@ -210,7 +210,7 @@ fn record(directory: &Path) -> Record {
     record
 }
 
-struct RootGroup(PathBuf);
+pub(super) struct RootGroup(pub(super) PathBuf);
 
 impl Drop for RootGroup {
     fn drop(&mut self) {

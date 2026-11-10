@@ -135,7 +135,13 @@ fn task_client(data: &Arc<TaskAppData>) -> ClientIdentity {
             capability_generation: data.binding.capability_generation.clone(),
             host_pid: data.binding.host_pid,
             host_start_time_ticks: data.binding.host_start_time_ticks,
-            task_session: None,
+            task_session: Some(Arc::new(session(
+                data.binding.session_id.as_deref().unwrap(),
+                data.binding.controller_pid,
+                crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+                    crate::caps::Verb::AGENT_INVOKE, crate::caps::Scope::name(APP),
+                )]),
+            ))),
             task_app_data: Some(data.clone()),
         },
     )
@@ -212,6 +218,8 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
     let backing = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     chown(backing.path(), owner.uid, owner.gid);
     mount_tmpfs(c"/run");
+    mount_tmpfs(c"/root");
+    mount_tmpfs(c"/var/lib");
     std::fs::create_dir("/run/lock").unwrap();
     std::fs::set_permissions("/run/lock", std::fs::Permissions::from_mode(0o1777)).unwrap();
     mount_tmpfs(c"/usr/local/bin");
@@ -296,6 +304,21 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
     crate::approvals::system_review::decide(owner.uid, &review.id, true, Some(package)).unwrap();
     crate::approvals::system_review::consume(owner.uid, &review.id, package).unwrap();
     let caps = CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name(APP))]);
+    let group = Path::new("/sys/fs/cgroup")
+        .join(format!("cos-task-data-fixture-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&group).unwrap();
+    let _group = store_custody::RootGroup(group.clone());
+    let _containment = crate::test_env::TestEnvVarGuard::set("CLAWD_EXTENSION_CGROUP_ROOT", &group);
+    let _execution_group = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_EXEC_GROUP", "nogroup");
+    let state = crate::clawd::state::DaemonState::try_new().unwrap();
+    let admission = crate::clawd::transport::limits::Admission::new(
+        crate::clawd::transport::limits::Limits::default(),
+    );
+    let primary = PathBuf::from("/run/task-data-broker.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&primary).unwrap();
+    let root = crate::agentd::supervisor::BrokerContext::new(
+        state.clone(), admission.clone(), primary,
+    ).unwrap().initialize_app_custody().unwrap();
     for (execution_uid, expected) in [(61010, 1), (61011, 3)] {
         let execution = ExtensionIdentity {
             uid: execution_uid,
@@ -321,6 +344,7 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
             .env("COS_DATA_DIR", paths.control_dir.join("data"))
             .env("COS_LOG_DIR", paths.control_dir.join("log"))
             .env("COS_CACHE_DIR", paths.control_dir.join("cache"))
+            .env("COS_BIN", "/usr/local/bin/cos")
             .env("COS_APPS_DIR", "/run/task-apps")
             .env("COS_PROC_DATA_DIR", format!("/run/cos/caps/{}", owner.uid))
             .env("COS_SESSION", "task-host")
@@ -349,6 +373,11 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
         }
         let mut child = command.spawn().unwrap();
         drop(command);
+        let mut host_group = crate::worker::cgroup::create_app(
+            &root, &format!("task-data-{execution_uid}"),
+            &crate::worker::Limits::operation(), None,
+        ).unwrap();
+        host_group.attach(child.id()).unwrap();
         let mut namespace = PrivateMountNamespace::capture(child.id(), &paths.dir, None).unwrap();
         let data = Arc::new(TaskAppData::new(
             owner.clone(),
@@ -379,11 +408,10 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
             }).is_err());
             assert!(data.views.lock().unwrap().is_empty());
         }
-        crate::proc::register_session_for_owner(
-            session("task-host", child.id(), caps.clone()),
-            owner.uid,
-        )
-        .unwrap();
+        let mut transport = session("task-host", child.id(), caps.clone());
+        transport.parent = data.binding.session_id.clone();
+        transport.command[1] = data.binding.task_id.clone();
+        crate::proc::register_session_for_owner(transport, owner.uid).unwrap();
         crate::storage::install_routed_extension_reader(owner.uid, execution.uid).unwrap();
         for operation in ["absent", "denied"] {
             let request = serde_json::json!({
@@ -406,10 +434,8 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
             .route()
             .decode)(invalid)
         .is_err());
-        let state = crate::clawd::state::DaemonState::try_new().unwrap();
-        let admission = crate::clawd::transport::limits::Admission::new(
-            crate::clawd::transport::limits::Limits::default(),
-        );
+        let state = state.clone();
+        let admission = admission.clone();
         let (stop, mut stopped) = tokio::sync::oneshot::channel();
         let broker = tokio::spawn(async move {
             let mut refuse_bind = true;
@@ -474,6 +500,8 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
         let count = data.views.lock().unwrap().len();
         namespace.cleanup().unwrap();
         paths.cleanup().unwrap();
+        host_group.retire_checked(Instant::now() + Duration::from_secs(5)).unwrap();
+        host_group.remove_checked().unwrap();
         crate::proc::deregister_session_for_owner("task-host", owner.uid);
         crate::storage::remove_routed_extension_reader(owner.uid, execution.uid).unwrap();
         assert!(

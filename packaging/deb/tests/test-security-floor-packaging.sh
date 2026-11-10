@@ -783,8 +783,8 @@ grep -Fxq 'DPkg::Tools::Options::/usr/lib/cos/apt/security-floor-hook::Version "
     || fail "the hook must be registered for protocol version 2"
 grep -q 'if \[' "$HOOK_CONF" \
     && fail "the hook command must not be a shell fragment"
-apt-config -c "$HOOK_CONF" dump 2>/dev/null \
-    | grep -Fq 'DPkg::Tools::options::/usr/lib/cos/apt/security-floor-hook::Version "2";' \
+[[ "$(apt-config -c "$HOOK_CONF" shell hook_version \
+    'DPkg::Tools::Options::/usr/lib/cos/apt/security-floor-hook::Version' 2>/dev/null)" == "hook_version='2'" ]] \
     || fail "APT does not parse the hook registration as intended"
 ok "the APT hook registration parses to exactly the intended keys"
 
