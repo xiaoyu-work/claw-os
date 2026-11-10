@@ -1427,7 +1427,7 @@ fn clawd_request(
     params: serde_json::Value,
 ) -> Result<serde_json::Value, ClawdCallError> {
     let response = crate::clawd::client::request_blocking(
-        crate::paths::clawd_socket_path(),
+        crate::clawd::config::socket_path(),
         crate::clawd::protocol::Request::build(command, params),
     )
     .map_err(|error| ClawdCallError {
