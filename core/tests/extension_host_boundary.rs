@@ -974,10 +974,20 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let execution_gid =
         cos::agentd::spawn::resolve_isolated_execution_gid().expect("isolated execution gid");
     let env = TestEnvironment::new(uid, execution_gid).expect("test environment");
-    assert!(
-        cos::apps::find(env._apps.path(), "echo-app").is_some(),
-        "echo App fixture is not discoverable"
-    );
+    let app = cos::apps::find(env._apps.path(), "echo-app")
+        .expect("echo App fixture is discoverable");
+    let package = app.require_verified().expect("verified echo App fixture");
+    let review = cos::approvals::system_review::submit(
+        uid,
+        cos::approvals::system_review::ReviewKind::AppActivation,
+        package,
+        "private extension boundary fixture".to_string(),
+    )
+    .expect("fixture activation review");
+    cos::approvals::system_review::decide(uid, &review.id, true, Some(package))
+        .expect("fixture owner decision");
+    cos::approvals::system_review::consume(uid, &review.id, package)
+        .expect("fixture activation confirmation");
     let registration_path = std::env::var("COS_EXTENSION_BOUNDARY_REGISTRATIONS").unwrap();
     let registrations: HashMap<String, cos::extension_host::protocol::AgentExtensionRegistration> =
         serde_json::from_slice(&std::fs::read(registration_path).unwrap()).unwrap();
