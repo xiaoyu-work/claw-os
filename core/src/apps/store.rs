@@ -1,7 +1,9 @@
 //! Authenticated official release metadata and package-local Web resources.
 
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::io::{Read, Write};
+#[cfg(test)]
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,6 +20,7 @@ pub(crate) const REPOSITORY: &str = "xiaoyu-work/clawos-app";
 pub(crate) const INDEX_URL: &str = "https://xiaoyu-work.github.io/clawos-app/store/index.json";
 pub(crate) const ARCHIVE_FINGERPRINT: &str = "ADBA1957E712B6C80B4CC8736C044D6F411416AF";
 pub(crate) const MAX_METADATA: usize = 8 * 1024 * 1024;
+#[cfg(test)]
 pub(crate) const MAX_DOWNLOAD: u64 = 256 * 1024 * 1024;
 pub(crate) const WEB_DESCRIPTOR: &str = "web-ui.json";
 pub(crate) const WEB_PROTOCOL: &str = "claw.web-app/v1";
@@ -33,7 +36,26 @@ pub(crate) struct Catalog {
     pub generation: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub packages: Vec<AptPackage>,
     pub apps: Vec<Record>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AptPackage {
+    pub package: String,
+    pub version: String,
+    pub architecture: String,
+    pub size: u64,
+    pub sha256: String,
+    pub apps: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AptDelivery {
+    pub kind: String,
+    pub package_sha256: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +71,7 @@ pub(crate) struct Record {
     pub release_tag: String,
     pub display: Display,
     pub web_ui: WebBinding,
+    pub delivery: AptDelivery,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -144,11 +167,13 @@ impl Catalog {
         }
         let catalog: Self = serde_json::from_slice(bytes)
             .map_err(|_| "The official App Store catalog has an invalid shape".to_string())?;
-        if catalog.schema != "claw.app-store/v1"
+        if catalog.schema != "claw.app-store/v2"
             || catalog.repository != REPOSITORY
             || catalog.runtime_abi != 1
             || catalog.apps.is_empty()
             || catalog.apps.len() > 1000
+            || catalog.packages.is_empty()
+            || catalog.packages.len() > 10000
             || catalog.generation.is_empty()
             || catalog.generation.starts_with('0')
             || !catalog.generation.bytes().all(|byte| byte.is_ascii_digit())
@@ -162,14 +187,36 @@ impl Catalog {
                 "App Store catalog identity, ABI or authenticated freshness is invalid".into(),
             );
         }
+        let mut packages = BTreeSet::new();
+        let mut digests = BTreeSet::new();
+        for package in &catalog.packages {
+            package.validate()?;
+            if !packages.insert((&package.package, &package.version, &package.architecture))
+                || !digests.insert(&package.sha256)
+            {
+                return Err("App Store has ambiguous or duplicate Debian package bindings".into());
+            }
+        }
         let mut identities = BTreeSet::new();
         for record in &catalog.apps {
             record.validate()?;
+            catalog.apt_package(record)?;
             if !identities.insert((&record.app_id, &record.architecture)) {
                 return Err("App Store catalog has duplicate App identities".into());
             }
         }
         Ok(catalog)
+    }
+
+    pub(crate) fn apt_package(&self, record: &Record) -> Result<&AptPackage, String> {
+        self.packages
+            .iter()
+            .find(|package| {
+                package.sha256 == record.delivery.package_sha256
+                    && package.architecture == record.architecture
+                    && package.apps.contains(&record.app_id)
+            })
+            .ok_or_else(|| "The App is not bound to its authenticated Debian package".into())
     }
 
     pub(crate) fn select(&self, app_id: &str, checksum: &str) -> Result<Record, String> {
@@ -185,6 +232,33 @@ impl Catalog {
                 "The selected App release is unavailable for this architecture; refresh the Store"
                     .into()
             })
+    }
+}
+
+impl AptPackage {
+    fn validate(&self) -> Result<(), String> {
+        if self.package.len() < 2
+            || self.package.len() > 255
+            || !self.package.bytes().enumerate().all(|(index, byte)| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || index > 0 && b"+.-".contains(&byte)
+            })
+            || self.version.is_empty()
+            || self.version.len() > 255
+            || self.version.starts_with('-')
+            || crate::update::debver::Version::parse(&self.version).is_err()
+            || !matches!(self.architecture.as_str(), "all" | "amd64" | "arm64")
+            || self.size == 0
+            || self.size > 1024 * 1024 * 1024
+            || !valid_sha256(&self.sha256)
+            || self.apps.len() > 1000
+            || self.apps.iter().any(|app| !identifier(app, true))
+            || self.apps.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err("Invalid App Store Debian package inventory".into());
+        }
+        Ok(())
     }
 }
 
@@ -233,17 +307,12 @@ impl Record {
             || self.web_ui.path != WEB_DESCRIPTOR
             || self.web_ui.entry != "web/index.html"
             || !valid_sha256(&self.web_ui.sha256)
+            || self.delivery.kind != "apt"
+            || !valid_sha256(&self.delivery.package_sha256)
         {
             return Err("App Store release metadata is invalid or not package-bound".into());
         }
         Ok(())
-    }
-
-    pub(crate) fn download_url(&self) -> String {
-        format!(
-            "https://github.com/{REPOSITORY}/releases/download/{}/{}",
-            self.release_tag, self.artifact.file
-        )
     }
 
     pub(crate) fn verify_package(&self, package: &VerifiedPackage) -> Result<(), String> {
@@ -485,6 +554,7 @@ async fn verify_signature(
     Ok(())
 }
 
+#[cfg(test)]
 fn check_tar_headers(source: &Path) -> Result<(), String> {
     let file = std::fs::File::open(source).map_err(|error| error.to_string())?;
     let mut stream = flate2::read::MultiGzDecoder::new(file);
@@ -538,6 +608,7 @@ fn check_tar_headers(source: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn extract_snapshot(source: &Path, destination: &Path) -> Result<(), String> {
     check_tar_headers(source)?;
     std::fs::create_dir(destination).map_err(|error| error.to_string())?;

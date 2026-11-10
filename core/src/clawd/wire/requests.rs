@@ -50,6 +50,13 @@ pub struct AppStoreRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AppStoreAptHook {
+    pub request_id: Token<32>,
+    pub files: Vec<Text<4096>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppStoreApp {
     pub app_id: Name,
 }

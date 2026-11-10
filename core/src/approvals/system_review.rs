@@ -52,6 +52,45 @@ pub struct ReviewRecord {
     pub decided_at: Option<u64>,
     pub decided_by: Option<u32>,
     pub inherited_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryReview>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryReview {
+    pub digest: String,
+    pub packages: Vec<DeliveryPackage>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryPackage {
+    pub package: String,
+    pub version: String,
+    pub architecture: String,
+}
+
+impl DeliveryReview {
+    fn validate(&self) -> Result<(), String> {
+        if !crate::apps::store::valid_sha256(&self.digest)
+            || self.packages.is_empty()
+            || self.packages.len() > 512
+        {
+            return Err("invalid bounded App delivery plan".into());
+        }
+        let mut packages = std::collections::BTreeSet::new();
+        for package in &self.packages {
+            if [&package.package, &package.version, &package.architecture]
+                .iter()
+                .any(|value| value.is_empty() || value.len() > 255 || value.chars().any(char::is_control))
+                || !packages.insert((&package.package, &package.architecture))
+            {
+                return Err("invalid or duplicate App delivery package".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ReviewRecord {
@@ -172,6 +211,12 @@ fn read_record(path: &Path) -> Result<ReviewRecord, String> {
     {
         return Err("system review does not match its App permission snapshot".into());
     }
+    if let Some(delivery) = &record.delivery {
+        if record.kind != ReviewKind::AppInstall {
+            return Err("delivery plans require an App installation review".into());
+        }
+        delivery.validate()?;
+    }
     if matches!(
         record.state,
         ReviewState::Approved | ReviewState::Denied | ReviewState::Consumed
@@ -243,6 +288,26 @@ pub fn submit(
     package: &VerifiedPackage,
     requester: String,
 ) -> Result<ReviewRecord, String> {
+    submit_with_delivery(owner, kind, package, requester, None)
+}
+
+pub fn submit_delivery(
+    owner: u32,
+    package: &VerifiedPackage,
+    requester: String,
+    delivery: DeliveryReview,
+) -> Result<ReviewRecord, String> {
+    delivery.validate()?;
+    submit_with_delivery(owner, ReviewKind::AppInstall, package, requester, Some(delivery))
+}
+
+fn submit_with_delivery(
+    owner: u32,
+    kind: ReviewKind,
+    package: &VerifiedPackage,
+    requester: String,
+    delivery: Option<DeliveryReview>,
+) -> Result<ReviewRecord, String> {
     let (manifest, review) = snapshot(package)?;
     let package_ref = PackageRef::of(package);
     let submitted_at = now()?;
@@ -263,13 +328,15 @@ pub fn submit(
                 && record.package == package_ref
                 && record.contract_digest == review.contract_digest
                 && record.source_dir == package.dir()
+                && record.delivery == delivery
             {
                 return Ok(record.clone());
             }
         }
         let owner_generation = current_generation(owner, &manifest.id)?;
         let accepted = existing.iter().rev().find(|record| {
-            record.owner_generation == owner_generation
+            delivery.is_none()
+                && record.owner_generation == owner_generation
                 && record.state == ReviewState::Consumed
                 && record.package.id == package_ref.id
                 && record.package.publisher_key_id == package_ref.publisher_key_id
@@ -300,6 +367,7 @@ pub fn submit(
             decided_at: accepted.map(|_| submitted_at),
             decided_by: accepted.and_then(|record| record.decided_by),
             inherited_from: accepted.map(|record| record.id.clone()),
+            delivery,
         };
         save(&record)?;
         Ok(record)
@@ -353,9 +421,30 @@ pub fn decide(
 }
 
 pub fn consume(owner: u32, id: &str, package: &VerifiedPackage) -> Result<ReviewRecord, String> {
+    consume_with_delivery(owner, id, package, None)
+}
+
+pub fn consume_delivery(
+    owner: u32,
+    id: &str,
+    package: &VerifiedPackage,
+    digest: &str,
+) -> Result<ReviewRecord, String> {
+    consume_with_delivery(owner, id, package, Some(digest))
+}
+
+fn consume_with_delivery(
+    owner: u32,
+    id: &str,
+    package: &VerifiedPackage,
+    digest: Option<&str>,
+) -> Result<ReviewRecord, String> {
     super::ensure_dirs().map_err(|error| format!("approvals directory: {error}"))?;
     crate::filelock::with_exclusive_path_lock(&super::grant_lock_path(), || {
         let mut record = get(owner, id)?;
+        if record.delivery.as_ref().map(|plan| plan.digest.as_str()) != digest {
+            return Err("App delivery plan differs from the owner's protected confirmation".into());
+        }
         if record.effective_state()? != ReviewState::Approved {
             return Err("App installation requires an approved, current system review".into());
         }

@@ -57,7 +57,7 @@ jobs:
       # rather than skip if it is somehow still unavailable, so a
       # missing dependency cannot turn those tests into a no-op.
       - name: Install worker sandbox dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna openssl libpam0g-dev dbus-daemon iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna python3-apt openssl libpam0g-dev dbus-daemon iproute2
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -161,3 +161,4 @@ jobs:
           python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src
           packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py
           scripts/tests/test_app_platform.py packaging/deb/tests/test_applet_provider.py
+          core/tests/test_app_apt_metadata.py

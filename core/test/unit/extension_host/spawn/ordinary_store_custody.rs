@@ -189,12 +189,21 @@ fn record(directory: &Path) -> Record {
             path: "web-ui.json".into(), sha256: store::sha256(&descriptor),
             entry: "web/index.html".into(),
         },
+        delivery: store::AptDelivery {
+            kind: "apt".into(), package_sha256: store::sha256(b"development-directory-fixture"),
+        },
     };
     let now = chrono::Utc::now();
     let catalog = store::Catalog {
-        schema: "claw.app-store/v1".into(), repository: store::REPOSITORY.into(),
+        schema: "claw.app-store/v2".into(), repository: store::REPOSITORY.into(),
         runtime_abi: 1, generation: "1".into(), issued_at: now,
-        expires_at: now + chrono::Duration::hours(1), apps: vec![record.clone()],
+        expires_at: now + chrono::Duration::hours(1),
+        packages: vec![store::AptPackage {
+            package: "claw-app-custody-fixture".into(), version: "2.0.0".into(),
+            architecture: "all".into(), size: 1,
+            sha256: record.delivery.package_sha256.clone(), apps: vec![ID.into()],
+        }],
+        apps: vec![record.clone()],
     };
     store::Catalog::decode(&serde_json::to_vec(&catalog).unwrap(), now).unwrap();
     record.verify_package(package).unwrap();

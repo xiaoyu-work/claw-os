@@ -75,7 +75,8 @@ and agent tasks.
 | `agent_account.rs` | Fixed owner-scoped Copilot sign-in status/logout; no caller-selected credential and no mutation while tasks are active |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_execution.rs`, `app_mutation.rs` | Retained ordinary App process/cgroup/provider custody and global-per-App Root admission fences, independent of registry rows or owner permission policy |
-| `app_store.rs` | Protected owner review, bounded Store commit controller, checked cross-owner retirement before publication, and refusal of dpkg-owned directory replacement |
+| `app_store.rs`, `app_store/apt.rs` | Official APT product/dependency plans, per-App protected delivery confirmation, checked cross-owner retirement and retained indeterminate-admission state |
+| `../bin/claw-app-apt-hook.rs`, `../../../tools/app_apt_metadata.py` | Tracked Root APT child gate and exact-hash authenticated APT-source inspection; no App-owned root hooks or signature-as-grant |
 | `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
 | `gui/`, `app_sessions/gui.rs` | Root-supervised default/named GUI instances; signed entry/selector binding, exclusive GUI needs or legacy operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
 | `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
@@ -141,6 +142,17 @@ cannot invoke the human `permission.apps` or privileged approval routes.
 The service does not execute another App or grant its requested capabilities.
 Target manifests, trust ceilings, supported scopes and checked GUI retirement
 remain enforced; restoration is only a request to the trusted OS presenter.
+
+Official Store v2 binds each App to a final signed Debian package inventory.
+Preparation verifies the actual App bytes and discloses the concrete APT
+dependency plan for every contained App. Delivery confirmations cannot inherit
+ordinary App permission acceptance, and neither grants runtime or AI access.
+The protected pre-dpkg helper is tied to the controller's actual APT pid/start
+identity and exact archive set; its request ID is correlation, not authority.
+Unconfirmed post-dispatch effects remain indeterminate and block admission;
+read-only outcome checking cannot replay a consumed confirmation. Private APT,
+native/resource and independent CLI/trust/package-path acceptance remain
+publication prerequisites, not consequences of this source implementation.
 
 App permission restores are non-execution receipts in the existing approvals store,
 bound to the exact owner/App/capability and both App and owner/session

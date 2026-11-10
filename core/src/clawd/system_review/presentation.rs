@@ -84,6 +84,18 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
         })
     }).collect::<Result<Vec<_>, String>>()?;
     let mut disclosures = Vec::new();
+    if let Some(delivery) = &record.delivery {
+        disclosures.push(ReviewDetail {
+            label: "APT delivery plan digest (comparison only)".into(),
+            value: delivery.digest.clone(),
+        });
+        for package in &delivery.packages {
+            disclosures.push(ReviewDetail {
+                label: format!("Install or upgrade package {}", package.package),
+                value: format!("{} [{}]", package.version, package.architecture),
+            });
+        }
+    }
     let arguments: std::collections::BTreeMap<_, _> = disclosure
         .permissions
         .iter()

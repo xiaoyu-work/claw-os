@@ -8,12 +8,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::approvals::system_review::{self as reviews, ReviewKind};
+#[cfg(test)]
 use crate::apps::installation::DirectoryInstall;
 use crate::apps::store::{self, Catalog, Record};
 use crate::provenance::runtime::PackageRef;
 
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
+
+#[cfg(target_os = "linux")]
+mod apt;
 
 const STORE_ROOT: &str = "/var/lib/cos/app-store";
 static SERIALIZER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -34,6 +38,9 @@ struct Prepared {
     record: Record,
     expires_at: DateTime<Utc>,
     phase: String,
+    #[cfg(target_os = "linux")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apt: Option<apt::Plan>,
 }
 
 fn records() -> Result<Vec<Prepared>, String> {
@@ -72,7 +79,7 @@ fn expire_requests() -> Result<(), String> {
                 std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
             }
         }
-        if !matches!(record.phase.as_str(), "ready" | "committing")
+        if !matches!(record.phase.as_str(), "ready" | "committing" | "installing" | "indeterminate" | "cleanup_pending")
             && record.expires_at + chrono::Duration::days(1) < Utc::now()
         {
             let directory = root().join("staging").join(&record.request_id);
@@ -95,8 +102,15 @@ pub async fn requests(_params: Value, client: &ClientIdentity) -> Result<Value, 
         .into_iter()
         .filter(|record| record.owner_uid == owner_uid)
         .map(|record| {
+            let mut review_ids = vec![record.review_id.clone()];
+            #[cfg(target_os = "linux")]
+            if let Some(plan) = &record.apt {
+                review_ids.extend(plan.reviews.iter().filter(|review| review.review_id != record.review_id)
+                    .map(|review| review.review_id.clone()));
+            }
             json!({
                 "request_id": record.request_id, "review_id": record.review_id,
+                "review_ids": review_ids,
                 "app_id": record.record.app_id, "name": record.record.display.name,
                 "phase": record.phase, "expires_at": record.expires_at,
             })
@@ -280,6 +294,7 @@ fn request_path(id: &str) -> Result<PathBuf, String> {
     Ok(root().join("requests").join(format!("{id}.json")))
 }
 
+#[cfg(test)]
 fn source_path(id: &str) -> Result<PathBuf, String> {
     request_path(id)?;
     Ok(root().join("staging").join(id).join("package"))
@@ -287,13 +302,15 @@ fn source_path(id: &str) -> Result<PathBuf, String> {
 
 fn prepared(id: &str, owner_uid: u32) -> Result<Prepared, String> {
     let value: Prepared = read_json(&request_path(id)?)?;
-    if value.owner_uid != owner_uid || value.request_id != id || value.expires_at <= Utc::now() {
+    if value.owner_uid != owner_uid || value.request_id != id
+        || matches!(value.phase.as_str(), "ready" | "cleanup_pending") && value.expires_at <= Utc::now()
+    {
         return Err("This App installation request belongs to another owner or has expired".into());
     }
-    if !matches!(value.phase.as_str(), "ready" | "cleanup_pending") {
-        return Err(
-            "The installation outcome must be inspected before preparing another request".into(),
-        );
+    if !matches!(value.phase.as_str(), "ready" | "cleanup_pending" | "committing" | "installing"
+        | "indeterminate" | "installed" | "failed" | "expired" | "cancelled")
+    {
+        return Err("The App installation request has an invalid protected phase".into());
     }
     Ok(value)
 }
@@ -307,10 +324,8 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
     }
     let _guard = SERIALIZER.lock().await;
     expire_requests().map_err(BrokerError::unavailable)?;
-    let record = catalog(false)
-        .await
-        .and_then(|catalog| catalog.select(&app_id, &checksum))
-        .map_err(BrokerError::unavailable)?;
+    let catalog = catalog(false).await.map_err(BrokerError::unavailable)?;
+    let record = catalog.select(&app_id, &checksum).map_err(BrokerError::unavailable)?;
     let active = records()
         .map_err(BrokerError::unavailable)?
         .into_iter()
@@ -323,8 +338,15 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
             && value.record.artifact.sha256 == checksum
     }) {
         let review = super::system_review::show(json!({"id": existing.review_id}), client).await?;
+        let mut bundle = Vec::new();
+        #[cfg(target_os = "linux")]
+        if let Some(plan) = &existing.apt {
+            for item in &plan.reviews {
+                bundle.push(super::system_review::show(json!({"id": item.review_id}), client).await?);
+            }
+        }
         return Ok(json!({"request_id": existing.request_id, "app_id": app_id,
-            "status": "review_required", "review": review}));
+            "status": "review_required", "review": review, "reviews": bundle, "delivery": "apt"}));
     }
     if active.len() >= 16
         || active
@@ -337,57 +359,15 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
             "Finish or cancel a pending App installation before downloading another",
         ));
     }
-    if record.artifact.size > store::MAX_DOWNLOAD {
-        return Err(BrokerError::unavailable(
-            "This App exceeds the current Host's verified payload limit",
-        ));
-    }
-    let http = store::http_client().map_err(BrokerError::unavailable)?;
-    let bytes = store::fetch_bytes(&http, &record.download_url(), store::MAX_DOWNLOAD as usize)
-        .await
-        .map_err(BrokerError::unavailable)?;
-    if bytes.len() as u64 != record.artifact.size || store::sha256(&bytes) != checksum {
-        return Err(BrokerError::authorization(
-            "App download does not match its signed release digest",
-        ));
-    }
+    #[cfg(not(target_os = "linux"))]
+    return Err(BrokerError::unavailable("Official App installation requires Linux APT"));
+    #[cfg(target_os = "linux")]
+    {
     let request_id = uuid::Uuid::new_v4().simple().to_string();
     let directory = root().join("staging").join(&request_id);
     secure_directory(&directory, 0o755).map_err(BrokerError::unavailable)?;
-    let archive = directory.join("archive.tar.gz");
-    std::fs::write(&archive, &bytes)
-        .map_err(|error| BrokerError::unavailable(error.to_string()))?;
-    drop(bytes);
-    let source = directory.join("package");
-    let selected = record.clone();
-    let prepare_id = request_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        store::extract_snapshot(&archive, &source)?;
-        let install = DirectoryInstall::prepare(&source, &apps_root())?;
-        let app = install.preview()?;
-        let package = app.require_verified()?;
-        selected.verify_package(package)?;
-        let review = reviews::submit(
-            owner_uid,
-            ReviewKind::AppInstall,
-            package,
-            format!("App Store install {prepare_id}"),
-        )?;
-        let pending = Prepared {
-            owner_uid,
-            request_id: prepare_id.clone(),
-            review_id: review.id.clone(),
-            record: selected,
-            expires_at: Utc::now() + chrono::Duration::hours(1),
-            phase: "ready".into(),
-        };
-        write_json(&request_path(&prepare_id)?, &pending)?;
-        Ok::<_, String>(review.id)
-    })
-    .await
-    .map_err(|error| BrokerError::unavailable(error.to_string()))?;
-    let review_id = match result {
-        Ok(id) => id,
+    let plan = match apt::prepare(owner_uid, &request_id, &record, &catalog).await {
+        Ok(plan) => plan,
         Err(error) => {
             std::fs::remove_dir_all(&directory).map_err(|cleanup| {
                 BrokerError::unavailable(format!("{error}; cleanup failed: {cleanup}"))
@@ -395,11 +375,27 @@ pub async fn prepare(params: Value, client: &ClientIdentity) -> Result<Value, Br
             return Err(BrokerError::authorization(error));
         }
     };
-    let review = super::system_review::show(json!({"id": review_id}), client).await?;
+    let review_id = plan.reviews.iter().find(|review| review.app_id == app_id)
+        .ok_or_else(|| BrokerError::authorization("APT plan has no selected App review"))?
+        .review_id.clone();
+    let mut disclosures = Vec::new();
+    for review in &plan.reviews {
+        disclosures.push(super::system_review::show(json!({"id": review.review_id}), client).await?);
+    }
+    let pending = Prepared {
+        owner_uid, request_id: request_id.clone(), review_id: review_id.clone(),
+        record, expires_at: Utc::now() + chrono::Duration::minutes(30),
+        phase: "ready".into(), apt: Some(plan),
+    };
+    write_json(&request_path(&request_id).map_err(BrokerError::unavailable)?, &pending)
+        .map_err(BrokerError::unavailable)?;
+    let review = disclosures.iter().find(|review| review.get("id").and_then(Value::as_str) == Some(review_id.as_str()))
+        .cloned().ok_or_else(|| BrokerError::unavailable("Selected App review is unavailable"))?;
     Ok(json!({
         "request_id": request_id, "app_id": app_id, "status": "review_required",
-        "review": review,
+        "review": review, "reviews": disclosures, "delivery": "apt",
     }))
+    }
 }
 
 pub async fn commit(
@@ -408,12 +404,55 @@ pub async fn commit(
 ) -> Result<Value, BrokerError> {
     let owner_uid = owner(client).await?;
     let id = super::permissions::required_string(&params, "request_id")?;
+    let pending = prepared(&id, owner_uid).map_err(BrokerError::authorization)?;
+    let catalog = if matches!(pending.phase.as_str(), "indeterminate" | "installed") {
+        None
+    } else {
+        Some(catalog(false).await.map_err(BrokerError::authorization)?)
+    };
+    commit_authenticated(state, owner_uid, id, catalog).await
+}
+
+async fn commit_authenticated(
+    state: &super::state::DaemonState,
+    owner_uid: u32,
+    id: String,
+    catalog: Option<Catalog>,
+) -> Result<Value, BrokerError> {
     let _guard = SERIALIZER.lock().await;
     let mut pending = prepared(&id, owner_uid).map_err(BrokerError::authorization)?;
-    catalog(false)
-        .await
-        .and_then(|catalog| catalog.select(&pending.record.app_id, &pending.record.artifact.sha256))
+    #[cfg(target_os = "linux")]
+    if matches!(pending.phase.as_str(), "indeterminate" | "installed") {
+        let app = apt::verify_installed(&pending).await.map_err(BrokerError::indeterminate)?;
+        pending.phase = "installed".into();
+        write_json(&request_path(&id).map_err(BrokerError::indeterminate)?, &pending)
+            .map_err(BrokerError::indeterminate)?;
+        return Ok(json!({"status": "installed", "app": app, "recovered": true}));
+    }
+    let catalog = catalog.ok_or_else(|| BrokerError::authorization("A fresh authenticated APT catalog is required"))?;
+    let current = catalog.select(&pending.record.app_id, &pending.record.artifact.sha256)
         .map_err(BrokerError::authorization)?;
+    if serde_json::to_value(current).map_err(|error| BrokerError::unavailable(error.to_string()))?
+        != serde_json::to_value(&pending.record).map_err(|error| BrokerError::unavailable(error.to_string()))?
+    {
+        return Err(BrokerError::authorization("The selected release changed after review; prepare a new APT plan"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let plan = pending.apt.as_ref().ok_or_else(|| BrokerError::authorization(
+            "This legacy snapshot request cannot install official Apps; prepare an APT transaction",
+        ))?;
+        if !matches!(pending.phase.as_str(), "ready" | "cleanup_pending") {
+            return Err(BrokerError::indeterminate("APT request requires checked recovery, not replay"));
+        }
+        for review in &plan.reviews {
+            if reviews::get(owner_uid, &review.review_id).and_then(|review| review.effective_state())
+                .map_err(BrokerError::authorization)? != reviews::ReviewState::Approved
+            {
+                return Err(BrokerError::authorization("Every App in the APT plan needs protected owner confirmation"));
+            }
+        }
+    }
     let review = reviews::get(owner_uid, &pending.review_id).map_err(BrokerError::authorization)?;
     if review
         .effective_state()
@@ -434,7 +473,11 @@ pub async fn commit(
     // The controller owns the transaction after the durable phase change. A disconnected
     // client cannot release its fence while blocking publication or cleanup is still running.
     let controller = tokio::spawn(async move {
-        let result = commit_prepared(&state, &pending).await;
+        #[cfg(target_os = "linux")]
+        let result = apt::publish(&state, &pending, &catalog).await;
+        #[cfg(not(target_os = "linux"))]
+        let result: Result<Value, String> = Err("Official App installation requires Linux APT".into());
+        pending = prepared(&pending.request_id, owner_uid).map_err(BrokerError::indeterminate)?;
         match result {
             Ok(app) => {
                 pending.phase = "installed".into();
@@ -449,7 +492,13 @@ pub async fn commit(
                 let approved = reviews::get(owner_uid, &pending.review_id)
                     .and_then(|review| review.effective_state()).map_err(BrokerError::indeterminate)?
                     == reviews::ReviewState::Approved;
-                pending.phase = if approved {
+                #[cfg(target_os = "linux")]
+                let effects_possible = pending.apt.as_ref().is_some_and(|plan| plan.hook_consumed);
+                #[cfg(not(target_os = "linux"))]
+                let effects_possible = false;
+                pending.phase = if effects_possible {
+                    "indeterminate".into()
+                } else if approved {
                     "cleanup_pending".into()
                 } else { "failed".into() };
                 write_json(&request_path(&pending.request_id).map_err(BrokerError::indeterminate)?, &pending)
@@ -463,6 +512,17 @@ pub async fn commit(
     controller.await.map_err(|error| BrokerError::indeterminate(error.to_string()))?
 }
 
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) async fn commit_apt_fixture(
+    state: &super::state::DaemonState,
+    owner_uid: u32,
+    request_id: String,
+    catalog: Catalog,
+) -> Result<Value, BrokerError> {
+    commit_authenticated(state, owner_uid, request_id, Some(catalog)).await
+}
+
+#[cfg(test)]
 async fn commit_prepared(state: &super::state::DaemonState, pending: &Prepared) -> Result<Value, String> {
     let app_id = pending.record.app_id.clone();
     let source = source_path(&pending.request_id)?;
@@ -573,8 +633,10 @@ async fn retire_installed(state: &super::state::DaemonState, app: &str, fence: M
     }
 }
 
+#[cfg(test)]
 struct DeliveryLock(std::fs::File);
 
+#[cfg(test)]
 impl DeliveryLock {
     fn acquire() -> Result<Self, String> {
         #[cfg(not(target_os = "linux"))]
@@ -628,6 +690,7 @@ impl DeliveryLock {
     }
 }
 
+#[cfg(test)]
 fn delivery_paths(destination: &Path) -> Result<Vec<String>, String> {
     let canonical = if destination.exists() {
         destination.canonicalize()
@@ -646,6 +709,7 @@ fn delivery_paths(destination: &Path) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+#[cfg(test)]
 fn delivery_owner_result(status: Option<i32>, output: &[u8]) -> Result<(), String> {
     if !output.is_empty() || status == Some(0) {
         return Err("This App path is owned by an OS package. Update its owning package through the OS package updater (APT), not a directory Store replacement.".into());
@@ -672,6 +736,8 @@ pub(crate) async fn commit_fixture(
         owner_uid, request_id, review_id, record,
         expires_at: Utc::now() + chrono::Duration::hours(1),
         phase: "ready".into(),
+        #[cfg(target_os = "linux")]
+        apt: None,
     }).await
 }
 
@@ -680,7 +746,18 @@ pub async fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, Bro
     let id = super::permissions::required_string(&params, "request_id")?;
     let _guard = SERIALIZER.lock().await;
     let mut pending = prepared(&id, owner_uid).map_err(BrokerError::authorization)?;
-    super::system_review::cancel(json!({"id": pending.review_id}), client).await?;
+    if !matches!(pending.phase.as_str(), "ready" | "cleanup_pending") {
+        return Err(BrokerError::indeterminate(
+            "Package effects or checked cleanup may be active; cancellation cannot release this transaction",
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(plan) = &pending.apt {
+        for review in &plan.reviews {
+            reviews::invalidate(owner_uid, &review.review_id).map_err(BrokerError::unavailable)?;
+        }
+    }
+    reviews::invalidate(owner_uid, &pending.review_id).map_err(BrokerError::unavailable)?;
     pending.phase = "cancelled".into();
     write_json(
         &request_path(&id).map_err(BrokerError::authorization)?,
@@ -690,6 +767,73 @@ pub async fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, Bro
     std::fs::remove_dir_all(root().join("staging").join(&id))
         .map_err(|error| BrokerError::unavailable(error.to_string()))?;
     Ok(json!({"status": "cancelled", "request_id": id}))
+}
+
+pub(crate) fn delivery_pending(app: &str) -> Result<bool, String> {
+    let entries = match std::fs::read_dir(root().join("requests")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("App delivery state is unavailable: {error}")),
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= 1000 {
+            return Err("App delivery state exceeds its bounded capacity".into());
+        }
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let id = path.file_stem().and_then(|value| value.to_str()).ok_or("Invalid App delivery state name")?;
+        if request_path(id)? != path {
+            return Err("Unexpected App delivery state file".into());
+        }
+        let pending: Prepared = read_json(&path)?;
+        #[cfg(target_os = "linux")]
+        if matches!(pending.phase.as_str(), "committing" | "installing" | "indeterminate")
+            && pending.apt.as_ref().is_some_and(|plan| plan.affected_apps.iter().any(|id| id == app))
+        {
+            return Ok(true);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (pending, app);
+    }
+    Ok(false)
+}
+
+pub async fn apt_hook(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+    #[cfg(target_os = "linux")]
+    { apt::hook(params, client).await }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = (params, client); Err(BrokerError::unavailable("APT requires Linux")) }
+}
+
+pub fn run_apt_hook() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Read;
+        if unsafe { libc::getuid() } != 0 || unsafe { libc::geteuid() } != 0 {
+            return Err("APT delivery hooks require the tracked Root installer".into());
+        }
+        let id = std::env::var("CLAW_APP_STORE_REQUEST").map_err(|_| "Missing APT request context")?;
+        request_path(&id)?;
+        let mut bytes = Vec::new();
+        std::io::stdin().take(1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("APT archive list exceeds its byte limit".into());
+        }
+        let files = std::str::from_utf8(&bytes).map_err(|_| "APT archive list is not UTF-8")?
+            .lines().map(str::to_string).collect::<Vec<_>>();
+        let response = super::client::request_blocking(
+            super::config::socket_path(),
+            super::protocol::Request::build(super::routes::Command::AppStoreAptHook, json!({
+                "request_id": id, "files": files,
+            })),
+        )?;
+        if !response.ok || response.result.as_ref().and_then(|value| value.get("proceed")).and_then(Value::as_bool) != Some(true) {
+            return Err("The protected installer did not authorize this exact delivery plan".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    { Err("APT delivery hooks require Linux".into()) }
 }
 
 pub async fn open(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {

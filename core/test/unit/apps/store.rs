@@ -3,9 +3,13 @@ use serde_json::json;
 
 fn catalog_value() -> Value {
     json!({
-        "schema": "claw.app-store/v1", "repository": REPOSITORY, "runtime_abi": 1,
+        "schema": "claw.app-store/v2", "repository": REPOSITORY, "runtime_abi": 1,
         "generation": "1", "issued_at": Utc::now() - chrono::Duration::minutes(1),
         "expires_at": Utc::now() + chrono::Duration::days(1),
+        "packages": [{
+            "package": "claw-app-fixture", "version": "1.0.0", "architecture": "all",
+            "size": 20, "sha256": "1".repeat(64), "apps": ["fixture"],
+        }],
         "apps": [{
             "app_id": "fixture", "app_version": "1.0.0", "architecture": "all",
             "release_version": "1.0.0", "release_tag": "app-fixture-v1.0.0",
@@ -17,6 +21,7 @@ fn catalog_value() -> Value {
                 "publisher_key_id": format!("sha256:{}", "e".repeat(64))},
             "display": {"name": "Fixture", "description": "", "source_kind": "product", "source_name": "fixture"},
             "web_ui": {"path": "web-ui.json", "sha256": "f".repeat(64), "entry": "web/index.html"},
+            "delivery": {"kind": "apt", "package_sha256": "1".repeat(64)},
         }],
     })
 }
@@ -53,6 +58,37 @@ fn catalog_refuses_stale_or_substituted_release_metadata() {
         {
             let mut v = value.clone();
             v["apps"][0]["permissions_granted"] = json!(true);
+            v
+        },
+        {
+            let mut v = value.clone();
+            v["schema"] = json!("claw.app-store/v1");
+            v
+        },
+        {
+            let mut v = value.clone();
+            v["apps"][0]["delivery"]["kind"] = json!("snapshot");
+            v
+        },
+        {
+            let mut v = value.clone();
+            v["apps"][0]["delivery"]["package_sha256"] = json!("2".repeat(64));
+            v
+        },
+        {
+            let mut v = value.clone();
+            v["packages"][0]["apps"] = json!(["different-app"]);
+            v
+        },
+        {
+            let mut v = value.clone();
+            v["packages"][0]["architecture"] = json!("arm64");
+            v
+        },
+        {
+            let mut v = value.clone();
+            let package = v["packages"][0].clone();
+            v["packages"].as_array_mut().unwrap().push(package);
             v
         },
     ] {

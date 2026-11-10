@@ -56,6 +56,10 @@ path = "src/bin/claw-display-session.rs"
 name = "claw-file-manager"
 path = "src/bin/claw-file-manager.rs"
 
+[[bin]]
+name = "claw-app-apt-hook"
+path = "src/bin/claw-app-apt-hook.rs"
+
 [features]
 default = []
 

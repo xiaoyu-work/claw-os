@@ -23,9 +23,47 @@ fn gate(app: &str) -> Result<Arc<RwLock<()>>, String> {
 }
 
 pub(crate) fn admit(app: &str) -> Result<OwnedRwLockReadGuard<()>, String> {
+    package_manager_idle()?;
+    if super::app_store::delivery_pending(app)? {
+        return Err(format!("App `{app}` has an active or indeterminate package transaction"));
+    }
     gate(app)?
         .try_read_owned()
         .map_err(|_| format!("App `{app}` package mutation is pending; retry admission afterwards"))
+}
+
+fn package_manager_idle() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        if unsafe { libc::geteuid() } != 0 {
+            return Ok(());
+        }
+        for path in ["/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock"] {
+            let file = match std::fs::OpenOptions::new().read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path)
+            {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("OS package admission lock is unavailable: {error}")),
+            };
+            let metadata = file.metadata().map_err(|error| error.to_string())?;
+            if !metadata.is_file() || metadata.uid() != 0 || metadata.nlink() != 1
+                || metadata.mode() & 0o022 != 0
+            {
+                return Err("OS package admission lock is not protected".into());
+            }
+            let lock = libc::flock {
+                l_type: libc::F_RDLCK as _, l_whence: libc::SEEK_SET as _,
+                l_start: 0, l_len: 0, l_pid: 0,
+            };
+            if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } != 0 {
+                return Err("An OS package transaction is active; App admission waits for its checked outcome".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn fence(app: &str) -> Result<OwnedRwLockWriteGuard<()>, String> {
