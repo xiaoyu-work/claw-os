@@ -213,7 +213,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs]
+        mode: [display, native-fs, file-manager]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -262,6 +262,9 @@ jobs:
       - name: Test real native filesystem selection and retirement
         if: matrix.mode == 'native-fs'
         run: bash scripts/ci/test-boundaries.sh native-fs
+      - name: Test FileManager intent delivery from fresh protected state
+        if: matrix.mode == 'file-manager'
+        run: bash scripts/ci/test-boundaries.sh file-manager
 
   sdk-bindings:
     runs-on: ubuntu-latest

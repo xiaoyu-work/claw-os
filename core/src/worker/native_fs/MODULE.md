@@ -25,6 +25,10 @@ refuses symlinks, hardlinked regular files and special nodes. No raw browse-root
 bind or backing FD reaches the App.
 The App sees only the filtered FUSE mount through the ordinary namespace
 sandbox; `/dev/fuse` and provider control are absent.
+The view's Root-owned parent permits traversal for the bound normal UID;
+bubblewrap resolves even an inherited `O_PATH` source through its parent.
+This does not expose the backing tree or allow another process through the
+view's instance/cgroup authorization.
 
 There is deliberately no passthrough or keep-cache grant. Ordinary FUSE page
 cache is needed for this first mmap probe, and cached/mapped bytes do not
