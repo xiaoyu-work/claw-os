@@ -31,11 +31,45 @@ nearby() {
 }
 
 app_bind() {
-    cargo build -p cos --bin claw-app-runner --locked
-    COS_CAPTURED_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
-        cargo test -p cos --lib --locked \
-        bridge::captured::tests::process::real_runner_waits_for_binding_and_preserves_app_input \
-        -- --exact --ignored --nocapture --test-threads=1
+    cargo build -p cos --bin cos --bin claw-app-runner --locked
+    sudo apt-get install -y --no-install-recommends acl
+    cargo test -p cos --lib --locked --no-run --message-format=json \
+        > "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl"
+    local test_binary
+    test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl")"
+    local listing
+    listing="$("$test_binary" --list)"
+    local gate
+    for gate in \
+        real_runner_waits_for_binding_and_preserves_app_input \
+        pre_sandbox_custody_gate_preserves_stdio_and_refuses_unbound_execution
+    do
+        grep -Fx -- "bridge::captured::tests::process::$gate: test" <<< "$listing" > /dev/null
+        COS_CAPTURED_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
+            "$test_binary" --exact "bridge::captured::tests::process::$gate" \
+            --ignored --nocapture --test-threads=1
+    done
+    local fixture
+    for fixture in \
+        ordinary_root_standalone_retires_host_before_publication \
+        ordinary_root_standalone_cancel_retry_publishes_only_after_cleanup \
+        ordinary_root_task_host_retires_namespace_data_before_publication \
+        ordinary_root_live_grandchild_blocks_publication_until_checked_retry \
+        ordinary_root_foreign_and_lost_ack_cannot_authorize_publication \
+        ordinary_root_indeterminate_provider_blocks_store_publication
+    do
+        grep -Fx -- "extension_host::spawn::task_data::tests::store_custody::$fixture: test" \
+            <<< "$listing" > /dev/null
+        sudo timeout 150 unshare --mount --net --fork \
+            env COS_ORDINARY_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+                COS_ORDINARY_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
+            bash --noprofile --norc -c '
+                set -euo pipefail
+                mount --make-rprivate /
+                exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
+            ' private-ordinary-custody "$test_binary" \
+            "extension_host::spawn::task_data::tests::store_custody::$fixture"
+    done
 }
 
 calendar() {
