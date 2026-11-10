@@ -299,7 +299,7 @@ mod desktop {
     ) -> io::Result<ExitStatus> {
         tokio::select! {
             result = child.wait() => result,
-            _ = stop.wait_for(|stopping| *stopping) => {
+            _ = async { let _ = stop.wait_for(|stopping| *stopping).await; } => {
                 let _ = child.start_kill();
                 child.wait().await
             }
