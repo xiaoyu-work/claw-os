@@ -60,6 +60,7 @@ and a root-owned executed artifact.
 | `cgroup.rs` | cgroup v2 governor and `cgroup.kill` teardown |
 | `app_custody.rs` | Ordinary App pre-sandbox gate and authenticated OS Host resource-retirement acknowledgement, separate from raw App stdio |
 | `gui_transport/` | Mandatory inherited GUI syscall mediation and trusted runner bootstrap |
+| `native_fs/` | Internal filtered-FUSE kernel prototype: metadata-only browse consent, Root-selected read resources and checked instance retirement; not a public mount API or completed filesystem |
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
 | `net_broker/resolver.rs` | Fixed system NSS lookup process, bounded output/deadline, endpoint cancellation and checked child reaping |

@@ -485,6 +485,57 @@ impl LinuxSandbox {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn prepare_native_fs_fixture(
+    policy: &super::policy::LaunchPolicy,
+    owner: u32,
+    group: &std::fs::File,
+) -> Result<(PreparedLaunch, super::app_custody::Gate), String> {
+    use std::os::fd::AsRawFd;
+
+    if unsafe { libc::geteuid() } != 0 || owner == 0 {
+        return Err("native filesystem fixture requires its private Root controller".into());
+    }
+    policy.validate()?;
+    let availability = LinuxSandbox.availability();
+    if !availability.is_available() {
+        return Err(availability.refusal());
+    }
+    let (gid, _) = crate::clawd::client_identity::owner_groups(owner)?;
+    let gate = super::app_custody::Gate::new()?;
+    let runner = Path::new("/usr/local/bin/claw-app-runner");
+    let metadata = crate::provenance::fsec::require_secure_location(runner, &[0])
+        .map_err(|error| error.to_string())?;
+    if !metadata.is_file || metadata.mode & 0o111 == 0 {
+        return Err("native filesystem fixture requires the protected App runner".into());
+    }
+    let bwrap = which("bwrap").ok_or("native filesystem fixture requires bubblewrap")?;
+    let pinned = PinnedSources::open_with_numbers(&policy.mounts, true)?;
+    let seccomp = seccomp_descriptor(policy.seccomp)?;
+    let membership = group.try_clone().map_err(|error| error.to_string())?;
+    let args = build_bwrap_args_with_seccomp(
+        policy, &pinned.mounts, owner, gid, &host_layout(), seccomp.as_raw_fd(),
+    );
+    let mut command = Command::new(runner);
+    command.args(gate.arguments()).arg(bwrap).args(args).env_clear();
+    for (name, value) in &policy.env { command.env(name, value); }
+    let mut descriptors = pinned.raw_fds();
+    descriptors.push(gate.fd());
+    install_pre_exec(&mut command, PreExecPlan {
+        seccomp_fd: seccomp.as_raw_fd(), pinned_fds: descriptors,
+        cgroup_procs: Some(membership.as_raw_fd()), umask: policy.umask, limits: policy.limits,
+        nproc_ceiling: current_task_count().saturating_add(policy.limits.pids_max as u64),
+        identity: (owner, gid), actual_numbers: true,
+    });
+    let mut resources = LaunchResources::empty();
+    resources.seccomp = Some(seccomp);
+    resources.pinned = Some(pinned);
+    resources.cgroup_membership = Some(membership);
+    Ok((PreparedLaunch {
+        command, facts: policy.audit_facts(), governor: Governor::Cgroup, resources,
+    }, gate))
+}
+
 fn inside_extension_host() -> bool {
     let uid = unsafe { libc::geteuid() as u32 };
     let end = crate::extension_host::identity::FIRST_UID

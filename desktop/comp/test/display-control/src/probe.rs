@@ -323,8 +323,119 @@ fn file_manager(args: &[String]) {
     println!("private FileManager1 signed GUI completed");
 }
 
+fn native_fs_kernel(view: &str) {
+    use std::fs::{File, OpenOptions};
+    use std::io::{Seek, SeekFrom};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::os::unix::fs::FileExt;
+    use std::path::Path;
+
+    const SIZE: usize = 2 * 1024 * 1024 + 29;
+    fn byte(index: usize) -> u8 { index.wrapping_mul(37).wrapping_add(11) as u8 }
+    fn tag(value: &[u8; 4]) {
+        std::io::stdout().write_all(value).unwrap();
+        std::io::stdout().flush().unwrap();
+    }
+    fn next(expected: u8) {
+        let mut token = [0];
+        std::io::stdin().read_exact(&mut token).unwrap();
+        assert_eq!(token[0], expected);
+    }
+    fn denied(path: &Path) {
+        assert!(File::open(path).is_err(), "unselected/protected content opened: {path:?}");
+    }
+
+    assert_ne!(unsafe { libc::getuid() }, 0);
+    assert_eq!(unsafe { libc::getuid() }, unsafe { libc::geteuid() });
+    assert_eq!(std::env::var("HOME").unwrap(), "/data");
+    assert_eq!(std::env::var("XDG_CONFIG_HOME").unwrap(), "/data/config");
+    assert_eq!(std::env::var("XDG_DATA_HOME").unwrap(), "/data/share");
+    assert_eq!(std::env::var("XDG_CACHE_HOME").unwrap(), "/data/cache");
+    assert!(!Path::new("/dev/fuse").exists());
+    assert!(!Path::new("/run/display-home").exists());
+    check_inherited_descriptors();
+    std::fs::create_dir_all("/data/config").unwrap();
+    std::fs::write("/data/config/private", b"private App configuration").unwrap();
+    assert_eq!(std::fs::read("/data/config/private").unwrap(), b"private App configuration");
+
+    let view = Path::new(view);
+    let binary = view.join("binary");
+    let other = view.join("unselected");
+    let raw = std::ffi::OsString::from_vec(b"binary-\xff".to_vec());
+    let names: Vec<_> = std::fs::read_dir(view).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert!(names.iter().any(|name| name.as_bytes() == raw.as_bytes()));
+    assert!(!names.iter().any(|name| matches!(name.as_bytes(), b".ssh" | b"symlink-alias" | b"hardlink-alias")));
+    assert_eq!(std::fs::metadata(&binary).unwrap().len(), SIZE as u64);
+    assert!(std::fs::metadata(view.join("selected-dir")).unwrap().is_dir());
+    for path in [&binary, &other, &view.join(&raw), &view.join("selected-dir/child")] { denied(path); }
+    for name in [".ssh/secret", "symlink-alias", "hardlink-alias", "owner-denied"] {
+        denied(&view.join(name));
+    }
+    tag(b"META");
+    next(b'F');
+
+    let mut file = File::open(&binary).unwrap();
+    let mapped = unsafe { libc::mmap(std::ptr::null_mut(), SIZE, libc::PROT_READ, libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
+    assert_ne!(mapped, libc::MAP_FAILED);
+    // Fault through the real view before a read() can fill its page cache.
+    let bytes = unsafe { std::slice::from_raw_parts(mapped.cast::<u8>(), SIZE) };
+    assert!(bytes.iter().enumerate().all(|(index, actual)| *actual == byte(index)));
+    let mut all = Vec::new();
+    file.read_to_end(&mut all).unwrap();
+    assert_eq!(all, bytes);
+    file.seek(SeekFrom::Start(19321)).unwrap();
+    let mut slice = [0; 4097];
+    file.read_exact(&mut slice).unwrap();
+    assert!(slice.iter().enumerate().all(|(index, actual)| *actual == byte(19321 + index)));
+    assert_eq!(std::fs::read(view.join(&raw)).unwrap(), b"\0\xffbinary-name\n");
+    denied(&other);
+    denied(&view.join("selected-dir/child"));
+    assert!(OpenOptions::new().write(true).open(&binary).is_err());
+    assert!(std::fs::write(view.join("must-not-exist"), b"no write authority").is_err());
+    tag(b"FILE");
+    next(b'D');
+
+    assert_eq!(std::fs::read(view.join("selected-dir/child")).unwrap(), b"selected directory content\0");
+    assert_eq!(std::fs::read(view.join("selected-dir/deeper/child")).unwrap(), b"selected nested content\xff");
+    denied(&other);
+    denied(&view.join("owner-denied"));
+    let mut ready = [-1; 2];
+    assert_eq!(unsafe { libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+    let descendant = unsafe { libc::fork() };
+    assert!(descendant >= 0);
+    if descendant == 0 {
+        unsafe { libc::close(ready[0]); }
+        assert!(unsafe { libc::setsid() } >= 0);
+        assert_eq!(unsafe { libc::write(ready[1], b"1".as_ptr().cast(), 1) }, 1);
+        unsafe { libc::close(ready[1]); }
+        loop {
+            assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>()) }, byte(0));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    unsafe { libc::close(ready[1]); }
+    let mut acknowledged = [0_u8; 1];
+    assert_eq!(unsafe { libc::read(ready[0], acknowledged.as_mut_ptr().cast(), 1) }, 1);
+    assert_eq!(&acknowledged, b"1");
+    unsafe { libc::close(ready[0]); }
+    tag(b"HELD");
+    loop {
+        let mut byte_read = [0; 1];
+        assert_eq!(file.read_at(&mut byte_read, 7).unwrap(), 1);
+        assert_eq!(byte_read[0], byte(7));
+        assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(SIZE - 1)) }, byte(SIZE - 1));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|selector| selector == "native-fs-kernel") {
+        assert_eq!(args.len(), 2);
+        native_fs_kernel(&args[1]);
+        return;
+    }
     if args
         .first()
         .is_some_and(|selector| selector == "file-manager-surface")

@@ -6,6 +6,7 @@ if [[ $# == 15 ]]; then
     case "${15}" in
         --session-startup-only) selection=startup ;;
         --file-manager-only) selection=file-manager ;;
+        --native-fs-only) selection=native-fs ;;
         *) exit 64 ;;
     esac
     set -- "${@:1:14}"
@@ -195,6 +196,7 @@ BUS
     case "$selection" in
         startup) fixture_test=clawd::server::gui_fixture::private_session_startup_failure ;;
         file-manager) fixture_test=clawd::server::gui_fixture::private_file_manager_session ;;
+        native-fs) fixture_test=clawd::server::gui_fixture::private_native_fs_kernel ;;
     esac
     listing=$("$registry" --list)
     grep -Fx "$fixture_test: test" <<< "$listing" >/dev/null
