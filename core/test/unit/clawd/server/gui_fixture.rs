@@ -1101,7 +1101,7 @@ fn private_native_fs_kernel() {
     for ending in ["revoke", "expiry", "worker-failure"] {
         let source = Path::new("/run/display-home").join(format!("native-fs-source-{ending}"));
         let data = Path::new("/run/display-home").join(format!("native-fs-data-{ending}"));
-        let mountpoint = Path::new("/run/gui-fixture").join(format!("native-fs-view-{ending}"));
+        let mountpoint = Path::new("/run/gui-public").join(format!("native-fs-view-{ending}"));
         for directory in [&source, &data, &source.join("selected-dir"), &source.join("selected-dir/deeper"), &source.join(".ssh")] {
             std::fs::create_dir(directory).unwrap();
             std::fs::set_permissions(directory, Permissions::from_mode(0o700)).unwrap();

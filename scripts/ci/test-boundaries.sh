@@ -25,6 +25,7 @@ private_extension_case() {
         bash --noprofile --norc -c '
             set -euo pipefail
             mount --make-rprivate /
+            ip link set lo up
             mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
             mkdir -m0755 /run/lock
             mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/lib
@@ -268,6 +269,8 @@ display() {
     if [[ "$selection" == native-fs ]]; then
         test -c /dev/fuse
         selectors=(--native-fs-only)
+    elif [[ "$selection" == file-manager ]]; then
+        selectors=(--file-manager-only)
     fi
     sudo timeout 240 unshare --mount --net --ipc --uts --fork \
         bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
@@ -280,7 +283,7 @@ display() {
         "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session" \
         "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop \
         "${selectors[@]}"
-    if [[ "$selection" == native-fs ]]; then
+    if [[ "$selection" != display ]]; then
         return
     fi
     sudo timeout 30 unshare --mount --net --ipc --uts --fork \
@@ -369,9 +372,10 @@ case "${1:-}" in
     extensions) extensions ;;
     display) display ;;
     native-fs) display native-fs ;;
+    file-manager) display file-manager ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|applets}" >&2
         exit 2
         ;;
 esac
