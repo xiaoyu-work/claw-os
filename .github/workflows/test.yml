@@ -166,6 +166,46 @@ jobs:
           scripts/tests/test_app_platform.py packaging/deb/tests/test_applet_provider.py
           core/tests/test_app_apt_metadata.py
 
+  sdk-bindings:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: claw-os-sdk/node/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: claw-os-sdk/go/go.mod
+          cache: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify generated public bindings
+        run: |
+          python3 claw-os-sdk/wire/codegen.py
+          git diff --exit-code -- \
+            claw-os-sdk/rust/src/generated.rs \
+            claw-os-sdk/python/src/claw_os_sdk/generated.py \
+            claw-os-sdk/node/src/generated.ts \
+            claw-os-sdk/go/generated.go
+      - name: Install existing SDK test dependencies
+        run: |
+          python3 -m pip install --disable-pip-version-check pytest
+          npm ci --prefix claw-os-sdk/node
+      - name: Test all four public SDK bindings
+        run: |
+          PYTHONPATH=claw-os-sdk/python/src \
+            python3 -m pytest -q claw-os-sdk/python/src
+          npm test --prefix claw-os-sdk/node
+          cargo test --locked -p claw-os-sdk -- --test-threads=1
+          (cd claw-os-sdk/go && go test ./...)
+
   desktop-sdk-presentation:
     runs-on: ubuntu-latest
     strategy:
