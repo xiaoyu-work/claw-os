@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import { TextDecoder } from "node:util";
+import { validate_owner_path_bindings } from "./manifest";
 
 import {
   McpCallContext,
@@ -825,6 +826,11 @@ function loadManifest(path: string): {
     throw new ManifestError(`invalid App manifest \`${path}\`: ${asError(error).message}`);
   }
   if (!isObject(manifest)) throw new ManifestError("App manifest must be a JSON object");
+  try {
+    validate_owner_path_bindings(manifest);
+  } catch (error) {
+    throw new ManifestError(asError(error).message);
+  }
   rejectUnknownFields(manifest, "App manifest", [
     "id",
     "version",

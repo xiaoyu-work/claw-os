@@ -6,6 +6,26 @@ use crate::clawd::wire::bounded::{Text, TextList, Token};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
+pub struct EntryName(Text<64>);
+
+impl EntryName {
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl<'de> Deserialize<'de> for EntryName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = Self(Text::<64>::deserialize(deserializer)?);
+        if !crate::caps::manifest::is_valid_gui_entry_name(name.as_str()) {
+            return Err(serde::de::Error::custom("invalid canonical GUI entry name"));
+        }
+        Ok(name)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
 pub struct Arguments(TextList<128, 4096>);
 
 impl Arguments {

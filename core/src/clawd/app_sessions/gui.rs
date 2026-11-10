@@ -13,6 +13,8 @@ use super::{authority, ClientIdentity};
 
 pub(crate) struct Draft {
     launch: AppLaunch,
+    gui_entry: Option<String>,
+    entry: String,
     selector: String,
     launcher: ProcessIdentity,
     client: ClientIdentity,
@@ -23,6 +25,8 @@ pub(crate) struct Draft {
 
 pub(crate) struct Registration {
     pub launch: AppLaunch,
+    pub gui_entry: Option<String>,
+    entry: String,
     pub selector: String,
     pub launcher: ProcessIdentity,
     pub client: ClientIdentity,
@@ -46,6 +50,7 @@ struct BoundDelegation {
 impl Draft {
     pub(super) fn new(
         package: Arc<crate::provenance::VerifiedPackage>,
+        gui_entry: Option<&str>,
         selector: &str,
         client: &ClientIdentity,
         launcher_authority: &super::LauncherAuthority,
@@ -53,15 +58,13 @@ impl Draft {
     ) -> Result<Self, String> {
         let launch = AppLaunch::new(package)?;
         crate::bridge::gui_args::prepare(launch.manifest().runtime, selector, &[])?;
-        if launch
-            .manifest()
-            .desktop
-            .as_ref()
-            .map(|desktop| desktop.exec.as_str())
-            != Some(selector)
-        {
+        let selected = launch.manifest().gui_entry(gui_entry)?;
+        if selected.exec != selector {
             return Err("GUI selector differs from the verified manifest".to_string());
         }
+        let entry = selected.entry.to_string();
+        launch.gui_entrypoint(gui_entry)?;
+        let _binding = launch.bind(std::slice::from_ref(&entry))?;
         let launcher = kernel_peer(client)?;
         let display = Registry::get()
             .map_err(|error| error.to_string())?
@@ -82,6 +85,8 @@ impl Draft {
             .covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name(launch.app_id())));
         Ok(Self {
             launch,
+            gui_entry: gui_entry.map(str::to_string),
+            entry,
             selector: selector.to_string(),
             launcher,
             client: client.clone(),
@@ -100,6 +105,8 @@ impl Draft {
     pub fn finish(self, session_id: String, caps: CapSet) -> Result<Registration, String> {
         Ok(Registration {
             launch: self.launch,
+            gui_entry: self.gui_entry,
+            entry: self.entry,
             selector: self.selector,
             launcher: self.launcher,
             client: self.client,
@@ -170,6 +177,11 @@ impl Registration {
     pub fn require_launch(&self, handle: &str, client: &ClientIdentity) -> Result<(), String> {
         self.require_client(client)?;
         self.require_delegation()?;
+        let selected = self.launch.manifest().gui_entry(self.gui_entry.as_deref())?;
+        if selected.entry != self.entry || selected.exec != self.selector {
+            return Err("GUI target differs from the Root-held registration".into());
+        }
+        self.launch.gui_entrypoint(self.gui_entry.as_deref())?;
         let grant = super::require_launch_grant(client, handle, &self.session_id, self.owner())?;
         if grant.issued_ago > super::BIND_WINDOW
             || grant.subject.app_id.as_deref() != Some(self.launch.app_id())

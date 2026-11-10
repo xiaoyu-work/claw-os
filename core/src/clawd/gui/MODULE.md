@@ -6,20 +6,46 @@ desktop label or Panel presentation as authority.
 
 ## Contracts
 
-Registration uses the existing App session authority and only the constrained
-union of fixed/wild **operation** needs. MCP tools and argument-bound needs do
-not join that union. Fixed needs outside launcher delegation use the ordinary
+Registration uses the existing App session authority. Optional `desktop.needs`
+selects only the default GUI's own needs; an explicit empty array requests none.
+Without that field, the constrained union of fixed/wild **operation** needs
+retains its legacy semantics. A named `desktop.entries.<name>` always declares
+its own needs, never a union with operations, MCP or another GUI. Fixed needs
+outside launcher delegation use the ordinary
 exact-owner approval flow before registration; a signature or GUI declaration
 grants nothing. Wild needs still inherit only the launcher's bounded scopes.
-The union does not evaluate `when` conditions, so they cannot express per-tab
-GUI authorization or bind a later file-picker selection.
+Argument-bound GUI needs are unsupported/unbound. Explicit conditional GUI
+needs are also unbound, not unconditional grants; the legacy operation union
+still does not evaluate `when`. Neither binds a later file-picker selection.
+
+The default GUI uses `desktop.entry`, falling back to top-level `entry` and the
+runtime default. Neither override changes ordinary operations or `mcp.entry`.
+Additional entries require a package-relative `entry`, literal `exec`, localized
+`name` and explicit `needs`. Names match `[a-z][a-z0-9_-]*`, at most 64 ASCII
+bytes; there are at most 64 additional entries. Only
+`cos app <id> --gui:<name> [literal args...]` selects one. Default `--gui` and the
+exact existing `desktop.exec` remain supported. No user-supplied path or
+executable is interpreted.
+Named launchers without `COS_SESSION` use the existing authenticated Root
+registration directly, not an Admin/bootstrap parent. Root independently
+retains their actual registered ancestry or bounded unregistered-launcher
+policy; unsetting an environment variable cannot erase App ownership.
+
+Root retains the selected name, package snapshot, entry and selector before
+authorization and checks the same binding at launch. Every selected target
+uses the generic signed regular-file/executable admission and descriptor-pinned
+sandbox path. The launch request cannot change its GUI/MCP/entry/runtime.
+All surfaces keep the same App/data/audit identity and per-App mutation fence.
+The protected review lists every target and its needs/purposes, including
+unbound requests. New fields enter its comparison digest, not approval authority.
 
 For Binary, Node and Shell runtimes, [argument preparation](../../bridge/gui_args.rs)
-appends `[desktop.exec, ...user_args]` after any interpreter/script arguments.
-The selector must equal the verified manifest's `desktop.exec`; it is not
+appends `[selected.exec, ...user_args]` after any interpreter/script arguments.
+The selector must equal the selected verified declaration's `exec`; it is not
 rewritten, split as a shell command or required to name an operation key.
-Python retains its existing wrapper dispatch instead of receiving native argv.
-The environment contains `COS_APP_GUI=1`, `COS_COMMAND=desktop.exec` and
+Python loads the selected signed file through its existing `run(selector, args)`
+wrapper instead of receiving native argv.
+The environment contains `COS_APP_GUI=1`, `COS_COMMAND=selected.exec` and
 `COS_ARGS_JSON` encoding **only** the user arguments. Empty user arguments,
 spaces, quotes and metacharacters remain literal.
 
@@ -34,6 +60,13 @@ Locale categories and `LANGUAGE` remain presentation. GUI execution does not
 retain the tool worker's forced `LC_ALL` when the launcher left it unset;
 stdio workers keep their existing deterministic environment.
 
+Root exposes the verified package's read-only `resources/` as
+`COS_APP_RESOURCE_DIR`. Its `usr/share` precedes standard system data roots in
+`XDG_DATA_DIRS`, so toolkit schema/icon lookup does not depend on global App
+resource activation. `COS_OWNER_HOME` supplies the authenticated owner path
+for UI choices; `HOME` and App state remain private. Neither environment path
+grants filesystem access, defeats protected-store checks or supplies a user bus.
+
 The Root [display registry](../../display_session/MODULE.md) supplies the
 authenticated owner and display epoch. The Host creates the instance ID, holds
 the actual launch-gated child pidfd and mandatory cgroup, and installs one
@@ -44,9 +77,15 @@ security-context strings.
 `clipboard.read:selection` and `clipboard.write:selection` are independent
 checks. History, display and Panel metadata imply neither. Zero GUI needs
 therefore give zero direct selection rights. Layer-shell is a separate lease
-field; this generic launch path currently issues it as false. Producers needing
-such authority require a coordinated authorization path, not a manifest flag
-that bypasses policy.
+field derived only from `ui.panel:Wild` in that same bound live grant.
+`ui.panel` requires explicit authorized delegation or exact protected owner
+approval; ordinary `ui.window`, native origin, signatures and Panel labels do
+not imply it. The system Agent and unregistered-launcher baselines deny it,
+and developer/unsigned content cannot hold it. All signed Apps use this same
+gate. The launch reply and bound audit event retain the actual installed right.
+Its Layer-shell surfaces may request their own overlay keyboard focus, not
+global `ui.input`, virtual keyboards, clipboard selection/history, capture or
+App orchestration. Unrelated compositor protocol denials remain unchanged.
 
 Every renewal rechecks package/instance validity, process identity, the existing
 App grant and App deny gate, the inherited portion of authenticated parent
@@ -120,6 +159,8 @@ From the OS repository root on Linux:
 
 ```bash
 cargo test -p cos --lib -- --test-threads=1 \
+  caps::manifest apps::permission_review clawd::app_sessions \
+  clawd::system_review::presentation clawd::wire::requests \
   bridge::gui_args clawd::gui::inputs clawd::gui::output clawd::gui::proxy \
   clawd::gui::retirement clawd::app_permissions clawd::authority::store::tests::approval \
   worker::gui_transport \
@@ -136,3 +177,6 @@ half-close directions, credential/descriptor refusals and checked stop.
 
 The actual authenticated PAM/App/compositor fixture and installation inputs are
 described in the [display guide](../../display_session/MODULE.md).
+Its panel cases create actual overlay surfaces through the bound Root lease,
+exercise independent read/write selection rights and checked revocation/expiry,
+and refuse Layer-shell for an ordinary window with Panel metadata.

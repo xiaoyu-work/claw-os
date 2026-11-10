@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::{self, File};
+use std::future::Future;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -13,8 +15,9 @@ use std::time::{Duration, Instant};
 use crate::caps::{Cap, Scope, Verb};
 use crate::proc::SessionInfo;
 
-use super::authority::{Authorized, Decision};
-use super::client_identity::ClientIdentity;
+use super::authority::{Audience, Authorized, Decision};
+use super::client_identity::{ClientIdentity, FsIdentityGuard};
+use super::protocol::BrokerError;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -76,6 +79,70 @@ pub async fn control(
     params: Value,
     client: &ClientIdentity,
     authority: &Decision,
+) -> Result<Value, BrokerError> {
+    let owner = validate_owner(&params, client, authority).map_err(BrokerError::authorization)?;
+    if let Some(change) = AccountChange::decode(&params).map_err(BrokerError::execution)? {
+        return account_control(change, owner, client, authority).await;
+    }
+    for field in ["new_name", "icon", "account_type"] {
+        if params.get(field).is_some_and(|value| !value.is_null()) {
+            return Err(BrokerError::execution(format!(
+                "{field} is not valid for this identity action"
+            )));
+        }
+    }
+    if expected_uid(&params)
+        .map_err(BrokerError::execution)?
+        .is_some()
+    {
+        let action = required_string(&params, "action").map_err(BrokerError::execution)?;
+        if !matches!(
+            action.as_str(),
+            "delete-user" | "lock-user" | "unlock-user" | "set-shell" | "set-password"
+        ) {
+            return Err(BrokerError::execution(
+                "uid is not valid for this identity action",
+            ));
+        }
+        let user = required_string(&params, "user").map_err(BrokerError::execution)?;
+        validate_account_name("user", &user).map_err(BrokerError::execution)?;
+    }
+    control_legacy(params, client, authority)
+        .await
+        .map_err(BrokerError::from)
+}
+
+fn validate_owner(
+    params: &Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<u32, String> {
+    let owner = client.require_uid()?;
+    if authority.owner_uid() != owner
+        || authority.session_id() != params.get("session").and_then(Value::as_str)
+        || authority.audience() != Audience::SystemService
+    {
+        return Err("identity owner/session mismatch".into());
+    }
+    authority.ensure_current()?;
+    Ok(owner)
+}
+
+fn expected_uid(params: &Value) -> Result<Option<u32>, String> {
+    match params.get("uid") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| "uid must be an unsigned 32-bit target identity".into()),
+    }
+}
+
+async fn control_legacy(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
 ) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
@@ -133,10 +200,25 @@ pub async fn control(
             .map(parse_credential_ref)
             .transpose()?;
         let requested = requested_caps(&action, credential_ref.as_ref());
-        let (session, authorized) = authorize_session(authority, &requested)?;
-
         if action == "status" {
+            let (_, _authorized) = authorize_session(authority, &requested)?;
             return identity_status();
+        }
+        let _guard = match tokio::time::timeout(
+            LOCK_TIMEOUT,
+            USER_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(_) => {
+                let (_, _authorized) = authorize_session(authority, &requested)?;
+                return Err("User Manager is busy with another identity mutation".into());
+            }
+        };
+        let (session, authorized) = authorize_session(authority, &requested)?;
+        if let Some(uid) = expected_uid(&params)? {
+            local_target(user.as_deref().ok_or("identity target is missing")?, uid)?;
         }
         let password = match credential_ref.as_ref() {
             Some((namespace, name)) => Some(
@@ -155,13 +237,7 @@ pub async fn control(
             validate_password(password)?;
         }
 
-        let _guard = tokio::time::timeout(
-            LOCK_TIMEOUT,
-            USER_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
-        )
-        .await
-        .map_err(|_| "User Manager is busy with another identity mutation".to_string())?;
-        mutate(
+        let mut result = mutate(
             &authorized,
             &action,
             user.as_deref(),
@@ -173,8 +249,651 @@ pub async fn control(
             token.as_deref(),
             uid,
         )
-        .await
+        .await?;
+        if let Some(uid) = expected_uid(&params)? {
+            result["uid"] = json!(uid);
+            result["user"] = json!(user);
+        }
+        Ok(result)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AccountValue {
+    Show,
+    Name(String),
+    FullName(String),
+    Icon(PathBuf),
+    Type(i32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AccountChange {
+    user: String,
+    uid: u32,
+    value: AccountValue,
+}
+
+impl AccountChange {
+    fn decode(params: &Value) -> Result<Option<Self>, String> {
+        let action = params.get("action").and_then(Value::as_str).unwrap_or("");
+        let field = match action {
+            "show-user" => None,
+            "rename-user" => Some("new_name"),
+            "set-full-name" => Some("full_name"),
+            "set-icon" => Some("icon"),
+            "set-account-type" => Some("account_type"),
+            _ => return Ok(None),
+        };
+        let object = params
+            .as_object()
+            .ok_or("identity request must be an object")?;
+        for (key, value) in object {
+            if matches!(key.as_str(), "session" | "action" | "user" | "uid")
+                || field == Some(key.as_str())
+                || (value.is_null()
+                    && matches!(
+                        key.as_str(),
+                        "group"
+                            | "full_name"
+                            | "shell"
+                            | "groups"
+                            | "credential"
+                            | "token"
+                            | "new_name"
+                            | "icon"
+                            | "account_type"
+                            | "confirm"
+                    ))
+                || (key == "confirm" && value == &Value::Bool(false))
+            {
+                continue;
+            }
+            return Err(format!("{key} is not valid for {action}"));
+        }
+        let user = required_string(params, "user")?;
+        validate_account_name("user", &user)?;
+        let uid = expected_uid(params)?.ok_or("this identity action requires an expected uid")?;
+        if !managed_id(uid) {
+            return Err("refusing to modify or disclose a system account".into());
+        }
+        let value = match action {
+            "show-user" => AccountValue::Show,
+            "rename-user" => {
+                let name = required_string(params, "new_name")?;
+                validate_account_name("new user", &name)?;
+                AccountValue::Name(name)
+            }
+            "set-full-name" => {
+                let name = params
+                    .get("full_name")
+                    .and_then(Value::as_str)
+                    .ok_or("full_name must be a string")?
+                    .to_owned();
+                validate_full_name(&name)?;
+                if name.contains(',') {
+                    return Err("AccountsService real names cannot contain commas".into());
+                }
+                AccountValue::FullName(name)
+            }
+            "set-icon" => {
+                let raw = params
+                    .get("icon")
+                    .and_then(Value::as_str)
+                    .ok_or("icon must be a string")?;
+                AccountValue::Icon(icon_path(raw)?)
+            }
+            "set-account-type" => {
+                AccountValue::Type(match required_string(params, "account_type")?.as_str() {
+                    "standard" => 0,
+                    "administrator" => 1,
+                    _ => return Err("account_type must be standard or administrator".into()),
+                })
+            }
+            _ => unreachable!(),
+        };
+        Ok(Some(Self { user, uid, value }))
+    }
+
+    fn action(&self) -> &'static str {
+        match self.value {
+            AccountValue::Show => "show-user",
+            AccountValue::Name(_) => "rename-user",
+            AccountValue::FullName(_) => "set-full-name",
+            AccountValue::Icon(_) => "set-icon",
+            AccountValue::Type(_) => "set-account-type",
+        }
+    }
+
+    fn caps(&self) -> Vec<Cap> {
+        let mut caps = if matches!(self.value, AccountValue::Show) {
+            vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("identities"))]
+        } else {
+            vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("manage"))]
+        };
+        if let AccountValue::Icon(path) = &self.value {
+            caps.push(Cap::new(
+                Verb::FS_READ,
+                Scope::path(path.to_string_lossy().into_owned()),
+            ));
+        }
+        caps
+    }
+}
+
+fn icon_path(raw: &str) -> Result<PathBuf, String> {
+    let path = Path::new(raw);
+    let normalized = path.components().collect::<PathBuf>();
+    if raw.len() > 4096
+        || raw.chars().any(char::is_control)
+        || !path.is_absolute()
+        || normalized.as_os_str() != path.as_os_str()
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+    {
+        return Err("icon must be one normalized absolute file path".into());
+    }
+    Ok(path.to_owned())
+}
+
+fn local_target(name: &str, uid: u32) -> Result<PasswdRecord, String> {
+    let record = passwd_records()?
+        .into_iter()
+        .find(|record| record.name == name)
+        .ok_or_else(|| format!("local user not found: {name}"))?;
+    validate_target(&record, name, uid)?;
+    Ok(record)
+}
+
+fn validate_target(record: &PasswdRecord, name: &str, uid: u32) -> Result<(), String> {
+    if !managed_id(uid) || record.uid != uid || record.name != name {
+        return Err("identity target name/uid changed or is not a managed local account".into());
+    }
+    Ok(())
+}
+
+fn account_preflight(
+    change: &AccountChange,
+    owner: u32,
+    authority: &Decision,
+) -> Result<(), BrokerError> {
+    if authority.owner_uid() != owner || authority.audience() != Audience::SystemService {
+        return Err(BrokerError::authorization("identity owner mismatch"));
+    }
+    authority
+        .ensure_current()
+        .map_err(BrokerError::authorization)?;
+    if !change.caps().iter().all(|cap| authority.caps().covers(cap)) {
+        return Err(BrokerError::authorization(
+            "identity action requires its exact declared capabilities",
+        ));
+    }
+    Ok(())
+}
+
+async fn account_control(
+    change: AccountChange,
+    owner: u32,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, BrokerError> {
+    account_preflight(&change, owner, authority)?;
+    let result = account_apply(&change, owner, client, authority).await;
+    if !super::authority::obligation_met(Some(authority)) {
+        let _authorized = authority
+            .require_all(&change.caps())
+            .map_err(BrokerError::authorization)?;
+    }
+    result
+}
+
+async fn account_apply(
+    change: &AccountChange,
+    owner: u32,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, BrokerError> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err(BrokerError::unavailable(
+            "identity actions require root clawd",
+        ));
+    }
+    let _guard = tokio::time::timeout(
+        LOCK_TIMEOUT,
+        USER_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
+    )
+    .await
+    .map_err(|_| BrokerError::unavailable("identity provider is busy; no change was dispatched"))?;
+    authority
+        .ensure_current()
+        .map_err(BrokerError::authorization)?;
+    let record = local_target(&change.user, change.uid).map_err(BrokerError::execution)?;
+    if let AccountValue::Name(name) = &change.value {
+        if name != &change.user
+            && passwd_records()
+                .map_err(BrokerError::execution)?
+                .iter()
+                .any(|record| record.name == *name)
+        {
+            return Err(BrokerError::execution(
+                "the requested login name already exists",
+            ));
+        }
+    }
+    let backend = AccountsBackend::system().await?;
+    let user = backend.user(change.uid).await?;
+    backend.check_target(&user, &record).await?;
+    let icon_home = if matches!(change.value, AccountValue::Icon(_)) {
+        Some(
+            client
+                .require_home_dir()
+                .map_err(BrokerError::authorization)?,
+        )
+    } else {
+        None
+    };
+    backend.require_current(&user).await?;
+    local_target(&change.user, change.uid).map_err(BrokerError::execution)?;
+    let authorized = authority
+        .require_all(&change.caps())
+        .map_err(BrokerError::authorization)?;
+    let icon = match (&change.value, icon_home.as_deref()) {
+        (AccountValue::Icon(path), Some(home)) => {
+            let source = icon_source(path, owner, home, &authorized)?;
+            Some(seal_icon(source, &authorized)?)
+        }
+        _ => None,
+    };
+    backend
+        .apply(&user, change, &record, icon.as_ref(), &authorized)
+        .await
+}
+
+fn icon_source(
+    path: &Path,
+    owner: u32,
+    home: &Path,
+    authorized: &Authorized,
+) -> Result<File, BrokerError> {
+    let exact = Cap::new(
+        Verb::FS_READ,
+        Scope::path(path.to_string_lossy().into_owned()),
+    );
+    if !authorized.spent().contains(&exact) {
+        return Err(BrokerError::authorization(
+            "icon source requires its exact spent file-read capability",
+        ));
+    }
+    crate::worker::derive::reject_forbidden_for_owner(path, home)
+        .map_err(BrokerError::authorization)?;
+    let _identity = FsIdentityGuard::enter(owner).map_err(BrokerError::authorization)?;
+    let file = super::owner_files::source(path).map_err(BrokerError::execution)?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| BrokerError::execution(error.to_string()))?;
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() > 1_048_576 {
+        return Err(BrokerError::execution(
+            "icon must be a single-link regular file of at most 1 MiB",
+        ));
+    }
+    Ok(file)
+}
+
+fn seal_icon(file: File, _authorized: &Authorized) -> Result<File, BrokerError> {
+    let mut bytes = Vec::new();
+    file.take(1_048_577)
+        .read_to_end(&mut bytes)
+        .map_err(|error| BrokerError::execution(format!("read authorized icon: {error}")))?;
+    if bytes.len() > 1_048_576 {
+        return Err(BrokerError::execution(
+            "icon grew beyond 1 MiB; no change was dispatched",
+        ));
+    }
+    let fd = unsafe {
+        libc::memfd_create(
+            c"account-icon".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if fd < 0 {
+        return Err(BrokerError::unavailable(format!(
+            "create private icon: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let mut sealed = unsafe { File::from_raw_fd(fd) };
+    sealed
+        .write_all(&bytes)
+        .map_err(|error| BrokerError::execution(error.to_string()))?;
+    sealed
+        .set_permissions(fs::Permissions::from_mode(0o400))
+        .map_err(|error| BrokerError::execution(error.to_string()))?;
+    if unsafe {
+        libc::fcntl(
+            fd,
+            libc::F_ADD_SEALS,
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL,
+        )
+    } < 0
+    {
+        return Err(BrokerError::unavailable(format!(
+            "seal private icon: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(sealed)
+}
+
+struct AccountsBackend {
+    connection: zbus::Connection,
+    accounts: zbus::Proxy<'static>,
+}
+
+impl AccountsBackend {
+    async fn system() -> Result<Self, BrokerError> {
+        let connection = account_before("connect system bus", async {
+            zbus::connection::Builder::address("unix:path=/run/dbus/system_bus_socket")?
+                .build()
+                .await
+        })
+        .await?;
+        let bus = zbus::fdo::DBusProxy::new(&connection)
+            .await
+            .map_err(account_unavailable)?;
+        let bus_uid = account_before("authenticate system bus", async {
+            bus.get_connection_unix_user(zbus::names::BusName::try_from("org.freedesktop.DBus")?)
+                .await
+                .map_err(Into::into)
+        })
+        .await?;
+        if bus_uid != 0 {
+            return Err(BrokerError::unavailable(
+                "identity provider requires the root-owned system bus",
+            ));
+        }
+        let name = zbus::names::WellKnownName::try_from("org.freedesktop.Accounts")
+            .map_err(account_unavailable)?;
+        let service = account_before("identify AccountsService", async {
+            match bus.get_name_owner(name.clone().into()).await {
+                Ok(owner) => Ok(owner),
+                Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+                    bus.start_service_by_name(name.clone(), 0).await?;
+                    bus.get_name_owner(name.into()).await.map_err(Into::into)
+                }
+                Err(error) => Err(error.into()),
+            }
+        })
+        .await?;
+        let service_uid = account_before("authenticate AccountsService", async {
+            bus.get_connection_unix_user(service.clone().into())
+                .await
+                .map_err(Into::into)
+        })
+        .await?;
+        if service_uid != 0 {
+            return Err(BrokerError::unavailable(
+                "AccountsService is not root-owned",
+            ));
+        }
+        let accounts = zbus::proxy::Builder::<zbus::Proxy<'static>>::new(&connection)
+            .destination(service)
+            .map_err(account_unavailable)?
+            .path("/org/freedesktop/Accounts")
+            .map_err(account_unavailable)?
+            .interface("org.freedesktop.Accounts")
+            .map_err(account_unavailable)?
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .await
+            .map_err(account_unavailable)?;
+        Ok(Self {
+            connection,
+            accounts,
+        })
+    }
+
+    async fn user(&self, uid: u32) -> Result<zbus::Proxy<'static>, BrokerError> {
+        let path: zbus::zvariant::OwnedObjectPath = account_before(
+            "resolve local account",
+            self.accounts.call("FindUserById", &(i64::from(uid),)),
+        )
+        .await?;
+        if path.as_str() != format!("/org/freedesktop/Accounts/User{uid}") {
+            return Err(BrokerError::authorization(
+                "AccountsService returned a different target path",
+            ));
+        }
+        zbus::proxy::Builder::<zbus::Proxy<'static>>::new(&self.connection)
+            .destination(self.accounts.destination().to_owned())
+            .map_err(account_unavailable)?
+            .path(path)
+            .map_err(account_unavailable)?
+            .interface("org.freedesktop.Accounts.User")
+            .map_err(account_unavailable)?
+            .cache_properties(zbus::proxy::CacheProperties::No)
+            .build()
+            .await
+            .map_err(account_unavailable)
+    }
+
+    async fn check_target(
+        &self,
+        user: &zbus::Proxy<'_>,
+        record: &PasswdRecord,
+    ) -> Result<(), BrokerError> {
+        let uid: u64 = account_before("verify target uid", user.get_property("Uid")).await?;
+        let name: String =
+            account_before("verify target name", user.get_property("UserName")).await?;
+        let home: String =
+            account_before("verify target home", user.get_property("HomeDirectory")).await?;
+        let local: bool =
+            account_before("verify local account", user.get_property("LocalAccount")).await?;
+        if uid != u64::from(record.uid) || name != record.name || home != record.home || !local {
+            return Err(BrokerError::authorization(
+                "AccountsService target no longer matches the local account",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn require_current(&self, user: &zbus::Proxy<'_>) -> Result<(), BrokerError> {
+        let bus = zbus::fdo::DBusProxy::new(&self.connection)
+            .await
+            .map_err(account_unavailable)?;
+        let current = account_before("revalidate AccountsService", async {
+            bus.get_name_owner(zbus::names::BusName::try_from("org.freedesktop.Accounts")?)
+                .await
+                .map_err(Into::into)
+        })
+        .await?;
+        if current.as_str() != user.destination().as_str() {
+            return Err(BrokerError::unavailable(
+                "AccountsService changed before dispatch",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn apply(
+        &self,
+        user: &zbus::Proxy<'_>,
+        change: &AccountChange,
+        record: &PasswdRecord,
+        icon: Option<&File>,
+        authorized: &Authorized,
+    ) -> Result<Value, BrokerError> {
+        if user.destination() != self.accounts.destination() {
+            return Err(BrokerError::authorization(
+                "account proxy is not bound to the authenticated backend",
+            ));
+        }
+        let value = match &change.value {
+            AccountValue::Show => {
+                let full_name: String =
+                    account_before("read real name", user.get_property("RealName")).await?;
+                let account_type: i32 =
+                    account_before("read account type", user.get_property("AccountType")).await?;
+                let icon_file: String =
+                    account_before("read account icon", user.get_property("IconFile")).await?;
+                let account_type = match account_type {
+                    0 => "standard",
+                    1 => "administrator",
+                    _ => {
+                        return Err(BrokerError::unavailable(
+                            "AccountsService returned an unknown account type",
+                        ))
+                    }
+                };
+                json!({"full_name":full_name,"account_type":account_type,"icon_file":icon_file})
+            }
+            AccountValue::Name(name) => {
+                // SetUserName preserves home/login semantics and moves only
+                // AccountsService's cached metadata. Never call SetHomeDirectory.
+                account_mutate(
+                    authorized,
+                    user.call::<_, _, ()>("SetUserName", &(name.as_str(),)),
+                )
+                .await?;
+                let observed: String =
+                    account_after("read login name", user.get_property("UserName")).await?;
+                if observed != *name {
+                    return Err(BrokerError::indeterminate(
+                        "login rename readback differs; refresh before retrying",
+                    ));
+                }
+                json!(observed)
+            }
+            AccountValue::FullName(name) => {
+                // AccountsService preserves the other GECOS fields.
+                account_mutate(
+                    authorized,
+                    user.call::<_, _, ()>("SetRealName", &(name.as_str(),)),
+                )
+                .await?;
+                let observed: String =
+                    account_after("read real name", user.get_property("RealName")).await?;
+                if observed != *name {
+                    return Err(BrokerError::indeterminate(
+                        "real name readback differs; refresh before retrying",
+                    ));
+                }
+                json!(observed)
+            }
+            AccountValue::Icon(path) => {
+                let file =
+                    icon.ok_or_else(|| BrokerError::execution("authorized icon is missing"))?;
+                let source = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd());
+                account_mutate(
+                    authorized,
+                    user.call::<_, _, ()>("SetIconFile", &(source.as_str(),)),
+                )
+                .await?;
+                let observed: String =
+                    account_after("read account icon", user.get_property("IconFile")).await?;
+                if observed.is_empty() || !Path::new(&observed).is_absolute() {
+                    return Err(BrokerError::indeterminate(
+                        "account icon readback is missing; refresh before retrying",
+                    ));
+                }
+                json!(path)
+            }
+            AccountValue::Type(value) => {
+                // Preserve the distro's complete admin-group set, not just sudo.
+                account_mutate(
+                    authorized,
+                    user.call::<_, _, ()>("SetAccountType", &(*value,)),
+                )
+                .await?;
+                let observed: i32 =
+                    account_after("read account type", user.get_property("AccountType")).await?;
+                if observed != *value {
+                    return Err(BrokerError::indeterminate(
+                        "account type readback differs; refresh before retrying",
+                    ));
+                }
+                json!(if observed == 1 {
+                    "administrator"
+                } else {
+                    "standard"
+                })
+            }
+        };
+        if !matches!(change.value, AccountValue::Show) {
+            let uid: u64 = account_after("revalidate target uid", user.get_property("Uid")).await?;
+            let home: String =
+                account_after("revalidate target home", user.get_property("HomeDirectory")).await?;
+            if uid != u64::from(change.uid) || home != record.home {
+                return Err(BrokerError::indeterminate("account identity/home changed; no home migration or rollback was requested; refresh before retrying"));
+            }
+        }
+        Ok(json!({
+            "action":change.action(),
+            "status":if matches!(change.value, AccountValue::Show) { "observed" } else { "applied" },
+            "user":change.user,"uid":change.uid,"value":value,
+            "home":record.home,"rollback_supported":false,
+        }))
+    }
+}
+
+fn account_unavailable(error: impl std::fmt::Display) -> BrokerError {
+    BrokerError::unavailable(format!(
+        "account backend unavailable before mutation: {error}"
+    ))
+}
+
+async fn account_before<T>(
+    phase: &str,
+    future: impl Future<Output = zbus::Result<T>>,
+) -> Result<T, BrokerError> {
+    tokio::time::timeout(Duration::from_secs(5), future)
+        .await
+        .map_err(|_| BrokerError::unavailable(format!("{phase} timed out before mutation")))?
+        .map_err(account_unavailable)
+}
+
+async fn account_mutate<T>(
+    _authorized: &Authorized,
+    future: impl Future<Output = zbus::Result<T>>,
+) -> Result<T, BrokerError> {
+    match tokio::time::timeout(Duration::from_secs(5), future).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(zbus::Error::MethodError(name, _, _)))
+            if matches!(
+                name.as_str(),
+                "org.freedesktop.Accounts.Error.PermissionDenied"
+                    | "org.freedesktop.DBus.Error.AccessDenied"
+            ) =>
+        {
+            Err(BrokerError::authorization(
+                "account mutation denied by the OS backend",
+            ))
+        }
+        Ok(Err(error)) => Err(BrokerError::indeterminate(format!(
+            "account mutation was not confirmed: {error}; refresh before retrying"
+        ))),
+        Err(_) => Err(BrokerError::indeterminate(
+            "account mutation timed out and may have applied; refresh before retrying",
+        )),
+    }
+}
+
+async fn account_after<T>(
+    phase: &str,
+    future: impl Future<Output = zbus::Result<T>>,
+) -> Result<T, BrokerError> {
+    tokio::time::timeout(Duration::from_secs(5), future)
+        .await
+        .map_err(|_| {
+            BrokerError::indeterminate(format!(
+                "{phase} timed out after mutation; refresh before retrying"
+            ))
+        })?
+        .map_err(|error| {
+            BrokerError::indeterminate(format!(
+                "{phase} failed after mutation: {error}; refresh before retrying"
+            ))
+        })
 }
 
 fn requested_caps(action: &str, credential: Option<&(String, String)>) -> Vec<Cap> {

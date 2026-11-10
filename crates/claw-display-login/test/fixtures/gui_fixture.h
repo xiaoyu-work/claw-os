@@ -138,7 +138,8 @@ static int gui_host(void) {
 static int gui_fixture(void) {
     static const char *modes[] = {
         "zero", "read", "write", "both", "revoke", "aliases",
-        "revoke", "revoke", "revoke", "revoke", "revoke", "revoke"
+        "revoke", "revoke", "revoke", "revoke", "revoke", "revoke", "named",
+        "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke"
     };
     pid_t child = -1;
     int gate = -1, result = -1;
@@ -187,7 +188,7 @@ static int gui_fixture(void) {
                     || setenv("LANG", "fr_CA.UTF-8", 1) != 0
                     || setenv("LANGUAGE", "fr:en", 1) != 0
                     || setenv("LC_TIME", "C.UTF-8", 1) != 0
-                    || setenv("COS_SESSION", session, 1) != 0
+                    || (scenario != 12 && setenv("COS_SESSION", session, 1) != 0)
                     || setenv("COS_PROC_DATA_DIR", "/run/cos/caps/62050", 1) != 0
                     || setenv("XDG_RUNTIME_DIR", "/run/forged-runtime", 1) != 0
                     || setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/forged-bus", 1) != 0
@@ -201,7 +202,12 @@ static int gui_fixture(void) {
                     _exit(122);
                 execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                       "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos", "app",
-                      scenario == 0 ? "gui-boundary-zero" : "gui-boundary-test", "surface",
+                      scenario == 0 ? "gui-boundary-zero" : "gui-boundary-test",
+                      scenario == 12 ? "--gui:applet" :
+                      scenario == 13 ? "--gui:panel" :
+                      scenario == 14 || scenario == 17 || scenario == 18 ? "--gui:panel-read" :
+                      scenario == 15 ? "--gui:panel-write" :
+                      scenario == 16 ? "--gui:window" : "surface",
                       modes[scenario], "literal ; quote' --flag", "", (char *)NULL);
                 _exit(123);
             }

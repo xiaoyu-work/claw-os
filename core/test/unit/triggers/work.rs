@@ -127,6 +127,81 @@ fn automatic_activity_work_advances_exactly_once_from_a_durable_handoff() {
 }
 
 #[test]
+fn automatic_handoff_refuses_a_mismatched_scheduler_session() {
+    for mismatch in ["owner", "activity", "system-agent", "attended"] {
+        let state = super::super::tests::TestState::new();
+        let (activity, _) = setup(&state);
+        let service = crate::activities::open_default().unwrap();
+        state.command("tick", &[]).unwrap();
+        let store = Store::open_default().unwrap();
+        let first = store.claim_one().unwrap().unwrap();
+        commit(&store, &first);
+        stage_checkpoint(
+            &first,
+            crate::activities::ActivityWorkCheckpoint {
+                summary: "Inspected one synthetic source.".into(),
+                made_progress: true,
+                completed_steps: Vec::new(),
+                artifacts: Vec::new(),
+                next: ActivityWorkNext::Continue {
+                    task: "Inspect the next synthetic source.".into(),
+                },
+            },
+        )
+        .unwrap();
+        store
+            .finish(
+                first.clone(),
+                crate::agent::service::FinishOutcome::Ok {
+                    response: "Inspected".into(),
+                    turns_used: 1,
+                    provider: "mock".into(),
+                    model: "mock".into(),
+                    evidence: Box::new(None),
+                    fallback: Box::new(None),
+                },
+            )
+            .unwrap();
+        let sid = first
+            .session_id
+            .as_deref()
+            .unwrap()
+            .parse::<crate::session::SessionId>()
+            .unwrap();
+        crate::session::update_meta(&sid, |meta| match mismatch {
+            "owner" => meta.owner_uid = Some(state.uid.wrapping_add(1)),
+            "activity" => meta.activity_id = Some(uuid::Uuid::new_v4().to_string()),
+            "system-agent" => {
+                meta.creator_runtime = Some("clawd".into());
+                meta.origin = Some(crate::session::SessionOrigin::SystemAgentTask);
+                meta.client = crate::session::SessionClient::new(
+                    crate::session::SessionSource::BrokerTask,
+                    false,
+                    true,
+                );
+            }
+            "attended" => meta.client.attended = true,
+            _ => unreachable!(),
+        })
+        .unwrap();
+
+        state.command("tick", &[]).unwrap();
+        assert!(
+            store.claim_one().unwrap().is_none(),
+            "a mismatched {mismatch} must not publish the handoff",
+        );
+        assert_eq!(state.jobs().len(), 1);
+        assert_eq!(
+            service
+                .work_history(state.uid, &activity.id, 10)
+                .unwrap()
+                .len(),
+            1,
+        );
+    }
+}
+
+#[test]
 fn missing_reserved_job_is_held_instead_of_republished() {
     let state = super::super::tests::TestState::new();
     let (activity, rule) = setup(&state);

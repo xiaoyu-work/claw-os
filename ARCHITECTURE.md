@@ -191,8 +191,18 @@ The closed control/PAM crates are internal OS interfaces, not public SDK exports
 
 The [GUI Host](core/src/clawd/gui/MODULE.md) binds signed App execution to the
 existing session grant, parent delegation and revocation generation. Its
-constrained operation needs do not inherit MCP permissions; selection read and
-write remain independent, and Panel metadata grants nothing. Mandatory
+explicit per-GUI needs (or the legacy constrained operation union when omitted)
+do not inherit MCP permissions. Optional default `desktop.entry` and named
+`desktop.entries` preserve separate signed executables under the same App
+identity. `--gui:<name>` selects only declared manifest data; Root retains the
+package/entry/selector binding across approval and launch. Protected review
+discloses each target and its needs without granting them. Selection read and
+write remain independent, and Panel metadata grants nothing.
+`ui.panel` separately admits LayerShell only from the live bound GUI grant;
+System Agent/default launchers receive none. Generic owner-path needs resolve
+only Root-authenticated owner home into bounded canonical Path scopes and
+normal exact-owner approval, never environment-derived home or a default grant.
+Protected mount/credential-root refusals remain unchanged. Mandatory
 instance cgroups, inherited syscall mediation and credential-checked relays
 confine the transport. Checked permission/session retirement includes retained
 descriptors and descendants before success; denial remains durable on failure.
@@ -2063,7 +2073,8 @@ Review/errors go to stderr; cancellation and a bounded post-EOF deadline
 retire the worker and session. It is non-model-callable and does not pass
 through the captured Python `main.py` wrapper or JSON output formatting.
 This exception does not imply support for other primary Python filenames in
-ordinary captured operation/GUI execution.
+ordinary captured operation execution. GUI entries instead load their selected
+signed file through the existing GUI wrapper/argv contract.
 
 The MCP-only `fs` service accepts explicit text/base64 content for writes.
 Rust desktop filesystem writes always serialize `{path, content}` over this

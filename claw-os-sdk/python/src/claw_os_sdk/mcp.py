@@ -45,6 +45,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
+from .manifest import validate_owner_path_bindings
 
 from .generated import (
     JSONRPC_ERROR_INTERNAL as ERR_INTERNAL,
@@ -854,6 +855,10 @@ def _load_manifest_service(path: pathlib.Path) -> tuple[str, str, List[_Tool]]:
         raise ManifestError(f"invalid App manifest `{path}`: {error}") from error
     if not isinstance(manifest, dict):
         raise ManifestError("App manifest must be a JSON object")
+    try:
+        validate_owner_path_bindings(manifest)
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ManifestError(str(error)) from error
     _reject_unknown_fields(
         manifest,
         {

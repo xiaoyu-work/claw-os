@@ -24,6 +24,7 @@ export * as channels from "./channels";
 export * as events from "./events";
 export * as tools from "./tools";
 export * as gui from "./gui";
+export * as manifest from "./manifest";
 export * as mcp from "./mcp";
 export * as objects from "./objects";
 export * as transport from "./transport";

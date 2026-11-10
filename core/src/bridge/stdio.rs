@@ -226,6 +226,7 @@ fn stdio_session(
         None,
         Some(&launch.ceiling()),
         &launch.package_ref(),
+        true,
     )?;
     Ok((session, bound.argv))
 }

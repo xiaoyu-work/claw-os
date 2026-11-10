@@ -60,6 +60,24 @@ pub fn is_gui_launch() -> bool {
     std::env::var("COS_APP_GUI").as_deref() == Ok("1")
 }
 
+/// Package-local, read-only presentation resources supplied by the Host.
+///
+/// This path is context, not a filesystem permission or proof of authority.
+pub fn resource_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("COS_APP_RESOURCE_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+/// Authenticated owner's home for UI path choices, distinct from App state.
+///
+/// Access still requires the App's exact filesystem capabilities and sandbox.
+pub fn owner_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("COS_OWNER_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 /// The kernel context handed to a desktop app at launch.
 #[derive(Debug, Clone)]
 pub struct Context {

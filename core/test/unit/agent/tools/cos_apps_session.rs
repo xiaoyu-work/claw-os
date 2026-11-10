@@ -1642,7 +1642,7 @@ async fn a_resource_bearing_call_runs_in_its_own_worker_and_leaves_nothing_behin
 /// Representative Python facades, whose entrypoints stay inside their packages.
 const SHIPPED_PYTHON_MCP_APPS: &[&str] = &["kv", "notify"];
 
-/// All nine native Desktop entries named by the kernel's fixed table.
+/// All shipped native Desktop and panel MCP Apps.
 const SHIPPED_NATIVE_MCP_APPS: &[&str] = &[
     "cosmic-files",
     "cosmic-edit",
@@ -1653,6 +1653,9 @@ const SHIPPED_NATIVE_MCP_APPS: &[&str] = &[
     "cosmic-player",
     "cosmic-screenshot",
     "cosmic-notifications",
+    "panel-calendar",
+    "panel-clipboard",
+    "widget-rail",
 ];
 
 /// Shipped manifests resolved from their declared local or immutable product source.
@@ -1820,25 +1823,51 @@ fn media_player_signed_manifest_has_seven_exact_brokered_calls() {
 }
 
 #[test]
-fn every_shipped_native_desktop_app_names_its_kernel_row() {
-    // The nine native Desktop Apps are the only shipped manifests that
-    // may name a program outside their package, and each must name
-    // exactly the one the kernel table holds for it. A manifest that
-    // drifted off its row would be refused at launch, so catching it
-    // here is the difference between a build failure and a dead tool.
+fn every_shipped_native_desktop_app_binds_its_declared_mcp_entry() {
+    let _lock = crate::test_env::lock_env();
+    let root = crate::test_env::secure_scratch_dir("shipped-native-entries");
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.join("data"));
     for &id in SHIPPED_NATIVE_MCP_APPS {
-        let manifest = shipped_manifest(id);
+        let source = app_sources::app_dir(id).join("app.json");
+        let manifest = crate::caps::manifest::Manifest::from_json(
+            &std::fs::read_to_string(&source).unwrap(),
+        )
+        .unwrap();
         let entry = manifest
             .mcp
             .as_ref()
             .and_then(|service| service.entry.clone())
             .unwrap_or_else(|| panic!("`{id}` declares no `mcp.entry`"));
-        assert_eq!(
-            crate::worker::trusted_desktop::allowlisted_system_program(id),
-            Some(entry.as_str()),
-            "`{id}` names `{entry}`, which is not its kernel row"
+        if entry.starts_with('/') {
+            assert_eq!(
+                crate::worker::trusted_desktop::allowlisted_system_program(id),
+                Some(entry.as_str()),
+                "`{id}` names `{entry}`, which is not its kernel row"
+            );
+            continue;
+        }
+        assert_eq!(manifest.runtime, crate::caps::manifest::Runtime::Binary);
+        let directory = root.join(id);
+        let target = directory.join(&entry);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::copy(&source, directory.join("app.json")).unwrap();
+        std::fs::write(&target, b"Signed entry fixture; never executed.\n").unwrap();
+        crate::test_env::sign_test_package_with_entrypoints(
+            &directory,
+            crate::provenance::PackageKind::App,
+            id,
+            &[entry.as_str()],
         );
+        let launch = launch_for(&directory, id).unwrap();
+        let selected = declared_session_entry(&launch).unwrap();
+        assert_eq!(
+            selected,
+            SessionEntry::Packaged(entry),
+            "`{id}` must bind its package-local signed MCP entry"
+        );
+        launch.bind(&selected.bound_entrypoints()).unwrap();
     }
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

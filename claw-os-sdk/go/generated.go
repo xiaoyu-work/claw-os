@@ -246,6 +246,7 @@ type Needcondition struct {
 // explicit wildcard (no implicit '*').
 type Scopebinding struct {
 	Kind string `json:"kind"`
+	Path string `json:"path,omitempty"`
 	Arg string `json:"arg,omitempty"`
 	Transform string `json:"transform,omitempty"`
 	Values map[string]interface{} `json:"values,omitempty"`
@@ -307,15 +308,30 @@ type Mcptool struct {
 }
 
 // Desktop — desktop.
-// Desktop GUI surface. Drives generation of
-// /usr/share/applications/com.clawos.<Id>.desktop at install time.
+// Default desktop GUI and optional additional named surfaces, all sharing one
+// authenticated App identity. Presentation grants no authority.
 type Desktop struct {
 	Exec string `json:"exec,omitempty"`
+	Entry string `json:"entry,omitempty"`
+	Needs *[]Need `json:"needs,omitempty"`
+	Entries map[string]DesktopEntry `json:"entries,omitempty"`
 	Name *Localizedtext `json:"name,omitempty"`
 	Icon string `json:"icon,omitempty"`
 	Categories []string `json:"categories,omitempty"`
 	MimeTypes []string `json:"mime_types,omitempty"`
 	SingleInstance bool `json:"single_instance,omitempty"`
+	PanelApplet bool `json:"panel_applet,omitempty"`
+}
+
+// DesktopEntry — DesktopEntry.
+// An additional explicitly selected signed GUI executable under the same
+// authenticated App identity. Required needs are exclusive to this surface; no
+// default-GUI, operation or MCP union.
+type DesktopEntry struct {
+	Entry string `json:"entry"`
+	Exec string `json:"exec"`
+	Name Localizedtext `json:"name"`
+	Needs []Need `json:"needs"`
 	PanelApplet bool `json:"panel_applet,omitempty"`
 }
 
@@ -349,6 +365,21 @@ type ObjectRef struct {
 	ObjectType string `json:"object_type"`
 	ObjectId string `json:"object_id"`
 	Revision *string `json:"revision,omitempty"`
+}
+
+// OwnerPathNeed — Owner-relative path need.
+// Bounded request data, never a grant. Only Root resolves the authenticated
+// owner's home; SDK resolution is a lexical preview without filesystem or
+// authorization effects.
+type OwnerPathNeed struct {
+	Verb string `json:"verb"`
+	Scope OwnerPathNeedScope `json:"scope"`
+}
+
+// OwnerPathNeedScope — owner_path_need_scope.
+type OwnerPathNeedScope struct {
+	Kind string `json:"kind"`
+	Path string `json:"path"`
 }
 
 // Perms — Permissions request / reply.
@@ -422,6 +453,15 @@ func ValidateManifestRuntime(value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid manifest.runtime value: %q", value)
+}
+
+// ValidateOwnerPathNeedVerb reports an error if value is not in the owner_path_need.verb enum.
+func ValidateOwnerPathNeedVerb(value string) error {
+	switch value {
+	case "fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta", "sys.config", "sys.mount", "data.backup":
+		return nil
+	}
+	return fmt.Errorf("invalid owner_path_need.verb value: %q", value)
 }
 
 // ValidatePermsDecision reports an error if value is not in the perms.decision enum.
@@ -779,6 +819,19 @@ func ValidateObjectRef(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "ObjectRef", "$")
+}
+
+const wireSchemaOwnerPathNeed = "{\"$id\":\"https://claw-os.dev/wire/v1/owner_path_need.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Bounded request data, never a grant. Only Root resolves the authenticated owner's home; SDK resolution is a lexical preview without filesystem or authorization effects.\",\"properties\":{\"scope\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"owner-path\",\"type\":\"string\"},\"path\":{\"description\":\"Normalized relative path or trailing /** subtree; ** alone means the authenticated home subtree. No absolute path, empty/dot/dotdot segment, backslash, colon, environment placeholder, control or other * pattern. SDK helpers also enforce 4096 UTF-8 bytes and 255 bytes per literal segment.\",\"maxLength\":4096,\"minLength\":1,\"pattern\":\"^(\\\\*\\\\*|([^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.[^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.\\\\.[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f])[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]*(/([^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.[^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.\\\\.[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f])[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]*)*(/\\\\*\\\\*)?)$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"kind\",\"path\"],\"type\":\"object\"},\"verb\":{\"enum\":[\"fs.read\",\"fs.write\",\"fs.delete\",\"fs.exec\",\"fs.watch\",\"fs.meta\",\"sys.config\",\"sys.mount\",\"data.backup\"],\"type\":\"string\"}},\"required\":[\"verb\",\"scope\"],\"title\":\"Owner-relative path need\",\"type\":\"object\"}"
+
+// ValidateOwnerPathNeed validates a value against wire/v1/owner_path_need.schema.json.
+func ValidateOwnerPathNeed(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaOwnerPathNeed))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "OwnerPathNeed", "$")
 }
 
 const wireSchemaToolCatalog = "{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}"

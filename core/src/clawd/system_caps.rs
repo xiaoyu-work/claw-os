@@ -150,6 +150,9 @@ const BASELINE: &[(Verb, Baseline)] = &[
     (Verb::SYS_EVENTS, Baseline::Denied),
     (Verb::SYS_IDENTITY, Baseline::Denied),
     (Verb::SYS_PERMISSIONS, Baseline::Denied),
+    (Verb::SYS_LOCALE, Baseline::Denied),
+    (Verb::SYS_LANGUAGE, Baseline::Denied),
+    (Verb::SYS_HOSTNAME, Baseline::Denied),
     (Verb::SYS_SECURITY, Baseline::Denied),
     (Verb::SYS_STORAGE, Baseline::Denied),
     (Verb::SYS_SERVICE, Baseline::Denied),
@@ -199,6 +202,7 @@ const BASELINE: &[(Verb, Baseline)] = &[
     // Asking the owner a question is the mechanism consent runs on.
     (Verb::UI_PROMPT, Baseline::Resourceless),
     (Verb::UI_WINDOW, Baseline::Denied),
+    (Verb::UI_PANEL, Baseline::Denied),
     (Verb::UI_INPUT, Baseline::Denied),
     (Verb::CLIPBOARD_READ, Baseline::Denied),
     (Verb::CLIPBOARD_WRITE, Baseline::Denied),
@@ -424,11 +428,11 @@ fn is_exact_secret_name(name: &str) -> bool {
 /// Authority that must never be delegated to a launcher the daemon
 /// could not tie to a registered session, regardless of catalog risk.
 ///
-/// Every verb here mutates machine-wide state or hands out credentials,
-/// which is exactly the escalation an unauthenticated local process
-/// would gain by asking for an App that declares it. Obtaining one of
-/// these requires an authenticated parent session or an approved
-/// permission grant.
+/// Every verb here mutates machine-wide state, controls desktop overlays
+/// or hands out credentials, which is exactly the escalation an
+/// unauthenticated local process would gain by asking for an App that
+/// declares it. Obtaining one of these requires an authenticated parent
+/// session or an approved permission grant.
 const LOCAL_LAUNCH_DENIED_VERBS: &[Verb] = &[
     Verb::SYS_PERMISSIONS,
     Verb::SYS_CONFIG,
@@ -446,6 +450,7 @@ const LOCAL_LAUNCH_DENIED_VERBS: &[Verb] = &[
     Verb::SECRET_READ,
     Verb::SECRET_WRITE,
     Verb::SECRET_GRANT,
+    Verb::UI_PANEL,
 ];
 
 /// Ceiling `clawd` delegates to a launcher it could not tie to a

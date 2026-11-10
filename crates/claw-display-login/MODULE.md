@@ -93,3 +93,16 @@ The six-input activation-only mode is unchanged.
 This is an explicit Root-only fixture, never a command to restart a real login
 or inspect a user's clipboard. It does not prove a real greetd/logind/KMS
 installation, hardware access or native producer permission readiness.
+Its named-GUI case selects a second signed executable with an explicit empty
+needs list under the same App identity, verifies literal argv and the actual
+executed filename, and retains zero selection/LayerShell rights despite the
+default GUI's operation needs and MCP declarations.
+The named launcher has no `COS_SESSION` environment value: Root still derives
+its exact registered parent from process identity, without an Admin bootstrap.
+Additional cases bind explicit `ui.panel:Wild` grants to the same signed App
+and executable, create real overlay surfaces with their own keyboard focus,
+and verify panel-only, independent clipboard read/write and ordinary
+`ui.window`/Panel-label-only admission. Panel revocation and display-control
+expiry retain the actual instance cgroup, descendants and transfer descriptor
+until checked retirement. Invalid owner/authority/process/expiry and
+reused-instance creator requests remain refused even when they request Layer-shell.

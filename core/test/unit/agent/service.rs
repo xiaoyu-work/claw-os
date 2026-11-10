@@ -910,7 +910,11 @@ fn activity_database_failure_keeps_associated_work_pending_but_legacy_work_usabl
     fs::create_dir(&database).unwrap();
 
     let error = store.claim_one().unwrap_err();
-    assert!(error.to_string().contains("load Activity"), "{error}");
+    assert!(
+        error.to_string().contains("Activity scheduling policy"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("activity storage failed"), "{error}");
     assert_eq!(
         store.locate(&job.id).unwrap().unwrap().1.status,
         JobStatus::Pending

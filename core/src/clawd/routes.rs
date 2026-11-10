@@ -1812,6 +1812,7 @@ routes! {
             ("app_id", FieldRule::Token),
             ("kind", FieldRule::Token),
             ("operation", FieldRule::Token),
+            ("gui_entry", FieldRule::Token),
             ("tool", FieldRule::Token),
             ("args", FieldRule::Size),
             ("package", FieldRule::Size),
@@ -2710,11 +2711,14 @@ routes! {
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("user", FieldRule::Token),
+            ("uid", FieldRule::Count),
+            ("new_name", FieldRule::Token),
+            ("account_type", FieldRule::Enum(&["standard", "administrator"])),
             ("group", FieldRule::Token),
         ],
         run: |c| {
             let authority = c.authority()?;
-    users::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+            users::control(c.params, c.client, authority).await
         },
     }
 }

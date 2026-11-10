@@ -1584,6 +1584,10 @@ fn dispatch_with_stdin_impl(
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal user command requires COS_SESSION".to_string())?;
         let mut user = None;
+        let mut uid = None;
+        let mut new_name = None;
+        let mut icon = None;
+        let mut account_type = None;
         let mut group = None;
         let mut full_name = None;
         let mut shell = None;
@@ -1607,6 +1611,31 @@ fn dispatch_with_stdin_impl(
                 .clone();
             match args[index].as_str() {
                 "--user" => user = Some(value),
+                "--uid" => {
+                    if uid.is_some() {
+                        return Err("duplicate internal user --uid".into());
+                    }
+                    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                        return Err("--uid requires an unsigned 32-bit target identity".into());
+                    }
+                    uid = Some(value.parse::<u32>()
+                        .map_err(|_| "--uid requires an unsigned 32-bit target identity".to_string())?);
+                }
+                "--new-name" => {
+                    if new_name.replace(value).is_some() {
+                        return Err("duplicate internal user --new-name".into());
+                    }
+                }
+                "--icon" => {
+                    if icon.replace(value).is_some() {
+                        return Err("duplicate internal user --icon".into());
+                    }
+                }
+                "--account-type" => {
+                    if account_type.replace(value).is_some() {
+                        return Err("duplicate internal user --account-type".into());
+                    }
+                }
                 "--group" => group = Some(value),
                 "--full-name" => full_name = Some(value),
                 "--shell" => shell = Some(value),
@@ -1617,12 +1646,16 @@ fn dispatch_with_stdin_impl(
             }
             index += 2;
         }
-        let value = request_clawd(
+        let value = request_wire_clawd(
             Command::SystemUsersControl,
             json!({
                 "session": session,
                 "action": action,
                 "user": user,
+                "uid": uid,
+                "new_name": new_name,
+                "icon": icon,
+                "account_type": account_type,
                 "group": group,
                 "full_name": full_name,
                 "shell": shell,
@@ -2346,13 +2379,12 @@ fn render_call_tool_result(result: &Value) -> Result<Option<String>, String> {
 }
 
 /// `cos app <name> <desktop.exec> [files...]` — launch an app's desktop
-/// GUI surface. The GUI itself is "World A" (the app draws its own
-/// window in any toolkit), so this does **not** require `agent.invoke`;
-/// the kernel only interposes when the app later exercises a declared
-/// capability verb. We still audit the launch and route through the
-/// bridge so the process is kernel-spawned with `COS_APP_ID` set.
+/// GUI surface. The App draws its own window in any toolkit; the
+/// authenticated Root Host owns launch authority, capability review and
+/// checked lifetime independently of an AI request.
 fn launch_app_gui(
     app_name: &str,
+    gui_entry: Option<&str>,
     exec: &str,
     files: &[String],
     app: &apps::App,
@@ -2365,13 +2397,17 @@ fn launch_app_gui(
     let launch = app
         .require_verified()
         .and_then(|pkg| bridge::AppLaunch::new(std::sync::Arc::clone(pkg)))?;
-    match bridge::launch_gui(&launch, exec, files, &data, &apps) {
+    let command = match gui_entry {
+        Some(name) => format!("--gui:{name}"),
+        None => exec.to_string(),
+    };
+    match bridge::launch_gui_entry(&launch, gui_entry, exec, files, &data, &apps) {
         Ok(()) => {
-            audit::log_entry(&audit, app_name, exec, files, start, "ok", None);
+            audit::log_entry(&audit, app_name, &command, files, start, "ok", None);
             Ok(None)
         }
         Err(e) => {
-            audit::log_entry(&audit, app_name, exec, files, start, "error", Some(&e));
+            audit::log_entry(&audit, app_name, &command, files, start, "error", Some(&e));
             Err(e)
         }
     }

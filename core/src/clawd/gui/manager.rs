@@ -30,6 +30,7 @@ pub(super) enum Phase {
 
 pub(super) struct JobState {
     pub phase: Phase,
+    pub layer_shell: bool,
     pub outcome: Option<Outcome>,
     pub retirement_error: Option<String>,
     finished_at: Option<Instant>,
@@ -47,11 +48,12 @@ impl Job {
         self.stopped.load(Ordering::Acquire)
     }
 
-    pub fn running(&self) -> Result<(), String> {
+    pub fn running(&self, layer_shell: bool) -> Result<(), String> {
         let mut state = self.state.lock().map_err(|_| "GUI status lock poisoned")?;
-        if self.stopping() {
+        if self.stopping() || state.phase != Phase::Starting {
             return Err("GUI launch was retired before execution".to_string());
         }
+        state.layer_shell = layer_shell;
         state.phase = Phase::Running;
         Ok(())
     }
@@ -156,6 +158,7 @@ impl Manager {
                 stopped: AtomicBool::new(false),
                 state: Mutex::new(JobState {
                     phase: Phase::Reserved,
+                    layer_shell: false,
                     outcome: None,
                     retirement_error: None,
                     finished_at: None,
@@ -311,7 +314,7 @@ pub(crate) async fn launch(params: Value, client: &ClientIdentity) -> Result<Val
                         return Err(BrokerError::execution(error));
                     }
                 }
-                return Ok(json!({ "started": true, "layer_shell": false }));
+                return Ok(json!({ "started": true, "layer_shell": state.layer_shell }));
             }
             if Instant::now() >= deadline {
                 job.stopped.store(true, Ordering::Release);

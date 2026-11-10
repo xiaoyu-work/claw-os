@@ -234,6 +234,7 @@ fn system_agent_caps_withhold_egress_execution_secrets_and_system_mutation() {
         (Verb::UI_ACCESSIBILITY, Scope::name("control")),
         (Verb::UI_INPUT, Scope::Wild),
         (Verb::UI_WINDOW, Scope::Wild),
+        (Verb::UI_PANEL, Scope::Wild),
         (Verb::DEVICE_AUDIO, Scope::name("output")),
         (Verb::DEVICE_MICROPHONE, Scope::name("input")),
         (Verb::DEVICE_CAMERA, Scope::name("capture")),

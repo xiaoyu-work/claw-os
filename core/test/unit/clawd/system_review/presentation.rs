@@ -1,5 +1,6 @@
 use super::*;
 use crate::provenance::{PackageKind, VerifiedPackage, VerifyOptions};
+use serde_json::json;
 
 fn isolated(test: impl FnOnce(&std::path::Path)) {
     let _lock = crate::test_env::lock_env();
@@ -83,6 +84,95 @@ fn system_review_shared_app_view_preserves_purpose_scope_arguments_and_non_grant
         assert_ne!(consumed.status, ReviewStatus::Completed);
         assert!(consumed.revision > confirmed.revision);
         assert!(approvals::list_recent(10).is_empty());
+    });
+}
+
+#[test]
+fn system_review_named_gui_targets_require_fresh_protected_confirmation() {
+    isolated(|root| {
+        let source = root.join("named-gui");
+        std::fs::create_dir(&source).unwrap();
+        let mut manifest = json!({
+            "id":"review-gui","version":"1.0.0","name":{"en":"Independent GUI"},
+            "entry":"command.py","desktop":{"entry":"window.py","exec":"open","needs":[],"entries":{
+                "applet":{"entry":"widget.py","exec":"panel","name":{"en":"Independent widget"},"needs":[{
+                    "verb":"sys.observe","scope":{"kind":"fixed","scope":{"kind":"name","value":"audio"}},
+                    "why":{"en":"Show the widget's own audio status"}
+                },{
+                    "verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":{"en":"Unbound widget file"}
+                }]}
+            }}
+        });
+        for entry in ["command.py", "window.py", "widget.py", "other.py"] {
+            std::fs::write(source.join(entry), "# never executed by review\n").unwrap();
+        }
+        let seal = |manifest: &serde_json::Value| {
+            std::fs::write(source.join("app.json"), serde_json::to_vec(manifest).unwrap()).unwrap();
+            let _ = std::fs::remove_file(source.join(crate::provenance::envelope::ENVELOPE_FILE));
+            crate::test_env::sign_test_package_with_entrypoints(
+                &source, PackageKind::App, "review-gui", &["command.py", "window.py", "widget.py", "other.py"],
+            );
+            crate::provenance::verify::verify_package(
+                &source, &VerifyOptions::new(PackageKind::App), &crate::provenance::trust_store(),
+            ).unwrap()
+        };
+        let package = seal(&manifest);
+        let record = approvals::system_review::submit(
+            1000, approvals::system_review::ReviewKind::AppActivation, &package, "terminal".into(),
+        ).unwrap();
+        let view = app(&record).unwrap();
+        assert!(view.disclosures.iter().any(|detail|
+            detail.label.contains("applet") && detail.value.contains("widget.py")
+                && detail.value.contains("Show the widget's own audio status")));
+        assert!(view.disclosures.iter().any(|detail| detail.label.contains("unsupported/unbound")));
+        assert!(view.permissions.iter().all(|permission| permission.supported_choices.is_empty()));
+        assert!(approvals::system_review::decide(1001, &record.id, true, Some(&package)).is_err());
+        approvals::system_review::decide(1000, &record.id, true, Some(&package)).unwrap();
+        approvals::system_review::consume(1000, &record.id, &package).unwrap();
+        assert!(approvals::system_review::has_accepted(1000, &package).unwrap());
+
+        manifest["desktop"]["entries"]["applet"]["entry"] = json!("other.py");
+        let changed = seal(&manifest);
+        assert!(!approvals::system_review::has_accepted(1000, &changed).unwrap());
+        let fresh = approvals::system_review::submit(
+            1000, approvals::system_review::ReviewKind::AppActivation, &changed, "terminal".into(),
+        ).unwrap();
+        let fresh = app(&fresh).unwrap();
+        assert_eq!(fresh.status, ReviewStatus::Pending);
+        assert_ne!(fresh.contract_digest, view.contract_digest);
+        assert!(fresh.disclosures.iter().any(|detail| detail.label.contains("applet") && detail.value.contains("other.py")));
+        assert!(approvals::list_recent(10).is_empty());
+    });
+}
+
+#[test]
+fn protected_gui_review_resolves_owner_path_from_the_record_owner_not_request_data() {
+    isolated(|root| {
+        let initial = package(root);
+        let source = initial.dir();
+        let mut manifest: serde_json::Value = serde_json::from_str(&initial.manifest_text().unwrap()).unwrap();
+        manifest["desktop"] = json!({"needs":[{
+            "verb":"fs.delete","scope":{"kind":"owner-path","path":"owner-path-review/**"},
+            "why":{"en":"Delete the owner's explicitly selected files"}
+        }]});
+        std::fs::write(source.join("app.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        std::fs::remove_file(source.join(crate::provenance::envelope::ENVELOPE_FILE)).unwrap();
+        crate::test_env::sign_test_package(source, PackageKind::App, "review-app");
+        let verified = crate::provenance::verify::verify_package(
+            source, &VerifyOptions::new(PackageKind::App), &crate::provenance::trust_store(),
+        ).unwrap();
+        let owner = unsafe { libc::geteuid() };
+        let home = crate::paths::verified_home_for_uid(owner).unwrap();
+        let record = approvals::system_review::submit(
+            owner, approvals::system_review::ReviewKind::AppActivation, &verified, "terminal".into(),
+        ).unwrap();
+        let view = app(&record).unwrap();
+        let permission = view.permissions.iter().find(|permission| permission.verb == "fs.delete").unwrap();
+        assert_eq!(permission.scope.kind, ScopeKind::Fixed);
+        assert_eq!(permission.scope.description, format!("path:{}/owner-path-review/**", home.display()));
+        assert_eq!(permission.uses[0].purpose, "Delete the owner's explicitly selected files");
+        assert!(permission.supported_choices.is_empty());
+        assert_eq!(view.status, ReviewStatus::Pending);
     });
 }
 

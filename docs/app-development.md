@@ -902,20 +902,132 @@ this while writing the manifest:
 * **GUI.** Display and GPU transports are granted only to a
   `desktop.exec` launch, never to a headless operation.
 
-GUI capability derivation currently uses manifest-fixed and wildcard
-`operations.*.needs` constrained by the authenticated launcher's existing
-authority. Argument-bound needs cannot be resolved at GUI startup, and MCP
-tool needs are not automatically unioned into a GUI grant. Missing high-risk
-authority is not turned into an implicit GUI approval. Merely adding a
-`desktop` block or a package-local native binary therefore does not authorize
-its privileged GUI features.
+### Multiple GUI entries under one App identity
 
-Display transport availability is not proof of separate clipboard or
-layer-shell enforcement. The committed selection hooks are only a foundation;
-authenticated instance binding, write checks and verified resource retirement
-must be integrated before those controls can be presented as effective.
-An App-side permission preflight is not a substitute for enforcement on the
-actual desktop or backend resource.
+The optional desktop contract can preserve separate native executables and
+render graphs without creating another installed App identity:
+
+```json
+{
+  "id": "workbench",
+  "version": "1.0.0",
+  "name": {"en": "Workbench"},
+  "runtime": "binary",
+  "entry": "bin/command",
+  "desktop": {
+    "exec": "--gui",
+    "entry": "bin/window",
+    "needs": [],
+    "entries": {
+      "applet": {
+        "entry": "bin/widget",
+        "exec": "open",
+        "name": {"en": "Workbench widget"},
+        "needs": []
+      }
+    }
+  }
+}
+```
+
+`cos app workbench --gui` selects the default GUI. Its exact existing
+`desktop.exec` also remains a public selector, including panel selectors such
+as `open`. `cos app workbench --gui:applet [literal user args...]` selects the
+named GUI, passing its declared `exec` as **one literal argument**, followed by
+unchanged user arguments. `exec` is not a shell command, command line or
+executable. No caller-supplied path can select a GUI. Unknown or invalid names
+are refused before execution.
+Non-interactive named launchers without `COS_SESSION` use authenticated Root
+registration without creating an Admin/bootstrap session. Root derives the
+actual parent or bounded unregistered-launcher policy, not caller environment.
+
+`desktop.entry` overrides only the default GUI's package-relative file. Without
+it, top-level `entry` or the runtime default is used. Ordinary operations and
+`mcp.entry` are unchanged. Each additional entry requires `entry`, `exec`,
+localized `name` (including `en`) and an explicit `needs` array. Names match
+`[a-z][a-z0-9_-]*`, at most 64 ASCII bytes, with at most 64 extra entries.
+Optional `panel_applet` defaults to false independently on each extra surface;
+it controls presentation environment only, not LayerShell or resource rights.
+
+`desktop.needs`, when present, is the default GUI's exclusive declaration:
+`[]` requests no capabilities. Omission retains the legacy constrained union
+of fixed/wild `operations.*.needs`. An additional GUI always uses only its own
+needs, never another GUI's, ordinary operations' or MCP tools' needs.
+Explicit `null` is invalid, not omission. Fixed needs outside the launcher's
+delegation require the existing exact-owner capability approval; wild needs
+can inherit only bounded same-verb launcher authority. Argument-bound and
+explicit conditional GUI needs are disclosed as unsupported/unbound and are
+not granted at startup. The old operation-needs union retains its legacy
+condition behavior. Literal GUI argv does not bind operation argument names
+or authorize a later file-picker selection.
+
+A GUI requiring a bounded owner-relative filesystem request can instead use
+the common Need binding:
+
+```json
+{
+  "verb": "fs.delete",
+  "scope": {"kind": "owner-path", "path": "Documents/**"},
+  "why": {"en": "Delete the owner's selected documents"}
+}
+```
+
+Root resolves this only against authenticated `PathContext.home`, for example
+`path:/home/alice/Documents/**`; neither manifest/request owner fields, `HOME`,
+`COS_OWNER_HOME`, cwd nor SDK output select the authority. The same binding
+works for operation and MCP needs through their Root-derived contexts.
+Only Path-kind verbs accept it. Paths must be normalized relative paths:
+no absolute, backslash, empty/dot/dotdot segment, colon, `$`, NUL/control or
+other `*` pattern. A trailing `/**` selects a subtree; `**` alone selects the
+authenticated home subtree. Literal spaces and Unicode are retained; path and
+resolved path fit 4096 UTF-8 bytes and literal segments fit 255 bytes.
+Root applies existing canonical Path-scope containment and rejects symlink
+escapes from the owner's home. Normal protected-resource and descriptor/mount
+checks remain mandatory, including refusal of `home/**` when it contains
+credential roots. This declaration does not make that resource view available.
+
+Owner-path needs request an exact bounded capability via normal authorization.
+Existing low-risk owner scopes may cover them; a missing High-risk `fs.delete`
+scope requires exact-owner approval. No default capability or Admin bootstrap
+is added, and legacy Wild inheritance is unchanged. Protected review shows the
+actual owner-resolved canonical scope while retaining the declared purpose.
+SDK `manifest.resolve_owner_path` (`ResolveOwnerPath` in Go) is only a lexical
+preview: it reads no home/environment/filesystem and grants or mounts nothing.
+Root independently derives the owner and canonical target before authorization.
+
+Panel hosting separately requires `ui.panel` with fixed canonical Wild scope,
+for example `"scope":{"kind":"fixed","scope":{"kind":"wild"}}`. This High-risk
+resourceless right is absent from System Agent and default/unregistered launcher
+ceilings; normal exact-owner approval remains necessary. `ui.window`, a panel
+label, `panel_applet` and clipboard rights do not imply it. Root projects
+LayerShell only from the actual installed instance's live grant; selection
+read/write, capture, virtual keyboard and global input remain independent.
+
+Root retains the exact selected package, name, entry and selector throughout
+registration and launch. Each target must be an authenticated regular file in
+both the signed file tree and envelope entrypoint inventory, executable for a
+binary runtime. The same sandbox, process identity, owner review, live grants,
+App deny gates, renewal and checked retirement apply to every surface. The App
+data/session/audit identity and cross-owner mutation fence remain App-scoped.
+Protected review discloses every target and its exact needs/purposes; the new
+fields enter its comparison digest but grant nothing.
+
+The public core helpers `Manifest::gui_entry(name)`,
+`gui_entry_for_cli(selector)` and `gui_entrypoints()` resolve manifest data
+without authority. `AppLaunch::gui_entrypoint(name)` applies the generic signed
+file gate. A signer appends the deduplicated GUI entrypoint inventory to its
+existing ordinary/MCP entries: if `desktop` exists, use
+`desktop.entry` or top-level `entry` or the runtime default, then each
+`desktop.entries.*.entry`. Do not export arbitrary auxiliary binaries.
+All four public SDK manifest types retain these optional fields; wire/ABI 1
+is unchanged. This source contract does not publish an SDK/platform artifact,
+adopt a pin, admit unsupported resources or complete installed GUI acceptance.
+
+Declared needs and display transport availability are not native resource or
+installed GUI acceptance. The authenticated Host must retain live grants,
+independent selection/LayerShell checks and checked resource retirement.
+Unsupported resources, private IPC and owner-home views remain explicit gates;
+an App preflight is never a substitute for actual provider enforcement.
 
 ### MCP service lifetime and Activity work
 

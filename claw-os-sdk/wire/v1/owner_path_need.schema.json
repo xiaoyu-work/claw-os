@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/owner_path_need.schema.json",
+  "title": "Owner-relative path need",
+  "description": "Bounded request data, never a grant. Only Root resolves the authenticated owner's home; SDK resolution is a lexical preview without filesystem or authorization effects.",
+  "type": "object",
+  "required": ["verb", "scope"],
+  "additionalProperties": true,
+  "properties": {
+    "verb": {
+      "type": "string",
+      "enum": ["fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta", "sys.config", "sys.mount", "data.backup"]
+    },
+    "scope": {
+      "type": "object",
+      "required": ["kind", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "const": "owner-path"},
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-full-match": true,
+          "pattern": "^(\\*\\*|([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*(/([^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.[^./\\\\*$:\\x00-\\x1f\\x7f-\\x9f]|\\.\\.[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f])[^/\\\\*$:\\x00-\\x1f\\x7f-\\x9f]*)*(/\\*\\*)?)$",
+          "description": "Normalized relative path or trailing /** subtree; ** alone means the authenticated home subtree. No absolute path, empty/dot/dotdot segment, backslash, colon, environment placeholder, control or other * pattern. SDK helpers also enforce 4096 UTF-8 bytes and 255 bytes per literal segment."
+        }
+      }
+    }
+  }
+}

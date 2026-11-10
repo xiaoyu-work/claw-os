@@ -246,7 +246,7 @@ export interface Defaultedpositional {
  * A single capability request: verb + scope binding + human reason.
  */
 export interface Need {
-  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "net.probe" | "net.manage" | "net.firewall" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.crash" | "sys.container" | "sys.config" | "sys.events" | "sys.identity" | "sys.locale" | "sys.language" | "sys.hostname" | "sys.security" | "sys.storage" | "sys.service" | "sys.package" | "sys.mount" | "sys.snapshot" | "sys.time" | "sys.power" | "sys.kernel" | "sys.permissions" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "data.backup" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "ui.accessibility" | "clipboard.read" | "clipboard.write" | "device.audio" | "device.bluetooth" | "device.media-route" | "device.printer" | "device.display" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.vision.analyze" | "ai.video.generate" | "ai.video.analyze" | "ai.bypass" | "desktop.launch" | "desktop.window" | "desktop.capture" | "desktop.media.observe" | "desktop.media.control" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval" | "mail.accounts" | "mail.read" | "mail.draft" | "mail.send";
+  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "net.probe" | "net.manage" | "net.firewall" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.crash" | "sys.container" | "sys.config" | "sys.events" | "sys.identity" | "sys.locale" | "sys.language" | "sys.hostname" | "sys.security" | "sys.storage" | "sys.service" | "sys.package" | "sys.mount" | "sys.snapshot" | "sys.time" | "sys.power" | "sys.kernel" | "sys.permissions" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "data.backup" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.panel" | "ui.input" | "ui.accessibility" | "clipboard.read" | "clipboard.write" | "device.audio" | "device.bluetooth" | "device.media-route" | "device.printer" | "device.display" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.vision.analyze" | "ai.video.generate" | "ai.video.analyze" | "ai.bypass" | "desktop.launch" | "desktop.window" | "desktop.capture" | "desktop.media.observe" | "desktop.media.control" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval" | "mail.accounts" | "mail.read" | "mail.draft" | "mail.send";
   scope: Scopebinding;
   when?: Needcondition;
   why: Localizedtext;
@@ -268,7 +268,8 @@ export interface Needcondition {
  * an explicit wildcard (no implicit '*').
  */
 export interface Scopebinding {
-  kind: "from-arg" | "from-arg-map" | "from-arg-or-wild" | "fixed" | "wild";
+  kind: "from-arg" | "from-arg-map" | "from-arg-or-wild" | "fixed" | "wild" | "owner-path";
+  path?: string;
   arg?: string;
   transform?: "identity" | "parent" | "url-host";
   values?: Record<string, unknown>;
@@ -344,16 +345,33 @@ export interface Mcptool {
 
 /**
  * desktop.
- * Desktop GUI surface. Drives generation of
- * /usr/share/applications/com.clawos.<Id>.desktop at install time.
+ * Default desktop GUI and optional additional named surfaces, all sharing one
+ * authenticated App identity. Presentation grants no authority.
  */
 export interface Desktop {
   exec?: string;
+  entry?: string;
+  needs?: Need[];
+  entries?: Record<string, DesktopEntry>;
   name?: Localizedtext;
   icon?: string;
   categories?: string[];
   mime_types?: string[];
   single_instance?: boolean;
+  panel_applet?: boolean;
+}
+
+/**
+ * DesktopEntry.
+ * An additional explicitly selected signed GUI executable under the same
+ * authenticated App identity. Required needs are exclusive to this surface; no
+ * default-GUI, operation or MCP union.
+ */
+export interface DesktopEntry {
+  entry: string;
+  exec: string;
+  name: Localizedtext;
+  needs: Need[];
   panel_applet?: boolean;
 }
 
@@ -394,6 +412,25 @@ export interface ObjectRef {
   object_type: string;
   object_id: string;
   revision?: string;
+}
+
+/**
+ * Owner-relative path need.
+ * Bounded request data, never a grant. Only Root resolves the authenticated
+ * owner's home; SDK resolution is a lexical preview without filesystem or
+ * authorization effects.
+ */
+export interface OwnerPathNeed {
+  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "sys.config" | "sys.mount" | "data.backup";
+  scope: OwnerPathNeedScope;
+}
+
+/**
+ * owner_path_need_scope.
+ */
+export interface OwnerPathNeedScope {
+  kind: "owner-path";
+  path: string;
 }
 
 /**
@@ -817,6 +854,17 @@ export function validateObjectRef(value: unknown): asserts value is ObjectRef & 
 
 export function normalizeObjectRefIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value);
+}
+
+const _WIRE_SCHEMA_OWNER_PATH_NEED: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/owner_path_need.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Bounded request data, never a grant. Only Root resolves the authenticated owner's home; SDK resolution is a lexical preview without filesystem or authorization effects.\",\"properties\":{\"scope\":{\"additionalProperties\":false,\"properties\":{\"kind\":{\"const\":\"owner-path\",\"type\":\"string\"},\"path\":{\"description\":\"Normalized relative path or trailing /** subtree; ** alone means the authenticated home subtree. No absolute path, empty/dot/dotdot segment, backslash, colon, environment placeholder, control or other * pattern. SDK helpers also enforce 4096 UTF-8 bytes and 255 bytes per literal segment.\",\"maxLength\":4096,\"minLength\":1,\"pattern\":\"^(\\\\*\\\\*|([^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.[^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.\\\\.[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f])[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]*(/([^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.[^./\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]|\\\\.\\\\.[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f])[^/\\\\\\\\*$:\\\\x00-\\\\x1f\\\\x7f-\\\\x9f]*)*(/\\\\*\\\\*)?)$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"kind\",\"path\"],\"type\":\"object\"},\"verb\":{\"enum\":[\"fs.read\",\"fs.write\",\"fs.delete\",\"fs.exec\",\"fs.watch\",\"fs.meta\",\"sys.config\",\"sys.mount\",\"data.backup\"],\"type\":\"string\"}},\"required\":[\"verb\",\"scope\"],\"title\":\"Owner-relative path need\",\"type\":\"object\"}") as WireRule;
+
+export function validateOwnerPathNeed(value: unknown): asserts value is OwnerPathNeed & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_OWNER_PATH_NEED, _WIRE_SCHEMA_OWNER_PATH_NEED, value, "OwnerPathNeed", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_OWNER_PATH_NEED, _WIRE_SCHEMA_OWNER_PATH_NEED, value);
+}
+
+export function normalizeOwnerPathNeedIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_OWNER_PATH_NEED, _WIRE_SCHEMA_OWNER_PATH_NEED, value);
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;

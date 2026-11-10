@@ -73,6 +73,7 @@ pub mod envelope;
 pub mod events;
 pub mod generated;
 pub mod gui;
+pub mod manifest;
 pub mod mcp;
 pub mod objects;
 pub mod tools;

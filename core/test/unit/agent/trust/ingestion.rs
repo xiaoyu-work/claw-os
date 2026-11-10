@@ -365,6 +365,29 @@ fn from_root_policy(observed: &mut std::collections::BTreeSet<SourceKind>) {
     );
 }
 
+fn from_workspace_context(observed: &mut std::collections::BTreeSet<SourceKind>) {
+    use crate::agent::context::packet::{ContextKind, ContextSection};
+    for kind in [
+        ContextKind::Workspace,
+        ContextKind::WorkspaceOwnerNote,
+        ContextKind::WorkspaceAgentReport,
+    ] {
+        record(observed, ContextSection::new(kind, "workspace-fixture", HOSTILE.into()).labeled());
+    }
+    for value in [
+        serde_json::json!({"note":{"source":"owner_note","content":HOSTILE}}),
+        serde_json::json!({"note":{"source":"agent_report","content":HOSTILE}}),
+        serde_json::json!({"note":{"source":"owner_note","content":HOSTILE},"imported":true}),
+        serde_json::json!({"source":{"content":HOSTILE}}),
+    ] {
+        let result = crate::agent::tools::workspace::read_result(&value);
+        let recovered = LabeledSegment::from_stored(&result.content);
+        assert!(recovered.content().contains("SYSTEM OVERRIDE"));
+        assert!(!recovered.class().is_policy());
+        record(observed, recovered);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The inventory
 // ---------------------------------------------------------------------------
@@ -381,6 +404,7 @@ fn every_source_kind_is_produced_by_a_real_builder() {
     from_model_output(&mut observed);
     from_replay(&mut observed);
     from_root_policy(&mut observed);
+    from_workspace_context(&mut observed);
     record(&mut observed,crate::triggers::work::handoff_segment(HOSTILE,None).unwrap());
 
     let missing: Vec<_> = SourceKind::ALL

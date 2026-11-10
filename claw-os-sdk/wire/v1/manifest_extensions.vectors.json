@@ -64,6 +64,56 @@
                 "label": {"en": "Read the requested path"},
                 "target_arg": "path",
                 "recovery": "not_applicable"
+              },
+              {
+                "name": "mcp-with-independent-gui-entries",
+                "manifest": {
+                  "id": "notes",
+                  "version": "1.0.0",
+                  "schema_version": 2,
+                  "name": {"en": "Notes"},
+                  "runtime": "binary",
+                  "entry": "bin/command",
+                  "mcp": {
+                    "entry": "bin/service",
+                    "tools": [{
+                      "name": "notes.get",
+                      "summary": {"en": "Read a note"},
+                      "args": [{"name": "note_id", "kind": "name", "binding": "flag", "required": true}],
+                      "needs": [{
+                        "verb": "sys.observe",
+                        "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "hardware"}},
+                        "why": {"en": "Inspect the requested service data"}
+                      }]
+                    }]
+                  },
+                  "desktop": {
+                    "entry": "bin/window",
+                    "exec": "--gui",
+                    "needs": [],
+                    "entries": {
+                      "applet": {
+                        "entry": "bin/widget",
+                        "exec": "open panel",
+                        "name": {"en": "Notes widget"},
+                        "needs": [{
+                          "verb": "ui.notify",
+                          "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                          "why": {"en": "Report this widget's results"}
+              }, {
+                          "verb": "fs.delete",
+                          "scope": {"kind": "owner-path", "path": "Documents/**"},
+                          "why": {"en": "Delete documents only after exact owner authorization"}
+              }, {
+                          "verb": "ui.panel",
+                          "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+                          "why": {"en": "Host this widget as an independently authorized panel"}
+                        }],
+                        "panel_applet": true
+                      }
+                    }
+                  }
+                }
               }
             ]
           }

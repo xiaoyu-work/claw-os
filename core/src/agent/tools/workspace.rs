@@ -89,26 +89,28 @@ impl Tool for WorkspaceTool {
             return ToolResult::err(error.to_string());
         }
         match gateway::request(operation).await {
-            Ok(value) => {
-                let kind = match value
-                    .get("note")
-                    .and_then(|note| note.get("source"))
-                    .and_then(Value::as_str)
-                {
-                    Some("owner_note") if value.get("imported") == Some(&json!(true)) => {
-                        SourceKind::WorkspaceImportedNote
-                    }
-                    Some("owner_note") => SourceKind::WorkspaceOwnerNote,
-                    Some("agent_report") => SourceKind::WorkspaceAgentReport,
-                    _ => SourceKind::WorkspaceSharedSource,
-                };
-                super::cos_proxy::memory::memory_result_with_class(
-                    kind,
-                    kind.class().least(TrustClass::UserControlledContext),
-                    &value,
-                )
-            }
+            Ok(value) => read_result(&value),
             Err(error) => ToolResult::err(error),
         }
     }
+}
+
+pub(crate) fn read_result(value: &Value) -> ToolResult {
+    let kind = match value
+        .get("note")
+        .and_then(|note| note.get("source"))
+        .and_then(Value::as_str)
+    {
+        Some("owner_note") if value.get("imported") == Some(&json!(true)) => {
+            SourceKind::WorkspaceImportedNote
+        }
+        Some("owner_note") => SourceKind::WorkspaceOwnerNote,
+        Some("agent_report") => SourceKind::WorkspaceAgentReport,
+        _ => SourceKind::WorkspaceSharedSource,
+    };
+    super::cos_proxy::memory::memory_result_with_class(
+        kind,
+        kind.class().least(TrustClass::UserControlledContext),
+        value,
+    )
 }

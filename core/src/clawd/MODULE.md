@@ -77,7 +77,7 @@ and agent tasks.
 | `app_execution.rs`, `app_mutation.rs` | Retained ordinary App process/cgroup/provider custody and global-per-App Root admission fences, independent of registry rows or owner permission policy |
 | `app_store.rs` | Protected owner review, bounded Store commit controller, checked cross-owner retirement before publication, and refusal of dpkg-owned directory replacement |
 | `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
-| `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
+| `gui/`, `app_sessions/gui.rs` | Root-supervised default/named GUI instances; signed entry/selector binding, exclusive GUI needs or legacy operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
 | `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
 | `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
 | `app_services.rs`, `app_services/retirement.rs` | Persistent owner/App service manager, retained cleanup custody, lifecycle policy, capacity/restart control, and single-use call authorization |

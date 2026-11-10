@@ -1140,6 +1140,8 @@ pub struct AppSessionRegister {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<Text<LABEL_BYTES>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gui_entry: Option<crate::clawd::gui::inputs::EntryName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<Text<LABEL_BYTES>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<TextList<128, PATH_BYTES>>,
@@ -1846,6 +1848,14 @@ pub struct UsersControl {
     pub action: Token,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_name: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<Text<PATH_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_type: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_name: Option<Text<LABEL_BYTES>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

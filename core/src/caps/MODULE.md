@@ -69,6 +69,14 @@ authority beyond the capability scope. Attended denials may create a bounded
 approval request; unattended denials never prompt. A worker approval is
 redeemed through `clawd::authority` at the final gate.
 
+`ui.panel` is the high-risk, resourceless desktop overlay capability, with
+canonical `Scope::Wild`. It is separate from ordinary `ui.window`, global
+`ui.input`, clipboard selection/history and capture rights. The system Agent
+baseline, unregistered launcher policy and non-administrative role bundles
+deny it; developer/unsigned content cannot hold it. An explicit authorized
+delegation or exact protected owner approval may grant it to a signed App's
+GUI. App names, origins and Panel presentation metadata never grant it.
+
 ## Tests
 
 ```bash

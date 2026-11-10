@@ -46,6 +46,10 @@ fn gui_launch_does_not_accept_process_owner_or_lease_metadata() {
         "epoch",
         "authority",
         "expires_monotonic_ms",
+        "gui_entry",
+        "entry",
+        "selector",
+        "runtime",
     ] {
         let value = serde_json::json!({
             "session_id": "app-fixture", "handle": "bound", "args": [], (key): "claimed",

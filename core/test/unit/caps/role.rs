@@ -91,6 +91,22 @@ fn clipboard_access_is_not_granted_below_admin() {
 }
 
 #[test]
+fn panel_authority_requires_an_explicit_administrative_role() {
+    let panel = Cap::unscoped(Verb::UI_PANEL);
+    for role in [
+        Role::Observer,
+        Role::Worker,
+        Role::Curator,
+        Role::Connector,
+        Role::Automator,
+        Role::AgentHost,
+    ] {
+        assert!(!role.caps_with_scopes(None, None, None).covers(&panel));
+    }
+    assert!(Role::Admin.caps_with_scopes(None, None, None).covers(&panel));
+}
+
+#[test]
 fn kernel_role_has_every_verb() {
     for v in super::super::verb::ALL_VERBS {
         assert!(

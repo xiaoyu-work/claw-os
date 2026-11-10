@@ -8,6 +8,7 @@
       "file_change_plan",
       "mcp_call_context",
       "object_ref",
+      "owner_path_need",
       "tool_catalog",
       "tool"
     ],

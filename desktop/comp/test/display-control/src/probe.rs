@@ -30,7 +30,25 @@ fn peer(protocol: Protocol) -> Peer {
     let mut peer = Peer::from_stream(UnixStream::connect(display).unwrap(), protocol);
     peer.commit();
     assert!(!peer.has_global("wp_security_context_manager_v1"));
-    assert!(!peer.has_global("zwlr_layer_shell_v1"));
+    let panel = std::env::args()
+        .nth(2)
+        .is_some_and(|mode| mode.starts_with("panel"));
+    assert_eq!(peer.has_global("zwlr_layer_shell_v1"), panel);
+    for denied in [
+        "zwp_virtual_keyboard_manager_v1",
+        "zwlr_virtual_pointer_manager_v1",
+        "zwp_input_method_manager_v2",
+        "ext_session_lock_manager_v1",
+        "ext_image_copy_capture_manager_v1",
+    ] {
+        assert!(!peer.has_global(denied), "{denied}");
+    }
+    peer
+}
+
+fn panel() -> Peer {
+    let mut peer = peer(Protocol::Core);
+    peer.create_layer_surface();
     peer
 }
 
@@ -228,9 +246,32 @@ fn main() {
     check_inherited_descriptors();
     match args[1].as_str() {
         "zero" => zero(),
+        "named" => {
+            assert_eq!(std::env::current_exe().unwrap().file_name().unwrap(), "gui-widget");
+            assert_eq!(std::env::var("COS_APP_ID").as_deref(), Ok("gui-boundary-test"));
+            assert!(private_marker("marker").ends_with("apps/gui-boundary-test/marker"));
+            zero();
+        }
         "read" => read_only(),
         "write" => write_only(),
         "both" => both(),
+        "panel" => {
+            let _panel = panel();
+            zero();
+        }
+        "panel-read" => {
+            let _panel = panel();
+            read_only();
+        }
+        "panel-write" => {
+            let _panel = panel();
+            write_only();
+        }
+        "window" => zero(),
+        "panel-revoke" => {
+            let _panel = panel();
+            revoke();
+        }
         "revoke" => revoke(),
         "aliases" => aliases(),
         _ => panic!("unknown private GUI probe mode"),

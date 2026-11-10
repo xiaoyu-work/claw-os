@@ -52,9 +52,13 @@ fn activity(owner_uid: u32) -> Activity {
 
 fn claimed_activity_job(activity: &Activity) -> (Store, Job) {
     let store = Store::open_default().unwrap();
-    let session = crate::session::create("Activity attention test")
-        .unwrap()
-        .to_string();
+    let session = crate::paths::RoutedPathContext::for_owner(
+        activity.owner_uid,
+        crate::paths::data_dir().join("owner-home"),
+    )
+    .scope_sync(|| crate::session::create("Activity attention test"))
+    .unwrap()
+    .to_string();
     store
         .submit_with_activity(
             "Prepare the release".into(),
