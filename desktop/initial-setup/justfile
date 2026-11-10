@@ -23,6 +23,8 @@ desktop-dst := base-dir / 'share' / 'applications' / desktop-entry
 icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg'
 layouts-dst := base-dir / 'share' / 'cosmic-layouts'
 polkit-rules-dst := base-dir / 'share' / 'polkit-1' / 'rules.d' / '20-cosmic-initial-setup.rules'
+desktop-rules-dst := base-dir / 'share' / 'polkit-1' / 'rules.d' / 'cosmic-settings.rules'
+accounts-policy-dst := base-dir / 'share' / 'polkit-1' / 'actions' / 'com.clawos.Settings.Users.policy'
 themes-dst := base-dir / 'share' / 'cosmic-themes'
 
 # Default recipe which runs `just cargo build-release`
@@ -49,6 +51,8 @@ install:
     install -Dm0644 {{ 'res' / desktop-entry }} '{{desktop-dst}}'
     install -Dm0644 {{ 'res' / autostart-entry }} '{{autostart-dst}}'
     install -Dm0644 res/20-cosmic-initial-setup.rules '{{polkit-rules-dst}}'
+    install -Dm0644 res/cosmic-settings.rules '{{desktop-rules-dst}}'
+    install -Dm0644 res/com.clawos.Settings.Users.policy '{{accounts-policy-dst}}'
     cd res/layouts; find . -type f -exec install -Dm0644 '{}' '{{layouts-dst}}/{}' \;
     find res/themes -type f -exec install -Dm0644 '{}' '{{themes-dst}}' \;
 
@@ -64,7 +68,7 @@ tag version:
 
 # Uninstalls installed files
 uninstall:
-    rm -rf {{desktop-dst}} {{polkit-rules-dst}} {{icon-dst}} {{themes-dst}} {{layouts-dst}} {{bin-dst}}
+    rm -rf {{desktop-dst}} {{polkit-rules-dst}} {{desktop-rules-dst}} {{accounts-policy-dst}} {{icon-dst}} {{themes-dst}} {{layouts-dst}} {{bin-dst}}
 
 # Vendor sources
 vendor:

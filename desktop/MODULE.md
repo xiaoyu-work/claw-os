@@ -30,6 +30,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `agent/ui/MODULE.md` | Agent UI state ownership, effects, views, and test boundaries |
 | `comp/`, `session/`, `panel/` | Shell/compositor/session surfaces |
 | `settings-daemon/` | OS settings services and config schemas; native UI source is external |
+| `initial-setup/res/{cosmic-settings.rules,com.clawos.Settings.Users.policy}` | OS-owned desktop/first-boot polkit policy, never delivered or removed by a product App |
 | `toolkit/`, `text/`, `theme/` | Shared UI/rendering foundations |
 | [`clawos-app/products/mail`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail) | External Mail product source and paired Firefox build dependency; not part of the COSMIC build |
 | [external Editor](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor) | Complete native UI/MCP/resources; controlled filesystem/desktop and SDK AI remain OS-provided; build with `just editor-build` |
