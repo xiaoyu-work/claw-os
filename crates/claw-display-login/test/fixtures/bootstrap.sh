@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-session_only=0
-if [[ $# == 13 && "${13}" == --session-startup-only ]]; then
-    session_only=1
-    set -- "${@:1:12}"
+selection=all
+if [[ $# == 15 ]]; then
+    case "${15}" in
+        --session-startup-only) selection=startup ;;
+        --file-manager-only) selection=file-manager ;;
+        *) exit 64 ;;
+    esac
+    set -- "${@:1:14}"
 fi
-[[ "$EUID" == 0 && ( $# == 6 || $# == 12 ) ]] || exit 64
+[[ "$EUID" == 0 && ( $# == 6 || $# == 14 ) ]] || exit 64
 [[ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)" ]] || exit 64
 registry=$(realpath -- "$1")
 host=$(realpath -- "$2")
@@ -15,7 +19,7 @@ pam_module=$(realpath -- "$4")
 pam_fixture=$(realpath -- "$5")
 private=$(realpath -- "$6")
 gui=0
-if [[ $# == 12 ]]; then
+if [[ $# == 14 ]]; then
     gui=1
     [[ "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)" ]] || exit 64
     cos=$(realpath -- "$7")
@@ -24,8 +28,11 @@ if [[ $# == 12 ]]; then
     probe=$(realpath -- "${10}")
     session=$(realpath -- "${11}")
     cosmic_session=$(realpath -- "${12}")
+    file_manager=$(realpath -- "${13}")
+    file_manager_autostart=$(realpath -- "${14}")
     [[ -x "$cos" && -x "$gui_runner" && -x "$app_runner" && -x "$probe" \
-        && -x "$session" && -x "$cosmic_session" ]] || exit 64
+        && -x "$session" && -x "$cosmic_session" && -x "$file_manager" \
+        && -f "$file_manager_autostart" ]] || exit 64
 fi
 [[ -x "$registry" && -x "$host" && -x "$compositor" && -f "$pam_module" ]] || exit 64
 [[ -x "$pam_fixture" && -d "$private" && "$private" != / ]] || exit 64
@@ -57,6 +64,8 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$app_runner" /usr/local/bin/claw-app-runner
     install -m0755 "$session" /usr/local/bin/claw-display-session
     install -m0755 "$cosmic_session" /usr/bin/cosmic-session
+    install -m0755 "$file_manager" /usr/lib/cos/bin/claw-file-manager
+    install -Dm0644 "$file_manager_autostart" /etc/xdg/autostart/claw-file-manager.desktop
     install -m0755 "$probe" /usr/lib/cos/bin/claw-gui-probe
     install -m0755 "$pam_fixture" /usr/lib/cos/bin/pam-login-fixture
     install -d -m0755 /usr/lib/cos/apps /usr/lib/cos/trust/publishers.d
@@ -65,10 +74,11 @@ fi
 printf '%s\n' \
     'root:x:0:0:root:/root:/bin/sh' \
     'claw-display-test:x:62050:62050:Private display fixture:/run/display-home:/bin/sh' \
+    'claw-display-other:x:62051:62051:Private negative caller:/run/display-other-home:/bin/sh' \
     >"$private/passwd"
-printf '%s\n' 'root:x:0:' 'claw-display-test:x:62050:' >"$private/group"
+printf '%s\n' 'root:x:0:' 'claw-display-test:x:62050:' 'claw-display-other:x:62051:' >"$private/group"
 hash=$(printf '%s\n' 'private-disposable-display-fixture-password' | openssl passwd -6 -stdin)
-printf 'root:!:20000:0:99999:7:::\nclaw-display-test:%s:20000:0:99999:7:::\n' "$hash" \
+printf 'root:!:20000:0:99999:7:::\nclaw-display-test:%s:20000:0:99999:7:::\nclaw-display-other:!:20000:0:99999:7:::\n' "$hash" \
     >"$private/shadow"
 chmod 0600 "$private/shadow"
 mount --bind "$private/passwd" /etc/passwd
@@ -76,6 +86,7 @@ mount --bind "$private/group" /etc/group
 mount --bind "$private/shadow" /etc/shadow
 install -d -m0755 /run/cos /run/user
 install -d -m0700 -o62050 -g62050 /run/display-home /run/user/62050
+install -d -m0700 -o62051 -g62051 /run/display-other-home
 mkdir -m0700 "$private/pam"
 printf '%s\n' \
     'auth required pam_unix.so' \
@@ -127,7 +138,52 @@ trap cleanup EXIT
 if [[ "$gui" == 1 ]]; then
     install -d -m0700 /run/gui-fixture
     install -d -m0755 /run/gui-public
+    printf 'private-v1' >/run/gui-public/isolated
+    chmod 0644 /run/gui-public/isolated
+    for kind in mnt net; do
+        readlink "/proc/self/ns/$kind" >"/run/gui-public/$kind-private"
+        readlink "/proc/1/ns/$kind" >"/run/gui-public/$kind-host"
+        chmod 0644 "/run/gui-public/$kind-private" "/run/gui-public/$kind-host"
+    done
     install -d -m0755 /run/gui-session-empty-path
+    install -d -m0755 /run/gui-session-components
+    for component in cosmic-settings-daemon cosmic-notifications cosmic-panel \
+        cosmic-app-library cosmic-launcher cosmic-workspaces cosmic-osd cosmic-bg \
+        cosmic-greeter cosmic-files-applet cosmic-idle; do
+        ln -s /usr/lib/cos/bin/pam-login-fixture "/run/gui-session-components/$component"
+    done
+    install -d -m0711 -o62050 -g62050 /run/gui-public/file-manager-bus
+    cat > /run/gui-public/file-manager-bus.conf <<'BUS'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path=/run/user/62050/bus</listen>
+  <listen>unix:path=/run/gui-public/file-manager-bus/bus</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <deny user="*"/>
+    <allow user="root"/>
+    <allow user="claw-display-test"/>
+    <allow user="claw-display-other"/>
+    <deny own="*"/>
+    <deny send_destination="*"/>
+    <allow receive_sender="*"/>
+  </policy>
+  <policy user="root">
+    <allow send_destination="org.freedesktop.DBus"/>
+  </policy>
+  <policy user="claw-display-test">
+    <allow own="*"/>
+    <allow send_destination="*"/>
+  </policy>
+  <policy user="claw-display-other">
+    <allow send_destination="org.freedesktop.DBus"/>
+    <allow send_destination="org.freedesktop.FileManager1"/>
+  </policy>
+</busconfig>
+BUS
+    chmod 0644 /run/gui-public/file-manager-bus.conf
     cp -a "$private/pam" /run/gui-fixture/pam
     printf 'private-v1' >/run/gui-fixture/isolated
     printf '%s\n' "$group" >/run/gui-fixture/cgroup
@@ -136,12 +192,17 @@ if [[ "$gui" == 1 ]]; then
     export PATH=/usr/local/bin:/usr/bin:/bin
     result=0
     fixture_test=clawd::server::gui_fixture::private_authenticated_gui
-    if [[ "$session_only" == 1 ]]; then
-        fixture_test=clawd::server::gui_fixture::private_session_startup_failure
-    fi
+    case "$selection" in
+        startup) fixture_test=clawd::server::gui_fixture::private_session_startup_failure ;;
+        file-manager) fixture_test=clawd::server::gui_fixture::private_file_manager_session ;;
+    esac
+    listing=$("$registry" --list)
+    grep -Fx "$fixture_test: test" <<< "$listing" >/dev/null
+    grep -Fx 'clawd::server::gui_fixture::file_manager::private_file_manager_client: test' \
+        <<< "$listing" >/dev/null
     "$registry" --exact "$fixture_test" \
         --ignored --nocapture --test-threads=1 || result=$?
-    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..11} session-startup; do
+    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..18} session-startup file-manager; do
         if [[ -f "/run/gui-fixture/pam-$case.log" ]]; then
             cp "/run/gui-fixture/pam-$case.log" "$private/pam-$case.log"
             if [[ "$result" != 0 ]]; then cat "$private/pam-$case.log" >&2; fi

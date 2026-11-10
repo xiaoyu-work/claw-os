@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <sys/socket.h>
+#include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -254,22 +255,54 @@ static int gui_fixture(void) {
     return result;
 }
 
-static pid_t session_child(char *const arguments[], int output) {
+static pid_t session_user_child(char *const arguments[], int output, uid_t uid,
+                                const char *path, const char *role) {
     pid_t child = fork();
     if (child == 0) {
         if ((output >= 0 && dup2(output, STDOUT_FILENO) != STDOUT_FILENO)
-            || setgroups(0, NULL) != 0 || setgid(62050) != 0 || setuid(62050) != 0
+            || setgroups(0, NULL) != 0 || setgid(uid) != 0 || setuid(uid) != 0
             || syscall(SYS_close_range, 3u, ~0u, 0u) != 0 || clearenv() != 0
-            || chdir("/run/display-home") != 0
-            || setenv("HOME", "/run/display-home", 1) != 0
-            || setenv("PATH", "/run/gui-session-empty-path", 1) != 0
+            || close(STDIN_FILENO) != 0 || open("/dev/null", O_RDONLY) != STDIN_FILENO
+            || chdir(uid == 62050 ? "/run/display-home" : "/run/display-other-home") != 0
+            || setenv("HOME", uid == 62050 ? "/run/display-home" : "/run/display-other-home", 1) != 0
+            || setenv("PATH", path, 1) != 0
+            || setenv("LANG", "fr_CA.UTF-8", 1) != 0
+            || setenv("LANGUAGE", "fr:en", 1) != 0
+            || setenv("LC_TIME", "C.UTF-8", 1) != 0
+            || setenv("XDG_CONFIG_DIRS", "/etc/xdg", 1) != 0
+            || setenv("XDG_CURRENT_DESKTOP", "COSMIC", 1) != 0
             || setenv("XDG_RUNTIME_DIR", "/run/user/62050", 1) != 0
             || setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/62050/bus", 1) != 0)
             _exit(120);
+        if (role && setenv("CLAW_GUI_FILE_MANAGER_CALL", role, 1) != 0)
+            _exit(121);
+        if (strcmp(path, "/run/gui-session-components") == 0
+            && (setenv("COS_SESSION", "file-manager-stale-session-do-not-use", 1) != 0
+                || setenv("COS_APP_ID", "file-manager-stale-app-do-not-use", 1) != 0
+                || setenv("COS_CAPS", "file-manager-stale-caps-do-not-use", 1) != 0
+                || setenv("COS_APP_GUI", "1", 1) != 0
+                || setenv("COS_MCP_SERVER", "1", 1) != 0))
+            _exit(122);
         execv(arguments[0], arguments);
         _exit(123);
     }
     return child;
+}
+
+static pid_t session_child(char *const arguments[], int output) {
+    return session_user_child(arguments, output, 62050, "/run/gui-session-empty-path", NULL);
+}
+
+static int session_component(void) {
+    struct stat marker;
+    if (getuid() != 62050 || geteuid() != 62050
+        || stat("/run/gui-public/isolated", &marker) != 0 || marker.st_uid != 0
+        || !S_ISREG(marker.st_mode) || (marker.st_mode & 0022) != 0
+        || prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) != 0)
+        return 64;
+    /* Unrelated desktop UI components are idle fixtures, not a GUI outcome. */
+    for (;;)
+        pause();
 }
 
 static int session_ready(int descriptor, const char *prefix) {
@@ -382,5 +415,108 @@ cleanup:
         result = -1;
     if (session_cleanup(bus) != 0)
         result = -1;
+    return result;
+}
+
+static int file_manager_call(const char *role, uid_t uid) {
+    char *const arguments[] = {
+        "/usr/local/bin/claw-gui-broker-fixture", "--exact",
+        "clawd::server::gui_fixture::file_manager::private_file_manager_client",
+        "--ignored", "--nocapture", "--test-threads=1", NULL
+    };
+    pid_t caller = session_user_child(arguments, -1, uid, "/run/gui-session-empty-path", role);
+    if (caller <= 0)
+        return -1;
+    int status;
+    if (session_exited(caller, 10000) != 1) {
+        session_cleanup(caller);
+        return -1;
+    }
+    if (waitpid(caller, &status, 0) != caller)
+        return -1;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+static int file_manager_session(void) {
+    pid_t bus = -1, session = -1;
+    int result = -1, descriptors[2];
+    if (gui_reply("AUTH", -1) != 0)
+        return -1;
+    char *const bus_arguments[] = {
+        "/usr/bin/dbus-daemon", "--nofork", "--nopidfile",
+        "--config-file=/run/gui-public/file-manager-bus.conf", "--print-address=1", NULL
+    };
+    if (pipe2(descriptors, O_CLOEXEC) != 0)
+        goto cleanup;
+    bus = session_child(bus_arguments, descriptors[1]);
+    close(descriptors[1]);
+    int ready = bus > 0
+        ? session_ready(descriptors[0], "unix:path=") : -1;
+    close(descriptors[0]);
+    if (ready != 0) {
+        fprintf(stderr, "private FileManager1 bus did not become ready\n");
+        goto cleanup;
+    }
+    if (chmod("/run/gui-public/file-manager-bus/bus", 0666) != 0)
+        goto cleanup;
+    char *const arguments[] = {
+        "/usr/local/bin/claw-display-session", "--exec", "/usr/bin/cosmic-session", NULL
+    };
+    session = session_user_child(arguments, -1, 62050, "/run/gui-session-components", NULL);
+    if (session <= 0)
+        goto cleanup;
+    int pidfd = (int)syscall(SYS_pidfd_open, session, 0u);
+    if (pidfd < 0)
+        goto cleanup;
+    ready = gui_reply("SESS", pidfd);
+    close(pidfd);
+    if (ready != 0)
+        goto cleanup;
+    fprintf(stderr, "private actual cosmic-session child started for FileManager1\n");
+    for (;;) {
+        char command[4];
+        if (gui_command(command) != 0)
+            break;
+        const char *role = NULL;
+        uid_t uid = 62050;
+        if (memcmp(command, "FLDR", 4) == 0) role = "folders";
+        else if (memcmp(command, "ITEM", 4) == 0) role = "items";
+        else if (memcmp(command, "PROP", 4) == 0) role = "properties";
+        else if (memcmp(command, "ERRO", 4) == 0) role = "failure";
+        else if (memcmp(command, "HOLD", 4) == 0) role = "hold";
+        else if (memcmp(command, "OTHR", 4) == 0) { role = "other"; uid = 62051; }
+        else if (memcmp(command, "STOP", 4) == 0 && session > 0) {
+            int status;
+            if (file_manager_call("exit", 62050) != 0
+                || session_exited(session, 15000) != 1
+                || waitpid(session, &status, 0) != session)
+                break;
+            session = -1;
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+                fprintf(stderr, "private cosmic-session orderly exit failed\n");
+                break;
+            }
+            if (gui_reply("PASS", -1) != 0)
+                break;
+        } else if (memcmp(command, "CLSE", 4) == 0 && session < 0) {
+            result = 0;
+            break;
+        } else {
+            break;
+        }
+        if (role && (file_manager_call(role, uid) != 0 || gui_reply("PASS", -1) != 0))
+            break;
+    }
+cleanup:
+    if (session_cleanup(session) != 0)
+        result = -1;
+    if (session_cleanup(bus) != 0) {
+        result = -1;
+    } else {
+        if (unlink("/run/user/62050/bus") != 0 && errno != ENOENT)
+            result = -1;
+        if (unlink("/run/gui-public/file-manager-bus/bus") != 0 && errno != ENOENT)
+            result = -1;
+    }
     return result;
 }

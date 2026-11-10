@@ -11,6 +11,13 @@ use claw_display_control::ProcessIdentity;
 
 const OWNER: u32 = 62050;
 
+mod file_manager {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/file_manager.rs"
+    ));
+}
+
 fn command(channel: &OwnedFd, tag: &[u8; 4]) {
     assert_eq!(
         unsafe {
@@ -115,7 +122,7 @@ fn install_packages() {
     let trust = TrustStore::load_roots(&roots);
     assert!(!trust.is_empty(), "{:?}", trust.diagnostics());
     crate::provenance::set_trust_store_for_roots(trust, roots);
-    for id in ["gui-boundary-test", "gui-boundary-zero"] {
+    for id in ["gui-boundary-test", "gui-boundary-zero", "gui-file-manager-test"] {
         let dir = Path::new("/usr/lib/cos/apps").join(id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -141,6 +148,11 @@ fn install_packages() {
             }));
         }
         let mut desktop = serde_json::json!({"exec":"surface","panel_applet":true});
+        if id == "gui-file-manager-test" {
+            desktop = serde_json::json!({
+                "exec":"file-manager-surface","needs":[],"panel_applet":false,
+            });
+        }
         let mut entrypoints = vec!["gui-probe".to_string()];
         if id == "gui-boundary-test" {
             std::fs::copy(dir.join("gui-probe"), dir.join("gui-widget")).unwrap();
@@ -1005,16 +1017,22 @@ fn headless_cli(group: &std::fs::File) {
 #[test]
 #[ignore = "requires the private authenticated Root PAM/display fixture namespace"]
 fn private_authenticated_gui() {
-    private_gui_fixture(false);
+    private_gui_fixture(false, false);
 }
 
 #[test]
 #[ignore = "requires the private authenticated Root PAM/display fixture and cosmic-session"]
 fn private_session_startup_failure() {
-    private_gui_fixture(true);
+    private_gui_fixture(true, false);
 }
 
-fn private_gui_fixture(session_only: bool) {
+#[test]
+#[ignore = "requires the private authenticated PAM/COSMIC/FileManager1 fixture"]
+fn private_file_manager_session() {
+    private_gui_fixture(false, true);
+}
+
+fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
     assert_eq!(unsafe { libc::geteuid() }, 0);
     assert_ne!(
         std::fs::read_link("/proc/self/ns/mnt").unwrap(),
@@ -1065,7 +1083,7 @@ fn private_gui_fixture(session_only: bool) {
         assert!(path.starts_with("/sys/fs/cgroup/claw-display-fixture."));
         let root = Path::new(path);
         std::fs::write(root.join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
-        if !session_only {
+        if !session_only && !file_manager_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
             for case in 0..19 {
@@ -1073,7 +1091,12 @@ fn private_gui_fixture(session_only: bool) {
                 run_case(case, &group).await;
             }
         }
-        session_startup_failure(root);
+        if !session_only {
+            file_manager::run(root).await;
+        }
+        if !file_manager_only {
+            session_startup_failure(root);
+        }
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
     });

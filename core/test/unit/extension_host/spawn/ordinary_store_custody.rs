@@ -294,6 +294,7 @@ impl Fixture {
         ).unwrap();
         crate::approvals::system_review::decide(OWNER, &review.id, true, Some(old.require_verified().unwrap())).unwrap();
         crate::approvals::system_review::consume(OWNER, &review.id, old.require_verified().unwrap()).unwrap();
+        let activation_review = review.id.clone();
         let request = uuid::Uuid::new_v4().simple().to_string();
         let source_parent = Path::new("/var/lib/cos/app-store/staging").join(&request).join("package");
         sign_app(&source_parent, "2.0.0", &key);
@@ -318,7 +319,8 @@ impl Fixture {
             OWNER, crate::approvals::system_review::ReviewKind::AppInstall,
             package, "private reviewed Store replacement".into(),
         ).unwrap();
-        crate::approvals::system_review::decide(OWNER, &review.id, true, Some(package)).unwrap();
+        assert_eq!(review.effective_state().unwrap(), crate::approvals::system_review::ReviewState::Approved);
+        assert_eq!(review.inherited_from.as_deref(), Some(activation_review.as_str()));
         let state = DaemonState::new().unwrap();
         let admission = Admission::new(AdmissionLimits::default());
         let primary = Path::new(BASE).join("broker.sock");

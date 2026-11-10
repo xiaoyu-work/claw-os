@@ -1,0 +1,46 @@
+{
+  "app_id": "gui-file-manager-test",
+  "startup_id": "private-file-manager-startup-do-not-log",
+  "calls": [
+    {
+      "name": "folders",
+      "method": "ShowFolders",
+      "uris": [
+        "file:///private-file-manager-intent/folders?token=private-intent-secret-folders",
+        "https://fixture-user:fixture-password@example.invalid/literal name/'\";$() --flag"
+      ]
+    },
+    {
+      "name": "items",
+      "method": "ShowItems",
+      "uris": [
+        "file:///private-file-manager-intent/items?token=private-intent-secret-items",
+        "https://fixture-user:fixture-password@example.invalid/literal name/'\";$() --flag"
+      ]
+    },
+    {
+      "name": "properties",
+      "method": "ShowItemProperties",
+      "uris": [
+        "file:///private-file-manager-intent/properties?token=private-intent-secret-properties",
+        "https://fixture-user:fixture-password@example.invalid/literal name/'\";$() --flag"
+      ]
+    },
+    {
+      "name": "failure",
+      "method": "ShowItems",
+      "uris": [
+        "file:///private-file-manager-intent/failure?token=private-intent-secret-failure",
+        "https://fixture-user:fixture-password@example.invalid/literal name/'\";$() --flag"
+      ]
+    },
+    {
+      "name": "hold",
+      "method": "ShowItems",
+      "uris": [
+        "file:///private-file-manager-intent/hold?token=private-intent-secret-hold",
+        "https://fixture-user:fixture-password@example.invalid/literal name/'\";$() --flag"
+      ]
+    }
+  ]
+}

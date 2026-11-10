@@ -47,7 +47,7 @@ runtime_target="$PWD/build/gui-runtime-target"
 fixture_target="$PWD/build/gui-fixture-target"
 CARGO_TARGET_DIR="$runtime_target" cargo build -p cos \
   --bin cos --bin claw-display-host --bin claw-display-session \
-  --bin claw-gui-runner --bin claw-app-runner --locked
+  --bin claw-gui-runner --bin claw-app-runner --bin claw-file-manager --locked
 CARGO_TARGET_DIR="$runtime_target" cargo build -p claw-display-login --locked
 CARGO_TARGET_DIR="$runtime_target" cargo test -p cos --lib --locked \
   --no-run --message-format=json > "$runtime_target/gui-tests.json"
@@ -70,7 +70,9 @@ sudo unshare --mount --net --ipc --uts --fork \
   "$runtime_target/debug/cos" "$runtime_target/debug/claw-gui-runner" \
   "$runtime_target/debug/claw-app-runner" "$fixture_target/debug/claw-gui-probe" \
   "$runtime_target/debug/claw-display-session" \
-  "$fixture_target/debug/cosmic-session"
+  "$fixture_target/debug/cosmic-session" \
+  "$runtime_target/debug/claw-file-manager" \
+  desktop/session/data/claw-file-manager.desktop
 ```
 
 The C fixture uses real PAM authentication and kernel login identities with
@@ -80,15 +82,63 @@ has its own Root cgroup, as real display sessions do. The runner checks and
 cleans only its own kernel subtree; its named scratch directory retains logs
 and private overlay files for inspection.
 
-The full runner has twelve positional inputs; the final input is the actual
-`cosmic-session` executable. It also tests a missing settings daemon through an
+The full runner has fourteen positional inputs; inputs twelve through fourteen
+are the actual `cosmic-session`, actual `claw-file-manager`, and the session's
+unmodified autostart source resource. It also tests a missing settings daemon through an
 empty private `PATH`, without a production test switch. A separate authenticated
 display observer and private session bus stay alive while the real session must
 exit with its original startup panic within five seconds. PAM must then complete
 checked retirement, with an outer 25-second session/PAM deadline. Append
-`--session-startup-only` to the same twelve-input command for the isolated
+`--session-startup-only` to the same fourteen-input command for the isolated
 `clawd::server::gui_fixture::private_session_startup_failure` regression.
 The six-input activation-only mode is unchanged.
+
+Append `--file-manager-only` to the fourteen-input command to select
+`clawd::server::gui_fixture::private_file_manager_session`. The complete
+`private_authenticated_gui` run also includes it. `scripts/ci/test-boundaries.sh
+display` builds/passes both real executables and the autostart resource and
+executes the complete fixture, not a test-name selection that can pass with
+zero tests.
+
+This case genuinely authenticates PAM, retains its kernel login, and runs
+`claw-display-session --exec /usr/bin/cosmic-session`. The actual session starts
+the actual facade as its child through the staged XDG resource. Only its
+`--app` routing preference is overridden to a private, freshly signed
+`gui-file-manager-test` package with explicit empty GUI needs. No parent App or
+model grant is registered. Assertions bind the session/facade/cos pidfds and
+kernel login, check absence of stale App/model environment, and verify zero
+GUI capabilities. The existing real headless compositor and ordinary Root GUI
+Host run the signed native probe, which commits a real Wayland surface,
+checks literal URI argv and refuses both raw bus paths. Three standard methods
+must produce checked successful GUI outcomes; a fourth native exit-7 case
+must produce a checked failure with counts-only arguments and static
+`gui_launch_failed` audit classification. Receipt markers alone are not GUI
+completion evidence.
+
+A second locked disposable NSS identity calls the same facade over a
+fixture-only second listener. The canonical owner runtime directory remains
+`0700`; only the isolated second socket is cross-UID reachable. Its authenticated
+reply must come from the facade's unique bus owner, not a daemon-policy denial.
+Root observes the current-thread facade with ptrace fork/vfork events and
+requires no spawn across the different-UID call. Apps receive neither listener:
+the signed GUI probe independently requires actual syscall-level bus refusal.
+The same ptrace capability is already needed by the GUI transport's kernel
+process/descriptor checks; failure is a test failure, not a skip.
+
+Finally a live GUI and separately grouped descendant retain the instance
+transport while the actual session exits. The test waits for the real facade,
+cos and GUI pidfds, checked-empty/deleted instance cgroup and runtime removal,
+then actual PAM retirement and an empty login cgroup. Private JSON/JSONL/log
+artifacts must contain neither URI nor StartupID/credential sentinels.
+
+Unrelated COSMIC component slots use explicitly idle C-fixture executables
+in a private PATH; they never report a GUI outcome. A private `/run/systemd/system`
+availability marker also exercises the session-owned path without contacting a
+real user manager. This proves authenticated session-child transport and Root
+GUI custody, not the Settings/Panel/Files Applet UIs, a real user-manager/logind
+installation, the full Files product, or KMS/image acceptance. Linux compilation
+and execution are mandatory downstream evidence; formatting/static checks do
+not establish a passing authenticated session.
 
 This is an explicit Root-only fixture, never a command to restart a real login
 or inspect a user's clipboard. It does not prove a real greetd/logind/KMS
