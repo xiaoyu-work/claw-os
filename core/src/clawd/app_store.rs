@@ -575,18 +575,40 @@ where
 }
 
 pub(crate) async fn retire_installed(state: &super::state::DaemonState, app: &str, fence: MutationFence) -> Result<(), String> {
+    retire_scoped(state, app, None, fence).await
+}
+
+pub(crate) async fn retire_for_owner(
+    state: &super::state::DaemonState, app: &str, owner: u32,
+    fence: std::sync::Arc<super::app_mutation::OwnerFence>,
+) -> Result<(), String> {
+    retire_scoped(state, app, Some(owner), fence).await
+}
+
+async fn retire_scoped<F: Send + Sync + 'static>(
+    state: &super::state::DaemonState, app: &str, owner_filter: Option<u32>, fence: std::sync::Arc<F>,
+) -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
-    { let _ = (state, app, fence); Err("Root App mutation requires Linux".into()) }
+    { let _ = (state, app, owner_filter, fence); Err("Root App mutation requires Linux".into()) }
     #[cfg(target_os = "linux")]
     {
         let services = state.app_service_manager().ok_or("Root App service custody is unavailable")?;
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut completed = services.retire_app(app, deadline).await?;
+        let mut completed = match owner_filter {
+            Some(owner) => services.retire_app_for_owner(app, Some(owner), deadline).await?,
+            None => services.retire_app(app, deadline).await?,
+        };
         let app_id = app.to_string();
         let result = tokio::task::spawn_blocking(move || {
             let _fence = fence;
-            completed.extend(super::gui::retire_installed_app(&app_id, deadline)?);
-            completed.extend(super::app_execution::retire_app(&app_id, deadline)?);
+            completed.extend(match owner_filter {
+                Some(owner) => super::gui::retire_installed_app_for_owner(&app_id, Some(owner), deadline)?,
+                None => super::gui::retire_installed_app(&app_id, deadline)?,
+            });
+            completed.extend(match owner_filter {
+                Some(owner) => super::app_execution::retire_app_for_owner(&app_id, Some(owner), deadline)?,
+                None => super::app_execution::retire_app(&app_id, deadline)?,
+            });
             let mut owners = Vec::new();
             match std::fs::read_dir("/run/cos/caps") {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -596,7 +618,7 @@ pub(crate) async fn retire_installed(state: &super::state::DaemonState, app: &st
                     if entry.file_type().map_err(|error| error.to_string())?.is_dir() {
                         let owner = entry.file_name().to_str().and_then(|value| value.parse::<u32>().ok())
                             .ok_or("unexpected owner in Root capability state")?;
-                        owners.push(owner);
+                        if owner_filter.is_none_or(|selected| selected == owner) { owners.push(owner); }
                     }
                 },
             }
@@ -624,7 +646,10 @@ pub(crate) async fn retire_installed(state: &super::state::DaemonState, app: &st
                     crate::provenance::runtime::deregister_checked(owner, &row.session_id)?;
                 }
             }
-            crate::extension_host::spawn::TaskAppData::retire_app_views(&app_id)?;
+            match owner_filter {
+                Some(owner) => crate::extension_host::spawn::TaskAppData::retire_app_views_for_owner(&app_id, Some(owner))?,
+                None => crate::extension_host::spawn::TaskAppData::retire_app_views(&app_id)?,
+            }
             Ok(())
         });
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), result).await

@@ -491,6 +491,7 @@ async fn persistent_service_cannot_change_app_identity_or_fall_back_to_unverifie
         content_digest: "a".repeat(64),
         publisher_key_id: None,
         tier: "system".into(),
+        developer_path: None,
     });
     let service = Arc::new(service);
     let error = dispatch(
@@ -538,6 +539,7 @@ async fn task_and_service_hosts_cannot_swap_app_actions() {
         content_digest: "a".repeat(64),
         publisher_key_id: None,
         tier: "system".to_string(),
+        developer_path: None,
     });
     let error = dispatch(
         HostAction::RunApp {

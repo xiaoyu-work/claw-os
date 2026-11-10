@@ -186,6 +186,7 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
             source: None,
         })?;
     let _app_service_sweeper = app_services.spawn_sweeper(agentd_shutdown.clone());
+    super::trust_withdrawal::initialize(state.clone());
     // Agent work runs in unprivileged `claw-agentd` processes. The
     // supervisor handle is deliberately *not* part of the daemon's
     // fatal path: a worker exiting — normally or not — must never take

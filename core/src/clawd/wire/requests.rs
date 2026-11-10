@@ -34,6 +34,7 @@ const NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
 const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
+pub use crate::clawd::trust_withdrawal::Request as ProvenanceTrustWithdrawal;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]

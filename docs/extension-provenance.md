@@ -142,23 +142,64 @@ root-owned and managed by the package manager.
 ### What happens to something already running
 
 An App session or MCP server that was verified at launch may run for
-hours. Two mechanisms cover it, and they give different guarantees:
+hours. Authority denial and checked resource retirement are separate outcomes:
 
 | | Guarantee | Where |
 | --- | --- | --- |
 | **On use** | The *next* authority call fails. Not "soon" — the call in front of it. | `provenance::runtime::assert_live` on the capability path, the worker broker endpoint, `app_session.relay`, and every MCP/App-session tool call |
-| **When idle** | Bounded by the tick of whichever supervision loop owns that view. | `provenance::runtime::lifecycle_tick`, called from the `clawd` authority sweep and the `agentd` reconcile pass |
+| **App retirement** | Root retains ordinary/GUI/MCP/data-view custody and awaits its existing checked barriers. Failure remains pending, not reusable. | `clawd::trust_withdrawal` and the shared App retirement controller |
+| **Other package resources** | The App reconciliation receipt does not certify their retirement. | Reported separately as unknown unless their own supervisor has checked them |
 
 Neither waits for a grant to expire and neither needs a daemon restart.
-The mechanism is the durable generation, not a notification: a daemon
-re-stats it before each decision and rebuilds the store when it moved,
-so a revocation written by a different process is visible immediately
-and no message can be lost. `cos provenance trust revoke` additionally
-runs a lifecycle pass in its own process, so instances it can see are
-stopped before the command returns.
+The CLI first durably narrows its own private file and records its generation.
+It does not wait for Root cleanup or undo withdrawal when Root is unavailable.
+The public router then requests reconciliation over an authenticated Root
+connection. Results distinguish `policy_withdrawn` from
+`root_retirement.root_retirement_confirmed`; a local process scan is never a
+checked retirement receipt. Status and recovery use the returned opaque ID:
+
+```bash
+cos provenance trust status <request-id>
+cos provenance trust recover <request-id>
+```
+
+`policy_scope` names the effective UID's private file, not global trust.
+Developer withdrawal preserves other grant files; `developer_grant_remaining`
+reports a still-loaded grant when observable. Root checks the effective grant
+against retained supporting context/path/digest instead of assuming file
+removal withdrew every grant.
+
+Root keeps the existing positive App verifier: its daemon-default store is
+the system/vendor roots **plus UID 0's private roots**, not the consumer's
+private publishers. Consequently UID-0-private withdrawal can affect
+cross-owner Root-authenticated App bindings. Nonzero withdrawal affects only
+that consumer. Fresh consumer-private checks can only deny by key/digest;
+missing consumer keys or unrelated developer grants never widen or replace
+the positive verifier. Invalid policy is unknown/denied, not an empty allow.
+Checks run again after waits before final binding or service dispatch.
+This closes stale-policy admission paths, but does not make the independent
+policy write and Root notification atomic; previously admitted work must drain.
+
+Root derives targets from retained custody as well as protected runtime and
+legacy registry evidence. The wire accepts only key/digest or developer
+kind/ID selectors, or an outcome ID for status/recovery; selectors are not
+proof that policy changed. Pending records are Root-owned and bounded.
+An App package read guard serializes publication, while an owner/App write
+fence drains only that owner's admissions. Pending cleanup cannot hold another
+owner's admission closed. Persistent blocks remain owner/App-scoped.
+Retiring a whole affected owner/App
+unit conservatively includes its shared service/data views, not other owners.
+Controllers survive client disconnect. Missing supporting evidence and
+unrecovered custody from a previous daemon epoch remain indeterminate.
+No status/recovery action grants trust or publishes a package.
+
+GUI's existing retained-snapshot generation check remains conservative:
+a daemon-default trust generation change can also invalidate other GUI
+snapshots using that same context. It is not a claim that those other keys
+were revoked.
 
 Every launch records an *instance* — the package digest and publisher
-key id it came from, plus the owner uid, pid, `/proc` start-time ticks
+key id it came from and its supporting trust-context UID, plus the owner uid, pid, `/proc` start-time ticks
 and cgroup of the child once it is bound.
 
 The record is addressed by an **explicit owner uid**, never by whatever
@@ -180,15 +221,12 @@ package-backed — a relay grant names one, a session row carries an
 is the only thing that could say the package behind that session is
 still trusted, and failing to read it is not evidence that it is.
 
-Stopping one means signalling the whole **process group**: an App
-worker and an MCP server each `setsid` at spawn, so a pid-only kill
-would leave descendants running. Before any signal the recorded
-identity is re-read from `/proc` and must still match on uid, start
-time and cgroup — a pid that was recycled after the instance exited
-names a different process and is never signalled. `SIGTERM`, a bounded
-grace, then `SIGKILL`; then the runtime record and the session's
-capability grants are cleared together, so no live grant outlives the
-process it was issued to.
+App termination belongs to Root's retained process/cgroup/provider/transport
+custody, not the generic runtime process-group helper. That helper refuses App
+records even when a PID is missing or mismatched. Only checked Root retirement
+can release those records and resources. The legacy non-App process-group
+supervisor still checks UID/start-time/cgroup before signalling; its counters
+are not a checked App or mixed-resource retirement receipt.
 
 A revoked MCP server is not merely refused: the transport is closed and
 its process group is stopped, because revoked code holding an open
@@ -675,6 +713,13 @@ A developer grant:
   above;
 - is recorded in the provenance audit log and listed by
   `cos provenance trust list`.
+
+Running developer packages retain the supporting canonical path and digest.
+Liveness requires that exact kind/ID/path/digest grant in the retained
+supporting context. Absence in an unrelated consumer's roots is irrelevant;
+missing retained evidence denies authority and leaves retirement unconfirmed.
+`dev-untrust` follows the same own-write-first/Root-reconciliation path and
+does not enable developer publication.
 
 **What consent does not defend against.** Malware already running as the
 same user can write the developer root directly; consent is not a

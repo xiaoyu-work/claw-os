@@ -31,18 +31,17 @@
 //!   timer.
 //! * **Bounded, for idle instances.** An instance that makes no
 //!   authority call would otherwise sit there. [`lifecycle_tick`] runs
-//!   from supervision loops that already exist — the `clawd` authority
-//!   sweep and the `agentd` reconcile pass — and calls [`sweep`] plus
-//!   [`enforce_shutdowns`]. The bound is the tick interval of whichever
-//!   loop owns that view, not an instant.
+//!   from existing supervision loops. It marks revoked Apps, but only
+//!   retained Root custody may retire their resources. The generic
+//!   process-group helper handles non-App instances only.
 //!
 //! Neither path waits for a grant TTL and neither requires a daemon
 //! restart.
 //!
 //! # Termination
 //!
-//! [`terminate`] kills the whole process *group*, because an App worker
-//! and an MCP server both `setsid` at spawn and may have started
+//! [`terminate`] refuses App records. Its legacy non-App helper kills
+//! the whole process *group*, because an MCP server may have started
 //! children of their own. Before signalling it re-reads the process
 //! identity from `/proc` and refuses unless the uid, start time and
 //! cgroup still match what was recorded — a pid that was recycled
@@ -84,9 +83,17 @@ pub struct PackageRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher_key_id: Option<String>,
     pub tier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub developer_path: Option<PathBuf>,
 }
 
 impl PackageRef {
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.id == other.id
+            && self.content_digest == other.content_digest
+            && self.publisher_key_id == other.publisher_key_id && self.tier == other.tier
+    }
+
     pub fn of(pkg: &VerifiedPackage) -> Self {
         Self {
             kind: pkg.kind(),
@@ -97,6 +104,8 @@ impl PackageRef {
                 _ => None,
             },
             tier: pkg.tier().as_str().to_string(),
+            developer_path: matches!(pkg.source(), TrustSource::Developer)
+                .then(|| pkg.dir().canonicalize().ok()).flatten(),
         }
     }
 
@@ -120,6 +129,17 @@ impl PackageRef {
                     "publisher key `{key_id}` for package `{}` is no longer trusted",
                     self.id
                 ));
+            }
+        }
+        if self.tier == "developer" {
+            let path = self.developer_path.as_ref()
+                .ok_or("developer instance has no retained supporting path; retirement is indeterminate")?;
+            let grant = trust.dev_grant(self.kind, &self.id)
+                .ok_or("the supporting developer grant was withdrawn")?;
+            let same_path = path.canonicalize().ok().zip(grant.path.canonicalize().ok())
+                .is_some_and(|(bound, current)| bound == current);
+            if !same_path || grant.content_digest != self.content_digest {
+                return Err("the exact supporting developer path/digest grant is no longer current".into());
             }
         }
         Ok(())
@@ -291,6 +311,8 @@ pub struct Instance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessIdentity>,
     pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_context_uid: Option<u32>,
 }
 
 impl Instance {
@@ -302,7 +324,16 @@ impl Instance {
     /// runs in, which is a different policy and is labelled as one.
     pub fn is_live(&self, trust: &TrustStore) -> Result<(), String> {
         match &self.package {
-            Some(reference) => reference.is_live(trust),
+            Some(reference) => {
+                if reference.tier == "developer" {
+                    let context = self.trust_context_uid
+                        .ok_or("developer supporting trust context is missing; retirement is indeterminate")?;
+                    if !trust.domain_is_usable(super::state::TrustDomain::Owner(context)) {
+                        return Err("the retained developer supporting context is unavailable in this store; an unrelated consumer grant is not evidence".into());
+                    }
+                }
+                reference.is_live(trust)
+            }
             None => Ok(()),
         }
     }
@@ -642,6 +673,7 @@ fn register_instance(
         package,
         process: None,
         started_at: chrono::Utc::now().to_rfc3339(),
+        trust_context_uid: Some(super::fsec::effective_uid()),
     };
     mutate_or_warn(owner, |state| {
         state.shutdown.remove(session_id);
@@ -924,7 +956,7 @@ pub fn pending_or_running(owner: u32) -> usize {
 pub struct LifecycleReport {
     /// Sessions newly marked by this pass.
     pub marked: Vec<String>,
-    /// Sessions whose process group was signalled and reaped.
+    /// Legacy non-App groups signalled; not a checked resource-retirement receipt.
     pub terminated: Vec<String>,
     /// Sessions whose record was cleared without signalling, because
     /// the recorded process was already gone or could no longer be
@@ -957,6 +989,17 @@ pub fn terminate(owner: u32, session_id: &str, grace: Duration) -> Result<bool, 
     let Some(marked) = shutdown_for(owner, session_id)? else {
         return Err(format!("session `{session_id}` is not marked for shutdown"));
     };
+    if marked.class.is_none() {
+        return Err("instance classification is missing; retirement is unconfirmed and its record was retained".into());
+    }
+    if marked.class == Some(InstanceClass::App)
+        || instance_for(owner, session_id)?.is_some_and(|instance| {
+            instance.class == InstanceClass::App
+                || instance.package.is_some_and(|package| package.kind == PackageKind::App)
+        })
+    {
+        return Err("App retirement requires checked Root custody; the runtime record was retained".into());
+    }
     let outcome = match marked.process.as_ref() {
         Some(identity) if identity.still_matches() => {
             let killed = signal_group(identity, grace);

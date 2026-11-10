@@ -23,6 +23,7 @@ pub mod app_sessions;
 pub mod app_store;
 pub(crate) mod app_install;
 pub(crate) mod app_mutation;
+pub(crate) mod trust_withdrawal;
 #[cfg(target_os = "linux")]
 pub(crate) mod app_execution;
 pub mod audio;

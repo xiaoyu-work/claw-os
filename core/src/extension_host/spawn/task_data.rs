@@ -19,6 +19,7 @@ fn retained_views() -> &'static Mutex<Vec<Arc<TaskAppData>>> {
 struct View {
     binding: app_data::Binding,
     destination: CString,
+    package: PackageRef,
 }
 
 pub(crate) struct TaskAppData {
@@ -95,17 +96,21 @@ impl TaskAppData {
         client: &ClientIdentity,
         package: &crate::provenance::VerifiedPackage,
     ) -> Result<PathBuf, String> {
-        let package = PackageRef::of(package);
-        if package.kind != crate::provenance::PackageKind::App {
+        crate::clawd::trust_withdrawal::check_package(self.owner.uid, package)?;
+        let package_ref = PackageRef::of(package);
+        if package_ref.kind != crate::provenance::PackageKind::App {
             return Err("Task App data requires a verified App package".to_string());
         }
-        self.bind_app(client, &package.id)
+        let view = self.bind_app(client, &package_ref)?;
+        crate::clawd::trust_withdrawal::check_package(self.owner.uid, package)?;
+        Ok(view)
     }
 
-    fn bind_app(self: &Arc<Self>, client: &ClientIdentity, app: &str) -> Result<PathBuf, String> {
+    fn bind_app(self: &Arc<Self>, client: &ClientIdentity, package: &PackageRef) -> Result<PathBuf, String> {
+        let app = package.id.as_str();
         self.require_client(client)?;
         crate::worker::derive::validate_app_id(app)?;
-        let _admission = crate::clawd::app_mutation::admit(app)?;
+        let _admission = crate::clawd::app_mutation::admit_for_owner(app, self.owner.uid)?;
         let mut views = self
             .views
             .lock()
@@ -135,6 +140,7 @@ impl TaskAppData {
             View {
                 binding: prepared.binding.clone(),
                 destination: prepared.destination.clone(),
+                package: package.clone(),
             },
         );
         if let Err(error) = in_namespace(&self.namespace, || prepared.install()) {
@@ -190,8 +196,12 @@ impl TaskAppData {
     }
 
     pub(crate) fn retire_app_views(app: &str) -> Result<(), String> {
+        Self::retire_app_views_for_owner(app, None)
+    }
+
+    pub(crate) fn retire_app_views_for_owner(app: &str, owner: Option<u32>) -> Result<(), String> {
         let retained = retained_views().lock().map_err(|_| "Task App custody lock poisoned")?.clone();
-        for data in retained {
+        for data in retained.into_iter().filter(|data| owner.is_none_or(|owner| data.owner.uid == owner)) {
             let mut views = data.views.lock().map_err(|_| "Task App data lock poisoned")?;
             if let Some(view) = views.get(app) {
                 in_namespace(&data.namespace, || {
@@ -212,6 +222,22 @@ impl TaskAppData {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn retained_trust_bindings(
+        owner: Option<u32>,
+    ) -> Result<Vec<crate::clawd::trust_withdrawal::Binding>, String> {
+        let retained = retained_views().lock().map_err(|_| "Task App custody lock poisoned")?.clone();
+        let mut bindings = Vec::new();
+        for data in retained.into_iter().filter(|data| owner.is_none_or(|owner| data.owner.uid == owner)) {
+            let views = data.views.lock().map_err(|_| "Task App data lock poisoned")?;
+            bindings.extend(views.iter().map(|(app, view)| crate::clawd::trust_withdrawal::Binding {
+                owner: data.owner.uid, app: app.clone(), package: Some(view.package.clone()),
+                trust_context_uid: Some(0),
+                context_generation_invalidated: false,
+            }));
+        }
+        Ok(bindings)
     }
 }
 

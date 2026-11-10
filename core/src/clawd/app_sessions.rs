@@ -217,7 +217,7 @@ fn require_expected_package(
     expected: &crate::provenance::runtime::PackageRef,
 ) -> Result<Arc<crate::provenance::VerifiedPackage>, String> {
     let package = Arc::clone(app.require_verified()?);
-    if crate::provenance::runtime::PackageRef::of(&package) != *expected {
+    if !crate::provenance::runtime::PackageRef::of(&package).same_identity(expected) {
         return Err(format!(
             "App `{}` package changed before session authorization",
             app.manifest.id
@@ -296,7 +296,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let app_id = required_string(&params, "app_id")?;
-    let admission = std::sync::Arc::new(super::app_mutation::admit(&app_id)
+    let admission = std::sync::Arc::new(super::app_mutation::admit_for_owner(&app_id, uid)
         .map_err(BrokerError::unavailable)?);
     let expected_package = required_package_ref(&params)?;
     let kind = launch_kind(&params)?;
@@ -318,6 +318,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
     let app = installed_app(&app_id)?;
     let package = require_expected_package(&app, &expected_package)?;
+    super::trust_withdrawal::check_package(uid, &package).map_err(BrokerError::authorization)?;
     let package_ref = crate::provenance::runtime::PackageRef::of(&package);
     // Resolved before any plan is built: the ceiling decides whether
     // this launch kind is available at all, and every capability and
@@ -464,6 +465,10 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     };
 
     let proc_dir = install_session(uid, home.clone(), info).await?;
+    if let Err(error) = super::trust_withdrawal::check_package(uid, &package) {
+        remove_session_row(uid, home, &session_id).await;
+        return Err(BrokerError::authorization(error));
+    }
     let handle = match issue_launch_grant_with_gui(
         &session_id,
         Some(&app_id),
@@ -599,7 +604,8 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
     // still inside the bind window, and the process being bound really
     // is the launcher's child.
     let launch = require_launch_grant(client, &handle, &session_id, uid)?;
-    let _admission = launch.subject.app_id.as_deref().map(super::app_mutation::admit).transpose()?;
+    let _admission = launch.subject.app_id.as_deref()
+        .map(|app| super::app_mutation::admit_for_owner(app, uid)).transpose()?;
     if let Some(binding) = &launch.subject.activity {
         binding.check()?;
     }
@@ -658,6 +664,9 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
         ),
         None => bound_caps,
     };
+    if let Some(app_id) = launch.subject.app_id.as_deref() {
+        installed_app_for_session(uid, &session_id, app_id)?;
+    }
     // Deriving the session grant is what makes `bind` one-shot: the
     // store refuses a second claim on a session index, so two
     // concurrent binds cannot both install one.
@@ -865,6 +874,8 @@ fn finalize_prepared_app_service_call(
     context: crate::agent::tools::app_gateway::McpCallContext,
     uid: u32,
 ) -> Result<super::app_services::PreparedAppServiceCall, BrokerError> {
+    super::trust_withdrawal::check_package(uid, app.require_verified()?)
+        .map_err(BrokerError::authorization)?;
     crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)?;
     let generation = crate::agent::tools::exposure::capability_generation(&delegation.ceiling);
     let service = app
@@ -1105,7 +1116,7 @@ pub async fn set_transient(
         );
     }
     let widening = authorization.is_some();
-    let _admission = widening.then(|| super::app_mutation::admit(&app_id)).transpose()?;
+    let _admission = widening.then(|| super::app_mutation::admit_for_owner(&app_id, uid)).transpose()?;
 
     // The same authoritative ceiling as `register`, resolved again from
     // the installed package. A transient re-scope is the obvious way to
@@ -1205,6 +1216,12 @@ pub async fn set_transient(
     })
     .await?;
 
+    if widening {
+        if let Err(error) = installed_app_for_session(uid, &session_id, &app_id) {
+            rollback_transient_caps(uid, home, &session_id, previous).await;
+            return Err(error);
+        }
+    }
     let grant = match call_context.as_ref() {
         Some(context) => issue_gateway_target_grant(
             &session_id,
@@ -1789,6 +1806,8 @@ fn installed_app_for_session(
             "App `{app_id}` package changed after session authorization"
         ));
     }
+    super::trust_withdrawal::check_package(owner, app.require_verified()?)?;
+    super::trust_withdrawal::check_session(owner, session_id)?;
     let ceiling = app_ceiling(&app)?;
     Ok((app, ceiling))
 }
@@ -2672,7 +2691,8 @@ async fn assert_relay_package_live(
     // `proc_data_dir()` would resolve to inside a path override. A
     // relay grant names an App session, so a missing or unreadable
     // record is a denial rather than "not an extension".
-    let verdict = crate::provenance::runtime::assert_live_instance_now(uid, session_id);
+    let verdict = super::trust_withdrawal::check_session(uid, session_id)
+        .and_then(|_| crate::provenance::runtime::assert_live_instance_now(uid, session_id));
     let Err(reason) = verdict else {
         return Ok(());
     };

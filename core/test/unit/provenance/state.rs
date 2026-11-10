@@ -65,6 +65,21 @@ fn bump_records_a_monotonic_generation() {
 
 #[cfg(unix)]
 #[test]
+fn owner_policy_fingerprints_bound_untrusted_file_size_and_entry_count() {
+    let dir = tmpdir("bounded-policy");
+    let file = dir.join("oversized.json");
+    fs::File::create(&file).unwrap().set_len(1024 * 1024 + 1).unwrap();
+    assert!(read_domain_files(&dir).is_err());
+    fs::remove_file(file).unwrap();
+    for index in 0..257 {
+        write_trust_file(&dir, &format!("{index}.json"), "{}");
+    }
+    assert!(read_domain_files(&dir).is_err());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
 fn missing_state_is_uninitialised_not_corrupt() {
     let dir = tmpdir("missing");
     assert!(read_state(&dir, domain()).unwrap().is_none());

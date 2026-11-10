@@ -297,7 +297,7 @@ mod unix {
                 libc::openat(
                     parent,
                     c.as_ptr(),
-                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
                 )
             };
             if fd < 0 {
@@ -321,6 +321,10 @@ mod unix {
         /// Sorted directory listing that reports the raw node type of
         /// each child without following symlinks.
         pub fn entries(&self, rel: Option<&str>) -> io::Result<Vec<(String, NodeMeta)>> {
+            self.entries_bounded(rel, usize::MAX)
+        }
+
+        pub fn entries_bounded(&self, rel: Option<&str>, cap: usize) -> io::Result<Vec<(String, NodeMeta)>> {
             let dir_fd = match rel {
                 None => dup_fd(self.fd.as_raw_fd())?,
                 Some(path) => {
@@ -363,6 +367,10 @@ mod unix {
                     .into_owned();
                 if name == "." || name == ".." {
                     continue;
+                }
+                if out.len() >= cap {
+                    unsafe { libc::closedir(dirp) };
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "directory exceeds its bounded entry inventory"));
                 }
                 let c = match CString::new(name.clone()) {
                     Ok(c) => c,

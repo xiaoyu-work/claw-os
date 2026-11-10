@@ -102,6 +102,7 @@ fn system_review_terminal_binds_install_confirmation_to_the_staged_contract() {
         content_digest: "sha256:fixture".into(),
         tier: "user".into(),
         publisher_key_id: None,
+        developer_path: None,
     };
     assert!(matches_install(&review, &package, &local));
     package.id = "other".into();

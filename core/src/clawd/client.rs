@@ -92,6 +92,7 @@ fn transport_error(fault: Fault) -> String {
 fn requires_root_peer(command: super::routes::Command) -> bool {
     command == super::routes::Command::AppSessionRegister
         || command == super::routes::Command::AppDirectoryInstall
+        || command == super::routes::Command::ProvenanceTrustWithdrawal
         || matches!(command, super::routes::Command::AppGuiLaunch
             | super::routes::Command::AppGuiWait | super::routes::Command::AppGuiStop)
         || command == super::routes::Command::SystemRegionalSettingsControl

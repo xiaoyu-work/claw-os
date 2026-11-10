@@ -38,6 +38,7 @@ pub mod sign;
 pub mod state;
 pub mod trust;
 pub mod verify;
+pub mod withdrawal;
 
 use std::sync::{Arc, Mutex, OnceLock};
 

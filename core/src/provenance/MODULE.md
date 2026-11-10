@@ -33,6 +33,7 @@ schemas or model-visible metadata are trusted.
 | `runtime.rs` | Which package and which exact process a running session is, immediate denial on use, and the bounded lifecycle pass that stops it |
 | `consent.rs` | Interactive, phrase-matched human approval for unsigned code |
 | `cli.rs` | Provenance command mechanics and read-only App rollback selection; public App rollback orchestration lives in the router |
+| `withdrawal.rs` | Pure bounded withdrawal selectors and fresh owner-private denial-only policy snapshots; never a publisher authority |
 
 ## Dependencies
 
@@ -48,6 +49,16 @@ artifact resolver and the existing signed Root directory controller. Direct
 `install::rollback` and `cli::run` App publication are refused. Non-App rollback
 keeps its existing staging/verification/publication behavior; no App/broker
 dependency is introduced here.
+
+Trust withdrawal writes only the effective UID's private policy, before any
+Root request. The router then requests checked Root reconciliation; direct
+provenance CLI calls report retirement unconfirmed. Provenance never imports
+the App broker. Generic runtime termination refuses App records, retaining
+them for Root custody rather than treating an unreadable process as absence.
+Developer liveness requires the retained supporting path, kind, ID and digest.
+Missing consumer-private keys/grants do not alter Root's positive verifier.
+Owner-policy readers bound file bytes and directory entries and use pinned,
+no-follow, nonblocking descriptors so a replaced FIFO cannot stall Root.
 
 ## Tests
 

@@ -257,11 +257,8 @@ pub fn read_state(dir: &Path, domain: TrustDomain) -> Result<Option<TrustState>,
             reason: format!("{} bytes is implausible for a state file", meta.size),
         });
     }
-    let raw = std::fs::read_to_string(&path).map_err(|e| StateError::Io {
-        path: path.clone(),
-        reason: e.to_string(),
-    })?;
-    let state: TrustState = serde_json::from_str(&raw).map_err(|e| StateError::Corrupt {
+    let raw = read_pinned_file(dir, TRUST_STATE_FILE, &meta, 64 * 1024)?;
+    let state: TrustState = serde_json::from_slice(&raw).map_err(|e| StateError::Corrupt {
         path: path.clone(),
         reason: e.to_string(),
     })?;
@@ -393,26 +390,56 @@ pub fn read_domain_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, StateErro
             })
         }
     };
-    for entry in entries.filter_map(Result::ok) {
+    for (index, entry) in entries.enumerate() {
+        if index >= 256 {
+            return Err(StateError::Corrupt {
+                path: dir.to_path_buf(), reason: "trust directory exceeds its bounded entry inventory".into(),
+            });
+        }
+        let entry = entry.map_err(|error| StateError::Io {
+            path: dir.to_path_buf(), reason: error.to_string(),
+        })?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if !name.ends_with(".json") || name.starts_with('.') || name == TRUST_STATE_FILE {
             continue;
         }
         let path = entry.path();
-        let meta = std::fs::symlink_metadata(&path).map_err(|e| StateError::Io {
+        let meta = fsec::lstat(&path).map_err(|e| StateError::Io {
             path: path.clone(),
             reason: e.to_string(),
         })?;
-        if !meta.is_file() {
+        if !meta.is_file {
             continue;
         }
-        let body = std::fs::read(&path).map_err(|e| StateError::Io {
-            path: path.clone(),
-            reason: e.to_string(),
-        })?;
+        let body = read_pinned_file(dir, &name, &meta, 1024 * 1024)?;
         out.push((name, body));
     }
     Ok(out)
+}
+
+fn read_pinned_file(
+    dir: &Path, name: &str, expected: &fsec::NodeMeta, cap: u64,
+) -> Result<Vec<u8>, StateError> {
+    let path = dir.join(name);
+    if expected.size > cap {
+        return Err(StateError::Corrupt { path, reason: "trust file exceeds its bounded size".into() });
+    }
+    #[cfg(unix)]
+    {
+        let file = fsec::DirHandle::open(dir).and_then(|directory| directory.open_file(name))
+            .map_err(|error| StateError::Io { path: path.clone(), reason: error.to_string() })?;
+        let actual = file.meta();
+        if (actual.dev, actual.ino, actual.uid, actual.mode, actual.nlink)
+            != (expected.dev, expected.ino, expected.uid, expected.mode, expected.nlink)
+        {
+            return Err(StateError::Corrupt { path, reason: "trust file changed while opening its pinned descriptor".into() });
+        }
+        file.read_bounded(cap).map_err(|error| StateError::Io { path, reason: error.to_string() })
+    }
+    #[cfg(not(unix))]
+    {
+        Err(StateError::Io { path, reason: "pinned trust storage requires Unix".into() })
+    }
 }
 
 /// Paths a reader stats to detect a change in one domain: the state

@@ -269,6 +269,12 @@ async fn mint_peer_session_grant(
     }
 
     let workspace;
+    if session.app_id.is_some()
+        && !matches!(route_name, "app_session.deregister" | "app_session.set_transient")
+    {
+        crate::clawd::trust_withdrawal::check_session(uid, session_id)
+            .map_err(AuthorityError::AppPolicy)?;
+    }
     let activity = if session.app_id.is_some() || session.group.as_deref() == Some("mcp") {
         // Reuse held invocation authority, including service-Host calls whose
         // parent is not a durable task session. Registry data cannot restore it.
