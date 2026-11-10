@@ -361,6 +361,7 @@ impl MemoryDb {
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )?;
+        conn.busy_timeout(OPEN_BUSY_TIMEOUT)?;
         // The schema batch begins by switching the journal to WAL,
         // which needs an exclusive lock, and the provenance migration
         // needs one too. The broker, the worker and a CLI can all open

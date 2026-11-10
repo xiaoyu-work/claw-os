@@ -97,6 +97,9 @@ jobs:
           fi
           python3 scripts/app_sources.py
 
+      - name: Run privileged extension boundaries
+        run: bash scripts/ci/test-boundaries.sh extensions
+
       - name: Run cos tests
         # `--test-threads=1` because many tests in `cos` mutate process-wide
         # env vars (`COS_DATA_DIR`, `COS_SESSION`, `COS_PERMS_MODE`, …).
@@ -124,9 +127,6 @@ jobs:
 
       - name: Test owner-scoped Calendar reads
         run: bash scripts/ci/test-boundaries.sh calendar
-
-      - name: Run privileged extension boundaries
-        run: bash scripts/ci/test-boundaries.sh extensions
 
       - name: Test authenticated OS display and GUI lifetime
         run: bash scripts/ci/test-boundaries.sh display
