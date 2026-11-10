@@ -82,12 +82,14 @@ build, then signed and deployed once. `images` builds signed Agent/Base inputs
 without publishing those packages to APT. `website` preserves the existing
 signed package pool. Non-expiring indexes need no scheduled refresh.
 
-Successful Agent APT publication also extracts the exact tested `cos`
-executables from its same-run amd64/arm64 packages into a new
-`agent-tools-v<package-version>` Release. These bounded public signing-tool
-assets retain package notices and SHA-256 checksums. Existing tags/assets are
-never replaced. App publication pins an individual executable URL and digest;
-it does not fetch OS source or use a mutable CI artifact as a production tool.
+SDK publication also builds tested portable `cos` signing executables for amd64
+and arm64 from that same commit, after its full Root validation succeeds.
+The SDK Release binds those bounded assets, dependency source pins and upstream
+notices to its checksums. This lets the first App channel authenticate snapshots
+before the coordinated Agent ownership cutover, without a circular dependency
+on an already-published Agent APT package. App publication pins an individual
+immutable executable URL and digest, never OS source or a mutable CI artifact.
+Publishing a signing tool does not install or activate an Agent or App.
 
 ## Dependencies
 

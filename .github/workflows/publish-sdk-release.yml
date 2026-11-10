@@ -15,10 +15,105 @@ concurrency:
   queue: max
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
+  provenance-tools:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+    env:
+      SDK_VERSION: ${{ inputs.version }}
+      ARCH: ${{ matrix.arch }}
+      RUST_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require successful Root validation for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          accepted="$(gh api -X GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs" \
+            -f head_sha="$GITHUB_SHA" -f status=completed \
+            --jq '.workflow_runs[] | select(.conclusion == "success") | .id')"
+          test -n "$accepted"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install portable CLI build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Test and build the public provenance CLI
+        run: |
+          set -euo pipefail
+          python3 -c 'import os, pathlib, tomllib; assert tomllib.loads(pathlib.Path("core/Cargo.toml").read_text())["package"]["version"] == os.environ["SDK_VERSION"]'
+          cargo test -p cos --lib --locked provenance:: -- --test-threads=1
+          cargo build --release --locked -p cos --bin cos --target "$RUST_TARGET"
+          mkdir -p dist
+          install -m 0755 "target/$RUST_TARGET/release/cos" "dist/cos-provenance-linux-$ARCH"
+          test "$(stat -c %s "dist/cos-provenance-linux-$ARCH")" -le 134217728
+          "dist/cos-provenance-linux-$ARCH" --version | grep -F "$SDK_VERSION"
+          cargo metadata --locked --format-version 1 --filter-platform "$RUST_TARGET" > "$RUNNER_TEMP/tool-metadata.json"
+      - name: Retain tool source pins and upstream notices
+        run: |
+          python3 - <<'PY'
+          import io, json, os, pathlib, tarfile
+          metadata = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "tool-metadata.json").read_text())
+          packages = {package["id"]: package for package in metadata["packages"]}
+          nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+          root = next(package["id"] for package in packages.values()
+                      if pathlib.Path(package["manifest_path"]).resolve() == pathlib.Path("core/Cargo.toml").resolve())
+          selected, pending = set(), [root]
+          while pending:
+              identity = pending.pop()
+              if identity in selected:
+                  continue
+              selected.add(identity)
+              pending.extend(dependency["pkg"] for dependency in nodes[identity]["deps"])
+          records = []
+          archive = pathlib.Path("dist") / f'cos-provenance-linux-{os.environ["ARCH"]}-notices.tar.gz'
+          with tarfile.open(archive, "w:gz") as stream:
+              stream.add("LICENSE", arcname="LICENSE", recursive=False)
+              for identity in sorted(selected):
+                  package = packages[identity]
+                  directory = pathlib.Path(package["manifest_path"]).parent
+                  paths = {path for path in directory.iterdir() if path.is_file()
+                           and path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE"))}
+                  if package.get("license_file"):
+                      paths.add(directory / package["license_file"])
+                  for path in sorted(paths):
+                      content = path.read_bytes()
+                      info = tarfile.TarInfo(f'{package["name"]}-{package["version"]}/{path.name}')
+                      info.size, info.mode = len(content), 0o644
+                      stream.addfile(info, io.BytesIO(content))
+                  records.append({name: package.get(name) for name in ("name", "version", "source", "license")})
+              content = json.dumps({"revision": os.environ["GITHUB_SHA"], "packages": records},
+                                   sort_keys=True, indent=2).encode()
+              info = tarfile.TarInfo("sources.json")
+              info.size, info.mode = len(content), 0o644
+              stream.addfile(info, io.BytesIO(content))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cos-provenance-tool-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
+    needs: provenance-tools
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
@@ -147,6 +242,15 @@ jobs:
             --output="dist/claw-os-sdk-$SDK_VERSION-source.tar.gz" \
             HEAD:claw-os-sdk
 
+      - name: Collect the tested public signing tools
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cos-provenance-tool-*
+          path: dist
+          merge-multiple: true
+
+      - name: Bind all release artifacts to checksums
+        run: |
           (cd dist && sha256sum * > SHA256SUMS)
           ls -lh dist
 
