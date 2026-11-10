@@ -157,8 +157,12 @@ impl BrokerContext {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn initialize_app_custody(&self) {
+    /// Initialize custody before spawning Hosts; reuse the returned containment root.
+    pub fn initialize_app_custody(
+        &self,
+    ) -> Result<Arc<crate::extension_host::spawn::ContainmentRoot>, String> {
         crate::clawd::app_execution::initialize(self);
+        self.extension_containment()
     }
 
     pub(crate) fn extension_identity_pool(
