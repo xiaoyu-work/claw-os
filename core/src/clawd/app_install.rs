@@ -352,7 +352,7 @@ fn checked_outcome(
     )
     .map_err(|error| error.to_string())?;
     require_package(&verified, pending)?;
-    crate::apps::installation::require_complete_at(&pending.destination, &pending.package.id)?;
+    DirectoryInstall::require_complete_at(&pending.destination, &pending.package.id)?;
     Ok(DirectoryPublication {
         manifest: pending.manifest.clone(),
         destination: pending.destination.clone(),
