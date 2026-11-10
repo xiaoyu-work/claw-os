@@ -10,6 +10,16 @@ use std::path::{Path, PathBuf};
 
 use super::{lint::app_lint_violations, App, AppManifest};
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DirectoryPublication {
+    pub manifest: AppManifest,
+    pub destination: PathBuf,
+    pub in_place: bool,
+    pub provenance: serde_json::Value,
+    pub review_id: Option<String>,
+}
+
 /// Source identity and destination selection, not a verified package or approval.
 pub(crate) struct DirectoryInstall {
     source: PathBuf,
@@ -93,6 +103,19 @@ impl DirectoryInstall {
 
     pub(crate) fn is_in_place(&self) -> bool {
         self.same_path
+    }
+
+    pub(crate) fn require_complete_at(destination: &Path, app_id: &str) -> Result<(), String> {
+        let parent = destination.parent().ok_or("App destination has no parent")?;
+        for kind in ["backup", "staging"] {
+            if !install_scratch_paths(parent, app_id, kind)
+                .map_err(|error| format!("inspect App installation cleanup: {error}"))?
+                .is_empty()
+            {
+                return Err("App transaction scratch remains; checked outcome cannot be confirmed".into());
+            }
+        }
+        sync_directory(parent).map_err(|error| format!("commit App installation directory: {error}"))
     }
 
     /// Authenticate the source for disclosure without staging or publishing it.
@@ -347,8 +370,10 @@ where
         .map_err(|e| format!("create staging {}: {e}", staging.display()))?;
     let _staging_guard = InstallStagingGuard(staging.clone());
 
-    copy_dir_recursive(source, &staging)
-        .map_err(|e| format!("copy {} -> {}: {e}", source.display(), staging.display()))?;
+    let limits = crate::provenance::install::Limits::default();
+    crate::provenance::install::assert_safe_tree(source, &limits)
+        .and_then(|()| crate::provenance::install::copy_bundle(source, &staging, &limits))
+        .map_err(|error| format!("copy {} -> {}: {error}", source.display(), staging.display()))?;
     let app = validate_install_tree(
         &staging,
         expected_id,
@@ -665,44 +690,6 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 
 fn sync_directory_best_effort(path: &Path) {
     let _ = sync_directory(path);
-}
-
-/// Plain recursive directory copy. **Symlinks are rejected** with an
-/// error rather than followed.
-///
-/// `fs::copy` and `Path::is_dir` traverse symlinks, so a malicious
-/// install source containing a link such as `passwd -> /etc/passwd`
-/// (or `data -> /var/lib/cos/credentials`) used to either escape the
-/// source tree or materialise privileged content as part of the
-/// installed App. For Apps we want a verbatim copy of a developer tree:
-/// rejecting symlinks is both safer and matches what every shipped
-/// App actually needs (none use symlinks). Use `symlink_metadata` to
-/// inspect entries without traversal, the same pattern checkpoint.rs
-/// uses in `copy_dir_recursive`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let metadata = std::fs::symlink_metadata(&from)?;
-        let ft = metadata.file_type();
-        if ft.is_symlink() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "refusing to copy symlink at `{}` during app install: \
-                     install sources must not contain symlinks",
-                    from.display()
-                ),
-            ));
-        } else if ft.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -123,13 +123,13 @@ fn root() -> PathBuf {
     PathBuf::from(STORE_ROOT)
 }
 
-fn apps_root() -> PathBuf {
+pub(crate) fn apps_root() -> PathBuf {
     std::env::var_os("COS_APPS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"))
 }
 
-fn secure_directory(path: &Path, mode: u32) -> Result<(), String> {
+pub(crate) fn secure_directory(path: &Path, mode: u32) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|error| error.to_string())?;
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     #[cfg(unix)]
@@ -156,12 +156,12 @@ fn initialize() -> Result<(), String> {
     secure_directory(&root().join("staging"), 0o711)
 }
 
-fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
     crate::agent::util::atomic_write_with_fsync(path, &bytes).map_err(|error| error.to_string())
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     #[cfg(unix)]
     {
@@ -558,7 +558,7 @@ async fn commit_prepared(state: &super::state::DaemonState, pending: &Prepared) 
     }).await
 }
 
-type MutationFence = std::sync::Arc<tokio::sync::OwnedRwLockWriteGuard<()>>;
+pub(crate) type MutationFence = std::sync::Arc<tokio::sync::OwnedRwLockWriteGuard<()>>;
 
 pub(crate) async fn with_mutation<T, C, F, P, R>(
     app: &str, retire: C, publish: P,
@@ -574,7 +574,7 @@ where
     publish(fence).await
 }
 
-async fn retire_installed(state: &super::state::DaemonState, app: &str, fence: MutationFence) -> Result<(), String> {
+pub(crate) async fn retire_installed(state: &super::state::DaemonState, app: &str, fence: MutationFence) -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     { let _ = (state, app, fence); Err("Root App mutation requires Linux".into()) }
     #[cfg(target_os = "linux")]
@@ -633,12 +633,10 @@ async fn retire_installed(state: &super::state::DaemonState, app: &str, fence: M
     }
 }
 
-#[cfg(test)]
-struct DeliveryLock(std::fs::File);
+pub(crate) struct DeliveryLock(std::fs::File);
 
-#[cfg(test)]
 impl DeliveryLock {
-    fn acquire() -> Result<Self, String> {
+    pub(crate) fn acquire() -> Result<Self, String> {
         #[cfg(not(target_os = "linux"))]
         { Err("App delivery ownership requires Linux".into()) }
         #[cfg(target_os = "linux")]
@@ -654,13 +652,13 @@ impl DeliveryLock {
             }
             let lock = libc::flock { l_type: libc::F_WRLCK as _, l_whence: libc::SEEK_SET as _, l_start: 0, l_len: 0, l_pid: 0 };
             if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } != 0 {
-                return Err("An OS package operation is active; retry Store installation afterwards".into());
+                return Err("An OS package operation is active; retry checked directory installation afterwards".into());
             }
             Ok(Self(file))
         }
     }
 
-    fn require_directory_delivery(&self, destination: &Path) -> Result<(), String> {
+    pub(crate) fn require_directory_delivery(&self, destination: &Path) -> Result<(), String> {
         use std::io::Read;
         let _held = &self.0;
         let paths = delivery_paths(destination)?;
@@ -690,7 +688,6 @@ impl DeliveryLock {
     }
 }
 
-#[cfg(test)]
 fn delivery_paths(destination: &Path) -> Result<Vec<String>, String> {
     let canonical = if destination.exists() {
         destination.canonicalize()
@@ -709,10 +706,9 @@ fn delivery_paths(destination: &Path) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-#[cfg(test)]
 fn delivery_owner_result(status: Option<i32>, output: &[u8]) -> Result<(), String> {
     if !output.is_empty() || status == Some(0) {
-        return Err("This App path is owned by an OS package. Update its owning package through the OS package updater (APT), not a directory Store replacement.".into());
+        return Err("This App path is owned by an OS package. Update its owning package through the OS package updater (APT), not a directory App replacement.".into());
     }
     if status != Some(1) {
         return Err("OS package ownership could not be established; directory replacement is refused".into());

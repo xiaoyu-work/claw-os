@@ -24,7 +24,7 @@ fn gate(app: &str) -> Result<Arc<RwLock<()>>, String> {
 
 pub(crate) fn admit(app: &str) -> Result<OwnedRwLockReadGuard<()>, String> {
     package_manager_idle()?;
-    if super::app_store::delivery_pending(app)? {
+    if super::app_store::delivery_pending(app)? || super::app_install::pending(app)? {
         return Err(format!("App `{app}` has an active or indeterminate package transaction"));
     }
     gate(app)?

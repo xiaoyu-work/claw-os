@@ -1,9 +1,18 @@
 use super::*;
 
 fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
-    install_cmd_with_confirmation(args, &mut |app, _source, _auto_yes, _dev_trust| {
-        apps::permission_review::PermissionReview::from_manifest(&app.manifest)
-            .map(|review| (review, None))
+    install_cmd_with_publisher(args, &mut |install, _source, _root, force, _auto_yes| {
+        let manifest = install.publish(force, false, &mut |app| {
+            apps::permission_review::PermissionReview::from_manifest(&app.manifest).map(|_| ())
+        })?;
+        let verified = installation::verify_installed_app(install.destination(), &manifest.id)?;
+        Ok(installation::DirectoryPublication {
+            manifest,
+            destination: install.destination().to_path_buf(),
+            in_place: install.is_in_place(),
+            provenance: verified.audit_facts(),
+            review_id: None,
+        })
     })
 }
 
@@ -234,11 +243,16 @@ fn install_yes_cannot_replace_os_confirmation_when_the_broker_is_unavailable() {
     ] {
         let error = super::install_cmd(&flags).unwrap_err();
         assert!(
-            error.contains("system review service is unavailable"),
+            error.contains("system review service is unavailable")
+                || error.contains("Global App directory installation requires Root"),
             "{error}"
         );
         assert!(!destination.join("needs-os-review").exists());
     }
+    let error = super::install_cmd(&["--recover".into(), "needs-os-review".into()]).unwrap_err();
+    assert!(error.contains("Root directory installation service is unavailable")
+        || error.contains("requires Root"), "{error}");
+    assert!(!destination.exists());
 }
 
 #[test]
@@ -313,6 +327,11 @@ fn install_review_cannot_trust_unsigned_metadata_via_dev_flag() {
         None => std::env::remove_var("COS_APPS_DIR"),
     }
     assert!(result.is_err());
+    assert!(!destination.exists());
+    let error = super::install_cmd(&[
+        source.display().to_string(), "--dev-trust".into(), "--yes".into(), "--force".into(),
+    ]).unwrap_err();
+    assert!(error.contains("Developer directory installation is blocked"), "{error}");
     assert!(!destination.exists());
 }
 

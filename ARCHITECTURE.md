@@ -82,7 +82,7 @@ route.
 | Notification presentation definition | Renderer-independent private presentation contract with bounded text/pixels; no grants, product configuration or durable notification state | `claw-os-sdk/rust/notification-presentation/`, `claw-os-sdk/wire/v1/notification-presentation.md` |
 | App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
 | App/adapter integration | Provenance-gated manifest binding, authenticated App Host/bridge and protocol adapter integration | `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs`, `core/src/worker/` |
-| App permission disclosure and directory installation | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; reusable directory installs review before publication and never grant capabilities | `core/src/apps/permission_review.rs`, `core/src/apps/installation.rs`, `core/src/router/app_commands.rs` |
+| App permission disclosure and directory installation | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; Root-only signed directory publication shares checked retirement/admission and never grants capabilities | `core/src/apps/permission_review.rs`, `core/src/apps/installation.rs`, `core/src/clawd/app_install.rs`, `core/src/router/app_commands.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, MCP/adapter packages, and Agent extensions | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -167,13 +167,15 @@ grant AI consent. Clients verify the broker's root Unix peer; a returned JSON
 flag or comparison digest is not approval authority.
 
 Directory-install validation, private staging, replacement and recovery live
-in `apps::installation`, below CLI or future Root orchestration. Installation
+in `apps::installation`, below CLI and Root orchestration. Installation
 and CLI lint consume the same static `apps::lint` implementation. These App
 providers consume provenance; provenance does not depend on Apps, Agent or
 `clawd`. The backend accepts a pre-publication review callback and re-verifies
 the reviewed package before publication, without supplying permission or
-running an App entrypoint. CLI flags, trusted terminal review, developer trust,
-AI consent and post-publication presentation remain in the router.
+running an App entrypoint. CLI flags, trusted terminal review, AI consent and
+post-publication presentation remain in the router. Signed directory publication
+uses the Root-only `app.directory_install` controller; it never becomes a Store
+directory fallback.
 
 Brokered App registrations and prepared MCP calls require owner review, while
 unreviewed background services remain inactive. The OS terminal and native
@@ -224,8 +226,8 @@ Protected mount/credential-root refusals remain unchanged. Mandatory
 instance cgroups, inherited syscall mediation and credential-checked relays
 confine the transport. Checked permission/session retirement includes retained
 descriptors and descendants before success; denial remains durable on failure.
-Standalone App installation, replacement, rollback and provenance mutations
-still need authenticated Root coordination and admission fencing.
+Provenance rollback/trust mutations and generic OS package changes still need
+authenticated Root coordination and admission fencing.
 
 Ordinary App operations retain both the exact-entry stdin launch gate and a
 pre-sandbox Root custody gate. Root pins/stops the protected runner across
@@ -238,10 +240,26 @@ Root Store commits now hold one global-per-App admission fence, retire ordinary,
 GUI and MCP custody across owners, and only then consume the exact owner's
 protected review and publish/reverify. Incomplete/unknown cleanup remains
 pending; cancellation cannot release a blocking cleanup/publication worker's
-fence. The Store refuses dpkg-owned paths and directs updates to APT instead of
-overwriting delivery ownership. Independent CLI installation, rollback,
-trust-revoke and dpkg/APT coordination remain pending; this is not the complete
-installed-system publication gate or production acceptance.
+fence. Official Store delivery uses authenticated APT bundles, never a directory
+snapshot fallback. Standalone signed directory installation refuses dpkg-owned
+paths and uses the same checked fence/retirement through a direct kernel-UID-0, non-App
+broker route. Root selects its configured App root, consumes the exact protected
+review inside publication, and retains durable admission blocking on incomplete
+cleanup or uncertain publication; disconnection never cancels the controller.
+Publication dispatch is durable before tree writes and cannot be replayed after
+an unknown outcome. `cos app install --recover <app-id>` only verifies the
+original installed package/manifest, destination/delivery ownership and absence
+of scratch before reopening admission, without source access or review
+consumption. Records require schema version 1; missing or unknown schemas fail
+closed.
+`--review` remains nonmutating. Different CLI-local roots and unavailable
+daemons fail explicitly, without direct writes.
+Unsigned `--dev-trust` installation is blocked: the installed vendor path or an
+existing developer grant could authenticate it before a new independent trust
+decision. A quarantined Root publication contract is still required; no flag
+creates trust or capabilities. Rollback, trust-revoke and generic dpkg/APT
+coordination remain pending. This is not complete installed-system publication
+or production acceptance.
 
 The App-service manager now retains non-reusable runtime, identity and capacity
 custody across incomplete or cancelled retirement. Cleanup errors propagate to

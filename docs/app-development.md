@@ -749,8 +749,10 @@ execution surfaces. It excludes the App version and capability-purpose text,
 so changing release numbers or explanations alone does not imply a permission
 change. The digest is a comparison key, **not an approval token or a grant**.
 
-Ordinary directory installation creates an owner-scoped OS request before
-publishing, including `--force`, `--yes`, `--no-consent` and in-place installs.
+Signed global directory installation requires Root and creates a protected
+Root-owner OS request before publishing, including `--force`, `--yes`,
+`--no-consent` and in-place installs. `--review` remains nonmutating and does
+not require installation authority.
 A terminal or native desktop presenter sends the displayed decision through
 `claw-approval-helper --system-review-json`, authenticated by polkit. Without an
 interactive terminal or a previous matching OS decision, installation returns
@@ -761,8 +763,10 @@ permission-related contract under the current revocation generation.
 
 Review clients authenticate the Unix broker peer as root before sending
 requests. A configured user-owned socket, returned JSON, request ID or contract
-digest cannot become approval authority. Confirmation is consumed once against
-the freshly verified package. A consumed confirmation records the user's
+digest cannot become approval authority. The Root directory controller consumes
+confirmation once against the freshly verified staged package, inside the same
+per-App fence and checked ordinary/GUI/MCP cross-owner retirement used by the
+official Store. A consumed confirmation records the user's
 decision, not proof that a subsequent filesystem publication succeeded.
 `permission_review.permissions_granted` remains `false`; normal capabilities
 and separate AI consent still govern App effects.
@@ -778,9 +782,35 @@ The reusable [directory-install backend](../core/src/apps/installation.rs)
 owns source validation, private staging, in-place revalidation and filesystem
 replacement/recovery. It and `cos app lint` use the same
 [static lint implementation](../core/src/apps/lint.rs), without executing App
-entrypoints. CLI flags, OS review presentation, developer trust and AI consent
-remain in the router. This backend extraction does not provide authenticated
-Root installation/rollback coordination or admission fencing.
+entrypoints. CLI flags, OS review presentation and AI consent remain in the
+router; actual signed publication uses the closed Root-only
+`app.directory_install` route. Root selects its configured App root and verified
+App ID, retaining existing normalized nested layouts. A different CLI-local
+`COS_APPS_DIR`, an unavailable daemon or unconfirmed cleanup is an explicit
+error, never permission to write directly. The controller outlives client
+disconnection and durably blocks App admission after an uncertain result.
+Agent-only installations need no preinstalled App package: Root may initialize
+the configured empty App-root leaf beneath its existing verified Root-owned
+parent. This creates no App payload and never uses a caller-selected target.
+Root records publication dispatch durably before any installation tree writes.
+After dispatch or an indeterminate outcome, do not repeat installation, even
+with the same package or `--force`. Run `cos app install --recover <app-id>` for
+a read-only outcome check. It requires the exact installed package/manifest,
+original destination, unchanged directory delivery ownership and no transaction
+scratch before reopening admission. It does not need the original source and
+never copies, renames or consumes confirmation. Unconfirmed bytes/scratch remain
+blocked; this command does not repair or roll back them. Only cleanup known to
+precede publication may retry checked retirement with current confirmation.
+Directory installation refuses dpkg-owned
+payloads: update those through APT. Official Store installation remains APT-only.
+
+Mutating `--dev-trust` installs are currently blocked without writing files or
+trust grants. A Root-owned unsigned tree in the installed vendor root, or one
+matching an old developer grant, cannot yet be guaranteed quarantined before a
+new independent trust decision. The existing standalone developer-trust
+terminal/phrase/no-active-session gate is unchanged; no Root request flag
+creates trust or runtime permission. Provenance rollback/trust coordination
+remains separate work.
 
 Brokered operation/GUI/native registration and prepared MCP calls also require
 owner review before activation, including preinstalled Apps. Unreviewed
@@ -1116,21 +1146,19 @@ cos app install ~/my-apps/hello      # review permissions, confirm, then publish
 cos app hello say                    # now lives under /usr/lib/cos/apps/hello/
 ```
 
-An App is authenticated before its manifest can influence capability
-grants or App identity, so `cos app install` refuses an unsigned tree
-unless the operator explicitly opts in:
+An App is authenticated before its manifest can influence capability grants or
+App identity. Global directory publication requires Root, the running broker
+and a signed package. This unsigned developer-install command is currently
+explicitly blocked:
 
 ```sh
 cos app install ~/my-apps/hello --dev-trust
 ```
 
-That records a developer grant bound to the installed content digest,
-runs the App with a restricted ceiling and no privileged routes, and is
-invalidated the moment the tree changes. Editing
-`/usr/lib/cos/apps/<id>/main.py` in place therefore no longer
-hot-reloads: the edited package stops verifying and is quarantined
-until it is re-signed and re-installed (or the developer grant is
-re-recorded). Iterate in your source tree and re-run `cos app install`.
+It does not publish an unsigned tree or record trust. Sign the development
+package and use checked installation instead. Existing developer grants remain
+path/content-bound with their restricted capability ceiling; this change does
+not migrate or revoke them, and signatures never grant capabilities.
 
 For a clean distributable, sign the directory and package it as a
 tarball: any machine that trusts your publisher key can

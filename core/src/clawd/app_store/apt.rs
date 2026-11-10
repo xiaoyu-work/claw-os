@@ -599,6 +599,9 @@ pub(super) async fn publish(
     let mut fences: Vec<MutationFence> = Vec::new();
     for app in &plan.affected_apps {
         let fence = std::sync::Arc::new(crate::clawd::app_mutation::fence(app).await?);
+        if crate::clawd::app_install::pending(app)? {
+            return Err("Recover the pending Root directory installation before official App delivery".into());
+        }
         super::retire_installed(state, app, fence.clone()).await?;
         fences.push(fence);
     }

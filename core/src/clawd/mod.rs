@@ -21,6 +21,7 @@ pub mod app_permissions;
 pub mod app_services;
 pub mod app_sessions;
 pub mod app_store;
+pub(crate) mod app_install;
 pub(crate) mod app_mutation;
 #[cfg(target_os = "linux")]
 pub(crate) mod app_execution;

@@ -43,6 +43,11 @@ fn reviewed_install_exposes_the_signed_web_interface_and_mcp_declaration() {
         "raise RuntimeError('installation must not execute App code')\n",
     )
     .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(source.join("web"), fs::Permissions::from_mode(0o750)).unwrap();
+    }
     reseal_app(source, "installed-web");
     let target = crate::test_env::secure_scratch_dir("web-installed");
     let install = DirectoryInstall::prepare(source, &target).unwrap();
@@ -65,6 +70,11 @@ fn reviewed_install_exposes_the_signed_web_interface_and_mcp_declaration() {
         .unwrap()
         .read_verified("web/index.html")
         .is_ok());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(target.join("installed-web/web")).unwrap().permissions().mode() & 0o777, 0o750);
+    }
 }
 
 fn write_min_app(dir: &Path, id: &str, body: &str) {

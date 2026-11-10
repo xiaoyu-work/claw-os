@@ -106,6 +106,7 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("transaction.") => Audience::Transaction,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
+                || name == "app.directory_install"
                 || name.starts_with("app_store.")
                 || name.starts_with("app.gui.")
                 || name.starts_with("app_session.")
@@ -199,7 +200,8 @@ fn the_root_only_access_class_is_unchanged() {
     // direction. `journal.mutation.resolve` is the second: it states
     // what happened to a privileged mutation the machine could not
     // resolve, and that statement is what lifts the replay refusal.
-    // Protected review decisions and the tracked pre-dpkg helper stay Root-only.
+    // Protected review decisions, global directory publication and the tracked
+    // pre-dpkg helper stay Root-only.
     let root: Vec<&str> = ROUTES
         .iter()
         .filter(|route| route.access == Access::Root)
@@ -212,6 +214,7 @@ fn the_root_only_access_class_is_unchanged() {
             "journal.mutation.resolve",
             "system.review.decide",
             "permission.revoke",
+            "app.directory_install",
             "app_store.apt_hook"
         ]
     );

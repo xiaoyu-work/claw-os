@@ -196,7 +196,9 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
 /// `journal.mutation.resolve` joins them because recording what
 /// happened to an unresolved privileged mutation is an administrative
 /// statement, and it is what ends that operation's replay refusal.
+/// Global directory publication must not give an ordinary peer filesystem authority.
 const EXPECTED_ROOT_COMMANDS: &[&str] = &[
+    "app.directory_install",
     "app_store.apt_hook",
     "context.update",
     "journal.mutation.resolve",

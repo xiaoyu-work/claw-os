@@ -57,9 +57,46 @@ fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
         forged[field] = value;
         assert!(serde_json::from_value::<SystemReviewPrepare>(forged).is_err());
     }
-    let mut oversized = request;
+    let mut oversized = request.clone();
     oversized["source"] = json!("x".repeat(PATH_BYTES + 1));
     assert!(serde_json::from_value::<SystemReviewPrepare>(oversized).is_err());
+    let install = json!({
+        "action": "publish",
+        "source": "/root/downloads/app",
+        "expected_apps_root": "/usr/lib/cos/apps",
+        "expected_package": request["expected_package"],
+        "review_id": "rv-0123456789abcdef0123456789abcdef",
+        "force": false,
+    });
+    assert!(serde_json::from_value::<AppDirectoryInstall>(install.clone()).is_ok());
+    for field in [
+        "owner_uid", "destination", "apps_root", "executable", "command", "capabilities",
+        "dev_trust", "allow_unsigned", "approved",
+    ] {
+        let mut forged = install.clone();
+        forged[field] = json!(true);
+        assert!(serde_json::from_value::<AppDirectoryInstall>(forged).is_err(), "{field}");
+    }
+    for field in ["source", "expected_apps_root"] {
+        let mut oversized = install.clone();
+        oversized[field] = json!("x".repeat(PATH_BYTES + 1));
+        assert!(serde_json::from_value::<AppDirectoryInstall>(oversized).is_err());
+    }
+    let mut invalid_force = install;
+    invalid_force["force"] = json!(1);
+    assert!(serde_json::from_value::<AppDirectoryInstall>(invalid_force).is_err());
+    let recover = json!({
+        "action": "recover", "app_id": "example", "expected_apps_root": "/usr/lib/cos/apps",
+    });
+    assert!(serde_json::from_value::<AppDirectoryInstall>(recover.clone()).is_ok());
+    for field in ["source", "expected_package", "force", "review_id", "owner_uid", "destination"] {
+        let mut forged = recover.clone();
+        forged[field] = json!(true);
+        assert!(serde_json::from_value::<AppDirectoryInstall>(forged).is_err(), "{field}");
+    }
+    let mut unknown = recover;
+    unknown["action"] = json!("overwrite");
+    assert!(serde_json::from_value::<AppDirectoryInstall>(unknown).is_err());
 }
 
 #[test]

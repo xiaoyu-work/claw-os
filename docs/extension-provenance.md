@@ -614,11 +614,12 @@ Unsigned development content is permitted only through an explicit
 
 ```bash
 cos provenance dev-trust --kind app --id scratch --path ./apps/scratch
+# Blocked pending genuinely quarantined Root publication:
 cos app install ./apps/scratch --dev-trust
 cos provenance dev-untrust --kind app --id scratch
 ```
 
-Both commands demand, in order:
+Standalone `cos provenance dev-trust` still demands, in order:
 
 1. a real controlling terminal on stdin **and** stderr — no pipes, no
    `nohup`, no CI runner, no agent subprocess;
@@ -633,6 +634,12 @@ that it was ignored. Automation that genuinely needs unsigned content
 uses an **offline signed developer grant**: a `claw.trust-dev/v1` file
 produced on a workstation and copied into the developer root. That is a
 deliberate, auditable artifact rather than a runtime flag.
+
+The directory-install command currently refuses `--dev-trust` without
+publication or trust changes. Root must be able to keep an unsigned installed
+tree quarantined despite vendor-path trust and existing developer grants before
+this workflow can resume. Signed directory installation uses checked Root
+retirement and publication instead; its request cannot record developer trust.
 
 A developer grant:
 

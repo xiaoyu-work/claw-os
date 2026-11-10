@@ -76,6 +76,7 @@ and agent tasks.
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_execution.rs`, `app_mutation.rs` | Retained ordinary App process/cgroup/provider custody and global-per-App Root admission fences, independent of registry rows or owner permission policy |
 | `app_store.rs`, `app_store/apt.rs` | Official APT product/dependency plans, per-App protected delivery confirmation, checked cross-owner retirement and retained indeterminate-admission state |
+| `app_install.rs` | Direct Root-peer-only signed directory publication, shared retirement/fencing, in-fence review consumption and durable pending admission; no unsigned trust or Store fallback |
 | `../bin/claw-app-apt-hook.rs`, `../../../tools/app_apt_metadata.py` | Tracked Root APT child gate and exact-hash authenticated APT-source inspection; no App-owned root hooks or signature-as-grant |
 | `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
 | `gui/`, `app_sessions/gui.rs` | Root-supervised default/named GUI instances; signed entry/selector binding, exclusive GUI needs or legacy operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
@@ -654,8 +655,9 @@ does not cancel admitted effects. Unexpected acceptor-task failure requires
 broker recovery, since dropping that failed task cannot prove request drainage.
 The Root Store commit controller now composes this checked service-lifetime
 primitive with ordinary/GUI retirement under one per-App admission fence.
-Standalone directory install, provenance rollback and dpkg/APT mutation do not
-acquire that fence and remain separate pending integration.
+The separate signed directory-install controller now acquires the same fence
+and checked cross-owner retirement. Provenance rollback/trust and generic
+dpkg/APT mutations remain separate pending integration.
 
 Ordinary App binding admits only the protected pre-sandbox runner. Root holds
 the runner stopped across cgroup attachment, retains its pidfd and a mandatory
@@ -679,11 +681,45 @@ remain explicit pending errors, not proof inferred from a missing row or dead
 parent. A stale ordinary cgroup also blocks containment recovery rather than
 silently discarding unknown Host cleanup.
 
-Directory Store delivery holds the existing dpkg database lock and refuses
+Signed directory CLI delivery and the test-only directory Store fixture hold
+the existing dpkg database lock and refuse
 ownership of the destination or any subtree entry, directing the owner to APT.
 It neither transfers dpkg ownership nor invokes package/App hooks. This does
 not coordinate the independent OS-package updater with every App lifecycle
 and is not full installed-system publication acceptance.
+
+`app.directory_install` is Root-only and additionally requires the direct
+kernel UID 0 peer and existing non-App ancestry check. Its closed bounded body
+selects `publish` or `recover`. Publication carries canonical source,
+comparison-only `expected_apps_root`, exact expected package, protected review
+ID and force intent; recovery carries only App ID and the root comparison.
+Neither accepts a destination, owner, executable, command, capabilities or
+unsigned/trust input. Root derives the
+destination from its configured root and verified ID, preserving existing
+normalized nested layouts. Agent packaging supplies the protected `/usr/lib/cos`
+parent, not an App package: a first install may create just the daemon-configured
+empty App-root leaf, Root-owned 0755, after the namespace comparison and trusted
+parent check. Existing roots are validated without changing their permissions.
+It rechecks source, manifest, complete signed tree
+and dpkg ownership; protected confirmation is consumed only inside publication.
+The independent controller survives client loss. Root-owned per-App records in
+`/var/lib/cos/app-directory-installs` keep the existing admission gate closed
+after incomplete retirement or uncertain publication, including daemon restart.
+Root durably checkpoints `publishing` before any backend tree writes. That
+phase and `indeterminate` never authorize another publication, even of identical
+bytes. Records require `schema_version: 1`; missing or unknown schemas fail
+closed without prototype migration.
+Only pre-publication `retiring`/`cleanup_pending` may retry checked retirement
+with the same package and current review. `cos app install --recover <app-id>`
+holds the fence and protected dpkg lock, re-verifies the original destination's
+exact package/manifest and absence of transaction scratch, then records
+`installed`. It neither reads the original source nor copies, renames, removes
+scratch or consumes review. Missing/mismatched bytes or scratch keep admission
+blocked; recovery is not a rollback/repair API.
+CLI `--review` stays nonmutating; mismatched local roots and missing daemons
+fail explicitly. `--dev-trust` installation is blocked until vendor trust and
+old developer grants cannot bypass a genuinely quarantined publication step.
+No new trust/grant API or default Admin authority is introduced.
 
 The manifest-defined `launcher` App-service sandbox receives no Wayland socket
 or session bus and must not spawn desktop binaries. Provenance-classified
