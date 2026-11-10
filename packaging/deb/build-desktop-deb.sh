@@ -21,6 +21,11 @@ STAGE_ROOT="$1"
 OUT_DIR="$PROJECT_DIR/build/debs"
 source "$PROJECT_DIR/scripts/lib/package-version.sh"
 VERSION="$(package_version "$PROJECT_DIR")"
+APP_RUNTIME_VERSION="$(python3 "$PROJECT_DIR/scripts/app_packages.py" runtime-version)"
+python3 "$PROJECT_DIR/scripts/app_packages.py" check-version --version "$VERSION"
+python3 "$PROJECT_DIR/scripts/app_packages.py" check \
+    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" >/dev/null
+python3 "$PROJECT_DIR/scripts/app_packages.py" native-boundary
 
 if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
@@ -78,26 +83,6 @@ fi
 mkdir -p "$STAGE_ROOT/DEBIAN" "$OUT_DIR"
 chmod 0755 "$STAGE_ROOT/DEBIAN"
 
-# The desktop package owns only the explicitly listed COSMIC/panel app
-# manifests. Every other app is shipped by claw-os-agent.
-APP_SOURCE_LOCK="$STAGE_ROOT/usr/share/doc/claw-os-desktop/app-sources.json"
-if [ ! -f "$APP_SOURCE_LOCK" ]; then
-    echo "error: desktop App source snapshot missing; rebuild the desktop from prepared App main sources" >&2
-    exit 1
-fi
-export CLAW_APP_SOURCE_LOCK="$APP_SOURCE_LOCK"
-DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
-mkdir -p "$STAGE_ROOT/usr/lib/cos/apps"
-while IFS= read -r app_id; do
-    [ -n "$app_id" ] || continue
-    app_src="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id")"
-    rm -rf "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
-    cp -a "$app_src" "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
-done < "$DESKTOP_APPS_FILE"
-find "$STAGE_ROOT/usr/lib/cos/apps" -name '__pycache__' -type d \
-    -exec rm -rf {} + 2>/dev/null || true
-find "$STAGE_ROOT/usr/lib/cos/apps" -name 'test_*.py' -type f -delete
-
 THERMALD_DEP="${THERMALD_PKG:+$THERMALD_PKG, }"
 VAAPI_INTEL_NONFREE_DEP="${VAAPI_INTEL_NONFREE_PKG:+$VAAPI_INTEL_NONFREE_PKG, }"
 
@@ -149,6 +134,7 @@ unset RELEASE_SECURITY_PASSPHRASE
 
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" \
     -e "s/__ABI__/$SECURITY_ABI/g" \
+    -e "s/__APP_RUNTIME_VERSION__/$APP_RUNTIME_VERSION/g" \
     -e "s/__SECURITY_EPOCH__/$SECURITY_EPOCH/g" \
     -e "s/__MIN_AGENT__/$MIN_AGENT_VERSION/g" \
     -e "s/__MIN_BASE__/$MIN_BASE_VERSION/g" \

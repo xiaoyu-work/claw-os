@@ -23,12 +23,13 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
-| `ci/prepare-release.sh` | Select release jobs, including coordinated Agent/Base-only `core`; freeze the package version and one immutable App-main snapshot |
+| `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
-| `ci/verify-package.sh` | Check package identity, payload, same-run App snapshot and signed release manifest before upload or image composition |
+| `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
 | `ci/test-agent-package.sh` | Agent TUI and Ubuntu install/reinstall, terminal/Web polkit/PAM, broker and cgroup checks; `installed-core` validates the exact Agent/Base pair in one transaction |
 | `app_platform.py` | Reproducible, versioned SDK/runtime/toolkit development artifact; excludes App helpers and OS providers |
-| `app_sources.py` | Resolve current App `main` into an immutable build snapshot and stage explicitly kinded product/capability assets |
+| `app_packages.py` | Reauthenticate official fresh App APT indexes and final `.deb` bytes; select independent package closure and enforce one-owner OS staging |
+| `app_sources.py` | Prepare explicit immutable App test/development fixtures; never a production package fallback |
 | `app_sources.py --write-lock <path>` | Record the selected SHA for later build steps through `CLAW_APP_SOURCE_LOCK`; never changes the repository selection |
 | `app_sources.py --stage-shared <root>` | Forward to the selected snapshot's public App common staging CLI; stage only App-owned support under `usr/lib/cos/python` |
 | `app_sources.py --native` | Refresh product-declared native inputs and record their source snapshot alongside stable ignored build paths |
@@ -55,6 +56,15 @@ python3 -m pytest -q packaging/deb/tests/test_app_sources.py
 
 Also run the narrowest consuming target/package command.
 
+Production package/release/rootfs paths consume `app_packages.py`, not
+`app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,
+App support/named libraries have separate dpkg owners, and OS staging refuses
+their payloads. Runtime-v1 implementation version comes from the platform
+metadata; this is not an unpublished platform/App pin adoption.
+Desktop private UI/config/util links are removed; the unchanged source guard
+rejects their reintroduction. Actual native/installed acceptance remains gated.
+
+The remaining source-staging documentation describes explicit fixtures.
 `--stage <root>` validates all locked App identities; `--package agent` or
 `--package desktop` preserves the explicit Debian package partition.
 `--app-path <id>` resolves a single source directory for desktop package
@@ -63,8 +73,8 @@ assembly. None of these commands fetches application code at runtime.
 requires the same exact clean source pin, invokes public
 `tools/stage.py --shared --root <root>` and verifies its declared Python-root result. App
 support is never sourced from OS `apps/` or duplicated beside App payloads.
-The current Agent compatibility build calls it once; SDK/runtime staging and
-future independent App APT ownership remain separate contracts.
+Source fixtures call it separately; production Agent stages only its own
+SDK/runtime, and independent App APT support/library ownership is separate.
 The version-2 selection tracks `main` without a fixed revision and retains
 nonempty `products`/`apps` lists plus optional `capabilities`. Fresh preparation
 must resolve the branch even when a cache exists; failure never selects stale
@@ -94,8 +104,8 @@ inside their declared product component. Duplicate names and escapes are
 rejected before replacement. `native-libraries.json` records the resolved
 library paths and full source revision for consumers/assembly validation.
 `source-lock.json` retains the same resolved selection for desktop packaging.
-Notifications' private config/util crates remain whole-component build inputs
-for the current OS applet/panel links, not declared public library exports.
+Notifications' private config/util crates remain whole-component App fixture
+inputs, not OS applet/panel dependencies or public library exports.
 The original daemon and all its build inputs are composed, not recreated under
 the deleted production `desktop/notifications` path.
 Its `notify` Python facade is staged separately into Agent, never into the

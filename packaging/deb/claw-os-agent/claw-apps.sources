@@ -1,0 +1,10 @@
+Types: deb
+URIs: https://xiaoyu-work.github.io/clawos-app/
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/claw-apps-archive-key.asc
+Check-Valid-Until: yes
+Allow-Insecure: no
+Allow-Weak: no
+Allow-Downgrade-To-Insecure: no
+By-Hash: force

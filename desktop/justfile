@@ -10,9 +10,15 @@ settings := '../build/native-apps/cosmic-settings/justfile'
 capture := '../build/native-apps/cosmic-screenshot/justfile'
 player := '../build/native-apps/cosmic-player/justfile'
 notifications := '../build/native-apps/cosmic-notifications/justfile'
+calendar := '../build/native-apps/claw-applet-calendar/justfile'
+clipboard := '../build/native-apps/claw-applet-clipboard/justfile'
+widgets := '../build/native-apps/claw-applet-widget-rail/justfile'
+
+default: build
 
 prepare-native-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }} && test -f {{ settings }} && test -f {{ capture }} && test -f {{ player }} && test -f {{ notifications }}; else python3 ../scripts/app_sources.py --native; fi
+    test -n "${CLAW_APP_SOURCE_LOCK:-}" || { echo "source fixtures require an explicit immutable CLAW_APP_SOURCE_LOCK" >&2; exit 1; }
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }} && test -f {{ settings }} && test -f {{ capture }} && test -f {{ player }} && test -f {{ notifications }} && test -f {{ calendar }} && test -f {{ clipboard }} && test -f {{ widgets }}; else python3 ../scripts/app_sources.py --native; fi
 
 launcher-build: prepare-native-apps
     {{ just }} --justfile {{ launcher }} build-release --locked
@@ -41,66 +47,99 @@ player-build: prepare-native-apps
 notifications-build: prepare-native-apps
     {{ just }} --justfile {{ notifications }} build-release --locked
 
-[default]
-build: prepare-native-apps
+calendar-build: prepare-native-apps
+    {{ just }} --justfile {{ calendar }} build-release --locked
+
+clipboard-build: prepare-native-apps
+    {{ just }} --justfile {{ clipboard }} build-release --locked
+
+widgets-build: prepare-native-apps
+    {{ just }} --justfile {{ widgets }} build-release --locked
+
+build:
+    python3 ../scripts/app_packages.py native-boundary
+    {{ just }} build-shell
+
+[private]
+build-shell:
     #!/usr/bin/env bash
     set -euo pipefail
-    export CLAW_NATIVE_APPS_PREPARED=1
     mkdir -p build
     {{ just }} applets/build-release
     {{ just }} applibrary/build-release
     {{ just }} bg/build-release
     {{ make }} -C comp all
-    {{ just }} editor-build
-    {{ just }} files-build
     {{ just }} greeter/build-release
     {{ just }} idle/build-release
     {{ just }} initial-setup/build-release
-    {{ just }} launcher-build
-    {{ just }} notifications-build
     {{ just }} osd/build-release
     {{ just }} panel/build-release
-    {{ just }} player-build
     {{ just }} randr/build-release
-    {{ just }} capture-build
-    {{ just }} settings-build
     {{ make }} -C settings-daemon all
     {{ just }} session/build-release
-    {{ just }} store-build
-    {{ just }} terminal-build
     {{ make }} -C wallpapers all
     {{ make }} -C workspaces all
     {{ just }} launcher-backend/build-release
     {{ make }} -C xdg-desktop-portal all
 
+# Explicit development fixtures are never invoked by OS package assembly.
+build-source-fixtures: prepare-native-apps
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export CLAW_NATIVE_APPS_PREPARED=1
+    {{ just }} build-shell
+    {{ just }} editor-build
+    {{ just }} files-build
+    {{ just }} launcher-build
+    {{ just }} notifications-build
+    {{ just }} player-build
+    {{ just }} capture-build
+    {{ just }} settings-build
+    {{ just }} store-build
+    {{ just }} terminal-build
+    {{ just }} calendar-build
+    {{ just }} clipboard-build
+    {{ just }} widgets-build
+
 install rootdir="" prefix="/usr/local": build
+    {{ just }} install-shell "{{rootdir}}" "{{prefix}}"
+
+[private]
+install-shell rootdir="" prefix="/usr/local":
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} applets/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} applibrary/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} bg/install
     {{ make }} -C comp install DESTDIR={{rootdir}} prefix={{prefix}}
-    {{ just }} --justfile {{ editor }} rootdir={{rootdir}} prefix={{prefix}} install
-    {{ just }} --justfile {{ files }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} greeter/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons-tela-pkg/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} idle/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} initial-setup/install
-    {{ just }} --justfile {{ launcher }} rootdir={{rootdir}} prefix={{prefix}} install
-    {{ just }} --justfile {{ notifications }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} osd/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} panel/install
-    {{ just }} --justfile {{ player }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} randr/install
-    {{ just }} --justfile {{ capture }} rootdir={{rootdir}} prefix={{prefix}} install
-    {{ just }} --justfile {{ settings }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ make }} -C settings-daemon install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} session/install
-    {{ just }} --justfile {{ store }} rootdir={{rootdir}} prefix={{prefix}} install
-    {{ just }} --justfile {{ terminal }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ make }} -C wallpapers install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ make }} -C workspaces install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher-backend/install
     {{ make }} -C xdg-desktop-portal install DESTDIR={{rootdir}} prefix={{prefix}}
+
+install-source-fixtures rootdir prefix="/usr/local": build-source-fixtures
+    test -n "{{rootdir}}" && test "{{rootdir}}" != /
+    {{ just }} install-shell "{{rootdir}}" "{{prefix}}"
+    {{ just }} --justfile {{ editor }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ files }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ launcher }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ notifications }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ player }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ capture }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ settings }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ store }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ terminal }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ calendar }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ clipboard }} rootdir={{rootdir}} prefix={{prefix}} install
+    {{ just }} --justfile {{ widgets }} rootdir={{rootdir}} prefix={{prefix}} install
 
 _mkdir dir:
    mkdir -p dir

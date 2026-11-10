@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cosmic_notifications_config::PANEL_NOTIFICATIONS_FD;
+use claw_notification_presentation::PANEL_FD_ENV;
 use smithay::reexports::rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use smithay::reexports::rustix::{self};
 use std::os::fd::{FromRawFd, RawFd};
@@ -19,11 +19,10 @@ pub trait NotificationsSocket {
 }
 pub async fn notifications_conn() -> Result<NotificationsSocketProxy<'static>> {
     info!("Connecting to notifications daemon");
-    let fd_num = std::env::var(PANEL_NOTIFICATIONS_FD)
-        .map_err(|_| anyhow::anyhow!("No {} env var found", PANEL_NOTIFICATIONS_FD))?;
-    let fd = fd_num
-        .parse::<RawFd>()
-        .map_err(|_| anyhow::anyhow!("Invalid {} env var", PANEL_NOTIFICATIONS_FD))?;
+    let fd_num = std::env::var(PANEL_FD_ENV)
+        .map_err(|_| anyhow::anyhow!("No {} env var found", PANEL_FD_ENV))?;
+    let fd =
+        fd_num.parse::<RawFd>().map_err(|_| anyhow::anyhow!("Invalid {} env var", PANEL_FD_ENV))?;
     let fd = unsafe { rustix::fd::OwnedFd::from_raw_fd(fd) };
 
     let res = fcntl_getfd(&fd).and_then(|flags| fcntl_setfd(&fd, FdFlags::CLOEXEC.union(flags)));

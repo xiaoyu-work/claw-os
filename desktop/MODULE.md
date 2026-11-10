@@ -23,7 +23,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `applets/claw-applet-services/` | Independent OS policy/data library and versioned private-pipe provider executable; Calendar/task-list/telemetry and history preflight, no UI/App dependencies |
 | `../scripts/app_sources.py --native` | Materialize product-declared native libraries, workspaces and assets under ignored build storage before direct Cargo use |
 | `launcher-backend/` | Shared launcher library/service; native frontend is owned by external `clawos-app/products/launcher` |
-| `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda, Clipboard history-policy and Widget Rail typed data callbacks, and generate product-owned desktop entries |
+| `applets/cosmic-applets/` | OS applet dispatcher/resources only; product panel binaries, callbacks, translations and desktop entries are independently App-owned |
 | `agent/` | Native agent bridge and UI |
 | `agent/bridge/src/notifications.rs` | Single desktop delivery consumer; installed owner/executable-bound presenter, safe plain-text projection, connection-local handles and genuine user state transitions |
 | `agent/protocol/` | Versioned desktop Agent HTTP/SSE presentation contract |
@@ -44,20 +44,40 @@ component crates plus Claw-specific agent bridges and applets.
 
 ## Dependencies
 
+Production `just build`/`install` build only OS shell/services and are guarded
+against App source links. Native product binaries/manifests/resources belong
+to independent App APT packages, recommended through `claw-apps-desktop`.
+Calendar/Clipboard/Widget Rail keep their original native UI in independent
+App packages. Their matching desktop entries and common-Host launchers retain
+the panel defaults; the OS no longer links their libraries, generates their
+templates or installs their aliases. The source guard remains and passes this
+separated graph instead of allowing an App-source fallback.
+Explicit `build-source-fixtures`/`install-source-fixtures` require an immutable
+`CLAW_APP_SOURCE_LOCK`; those developer fixtures preserve the original surfaces
+but never feed OS production staging. See
+[ownership/bootstrap status](../packaging/README.md#coordinated-021-source-ownership-cutover).
+
 Desktop processes communicate with core through stable CLI, HTTP/SSE, DBus,
 Wayland, SDK, or MCP boundaries. Preserve licenses and avoid pulling privileged
 agent logic into GPL desktop processes. Component workspaces remain independent
 of the root Rust workspace.
 
-Notifications config/util crates remain private native component inputs,
-linked by the current `applets/cosmic-applet-notifications` and `panel/cosmic-panel-bin`
-from `build/native-apps/cosmic-notifications`. They are no longer declared
-`native_libraries` exports; preparation keeps the full component without
-inventing public metadata. Their manual and chroot builds
-prepare/validate the same immutable inputs. The original daemon graph is built
-separately, not unified with the applet renderer. Connection-local handles and
-popup retirement are presentation, never a second durable notification store.
-Legacy `notify` JSON and all local settings remain separate.
+Notifications' config/util stay private to the App. The OS applet and panel use
+the existing public `claw-notification-presentation` SDK crate, with no product
+configuration, markup parser, image decoder or private library import. The
+applet preserves grouped cards, text styles, actions, decoded RGBA/mask icon
+precedence and inherited symbolic foreground. It negotiates v1 over the
+existing private connection, subscribes before preferences, bounds calls to
+three seconds and enables popup mute only after confirmation. Failed writes
+and connection loss preserve the last confirmed value; disconnect retires the
+view/control channel without acknowledging durable notifications. The ordinary
+freedesktop close subscription and Agent delivery consumer remain separate.
+The App owns preference persistence and maps popup mute to its existing key;
+OS durable DND policy and all legacy state remain unchanged.
+
+Desktop now requires runtime-v1 implementation 0.2.1, still ABI 1. This is
+source integration, not a published SDK pin, native ELF build, installed GUI
+or update/rollback acceptance. No toolkit/renderer graphs are merged.
 
 `just player-build` prepares `build/native-apps/cosmic-player` from the same
 immutable pin, preserving its original GStreamer/libcosmic renderer, lock and

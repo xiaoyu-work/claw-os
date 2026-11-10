@@ -49,7 +49,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Freeze release version and App sources
+      - name: Freeze release version and authenticated App APT inputs
         id: plan
         env:
           RELEASE_TARGET: ${{ inputs.target }}
@@ -100,7 +100,7 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
       COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-      CLAW_APP_SOURCE_LOCK: ${{ github.workspace }}/build/release/app-sources.json
+      CLAW_APP_PACKAGE_ROOT: ${{ github.workspace }}/build/release/app-packages
     steps:
       - uses: actions/checkout@v5
         with:
@@ -159,7 +159,7 @@ jobs:
       - name: Exercise the Claw-owned Agent TUI
         run: bash scripts/ci/test-agent-package.sh tui
 
-      - name: Verify Agent payload, snapshot and signed release manifest
+      - name: Verify Agent ownership, App APT inputs and signed release manifest
         run: bash scripts/ci/verify-package.sh agent
 
       - name: Install and reinstall Agent on Ubuntu
@@ -235,7 +235,7 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
       COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-      CLAW_APP_SOURCE_LOCK: ${{ github.workspace }}/build/release/app-sources.json
+      CLAW_APP_PACKAGE_ROOT: ${{ github.workspace }}/build/release/app-packages
     steps:
       - uses: actions/checkout@v5
         with:
@@ -259,11 +259,11 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
         run: |
-          sudo --preserve-env=GNUPGHOME,CLAW_OS_RELEASE_SECURITY_KEY_ID,GPG_PASSPHRASE,COS_PACKAGE_VERSION,CLAW_APP_SOURCE_LOCK \
+          sudo --preserve-env=GNUPGHOME,CLAW_OS_RELEASE_SECURITY_KEY_ID,GPG_PASSPHRASE,COS_PACKAGE_VERSION,CLAW_APP_PACKAGE_ROOT \
             env ARCH="$ARCH" DESKTOP_PACKAGE_ONLY=1 \
             ./rootfs/build.sh --features base,desktop
 
-      - name: Verify Desktop payload, snapshot and signed release manifest
+      - name: Verify Desktop ownership, App APT inputs and signed release manifest
         run: bash scripts/ci/verify-package.sh desktop
 
       - name: Upload Desktop package
@@ -322,7 +322,7 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
       COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
-      CLAW_APP_SOURCE_LOCK: ${{ github.workspace }}/build/release/app-sources.json
+      CLAW_APP_PACKAGE_ROOT: ${{ github.workspace }}/build/release/app-packages
       COS_APT_PUBLIC_KEY_FILE: ${{ github.workspace }}/build/release/claw-os-archive-keyring.gpg
       CLAW_OS_RELEASE_SECURITY_KEYRING: ${{ github.workspace }}/build/release/claw-os-archive-keyring.gpg
     steps:
@@ -360,7 +360,7 @@ jobs:
 
       - name: Build one rootfs from the prepared Agent and Base packages
         run: |
-          sudo --preserve-env=COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_SOURCE_LOCK \
+          sudo --preserve-env=COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_PACKAGE_ROOT \
             env ARCH="$ARCH" ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
       - name: Verify the shared rootfs has no human account
@@ -408,7 +408,7 @@ jobs:
 
       - name: Package WSL from the same stamped rootfs
         run: |
-          sudo --preserve-env=COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_SOURCE_LOCK \
+          sudo --preserve-env=COS_PACKAGE_VERSION,COS_APT_PUBLIC_KEY_FILE,CLAW_APP_PACKAGE_ROOT \
             env ARCH="$ARCH" FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
 
       - name: Compute WSL checksums

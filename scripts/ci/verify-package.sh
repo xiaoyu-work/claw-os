@@ -51,7 +51,12 @@ case "$component" in
             usr/local/bin/cos-browser
             usr/local/bin/claw-semantic
             usr/local/bin/claw-semantic-daemon
-            usr/lib/cos/apps/web/app.json
+            usr/lib/cos/python/claw_os_sdk/__init__.py
+            usr/lib/cos/python/cos_runtime/__init__.py
+            usr/share/keyrings/claw-apps-archive-key.asc
+            etc/apt/sources.list.d/claw-apps.sources
+            usr/lib/cos/bin/claw-app-apt-hook
+            usr/lib/cos/app-apt-metadata.py
             usr/lib/cos/skills/claw-os/SKILL.md
             usr/lib/cos/skills/claw-os/diagnostics.md
             usr/lib/systemd/system/clawd.service
@@ -63,13 +68,15 @@ case "$component" in
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-nearby-v1
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-display-session-v1
         if grep -Fxq './etc/cos/oauth.conf' "$files" \
-            || grep -q '/apps/panel-calendar/' "$files"; then
-            echo "error: Agent contains excluded OAuth configuration or Desktop Apps" >&2
+            || grep -q '/usr/lib/cos/apps/' "$files"; then
+            echo "error: Agent contains excluded OAuth configuration or App payloads" >&2
             exit 1
         fi
         dpkg-deb -x "$deb" "$extract/payload"
         test "$(stat -c '%a' "$extract/payload/usr/lib/cos/skills/claw-os")" = "755"
         test "$(stat -c '%a' "$extract/payload/usr/lib/cos/skills/claw-os/SKILL.md")" = "644"
+        runtime_version="$(python3 scripts/app_packages.py runtime-version)"
+        dpkg-deb -f "$deb" Provides | grep -Fq "claw-os-app-runtime-v1 (= $runtime_version)"
         ;;
     base)
         required=(usr/local/bin/cos-init usr/lib/systemd/system/cos-home-setup.service)
@@ -96,20 +103,12 @@ for path in "${required[@]}"; do
 done
 
 if [ "$component" != base ]; then
-    snapshot="usr/share/doc/claw-os-$component/app-sources.json"
-    dpkg-deb --fsys-tarfile "$deb" | tar -xOf - "./$snapshot" > "$extract/app-sources.json"
-    python3 - "${CLAW_APP_SOURCE_LOCK:?CLAW_APP_SOURCE_LOCK is required}" \
-        "$extract/app-sources.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    expected = json.load(handle)
-with open(sys.argv[2], encoding="utf-8") as handle:
-    actual = json.load(handle)
-if actual != expected:
-    raise SystemExit("error: package App sources do not match this release snapshot")
-PY
+    if [ "$component" = desktop ]; then
+        dpkg-deb -x "$deb" "$extract/payload"
+        python3 scripts/app_packages.py native-boundary
+    fi
+    python3 scripts/app_packages.py check --variant "$component" \
+        --architecture "$arch" --stage "$extract/payload" >/dev/null
 fi
 
 bash packaging/release-security/verify-package-manifest.sh "$deb" \

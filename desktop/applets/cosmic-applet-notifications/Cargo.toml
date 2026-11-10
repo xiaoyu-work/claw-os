@@ -5,8 +5,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
-cosmic-notifications-util = { path = "../../../build/native-apps/cosmic-notifications/cosmic-notifications-util" }
-cosmic-notifications-config = { path = "../../../build/native-apps/cosmic-notifications/cosmic-notifications-config" }
+claw-notification-presentation = { path = "../../../claw-os-sdk/rust/notification-presentation", version = "0.1", features = ["dbus"] }
 anyhow.workspace = true
 libcosmic.workspace = true
 tokio.workspace = true
@@ -22,4 +21,3 @@ i18n-embed = { workspace = true, features = [
 i18n-embed-fl.workspace = true
 rust-embed.workspace = true
 zbus = { workspace = true, features = ["tokio", "p2p"] }
-url = "2.5.8"

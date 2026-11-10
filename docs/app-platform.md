@@ -49,10 +49,11 @@ The public Rust `applet` client and its
 binary do not enter the archive. Source-cohort checks may canonically prepare
 native workspaces against a separate, explicitly unpublished copy of these
 public libraries. They must not alter a verified artifact/cache or claim
-compatibility with a published pin. The development contract is version 0.1.0
-with runtime ABI 1 and is not published. Earlier development-platform releases
-have been withdrawn. The Applet client and regional capability vocabulary remain
-source changes, not an available release. Do not fabricate artifact URLs or
+compatibility with a published pin. The approved source contract is version
+0.2.1 with runtime ABI 1 and is not published. App consumers still select the
+real published 0.2.0 pin; withdrawn historical 1.0.0/1.1.0 releases are not
+restored. Generic GUI/owner-path and checked custody are source changes, not
+installed runtime acceptance or an available 0.2.1 artifact. Do not fabricate artifact URLs or
 digests. Publication requires an explicit owner decision; committing or pushing
 source changes is not permission to publish. Consumers still need the installed
 `claw-os-applet-services-v1` provider and OS admission.
@@ -61,10 +62,18 @@ From the repository root:
 
 ```bash
 python3 -m pytest -q scripts/tests/test_app_platform.py
-python3 scripts/app_platform.py --version 0.1.0
+python3 scripts/app_platform.py --version 0.2.1
 ```
 
 The build command only creates a local archive; it must not trigger publication.
 An App platform release is neither an OS image nor an installed App update.
 SDK artifacts are build inputs; installed App downloads and updates use the
 separate signed App APT channel.
+
+The Agent Debian package derives its versioned
+`claw-os-app-runtime-v1 (= 0.2.1)` Provides from `packaging/app-platform.json`.
+Independent App packages require `claw-os-app-runtime-v1 (>= 0.2.1)` so an
+old/unversioned 0.2.0 provider cannot satisfy the new implementation contract.
+This keeps ABI 1; the implementation floor is neither a grant nor adoption of
+an unpublished development pin. See
+[coordinated packaging ownership](../packaging/README.md#coordinated-021-source-ownership-cutover).

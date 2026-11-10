@@ -139,6 +139,24 @@ may provide the same function; a default handler is a routing preference,
 not exclusive access or a permission grant. Existing fixed-product runtime
 and desktop integration paths still require that common-contract cutover.
 
+The approved coordinated 0.2.1 **source packaging** cutover removes App and
+App-owned common/named-library payload staging from Agent/Desktop. Production
+consumes separately signed App APT packages, preserving installed identities,
+paths, grants and data. Agent's runtime-v1 Provides carries the platform
+implementation version 0.2.1 (still ABI 1); Apps require `>= 0.2.1` and bound
+former-owner replacement strictly below `1:0.2.1`. Agent recommends the
+headless set without a Desktop dependency or circular hard App dependency.
+SDK/runtime, toolkit, Root services and policy stay OS-owned.
+The shell no longer links product panel UI or Notifications-private libraries.
+Independent App packages keep the original binaries/resources and common-Host
+routes; the OS notification applet uses the public presentation records/proxy.
+Production source guards remain, without granting an App a privileged interface.
+Source fixtures remain explicitly separate. Older per-product source-move
+sections below describe the pre-cutover compatibility package layout; see
+[current ownership, bootstrap and blockers](packaging/README.md#coordinated-021-source-ownership-cutover).
+No publication, pin adoption or installed runtime acceptance follows from this
+source change.
+
 `cos app install --review` authenticates a package and projects every declared
 operation/MCP permission, conditional scope, AI policy and execution surface.
 Ordinary directory installation now creates a protected owner-scoped review in
@@ -251,15 +269,17 @@ These are unpublished source contracts with private process coverage, not
 real-login/image or all-App resource acceptance. Terminal-only operation does
 not acquire a display dependency.
 
-The complete native Notifications fork, both shared presentation crates,
+The complete native Notifications fork, both private implementation crates,
 descriptor, license and original build now live in
 `clawos-app/products/notifications`. `just notifications-build` consumes the
 immutable App pin at `build/native-apps/cosmic-notifications`; no production
-source remains at `desktop/notifications`. Applet and panel manifests link
-the explicitly exported config/util libraries from that same composition,
-preserving their own toolkit graphs. Native sources/fixture executables never
-enter the Agent payload. Desktop owns the binary and signed descriptor and
-depends on Agent's `claw-os-notifications-v1`. MCP uses the fixed installed
+source remains at `desktop/notifications`. The OS applet and panel consume
+only the existing public notification-presentation SDK records, proxy and FD
+constants; config/util and their markup/image/configuration implementation
+stay App-private. Original native and OS shell renderer graphs stay separate.
+Native sources/fixture executables never enter the Agent payload. Independent
+App packages own the binary and signed descriptor and depend on Agent's
+`claw-os-notifications-v1`. MCP uses the fixed installed
 SDK stdin client and durable string IDs, with explicit integer/icon-path
 compatibility refusals. Source ownership is not legacy-data or visual acceptance.
 
@@ -371,20 +391,21 @@ Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
 extension now live in the Browser product too. The reusable `cos-browser`
 engine and privileged attached-browser provider remain here.
 
-The Calendar, Clipboard and Widget Rail UI libraries, localization and assets are materialized from the
-same App source pin into ignored `build/native-apps` by
-`scripts/app_sources.py --native`. Manual applet builds prepare these inputs;
-image builds bind the prepared tree into the chroot. The `cosmic-applets`
-host links these libraries against the existing forked toolkit and injects
-Calendar's typed agenda callback, Clipboard's history policy callback and Widget
-Rail's typed Calendar/task/system data callbacks. Shared read-only Calendar,
+Calendar, Clipboard and Widget Rail retain their complete original native UI,
+localization and resources in independent App packages. The OS `cosmic-applets`
+dispatcher no longer links those libraries, injects product callbacks or
+generates their templates/aliases. Their unchanged panel desktop IDs select
+App-owned real binaries through common-Host compatibility launchers.
+Explicit immutable source fixtures can still prepare/build them under
+`build/native-apps`; production never mounts or fetches those sources.
+Shared read-only Calendar,
 task-list and telemetry providers and policy checks live in
 `desktop/applets/claw-applet-services`, not in an App. Agent Activity shares
 only the task-list provider; task mutations and Agent execution remain OS-owned.
-Widget Rail's original telemetry fallback and process-local sampling deltas
-remain in the OS. No new state store or cross-App call is introduced.
-`panel-calendar`, `panel-clipboard` and `widget-rail` remain owned by the desktop
-Debian package, with original launcher identities and independent grants
+Widget Rail's presentation mapping is App-owned; OS telemetry/provider policy
+remains separate. No new state store or cross-App call is introduced.
+`panel-calendar`, `panel-clipboard` and `widget-rail` remain independently
+App-owned, with original launcher identities and independent grants
 unchanged; installed updates remain signed APT packages.
 Standalone consumers use the public Rust SDK's versioned
 [`applet` pipe protocol](claw-os-sdk/wire/v1/applet-services.md) and the OS-owned
@@ -395,8 +416,7 @@ are preflight only. Current panel history clients use the actual OS clipboard
 broker below instead. Provider/data/authority implementation is excluded from the public
 development export. This source interface does not release a new SDK, replace
 the current App pin, complete authenticated GUI/resource admission, or authorize
-CopyQ/Wayland access. The existing linked shell paths above remain until their
-separate coordinated cutover.
+CopyQ/Wayland access. The removed shell links are not a source fallback.
 
 Calendar day reads now cross `system.calendar.day` under the exact
 `data.db.read:calendar` grant. `clawd` selects the authenticated owner's existing

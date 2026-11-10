@@ -1,177 +1,175 @@
 // Copyright 2023 System76 <info@system76.com>
 // SPDX-License-Identifier: GPL-3.0-only
 
-use cosmic::{
-    iced::Subscription,
-    iced::{
-        futures::{self, FutureExt},
-        stream,
-    },
+use claw_notification_presentation::{
+    APPLET_FD_ENV, Card, Preferences, VERSION, proxy::NotificationPresentationProxy,
+    validate_action, validate_handle,
 };
-use cosmic_notifications_util::Notification;
+use cosmic::iced::{Subscription, futures, stream};
 use futures_util::{SinkExt, StreamExt};
-use std::{
-    collections::HashMap,
-    hash::Hash,
-    os::unix::io::{FromRawFd, RawFd},
-    pin::pin,
-};
+use std::{future::Future, os::fd::FromRawFd, time::Duration};
 use tokio::sync::mpsc;
-use tracing::{error, trace};
-use zbus::{connection::Builder, proxy};
+use zbus::connection::Builder;
 
-#[derive(Debug)]
-pub enum State {
-    WaitingForNotificationEvent,
-    Finished,
-}
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
 pub enum Input {
     Activated(u32, String),
     Dismiss(u32),
+    SetMuted(bool),
 }
 
 #[derive(Debug, Clone)]
 pub enum Output {
     Ready(mpsc::Sender<Input>),
-    Notification(Notification),
+    Card(Card),
+    Preferences(Preferences),
+    PreferenceResult(Result<Preferences, String>),
+    Dismissed(u32),
+    RequestFailed(String),
+    Disconnected(String),
+    Queued,
 }
 
-pub fn notifications(proxy: NotificationsAppletProxy<'static>) -> Subscription<Output> {
-    struct Wrapper(NotificationsAppletProxy<'static>);
-
-    impl Hash for Wrapper {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            std::any::TypeId::of::<NotificationsAppletProxy<'static>>().hash(state);
-        }
-    }
-    Subscription::run_with(Wrapper(proxy), |Wrapper(proxy)| {
-        let proxy = proxy.clone();
+pub fn notifications() -> Subscription<Output> {
+    struct Presenter;
+    Subscription::run_with(std::any::TypeId::of::<Presenter>(), |_| {
         stream::channel(
             50,
-            move |mut output: futures::channel::mpsc::Sender<Output>| async move {
-                let mut state = State::WaitingForNotificationEvent;
-                let (sender, mut receiver) = mpsc::channel(10);
-                _ = output.send(Output::Ready(sender)).await;
-
-                let mut signal;
-                let mut fail_count: u8 = 0;
-                loop {
-                    match proxy.receive_notify().await {
-                        Ok(s) => {
-                            signal = s;
-                            break;
-                        }
-                        Err(err) => {
-                            error!(
-                                "failed to get a stream of signals for notifications. {}",
-                                err
-                            );
-                            fail_count = fail_count.saturating_add(1);
-                            if fail_count > 5 {
-                                error!("Failed to receive notification events");
-                                // exit because the applet needs the notifications daemon in order to work properly
-                                std::process::exit(0);
-                            } else {
-                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                            }
-                            continue;
-                        }
-                    }
+            |mut output: futures::channel::mpsc::Sender<Output>| async move {
+                let result = async {
+                    let proxy = get_proxy().await?;
+                    client(&proxy, &mut output).await
                 }
-                loop {
-                    match &mut state {
-                        State::WaitingForNotificationEvent => {
-                            trace!("Waiting for notification events...");
-                            let mut next_signal = signal.next();
-                            let mut next_input = pin!(receiver.recv().fuse());
-                            cosmic::iced::futures::select! {
-                                v = next_signal => {
-                                    if let Some(msg) = v {
-                                        let Ok(args) = msg.args() else {
-                                            break;
-                                        };
-                                        let notification = Notification::new(
-                                            args.app_name,
-                                            args.id,
-                                            args.app_icon,
-                                            args.summary,
-                                            args.body,
-                                            args.actions,
-                                            args.hints,
-                                            args.expire_timeout,
-                                        );
-                                        _ = output.send(Output::Notification(notification)).await;
-                                    } else {
-                                        tracing::error!("Signal stream closed, ending notifications subscription");
-                                        state = State::Finished;
-                                    }
-                                }
-                                v = next_input => {
-                                    match v {
-                                        Some(Input::Activated(id, action)) => {
-                                            if let Err(error) = proxy.invoke_action(id, action).await {
-                                                tracing::error!("Failed to invoke notification action: {error}");
-                                            }
-                                        }
-                                        Some(Input::Dismiss(id)) => {
-                                            if let Err(error) = proxy.dismiss(id).await {
-                                                tracing::error!("Failed to dismiss notification: {error}");
-                                            }
-                                        }
-                                        None => {
-                                            tracing::error!("Channel closed, ending notifications subscription");
-                                            state = State::Finished;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        State::Finished => {
-                            let () = futures::future::pending().await;
-                        }
-                    }
+                .await;
+                if let Err(error) = result {
+                    let _ = output.send(Output::Disconnected(error)).await;
                 }
+                futures::future::pending::<()>().await;
             },
         )
     })
 }
 
-#[proxy(
-    default_service = "com.clawos.NotificationsApplet",
-    interface = "com.clawos.NotificationsApplet",
-    default_path = "/com/clawos/NotificationsApplet"
-)]
-pub trait NotificationsApplet {
-    #[zbus(signal)]
-    fn notify(
-        &self,
-        app_name: &str,
-        id: u32,
-        app_icon: &str,
-        summary: &str,
-        body: &str,
-        actions: Vec<&str>,
-        hints: HashMap<&str, zbus::zvariant::Value<'_>>,
-        expire_timeout: i32,
-    ) -> zbus::Result<()>;
-
-    fn invoke_action(&self, id: u32, action: String) -> zbus::Result<()>;
-    fn dismiss(&self, id: u32) -> zbus::Result<()>;
+async fn bounded<T>(future: impl Future<Output = zbus::Result<T>>) -> Result<T, String> {
+    tokio::time::timeout(CALL_TIMEOUT, future)
+        .await
+        .map_err(|_| "Notification presentation timed out.".to_string())?
+        .map_err(|error| error.to_string())
 }
 
-pub async fn get_proxy() -> anyhow::Result<NotificationsAppletProxy<'static>> {
-    let raw_fd = std::env::var("COSMIC_NOTIFICATIONS")?;
-    let raw_fd = raw_fd.parse::<RawFd>()?;
-    tracing::info!("Connecting to notifications daemon on fd {}", raw_fd);
+async fn send(
+    output: &mut futures::channel::mpsc::Sender<Output>,
+    value: Output,
+) -> Result<(), String> {
+    output
+        .send(value)
+        .await
+        .map_err(|_| "Notification presentation view closed.".to_string())
+}
 
-    let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(raw_fd) };
-    stream.set_nonblocking(true)?;
-    let stream = tokio::net::UnixStream::from_std(stream)?;
-    let conn = Builder::socket(stream).p2p().build().await?;
-    trace!("Applet connection created");
-    let proxy = NotificationsAppletProxy::new(&conn).await?;
+async fn client(
+    proxy: &NotificationPresentationProxy<'static>,
+    output: &mut futures::channel::mpsc::Sender<Output>,
+) -> Result<(), String> {
+    if bounded(proxy.version()).await? != VERSION {
+        return Err("The selected presenter does not support notification presentation v1.".into());
+    }
+    let mut cards = bounded(proxy.receive_card()).await?;
+    let mut preferences = bounded(proxy.receive_preferences_changed()).await?;
+    let mut failures = bounded(proxy.receive_failure()).await?;
+    let initial = Preferences::from_json(&bounded(proxy.preferences()).await?)
+        .map_err(|error| error.to_string())?;
+    let (sender, mut input) = mpsc::channel(10);
+    send(output, Output::Preferences(initial)).await?;
+    send(output, Output::Ready(sender)).await?;
+    loop {
+        tokio::select! {
+            message = cards.next() => {
+                let message = message.ok_or("Notification presentation connection closed.")?;
+                let args = message.args().map_err(|error| error.to_string())?;
+                let card = Card::from_json(args.payload).map_err(|error| error.to_string())?;
+                send(output, Output::Card(card)).await?;
+            }
+            message = preferences.next() => {
+                let message = message.ok_or("Notification preference connection closed.")?;
+                let args = message.args().map_err(|error| error.to_string())?;
+                let value = Preferences::from_json(args.payload).map_err(|error| error.to_string())?;
+                send(output, Output::Preferences(value)).await?;
+            }
+            message = failures.next() => {
+                let message = message.ok_or("Notification presentation connection closed.")?;
+                let args = message.args().map_err(|error| error.to_string())?;
+                send(output, Output::RequestFailed(args.message.chars().take(4096).collect())).await?;
+            }
+            message = input.recv() => {
+                match message.ok_or("Notification presentation controls closed.")? {
+                    Input::SetMuted(muted) => {
+                        send(output, Output::PreferenceResult(set_muted(proxy, muted).await)).await?;
+                    }
+                    Input::Dismiss(id) => {
+                        let result = match validate_handle(id) {
+                            Ok(()) => bounded(proxy.dismiss(id)).await,
+                            Err(error) => Err(error.to_string()),
+                        };
+                        let event = match result {
+                            Ok(()) => Output::Dismissed(id),
+                            Err(error) => Output::RequestFailed(error),
+                        };
+                        send(output, event).await?;
+                    }
+                    Input::Activated(id, action) => {
+                        let result = match validate_action(id, &action) {
+                            Ok(()) => bounded(proxy.invoke_action(id, &action)).await,
+                            Err(error) => Err(error.to_string()),
+                        };
+                        if let Err(error) = result {
+                            send(output, Output::RequestFailed(error)).await?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
-    Ok(proxy)
+async fn set_muted(
+    proxy: &NotificationPresentationProxy<'static>,
+    muted: bool,
+) -> Result<Preferences, String> {
+    let payload = Preferences::new(muted)
+        .to_json()
+        .map_err(|error| error.to_string())?;
+    let value = Preferences::from_json(&bounded(proxy.set_preferences(&payload)).await?)
+        .map_err(|error| error.to_string())?;
+    if value.muted != muted {
+        return Err("The presenter did not confirm the requested popup mute.".into());
+    }
+    Ok(value)
+}
+
+async fn get_proxy() -> Result<NotificationPresentationProxy<'static>, String> {
+    let fd = std::env::var(APPLET_FD_ENV)
+        .map_err(|_| "Notification presentation connection is unavailable.".to_string())?
+        .parse::<i32>()
+        .map_err(|_| "Invalid notification presentation descriptor.".to_string())?;
+    if fd < 3 {
+        return Err("Invalid notification presentation descriptor.".into());
+    }
+    let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    stream
+        .set_nonblocking(true)
+        .map_err(|error| error.to_string())?;
+    let stream = tokio::net::UnixStream::from_std(stream).map_err(|error| error.to_string())?;
+    let connection = bounded(Builder::socket(stream).p2p().build()).await?;
+    bounded(NotificationPresentationProxy::new(&connection)).await
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/subscriptions/notifications.rs"
+    ));
 }

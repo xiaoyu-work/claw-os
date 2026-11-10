@@ -12,10 +12,6 @@ use std::path::{Path, PathBuf};
 use cosmic::desktop::fde::{DesktopEntry, get_languages_from_env};
 
 fn data_dir(package: &str) -> PathBuf {
-    if package == "claw-applet-calendar" {
-        return Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../build/native-apps/claw-applet-calendar/data");
-    }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join(package)
@@ -127,28 +123,6 @@ fn brand_button_presents_the_claw_mark() {
             svg.contains(r##"fill="#005CFE""##),
             "{label} mark lost the brand dot",
         );
-    }
-}
-
-#[test]
-fn native_panel_applets_use_manifest_wrappers() {
-    for (package, id, exec) in [
-        (
-            "claw-applet-calendar",
-            "com.clawos.PanelCalendarButton",
-            "cos app panel-calendar open",
-        ),
-        (
-            "claw-applet-clipboard",
-            "com.clawos.AppletClipboard",
-            "cos app panel-clipboard open",
-        ),
-    ] {
-        let path = data_dir(package).join(format!("{id}.desktop"));
-        let raw = std::fs::read_to_string(&path).expect("read native panel applet");
-        let entry = DesktopEntry::from_str(&path, &raw, Some(&get_languages_from_env()))
-            .expect("parse native panel applet");
-        assert_eq!(entry.exec(), Some(exec));
     }
 }
 

@@ -22,10 +22,11 @@ Debian packages and a signed multi-architecture APT repository.
 | Path | Role |
 | --- | --- |
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
-| `apps.lock.json` | App main branch selection, distinct product/capability groups and exact App payload |
-| `../scripts/app_sources.py` | Resolve main once per build, retain its immutable source lock and stage explicitly kinded payloads |
-| `../scripts/app_sources.py --stage-shared <root>` | Invoke App-owned common support staging once into `usr/lib/cos/python`, separately from SDK/runtime and product payloads |
-| External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
+| `app-packages.json`, `../scripts/app_packages.py` | Official signed App APT consumption, retained identity closure, exact native/headless versions and one-owner production guards |
+| `apps.lock.json` | Retained identity selection and explicit cross-repository source-fixture composition, never production payload staging |
+| `../scripts/app_sources.py` | Immutable test/development source fixtures only |
+| `../scripts/app_sources.py --stage-shared <root>` | Source-fixture common support staging; production common files belong to independent `claw-app-support` |
+| External Files `python/claw_files/` | Single App-owned named library export; production owner is `claw-app-files`, not Agent |
 | `../tools/install-browser-agent.sh` | Native Messaging/policy registration for already installed Browser assets; never fetches or replaces product files |
 | `../tools/browser_native_host.py` | OS-owned owner-bound Native Messaging transport for the capability-gated Browser service |
 | `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
@@ -67,11 +68,26 @@ a rootfs except for the separately staged desktop package. Rootfs features
 install the resulting packages. Package dependencies express runtime layering
 without forcing synchronized versions or publication schedules.
 
-One release run freezes a package version and App snapshot. Its image matrix
+One release run freezes a package version and authenticated App APT inputs. Its image matrix
 consumes the same signed Agent/Base `.deb` artifacts rather than rebuilding
-their binaries. Desktop keeps its separate native rootfs build but consumes
-that same App snapshot. The APT publisher merges all selected package families
+their binaries and installs the checked App packages as independent owners.
+Only `all` tests separately receive an immutable source fixture. Desktop's
+product UI/private-library links are removed: original product binaries and
+resources come from App packages; OS notification presentation uses the public
+SDK. The source guard remains and rejects reintroduced links, without a source
+fallback or native surface removal.
+The APT publisher merges all selected package families
 once, preserving the authenticated candidates for families not rebuilt.
+
+The coordinated first transfer is strictly below `1:0.2.1`; runtime ABI stays
+1. Agent's versioned `claw-os-app-runtime-v1` Provides is rendered from
+`app-platform.json` (0.2.1 implementation), and App packages require `>= 0.2.1`.
+Agent recommends `claw-apps-agent`; Desktop recommends `claw-apps-desktop`
+and requires runtime-v1 implementation 0.2.1 for its actual SDK consumer.
+No Agent → App hard dependency prevents publishing independent App APT
+packages before the new Agent. SDK/runtime Python and Root authority stay
+OS-owned; `_shared`, `gateway`, `canonical_argv` and `claw_files` do not.
+See [current ownership and bootstrap blockers](README.md#coordinated-021-source-ownership-cutover).
 
 Independent publication must still preserve protocol compatibility. Before
 signing an index, the publisher rejects package protocol generations below
@@ -127,6 +143,12 @@ OS-owned GPL Applet service library, with its original license. Its
 The reader is included in the existing signed update-component inventory;
 the public Applet helper remains Desktop-owned. No rootfs feature or target
 duplicates the reader payload.
+
+### Historical source-fixture compatibility layout
+
+The following source-move record predates the 0.2.1 production ownership
+cutover above. Its Agent/Desktop payload claims describe compatibility
+fixtures, not current production builders.
 
 Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
 implementation. `apps.lock.json` tracks their `main` branch. Builds resolve one commit and
@@ -246,6 +268,7 @@ source staging remain distribution/build coupling.
 ## Tests
 
 ```bash
+python3 scripts/app_packages.py prepare --variant agent --architecture amd64
 ARCH=amd64 ./packaging/deb/build-debs.sh
 python3 -m pytest -q packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py
 bash packaging/apt-repo/tests/test-sync-existing-packages.sh

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # rootfs/features/desktop/install.sh — build the claw-os desktop from
-# shell source (PROJECT_DIR/desktop) plus pinned native App inputs, so the rootfs
+# shell source (PROJECT_DIR/desktop) plus separately owned App APT packages, so the rootfs
 # boots into a Wayland login.
 #
 # Target distro: Debian 13 "trixie" (kernel 6.12 LTS, PipeWire 1.4, Mesa 24).
@@ -32,6 +32,9 @@ if [ "${DESKTOP_SKIP:-0}" = "1" ]; then
         echo "  :: applying desktop overlay"
         cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
     fi
+    APP_PACKAGE_INPUTS="$(python3 "$PROJECT_DIR/scripts/app_packages.py" check \
+        --variant desktop --architecture "$DEB_ARCH")"
+    python3 "$PROJECT_DIR/scripts/app_packages.py" native-boundary
     echo "  :: DESKTOP_SKIP=1 — runtime deps + overlay applied, build skipped"
     echo "  :: NOTE: login chain not wired (greeter binary missing). Re-run"
     echo "         without DESKTOP_SKIP to get a bootable graphical session."
@@ -184,35 +187,17 @@ fi
 #    inside the chroot (../../crates from /build/desktop/<x> →
 #    /build/crates).
 #
-#    Likewise composed native Apps (including Terminal) depend on
-#    cos-runtime/rust for the internal controlled-service SDK. Without
-#    this mount cargo cannot resolve cos-runtime inside the chroot and
-#    the desktop build fails before producing a single binary.
-#
-#    And cos-runtime itself pulls in `claw-os-sdk = { path =
-#    "../../claw-os-sdk/rust" }` (the public app-developer SDK that
-#    cos-runtime layers audit/caps on top of). Bind-mount that one too
-#    Media Player and Notifications use this public SDK directly. Without this mount
-#    cargo dies in composed native crates with "failed to read
-#    /build/claw-os-sdk/rust/Cargo.toml".
+#    OS shell/Agent clients still need their OS-owned SDK/runtime sources.
+#    Product native binaries/resources come from App APT packages, never a
+#    sibling checkout or source tree mounted into this production build.
 # ---------------------------------------------------------------------------
 CHROOT_SRC="$ROOTFS/build/desktop"
 CHROOT_CRATES="$ROOTFS/build/crates"
 CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
 CHROOT_SDK="$ROOTFS/build/claw-os-sdk"
-CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"
-NATIVE_APP_SOURCES="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --native)"
-install -D -m 644 "$NATIVE_APP_SOURCES/source-lock.json" \
-    "$DESKTOP_PACKAGE_ROOT/usr/share/doc/claw-os-desktop/app-sources.json"
-test -f "$NATIVE_APP_SOURCES/cosmic-notifications/cosmic-notifications-config/Cargo.toml"
-test -f "$NATIVE_APP_SOURCES/cosmic-notifications/cosmic-notifications-util/Cargo.toml"
 PROJECT_CRATES="$PROJECT_DIR/crates"
 PROJECT_RUNTIME="$PROJECT_DIR/cos-runtime"
 PROJECT_SDK="$PROJECT_DIR/claw-os-sdk"
-mkdir -p "$CHROOT_NATIVE_APPS"
-if ! mountpoint -q "$CHROOT_NATIVE_APPS"; then
-    mount --bind "$NATIVE_APP_SOURCES" "$CHROOT_NATIVE_APPS"
-fi
 mkdir -p "$CHROOT_SRC"
 if ! mountpoint -q "$CHROOT_SRC"; then
     mount --bind "$DESKTOP_SRC" "$CHROOT_SRC"
@@ -237,9 +222,6 @@ if [ -d "$PROJECT_SDK" ]; then
 fi
 
 cleanup() {
-    umount "$CHROOT_NATIVE_APPS" 2>/dev/null || true
-    rmdir "$CHROOT_NATIVE_APPS" 2>/dev/null || true
-    rmdir "$ROOTFS/build/build" 2>/dev/null || true
     umount "$CHROOT_SDK" 2>/dev/null || true
     rmdir "$CHROOT_SDK" 2>/dev/null || true
     umount "$CHROOT_RUNTIME" 2>/dev/null || true
@@ -274,7 +256,6 @@ echo "  :: building desktop (cold tree: 30–60 minutes)"
 VERGEN_GIT_SHA="$(git_readonly -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 VERGEN_GIT_COMMIT_DATE="$(git_readonly -C "$PROJECT_DIR" log -1 --format=%cs HEAD 2>/dev/null || date -u +%Y-%m-%d)"
 chroot "$ROOTFS" env \
-    CLAW_NATIVE_APPS_PREPARED=1 \
     VERGEN_GIT_SHA="$VERGEN_GIT_SHA" \
     VERGEN_GIT_COMMIT_DATE="$VERGEN_GIT_COMMIT_DATE" \
     DESKTOP_PACKAGE_ROOT="$DESKTOP_PACKAGE_ROOT_CHROOT" \
@@ -377,13 +358,6 @@ required_files=(
     "$DESKTOP_PACKAGE_ROOT/usr/share/cosmic/com.clawos.Comp/v1/appearance_settings"
     # First-party application icon family. Scalable hicolor assets avoid
     # fixed-size theme overrides and keep every shell surface consistent.
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Files.svg"
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Term.svg"
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Edit.svg"
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Settings.svg"
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Store.svg"
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Player.svg"
-    "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.Launcher.svg"
     "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/com.clawos.AppLibrary.svg"
     # Icon theme — Tela is installed via just install
     # icons-tela-pkg/install in desktop/justfile. If it's missing
@@ -520,7 +494,8 @@ echo "  :: building claw-os-desktop.deb"
 "$PROJECT_DIR/packaging/deb/build-desktop-deb.sh" "$DESKTOP_PACKAGE_ROOT"
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
-DESKTOP_DEB="$DEBS_DIR/claw-os-desktop_${COS_VERSION}_${DEB_ARCH:-amd64}.deb"
+FILE_VERSION="${COS_VERSION//:/%3a}"
+DESKTOP_DEB="$DEBS_DIR/claw-os-desktop_${FILE_VERSION}_${DEB_ARCH:-amd64}.deb"
 if [ ! -f "$DESKTOP_DEB" ]; then
     echo "  error: expected desktop package missing: $DESKTOP_DEB" >&2
     exit 1
@@ -534,6 +509,12 @@ echo "  :: installing $(basename "$DESKTOP_DEB")"
 
 mkdir -p "$ROOTFS/var/cache/cos-debs"
 cp "$DESKTOP_DEB" "$ROOTFS/var/cache/cos-debs/"
+mkdir -p "$ROOTFS/var/cache/cos-debs/apps"
+cp "$APP_PACKAGE_INPUTS"/archives/*.deb "$ROOTFS/var/cache/cos-debs/apps/"
+app_debs=()
+for app_deb in "$APP_PACKAGE_INPUTS"/archives/*.deb; do
+    app_debs+=("/var/cache/cos-debs/apps/$(basename "$app_deb")")
+done
 # The desktop deb ships some conffiles (e.g. /etc/apt/apt.conf.d/20auto-upgrades)
 # that already exist on the rootfs from the base overlay. dpkg would normally
 # stop at an interactive conffile prompt, but stdin is not a terminal inside the
@@ -543,8 +524,9 @@ DEBIAN_FRONTEND=noninteractive chroot "$ROOTFS" apt-get install -y \
     --no-install-recommends \
     -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold \
-    "/var/cache/cos-debs/$(basename "$DESKTOP_DEB")"
+    "/var/cache/cos-debs/$(basename "$DESKTOP_DEB")" "${app_debs[@]}"
 chroot "$ROOTFS" apt-get clean
+rm -rf "$ROOTFS/var/cache/cos-debs/apps"
 rm -rf "$ROOTFS/var/lib/apt/lists"/*
 rm -rf "$DESKTOP_PACKAGE_ROOT"
 
