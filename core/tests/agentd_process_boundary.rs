@@ -1755,11 +1755,11 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
         quarantine.clone(),
     )
     .expect("reload quarantine pool");
-    let alternate = blocked
+    let error = blocked
         .acquire(harness.identity.uid, HostPurpose::Task)
-        .expect("use a different identity while first is quarantined");
-    assert_ne!(alternate.identity().uid, first_uid);
-    alternate.release().expect("release alternate identity");
+        .err()
+        .expect("unconfirmed owner data custody must block another execution identity");
+    assert!(error.contains("cleanup is unconfirmed") && error.contains("persistent-data writer"), "{error}");
     drop(blocked);
 
     assert_eq!(

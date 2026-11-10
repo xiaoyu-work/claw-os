@@ -314,11 +314,9 @@ pub(crate) fn inspect(
         || fields
             .get("Pre-Depends")
             .is_some_and(|value| !value.is_empty())
-        || fields.get("Provides").is_some_and(|value| {
-            value
-                .split(',')
-                .any(|item| item.trim().starts_with("claw-os-"))
-        })
+        || fields
+            .get("Provides")
+            .is_some_and(|value| value.split(',').any(|item| !app_provide(item.trim())))
     {
         return Err(
             "App packages cannot claim OS authority, conflicts or pre-install effects".into(),
@@ -339,6 +337,20 @@ pub(crate) fn inspect(
     std::fs::create_dir(destination).map_err(|error| error.to_string())?;
     let (_, expanded) = tar_entries(path, false, Some(destination), budget)?;
     Ok(expanded)
+}
+
+fn app_provide(value: &str) -> bool {
+    value == "claw-app-support-v1"
+        || value
+            .strip_prefix("claw-app-python-")
+            .and_then(|value| value.strip_suffix("-v1"))
+            .is_some_and(|library| {
+                !library.is_empty()
+                    && library.as_bytes()[0].is_ascii_lowercase()
+                    && library.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+            })
 }
 
 fn control_fields(text: &str) -> Result<BTreeMap<String, String>, String> {
