@@ -10,6 +10,8 @@ pub struct DesktopEntry {
     pub exec: String,
     pub name: LocalizedText,
     pub needs: Vec<Need>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_needs: Vec<Need>,
     #[serde(default)]
     pub panel_applet: bool,
 }
@@ -22,6 +24,7 @@ pub struct GuiEntry<'a> {
     pub exec: &'a str,
     pub label: &'a LocalizedText,
     pub needs: Vec<&'a Need>,
+    pub optional_needs: Vec<&'a Need>,
     pub legacy_needs: bool,
     pub panel_applet: bool,
 }
@@ -42,6 +45,11 @@ impl<'a> GuiEntry<'a> {
 
     pub fn need_is_bound(&self, need: &Need) -> bool {
         (self.legacy_needs || need.when.is_none())
+            && matches!(need.scope, ScopeBinding::Fixed { .. } | ScopeBinding::Wild | ScopeBinding::OwnerPath { .. })
+    }
+
+    pub fn optional_need_is_bound(&self, need: &Need) -> bool {
+        need.when.is_none()
             && matches!(need.scope, ScopeBinding::Fixed { .. } | ScopeBinding::Wild | ScopeBinding::OwnerPath { .. })
     }
 }
@@ -72,6 +80,7 @@ impl Manifest {
                 exec: &entry.exec,
                 label: &entry.name,
                 needs: entry.needs.iter().collect(),
+                optional_needs: entry.optional_needs.iter().collect(),
                 legacy_needs: false,
                 panel_applet: entry.panel_applet,
             });
@@ -94,6 +103,7 @@ impl Manifest {
                     .collect(),
             },
             legacy_needs: desktop.needs.is_none(),
+            optional_needs: desktop.optional_needs.iter().collect(),
             panel_applet: desktop.panel_applet,
         })
     }
@@ -131,9 +141,9 @@ impl Manifest {
     /// Permission inventory only, never a GUI launch capability union.
     pub fn declared_gui_needs(&self) -> impl Iterator<Item = &Need> {
         self.desktop.iter().flat_map(|desktop| {
-            desktop.needs.iter().flatten().chain(
-                desktop.entries.values().flat_map(|entry| &entry.needs),
-            )
+            desktop.needs.iter().flatten()
+                .chain(&desktop.optional_needs)
+                .chain(desktop.entries.values().flat_map(|entry| entry.needs.iter().chain(&entry.optional_needs)))
         })
     }
 }
@@ -159,6 +169,7 @@ pub(super) fn validate(manifest: &Manifest) -> Result<(), ManifestError> {
     if let Some(needs) = &desktop.needs {
         validate_needs(manifest, "default", needs)?;
     }
+    validate_needs(manifest, "default optional", &desktop.optional_needs)?;
     if desktop.entries.len() > 64 {
         return Err(invalid("entries", "at most 64 additional GUI entries are allowed"));
     }
@@ -185,6 +196,7 @@ pub(super) fn validate(manifest: &Manifest) -> Result<(), ManifestError> {
             .validate()
             .map_err(|detail| invalid("entries", &format!("{name}.name: {detail}")))?;
         validate_needs(manifest, name, &entry.needs)?;
+        validate_needs(manifest, &format!("{name} optional"), &entry.optional_needs)?;
     }
     Ok(())
 }
@@ -225,7 +237,7 @@ fn validate_needs(manifest: &Manifest, name: &str, needs: &[Need]) -> Result<(),
         }
         if need.verb == Verb::AI_BYPASS {
             return Err(ManifestError::AiBypassNotAllowedForApps {
-                field: "desktop.needs / desktop.entries[].needs",
+                field: "desktop GUI needs / optional_needs",
             });
         }
         if need.verb.as_str().starts_with("ai.") && manifest.ai.is_none() {

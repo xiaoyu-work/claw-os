@@ -100,6 +100,9 @@ fn system_review_named_gui_targets_require_fresh_protected_confirmation() {
                     "why":{"en":"Show the widget's own audio status"}
                 },{
                     "verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":{"en":"Unbound widget file"}
+                }],"optional_needs":[{
+                    "verb":"sys.identity","scope":{"kind":"fixed","scope":{"kind":"name","value":"accounts"}},
+                    "why":{"en":"Optional widget account management"}
                 }]}
             }}
         });
@@ -125,6 +128,9 @@ fn system_review_named_gui_targets_require_fresh_protected_confirmation() {
             detail.label.contains("applet") && detail.value.contains("widget.py")
                 && detail.value.contains("Show the widget's own audio status")));
         assert!(view.disclosures.iter().any(|detail| detail.label.contains("unsupported/unbound")));
+        assert!(view.disclosures.iter().any(|detail| detail.label.contains("optional feature")));
+        assert!(view.permissions.iter().any(|permission| permission.uses.iter().any(|usage|
+            usage.function == "gui:applet:optional" && usage.purpose == "Optional widget account management")));
         assert!(view.permissions.iter().all(|permission| permission.supported_choices.is_empty()));
         assert!(approvals::system_review::decide(1001, &record.id, true, Some(&package)).is_err());
         approvals::system_review::decide(1000, &record.id, true, Some(&package)).unwrap();

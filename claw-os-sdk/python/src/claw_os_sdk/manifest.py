@@ -25,14 +25,25 @@ def resolve_owner_path(verb: str, path: str, owner_home: str) -> str:
 def validate_owner_path_bindings(manifest: dict[str, Any]) -> None:
     entries = list((manifest.get("operations") or {}).values())
     entries.extend((manifest.get("mcp") or {}).get("tools", []))
+    gui_entries = []
     desktop = manifest.get("desktop")
     if isinstance(desktop, dict):
-        entries.append(desktop)
-        entries.extend((desktop.get("entries") or {}).values())
+        gui_entries = [desktop, *(desktop.get("entries") or {}).values()]
+        entries.extend(gui_entries)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        for need in entry.get("needs") or []:
-            if isinstance(need, dict) and isinstance(need.get("scope"), dict) and need["scope"].get("kind") == "owner-path":
-                validate_owner_path_need(need)
-                validate_owner_path(need["verb"], need["scope"]["path"])
+        _validate_owner_path_needs(entry.get("needs") or [])
+    for gui in gui_entries:
+        if isinstance(gui, dict) and "optional_needs" in gui:
+            optional = gui["optional_needs"]
+            if not isinstance(optional, list):
+                raise ValueError("GUI optional_needs must be an array")
+            _validate_owner_path_needs(optional)
+
+
+def _validate_owner_path_needs(needs: list[Any]) -> None:
+    for need in needs:
+        if isinstance(need, dict) and isinstance(need.get("scope"), dict) and need["scope"].get("kind") == "owner-path":
+            validate_owner_path_need(need)
+            validate_owner_path(need["verb"], need["scope"]["path"])

@@ -144,6 +144,7 @@ pub(crate) struct PreparedPlan {
 pub(crate) fn plan(
     launch: &AppLaunch,
     gui_entry: Option<&str>,
+    optional_needs_ungranted: &[usize],
     selector: &str,
     args: &[String],
     presentation: &Presentation,
@@ -203,6 +204,11 @@ pub(crate) fn plan(
         ("COS_COMMAND".to_string(), selector.to_string()),
         ("COS_ARGS_JSON".to_string(), arguments.user_args_json),
     ]);
+    if !selected.optional_needs.is_empty() {
+        environment.insert("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON".to_string(),
+            serde_json::to_string(optional_needs_ungranted)
+                .map_err(|error| format!("encode optional GUI startup state: {error}"))?);
+    }
     for (key, value) in presentation {
         if panel || !key.is_panel() {
             environment.insert(key.as_str().to_string(), value.as_str().to_string());

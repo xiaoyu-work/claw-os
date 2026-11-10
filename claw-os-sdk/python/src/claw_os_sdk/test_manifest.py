@@ -32,3 +32,19 @@ class OwnerPathTests(unittest.TestCase):
         ]:
             with self.assertRaises(ValueError):
                 manifest.validate_owner_path_bindings(value)
+
+    def test_optional_gui_lists_are_validated_without_grant_or_owner_path_fallback(self) -> None:
+        for invalid in [None, "not-an-array", {}, [{
+            "verb": "fs.read",
+            "scope": {"kind": "owner-path", "path": "../other/**"},
+        }]]:
+            for value in [
+                {"desktop": {"optional_needs": invalid}},
+                {"desktop": {"entries": {"applet": {"optional_needs": invalid}}}},
+            ]:
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    manifest.validate_owner_path_bindings(value)
+        manifest.validate_owner_path_bindings({"desktop": {"optional_needs": []}})
+        manifest.validate_owner_path_bindings({"desktop": {"entries": {"applet": {
+            "optional_needs": [{"verb": "fs.read", "scope": {"kind": "owner-path", "path": "Documents/**"}}],
+        }}}})

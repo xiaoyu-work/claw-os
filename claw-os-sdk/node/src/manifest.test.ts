@@ -27,3 +27,18 @@ test("owner-path validation covers operations MCP and each GUI declaration", () 
     { desktop: bad }, { desktop: { entries: { applet: bad } } },
   ]) assert.throws(() => validate_owner_path_bindings(value));
 });
+
+test("optional GUI lists validate owner paths without fallback on both surfaces", () => {
+  for (const invalid of [null, "not-an-array", {}, [{
+    verb: "fs.read", scope: { kind: "owner-path", path: "../other/**" },
+  }]]) {
+    for (const value of [
+      { desktop: { optional_needs: invalid } },
+      { desktop: { entries: { applet: { optional_needs: invalid } } } },
+    ]) assert.throws(() => validate_owner_path_bindings(value));
+  }
+  validate_owner_path_bindings({ desktop: { optional_needs: [] } });
+  validate_owner_path_bindings({ desktop: { entries: { applet: { optional_needs: [{
+    verb: "fs.read", scope: { kind: "owner-path", path: "Documents/**" },
+  }] } } } });
+});

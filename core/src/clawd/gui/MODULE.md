@@ -18,6 +18,33 @@ Argument-bound GUI needs are unsupported/unbound. Explicit conditional GUI
 needs are also unbound, not unconditional grants; the legacy operation union
 still does not evaluate `when`. Neither binds a later file-picker selection.
 
+`desktop.optional_needs` and each `desktop.entries.<name>.optional_needs` are
+independent best-effort feature lists, empty when absent. Missing, denied,
+ask-unapproved, unbound, package/policy-refused or unsupported optional rights
+do not block startup and never create an approval request. Mandatory `needs`
+remain strict, including required `ui.panel`; optional declarations do not
+subtract from them or from the default GUI's legacy operation union.
+
+Root first settles the complete mandatory plan, then admits optional caps only
+from the authenticated parent or a still-live, exact owner/session/scope
+reusable approval. Reusable admission spends one bounded use, never a once
+grant or a restoration receipt, and retains its expiry and revocation checks.
+Optional Wild requests retain the existing bounded parent-only inheritance;
+they never scan unrelated approved scopes or other GUI/MCP declarations.
+Activity confirmations, Workspace limits, App denials, package ceilings and
+the normal protected-resource/mount checks still apply. A disallowed optional
+mount is omitted, not made available by weakening the resource gate.
+
+Registration returns `optional_needs_ungranted`, zero-based indexes in the
+selected surface's optional list. Root projects the same startup snapshot as
+`COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON` when the selected list is nonempty.
+An index can also mean only part of an inherited bounded set was available.
+This presentation data is not authority or feature readiness: live
+policy/provider checks still return ordinary denial errors, and AI consent,
+budgets and provider availability remain separate. Existing sessions never
+widen after a later approval. Expiry/revocation still uses checked instance
+retirement; there is no new live capability acquisition or file-picker grant.
+
 The default GUI uses `desktop.entry`, falling back to top-level `entry` and the
 runtime default. Neither override changes ordinary operations or `mcp.entry`.
 Additional entries require a package-relative `entry`, literal `exec`, localized

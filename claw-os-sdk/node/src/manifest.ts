@@ -36,19 +36,31 @@ function object(value: unknown): value is Record<string, unknown> {
 
 export function validate_owner_path_bindings(manifest: Record<string, unknown>): void {
   const entries: unknown[] = [];
+  const guiEntries: Record<string, unknown>[] = [];
   if (object(manifest.operations)) entries.push(...Object.values(manifest.operations));
   if (object(manifest.mcp) && Array.isArray(manifest.mcp.tools)) entries.push(...manifest.mcp.tools);
   if (object(manifest.desktop)) {
-    entries.push(manifest.desktop);
-    if (object(manifest.desktop.entries)) entries.push(...Object.values(manifest.desktop.entries));
+    guiEntries.push(manifest.desktop);
+    if (object(manifest.desktop.entries)) guiEntries.push(...Object.values(manifest.desktop.entries).filter(object));
+    entries.push(...guiEntries);
   }
   for (const entry of entries) {
     if (!object(entry) || !Array.isArray(entry.needs)) continue;
-    for (const need of entry.needs) {
-      if (object(need) && object(need.scope) && need.scope.kind === "owner-path") {
-        validateOwnerPathNeed(need);
-        validate_owner_path(need.verb as string, need.scope.path as string);
-      }
+    validateOwnerPathNeeds(entry.needs);
+  }
+  for (const gui of guiEntries) {
+    if (gui.optional_needs !== undefined) {
+      if (!Array.isArray(gui.optional_needs)) throw new Error("GUI optional_needs must be an array");
+      validateOwnerPathNeeds(gui.optional_needs);
+    }
+  }
+}
+
+function validateOwnerPathNeeds(needs: unknown[]): void {
+  for (const need of needs) {
+    if (object(need) && object(need.scope) && need.scope.kind === "owner-path") {
+      validateOwnerPathNeed(need);
+      validate_owner_path(need.verb as string, need.scope.path as string);
     }
   }
 }

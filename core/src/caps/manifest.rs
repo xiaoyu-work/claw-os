@@ -732,6 +732,11 @@ pub struct Desktop {
     )]
     pub needs: Option<Vec<Need>>,
 
+    /// Best-effort GUI features. Omission is empty, never an operation/MCP
+    /// union; missing authority does not request consent or block startup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_needs: Vec<Need>,
+
     /// Additional named GUI surfaces sharing this App's identity.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub entries: BTreeMap<String, DesktopEntry>,

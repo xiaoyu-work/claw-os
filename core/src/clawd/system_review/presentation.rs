@@ -143,6 +143,12 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
                 value: format!("Need indexes {:?} have no GUI argument binding and are not granted at startup.", gui.unbound_needs),
             });
         }
+        if !gui.optional_needs.is_empty() {
+            disclosures.push(ReviewDetail {
+                label: format!("GUI {}: optional feature permissions", gui.name.as_deref().unwrap_or("(default)")),
+                value: "Startup does not request or require new optional authority. Missing, denied or unapproved rights leave those features unavailable; required permissions remain mandatory.".into(),
+            });
+        }
     }
     let actions = if status == ReviewStatus::Pending {
         vec![

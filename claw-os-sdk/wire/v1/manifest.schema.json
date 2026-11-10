@@ -457,6 +457,13 @@
           "items": { "$ref": "#/$defs/need" },
           "description": "Default GUI's own needs. Present [] means no needs; omission retains legacy constrained fixed/wild operation needs, never MCP needs. Explicit argument-bound/conditional needs remain unsupported and unbound at GUI startup."
         },
+        "optional_needs": {
+          "type": "array",
+          "x-go-type": "*[]Need",
+          "items": { "$ref": "#/$defs/need" },
+          "default": [],
+          "description": "Best-effort default-GUI features, empty when omitted. Only existing authenticated parent or reusable exact-owner approval may authorize them; absent/denied/unapproved rights do not block startup or prompt. Never subtracts from mandatory needs or the legacy operation union, and never inherits optional needs from other surfaces."
+        },
         "entries": {
           "type": "object",
           "maxProperties": 64,
@@ -492,6 +499,13 @@
         "exec": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^(?=[\\s\\S]*\\S)[^\\u0000-\\u001f\\u007f-\\u009f]+$(?![\\s\\S])", "description": "One exact literal selector passed to this entry, not a command line. Core enforces 1024 UTF-8 bytes." },
         "name": { "$ref": "#/$defs/localizedText", "description": "Localized presentation name, English required; never authority." },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "This GUI's own needs, explicitly [] for none. Fixed needs use existing owner authorization; wild needs inherit bounded same-verb delegation. Argument-bound/conditional needs remain unsupported/unbound." },
+        "optional_needs": {
+          "type": "array",
+          "x-go-type": "*[]Need",
+          "items": { "$ref": "#/$defs/need" },
+          "default": [],
+          "description": "This GUI's own best-effort feature needs, empty when omitted. Missing/denied/ask-unapproved permissions neither block startup nor mint rights. Required panel-display authority must remain in needs. No default-GUI, operation, MCP or other-entry union; no on-demand widening is implied."
+        },
         "panel_applet": { "type": "boolean", "description": "Presentation metadata only, defaults false independently of the default desktop; grants no LayerShell or resource authority." }
       }
     }

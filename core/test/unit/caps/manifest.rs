@@ -2195,3 +2195,83 @@ fn owner_path_rejects_an_existing_symlink_escape_even_for_a_missing_leaf() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn optional_gui_needs_are_per_surface_empty_by_default_and_never_relax_mandatory_needs() {
+    let mut value = multi_gui_manifest();
+    value["desktop"]["optional_needs"] = serde_json::json!([{
+        "verb":"sys.identity","scope":{"kind":"fixed","scope":{"kind":"name","value":"accounts"}},
+        "why":{"en":"Optional account management"}
+    }]);
+    value["desktop"]["entries"]["applet"]["optional_needs"] = serde_json::json!([{
+        "verb":"fs.read","scope":{"kind":"owner-path","path":"Documents/**"},
+        "when":{"kind":"arg-present","arg":"path"},"why":{"en":"Unsupported conditional feature"}
+    }]);
+    let manifest = parse(&value.to_string());
+    let default = manifest.gui_entry(None).unwrap();
+    assert!(default.needs.is_empty());
+    assert_eq!(default.optional_needs[0].verb, Verb::SYS_IDENTITY);
+    let applet = manifest.gui_entry(Some("applet")).unwrap();
+    assert_eq!(applet.launch_needs().map(|need| need.verb).collect::<Vec<_>>(), [Verb::UI_NOTIFY]);
+    assert_eq!(applet.optional_needs.len(), 1);
+    assert!(!applet.optional_need_is_bound(applet.optional_needs[0]));
+    let round_trip = parse(&serde_json::to_string(&manifest).unwrap());
+    assert_eq!(round_trip.gui_entry(Some("applet")).unwrap().optional_needs.len(), 1);
+    assert_eq!(manifest.declared_gui_needs().count(), 5);
+
+    value["desktop"].as_object_mut().unwrap().remove("needs");
+    let legacy = parse(&value.to_string());
+    assert!(legacy.gui_entry(None).unwrap().legacy_needs);
+    assert_eq!(legacy.gui_entry(None).unwrap().launch_needs().map(|need| need.verb).collect::<Vec<_>>(), [Verb::SYS_OBSERVE]);
+    assert!(parse(r#"{"id":"plain-gui","version":"1","name":{"en":"Plain"},"desktop":{}}"#)
+        .gui_entry(None).unwrap().optional_needs.is_empty());
+}
+
+#[test]
+fn optional_gui_needs_reuse_need_validation_and_reject_null_instead_of_ignoring_it() {
+    for location in ["default", "applet"] {
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!("not-an-array"),
+            serde_json::json!([{"verb":"ai.chat","scope":{"kind":"wild"},"why":{"en":"Missing policy"}}]),
+            serde_json::json!([{"verb":"fs.delete","scope":{"kind":"owner-path","path":"../other/**"},"why":{"en":"Escape"}}]),
+        ] {
+            let mut value = multi_gui_manifest();
+            if location == "default" {
+                value["desktop"]["optional_needs"] = invalid;
+            } else {
+                value["desktop"]["entries"]["applet"]["optional_needs"] = invalid;
+            }
+            assert!(Manifest::from_json(&value.to_string()).is_err(), "{location}");
+        }
+    }
+    for field in ["operations", "mcp"] {
+        let mut value = multi_gui_manifest();
+        if field == "operations" {
+            value["operations"]["inspect"]["optional_needs"] = serde_json::json!([]);
+        } else {
+            value["mcp"]["tools"][0]["optional_needs"] = serde_json::json!([]);
+        }
+        assert!(Manifest::from_json(&value.to_string()).is_err(), "{field}");
+    }
+}
+
+#[test]
+fn public_gui_conformance_vectors_are_actual_top_level_valid_manifests() {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"), "/../claw-os-sdk/wire/v1/manifest_extensions.vectors.json",
+    ))).unwrap();
+    let mut optional_seen = false;
+    for case in vectors["cases"].as_array().unwrap() {
+        let manifest = parse(&case["manifest"].to_string());
+        if manifest.desktop.is_some() {
+            let selected = manifest.gui_entry(Some("applet")).unwrap();
+            if !selected.optional_needs.is_empty() {
+                optional_seen = true;
+                assert!(selected.launch_needs().any(|need| need.verb == Verb::UI_PANEL));
+                assert!(selected.optional_needs.iter().any(|need| need.verb == Verb::AI_CHAT_UNTRUSTED));
+            }
+        }
+    }
+    assert!(optional_seen, "optional GUI declarations must not be hidden inside another metadata object");
+}

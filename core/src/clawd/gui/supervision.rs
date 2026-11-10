@@ -70,6 +70,7 @@ impl Supervised {
         let mut plan = crate::bridge::gui::plan(
             &job.registration.launch,
             job.registration.gui_entry.as_deref(),
+            &job.registration.optional_needs_ungranted,
             &job.registration.selector,
             request.args.as_slice(),
             &request.presentation,

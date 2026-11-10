@@ -32,13 +32,24 @@ pub(crate) fn validate_owner_path_bindings(manifest: &Value) -> Result<(), Strin
     let desktop = manifest.get("desktop").into_iter();
     let entries = manifest.get("desktop").and_then(|desktop| desktop.get("entries"))
         .and_then(Value::as_object).into_iter().flat_map(|entries| entries.values());
-    for entry in operations.chain(tools).chain(desktop).chain(entries) {
-        for need in entry.get("needs").and_then(Value::as_array).into_iter().flatten() {
-            if need.get("scope").and_then(|scope| scope.get("kind")).and_then(Value::as_str) == Some("owner-path") {
-                super::generated::validate_owner_path_need(need).map_err(|error| error.to_string())?;
-                validate_owner_path(need["verb"].as_str().ok_or("invalid owner-path verb")?,
-                    need["scope"]["path"].as_str().ok_or("invalid owner-path")?)?;
-            }
+    for entry in operations.chain(tools).chain(desktop.clone()).chain(entries.clone()) {
+        validate_owner_path_needs(entry.get("needs").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default())?;
+    }
+    for gui in desktop.chain(entries) {
+        if let Some(optional) = gui.get("optional_needs") {
+            let optional = optional.as_array().ok_or("GUI optional_needs must be an array")?;
+            validate_owner_path_needs(optional)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_owner_path_needs(needs: &[Value]) -> Result<(), String> {
+    for need in needs {
+        if need.get("scope").and_then(|scope| scope.get("kind")).and_then(Value::as_str) == Some("owner-path") {
+            super::generated::validate_owner_path_need(need).map_err(|error| error.to_string())?;
+            validate_owner_path(need["verb"].as_str().ok_or("invalid owner-path verb")?,
+                need["scope"]["path"].as_str().ok_or("invalid owner-path")?)?;
         }
     }
     Ok(())

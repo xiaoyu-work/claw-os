@@ -31,6 +31,14 @@ resolves identity/home, canonical containment, protected resources and approval.
 High-risk deletion and `ui.panel` require their own ordinary owner approval;
 neither new metadata nor a panel label supplies a default grant.
 
+GUI manifests can place nonessential features in default/named
+`optional_needs` arrays. Missing, denied or unapproved rights leave those
+features unavailable without blocking startup or prompting for new authority.
+Mandatory needs, especially required `ui.panel`, remain strict. Root uses only
+existing parent or exact-owner reusable authorization; the arrays and purposes
+remain part of review and deny inventory. Startup ungranted indexes are
+presentation data, not a live grant or a new on-demand permission API.
+
 ## Layout
 
 ```

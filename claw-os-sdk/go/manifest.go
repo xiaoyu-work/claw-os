@@ -42,6 +42,7 @@ func ResolveOwnerPath(verb, path, ownerHome string) (string, error) {
 
 func validateOwnerPathBindings(manifest map[string]any) error {
 	var entries []any
+	var guiEntries []map[string]any
 	if operations, ok := manifest["operations"].(map[string]any); ok {
 		for _, entry := range operations {
 			entries = append(entries, entry)
@@ -54,9 +55,13 @@ func validateOwnerPathBindings(manifest map[string]any) error {
 	}
 	if desktop, ok := manifest["desktop"].(map[string]any); ok {
 		entries = append(entries, desktop)
+		guiEntries = append(guiEntries, desktop)
 		if extras, ok := desktop["entries"].(map[string]any); ok {
 			for _, entry := range extras {
 				entries = append(entries, entry)
+				if gui, ok := entry.(map[string]any); ok {
+					guiEntries = append(guiEntries, gui)
+				}
 			}
 		}
 	}
@@ -66,19 +71,37 @@ func validateOwnerPathBindings(manifest map[string]any) error {
 			continue
 		}
 		needs, _ := entry["needs"].([]any)
-		for _, rawNeed := range needs {
-			need, ok := rawNeed.(map[string]any)
+		if err := validateOwnerPathNeeds(needs); err != nil {
+			return err
+		}
+	}
+	for _, gui := range guiEntries {
+		if raw, present := gui["optional_needs"]; present {
+			needs, ok := raw.([]any)
 			if !ok {
-				continue
+				return fmt.Errorf("GUI optional_needs must be an array")
 			}
-			scope, _ := need["scope"].(map[string]any)
-			if scope["kind"] == "owner-path" {
-				if err := ValidateOwnerPathNeed(need); err != nil {
-					return err
-				}
-				if err := ValidateOwnerPath(need["verb"].(string), scope["path"].(string)); err != nil {
-					return err
-				}
+			if err := validateOwnerPathNeeds(needs); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateOwnerPathNeeds(needs []any) error {
+	for _, rawNeed := range needs {
+		need, ok := rawNeed.(map[string]any)
+		if !ok {
+			continue
+		}
+		scope, _ := need["scope"].(map[string]any)
+		if scope["kind"] == "owner-path" {
+			if err := ValidateOwnerPathNeed(need); err != nil {
+				return err
+			}
+			if err := ValidateOwnerPath(need["verb"].(string), scope["path"].(string)); err != nil {
+				return err
 			}
 		}
 	}

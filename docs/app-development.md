@@ -961,6 +961,54 @@ not granted at startup. The old operation-needs union retains its legacy
 condition behavior. Literal GUI argv does not bind operation argument names
 or authorize a later file-picker selection.
 
+Both the default GUI and a named GUI may additionally declare an
+`optional_needs` array using the same Need model:
+
+```json
+{
+  "needs": [{
+    "verb": "ui.panel",
+    "scope": {"kind": "fixed", "scope": {"kind": "wild"}},
+    "why": {"en": "Required panel display"}
+  }],
+  "optional_needs": [{
+    "verb": "sys.identity",
+    "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}},
+    "why": {"en": "Optional account management"}
+  }]
+}
+```
+
+Omission means `[]`; explicit `null` is invalid. The field belongs only to
+`desktop` or `desktop.entries.<name>`, not ordinary operations or MCP tools.
+It never borrows default/other GUI, operation or MCP permissions. Mandatory
+`needs` still refuse startup when authorization is missing or denied. In
+particular, required LayerShell authority must remain a mandatory `ui.panel`
+need. Adding the same permission to `optional_needs` does not relax it.
+For legacy default GUIs, authors must explicitly declare their required
+`desktop.needs` subset before moving a feature out of the old operation union.
+
+Optional missing, denied or ask-unapproved rights leave features unavailable
+without blocking GUI startup or asking for new consent. Root may admit only
+already authenticated parent rights or an existing exact owner/session/scope
+reusable approval, spending one use while retaining its expiry. Once-grants,
+restoration receipts and another session's approvals cannot supply optional
+startup rights. Wild bindings keep the same bounded parent-only meaning.
+Package, App-deny, Activity, Workspace and protected-resource/mount rules
+still apply; unsupported optional resources are not mounted as a fallback.
+Optional argument-bound/conditional needs remain unbound. AI needs still
+require a valid AI policy, and paid-model consent/budgets remain separate.
+
+The authenticated review lists required and optional purposes separately and
+includes optional declarations in the permission-contract digest and deny
+inventory. Root registration reports `optional_needs_ungranted` indexes, also
+projected as `COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON` for the selected GUI.
+This is an initial presentation snapshot, not permission authority or a promise
+that a provider is ready. Apps must retain normal live policy/provider checks
+and handle existing denial errors. No later approval silently widens the
+running grant; expiry/revocation retains checked instance retirement.
+This contract adds no on-demand widening or file-picker capability.
+
 A GUI requiring a bounded owner-relative filesystem request can instead use
 the common Need binding:
 
