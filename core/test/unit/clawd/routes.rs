@@ -145,6 +145,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "app_session.register_native",
     "mcp_session.register",
     "app_session.bind",
+    "app_session.check_live",
     "app_session.set_transient",
     "app_session.deregister",
     // The human `cos app <id> <command>` surface for MCP-only Apps. It is

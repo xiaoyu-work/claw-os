@@ -1212,6 +1212,13 @@ pub struct AppSessionBind {
     pub custody_socket: Option<Text<4096>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppSessionCheckLive {
+    pub session_id: Token,
+    pub handle: Token,
+}
+
 pub type AppGuiLaunch = crate::clawd::gui::inputs::LaunchRequest;
 pub type AppGuiWait = crate::clawd::gui::inputs::InstanceRequest;
 pub type AppGuiStop = crate::clawd::gui::inputs::InstanceRequest;

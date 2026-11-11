@@ -73,6 +73,7 @@ fn host_lifecycle_never_exposes_admin_or_decision_routes() {
         Command::AppSessionRegister,
         Command::McpSessionRegister,
         Command::AppSessionBind,
+        Command::AppSessionCheckLive,
         Command::AppSessionSetTransient,
         Command::AppSessionDeregister,
         Command::PermissionStatus,

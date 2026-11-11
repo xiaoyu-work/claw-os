@@ -95,6 +95,7 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
         | super::routes::Command::SystemPackageRecover
         | super::routes::Command::AppStoreAptHook)
         || command == super::routes::Command::AppSessionRegister
+        || command == super::routes::Command::AppSessionCheckLive
         || command == super::routes::Command::AppDirectoryInstall
         || command == super::routes::Command::ProvenanceTrustWithdrawal
         || matches!(command, super::routes::Command::AppGuiLaunch

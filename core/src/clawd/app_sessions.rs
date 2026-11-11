@@ -2550,6 +2550,23 @@ fn issue_session_grant_with_gui(
     Ok(())
 }
 
+pub async fn check_live(
+    params: Value,
+    client: &ClientIdentity,
+    relay_grant: &authority::Decision,
+) -> Result<Value, BrokerError> {
+    let session_id = required_string(&params, "session_id")?;
+    if relay_grant.session_id() != Some(session_id.as_str()) {
+        return Err(BrokerError::authorization(
+            "relay handle does not cover this App session",
+        ));
+    }
+    assert_relay_package_live(client, &session_id)
+        .await
+        .map_err(BrokerError::authorization)?;
+    Ok(json!({"live": true}))
+}
+
 /// Mint the launcher's right to relay for one App session.
 ///
 /// The grant carries an empty capability set on purpose: it authorizes
