@@ -1,7 +1,11 @@
 #![cfg(all(feature = "provider", target_os = "linux"))]
 
 use claw_os_sdk::applet::{Client, HistoryPermission};
-use std::{fs, time::Duration};
+use std::{
+    fs,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    time::Duration,
+};
 use tokio::time::{sleep, timeout};
 
 #[allow(dead_code)]
@@ -58,27 +62,61 @@ async fn cancellation_terminates_the_real_provider_and_its_active_policy_child()
                 .map(|value| value.trim().parse().unwrap())
         })
         .unwrap();
-    assert_eq!(unsafe { libc::getpgid(child) }, provider);
+    let group: libc::pid_t = fs::read_to_string(fixture.root.join("provider-group-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(unsafe { libc::getpgid(child) }, group);
+    assert_eq!(unsafe { libc::getpgid(provider) }, group);
+    let processes: Vec<_> = [child, provider, group]
+        .into_iter()
+        .map(|pid| {
+            let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+            assert!(raw >= 0);
+            let descriptor = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+            let mut poll = libc::pollfd {
+                fd: descriptor.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            assert_eq!(unsafe { libc::poll(&mut poll, 1, 0) }, 0);
+            (pid, descriptor)
+        })
+        .collect();
     call.abort();
     assert!(call.await.unwrap_err().is_cancelled());
     timeout(Duration::from_secs(3), async {
         loop {
-            let mut status = 0;
-            let waited = unsafe { libc::waitpid(child, &mut status, libc::WNOHANG) };
-            if waited == child {
-                assert!(libc::WIFSIGNALED(status));
-                assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+            let mut complete = true;
+            for (pid, descriptor) in &processes {
+                if *pid != group {
+                    let mut status = 0;
+                    let waited = unsafe { libc::waitpid(*pid, &mut status, libc::WNOHANG) };
+                    if waited == *pid {
+                        assert!(libc::WIFSIGNALED(status));
+                        assert_eq!(libc::WTERMSIG(status), libc::SIGKILL);
+                    } else if waited < 0 {
+                        assert_eq!(
+                            std::io::Error::last_os_error().raw_os_error(),
+                            Some(libc::ECHILD)
+                        );
+                    }
+                }
+                let mut poll = libc::pollfd {
+                    fd: descriptor.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut poll, 1, 0) };
+                assert!(ready >= 0);
+                complete &= ready > 0
+                    && poll.revents & libc::POLLIN != 0
+                    && !std::path::Path::new(&format!("/proc/{pid}")).exists();
+            }
+            if complete {
                 break;
             }
-            if waited < 0 {
-                assert_eq!(
-                    std::io::Error::last_os_error().raw_os_error(),
-                    Some(libc::ECHILD)
-                );
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-        while std::path::Path::new(&format!("/proc/{provider}")).exists() {
             sleep(Duration::from_millis(10)).await;
         }
     })
