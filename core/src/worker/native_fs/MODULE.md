@@ -115,13 +115,15 @@ checked unlink proves the retained file has no links and syncs its parent.
 
 A separately joined observer compares owner-accessible metadata fingerprints
 for already materialized nodes every 25 ms. It invalidates kernel data/attribute
-and directory-entry caches without holding the dispatcher locks. Directory
-enumeration sees new metadata without granting new content access. External
+caches without holding the dispatcher locks. Zero entry TTL and fresh directory
+enumeration expose changed metadata without granting new content access. External
 replacement does not silently transfer an old object selection.
 
 An explicitly Root-selected regular-file watch supports native
 `poll(fd, POLLPRI)` and `FUSE_NOTIFY_POLL`; readiness follows cache invalidation.
-`FUSE_NOTIFY_DELETE` also supplies actual parent-directory inotify deletion events.
+`FUSE_NOTIFY_DELETE` marks the exact cached object unlinked. File-watch
+`IN_DELETE_SELF` follows the last dentry reference closing; a retained open FD
+delays it. This does not inject a parent-directory `IN_DELETE` event.
 App-origin writes/atomic rename produce normal kernel inotify events.
 FUSE 7.31 cannot inject general external create/modify inotify events:
 cache invalidation is not such an event, and no fake write, grant or JSON
