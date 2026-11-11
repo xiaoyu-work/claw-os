@@ -345,9 +345,9 @@ fn native_fs_kernel(view: &str) {
     fn denied(path: &Path) {
         assert!(File::open(path).is_err(), "unselected/protected content opened: {path:?}");
     }
-    fn events(file: &mut File) -> Vec<(u32, Vec<u8>)> {
+    fn events(file: &mut File, label: &str) -> Vec<(u32, Vec<u8>)> {
         let mut poll = libc::pollfd { fd: file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-        assert!(unsafe { libc::poll(&mut poll, 1, 5000) } > 0, "native inotify event deadline");
+        assert!(unsafe { libc::poll(&mut poll, 1, 5000) } > 0, "native inotify {label} event deadline");
         let mut buffer = [0_u8; 8192];
         let count = file.read(&mut buffer).unwrap();
         let mut at = 0;
@@ -460,14 +460,14 @@ fn native_fs_kernel(view: &str) {
         drop(discarded);
         std::fs::remove_file(&names[1]).unwrap();
         File::open(view).unwrap().sync_all().unwrap();
-        let seen = events(&mut directory_watch);
+        let seen = events(&mut directory_watch, "atomic rename");
         assert!(seen.iter().any(|(mask, name)| mask & libc::IN_MOVED_TO != 0 && name == b"atomic"));
         assert!(!names[0].exists() && !names[1].exists());
         tag(b"WROK");
 
         let watched = File::open(view.join("watched")).unwrap();
         assert_eq!(std::fs::read(view.join("watched")).unwrap(), b"watch-before\0");
-        let mut backing_watch = watcher(&view.join("watched"), libc::IN_DELETE_SELF | libc::IN_ATTRIB);
+        let mut backing_watch = watcher(view, libc::IN_DELETE);
         tag(b"WATC");
         priority(&watched);
         next(b'C');
@@ -478,8 +478,8 @@ fn native_fs_kernel(view: &str) {
         denied(&view.join("external-entry"));
         tag(b"CHNG");
         priority(&watched);
-        let seen = events(&mut backing_watch);
-        assert!(seen.iter().any(|(mask, _)| mask & libc::IN_DELETE_SELF != 0));
+        let seen = events(&mut backing_watch, "external directory deletion");
+        assert!(seen.iter().any(|(mask, name)| mask & libc::IN_DELETE != 0 && name == b"watched"));
         assert!(std::fs::metadata(view.join("watched")).is_err());
         tag(b"GONE");
         output

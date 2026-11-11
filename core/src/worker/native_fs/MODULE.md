@@ -121,7 +121,7 @@ replacement does not silently transfer an old object selection.
 
 An explicitly Root-selected regular-file watch supports native
 `poll(fd, POLLPRI)` and `FUSE_NOTIFY_POLL`; readiness follows cache invalidation.
-`FUSE_NOTIFY_DELETE` also supplies actual native inotify deletion events.
+`FUSE_NOTIFY_DELETE` also supplies actual parent-directory inotify deletion events.
 App-origin writes/atomic rename produce normal kernel inotify events.
 FUSE 7.31 cannot inject general external create/modify inotify events:
 cache invalidation is not such an event, and no fake write, grant or JSON
