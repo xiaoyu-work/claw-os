@@ -2574,7 +2574,7 @@ routes! {
         authority: peer(Audience::SystemService),
         body: body::PackageTransactionStatus,
         audit: &[("request_id", FieldRule::Token), ("invocation_id", FieldRule::Token)],
-        run: |c| { packages::transaction_status(c.params, c.client).await },
+        run: |c| packages::transaction_status(c.params, c.client).await,
     }
     SystemPackageRecover {
         name: "system.package.recover",
@@ -2584,7 +2584,7 @@ routes! {
         authority: peer(Audience::SystemService),
         body: body::PackageTransactionRecover,
         audit: &[("request_id", FieldRule::Token)],
-        run: |c| { packages::transaction_recover(c.params, c.client).await },
+        run: |c| packages::transaction_recover(c.params, c.client).await,
     }
     SystemPowerControl {
         name: "system.power.control",
