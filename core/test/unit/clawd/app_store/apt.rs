@@ -2086,6 +2086,16 @@ async fn private_apt_global_stop_is_separate_and_unreviewed_effect_is_not_applie
         .to_string(),
     )
     .unwrap();
+    std::fs::write(
+        extra.join("main.py"),
+        "def run(command, args):\n    return {\"fixture\": True}\n",
+    )
+    .unwrap();
+    std::fs::copy(
+        Path::new("/usr/lib/cos/apps").join(APPS[0]).join(".provenance.json"),
+        extra.join(".provenance.json"),
+    )
+    .unwrap();
     assert!(crate::apps::discover_all(Path::new("/usr/lib/cos/apps"))
         .quarantined
         .contains_key("apt-preexisting-quarantine"));
