@@ -1700,10 +1700,8 @@ pub(crate) fn retire_operation_decision(
                     invalidate_claimed_request(id, &scratch, &request, reason)?;
                     sync_dir(&pending_dir());
                 }
-                RequestStatus::Approved => {
-                    if !consume_grant_file(&path)? {
-                        return Err("operation approval retirement was not verified".into());
-                    }
+                RequestStatus::Approved if !consume_grant_file(&path)? => {
+                    return Err("operation approval retirement was not verified".into());
                 }
                 _ => {}
             }
