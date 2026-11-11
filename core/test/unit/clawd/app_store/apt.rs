@@ -1065,13 +1065,21 @@ impl RetainedPeer {
             .env("COS_APP_APT_REPLY", &reply)
             .spawn()
             .unwrap();
+        register_process_session(
+            uid,
+            child.id(),
+            &parent,
+            None,
+            crate::caps::CapSet::from_caps([]),
+        );
+        let sessions = vec![parent.clone()];
         Self {
             child,
             uid,
             reply,
             session: String::new(),
             parent,
-            sessions: Vec::new(),
+            sessions,
         }
     }
 
@@ -2252,11 +2260,8 @@ async fn private_apt_retained_payload_lifecycle_and_nonzero_completion() {
             !response.ok,
             "installed versions hid a normal nonzero APT exit"
         );
-        assert!(response
-            .error
-            .unwrap()
-            .message
-            .contains("Successful Root package child completion"));
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "indeterminate", "{error:?}");
         assert_eq!(peer.status(&failed).await["phase"], "indeterminate");
         assert_eq!(dpkg_state(), before);
         assert_eq!(
