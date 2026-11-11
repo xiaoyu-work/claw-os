@@ -24,9 +24,9 @@ extensions.
   pid/start time, host pid/start time, task or service identity, package when
   applicable, nonce, protocol version, and lease deadline.
 - Expose a second broker-owned Unix socket only to the host process and its
-  descendants. The host may use only App/MCP lifecycle routes; descendants may
-  use only session/peer-session provider routes for their nearest registered
-  App/MCP session.
+  descendants. The host may use only App/MCP lifecycle routes and the
+  process-bound App-session relay; descendants may use only session/peer-session
+  provider routes for their nearest registered App/MCP session.
 - Let task Hosts run one-shot Apps and configured MCP servers and relay typed
   Agent-to-App calls, but never execute those relayed calls; never run their code
   in `clawd` or `claw-agentd`.
@@ -114,9 +114,14 @@ The private proxy is not `/run/cos/clawd.sock`. It belongs to the leased
 extension uid and rejects every other uid before checking whether the kernel
 pid/start-time is the exact host or a descendant bound to the nearest App/MCP
 session.
-Lifecycle routes are host-only; provider routes are child-only; task,
-scheduler, permission-decision, admin, and App-session routes are never
-available to an extension child.
+Lifecycle and App-session relay routes are host-only; direct provider routes
+are child-only; task, scheduler, permission-decision, admin, and App-session
+routes are never available to an extension child. A nested worker's local
+broker relays through the Host using its Root-issued, process-bound empty-cap
+handle. Root binds that handle to one App session, checks its live package,
+decodes only session-subject system-service routes, and spends the exact live
+capability before the provider effect. Admitting the relay envelope does not
+admit direct Host provider calls, recursive relays, or grant any capability.
 
 The validated private bootstrap binds the App session cache and owner-path
 metadata to its authenticated owner once per Host process. That metadata never
