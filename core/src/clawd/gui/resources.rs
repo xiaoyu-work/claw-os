@@ -281,6 +281,13 @@ pub(super) fn validate_optional_mounts(
     let controlled = declares_home_metadata(&selected, &scope)
         && caps.iter().any(|cap| cap == &Cap::new(Verb::FS_META, scope.clone()));
     if controlled { refuse_unsupported_home_needs(&selected, home, caps)?; }
+    // Missing paths may resolve to no mounts; eligibility still binds the scope.
+    if !controlled && caps.iter().any(|cap| {
+        matches!(cap.verb, Verb::FS_META | Verb::FS_READ | Verb::FS_WRITE | Verb::FS_DELETE | Verb::FS_WATCH | Verb::FS_EXEC)
+            && matches!(&cap.scope, Scope::Path(path) if Path::new(path) == home || cap.scope.covers(&scope))
+    }) {
+        return Err("GUI Home resources require the filtered view, never a raw Home bind".into());
+    }
     let projected = if controlled { raw_mount_caps(home, caps, true)? } else { caps.clone() };
     let mounts = crate::worker::derive::granted_path_mounts(&projected)?;
     if mounts.iter().any(|mount| {
