@@ -117,7 +117,7 @@ impl BrokerAuthority {
                 .relay_handle()
                 .ok_or("Root has not bound this App's liveness authority")?;
             let response = crate::clawd::client::request_blocking(
-                crate::paths::clawd_socket_path(),
+                crate::clawd::config::socket_path(),
                 crate::clawd::protocol::Request::build(
                     crate::clawd::routes::Command::AppSessionCheckLive,
                     serde_json::json!({"session_id": self.session_id, "handle": handle}),
