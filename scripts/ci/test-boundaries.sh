@@ -182,6 +182,16 @@ extensions() {
         --exact extension_host::identity::tests::checked_release_retries_authenticated_marker_cleanup \
         --ignored --nocapture --test-threads=1
 
+    local restart_case=clawd::trust_withdrawal::tests::restart_process::root_controller_restart_keeps_unconfirmed_owner_scoped_outcome
+    for fixture in "$restart_case" \
+        clawd::trust_withdrawal::tests::restart_process::controller_process \
+        clawd::trust_withdrawal::tests::restart_process::foreign_owner_process
+    do
+        "$service_test_binary" --list | grep -Fx "$fixture: test" > /dev/null
+    done
+    sudo timeout 120 "$service_test_binary" --exact "$restart_case" \
+        --ignored --nocapture --test-threads=1
+
     readonly root=/opt/cos-boundary-tests
     sudo install -d -o root -g root -m 0755 "$root"
     cleanup() {

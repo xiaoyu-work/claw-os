@@ -879,4 +879,366 @@ mod tests {
         assert_eq!(closure.len(), 1);
         assert!(closure[0].context_generation_closure);
     }
+
+    #[cfg(target_os = "linux")]
+    mod restart_process {
+        use super::*;
+        use std::ffi::CString;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+        use std::process::{Child, Command, Stdio};
+        use std::time::Instant;
+
+        const DRIVER: &str = "clawd::trust_withdrawal::tests::restart_process::root_controller_restart_keeps_unconfirmed_owner_scoped_outcome";
+        const CONTROLLER: &str = "clawd::trust_withdrawal::tests::restart_process::controller_process";
+        const FOREIGN: &str = "clawd::trust_withdrawal::tests::restart_process::foreign_owner_process";
+        const ROLE: &str = "COS_TEST_WITHDRAWAL_EPOCH_ROLE";
+        const ROOT: &str = "COS_TEST_WITHDRAWAL_EPOCH_ROOT";
+        const UID: &str = "COS_TEST_WITHDRAWAL_EPOCH_FOREIGN_UID";
+        const ID: &str = "COS_TEST_WITHDRAWAL_EPOCH_REQUEST_ID";
+        const SOCKET: &str = "withdrawal.sock";
+
+        struct OwnedProcess(Child);
+
+        impl OwnedProcess {
+            fn wait(&mut self, timeout: Duration) {
+                let deadline = Instant::now() + timeout;
+                loop {
+                    if let Some(status) = self.0.try_wait().unwrap() {
+                        assert!(status.success(), "fixture process failed: {status}");
+                        return;
+                    }
+                    assert!(Instant::now() < deadline, "fixture process timed out");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+
+        impl Drop for OwnedProcess {
+            fn drop(&mut self) {
+                if self.0.try_wait().ok().flatten().is_none() {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+        }
+
+        fn process(test: &str, role: &str, root: &Path) -> Command {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"])
+                .env(ROLE, role).env(ROOT, root)
+                .stdout(Stdio::inherit()).stderr(Stdio::inherit());
+            command
+        }
+
+        fn namespace_identity(name: &str) -> String {
+            let metadata = std::fs::metadata(format!("/proc/self/ns/{name}")).unwrap();
+            format!("{}:{}", metadata.dev(), metadata.ino())
+        }
+
+        fn require_private_namespaces() {
+            assert_eq!(unsafe { libc::geteuid() }, 0, "Root controller fixture requires kernel UID 0");
+            for name in ["mnt", "pid", "net"] {
+                let outer = std::env::var(format!("COS_TEST_WITHDRAWAL_OUTER_{name}"))
+                    .expect("namespace wrapper evidence is required");
+                assert_ne!(namespace_identity(name), outer, "{name} namespace is not private");
+            }
+        }
+
+        fn foreign_uid() -> u32 {
+            let uid = 700_001;
+            let mut passwd = unsafe { std::mem::zeroed::<libc::passwd>() };
+            let mut group = unsafe { std::mem::zeroed::<libc::group>() };
+            let mut buffer = vec![0u8; 64 * 1024];
+            let mut found_passwd = std::ptr::null_mut();
+            let mut found_group = std::ptr::null_mut();
+            assert_eq!(unsafe { libc::getpwuid_r(uid, &mut passwd, buffer.as_mut_ptr().cast(), buffer.len(), &mut found_passwd) }, 0);
+            assert!(found_passwd.is_null(), "fixture refuses to borrow an existing UID");
+            assert_eq!(unsafe { libc::getgrgid_r(uid, &mut group, buffer.as_mut_ptr().cast(), buffer.len(), &mut found_group) }, 0);
+            assert!(found_group.is_null(), "fixture refuses to borrow an existing GID");
+            uid
+        }
+
+        fn bind(source: &Path, target: &Path) {
+            let source = CString::new(source.as_os_str().as_encoded_bytes()).unwrap();
+            let target = CString::new(target.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe {
+                libc::mount(source.as_ptr(), target.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null())
+            }, 0, "private bind failed: {}", std::io::Error::last_os_error());
+        }
+
+        fn require_private_state(root: &Path) {
+            require_private_namespaces();
+            for (source, target) in [
+                (root.join("etc"), Path::new("/etc")),
+                (root.join("var-lib"), Path::new("/var/lib")),
+                (root.join("run"), Path::new("/run")),
+            ] {
+                let expected = std::fs::metadata(source).unwrap();
+                let actual = std::fs::metadata(target).unwrap();
+                assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()), "canonical state is not privately bound");
+            }
+            assert_eq!(crate::paths::verified_home_for_uid(0).unwrap(), Path::new("/run/cos/withdrawal-home"));
+        }
+
+        fn setup(root: &Path, uid: u32) -> PathBuf {
+            require_private_namespaces();
+            assert!(std::process::id() > 1, "PID 1 must supervise the authenticated driver");
+            assert_eq!(unsafe {
+                libc::mount(std::ptr::null(), c"/".as_ptr(), std::ptr::null(), libc::MS_REC | libc::MS_PRIVATE, std::ptr::null())
+            }, 0);
+            let home = PathBuf::from("/run/cos/withdrawal-home");
+            let foreign = PathBuf::from("/run/cos/withdrawal-foreign");
+            let home_source = root.join("run/cos/withdrawal-home");
+            let foreign_source = root.join("run/cos/withdrawal-foreign");
+            let control = root.join("control");
+            for directory in [&home_source, &foreign_source, &control, &root.join("etc/cos"), &root.join("var-lib/cos"), &root.join("run/cos/caps"), &root.join("vendor-trust")] {
+                std::fs::create_dir_all(directory).unwrap();
+            }
+            for directory in ["etc", "etc/cos", "var-lib", "var-lib/cos", "run", "run/cos", "run/cos/caps", "vendor-trust"] {
+                std::fs::set_permissions(root.join(directory), std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o711)).unwrap();
+            std::fs::set_permissions(&home_source, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&foreign_source, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let foreign_path = CString::new(foreign_source.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::chown(foreign_path.as_ptr(), uid, uid) }, 0);
+            std::fs::write(root.join("etc/passwd"), format!(
+                "root:x:0:0:Private root:{}:/bin/sh\nwithdrawal-foreign:x:{uid}:{uid}:Private foreign:{}:/bin/sh\n",
+                home.display(), foreign.display(),
+            )).unwrap();
+            std::fs::write(root.join("etc/group"), format!("root:x:0:\nwithdrawal-foreign:x:{uid}:\n")).unwrap();
+            std::fs::write(root.join("etc/nsswitch.conf"), "passwd: files\ngroup: files\nhosts: files\n").unwrap();
+            for name in ["passwd", "group", "nsswitch.conf"] {
+                std::fs::set_permissions(root.join("etc").join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            bind(&root.join("etc"), Path::new("/etc"));
+            bind(&root.join("var-lib"), Path::new("/var/lib"));
+            bind(&root.join("run"), Path::new("/run"));
+            match std::fs::symlink_metadata("/usr/lib/cos/trust") {
+                Ok(metadata) => {
+                    assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+                    bind(&root.join("vendor-trust"), Path::new("/usr/lib/cos/trust"));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("cannot privately mask vendor trust: {error}"),
+            }
+            for (name, value) in [
+                ("HOME", home.clone()), ("COS_DATA_DIR", PathBuf::from("/var/lib/cos/epoch-test")),
+                ("COS_CONFIG_DIR", PathBuf::from("/etc/cos")), ("COS_CACHE_DIR", PathBuf::from("/var/lib/cos/cache")),
+                ("COS_LOG_DIR", PathBuf::from("/var/lib/cos/logs")), ("COS_RUNTIME_DIR", PathBuf::from("/run/cos")),
+                ("COS_PROC_DATA_DIR", PathBuf::from("/run/cos/test-proc")), ("COS_APPS_DIR", PathBuf::from("/var/lib/cos/no-apps")),
+                ("COS_PROVENANCE_RUNTIME_DIR", PathBuf::from("/run/cos/provenance")),
+            ] { std::env::set_var(name, value); }
+            for name in ["COS_SESSION", "COS_USER_DATA_DIR", "COS_USER_CONFIG_DIR", "COS_CAPS_DATA_DIR", "COS_PERMS_MODE"] {
+                std::env::remove_var(name);
+            }
+            assert_eq!(crate::paths::verified_home_for_uid(0).unwrap(), home);
+            assert_eq!(crate::paths::verified_home_for_uid(uid).unwrap(), foreign);
+            require_private_state(root);
+            control
+        }
+
+        fn denial_policy() -> Target {
+            let trust = PathBuf::from("/run/cos/withdrawal-home/.config/cos/trust");
+            let publishers = trust.join("publishers.d");
+            let developer = trust.join("developer.d");
+            for directory in [trust.parent().unwrap().parent().unwrap(), trust.parent().unwrap(), &trust, &publishers, &developer] {
+                std::fs::create_dir_all(directory).unwrap();
+                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let digest = format!("sha256:{}", crate::crypto::sha256_hex(b"private unconfirmed withdrawal epoch fixture"));
+            let policy = publishers.join("operator.json");
+            std::fs::write(&policy, serde_json::to_vec(&json!({
+                "schema": crate::provenance::trust::TRUST_SCHEMA_V1,
+                "keys": [], "revoked_keys": [], "revoked_packages": [digest],
+            })).unwrap()).unwrap();
+            std::fs::set_permissions(policy, std::fs::Permissions::from_mode(0o600)).unwrap();
+            crate::provenance::state::bump(&trust, crate::provenance::state::TrustDomain::Owner(0), &[publishers, developer]).unwrap();
+            // No positive trust or App admission is fabricated for this journal-boundary fixture.
+            Target::Revocation { key_id: None, digest: Some(digest) }
+        }
+
+        fn request(action: Value) -> crate::clawd::protocol::Response {
+            crate::clawd::client::request_blocking(
+                SOCKET,
+                crate::clawd::protocol::Request::build(
+                    crate::clawd::routes::Command::ProvenanceTrustWithdrawal, action,
+                ),
+            ).expect("exchange must authenticate the real Root socket peer")
+        }
+
+        fn result(response: crate::clawd::protocol::Response) -> Value {
+            assert!(response.ok, "Root request failed: {:?}", response.error);
+            response.result.unwrap()
+        }
+
+        fn ready(root: &Path, label: &str, process: &mut OwnedProcess) -> Value {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Ok(bytes) = std::fs::read(root.join(format!("control/ready-{label}.json"))) {
+                    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                        assert_eq!(value["pid"].as_u64(), Some(process.0.id() as u64));
+                        return value;
+                    }
+                }
+                assert!(process.0.try_wait().unwrap().is_none(), "controller exited before readiness");
+                assert!(Instant::now() < deadline, "controller readiness timed out");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        #[test]
+        #[ignore = "Root private-namespace controller-process acceptance; no reserved identities"]
+        fn root_controller_restart_keeps_unconfirmed_owner_scoped_outcome() {
+            if std::env::var(ROLE).as_deref() != Ok("driver") {
+                assert_eq!(unsafe { libc::geteuid() }, 0, "requires Root for private namespaces");
+                let uid = foreign_uid();
+                let root = tempfile::Builder::new().prefix("withdrawal-epoch-")
+                    .tempdir_in(std::env::current_dir().unwrap()).unwrap();
+                let mut command = Command::new("unshare");
+                command.args(["--mount", "--net", "--pid", "--fork", "--mount-proc", "--propagation", "private", "--kill-child=KILL"])
+                    .args([
+                        "/bin/bash", "--noprofile", "--norc", "-c",
+                        "status=0; \"$1\" --exact \"$2\" --ignored --nocapture --test-threads=1 || status=$?; exit \"$status\"",
+                        "withdrawal-epoch",
+                    ])
+                    .arg(std::env::current_exe().unwrap())
+                    .arg(DRIVER)
+                    .env(ROLE, "driver").env(ROOT, root.path()).env(UID, uid.to_string());
+                for name in ["mnt", "pid", "net"] {
+                    command.env(format!("COS_TEST_WITHDRAWAL_OUTER_{name}"), namespace_identity(name));
+                }
+                let mut child = OwnedProcess(command.spawn().unwrap());
+                child.wait(Duration::from_secs(90));
+                return;
+            }
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            let uid: u32 = std::env::var(UID).unwrap().parse().unwrap();
+            let control = setup(&root, uid);
+            std::env::set_current_dir(&control).unwrap();
+            let target = denial_policy();
+            let mut first = OwnedProcess(process(CONTROLLER, "a", &root).current_dir(&control).spawn().unwrap());
+            let first_ready = ready(&root, "a", &mut first);
+            let initial = result(request(json!({"action":"reconcile","target":target})));
+            assert_eq!(initial["state"], "indeterminate");
+            assert_eq!(initial["root_retirement_confirmed"], false);
+            assert!(initial["error"].as_str().unwrap().contains("service custody is unavailable"));
+            let id = initial["request_id"].as_str().unwrap().to_string();
+            let original = read(&id).unwrap();
+            assert_eq!(original.root_epoch, first_ready["epoch"].as_str().unwrap());
+            assert_eq!(original.requester, 0);
+            assert!(original.source_generation.is_some() && original.source_fingerprint.is_some());
+            assert_eq!(result(request(json!({"action":"status","request_id":id})))["root_retirement_confirmed"], false);
+            let metadata = std::fs::metadata(path(&id).unwrap()).unwrap();
+            assert_eq!(metadata.uid(), 0);
+            assert_eq!(metadata.mode() & 0o777, 0o600);
+            assert_eq!(metadata.nlink(), 1);
+            assert_eq!(std::fs::metadata(STATE_ROOT).unwrap().mode() & 0o777, 0o700);
+            first.0.kill().unwrap();
+            assert!(!first.0.wait().unwrap().success(), "first controller must be lost, not cleanly drained");
+            let socket = control.join(SOCKET);
+            assert!(std::fs::symlink_metadata(&socket).unwrap().file_type().is_socket());
+            std::fs::remove_file(socket).unwrap();
+            std::fs::remove_dir_all("/run/cos/withdrawal-home/.config/cos/trust").unwrap();
+            let mut second = OwnedProcess(process(CONTROLLER, "b", &root).current_dir(&control).spawn().unwrap());
+            let second_ready = ready(&root, "b", &mut second);
+            assert_ne!(first_ready["pid"], second_ready["pid"]);
+            assert_ne!(first_ready["epoch"], second_ready["epoch"]);
+            assert_eq!(result(request(json!({"action":"status","request_id":id})))["state"], "indeterminate");
+            let before_foreign = std::fs::read(path(&id).unwrap()).unwrap();
+            let mut foreign = OwnedProcess(process(FOREIGN, "foreign", &root).env(ID, &id).current_dir(&control).spawn().unwrap());
+            foreign.wait(Duration::from_secs(15));
+            assert_eq!(std::fs::read(path(&id).unwrap()).unwrap(), before_foreign, "another owner changed the protected outcome");
+            for action in [
+                json!({"action":"recover","request_id":id}),
+                json!({"action":"reconcile","target":target}),
+                json!({"action":"status","request_id":id}),
+            ] {
+                let outcome = result(request(action));
+                assert_eq!(outcome["request_id"], id);
+                assert_eq!(outcome["state"], "indeterminate");
+                assert_eq!(outcome["root_retirement_confirmed"], false);
+                assert!(outcome["error"].as_str().unwrap().contains("earlier daemon epoch"));
+            }
+            second.wait(Duration::from_secs(15));
+            let persisted = read(&id).unwrap();
+            assert_eq!(persisted.root_epoch, original.root_epoch);
+            assert!(matches!(persisted.phase, Phase::Indeterminate));
+            assert_eq!(persisted.apps.len(), original.apps.len());
+            assert_eq!(persisted.source_generation, original.source_generation);
+            assert_eq!(persisted.source_fingerprint, original.source_fingerprint);
+            assert_eq!(records().unwrap().len(), 1, "reconciliation was replayed as a new request");
+            assert!(!Path::new("/run/cos/withdrawal-home/.config/cos/trust").exists(), "recovery replayed a policy mutation");
+            let peers: Vec<Value> = serde_json::from_slice(&std::fs::read(control.join("peers-b.json")).unwrap()).unwrap();
+            assert_eq!(peers.iter().filter(|peer| peer["uid"].as_u64() == Some(uid as u64)).count(), 2);
+            assert_eq!(peers.iter().filter(|peer| peer["uid"] == 0).count(), 4);
+        }
+
+        #[test]
+        #[ignore = "subprocess entry for the controller restart fixture"]
+        fn controller_process() {
+            let Ok(label) = std::env::var(ROLE) else { return; };
+            assert!(label == "a" || label == "b");
+            require_private_namespaces();
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            require_private_state(&root);
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let listener = std::os::unix::net::UnixListener::bind(SOCKET).unwrap();
+                crate::clawd::transport::peer::enable_credential_passing(listener.as_raw_fd()).unwrap();
+                std::fs::set_permissions(SOCKET, std::fs::Permissions::from_mode(0o666)).unwrap();
+                listener.set_nonblocking(true).unwrap();
+                let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+                let state = DaemonState::try_new().unwrap();
+                // This starts the real controller/dispatcher, not clawd's App
+                // custody/NSS pool or installed-daemon recovery sequence.
+                assert!(state.app_service_manager().is_none());
+                initialize(state.clone());
+                tokio::task::yield_now().await;
+                std::fs::write(root.join(format!("control/ready-{label}.json")),
+                    serde_json::to_vec(&json!({"pid":std::process::id(),"epoch":epoch()})).unwrap()).unwrap();
+                let admission = crate::clawd::transport::Admission::new(crate::clawd::transport::Limits::default());
+                let mut peers = Vec::new();
+                for _ in 0..if label == "a" { 3 } else { 6 } {
+                    let (stream, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept()).await.unwrap().unwrap();
+                    let mut stream = crate::clawd::transport::PeerStream::new(stream).unwrap();
+                    let frame = tokio::time::timeout(Duration::from_secs(10), stream.read_request(crate::clawd::wire::MAX_REQUEST_BYTES)).await.unwrap().unwrap();
+                    let crate::clawd::transport::ReadOutcome::Frame(frame) = frame else { panic!("expected authenticated frame"); };
+                    let peer = crate::clawd::transport::peer::verify(frame.credentials).expect("kernel peer identity must verify");
+                    let request: crate::clawd::wire::Request = serde_json::from_slice(&frame.body).unwrap();
+                    assert_eq!(request.command, crate::clawd::routes::Command::ProvenanceTrustWithdrawal);
+                    peers.push(json!({"uid":peer.uid,"pid":peer.pid,"start":peer.start_time_ticks}));
+                    let client = ClientIdentity::from_peer(peer);
+                    let response = crate::clawd::server::dispatch_verified_request(request, &client, &state, &admission).await;
+                    let encoded = crate::clawd::protocol::encode_response(&response).unwrap();
+                    tokio::time::timeout(Duration::from_secs(10), stream.write_response(&encoded)).await.unwrap().unwrap();
+                }
+                std::fs::write(root.join(format!("control/peers-{label}.json")), serde_json::to_vec(&peers).unwrap()).unwrap();
+            });
+        }
+
+        #[test]
+        #[ignore = "subprocess entry for the foreign-owner credential check"]
+        fn foreign_owner_process() {
+            if std::env::var(ROLE).as_deref() != Ok("foreign") { return; }
+            require_private_namespaces();
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            require_private_state(&root);
+            let uid: u32 = std::env::var(UID).unwrap().parse().unwrap();
+            let id = std::env::var(ID).unwrap();
+            std::env::set_current_dir(root.join("control")).unwrap();
+            assert_eq!(unsafe { libc::setgroups(0, std::ptr::null()) }, 0);
+            assert_eq!(unsafe { libc::setresgid(uid, uid, uid) }, 0);
+            assert_eq!(unsafe { libc::setresuid(uid, uid, uid) }, 0);
+            assert_eq!(unsafe { libc::getuid() }, uid);
+            for action in ["status", "recover"] {
+                let response = request(json!({"action":action,"request_id":id}));
+                assert!(!response.ok && response.result.is_none());
+                let error = response.error.unwrap();
+                assert_eq!(error.code, "not_authorized");
+                assert!(error.message.contains("another peer"), "{error:?}");
+            }
+        }
+    }
 }
