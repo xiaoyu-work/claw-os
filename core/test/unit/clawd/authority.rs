@@ -156,6 +156,7 @@ fn privileged_provider_routes_resolve_a_session_grant() {
         if !route.name.starts_with("system.")
             || route.name == "system.operations"
             || route.name.starts_with("system.review.")
+            || matches!(route.name, "system.package.status" | "system.package.recover")
         {
             continue;
         }

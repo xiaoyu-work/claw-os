@@ -390,6 +390,10 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
 }
 
 pub(super) fn get(owner: u32, id: &str) -> Result<SystemReview, String> {
+    #[cfg(target_os = "linux")]
+    if id.starts_with("pg-") {
+        return super::super::package_transactions::stop_review::get_view(owner, id);
+    }
     if id.starts_with("rv-") {
         app(&crate::approvals::system_review::get(owner, id)?)
     } else {
@@ -406,6 +410,8 @@ pub(super) fn pending(owner: u32, limit: usize) -> Result<PendingReviews, String
         let at = request.requested_at;
         records.push((at, legacy(owner, LegacyReview::Pending(Box::new(request)))?));
     }
+    #[cfg(target_os = "linux")]
+    records.extend(super::super::package_transactions::stop_review::pending_views(owner)?);
     records.sort_by_key(|(at, review)| (*at, review.id.clone()));
     let pending = PendingReviews {
         reviews: records

@@ -190,6 +190,18 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::approvals::start_authorization),
         )
         .route(
+            "/api/approvals/system-reviews/{id}",
+            get(routes::approvals::system_review),
+        )
+        .route(
+            "/api/approvals/system-reviews/{id}/authorization",
+            post(routes::approvals::start_system_authorization),
+        )
+        .route(
+            "/api/approvals/system-reviews/{id}/cancel",
+            post(routes::approvals::cancel_system_review),
+        )
+        .route(
             "/api/authorizations/{id}",
             get(routes::approvals::authorization_status),
         )

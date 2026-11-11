@@ -189,6 +189,16 @@ impl Decision {
         self.require_all(std::slice::from_ref(&cap))
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn acknowledge_package_acceptance(
+        &self,
+        accepted: &crate::clawd::package_transactions::AcceptedInvocation<'_>,
+    ) -> Result<(), String> {
+        accepted.check(self)?;
+        self.exercised.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Revalidate a long-running session operation without spending another use.
     /// A replaced transient grant is a different invocation, not a renewal.
     pub(crate) fn ensure_current(&self) -> Result<(), String> {

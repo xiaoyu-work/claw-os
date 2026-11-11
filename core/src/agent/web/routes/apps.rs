@@ -29,6 +29,11 @@ fn failure(message: impl Into<String>) -> ApiError {
 
 fn project_review(mut value: Value) -> Result<Value, ApiError> {
     if let Some(review) = value.get_mut("review") {
+        if review.get("kind").and_then(Value::as_str) == Some("package_impact") {
+            return Err(failure(
+                "Package-impact confirmation belongs in OS Approvals, not App installation",
+            ));
+        }
         let revision = review
             .get("revision")
             .and_then(Value::as_u64)
@@ -106,6 +111,18 @@ pub struct ConfirmBody {
     revision: String,
 }
 
+fn app_confirmation_action(kind: ReviewKind) -> Result<ReviewAction, ApiError> {
+    match kind {
+        ReviewKind::Install => Ok(ReviewAction::ConfirmInstall),
+        ReviewKind::Activation => Ok(ReviewAction::ConfirmActivation),
+        ReviewKind::Update => Ok(ReviewAction::ConfirmUpdate),
+        ReviewKind::PackageImpact => Err(failure(
+            "Use top-level OS Approvals for the separate all-App stop confirmation",
+        )),
+        ReviewKind::Capability => Err(failure("App confirmation cannot grant a capability")),
+    }
+}
+
 pub async fn authorize(
     State(state): State<AppState>,
     Extension(caller): Extension<AuthenticatedToken>,
@@ -127,14 +144,7 @@ pub async fn authorize(
             "The displayed App review changed; refresh before confirming",
         ));
     }
-    let action = match review.kind {
-        ReviewKind::Install => ReviewAction::ConfirmInstall,
-        ReviewKind::Activation => ReviewAction::ConfirmActivation,
-        ReviewKind::Update => ReviewAction::ConfirmUpdate,
-        ReviewKind::Capability => {
-            return Err(failure("App confirmation cannot grant a capability"))
-        }
-    };
+    let action = app_confirmation_action(review.kind)?;
     let decision = ReviewDecision {
         id: review.id.clone(),
         revision: review.revision,

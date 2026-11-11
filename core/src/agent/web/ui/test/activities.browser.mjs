@@ -890,17 +890,18 @@ async function fixture(req, res) {
     const reviews = taskId === "job-chat" && !inlineApprovalDecided
       ? [approvalView("inline-approval", "Inspect this task's system information")]
       : job?.status === "waiting_approval" ? job.waiting_on.map((id) => approvalView(id)) : [];
-    return reply(req, res, { task_id: taskId, reviews, app_reviews: [] });
+    return reply(req, res, { task_id: taskId, reviews, app_reviews: [], system_reviews: [] });
   }
   if (url.pathname === "/api/approvals/reviews") {
     return reply(req, res, {
       reviews: [...jobs.values()].filter((job) => job.status === "waiting_approval")
         .flatMap((job) => job.waiting_on.map((id) => approvalView(id))),
       app_reviews: [],
+      system_reviews: [],
     });
   }
   if (url.pathname === "/api/approvals/reviews/recent") return reply(req, res, {
-    reviews: [...resolvedApprovals.values()], app_reviews: [],
+    reviews: [...resolvedApprovals.values()], app_reviews: [], system_reviews: [],
   });
   if (/^\/api\/approvals\/[^/]+\/decision$/.test(url.pathname)) {
     const id = url.pathname.split("/")[3];

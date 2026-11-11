@@ -17,20 +17,21 @@ import sys
 BASE = Path("/run/cos-app-apt-fixture")
 BUNDLE = "claw-app-acceptance-bundle"
 SUPPORT = "claw-app-acceptance-support"
+SIDE_EFFECT = "claw-package-acceptance-side-effect"
 VERSION = "1.0.0"
 PORT = 38081
 PRIVATE_MOUNTS = (
-    "/run", "/var/lib", "/var/cache", "/var/log", "/etc/apt", "/etc/dpkg", "/usr",
+    "/run", "/var/lib", "/var/cache", "/var/log", "/etc/apt", "/etc/dpkg",
+    "/root", "/usr",
 )
 
 
 def require_namespace():
     if os.getuid() != 0 or os.geteuid() != 0:
         raise RuntimeError("the private fixture requires actual Root")
-    for namespace in ("mnt", "net"):
-        if os.readlink(f"/proc/self/ns/{namespace}") == os.readlink(
-            f"/proc/1/ns/{namespace}"
-        ):
+    for namespace in ("mnt", "pid", "net"):
+        parent = os.environ.get(f"COS_APP_APT_PARENT_{namespace.upper()}")
+        if not parent or os.readlink(f"/proc/self/ns/{namespace}") == parent:
             raise RuntimeError(f"refusing a host {namespace} namespace")
 
 
@@ -86,6 +87,7 @@ def isolate():
     for directory in ("lib/cos/apps", "lib/cos/python", "lib/cos/bin", "share/doc"):
         (shadow / directory).mkdir(parents=True, exist_ok=True)
     mount(shadow, "/usr", flags=4096 | 16384)
+    mount("tmpfs", "/usr/local/bin", "tmpfs", 2 | 4, "mode=0755,size=1073741824")
     for directory in (
         "scratch", "payloads/bundle", "payloads/support", "trust", "state", "runtime",
     ):
@@ -104,7 +106,7 @@ def require_private_mounts():
     for line in Path("/proc/self/mountinfo").read_text().splitlines():
         fields = line.split()
         mounts[fields[4]] = fields[fields.index("-") + 1]
-    if any(mounts.get(target) != "tmpfs" for target in PRIVATE_MOUNTS):
+    if any(mounts.get(target) != "tmpfs" for target in (*PRIVATE_MOUNTS, "/usr/local/bin")):
         raise RuntimeError("all package, runtime and broker paths must be privately mounted")
 
 
@@ -155,9 +157,14 @@ def repository():
     repo = BASE / "repo"
     pool = repo / "pool"
     pool.mkdir(parents=True)
+    effect = BASE / "payloads/effects"
+    marker = effect / "usr/lib/cos/fixture-side-effect"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("A normal, successful private package install\n")
     for payload, package, dependency in (
         ("bundle", BUNDLE, f"Depends: {SUPPORT} (= {VERSION})\n"),
         ("support", SUPPORT, ""),
+        ("effects", SIDE_EFFECT, ""),
     ):
         root = BASE / "payloads" / payload
         control = root / "DEBIAN"
@@ -168,6 +175,23 @@ def repository():
             "Maintainer: Private Acceptance <noreply@fixture.invalid>\n"
             f"{dependency}Description: Isolated signed App delivery acceptance fixture\n"
         )
+        if package == SIDE_EFFECT:
+            postinst = control / "postinst"
+            postinst.write_text(
+                "#!/bin/sh\nset -eu\n"
+                "mkdir -p /usr/lib/cos/apps/apt-unreviewed\n"
+                "printf '%s\\n' "
+                "'{\"schema_version\":2,\"id\":\"apt-unreviewed\",\"version\":\"1.0.0\","
+                "\"runtime\":\"python\",\"name\":{\"en\":\"Unreviewed private App\"},"
+                "\"summary\":{\"en\":\"No App delivery confirmation\"},"
+                "\"operations\":{\"probe\":{\"label\":{\"en\":\"Probe\"},"
+                "\"needs\":[],\"args\":[]}}}' "
+                "> /usr/lib/cos/apps/apt-unreviewed/app.json\n"
+                "printf '%s\\n' 'def run(command, args):' "
+                "'    return {\"fixture\": True}' "
+                "> /usr/lib/cos/apps/apt-unreviewed/main.py\n"
+            )
+            postinst.chmod(0o755)
         run(
             "/usr/bin/dpkg-deb", "--root-owner-group", "-Znone", "--build",
             str(root), str(pool / f"{package}_{VERSION}_all.deb"),

@@ -798,12 +798,46 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "package-transactions" {
+        let (command, params) = match &args[1..] {
+            [] => (Command::SystemPackageStatus, json!({})),
+            [id] => (Command::SystemPackageStatus, json!({"request_id": id})),
+            [flag, id] if flag == "--invocation" =>
+                (Command::SystemPackageStatus, json!({"invocation_id": id})),
+            [flag, id] if flag == "--recover" =>
+                (Command::SystemPackageRecover, json!({"request_id": id})),
+            _ => return Err("usage: cos package-transactions [request-id | --invocation invocation-id | --recover request-id]".into()),
+        };
+        let value = request_wire_clawd(command, params)?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__package" {
+        let package_args = if args.get(1).map(String::as_str) == Some("--retained") {
+            &args[2..]
+        } else { &args[1..] };
         let action = args
-            .get(1)
+            .get(if args.get(1).map(String::as_str) == Some("--retained") { 2 } else { 1 })
             .ok_or_else(|| "internal package command required".to_string())?;
-        let package = args.get(2).cloned();
-        let version = args.get(3).cloned();
+        if action == "install-packages" {
+            if !(2..=129).contains(&package_args.len()) {
+                return Err("internal package batch requires 1..128 packages".into());
+            }
+            for package in &package_args[1..] {
+                crate::clawd::packages::validate_package_name(package)?;
+            }
+            let session = env::var("COS_SESSION")
+                .map_err(|_| "internal package install requires COS_SESSION".to_string())?;
+            let value = crate::clawd::packages::request_control(json!({
+                "session": session, "action": action, "packages": &package_args[1..],
+            }))?;
+            return Ok(Some(value.to_string()));
+        }
+        if package_args.len() > 3 {
+            return Err("internal package control accepts only action, package and version".into());
+        }
+        let package = package_args.get(1).cloned();
+        let version = package_args.get(2).cloned();
         if let Some(package) = package.as_deref() {
             crate::clawd::packages::validate_package_name(package)?;
         }
@@ -812,15 +846,12 @@ fn dispatch_with_stdin_impl(
         }
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal package install requires COS_SESSION".to_string())?;
-        let value = request_clawd(
-            Command::SystemPackageControl,
-            json!({
+        let value = crate::clawd::packages::request_control(json!({
                 "session": session,
                 "action": action,
                 "package": package,
                 "version": version,
-            }),
-        )?;
+            }))?;
         return Ok(Some(value.to_string()));
     }
 

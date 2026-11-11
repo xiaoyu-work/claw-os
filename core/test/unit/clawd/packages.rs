@@ -270,3 +270,96 @@ fn global_and_versioned_action_shapes_are_strict() {
     assert!(validate_action("install-version", Some("curl"), None).is_err());
     assert!(validate_action("remove", Some("curl"), Some("8.0")).is_err());
 }
+
+#[test]
+fn package_receipt_queries_do_not_accept_owner_or_execution_selectors() {
+    use crate::clawd::authority::SubjectSource;
+    use crate::clawd::routes::Command;
+    for command in [Command::SystemPackageStatus, Command::SystemPackageRecover] {
+        let route = command.route();
+        assert_eq!(route.authority.subject, SubjectSource::Peer);
+        for field in [
+            "owner_uid",
+            "session",
+            "caps",
+            "command",
+            "executable",
+            "path",
+        ] {
+            let mut params = json!({"request_id":"a".repeat(32)});
+            (route.decode)(params.clone()).unwrap();
+            params[field] = json!("caller-selection");
+            assert!((route.decode)(params).is_err(), "{field}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retained_package_gate_requires_complete_apt_v3_removal_metadata() {
+    use crate::clawd::package_transactions::check_hook_fixture;
+    assert!(check_hook_fixture(vec!["/protected/archive.deb".into()]).is_err());
+    let complete = vec![
+        "VERSION 3".into(),
+        "APT::Architecture=amd64".into(),
+        "".into(),
+        "fixture 1.0 amd64 none > - - none **REMOVE**".into(),
+    ];
+    assert_eq!(check_hook_fixture(complete.clone()).unwrap(), 1);
+    let mut malformed = complete;
+    malformed[3] = "fixture 1.0 amd64 none > - amd64 none **REMOVE**".into();
+    assert!(check_hook_fixture(malformed).is_err());
+}
+
+#[test]
+fn concrete_package_reads_keep_held_versions_and_separate_foreign_architectures() {
+    let rows = "hold ok installed\t2.0\tamd64\ninstall ok installed\t1.0\ti386\n";
+    let native = select_package_status(rows, "amd64").unwrap().unwrap();
+    assert_eq!(
+        native,
+        ("hold ok installed".into(), "2.0".into(), "amd64".into())
+    );
+    assert_eq!(
+        select_package_status(rows, "i386").unwrap().unwrap().1,
+        "1.0"
+    );
+    assert!(select_package_status(rows, "arm64").unwrap().is_none());
+    assert!(
+        select_package_status("install ok installed\t2.0\tamd64\nmalformed\n", "amd64").is_err()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn package_impact_follows_installed_shared_dependencies_not_every_app_package() {
+    let rows = [
+        "support\t1.0\tall\tinstalled\t\t\tshared-v1\t",
+        "parser\t1.0\tall\tinstalled\tshared-v1 (>= 1)\t\tparser-v1\t",
+        "app-a\t1.0\tall\tinstalled\tparser-v1\t\t\t",
+        "app-b\t1.0\tall\tinstalled\tunrelated\t\t\t",
+        "unrelated\t1.0\tall\tinstalled\t\t\t\t",
+    ];
+    let (closure, uncertain) =
+        crate::clawd::package_transactions::dependency_fixture(&rows, &["support:all"]).unwrap();
+    assert!(closure.contains(&"app-a:all".into()));
+    assert!(!closure.contains(&"app-b:all".into()));
+    assert!(!uncertain);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ambiguous_shared_providers_are_not_reported_as_precise_package_impact() {
+    let rows = [
+        "support-one\t1.0\tall\tinstalled\t\t\tshared-v1\t",
+        "support-two\t1.0\tall\tinstalled\t\t\tshared-v1\t",
+        "app-a\t1.0\tall\tinstalled\tshared-v1\t\t\t",
+    ];
+    let (closure, uncertain) =
+        crate::clawd::package_transactions::dependency_fixture(&rows, &["support-one:all"])
+            .unwrap();
+    assert!(closure.contains(&"app-a:all".into()));
+    assert!(
+        uncertain,
+        "alternative providers cannot silently authorize a precise stop set"
+    );
+}

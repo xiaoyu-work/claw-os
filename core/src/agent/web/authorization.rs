@@ -235,6 +235,14 @@ impl Controller {
                     review.subject.version.as_deref().unwrap_or("")
                 ),
             ),
+            ReviewAction::ConfirmGlobalAppStop => (
+                None,
+                Some(decision.action),
+                review.subject.name.clone(),
+                review.disclosures.iter().find(|detail| detail.label == "Scope")
+                    .map(|detail| detail.value.clone())
+                    .unwrap_or_else(|| "All listed Apps across all owners, including the caller when present; unsaved work may be lost.".into()),
+            ),
             ReviewAction::Cancel => {
                 return Err("Cancellation does not need OS authentication.".into())
             }
@@ -286,7 +294,10 @@ impl Controller {
                     .map_err(|_| "The OS returned an invalid authorization outcome.".to_string()))
                 .and_then(|current| {
                     current.validate().map_err(|_| "The OS returned an invalid review.".to_string())?;
-                    if current.id != review.id {
+                    if current.id != review.id || current.kind != review.kind
+                        || review.kind == clawd_client::system_review::ReviewKind::PackageImpact
+                            && current.contract_digest != review.contract_digest
+                    {
                         return Err("The OS returned a different authorization request.".into());
                     }
                     Ok(current.status)

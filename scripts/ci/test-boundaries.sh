@@ -51,11 +51,11 @@ nearby() {
 
 app_apt() {
     local program
-    for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare; do
+    for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare bwrap setfacl; do
         command -v "$program" > /dev/null
     done
     python3 -I -c 'import apt_pkg'
-    cargo build -p cos --bin claw-app-apt-hook --locked
+    cargo build -p cos --bin cos --bin claw-app-runner --bin claw-app-apt-hook --locked
     cargo test -p cos --lib --locked --no-run --message-format=json \
         > "$CARGO_TARGET_DIR/app-apt-tests.jsonl"
     local test_binary listing fixture
@@ -66,14 +66,26 @@ app_apt() {
         private_apt_refuses_substituted_bytes_plan_and_status_before_dpkg
         private_apt_hook_identity_and_lost_reply_never_replay
         private_apt_completed_dispatch_failure_recovers_read_only
+        private_apt_ordinary_self_handoff_retains_receipt
+        private_apt_global_stop_is_separate_and_unreviewed_effect_is_not_applied
+        private_apt_retained_payload_lifecycle_and_nonzero_completion
     )
-    for fixture in "${fixtures[@]}" private_apt_foreign_uid_probe; do
+    for fixture in "${fixtures[@]}" private_apt_foreign_uid_probe private_apt_retained_peer private_apt_ordinary_actor; do
         grep -Fx -- "clawd::app_store::apt::tests::$fixture: test" \
             <<< "$listing" > /dev/null
     done
+    local parent_mnt parent_pid parent_net
+    parent_mnt="$(readlink /proc/self/ns/mnt)"
+    parent_pid="$(readlink /proc/self/ns/pid)"
+    parent_net="$(readlink /proc/self/ns/net)"
     for fixture in "${fixtures[@]}"; do
-        sudo timeout 150 unshare --mount --net --fork \
+        sudo timeout 150 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
             env COS_APP_APT_TEST_HOOK="$CARGO_TARGET_DIR/debug/claw-app-apt-hook" \
+                COS_APP_APT_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+                COS_APP_APT_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
+                COS_APP_APT_PARENT_MNT="$parent_mnt" \
+                COS_APP_APT_PARENT_PID="$parent_pid" \
+                COS_APP_APT_PARENT_NET="$parent_net" \
             bash --noprofile --norc -c '
                 set -euo pipefail
                 mount --make-rprivate /

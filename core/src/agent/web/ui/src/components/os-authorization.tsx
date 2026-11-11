@@ -113,6 +113,8 @@ export function OsAuthorizationDialog({ initial, onFinished }: {
           <p className="break-words"><strong>Target:</strong> {current.target}</p>
           <p className="text-xs text-muted-foreground">{current.choice !== null
             ? APPROVAL_LABELS[current.choice]
+            : current.action === "confirm_global_app_stop"
+            ? "Only confirms the reviewed all-App stop. Unsaved work may be lost. App delivery and Critical package authority remain separate; this is not package success."
             : current.action === "confirm_activation" ? "Confirm opening this App; no capability is granted."
             : "Confirm the reviewed App installation; runtime permissions remain separately enforced."}</p>
         </div>

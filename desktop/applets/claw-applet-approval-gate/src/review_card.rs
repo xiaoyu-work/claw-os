@@ -63,10 +63,10 @@ pub fn review_card(card: &ReviewCardState) -> Element<'_, ReviewMessage> {
         content = content.push(named_detail(&item.label, &item.value));
     }
     content = content.push(text::body(review_label(
-        if review.kind == ReviewKind::Capability {
-            ReviewText::CapabilityNotice
-        } else {
-            ReviewText::NoGrantNotice
+        match review.kind {
+            ReviewKind::Capability => ReviewText::CapabilityNotice,
+            ReviewKind::PackageImpact => ReviewText::GlobalStopNotice,
+            _ => ReviewText::NoGrantNotice,
         },
     )));
     if let Some(message) = &review.status_message {

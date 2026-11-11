@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Stdio;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::caps::{Cap, Scope, Verb};
@@ -12,7 +11,6 @@ use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const PACKAGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-static APT_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageState {
@@ -23,23 +21,25 @@ pub struct PackageState {
 }
 
 pub async fn install(
+    state: &super::state::DaemonState,
     params: Value,
     client: &ClientIdentity,
     authority: &Decision,
 ) -> Result<Value, String> {
     let mut params = params;
     params["action"] = Value::String("install".to_string());
-    control(params, client, authority).await
+    control(state, params, client, authority).await
 }
 
 pub async fn control(
+    state: &super::state::DaemonState,
     params: Value,
     client: &ClientIdentity,
     authority: &Decision,
 ) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, authority);
+        let _ = (state, params, authority);
         return Err("system package control requires Linux".to_string());
     }
 
@@ -53,8 +53,48 @@ pub async fn control(
         let action = required_string(&params, "action")?;
         let package = optional_string(&params, "package")?;
         let version = optional_string(&params, "version")?;
+        if action == "install-packages" {
+            if package.is_some() || version.is_some() {
+                return Err("install-packages does not accept a single package or version".into());
+            }
+            let packages: Vec<String> =
+                serde_json::from_value(params.get("packages").cloned().unwrap_or(Value::Null))
+                    .map_err(|_| "install-packages requires a bounded package list")?;
+            let operation = super::package_transactions::Operation::install_packages(packages)?;
+            let invocation = optional_string(&params, "invocation_id")?;
+            return super::package_transactions::accept(
+                state,
+                client,
+                authority,
+                operation,
+                invocation.as_deref(),
+            )
+            .await;
+        }
+        if params
+            .get("packages")
+            .is_some_and(|packages| !packages.is_null())
+        {
+            return Err("Only install-packages accepts a package list".into());
+        }
         validate_action(&action, package.as_deref(), version.as_deref())?;
 
+        if !matches!(action.as_str(), "update-index" | "hold" | "unhold") {
+            let operation = super::package_transactions::Operation::from_action(
+                &action,
+                package.as_deref(),
+                version.as_deref(),
+            )?;
+            let invocation = optional_string(&params, "invocation_id")?;
+            return super::package_transactions::accept(
+                state,
+                client,
+                authority,
+                operation,
+                invocation.as_deref(),
+            )
+            .await;
+        }
         let requested_scope = if is_global_action(&action) {
             Scope::Wild
         } else {
@@ -62,10 +102,7 @@ pub async fn control(
         };
         let (session, authorized) = authorize_package_session(authority, requested_scope, uid)?;
 
-        let _guard = APT_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
+        let _guard = super::app_store::apt::TRANSACTION.lock().await;
         let before = match package.as_deref() {
             Some(package) => Some(query_package_state(package).await?),
             None => None,
@@ -89,25 +126,12 @@ pub async fn control(
                 "Global apt index and upgrade operations require a system snapshot for rollback.",
             )
         };
-        let output =
-            run_package_action(&authorized, &action, package.as_deref(), version.as_deref())
-                .await?;
+        let output = run_metadata_action(&authorized, &action, package.as_deref()).await?;
         let after = match package.as_deref() {
             Some(package) => match query_package_state(package).await {
                 Ok(state) => Some(state),
                 Err(error) => {
-                    return Ok(json!({
-                        "action": action,
-                        "package": package,
-                        "version": version,
-                        "changed": Value::Null,
-                        "action_applied": true,
-                        "before": before,
-                        "stdout_tail": output.stdout_tail,
-                        "stderr_tail": output.stderr_tail,
-                        "post_state_error": error,
-                        "rollback": rollback,
-                    }));
+                    return Err(format!("Package metadata outcome is unconfirmed: {error}; do not replay automatically"));
                 }
             },
             None => None,
@@ -128,13 +152,14 @@ pub async fn control(
 }
 
 pub async fn restore(
+    state: &super::state::DaemonState,
     params: Value,
     client: &ClientIdentity,
     authority: &Decision,
 ) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client, authority);
+        let _ = (state, params, client, authority);
         return Err("system package restore requires Linux".to_string());
     }
 
@@ -143,7 +168,7 @@ pub async fn restore(
         if unsafe { libc::geteuid() } != 0 {
             return Err("system package restore requires root clawd".to_string());
         }
-        let uid = client.require_uid()?;
+        client.require_uid()?;
         let mutation_session = required_string(&params, "mutation_session")?;
         let mutation_seq = required_u64(&params, "mutation_seq")?;
         let package = required_string(&params, "package")?;
@@ -154,8 +179,6 @@ pub async fn restore(
         }
         let was_held = required_bool(&params, "was_held")?;
 
-        let (_session, authorized) =
-            authorize_package_session(authority, Scope::name(&package), uid)?;
         validate_restore_record(
             &mutation_session,
             mutation_seq,
@@ -164,17 +187,21 @@ pub async fn restore(
             was_held,
         )?;
 
-        let _guard = APT_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
-        restore_package_state_async(&authorized, &package, previous_version.as_deref(), was_held)
-            .await?;
-        Ok(json!({
-            "package": package,
-            "restored": true,
-            "state": query_package_state(&package).await?,
-        }))
+        let invocation = optional_string(&params, "invocation_id")?;
+        super::package_transactions::accept(
+            state,
+            client,
+            authority,
+            super::package_transactions::Operation::Restore {
+                package,
+                previous_version,
+                was_held,
+                mutation_session,
+                mutation_seq,
+            },
+            invocation.as_deref(),
+        )
+        .await
     }
 }
 
@@ -184,16 +211,13 @@ pub fn restore_package_state(
     package: &str,
     previous_version: Option<&str>,
     was_held: bool,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     validate_package_name(package)?;
     if let Some(version) = previous_version {
         validate_version(version)?;
     }
     #[cfg(target_os = "linux")]
     {
-        if unsafe { libc::geteuid() } == 0 {
-            return restore_package_state_sync(package, previous_version, was_held);
-        }
         let session = std::env::var("COS_SESSION")
             .map_err(|_| "package rollback requires COS_SESSION".to_string())?;
         let response = crate::clawd::client::request_blocking(
@@ -207,11 +231,18 @@ pub fn restore_package_state(
                     "package": package,
                     "previous_version": previous_version,
                     "was_held": was_held,
+                    "invocation_id": crate::crypto::sha256_hex(
+                        format!("package-inverse:{}:{mutation_seq}", mutation_session.as_str()).as_bytes()
+                    )[..32].to_string(),
                 }),
             ),
         )?;
         if response.ok {
-            Ok(())
+            let receipt = response
+                .result
+                .ok_or("Root package acceptance receipt is missing")?;
+            require_acceptance(&receipt)?;
+            Ok(receipt)
         } else {
             Err(response
                 .error
@@ -223,6 +254,214 @@ pub fn restore_package_state(
     {
         let _ = (mutation_session, mutation_seq, previous_version, was_held);
         Err("system package restore requires Linux".to_string())
+    }
+}
+
+pub(crate) fn inverse_completion(
+    session: &SessionId,
+    seq: u64,
+    package: &str,
+    version: Option<&str>,
+    held: bool,
+) -> Result<Option<bool>, String> {
+    let invocation =
+        crate::crypto::sha256_hex(format!("package-inverse:{}:{seq}", session.as_str()).as_bytes());
+    let response = super::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        super::protocol::Request::build(
+            super::routes::Command::SystemPackageStatus,
+            json!({"invocation_id": &invocation[..32]}),
+        ),
+    )?;
+    if !response.ok {
+        return Err("Root package inverse completion could not be authenticated".into());
+    }
+    let result = response.result.ok_or("Missing Root package status")?;
+    let expected = json!({
+        "action": "restore", "package": package, "previous_version": version,
+        "was_held": held, "mutation_session": session.as_str(), "mutation_seq": seq,
+    });
+    let records = result
+        .get("transactions")
+        .and_then(Value::as_array)
+        .ok_or("Malformed Root package status")?;
+    let matching = records
+        .iter()
+        .filter(|record| record.get("operation") == Some(&expected))
+        .collect::<Vec<_>>();
+    if matching.iter().any(|record| {
+        record.get("phase").and_then(Value::as_str) == Some("applied")
+            && record
+                .get("completion")
+                .and_then(|value| value.get("confirmed"))
+                .and_then(Value::as_bool)
+                == Some(true)
+    }) {
+        return Ok(Some(true));
+    }
+    if !matching.is_empty()
+        && matching
+            .iter()
+            .all(|record| record.get("phase").and_then(Value::as_str) == Some("not_applied"))
+    {
+        return Ok(Some(false));
+    }
+    Ok(None)
+}
+
+pub(crate) fn inverse_completion_in_process(
+    client: &ClientIdentity,
+    session: &SessionId,
+    seq: u64,
+    package: &str,
+    version: Option<&str>,
+    held: bool,
+) -> Result<Option<bool>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        super::package_transactions::inverse_completion(
+            client, session, seq, package, version, held,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (client, session, seq, package, version, held);
+        Err("Package rollback requires Linux".into())
+    }
+}
+
+fn require_acceptance(receipt: &Value) -> Result<(), String> {
+    let id = receipt
+        .get("request_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if receipt.get("status").and_then(Value::as_str) != Some("accepted")
+        || receipt.get("accepted").and_then(Value::as_bool) != Some(true)
+        || id.len() != 32
+        || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("The Root package handoff protocol was not confirmed; do not replay".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn request_control(mut params: Value) -> Result<Value, String> {
+    let payload = !matches!(
+        params.get("action").and_then(Value::as_str),
+        Some("update-index" | "hold" | "unhold")
+    );
+    let invocation = uuid::Uuid::new_v4().simple().to_string();
+    if payload {
+        params["invocation_id"] = json!(invocation);
+    }
+    let response = super::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        super::protocol::Request::build(super::routes::Command::SystemPackageControl, params),
+    ).map_err(|error| {
+        if payload && error.may_have_dispatched() {
+            format!("Root package acceptance is unconfirmed: {error}. Query `cos package-transactions --invocation {invocation}`; do not resubmit effects")
+        } else { error.to_string() }
+    })?;
+    if !response.ok {
+        return Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "Root package request failed".into()));
+    }
+    let result = response.result.ok_or("Root package response is missing")?;
+    if payload {
+        require_acceptance(&result)?;
+    }
+    Ok(result)
+}
+
+pub(crate) async fn rollback_authority(client: &ClientIdentity) -> Result<Decision, String> {
+    let route = super::routes::Command::SystemPackageRestore.route();
+    super::authority::authorize(route.name, &route.authority, &json!({}), client)
+        .await
+        .map_err(|fault| fault.message().to_string())?
+        .ok_or_else(|| "Package rollback requires the authenticated caller's live session".into())
+}
+
+pub(crate) fn restore_in_process(
+    state: &super::state::DaemonState,
+    client: &ClientIdentity,
+    authority: &Decision,
+    mutation_session: &SessionId,
+    mutation_seq: u64,
+    package: &str,
+    previous_version: Option<&str>,
+    was_held: bool,
+) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        validate_restore_record(
+            mutation_session.as_str(),
+            mutation_seq,
+            package,
+            previous_version,
+            was_held,
+        )?;
+        super::package_transactions::accept_inverse(
+            state,
+            client,
+            authority,
+            super::package_transactions::Operation::Restore {
+                package: package.into(),
+                previous_version: previous_version.map(str::to_string),
+                was_held,
+                mutation_session: mutation_session.as_str().into(),
+                mutation_seq,
+            },
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (
+            state,
+            client,
+            authority,
+            mutation_session,
+            mutation_seq,
+            package,
+            previous_version,
+            was_held,
+        );
+        Err("Package rollback requires Linux".into())
+    }
+}
+
+pub async fn transaction_status(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, super::protocol::BrokerError> {
+    #[cfg(target_os = "linux")]
+    {
+        super::package_transactions::status(params, client).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (params, client);
+        Err(super::protocol::BrokerError::unavailable(
+            "Package transactions require Linux",
+        ))
+    }
+}
+
+pub async fn transaction_recover(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, super::protocol::BrokerError> {
+    #[cfg(target_os = "linux")]
+    {
+        super::package_transactions::recover(params, client).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (params, client);
+        Err(super::protocol::BrokerError::unavailable(
+            "Package transactions require Linux",
+        ))
     }
 }
 
@@ -248,23 +487,29 @@ fn authorize_package_session(
     Ok((session, proof))
 }
 
-async fn query_package_state(package: &str) -> Result<PackageState, String> {
-    let query = run_command_allow_failure(
-        dpkg_query_path(),
-        &["-W", "-f=${db:Status-Abbrev}\t${Version}", "--", package],
-    )
-    .await?;
-    let installed = query.status == 0 && query.stdout.starts_with("ii ");
-    let version = installed
-        .then(|| {
-            query
-                .stdout
-                .split_once('\t')
-                .map(|(_, value)| value.trim().to_string())
-        })
-        .flatten();
+pub(crate) async fn query_package_state(package: &str) -> Result<PackageState, String> {
+    let status = query_package_status(package).await?;
+    let installed = status
+        .as_ref()
+        .is_some_and(|(status, _, _)| status.ends_with(" ok installed"));
+    let version = status
+        .as_ref()
+        .filter(|_| installed)
+        .map(|(_, version, _)| version.clone());
     let holds = run_command(apt_mark_path(), &["showhold"]).await?;
-    let held = holds.stdout.lines().any(|line| line.trim() == package);
+    let native = native_architecture().await?;
+    let base = package.split(':').next().unwrap_or(package);
+    let arch = status
+        .as_ref()
+        .map(|(_, _, arch)| arch.as_str())
+        .or_else(|| package.split_once(':').map(|(_, arch)| arch))
+        .unwrap_or(&native);
+    let held = holds.stdout.lines().any(|line| {
+        let line = line.trim();
+        line == package
+            || line == format!("{base}:{arch}")
+            || (arch == "all" || arch == native) && line == base
+    });
     Ok(PackageState {
         package: package.to_string(),
         installed,
@@ -273,124 +518,115 @@ async fn query_package_state(package: &str) -> Result<PackageState, String> {
     })
 }
 
-async fn run_package_action(
+pub(crate) async fn native_architecture() -> Result<String, String> {
+    let output = run_command("/usr/bin/dpkg", &["--print-architecture"]).await?;
+    let architecture = output.stdout.trim();
+    validate_package_name(&format!("fixture:{architecture}"))?;
+    Ok(architecture.into())
+}
+
+fn package_absent(output: &CommandOutput) -> bool {
+    output.status == 1
+        && output.stdout.is_empty()
+        && output
+            .stderr
+            .starts_with("dpkg-query: no packages found matching ")
+}
+
+pub(crate) async fn query_package_status(
+    package: &str,
+) -> Result<Option<(String, String, String)>, String> {
+    validate_package_name(package)?;
+    let base = package.split(':').next().unwrap_or(package);
+    let output = run_command_allow_failure(
+        dpkg_query_path(),
+        &[
+            "--show",
+            "--showformat=${Status}\t${Version}\t${Architecture}\n",
+            "--",
+            base,
+        ],
+    )
+    .await?;
+    if package_absent(&output) {
+        return Ok(None);
+    }
+    if output.status != 0 || output.stdout.len() > 64 * 1024 {
+        return Err("The concrete installed package state could not be read".into());
+    }
+    let preferred = match package.split_once(':') {
+        Some((_, "native")) => native_architecture().await?,
+        Some((_, arch)) => arch.to_string(),
+        None => native_architecture().await?,
+    };
+    select_package_status(&output.stdout, &preferred)
+}
+
+fn select_package_status(
+    text: &str,
+    preferred: &str,
+) -> Result<Option<(String, String, String)>, String> {
+    if text.is_empty() {
+        return Err("The concrete installed package state is empty, not confirmed absent".into());
+    }
+    let mut selected = None;
+    for line in text.lines() {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 3 {
+            return Err("The concrete installed package state is malformed".into());
+        }
+        validate_package_name(&format!("fixture:{}", fields[2]))?;
+        if fields[2] == preferred || fields[2] == "all" {
+            if selected.is_some() {
+                return Err("The concrete installed package architecture is ambiguous".into());
+            }
+            selected = Some((fields[0].into(), fields[1].into(), fields[2].into()));
+        }
+    }
+    Ok(selected)
+}
+
+pub(crate) async fn query_package_owners(path: &std::path::Path) -> Result<Vec<String>, String> {
+    let path = path.to_str().ok_or("Package-owned path must be UTF-8")?;
+    let output = run_command_allow_failure(dpkg_query_path(), &["--search", "--", path]).await?;
+    if output.status == 1
+        && output.stdout.is_empty()
+        && output
+            .stderr
+            .starts_with("dpkg-query: no path found matching pattern ")
+    {
+        return Ok(Vec::new());
+    }
+    if output.status != 0 || output.stdout.len() > 64 * 1024 {
+        return Err("Installed App package ownership could not be read".into());
+    }
+    let mut owners = Vec::new();
+    for line in output.stdout.lines() {
+        let (names, _) = line
+            .rsplit_once(": ")
+            .ok_or("Invalid installed App ownership result")?;
+        for owner in names.split(", ") {
+            validate_package_name(owner)?;
+            owners.push(owner.into());
+        }
+    }
+    Ok(owners)
+}
+
+async fn run_metadata_action(
     _authorized: &Authorized,
     action: &str,
     package: Option<&str>,
-    version: Option<&str>,
 ) -> Result<CommandOutput, String> {
     match action {
-        "install" => {
-            run_command(
-                apt_get_path(),
-                &[
-                    "install",
-                    "-y",
-                    "--no-install-recommends",
-                    "--",
-                    package.unwrap(),
-                ],
-            )
-            .await
-        }
-        "install-version" => {
-            let spec = format!("{}={}", package.unwrap(), version.unwrap());
-            run_command_owned(
-                apt_get_path(),
-                vec![
-                    "install".into(),
-                    "-y".into(),
-                    "--allow-downgrades".into(),
-                    "--no-install-recommends".into(),
-                    "--".into(),
-                    spec,
-                ],
-            )
-            .await
-        }
-        "remove" => run_command(apt_get_path(), &["remove", "-y", "--", package.unwrap()]).await,
-        "purge" => run_command(apt_get_path(), &["purge", "-y", "--", package.unwrap()]).await,
-        "upgrade" => {
-            run_command(
-                apt_get_path(),
-                &["install", "--only-upgrade", "-y", "--", package.unwrap()],
-            )
-            .await
-        }
         "update-index" => run_command(apt_get_path(), &["update"]).await,
-        "upgrade-all" => run_command(apt_get_path(), &["upgrade", "-y"]).await,
         "hold" => run_command(apt_mark_path(), &["hold", "--", package.unwrap()]).await,
         "unhold" => run_command(apt_mark_path(), &["unhold", "--", package.unwrap()]).await,
         _ => Err(format!("unsupported package action: {action}")),
     }
 }
 
-async fn restore_package_state_async(
-    _authorized: &Authorized,
-    package: &str,
-    previous_version: Option<&str>,
-    was_held: bool,
-) -> Result<(), String> {
-    match previous_version {
-        Some(version) => {
-            let spec = format!("{package}={version}");
-            run_command_owned(
-                apt_get_path(),
-                vec![
-                    "install".into(),
-                    "-y".into(),
-                    "--allow-downgrades".into(),
-                    "--no-install-recommends".into(),
-                    "--".into(),
-                    spec,
-                ],
-            )
-            .await?;
-        }
-        None => {
-            run_command(apt_get_path(), &["remove", "-y", "--", package]).await?;
-        }
-    }
-    run_command(
-        apt_mark_path(),
-        &[if was_held { "hold" } else { "unhold" }, "--", package],
-    )
-    .await?;
-    Ok(())
-}
-
-fn restore_package_state_sync(
-    package: &str,
-    previous_version: Option<&str>,
-    was_held: bool,
-) -> Result<(), String> {
-    match previous_version {
-        Some(version) => {
-            let spec = format!("{package}={version}");
-            run_command_sync_owned(
-                apt_get_path(),
-                vec![
-                    "install".into(),
-                    "-y".into(),
-                    "--allow-downgrades".into(),
-                    "--no-install-recommends".into(),
-                    "--".into(),
-                    spec,
-                ],
-            )?;
-        }
-        None => {
-            run_command_sync(apt_get_path(), &["remove", "-y", "--", package])?;
-        }
-    }
-    run_command_sync(
-        apt_mark_path(),
-        &[if was_held { "hold" } else { "unhold" }, "--", package],
-    )?;
-    Ok(())
-}
-
-fn prepare_rollback_record(
+pub(crate) fn prepare_rollback_record(
     session: &SessionInfo,
     before: &PackageState,
 ) -> Result<RollbackRecord, String> {
@@ -466,7 +702,7 @@ fn validate_restore_record(
 }
 
 #[derive(Debug, Serialize)]
-struct RollbackRecord {
+pub(crate) struct RollbackRecord {
     available: bool,
     mutation_seq: Option<u64>,
     note: String,
@@ -485,6 +721,7 @@ impl RollbackRecord {
 struct CommandOutput {
     status: i32,
     stdout: String,
+    stderr: String,
     stdout_tail: String,
     stderr_tail: String,
 }
@@ -536,36 +773,6 @@ fn command(path: &str, args: &[String]) -> tokio::process::Command {
     command
 }
 
-fn run_command_sync(path: &str, args: &[&str]) -> Result<CommandOutput, String> {
-    run_command_sync_owned(
-        path,
-        args.iter().map(|value| (*value).to_string()).collect(),
-    )
-}
-
-fn run_command_sync_owned(path: &str, args: Vec<String>) -> Result<CommandOutput, String> {
-    let timeout = PACKAGE_TIMEOUT.as_secs().to_string();
-    let output = std::process::Command::new(timeout_path())
-        .args(["--signal=KILL", &timeout, path])
-        .args(&args)
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("HOME", "/root")
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("APT_LISTCHANGES_FRONTEND", "none")
-        .env("LC_ALL", "C.UTF-8")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("failed to launch timeout wrapper for {path}: {error}"))?;
-    if matches!(output.status.code(), Some(124) | Some(137)) {
-        return Err(format!(
-            "{path} timed out after {}s",
-            PACKAGE_TIMEOUT.as_secs()
-        ));
-    }
-    command_output(path, &args, output, false)
-}
-
 fn command_output(
     path: &str,
     args: &[String],
@@ -588,6 +795,7 @@ fn command_output(
         stdout_tail: tail(&stdout),
         stderr_tail: tail(&stderr),
         stdout,
+        stderr,
     })
 }
 
@@ -724,14 +932,6 @@ fn apt_mark_path() -> &'static str {
 
 fn dpkg_query_path() -> &'static str {
     "/usr/bin/dpkg-query"
-}
-
-fn timeout_path() -> &'static str {
-    if std::path::Path::new("/usr/bin/timeout").is_file() {
-        "/usr/bin/timeout"
-    } else {
-        "/bin/timeout"
-    }
 }
 
 #[cfg(test)]

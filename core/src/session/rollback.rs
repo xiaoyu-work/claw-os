@@ -62,6 +62,8 @@ pub enum Status {
     /// not exist when we tried to delete it back to nothing, etc.).
     /// Counts as success.
     AlreadyDone,
+    /// Root accepted the inverse; no restored state has been confirmed.
+    Pending,
     /// Engine doesn't know how to undo this entry on its own; left
     /// for the user. Includes the opaque escape hatch and credential
     /// variants until Phase 4 wires them.
@@ -77,6 +79,30 @@ pub enum Status {
 /// from a "we won't lose the log" perspective even though the
 /// individual replays are not idempotent (see module docs).
 pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
+    rollback_with_package_restore(
+        sid,
+        &mut crate::clawd::packages::restore_package_state,
+        &mut crate::clawd::packages::inverse_completion,
+    )
+}
+
+pub(crate) fn rollback_with_package_restore(
+    sid: &SessionId,
+    package_restore: &mut dyn FnMut(
+        &SessionId,
+        u64,
+        &str,
+        Option<&str>,
+        bool,
+    ) -> Result<serde_json::Value, String>,
+    package_completion: &mut dyn FnMut(
+        &SessionId,
+        u64,
+        &str,
+        Option<&str>,
+        bool,
+    ) -> Result<Option<bool>, String>,
+) -> Result<Vec<Outcome>, SessionError> {
     let _rollback_lock = RollbackLock::acquire(sid)?;
     let mut entries = store::iter_mutations(sid)?;
     entries.reverse();
@@ -88,9 +114,34 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
     // the marker is a sidecar (see `rolled_back_path`).
     let mut done = load_rolled_back(sid)?;
     if let Some(uncertain_seq) = load_uncertain(sid)? {
+        let package_completion = entries
+            .iter()
+            .find(|entry| entry.seq == uncertain_seq)
+            .and_then(|entry| match &entry.mutation {
+                Mutation::SystemPackage {
+                    package,
+                    previous_version,
+                    was_held,
+                } => Some(package_completion(
+                    sid,
+                    uncertain_seq,
+                    package,
+                    previous_version.as_deref(),
+                    *was_held,
+                )),
+                _ => None,
+            });
+        if let Some(Ok(completed)) = package_completion {
+            if completed == Some(true) {
+                done.insert(uncertain_seq);
+                save_rolled_back(sid, &done)?;
+            } else if completed == Some(false) {
+                clear_uncertain(sid)?;
+            }
+        }
         if done.contains(&uncertain_seq) {
             clear_uncertain(sid)?;
-        } else {
+        } else if load_uncertain(sid)?.is_some() {
             return Err(SessionError::Corrupt {
                 path: uncertain_path(sid),
                 detail: format!(
@@ -260,18 +311,19 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
                 previous_version,
                 was_held,
             } => match require(Verb::SYS_PACKAGE, Scope::name(package.clone())) {
-                Ok(()) => match crate::clawd::packages::restore_package_state(
+                Ok(()) => match package_restore(
                     sid,
                     seq,
                     &package,
                     previous_version.as_deref(),
                     was_held,
                 ) {
-                    Ok(()) => Outcome {
+                    Ok(receipt) => Outcome {
                         seq,
                         verb: "sys.package",
-                        status: Status::Restored,
-                        detail: format!("{package}: restored package version and hold state"),
+                        status: Status::Pending,
+                        detail: format!("{package}: Root accepted inverse {}; query package-transactions; not restored",
+                            receipt.get("request_id").and_then(serde_json::Value::as_str).unwrap_or("unconfirmed")),
                     },
                     Err(error) => Outcome {
                         seq,
@@ -301,7 +353,11 @@ pub fn rollback(sid: &SessionId) -> Result<Vec<Outcome>, SessionError> {
         } else if outcome.status == Status::Skipped {
             clear_uncertain(sid)?;
         }
+        let pending = outcome.status == Status::Pending;
         out.push(outcome);
+        if pending {
+            break;
+        }
     }
     Ok(out)
 }

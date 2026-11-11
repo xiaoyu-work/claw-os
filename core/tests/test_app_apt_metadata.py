@@ -66,3 +66,18 @@ def test_package_name_or_untrusted_index_cannot_authenticate_other_archive_bytes
     )
     with pytest.raises(ValueError, match="no matching authenticated APT index"):
         metadata.classify([package], cache, records, sources)
+
+
+def test_foreign_os_dependency_architecture_still_requires_exact_index_bytes():
+    package = {
+        "package": "fixture", "version": "1.0", "architecture": "i386", "sha256": "c" * 64
+    }
+    cache, records, sources = source_fixture("http://deb.debian.org/debian/", package["sha256"])
+    cache["fixture"].version_list[0].arch = "i386"
+    cache["fixture:i386"] = cache.pop("fixture")
+    assert metadata.classify([package], cache, records, sources) == [
+        {**package, "app_source": False, "os_source": True}
+    ]
+    records.digest = "d" * 64
+    with pytest.raises(ValueError, match="no matching authenticated APT index"):
+        metadata.classify([package], cache, records, sources)

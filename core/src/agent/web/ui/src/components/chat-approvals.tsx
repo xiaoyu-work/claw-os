@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { APPROVAL_LABELS, APPROVAL_STATUS_LABELS, readApprovalBundle, readAuthorization, type ApprovalBundle, type ApprovalChoice, type ApprovalView, type AuthorizationView } from "@/lib/approvals";
+import { APPROVAL_LABELS, APPROVAL_STATUS_LABELS, SYSTEM_REVIEW_STATUS_LABELS, readApprovalBundle, readAuthorization, readSystemApproval, systemReviewApi, type ApprovalBundle, type ApprovalChoice, type ApprovalView, type AuthorizationView, type SystemApprovalView } from "@/lib/approvals";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { OsAuthorizationDialog } from "./os-authorization";
@@ -119,12 +119,100 @@ export function ApprovalCard({ review, onChanged, readOnly = false }: {
   );
 }
 
+export function SystemApprovalCard({ review, onChanged, readOnly = false }: {
+  review: SystemApprovalView; onChanged: () => void; readOnly?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationView | null>(null);
+  const activeAuthorization = useRef<string | null>(null);
+  useEffect(() => { setError(null); }, [review.id, review.revision]);
+  useEffect(() => () => {
+    const id = activeAuthorization.current;
+    if (id) void api.post(`/api/authorizations/${id}/cancel`).catch(() => {
+      console.warn("OS authorization cancellation was not confirmed; inspect the review outcome.");
+    });
+  }, [review.id]);
+  const finishAuthorization = (failure?: string) => {
+    const id = activeAuthorization.current;
+    activeAuthorization.current = null;
+    setAuthorization(null);
+    setBusy(false);
+    setError(failure || null);
+    if (failure && id) void api.post(`/api/authorizations/${id}/cancel`).catch(() => {
+      console.warn("OS authorization cancellation was not confirmed; inspect the review outcome.");
+    });
+    onChanged();
+  };
+  const decide = async (cancel: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (cancel) {
+        await systemReviewApi.cancel(review);
+        onChanged();
+      } else {
+        const session = await systemReviewApi.authorize(review);
+        activeAuthorization.current = session.id;
+        setAuthorization(session);
+      }
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "The OS review outcome is unconfirmed.");
+      onChanged();
+    } finally {
+      if (!activeAuthorization.current) setBusy(false);
+    }
+  };
+  const mutable = !readOnly && review.status === "pending";
+  return <Card className="grid gap-3 border-destructive/40 p-4" aria-label="Separate OS package-impact review"
+    data-review-id={review.id}>
+    <div className="flex flex-wrap justify-between gap-2">
+      <h2 className="text-sm font-semibold">{review.subject.name}</h2>
+      <span className="text-xs">{SYSTEM_REVIEW_STATUS_LABELS[review.status]}</span>
+    </div>
+    <p className="text-sm font-medium text-destructive">
+      Global stop: all listed Apps across all owners may close, including the caller. Unsaved work may be lost.
+    </p>
+    <p className="text-xs text-muted-foreground">
+      This is a separate OS stop confirmation, not App installation or capability approval.
+      Confirmation recorded or used does not mean the package transaction succeeded.
+    </p>
+    {review.status_message && <p className="whitespace-pre-wrap break-words text-xs">{review.status_message}</p>}
+    <dl className="grid gap-2 text-xs">
+      {[{ label: "Initiated by", value: review.initiator }, ...review.context, ...review.disclosures,
+        { label: "Impact digest (comparison only)", value: review.contract_digest },
+        { label: "Request", value: review.id }, { label: "Displayed revision", value: review.revision },
+      ].map((detail, index) => <div key={index}>
+        <dt className="font-medium">{detail.label}</dt>
+        <dd className="whitespace-pre-wrap break-words text-muted-foreground">{detail.value}</dd>
+      </div>)}
+    </dl>
+    {mutable && <div className="flex flex-wrap gap-2">
+      {review.actions.includes("confirm_global_app_stop") && <Button size="sm" variant="destructive"
+        disabled={busy || !!error} onClick={() => void decide(false)}>
+        Authenticate to confirm this all-App stop
+      </Button>}
+      {review.actions.includes("cancel") && <Button size="sm" variant="outline"
+        disabled={busy || !!error} onClick={() => void decide(true)}>Cancel this stop review</Button>}
+    </div>}
+    {readOnly && review.status === "pending" && <a className="text-xs underline" href="#/approvals">
+      Inspect this separate review in OS Approvals
+    </a>}
+    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    {error && <Button size="sm" variant="outline" onClick={() => { setError(null); onChanged(); }}>
+      Refresh the current OS review
+    </Button>}
+    {authorization && <OsAuthorizationDialog initial={authorization} onFinished={finishAuthorization} />}
+  </Card>;
+}
+
 export function ApprovalViews({ taskId, recent = false, compact = false }: {
   taskId?: string; recent?: boolean; compact?: boolean;
 }) {
   const [bundle, setBundle] = useState<ApprovalBundle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const systemReviews = useRef(new Map<string, SystemApprovalView>());
   const refresh = useCallback(() => setVersion((value) => value + 1), []);
   useEffect(() => {
     const controller = new AbortController();
@@ -137,6 +225,21 @@ export function ApprovalViews({ taskId, recent = false, compact = false }: {
           recent ? "/api/approvals/reviews/recent" : "/api/approvals/reviews";
         const value = await api.get(path, { signal: controller.signal });
         const next = readApprovalBundle(value, taskId);
+        if (!taskId && !recent) {
+          const current = new Map(next.system_reviews.map((review) => [review.id, review]));
+          for (const id of systemReviews.current.keys()) {
+            if (!current.has(id)) {
+              if (current.size >= 100) throw new Error("This view has too many retained OS reviews. Refresh the inventory to inspect current requests.");
+              const reviewed = readSystemApproval(await api.get(
+                `/api/approvals/system-reviews/${encodeURIComponent(id)}`, { signal: controller.signal },
+              ));
+              if (reviewed.id !== id) throw new Error("The OS returned a different handled review.");
+              current.set(id, reviewed);
+            }
+          }
+          next.system_reviews = [...current.values()];
+          if (!controller.signal.aborted) systemReviews.current = current;
+        }
         if (!controller.signal.aborted) { setBundle(next); setError(null); }
       } catch (failure: unknown) {
         if (!controller.signal.aborted) {
@@ -152,20 +255,24 @@ export function ApprovalViews({ taskId, recent = false, compact = false }: {
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [taskId, recent, version]);
   if (error) return <div role="alert" className="grid gap-2 text-xs text-destructive">
-    {error}<Button size="sm" variant="outline" onClick={refresh}>Refresh approvals</Button>
+    {error}<Button size="sm" variant="outline" onClick={() => {
+      systemReviews.current.clear(); refresh();
+    }}>Refresh approvals</Button>
   </div>;
   if (!bundle) return compact ? null : <p className="text-sm text-muted-foreground">Loading OS approvals...</p>;
-  if (compact && bundle.reviews.length === 0 && bundle.app_reviews.length === 0) return null;
+  if (compact && bundle.reviews.length === 0 && bundle.app_reviews.length === 0 && bundle.system_reviews.length === 0) return null;
   return (
     <div className="grid gap-3" aria-label={taskId ? "Current task approvals" : "OS approval inventory"}>
       {taskId && <p className="text-xs font-medium">Permission needed for this task</p>}
       {bundle.reviews.length > 0 && <div className="divide-y overflow-hidden rounded-lg border">
         {bundle.reviews.map((review) => <ApprovalCard key={review.id} review={review} onChanged={refresh} readOnly={recent} />)}
       </div>}
+      {bundle.system_reviews.map((review) => <SystemApprovalCard key={review.id} review={review}
+        onChanged={refresh} readOnly={recent || !!taskId} />)}
       {bundle.app_reviews.map((review) => <Card key={review.id} className="p-3 text-xs">
         {review.label} requires the OS App-review presenter. <code>cos review show {review.id}</code>
       </Card>)}
-      {!compact && bundle.reviews.length === 0 && bundle.app_reviews.length === 0 && <p className="text-sm text-muted-foreground">No approval records in this view.</p>}
+      {!compact && bundle.reviews.length === 0 && bundle.app_reviews.length === 0 && bundle.system_reviews.length === 0 && <p className="text-sm text-muted-foreground">No approval records in this view.</p>}
     </div>
   );
 }

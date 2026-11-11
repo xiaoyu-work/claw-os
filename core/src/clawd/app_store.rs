@@ -17,10 +17,12 @@ use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 
 #[cfg(target_os = "linux")]
-mod apt;
+pub(crate) mod apt;
 
 const STORE_ROOT: &str = "/var/lib/cos/app-store";
 static SERIALIZER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static PUBLICATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CATALOG: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -149,7 +151,7 @@ pub(crate) fn secure_directory(path: &Path, mode: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn initialize() -> Result<(), String> {
+pub(crate) fn initialize() -> Result<(), String> {
     secure_directory(&root(), 0o711)?;
     secure_directory(&root().join("metadata"), 0o700)?;
     secure_directory(&root().join("requests"), 0o700)?;
@@ -184,7 +186,12 @@ async fn owner(client: &ClientIdentity) -> Result<u32, BrokerError> {
     client.require_uid().map_err(BrokerError::authorization)
 }
 
+pub(crate) async fn package_catalog() -> Result<Catalog, String> {
+    catalog(false).await
+}
+
 async fn catalog(refresh: bool) -> Result<Catalog, String> {
+    let _catalog = CATALOG.lock().await;
     initialize()?;
     let metadata = root().join("metadata");
     let index_path = metadata.join("index.json");
@@ -658,10 +665,23 @@ async fn retire_scoped<F: Send + Sync + 'static>(
     }
 }
 
-pub(crate) struct DeliveryLock(std::fs::File);
+pub(crate) struct DeliveryLock(
+    std::fs::File,
+    Option<tokio::sync::MutexGuard<'static, ()>>,
+);
 
 impl DeliveryLock {
     pub(crate) fn acquire() -> Result<Self, String> {
+        let publication = PUBLICATION.try_lock()
+            .map_err(|_| "Another checked Root payload controller is active")?;
+        #[cfg(target_os = "linux")]
+        super::package_transactions::require_idle(None)?;
+        let mut delivery = Self::acquire_for_readonly_recovery()?;
+        delivery.1 = Some(publication);
+        Ok(delivery)
+    }
+
+    pub(crate) fn acquire_for_readonly_recovery() -> Result<Self, String> {
         #[cfg(not(target_os = "linux"))]
         { Err("App delivery ownership requires Linux".into()) }
         #[cfg(target_os = "linux")]
@@ -679,7 +699,7 @@ impl DeliveryLock {
             if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &lock) } != 0 {
                 return Err("An OS package operation is active; retry checked directory installation afterwards".into());
             }
-            Ok(Self(file))
+            Ok(Self(file, None))
         }
     }
 

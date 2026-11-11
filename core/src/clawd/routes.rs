@@ -2524,7 +2524,7 @@ routes! {
         ],
         run: |c| {
             let authority = c.authority()?;
-    packages::install(c.params, c.client, authority).await.map_err(BrokerError::from)
+    packages::install(c.state, c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
     SystemPackageControl {
@@ -2543,7 +2543,7 @@ routes! {
         ],
         run: |c| {
             let authority = c.authority()?;
-    packages::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+    packages::control(c.state, c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
     SystemPackageRestore {
@@ -2563,8 +2563,28 @@ routes! {
         ],
         run: |c| {
             let authority = c.authority()?;
-    packages::restore(c.params, c.client, authority).await.map_err(BrokerError::from)
+    packages::restore(c.state, c.params, c.client, authority).await.map_err(BrokerError::from)
         },
+    }
+    SystemPackageStatus {
+        name: "system.package.status",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::fast(),
+        authority: peer(Audience::SystemService),
+        body: body::PackageTransactionStatus,
+        audit: &[("request_id", FieldRule::Token), ("invocation_id", FieldRule::Token)],
+        run: |c| { packages::transaction_status(c.params, c.client).await },
+    }
+    SystemPackageRecover {
+        name: "system.package.recover",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::heavy(),
+        authority: peer(Audience::SystemService),
+        body: body::PackageTransactionRecover,
+        audit: &[("request_id", FieldRule::Token)],
+        run: |c| { packages::transaction_recover(c.params, c.client).await },
     }
     SystemPowerControl {
         name: "system.power.control",

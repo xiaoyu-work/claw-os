@@ -67,6 +67,82 @@ fn rollback_rechecks_caps() {
         Some(v) => std::env::set_var("COS_DATA_DIR", v),
         None => std::env::remove_var("COS_DATA_DIR"),
     }
+
+    #[tokio::test]
+    async fn accepted_package_inverse_stops_ordered_replay_until_root_confirms_completion() {
+        let _lock = crate::test_env::lock_env();
+        let directory = tempfile::tempdir().unwrap();
+        let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", directory.path());
+        let _log = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", directory.path());
+        let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+        let session = store::create("isolated retained package inverse").unwrap();
+        let mut sequences = Vec::new();
+        for package in ["older-fixture", "newer-fixture"] {
+            sequences.push(
+                store::record_mutation(
+                    &session,
+                    MutationRecord::new(Mutation::SystemPackage {
+                        package: package.into(),
+                        previous_version: None,
+                        was_held: false,
+                    }),
+                )
+                .unwrap(),
+            );
+        }
+        let row = crate::proc::SessionInfo {
+            session_id: session.as_str().into(),
+            pid: std::process::id(),
+            command: vec!["isolated-rollback-fixture".into()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: None,
+            parent: None,
+            workdir: None,
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(crate::caps::CapSet::from_caps(vec![crate::caps::Cap::new(
+                crate::caps::Verb::SYS_PACKAGE,
+                crate::caps::Scope::Wild,
+            )])),
+            transient_caps: None,
+            role: None,
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+            client: crate::session::SessionClient::default(),
+        };
+        crate::proc::with_trusted_session_override(row, async {
+        let calls = std::cell::Cell::new(0);
+        let confirmed = std::cell::Cell::new(false);
+        let mut submit = |_: &SessionId, _, _: &str, _: Option<&str>, _| {
+            calls.set(calls.get() + 1);
+            Ok(serde_json::json!({"status":"accepted","accepted":true,"request_id":"a".repeat(32)}))
+        };
+        let mut completion = |_: &SessionId, _, _: &str, _: Option<&str>, _| {
+            Ok(confirmed.get().then_some(true))
+        };
+        let first = rollback_with_package_restore(&session, &mut submit, &mut completion).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].seq, sequences[1]);
+        assert_eq!(first[0].status, Status::Pending);
+        assert!(load_rolled_back(&session).unwrap().is_empty());
+        assert_eq!(load_uncertain(&session).unwrap(), Some(sequences[1]));
+        assert!(rollback_with_package_restore(&session, &mut submit, &mut completion).is_err());
+        assert_eq!(calls.get(), 1, "an unknown accepted inverse must not be submitted again");
+        confirmed.set(true);
+        let second = rollback_with_package_restore(&session, &mut submit, &mut completion).unwrap();
+        assert_eq!(second[0].status, Status::AlreadyDone);
+        assert_eq!(second[1].status, Status::Pending);
+        assert_eq!(calls.get(), 2);
+        assert!(load_rolled_back(&session).unwrap().contains(&sequences[1]));
+        assert!(!load_rolled_back(&session).unwrap().contains(&sequences[0]));
+        }).await;
+    }
     match prev_log {
         Some(v) => std::env::set_var("COS_LOG_DIR", v),
         None => std::env::remove_var("COS_LOG_DIR"),

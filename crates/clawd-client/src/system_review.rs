@@ -44,6 +44,7 @@ pub enum ReviewKind {
     Activation,
     Capability,
     Update,
+    PackageImpact,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -139,6 +140,7 @@ pub enum ReviewAction {
     ConfirmInstall,
     ConfirmActivation,
     ConfirmUpdate,
+    ConfirmGlobalAppStop,
     ApplyChoices,
 }
 
@@ -240,6 +242,13 @@ impl SystemReview {
             nonempty(&changes.summary, "update summary")?;
         }
         unique(&self.actions, "decision actions")?;
+        if self.kind == ReviewKind::PackageImpact
+            && (self.subject.app_id.is_some() || self.subject.version.is_some()
+                || self.subject.publisher.is_some() || !self.permissions.is_empty()
+                || self.changes.is_some() || self.contract_digest.is_none())
+        {
+            return Err(ReviewError("package impact confirmation cannot be an App or permission grant".into()));
+        }
         if self.status != ReviewStatus::Pending && !self.actions.is_empty() {
             return Err(ReviewError(
                 "a handled or stale review cannot offer decisions".into(),
@@ -250,6 +259,7 @@ impl SystemReview {
                 ReviewAction::ConfirmInstall => self.kind == ReviewKind::Install,
                 ReviewAction::ConfirmActivation => self.kind == ReviewKind::Activation,
                 ReviewAction::ConfirmUpdate => self.kind == ReviewKind::Update,
+                ReviewAction::ConfirmGlobalAppStop => self.kind == ReviewKind::PackageImpact,
                 ReviewAction::Cancel | ReviewAction::ApplyChoices => true,
             };
             if !correct_kind {
@@ -373,6 +383,7 @@ pub enum ReviewText {
     Activation,
     Capability,
     Update,
+    PackageImpact,
     Pending,
     Confirmed,
     Consumed,
@@ -385,6 +396,7 @@ pub enum ReviewText {
     ConfirmInstall,
     ConfirmActivation,
     ConfirmUpdate,
+    ConfirmGlobalAppStop,
     ApplyChoices,
     Deny,
     Restore,
@@ -397,6 +409,7 @@ pub enum ReviewText {
     High,
     Critical,
     NoGrantNotice,
+    GlobalStopNotice,
     CapabilityNotice,
     DigestNotice,
     Request,
@@ -448,6 +461,7 @@ impl ReviewText {
             Self::Activation => ("review-kind-activation", "Activation confirmation"),
             Self::Capability => ("review-kind-capability", "Permission choices"),
             Self::Update => ("review-kind-update", "Update confirmation"),
+            Self::PackageImpact => ("review-kind-package-impact", "All-App stop confirmation"),
             Self::Pending => ("review-pending", "Pending review"),
             Self::Confirmed => ("review-confirmed", "Confirmation recorded"),
             Self::Consumed => ("review-consumed", "Confirmation used; operation outcome is separate"),
@@ -460,6 +474,7 @@ impl ReviewText {
             Self::ConfirmInstall => ("review-confirm-install", "Confirm installation"),
             Self::ConfirmActivation => ("review-confirm-activation", "Confirm activation"),
             Self::ConfirmUpdate => ("review-confirm-update", "Confirm update"),
+            Self::ConfirmGlobalAppStop => ("review-confirm-global-app-stop", "Stop all Apps for this transaction"),
             Self::ApplyChoices => ("review-apply-choices", "Apply selected permission choices"),
             Self::Deny => ("review-choice-deny", "Deny"),
             Self::Restore => ("review-choice-restore", "Restore App policy"),
@@ -472,6 +487,7 @@ impl ReviewText {
             Self::High => ("review-risk-high", "High risk"),
             Self::Critical => ("review-risk-critical", "Critical risk"),
             Self::NoGrantNotice => ("review-no-grant-notice", "This confirmation does not grant capabilities or AI consent."),
+            Self::GlobalStopNotice => ("review-global-stop-notice", "Permits only the shown all-App stop. Critical package authority and App delivery confirmations remain separate; this is not package success."),
             Self::CapabilityNotice => ("review-capability-notice", "Only explicit supported choices are submitted. Unselected permissions are unchanged."),
             Self::DigestNotice => ("review-digest-notice", "The comparison digest and displayed JSON are not approval authority."),
             Self::Request => ("review-request", "Request"),
@@ -517,6 +533,7 @@ impl ReviewKind {
             Self::Activation => ReviewText::Activation,
             Self::Capability => ReviewText::Capability,
             Self::Update => ReviewText::Update,
+            Self::PackageImpact => ReviewText::PackageImpact,
         }
     }
 }
@@ -567,6 +584,7 @@ impl ReviewAction {
             Self::ConfirmInstall => ReviewText::ConfirmInstall,
             Self::ConfirmActivation => ReviewText::ConfirmActivation,
             Self::ConfirmUpdate => ReviewText::ConfirmUpdate,
+            Self::ConfirmGlobalAppStop => ReviewText::ConfirmGlobalAppStop,
             Self::ApplyChoices => ReviewText::ApplyChoices,
         }
     }
@@ -625,10 +643,10 @@ pub fn format_terminal_with(
     }
     output.push_str(&format!(
         "{}\n",
-        label(if review.kind == ReviewKind::Capability {
-            ReviewText::CapabilityNotice
-        } else {
-            ReviewText::NoGrantNotice
+        label(match review.kind {
+            ReviewKind::Capability => ReviewText::CapabilityNotice,
+            ReviewKind::PackageImpact => ReviewText::GlobalStopNotice,
+            _ => ReviewText::NoGrantNotice,
         })
     ));
     output.push_str(&format!("\n{}\n", label(ReviewText::Permissions)));

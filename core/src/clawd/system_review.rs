@@ -205,6 +205,10 @@ fn apply_decision(owner: u32, decision: &ReviewDecision) -> Result<SystemReview,
     decision
         .validate_for(&current)
         .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
+    if decision.id.starts_with("pg-") {
+        return super::package_transactions::stop_review::decide(owner, decision);
+    }
     if decision.id.starts_with("rv-") {
         return decide_app(owner, &decision.id, decision.action != ReviewAction::Cancel);
     }
