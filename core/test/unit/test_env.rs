@@ -204,6 +204,14 @@ pub(crate) fn sign_test_package(
     id: &str,
 ) {
     install_test_trust();
+    sign_test_package_tree(dir, kind, id);
+}
+
+fn sign_test_package_tree(
+    dir: &std::path::Path,
+    kind: crate::provenance::PackageKind,
+    id: &str,
+) {
     normalise_modes(dir);
     let files = collect_relative_files(dir, dir);
     let manifest_path = kind.manifest_file().to_string();
@@ -218,6 +226,147 @@ pub(crate) fn sign_test_package(
     };
     crate::provenance::sign::sign_directory(dir, &request, test_signing_key())
         .unwrap_or_else(|e| panic!("sign test package {}: {e}", dir.display()));
+}
+
+/// Provider-unit evidence, not a Root process/custody fixture. Its explicit
+/// execution-policy role is UID 0, while all fixture files belong to the test
+/// user. It never changes the process trust store or canonical owner state.
+#[derive(Debug)]
+pub(crate) struct UnitAppEvidence {
+    root: std::path::PathBuf,
+    owner: u32,
+    session: String,
+    app: String,
+    package_dir: std::path::PathBuf,
+    root_policy: Vec<crate::provenance::trust::TrustRootSpec>,
+    consumer_policy: Vec<crate::provenance::trust::TrustRootSpec>,
+    runtime: crate::provenance::runtime::Instance,
+}
+
+thread_local! {
+    static ROOT_APP_BACKEND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn root_app_backend_selected() -> bool {
+    ROOT_APP_BACKEND.with(std::cell::Cell::get)
+}
+
+pub(crate) fn with_root_app_backend<T>(operation: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) { ROOT_APP_BACKEND.with(|current| current.set(self.0)); }
+    }
+    let _restore = Restore(ROOT_APP_BACKEND.with(|current| current.replace(true)));
+    operation()
+}
+
+impl UnitAppEvidence {
+    pub(crate) fn new(owner: u32, session: &str, app: &str) -> Result<Self, String> {
+        use crate::provenance::{PackageKind, TrustStore, VerifyOptions};
+        let root = secure_scratch_dir("provider-app-evidence");
+        let result = (|| {
+            let package_dir = root.join("package");
+            std::fs::create_dir(&package_dir).map_err(|error| error.to_string())?;
+            std::fs::write(package_dir.join("app.json"), serde_json::to_vec(&serde_json::json!({
+                "id": app, "version": "0.0.0-test",
+                "name": {"en": "Capability provider unit fixture"}, "entry": "main.py",
+            })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+            std::fs::write(package_dir.join("main.py"), "# Signed fixture; never executed.\n")
+                .map_err(|error| error.to_string())?;
+            sign_test_package_tree(&package_dir, PackageKind::App, app);
+            let root_policy = Self::policy_roots(&root.join("execution-policy"), true)?;
+            let consumer_policy = Self::policy_roots(&root.join("consumer-policy"), false)?;
+            let trust = TrustStore::load_roots(&root_policy);
+            let package = crate::provenance::verify::verify_package(
+                &package_dir, &VerifyOptions::new(PackageKind::App).expect_id(app).signature_only(), &trust,
+            ).map_err(|error| error.to_string())?;
+            Ok(Self {
+                root: root.clone(), owner, session: session.into(), app: app.into(), package_dir,
+                root_policy, consumer_policy,
+                runtime: crate::provenance::runtime::Instance {
+                    class: crate::provenance::runtime::InstanceClass::App,
+                    package: Some(crate::provenance::runtime::PackageRef::of(&package)),
+                    process: None,
+                    started_at: chrono::Utc::now().to_rfc3339(),
+                    trust_context_uid: Some(0),
+                },
+            })
+        })();
+        if result.is_err() { let _ = std::fs::remove_dir_all(&root); }
+        result
+    }
+
+    fn policy_roots(
+        directory: &Path, publisher: bool,
+    ) -> Result<Vec<crate::provenance::trust::TrustRootSpec>, String> {
+        use crate::provenance::state::TrustDomain;
+        use crate::provenance::trust::{TrustRootSpec, TrustTier, TRUST_SCHEMA_V1};
+        let uid = crate::provenance::fsec::effective_uid();
+        let roots = vec![
+            TrustRootSpec { path: directory.join("publishers.d"), tier: TrustTier::User,
+                allowed_uids: vec![uid], domain: TrustDomain::Owner(uid) },
+            TrustRootSpec { path: directory.join("developer.d"), tier: TrustTier::Developer,
+                allowed_uids: vec![uid], domain: TrustDomain::Owner(uid) },
+        ];
+        for root in &roots {
+            std::fs::create_dir_all(&root.path).map_err(|error| error.to_string())?;
+        }
+        let policy = if publisher {
+            test_signing_key().trust_entry(&[crate::provenance::PackageKind::App])
+        } else {
+            serde_json::json!({
+                "schema": TRUST_SCHEMA_V1, "keys": [], "revoked_keys": [], "revoked_packages": [],
+            })
+        };
+        let path = roots[0].path.join("fixture.json");
+        std::fs::write(&path, serde_json::to_vec(&policy).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| error.to_string())?;
+        }
+        normalise_modes(directory);
+        record_trust_state(&roots);
+        Ok(roots)
+    }
+
+    pub(crate) fn check(&self, owner: u32, session: &str, app: &str) -> Result<(), String> {
+        use crate::provenance::runtime::{InstanceClass, PackageRef};
+        use crate::provenance::withdrawal::OwnerPolicy;
+        use crate::provenance::{PackageKind, VerifyOptions};
+        if owner != self.owner || session != self.session || app != self.app
+            || self.runtime.class != InstanceClass::App || self.runtime.trust_context_uid != Some(0)
+        {
+            return Err("unit App evidence belongs to a different owner/session/App/context".into());
+        }
+        let recorded = self.runtime.package.as_ref().ok_or("unit App runtime evidence is missing")?;
+        let uid = crate::provenance::fsec::effective_uid();
+        let execution = OwnerPolicy::load_roots(uid, &self.root_policy)?;
+        let consumer = OwnerPolicy::load_roots(uid, &self.consumer_policy)?;
+        let verified = crate::provenance::verify::verify_package(
+            &self.package_dir,
+            &VerifyOptions::new(PackageKind::App).expect_id(app).signature_only(),
+            &execution.store,
+        ).map_err(|error| error.to_string())?;
+        if PackageRef::of(&verified) != *recorded {
+            return Err("unit App runtime evidence no longer matches its authenticated package".into());
+        }
+        execution.check_denials(recorded)?;
+        consumer.check_denials(recorded)?;
+        self.runtime.is_live(&execution.store)
+    }
+
+    pub(crate) fn package_dir(&self) -> &Path {
+        &self.package_dir
+    }
+}
+
+impl Drop for UnitAppEvidence {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 /// Sign `dir` declaring only `entrypoints`.

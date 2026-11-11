@@ -222,6 +222,7 @@ async fn file_replace_serializes_competing_proposals_against_the_same_baseline()
 
 #[tokio::test]
 async fn file_replace_root_relay_keeps_both_unknown_brackets_unresolved() {
+    crate::test_env::install_test_trust();
     struct RuntimeDirectory(Option<std::ffi::OsString>);
     impl Drop for RuntimeDirectory {
         fn drop(&mut self) {

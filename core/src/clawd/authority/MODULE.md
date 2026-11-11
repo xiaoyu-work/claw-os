@@ -121,6 +121,14 @@ Nothing here reads a request field for identity or authority.
 cargo test -p cos clawd::authority -- --test-threads=1
 ```
 
+Capability/provider-only fixtures use `Decision::for_test` or the explicit
+unit-store constructor to retain signed publisher-package, execution-policy,
+consumer-denial-policy and session evidence. These fixtures use private
+test-owned roots and never install consumer keys into the production Root
+verifier. Signature, scope and policy checks still run before ordinary grant
+spending. Unregistered grants use the real backend and still deny missing
+evidence; Root process fixtures use that backend, not the unit data provider.
+
 A change here needs adversarial coverage, not only a happy path: handle guessing
 and theft, a same-uid sibling, pid reuse, wrong audience/session/App, an
 expired, revoked or exhausted grant, a parent revocation cascade, an attenuation

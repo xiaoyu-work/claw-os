@@ -283,12 +283,16 @@ struct Inner {
 
 pub struct Authority {
     inner: Mutex<Inner>,
+    #[cfg(test)]
+    unit_app_fixtures: bool,
 }
 
 impl Authority {
     fn new() -> Self {
         Self {
             inner: Mutex::new(Inner::default()),
+            #[cfg(test)]
+            unit_app_fixtures: false,
         }
     }
 
@@ -374,6 +378,8 @@ impl Authority {
             parent: None,
             depth: 0,
             children: 0,
+            #[cfg(test)]
+            unit_app_evidence: None,
         };
         let view = inner.insert(grant, now, issuance.index_session);
         Ok((handle, view))
@@ -433,6 +439,8 @@ impl Authority {
             parent: Some(parent_id),
             depth,
             children: 0,
+            #[cfg(test)]
+            unit_app_evidence: None,
         };
         let view = inner.insert(grant, now, request.index_session);
         if let Some(parent) = inner.grants.get_mut(&parent_key) {
@@ -553,8 +561,16 @@ impl Authority {
             } else { None }
         };
         if let Some((owner, session)) = binding {
-            crate::clawd::trust_withdrawal::check_session(owner, &session)
-                .map_err(AuthorityError::AppPolicy)?;
+            #[cfg(test)]
+            if let Some(result) = self.check_unit_app_evidence(id, owner, &session) {
+                return result;
+            }
+            #[cfg(test)]
+            let checked = crate::test_env::with_root_app_backend(||
+                crate::clawd::trust_withdrawal::check_session(owner, &session));
+            #[cfg(not(test))]
+            let checked = crate::clawd::trust_withdrawal::check_session(owner, &session);
+            checked.map_err(AuthorityError::AppPolicy)?;
         }
         Ok(())
     }
@@ -722,6 +738,86 @@ impl Authority {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.force_sweep(now)
+    }
+
+    #[cfg(test)]
+    fn for_unit_fixture() -> Self {
+        Self { inner: Mutex::new(Inner::default()), unit_app_fixtures: true }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach_unit_app_fixture(&self, view: &GrantView) -> Result<(), AuthorityError> {
+        let Some(app) = view.subject.app_id.as_deref() else { return Ok(()); };
+        let session = view.subject.session_id.as_deref().ok_or(AuthorityError::Subject)?;
+        {
+            let inner = self.lock();
+            let key = inner.id_index.get(&view.id).ok_or(AuthorityError::UnknownGrant)?;
+            let grant = inner.grants.get(key).ok_or(AuthorityError::UnknownGrant)?;
+            if grant.principal.uid != view.owner_uid
+                || grant.subject.session_id.as_deref() != Some(session)
+                || grant.subject.app_id.as_deref() != Some(app)
+            {
+                return Err(AuthorityError::Subject);
+            }
+            if grant.unit_app_evidence.is_some() { return Ok(()); }
+        }
+        let evidence = std::sync::Arc::new(
+            crate::test_env::UnitAppEvidence::new(view.owner_uid, session, app)
+                .map_err(AuthorityError::AppPolicy)?,
+        );
+        let mut inner = self.lock();
+        let key = *inner.id_index.get(&view.id).ok_or(AuthorityError::UnknownGrant)?;
+        let grant = inner.grants.get_mut(&key).ok_or(AuthorityError::UnknownGrant)?;
+        if grant.unit_app_evidence.is_none() { grant.unit_app_evidence = Some(evidence); }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn check_unit_app_session(&self, owner: u32, session: &str) -> Option<Result<(), String>> {
+        let (evidence, app) = {
+            let inner = self.lock();
+            let key = inner.by_session.get(session)?;
+            let grant = inner.grants.get(key)?;
+            let evidence = grant.unit_app_evidence.clone()?;
+            if grant.principal.uid != owner { return Some(Err("unit App evidence belongs to another owner".into())); }
+            (evidence, grant.subject.app_id.clone()?)
+        };
+        Some(evidence.check(owner, session, &app))
+    }
+
+    #[cfg(test)]
+    fn check_unit_app_evidence(
+        &self, id: GrantId, owner: u32, session: &str,
+    ) -> Option<Result<(), AuthorityError>> {
+        let (view, evidence) = {
+            let inner = self.lock();
+            let key = match inner.id_index.get(&id) { Some(key) => key, None => return Some(Err(AuthorityError::UnknownGrant)) };
+            let grant = match inner.grants.get(key) { Some(grant) => grant, None => return Some(Err(AuthorityError::UnknownGrant)) };
+            let evidence = grant.unit_app_evidence.clone().or_else(|| {
+                let session = grant.subject.session_id.as_deref()?;
+                let source = inner.grants.get(inner.by_session.get(session)?)?;
+                if source.principal.uid != grant.principal.uid
+                    || source.subject.app_id != grant.subject.app_id
+                { return None; }
+                source.unit_app_evidence.clone()
+            });
+            (view_of(grant, Instant::now()), evidence)
+        };
+        let evidence = match evidence {
+            Some(evidence) => evidence,
+            None if self.unit_app_fixtures => {
+                if let Err(error) = self.attach_unit_app_fixture(&view) { return Some(Err(error)); }
+                let inner = self.lock();
+                let key = match inner.id_index.get(&id) { Some(key) => key, None => return Some(Err(AuthorityError::UnknownGrant)) };
+                match inner.grants.get(key).and_then(|grant| grant.unit_app_evidence.clone()) {
+                    Some(evidence) => evidence,
+                    None => return Some(Err(AuthorityError::Subject)),
+                }
+            }
+            None => return None,
+        };
+        Some(evidence.check(owner, session, view.subject.app_id.as_deref().unwrap_or_default())
+            .map_err(AuthorityError::AppPolicy))
     }
 
     #[cfg(test)]
