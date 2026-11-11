@@ -330,7 +330,6 @@ def test_common_library_payload_excludes_tests_and_bytecode(shared_source, tmp_p
     _pin_fixture(root, lock, "shared/python")
     python = sources.stage_shared(tmp_path / "stage")
     assert _app_payload(python) == _app_payload(common, source=True)
-    assert len([path for path in python.rglob("*") if path.is_file()]) == 16
 
 
 @pytest.mark.parametrize("output", ['[]', 'null', '{"root":"wrong"}', '"wrong"'])

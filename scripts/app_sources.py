@@ -190,7 +190,7 @@ def stage_shared(destination, *, lock=None):
     destination = destination.resolve()
     python = destination / "usr/lib/cos/python"
     result = subprocess.check_output(
-        [sys.executable, str(source / "tools/stage.py"),
+        [sys.executable, "-B", str(source / "tools/stage.py"),
          "--shared", "--root", str(destination)],
         cwd=source, text=True,
     )
@@ -212,7 +212,7 @@ def stage_products(destination, package=None, *, lock=None):
         source_kind = ["--kind", kind] if kind != "product" else []
         selection = ["--apps", *selected] if package else []
         result = subprocess.check_output(
-            [sys.executable, str(source / "tools" / "stage.py"),
+            [sys.executable, "-B", str(source / "tools" / "stage.py"),
              product, "--root", str(destination.resolve()), *source_kind, *selection],
             cwd=source, text=True,
         )
@@ -282,7 +282,7 @@ def prepare_native(*, lock=None):
             elif component.exists():
                 shutil.rmtree(component)
         result = subprocess.check_output(
-            [sys.executable, str(source / "tools/stage_native.py"), product,
+            [sys.executable, "-B", str(source / "tools/stage_native.py"), product,
              "--root", str(destination)], text=True, cwd=source,
         )
         if json.loads(result) != components:
