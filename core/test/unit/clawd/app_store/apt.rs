@@ -11,8 +11,7 @@ use crate::clawd::protocol::BrokerErrorKind;
 use crate::clawd::state::DaemonState;
 use crate::clawd::transport::{frame::PeerStream, peer, ReadOutcome};
 use crate::clawd::wire::Request;
-use crate::provenance::trust::TrustRootSpec;
-use crate::provenance::{sign, PackageKind, TrustStore, TrustTier};
+use crate::provenance::{sign, PackageKind, TrustStore};
 use std::io::{BufRead, Read};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -20,6 +19,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 
 const BASE: &str = "/run/cos-app-apt-fixture";
+const TRUST_ROOT: &str = crate::provenance::trust::SYSTEM_TRUST_ROOT;
 const OWNER: u32 = 61994;
 const FOREIGN_UID: u32 = 61995;
 const BROKER_GID: u32 = 61996;
@@ -704,16 +704,11 @@ impl Fixture {
             crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", "/usr/lib/cos/apps"),
             crate::test_env::TestEnvVarGuard::set("CLAWD_SOCKET", "/run/cos/clawd.sock"),
         ];
-        let roots = vec![TrustRootSpec {
-            path: Path::new(BASE).join("trust"),
-            tier: TrustTier::System,
-            allowed_uids: vec![0],
-            domain: crate::provenance::state::TrustDomain::System,
-        }];
+        let roots = TrustStore::default_roots();
         for id in APPS {
             let key = sign::SigningKeyFile::generate(Some(format!("isolated {id}"))).unwrap();
             std::fs::write(
-                roots[0].path.join(format!("{id}.json")),
+                Path::new(TRUST_ROOT).join(format!("{id}.json")),
                 serde_json::to_vec(&key.trust_entry(&[PackageKind::App])).unwrap(),
             )
             .unwrap();
@@ -1374,12 +1369,7 @@ impl Drop for RetainedPeer {
 fn private_apt_ordinary_actor() {
     assert_eq!(std::env::var("COS_APP_APT_PROCESS").unwrap(), "1");
     assert_ne!(unsafe { libc::geteuid() }, 0);
-    let roots = vec![TrustRootSpec {
-        path: Path::new(BASE).join("trust"),
-        tier: TrustTier::System,
-        allowed_uids: vec![0],
-        domain: crate::provenance::state::TrustDomain::System,
-    }];
+    let roots = TrustStore::default_roots();
     let trust = TrustStore::load_roots(&roots);
     assert!(trust.diagnostics().is_empty(), "{:?}", trust.diagnostics());
     crate::provenance::set_trust_store_for_roots(trust, roots);

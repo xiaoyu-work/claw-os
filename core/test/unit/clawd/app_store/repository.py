@@ -21,7 +21,7 @@ SIDE_EFFECT = "claw-package-acceptance-side-effect"
 VERSION = "1.0.0"
 PORT = 38081
 PRIVATE_MOUNTS = (
-    "/run", "/var/lib", "/var/cache", "/var/log", "/etc/apt", "/etc/dpkg",
+    "/run", "/var/lib", "/var/cache", "/var/log", "/etc", "/etc/apt", "/etc/dpkg",
     "/root", "/usr",
 )
 
@@ -76,10 +76,34 @@ def isolate():
     require_namespace()
     mount(None, "/", flags=(1 << 18) | 16384)
     for target in PRIVATE_MOUNTS[:-1]:
+        if target in ("/etc", "/etc/apt", "/etc/dpkg"):
+            continue
         if not Path(target).is_dir():
             raise RuntimeError(f"required system mountpoint is absent: {target}")
         mount("tmpfs", target, "tmpfs", 2 | 4, "mode=0755,size=1073741824")
     BASE.mkdir(mode=0o755)
+    identities = {
+        "passwd": Path("/etc/passwd").read_bytes(),
+        "group": Path("/etc/group").read_bytes(),
+        "shadow": b"root:!:20000:0:99999:7:::\n",
+        "subuid": b"",
+        "subgid": b"",
+    }
+    etc = BASE / "etc"
+    mirror(
+        Path("/etc"), etc,
+        ("cos", "apt", "dpkg", *identities),
+    )
+    for name, body in identities.items():
+        target = etc / name
+        target.write_bytes(body)
+        target.chmod(0o600 if name == "shadow" else 0o644)
+    (etc / "cos/trust/publishers.d").mkdir(parents=True)
+    for name in ("apt", "dpkg"):
+        (etc / name).mkdir()
+    mount(etc, "/etc", flags=4096 | 16384)
+    for target in ("/etc/apt", "/etc/dpkg"):
+        mount("tmpfs", target, "tmpfs", 2 | 4, "mode=0755,size=1073741824")
     shadow = BASE / "usr"
     mirror(Path("/usr"), shadow, ("lib", "share"))
     mirror(Path("/usr/lib"), shadow / "lib", ("cos",))
@@ -89,7 +113,7 @@ def isolate():
     mount(shadow, "/usr", flags=4096 | 16384)
     mount("tmpfs", "/usr/local/bin", "tmpfs", 2 | 4, "mode=0755,size=1073741824")
     for directory in (
-        "scratch", "payloads/bundle", "payloads/support", "trust", "state", "runtime",
+        "scratch", "payloads/bundle", "payloads/support", "state", "runtime",
     ):
         (BASE / directory).mkdir(parents=True, exist_ok=True)
     (BASE / "scratch").chmod(0o700)
