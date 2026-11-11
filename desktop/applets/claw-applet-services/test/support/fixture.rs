@@ -118,7 +118,7 @@ fi
         let namespace = std::process::Command::new("/usr/bin/bwrap")
             .args([
                 "--unshare-user", "--uid", "0", "--gid", "0",
-                "--ro-bind", "/", "/", "--bind",
+                "--ro-bind", "/", "/", "--dev", "/dev", "--bind",
             ])
             .arg(&self.root)
             .args(["/usr/local/bin", "--", "/bin/true"])
@@ -133,7 +133,7 @@ fi
         let path = self.root.join("launch-provider");
         // Only this test child sees the synthetic kernel at the fixed path.
         fs::write(&path, format!(
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$$\" > {}/provider-group-pid\nexec /usr/bin/bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --bind {} /usr/local/bin -- {} \"$@\"\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$$\" > {}/provider-group-pid\nexec /usr/bin/bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --dev /dev --bind {} /usr/local/bin -- {} \"$@\"\n",
             quoted(self.root.to_str().unwrap()), quoted(self.root.to_str().unwrap()),
             quoted(binary.to_str().unwrap()),
         )).unwrap();
