@@ -54,9 +54,24 @@ pub(crate) fn launch(
         let super::AppSessionBackend::Clawd { handle, .. } = &session.backend else {
             return Err("GUI launch has no authenticated Root registration".to_string());
         };
-        let started = super::clawd_request(super::ClawdCommand::AppGuiLaunch, serde_json::json!({
+        let parameters = serde_json::json!({
             "session_id": session.id(), "handle": handle, "args": args, "presentation": presentation,
-        })).map_err(String::from)?;
+        });
+        let deadline = std::time::Instant::now() + super::APPROVAL_WAIT;
+        let mut waited = std::collections::BTreeSet::new();
+        let started = loop {
+            match super::clawd_request(super::ClawdCommand::AppGuiLaunch, parameters.clone()) {
+                Ok(started) => break started,
+                Err(error) => {
+                    let ids = super::approval_requests(&error);
+                    if ids.is_empty() || !waited.insert(ids.clone()) {
+                        return Err(String::from(error));
+                    }
+                    super::wait_for_approvals_until(&ids, deadline)
+                        .map_err(|context| String::from(error.with_context(&context)))?;
+                }
+            }
+        };
         let started: LaunchReply = serde_json::from_value(started)
             .map_err(|error| format!("invalid GUI launch response: {error}"))?;
         if !started.started {

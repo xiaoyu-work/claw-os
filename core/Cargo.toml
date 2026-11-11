@@ -158,10 +158,8 @@ claw-display-control = { path = "../crates/claw-display-control" }
 libc = "0.2"
 socket2 = "0.6"
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-fuser = { version = "=0.16.0", default-features = false, features = ["abi-7-31"] }
-
 [target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "=0.16.0", default-features = false, features = ["abi-7-31"] }
 wayland-client = "0.31.11"
 wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }
 

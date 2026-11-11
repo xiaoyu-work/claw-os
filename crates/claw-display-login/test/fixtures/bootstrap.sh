@@ -204,7 +204,7 @@ BUS
         <<< "$listing" >/dev/null
     "$registry" --exact "$fixture_test" \
         --ignored --nocapture --test-threads=1 || result=$?
-    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..18} session-startup file-manager; do
+    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..19} session-startup file-manager; do
         if [[ -f "/run/gui-fixture/pam-$case.log" ]]; then
             cp "/run/gui-fixture/pam-$case.log" "$private/pam-$case.log"
             if [[ "$result" != 0 ]]; then cat "$private/pam-$case.log" >&2; fi

@@ -271,6 +271,7 @@ pub(crate) async fn launch(params: Value, client: &ClientIdentity) -> Result<Val
     job.registration
         .require_launch(request.handle.as_str(), client)
         .map_err(BrokerError::authorization)?;
+    super::supervision::admit_home_metadata(&job)?;
     {
         let mut state = job
             .state

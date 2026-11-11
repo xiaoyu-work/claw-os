@@ -1,13 +1,17 @@
 //! Internal native resource kernel provider. Not an App mount API.
 
 use std::collections::BTreeMap;
-use std::ffi::{CString, OsString};
+use std::ffi::CString;
+#[cfg(test)]
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -23,28 +27,37 @@ struct Binding {
     group: OwnedFd,
 }
 
+#[cfg(test)]
 struct ChosenRead {
     relative: PathBuf,
     pin: File,
     directory: bool,
 }
 
+#[cfg(test)]
 struct ChosenWrite {
     relative: PathBuf,
     pin: File,
     parent: File,
 }
 
+#[cfg(test)]
 struct SaveTarget {
     relative: PathBuf,
     target: PathBuf,
 }
 
+#[cfg(test)]
 struct BackingStage {
     parent: File,
     name: OsString,
     file: File,
     published: bool,
+}
+
+struct Expiry {
+    deadline: Instant,
+    ceiling: Instant,
 }
 
 struct Shared {
@@ -53,14 +66,22 @@ struct Shared {
     root: File,
     root_path: PathBuf,
     owner_home: PathBuf,
-    expires: Instant,
+    expiry: Mutex<Expiry>,
+    metadata_only: bool,
     binding: Mutex<Option<Binding>>,
+    #[cfg(test)]
     chosen: Mutex<Vec<ChosenRead>>,
+    #[cfg(test)]
     writes: Mutex<Vec<ChosenWrite>>,
+    #[cfg(test)]
     saves: Mutex<Vec<SaveTarget>>,
+    #[cfg(test)]
     watches: Mutex<Vec<ChosenRead>>,
+    #[cfg(test)]
     session: Option<crate::session::SessionId>,
+    #[cfg(test)]
     effects: Mutex<()>,
+    #[cfg(test)]
     stages: Mutex<Vec<BackingStage>>,
     observed: Mutex<BTreeMap<u64, backend::Observed>>,
     polls: Mutex<BTreeMap<u64, backend::Subscription>>,
@@ -71,9 +92,13 @@ struct Shared {
     cleanup_error: Mutex<Option<String>>,
     #[cfg(test)]
     fail_worker: AtomicBool,
+    #[cfg(test)]
     fail_completion: AtomicBool,
+    #[cfg(test)]
     scratch_bytes: AtomicU64,
+    #[cfg(test)]
     inverse_bytes: AtomicU64,
+    #[cfg(test)]
     mutation_attempts: AtomicU64,
 }
 
@@ -88,7 +113,9 @@ impl Shared {
     }
 
     fn live(&self) -> Result<(), i32> {
-        if self.revoked.load(Ordering::Acquire) || Instant::now() >= self.expires {
+        if self.revoked.load(Ordering::Acquire)
+            || Instant::now() >= self.expiry.lock().map_err(|_| libc::EIO)?.deadline
+        {
             return Err(libc::EACCES);
         }
         Ok(())
@@ -118,11 +145,13 @@ impl Shared {
             .unwrap_or(Ok(true))
     }
 
+    #[cfg(test)]
     fn session_context<T>(&self, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         crate::paths::RoutedPathContext::for_owner(self.owner, self.owner_home.clone())
             .scope_sync(run)
     }
 
+    #[cfg(test)]
     fn validate_session(&self) -> Result<(), String> {
         let sid = self
             .session
@@ -154,6 +183,7 @@ impl Shared {
         })
     }
 
+    #[cfg(test)]
     fn indeterminate(&self, detail: String) {
         if let Ok(mut error) = self.cleanup_error.lock() {
             *error = Some(format!(
@@ -174,7 +204,8 @@ impl Shared {
 /// A Root controller's per-window metadata consent and bounded read view.
 ///
 /// The internal caller, not a FUSE request or App-supplied JSON, attests consent
-/// and chooses resources. The private fixture is the only initial consumer.
+/// and chooses resources. Production exposes only the metadata-only constructor;
+/// selected content and mutation entry points remain test-build-only.
 pub(crate) struct NativeFsView {
     shared: Arc<Shared>,
     mountpoint: PathBuf,
@@ -188,15 +219,17 @@ pub(crate) struct NativeFsView {
 static PENDING: OnceLock<Mutex<Vec<NativeFsView>>> = OnceLock::new();
 
 impl NativeFsView {
+    #[cfg(test)]
     pub(crate) fn create(
         owner: u32,
         browse_root: &Path,
         mountpoint: &Path,
         lifetime: Duration,
     ) -> Result<Self, String> {
-        Self::create_inner(owner, browse_root, mountpoint, lifetime, None)
+        Self::create_inner(owner, browse_root, mountpoint, lifetime, false, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_writable(
         owner: u32,
         browse_root: &Path,
@@ -209,8 +242,83 @@ impl NativeFsView {
             browse_root,
             mountpoint,
             lifetime,
+            false,
             Some(session.clone()),
         )
+    }
+
+    pub(crate) fn create_home_metadata(
+        owner: u32,
+        home: &Path,
+        mountpoint: &Path,
+        identity: (u64, u64),
+        ceiling: Instant,
+    ) -> Result<Self, String> {
+        let authenticated = crate::paths::verified_home_for_uid(owner)?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if authenticated != home {
+            return Err("metadata source differs from authenticated owner Home".into());
+        }
+        let lifetime = ceiling
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(10));
+        if lifetime < Duration::from_millis(250) {
+            return Err("Home metadata consent is expiring".into());
+        }
+        let view = Self::create_inner(owner, home, mountpoint, lifetime, true, None)?;
+        let actual = view
+            .shared
+            .root
+            .metadata()
+            .map_err(|error| error.to_string())?;
+        if (actual.dev(), actual.ino()) != identity {
+            return Err("authenticated Home identity changed after window consent".into());
+        }
+        view.shared
+            .expiry
+            .lock()
+            .map_err(|_| "native metadata expiry poisoned")?
+            .ceiling = ceiling;
+        Ok(view)
+    }
+
+    pub(crate) fn renew_home_metadata(&self, lifetime: Duration) -> Result<(), String> {
+        self.shared.controller()?;
+        self.shared
+            .live()
+            .map_err(|_| "Home metadata lease ended; fresh registration is required")?;
+        let bound = self
+            .shared
+            .binding
+            .lock()
+            .map_err(|_| "native binding poisoned")?
+            .is_some();
+        if !self.shared.metadata_only || !bound || !self.shared.instance_live()? {
+            return Err("metadata renewal requires its exact bound GUI instance".into());
+        }
+        let mut expiry = self
+            .shared
+            .expiry
+            .lock()
+            .map_err(|_| "native metadata expiry poisoned")?;
+        let now = Instant::now();
+        let deadline = now + lifetime.min(Duration::from_secs(2));
+        if deadline.saturating_duration_since(now) < Duration::from_millis(250)
+            || expiry.ceiling.saturating_duration_since(now) < Duration::from_millis(250)
+            || now >= expiry.deadline
+        {
+            return Err("Home metadata authority is expiring".into());
+        }
+        expiry.deadline = deadline.min(expiry.ceiling);
+        Ok(())
+    }
+
+    pub(crate) fn retire_pending_metadata(deadline: Instant) -> Result<(), String> {
+        if unsafe { libc::geteuid() } != 0 {
+            return Err("native metadata retirement requires Root".into());
+        }
+        Self::retry_pending(deadline)
     }
 
     fn create_inner(
@@ -218,6 +326,7 @@ impl NativeFsView {
         browse_root: &Path,
         mountpoint: &Path,
         lifetime: Duration,
+        metadata_only: bool,
         session: Option<crate::session::SessionId>,
     ) -> Result<Self, String> {
         if unsafe { libc::geteuid() } != 0
@@ -229,6 +338,14 @@ impl NativeFsView {
                 "native filesystem prototype requires Root, a normal owner and a bounded lease"
                     .into(),
             );
+        }
+        #[cfg(not(test))]
+        if !metadata_only || session.is_some() {
+            return Err("production native resources expose metadata only".into());
+        }
+        let writable = session.is_some();
+        if metadata_only && writable {
+            return Err("metadata views cannot enable writes".into());
         }
         Self::retry_pending(Instant::now() + Duration::from_secs(3))?;
         let controller = ProcessIdentity::current().map_err(|error| error.to_string())?;
@@ -273,14 +390,25 @@ impl NativeFsView {
             root,
             root_path,
             owner_home,
-            expires: Instant::now() + lifetime,
+            expiry: Mutex::new(Expiry {
+                deadline: Instant::now() + lifetime,
+                ceiling: Instant::now() + lifetime,
+            }),
+            metadata_only,
             binding: Mutex::new(None),
+            #[cfg(test)]
             chosen: Mutex::new(Vec::new()),
+            #[cfg(test)]
             writes: Mutex::new(Vec::new()),
+            #[cfg(test)]
             saves: Mutex::new(Vec::new()),
+            #[cfg(test)]
             watches: Mutex::new(Vec::new()),
+            #[cfg(test)]
             session,
+            #[cfg(test)]
             effects: Mutex::new(()),
+            #[cfg(test)]
             stages: Mutex::new(Vec::new()),
             observed: Mutex::new(BTreeMap::new()),
             polls: Mutex::new(BTreeMap::new()),
@@ -291,11 +419,16 @@ impl NativeFsView {
             cleanup_error: Mutex::new(None),
             #[cfg(test)]
             fail_worker: AtomicBool::new(false),
+            #[cfg(test)]
             fail_completion: AtomicBool::new(false),
+            #[cfg(test)]
             scratch_bytes: AtomicU64::new(0),
+            #[cfg(test)]
             inverse_bytes: AtomicU64::new(0),
+            #[cfg(test)]
             mutation_attempts: AtomicU64::new(0),
         });
+        #[cfg(test)]
         if shared.session.is_some() {
             shared.validate_session()?;
         }
@@ -323,11 +456,7 @@ impl NativeFsView {
                 libc::MS_NOSUID
                     | libc::MS_NODEV
                     | libc::MS_NOEXEC
-                    | if shared.session.is_none() {
-                        libc::MS_RDONLY
-                    } else {
-                        0
-                    },
+                    | if !writable { libc::MS_RDONLY } else { 0 },
                 options.as_ptr().cast(),
             )
         };
@@ -466,8 +595,12 @@ impl NativeFsView {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn choose_read(&self, relative: &Path) -> Result<(), String> {
         self.shared.controller()?;
+        if self.shared.metadata_only {
+            return Err("Home metadata views cannot select content".into());
+        }
         let pin = backend::open_relative(&self.shared, relative, false)
             .map_err(|error| format!("chosen native resource refused: {error}"))?;
         let metadata = pin.metadata().map_err(|error| error.to_string())?;
@@ -496,8 +629,12 @@ impl NativeFsView {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn choose_write(&self, relative: &Path) -> Result<(), String> {
         self.shared.controller()?;
+        if self.shared.metadata_only {
+            return Err("Home metadata views cannot select writes".into());
+        }
         self.shared.validate_session()?;
         backend::choose_write(&self.shared, relative).map_err(|error| {
             format!(
@@ -507,8 +644,12 @@ impl NativeFsView {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_save(&self, target: &Path) -> Result<PathBuf, String> {
         self.shared.controller()?;
+        if self.shared.metadata_only {
+            return Err("Home metadata views cannot stage saves".into());
+        }
         self.shared.validate_session()?;
         backend::reserve_save(&self.shared, target).map_err(|error| {
             format!(
@@ -518,8 +659,12 @@ impl NativeFsView {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn choose_watch(&self, relative: &Path) -> Result<(), String> {
         self.shared.controller()?;
+        if self.shared.metadata_only {
+            return Err("Home metadata views have no content watch API".into());
+        }
         let pin = backend::open_relative(&self.shared, relative, false)
             .map_err(|error| std::io::Error::from_raw_os_error(error).to_string())?;
         if !pin.metadata().map_err(|error| error.to_string())?.is_file() {
@@ -595,6 +740,7 @@ impl NativeFsView {
         self.shared.controller()?;
         self.shared.revoked.store(true, Ordering::Release);
         self.shared.retire_processes(deadline)?;
+        #[cfg(test)]
         backend::cleanup_stages(&self.shared, deadline)?;
         while self
             .watcher
@@ -690,6 +836,7 @@ impl NativeFsView {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn fail_completion_for_fixture(&self) -> Result<(), String> {
         self.shared.controller()?;
         self.shared.fail_completion.store(true, Ordering::Release);
