@@ -342,7 +342,11 @@ fn request_netdiag_clawd(params: Value) -> Result<Value, String> {
 fn request_wire_clawd(command: Command, params: Value) -> Result<Value, String> {
     let request = crate::clawd::protocol::Request::build(command, params);
     let response =
-        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
+        (if matches!(command, Command::GuiFileReadRequest | Command::GuiFileReadStatus) {
+            crate::clawd::client::request_gui_resource_blocking(request)
+        } else {
+            crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
+        })
             .map_err(|error| {
                 let code = if error.may_have_dispatched() {
                     "indeterminate"

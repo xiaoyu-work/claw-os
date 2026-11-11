@@ -415,7 +415,14 @@ fn selected_read() {
     let sibling_node = std::fs::metadata(&sibling).unwrap().ino();
     let directory_node = std::fs::metadata(home.join("read-selected")).unwrap().ino();
     assert!(claw_os_sdk::gui::request_file_read(directory_node).is_err());
-    let pending = claw_os_sdk::gui::request_file_read(node).expect("Root selected-file proposal");
+    let broker = std::env::var_os("COS_BROKER_SOCK");
+    unsafe { std::env::set_var("COS_BROKER_SOCK", private_marker("not-a-root-broker")); }
+    let pending = claw_os_sdk::gui::request_file_read(node);
+    unsafe {
+        if let Some(broker) = broker { std::env::set_var("COS_BROKER_SOCK", broker); }
+        else { std::env::remove_var("COS_BROKER_SOCK"); }
+    }
+    let pending = pending.expect("Root selected-file proposal through the authenticated private GUI hop");
     assert_eq!(pending.state, "pending");
     assert!(File::open(&selected).is_err(), "request success is not a read selection");
     assert!(claw_os_sdk::gui::file_read_status(&pending.selection_id, sibling_node).is_err());

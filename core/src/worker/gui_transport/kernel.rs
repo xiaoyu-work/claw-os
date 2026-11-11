@@ -272,6 +272,22 @@ fn open_pidfd(pid: i32) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(raw as i32) })
 }
 
+pub(crate) fn require_root_broker(descriptor: BorrowedFd<'_>) -> io::Result<()> {
+    let expected = ProcessIdentity::current().map_err(io::Error::other)?;
+    if expected.uid() != 0 { return Err(io::Error::from_raw_os_error(libc::EACCES)); }
+    let mut peer: libc::ucred = unsafe { zeroed() };
+    let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+    if unsafe { libc::getsockopt(descriptor.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED,
+        std::ptr::addr_of_mut!(peer).cast(), &mut length) } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if length as usize != size_of::<libc::ucred>() || peer.uid != 0 || peer.pid != expected.pid() {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "GUI broker is not the retained Root controller"));
+    }
+    expected.assert_current().map_err(io::Error::other)
+}
+
 pub(crate) fn connect(descriptor: BorrowedFd<'_>, path: &std::path::Path) -> io::Result<()> {
     let bytes = path.as_os_str().as_encoded_bytes();
     let mut address: libc::sockaddr_un = unsafe { zeroed() };
