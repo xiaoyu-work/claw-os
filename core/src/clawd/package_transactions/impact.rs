@@ -496,7 +496,9 @@ pub(super) async fn inspect(state: &DaemonState, plan: &Plan, id: &str) -> Resul
     for (app_id, app) in &apps {
         identities.insert(
             app_id.clone(),
-            app.require_verified().ok().map(PackageRef::of),
+            app.require_verified()
+                .ok()
+                .map(|package| PackageRef::of(package)),
         );
         roots.insert(app_id.clone(), app.dir.clone());
         owners.insert(
@@ -691,7 +693,9 @@ pub(super) async fn verify_static(impact: &Impact, plan: &Plan, id: &str) -> Res
     for (app_id, app) in apps {
         identities.insert(
             app_id.clone(),
-            app.require_verified().ok().map(PackageRef::of),
+            app.require_verified()
+                .ok()
+                .map(|package| PackageRef::of(package)),
         );
         owners.insert(
             app_id.clone(),
