@@ -110,7 +110,7 @@ fn selected_read_call(
 ) -> Result<crate::generated::GuiFileRead, crate::BridgeError> {
     let input = request.to_string();
     let response = crate::cos_call_json_with_stdin(
-        "__gui-file-read", verb, ["--request-stdin"], input.as_bytes(),
+        "__gui-file-read", verb, ["__gui-file-read", verb, "--request-stdin"], input.as_bytes(),
     )?;
     selected_read_response(verb, response)
 }
