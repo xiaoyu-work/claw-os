@@ -26,6 +26,10 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: Validate image provisioning scripts
         run: bash scripts/ci/check-provisioning.sh
 

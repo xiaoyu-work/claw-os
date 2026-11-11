@@ -45,7 +45,9 @@ const PLUMBING: &str = concat!(
 );
 
 fn checked(command: &mut std::process::Command) -> Vec<u8> {
-    let output = command.output().unwrap();
+    let output = command.output().unwrap_or_else(|error| {
+        panic!("spawn {}: {error}", command.get_program().to_string_lossy())
+    });
     assert!(
         output.status.success(),
         "{command:?}: {}\n{}",
@@ -1660,7 +1662,7 @@ fn installed_product_browser(token: &str, value: &str) {
     let name = std::ffi::CString::new(token_file.as_os_str().as_encoded_bytes()).unwrap();
     assert_eq!(unsafe { libc::chown(name.as_ptr(), OWNER, OWNER) }, 0);
     drop(file);
-    let mut command = owner_command(OWNER, Path::new("/usr/bin/node"));
+    let mut command = owner_command(OWNER, Path::new("/usr/local/bin/node"));
     command.arg("--experimental-websocket").arg(&script)
         .env("APP_STORE_INSTALLED_ORIGIN", WEB_ORIGIN)
         .env("APP_STORE_INSTALLED_TOKEN_FILE", &token_file)
@@ -2568,8 +2570,17 @@ async fn private_apt_ordinary_self_handoff_retains_receipt() {
 async fn private_installed_product_web_calls_real_kv_without_model() {
     use crate::clawd::routes::Command;
     let _lock = crate::test_env::lock_env();
+    // Private mounts can hide the runner's real runtime path.
+    let node = std::fs::File::open(
+        std::env::var_os("COS_APP_APT_TEST_NODE").expect("driver-pinned real Node runtime"),
+    ).expect("open real browser fixture runtime before private mounts");
     let fixture = Fixture::new();
     fixture.enable_processes();
+    copy_executable(
+        &PathBuf::from(format!("/proc/self/fd/{}", node.as_raw_fd())),
+        Path::new("/usr/local/bin/node"),
+    );
+    drop(node);
     let installed = stage_real_web_client();
     let (web, client, token) = WebOwner::start().await;
     let mut web = Some(web);
