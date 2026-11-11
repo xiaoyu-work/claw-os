@@ -636,21 +636,9 @@ pub(super) fn observe(shared: &Shared) -> Result<(), String> {
                         path.file_name().ok_or("observed file has no name")?,
                     )
                     .map_err(|error| error.to_string())?;
-            } else if directory {
-                let children = shared
-                    .observed
-                    .lock()
-                    .map_err(|_| "native observations poisoned")?
-                    .iter()
-                    .filter(|(child, node)| **child != inode && node.parent == inode && node.linked)
-                    .filter_map(|(_, node)| node.relative.file_name().map(OsStr::to_os_string))
-                    .collect::<Vec<_>>();
-                for child in children {
-                    notifier
-                        .inval_entry(inode, &child)
-                        .map_err(|error| error.to_string())?;
-                }
             }
+            // Entries have zero TTL. Pre-evicting child dentries here would
+            // erase their names before DELETE can deliver directory watch events.
             {
                 let mut observed = shared
                     .observed
