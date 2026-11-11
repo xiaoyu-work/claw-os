@@ -325,6 +325,7 @@ fn file_manager(args: &[String]) {
 
 fn home_metadata() {
     use std::fs::File;
+    use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
     let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").expect("authenticated Home context"));
     let private = PathBuf::from(std::env::var_os("HOME").expect("private App Home"));
@@ -345,6 +346,10 @@ fn home_metadata() {
     assert!(std::fs::metadata(home.join(".config/cos")).is_err());
     let directory = File::open(&home).unwrap();
     assert!(directory.metadata().unwrap().is_dir());
+    let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::fstatfs(directory.as_raw_fd(), &mut filesystem) }, 0);
+    assert_eq!(filesystem.f_type as u64, 0x6573_5546,
+        "the inner App's opened Home descriptor must be a real FUSE filesystem");
     let _peer = peer(Protocol::Core);
     let group = unsafe { libc::getpgrp() };
     let (mut ready, mut report) = UnixStream::pair().unwrap();
