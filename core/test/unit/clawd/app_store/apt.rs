@@ -788,12 +788,19 @@ impl Fixture {
             .await
             .unwrap();
         assert_eq!(plan.reviews.len(), 2);
+        let support = crate::clawd::packages::query_package_state(SUPPORT).await.unwrap();
+        let expected = if support.installed {
+            assert_eq!(support.version.as_deref(), Some("1.0.0"));
+            BTreeSet::from([BUNDLE])
+        } else {
+            BTreeSet::from([BUNDLE, SUPPORT])
+        };
         assert_eq!(
             plan.packages
                 .iter()
                 .map(|package| package.identity.package.as_str())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from([BUNDLE, SUPPORT])
+            expected
         );
         assert!(plan
             .packages
