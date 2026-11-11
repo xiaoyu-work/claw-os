@@ -798,9 +798,11 @@ POLICY_EPOCH="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["
 POLICY_ABI="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["abi"])' "$POLICY")"
 MIN_BASE="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["minimum_compatible"]["claw-os-base"])' "$POLICY")"
 MIN_DESKTOP="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["minimum_compatible"]["claw-os-desktop"])' "$POLICY")"
+APP_RUNTIME_VERSION="$(python3 "$PROJECT_DIR/scripts/app_packages.py" runtime-version)"
 sed -e "s/__VERSION__/$V2/g" \
     -e "s/__ARCH__/amd64/g" \
     -e "s/__ABI__/$POLICY_ABI/g" \
+    -e "s/__APP_RUNTIME_VERSION__/$APP_RUNTIME_VERSION/g" \
     -e "s/__SECURITY_EPOCH__/$POLICY_EPOCH/g" \
     -e "s/__MIN_BASE__/$MIN_BASE/g" \
     -e "s/__MIN_DESKTOP__/$MIN_DESKTOP/g" \
@@ -811,6 +813,9 @@ dpkg-deb -Znone --root-owner-group --build "$CONTROL_STAGE" "$CONTROL_DEB" >/dev
     || fail "the security epoch must be readable from the built package"
 [ "$(dpkg-deb --field "$CONTROL_DEB" XB-Claw-Os-Abi)" = "$POLICY_ABI" ] \
     || fail "the ABI generation must be readable from the built package"
+dpkg-deb --field "$CONTROL_DEB" Provides \
+    | grep -Fq "claw-os-app-runtime-v1 (= $APP_RUNTIME_VERSION)" \
+    || fail "the App runtime implementation version must survive control rendering"
 for service in "claw-os-abi-$POLICY_ABI" claw-os-app-permissions-v1 \
     claw-os-capture-v1 claw-os-media-player-v1; do
     dpkg-deb --field "$CONTROL_DEB" Provides | tr ', ' '\n' | grep -Fxq "$service" \
