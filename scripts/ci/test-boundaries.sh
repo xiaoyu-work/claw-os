@@ -79,7 +79,7 @@ app_apt() {
     parent_pid="$(readlink /proc/self/ns/pid)"
     parent_net="$(readlink /proc/self/ns/net)"
     for fixture in "${fixtures[@]}"; do
-        sudo timeout 150 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
+        sudo timeout --kill-after=5 150 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
             env COS_APP_APT_TEST_HOOK="$CARGO_TARGET_DIR/debug/claw-app-apt-hook" \
                 COS_APP_APT_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
                 COS_APP_APT_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \

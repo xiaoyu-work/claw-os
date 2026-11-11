@@ -22,6 +22,7 @@ use tokio::io::AsyncWriteExt;
 const BASE: &str = "/run/cos-app-apt-fixture";
 const OWNER: u32 = 61994;
 const FOREIGN_UID: u32 = 61995;
+const BROKER_GID: u32 = 61996;
 const APPS: [&str; 2] = ["apt-fixture-alpha", "apt-fixture-beta"];
 const BUNDLE: &str = "claw-app-acceptance-bundle";
 const SUPPORT: &str = "claw-app-acceptance-support";
@@ -643,6 +644,7 @@ impl Fixture {
                 "never borrow a real account"
             );
         }
+        assert!(unsafe { libc::getgrgid(BROKER_GID) }.is_null());
         let helper = PathBuf::from(
             std::env::var_os("COS_APP_APT_TEST_HOOK")
                 .expect("compiled claw-app-apt-hook is required"),
@@ -962,6 +964,9 @@ impl Fixture {
             ));
             group.push_str(&format!("apt-fixture-{uid}:x:{uid}:\n"));
         }
+        group.push_str(&format!(
+            "apt-fixture-broker:x:{BROKER_GID}:apt-fixture-{OWNER},apt-fixture-{FOREIGN_UID}\n"
+        ));
         for (name, body) in [("passwd", passwd), ("group", group)] {
             let source = Path::new(BASE).join(name);
             std::fs::write(&source, body).unwrap();
@@ -983,6 +988,15 @@ impl Fixture {
                 std::io::Error::last_os_error()
             );
         }
+        assert_eq!(
+            unsafe { libc::chown(c"/run/cos/clawd.sock".as_ptr(), 0, BROKER_GID) },
+            0
+        );
+        std::fs::set_permissions(
+            "/run/cos/clawd.sock",
+            std::fs::Permissions::from_mode(0o660),
+        )
+        .unwrap();
     }
 
     async fn install_bundle(&self) {
@@ -1037,7 +1051,8 @@ fn peer_command(uid: u32, test: &str) -> std::process::Command {
     let parent = std::process::id() as libc::pid_t;
     unsafe {
         command.pre_exec(move || {
-            if libc::setgroups(0, std::ptr::null()) != 0
+            let groups = [BROKER_GID];
+            if libc::setgroups(groups.len(), groups.as_ptr()) != 0
                 || libc::setresgid(uid, uid, uid) != 0
                 || libc::setresuid(uid, uid, uid) != 0
                 || libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
