@@ -2,40 +2,56 @@ use std::collections::BTreeMap;
 use std::ffi::{CStr, OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
-use std::path::{Component, Path, PathBuf};
+use std::os::fd::AsRawFd;
 #[cfg(test)]
+use std::os::fd::FromRawFd;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(test)]
+use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+#[cfg(test)]
+use std::time::Instant;
+use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, FileType, PollHandle, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyPoll, ReplyWrite, Request, TimeOrNow,
+    FileAttr, FileType, PollHandle, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    Request,
 };
+#[cfg(test)]
+use fuser::{ReplyCreate, ReplyData, ReplyPoll, ReplyWrite, TimeOrNow};
 
-use super::{BackingStage, ChosenWrite, SaveTarget, Shared};
+use super::Shared;
+#[cfg(test)]
+use super::{BackingStage, ChosenWrite, SaveTarget};
 use crate::clawd::client_identity::FsIdentityGuard;
 
 const MAX_NODES: usize = 4096;
 const MAX_HANDLES: usize = 128;
 const MAX_READ: u32 = 131072;
+#[cfg(test)]
 const MAX_FILE: u64 = 8 * 1024 * 1024;
+#[cfg(test)]
 const MAX_SAVES: usize = 8;
+#[cfg(test)]
 const MAX_BYTES_PER_VIEW: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
 const MAX_MUTATIONS: u64 = 256;
 const TTL: Duration = Duration::ZERO;
 
 struct Node {
     relative: PathBuf,
     pin: File,
+    #[cfg(test)]
     save: Option<PathBuf>,
+    #[cfg(test)]
     detached: bool,
 }
 
 enum Handle {
+    #[cfg(test)]
     File {
         inode: u64,
         file: File,
@@ -49,6 +65,16 @@ enum Handle {
         inode: u64,
         entries: Vec<(u64, FileType, OsString)>,
     },
+}
+
+impl Handle {
+    fn inode(&self) -> u64 {
+        match self {
+            #[cfg(test)]
+            Self::File { inode, .. } => *inode,
+            Self::Directory { inode, .. } => *inode,
+        }
+    }
 }
 
 pub(super) struct Observed {
@@ -205,6 +231,7 @@ fn reopen_as(shared: &Shared, pin: &File, flags: i32) -> Result<File, i32> {
     Ok(file)
 }
 
+#[cfg(test)]
 pub(super) fn choose_write(shared: &Shared, relative: &Path) -> Result<(), i32> {
     if relative.as_os_str().is_empty() || shared.root_path.join(relative).to_str().is_none() {
         return Err(libc::EINVAL);
@@ -234,6 +261,7 @@ pub(super) fn choose_write(shared: &Shared, relative: &Path) -> Result<(), i32> 
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn reserve_save(shared: &Shared, target: &Path) -> Result<PathBuf, i32> {
     shared.live()?;
     let writes = shared.writes.lock().map_err(|_| libc::EIO)?;
@@ -286,6 +314,7 @@ pub(super) fn reserve_save(shared: &Shared, target: &Path) -> Result<PathBuf, i3
     Ok(relative)
 }
 
+#[cfg(test)]
 fn snapshot(shared: &Shared, pin: &File) -> Result<Vec<u8>, i32> {
     let file = reopen(shared, pin)?;
     let before = fingerprint(&file.metadata().map_err(errno)?);
@@ -302,6 +331,7 @@ fn snapshot(shared: &Shared, pin: &File) -> Result<Vec<u8>, i32> {
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn charge(counter: &std::sync::atomic::AtomicU64, bytes: u64) -> Result<(), i32> {
     counter
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
@@ -313,6 +343,7 @@ fn charge(counter: &std::sync::atomic::AtomicU64, bytes: u64) -> Result<(), i32>
         .map_err(|_| libc::ENOSPC)
 }
 
+#[cfg(test)]
 fn scratch_growth(shared: &Shared, file: &File, size: u64) -> Result<(), i32> {
     charge(
         &shared.scratch_bytes,
@@ -320,6 +351,7 @@ fn scratch_growth(shared: &Shared, file: &File, size: u64) -> Result<(), i32> {
     )
 }
 
+#[cfg(test)]
 fn mutate<T>(
     shared: &Shared,
     path: &Path,
@@ -403,6 +435,7 @@ fn mutate<T>(
     result
 }
 
+#[cfg(test)]
 pub(super) fn cleanup_stages(shared: &Shared, deadline: Instant) -> Result<(), String> {
     let _serial = loop {
         match shared.effects.try_lock() {
@@ -470,6 +503,7 @@ pub(super) fn cleanup_stages(shared: &Shared, deadline: Instant) -> Result<(), S
     Ok(())
 }
 
+#[cfg(test)]
 fn materialize(
     shared: &Shared,
     target: &Path,
@@ -567,6 +601,7 @@ fn change_time(metadata: &std::fs::Metadata) -> Result<SystemTime, i32> {
     .ok_or(libc::EOVERFLOW)
 }
 
+#[cfg(test)]
 fn requested_time(time: TimeOrNow) -> SystemTime {
     match time {
         TimeOrNow::SpecificTime(time) => time,
@@ -694,7 +729,9 @@ impl Filesystem {
                 Node {
                     relative: PathBuf::new(),
                     pin: root,
+                    #[cfg(test)]
                     save: None,
+                    #[cfg(test)]
                     detached: false,
                 },
             )]),
@@ -779,6 +816,7 @@ impl Filesystem {
 
     fn node_file(&self, inode: u64, readable: bool) -> Result<File, i32> {
         let node = self.nodes.get(&inode).ok_or(libc::ESTALE)?;
+        #[cfg(test)]
         if node.save.is_some() || node.detached {
             return node.pin.try_clone().map_err(errno);
         }
@@ -790,8 +828,45 @@ impl Filesystem {
     }
 
     fn attr(&self, inode: u64) -> Result<FileAttr, i32> {
-        let node = self.nodes.get(&inode).ok_or(libc::ESTALE)?;
         let metadata = self.node_file(inode, false)?.metadata().map_err(errno)?;
+        let attr = FileAttr {
+            ino: inode,
+            size: metadata.len(),
+            blocks: metadata.blocks(),
+            atime: metadata.accessed().map_err(errno)?,
+            mtime: metadata.modified().map_err(errno)?,
+            ctime: change_time(&metadata)?,
+            crtime: SystemTime::UNIX_EPOCH,
+            kind: if metadata.is_dir() {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            },
+            perm: (metadata.mode() & if metadata.is_dir() { 0o555 } else { 0o444 }) as u16,
+            nlink: if metadata.is_dir() {
+                2
+            } else {
+                u32::from(metadata.nlink() != 0)
+            },
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            rdev: 0,
+            blksize: u32::try_from(metadata.blksize()).map_err(|_| libc::EOVERFLOW)?,
+            flags: 0,
+        };
+        #[cfg(test)]
+        let attr = self.test_attr(inode, &metadata, attr)?;
+        Ok(attr)
+    }
+
+    #[cfg(test)]
+    fn test_attr(
+        &self,
+        inode: u64,
+        metadata: &std::fs::Metadata,
+        mut attr: FileAttr,
+    ) -> Result<FileAttr, i32> {
+        let node = self.nodes.get(&inode).ok_or(libc::ESTALE)?;
         let private = node.save.is_some();
         let writable = private
             || self
@@ -809,58 +884,30 @@ impl Filesystem {
                 .map_err(|_| libc::EIO)?
                 .iter()
                 .any(|save| save.relative.parent() == Some(node.relative.as_path()));
-        Ok(FileAttr {
-            ino: inode,
-            size: metadata.len(),
-            blocks: metadata.blocks(),
-            atime: metadata.accessed().map_err(errno)?,
-            mtime: metadata.modified().map_err(errno)?,
-            ctime: change_time(&metadata)?,
-            crtime: SystemTime::UNIX_EPOCH,
-            kind: if metadata.is_dir() {
-                FileType::Directory
-            } else {
-                FileType::RegularFile
-            },
-            perm: if private {
-                0o600
-            } else {
-                (metadata.mode()
-                    & if metadata.is_dir() {
-                        if save_parent {
-                            0o777
-                        } else {
-                            0o555
-                        }
-                    } else if writable {
-                        0o666
+        attr.perm = if private {
+            0o600
+        } else {
+            (metadata.mode()
+                & if metadata.is_dir() {
+                    if save_parent {
+                        0o777
                     } else {
-                        0o444
-                    }) as u16
-            },
-            nlink: if private {
-                u32::from(!node.detached)
-            } else if metadata.is_dir() {
-                2
-            } else {
-                u32::from(metadata.nlink() != 0)
-            },
-            uid: if private {
-                self.shared.owner
-            } else {
-                metadata.uid()
-            },
-            gid: if private {
-                crate::clawd::client_identity::owner_groups(self.shared.owner)
-                    .map_err(|_| libc::EACCES)?
-                    .0
-            } else {
-                metadata.gid()
-            },
-            rdev: 0,
-            blksize: u32::try_from(metadata.blksize()).map_err(|_| libc::EOVERFLOW)?,
-            flags: 0,
-        })
+                        0o555
+                    }
+                } else if writable {
+                    0o666
+                } else {
+                    0o444
+                }) as u16
+        };
+        if private {
+            attr.nlink = u32::from(!node.detached);
+            attr.uid = self.shared.owner;
+            attr.gid = crate::clawd::client_identity::owner_groups(self.shared.owner)
+                .map_err(|_| libc::EACCES)?
+                .0;
+        }
+        Ok(attr)
     }
 
     fn lookup_node(&mut self, parent: u64, name: &OsStr) -> Result<(u64, FileAttr), i32> {
@@ -873,6 +920,7 @@ impl Filesystem {
         let parent_node = self.nodes.get(&parent).ok_or(libc::ESTALE)?;
         let path = parent_node.relative.join(name);
         let _parent = self.node_file(parent, false)?;
+        #[cfg(test)]
         if let Some(inode) = self.names.get(&path) {
             if self
                 .nodes
@@ -899,7 +947,9 @@ impl Filesystem {
             Node {
                 relative: path,
                 pin,
+                #[cfg(test)]
                 save: None,
+                #[cfg(test)]
                 detached: false,
             },
         );
@@ -924,6 +974,7 @@ impl Filesystem {
         Ok(())
     }
 
+    #[cfg(test)]
     fn selected_file(&self, inode: u64) -> Result<File, i32> {
         let node = self.nodes.get(&inode).ok_or(libc::ESTALE)?;
         let chosen = self.shared.chosen.lock().map_err(|_| libc::EIO)?;
@@ -953,6 +1004,7 @@ impl Filesystem {
         Err(libc::EACCES)
     }
 
+    #[cfg(test)]
     fn selected_write(&self, inode: u64, flags: i32) -> Result<File, i32> {
         self.shared.live()?;
         if self.shared.session.is_none() {
@@ -977,6 +1029,7 @@ impl Filesystem {
         reopen_as(&self.shared, &selected.pin, flags)
     }
 
+    #[cfg(test)]
     fn handle_file(&mut self, inode: u64, flags: i32) -> Result<u64, i32> {
         if self.handles.len() >= MAX_HANDLES || self.next_handle == u64::MAX {
             return Err(libc::EMFILE);
@@ -1025,6 +1078,7 @@ impl Filesystem {
         })
     }
 
+    #[cfg(test)]
     fn truncate(
         &self,
         inode: u64,
@@ -1063,6 +1117,7 @@ impl Filesystem {
         })
     }
 
+    #[cfg(test)]
     fn create_save(&mut self, parent: u64, name: &OsStr, flags: i32) -> Result<(u64, u64), i32> {
         if self.shared.session.is_none() {
             return Err(libc::EROFS);
@@ -1136,6 +1191,7 @@ impl Filesystem {
         Ok((inode, handle))
     }
 
+    #[cfg(test)]
     fn save(
         &mut self,
         parent: u64,
@@ -1246,6 +1302,7 @@ impl Filesystem {
         updated
     }
 
+    #[cfg(test)]
     fn discard_save(&mut self, parent: u64, name: &OsStr) -> Result<(), i32> {
         let path = self
             .nodes
@@ -1268,6 +1325,7 @@ impl Filesystem {
         Ok(())
     }
 
+    #[cfg(test)]
     fn write_file(&self, inode: u64, fh: u64, offset: i64, data: &[u8]) -> Result<(), i32> {
         let Some(Handle::File {
             inode: expected,
@@ -1393,6 +1451,7 @@ impl Filesystem {
                 Err(error) => return Err(error),
             }
         }
+        #[cfg(test)]
         for (path, id) in &self.names {
             if path.parent()
                 == Some(
@@ -1441,16 +1500,10 @@ impl fuser::Filesystem for Filesystem {
     }
 
     fn getattr(&mut self, req: &Request<'_>, inode: u64, fh: Option<u64>, reply: ReplyAttr) {
-        let opened = fh.is_some_and(|handle| match self.handles.get(&handle) {
-            Some(
-                Handle::File {
-                    inode: expected, ..
-                }
-                | Handle::Directory {
-                    inode: expected, ..
-                },
-            ) => *expected == inode,
-            _ => false,
+        let opened = fh.is_some_and(|handle| {
+            self.handles
+                .get(&handle)
+                .is_some_and(|handle| handle.inode() == inode)
         });
         match self
             .authorize(req, true, opened)
@@ -1508,7 +1561,17 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(not(test))]
+    fn open(&mut self, _req: &Request<'_>, _inode: u64, _flags: i32, reply: ReplyOpen) {
+        reply.error(libc::EACCES);
+    }
+
+    #[cfg(test)]
     fn open(&mut self, req: &Request<'_>, inode: u64, flags: i32, reply: ReplyOpen) {
+        if self.shared.metadata_only {
+            reply.error(libc::EACCES);
+            return;
+        }
         let result = self
             .authorize(req, false, false)
             .and_then(|_| self.handle_file(inode, flags));
@@ -1527,6 +1590,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn read(
         &mut self,
         req: &Request<'_>,
@@ -1582,6 +1646,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn release(
         &mut self,
         _req: &Request<'_>,
@@ -1611,6 +1676,7 @@ impl fuser::Filesystem for Filesystem {
         reply.ok();
     }
 
+    #[cfg(test)]
     fn flush(
         &mut self,
         req: &Request<'_>,
@@ -1625,6 +1691,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn write(
         &mut self,
         req: &Request<'_>,
@@ -1651,6 +1718,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn setattr(
         &mut self,
         req: &Request<'_>,
@@ -1697,6 +1765,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn create(
         &mut self,
         req: &Request<'_>,
@@ -1724,6 +1793,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn rename(
         &mut self,
         req: &Request<'_>,
@@ -1743,6 +1813,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn unlink(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         match self
             .authorize(req, false, false)
@@ -1757,6 +1828,7 @@ impl fuser::Filesystem for Filesystem {
         reply.error(libc::EPERM);
     }
 
+    #[cfg(test)]
     fn fsync(
         &mut self,
         req: &Request<'_>,
@@ -1818,6 +1890,7 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    #[cfg(test)]
     fn poll(
         &mut self,
         req: &Request<'_>,

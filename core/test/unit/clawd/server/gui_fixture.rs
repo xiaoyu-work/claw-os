@@ -162,6 +162,11 @@ fn install_packages() {
             desktop["entries"] = serde_json::json!({"applet":{
                 "entry":"gui-widget","exec":"surface","name":{"en":"Independent widget"},"needs":[]
             }});
+            desktop["entries"]["home-metadata"] = serde_json::json!({
+                "entry":"gui-probe", "exec":"surface", "name":{"en":"Private Home metadata"},
+                "needs":[{"verb":"fs.meta","scope":{"kind":"owner-path","path":"**"},
+                    "why":{"en":"Browse Home names and metadata for this window, without content access"}}]
+            });
             for (name, label, surface_needs) in [
                 ("read", "Private read-only selection", vec![needs[0].clone(), selection[0].clone()]),
                 ("write", "Private write-only selection", vec![needs[0].clone(), selection[1].clone()]),
@@ -269,6 +274,9 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     }
     if case == 11 {
         caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("audio")));
+    }
+    if case == 19 {
+        caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")));
     }
     let session = format!("gui-fixture-parent-{case}");
     let info = crate::proc::SessionInfo {
@@ -645,7 +653,93 @@ async fn owner_permissions(params: serde_json::Value) -> std::process::Output {
     .unwrap()
 }
 
+async fn run_home_metadata_case(group: &std::fs::File) {
+    let home = Path::new("/run/display-home");
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join(".config/cos")).unwrap();
+        std::fs::write(home.join(".ssh/secret"), b"synthetic credential: never expose").unwrap();
+        std::fs::write(home.join("metadata-visible"), b"metadata is not content\0\xff").unwrap();
+        std::os::unix::fs::symlink(".ssh/secret", home.join("metadata-symlink")).unwrap();
+        std::fs::hard_link(home.join(".ssh/secret"), home.join("metadata-hardlink")).unwrap();
+    }
+    let (control, child_control) = bootstrap::pair().unwrap();
+    let mut pam = spawn_pam("gui", "19", group, Stdio::from(child_control));
+    assert_eq!(status(&control, &pam, Instant::now() + Duration::from_secs(30)), *b"AUTH");
+    command(&control, b"CASE");
+    command(&control, b"19..");
+    let child = bootstrap::receive(control.as_fd(), *b"CHLD", Instant::now() + Duration::from_secs(5)).unwrap();
+    assert_eq!(kernel::sender(child.credentials).unwrap(), ProcessIdentity::child(&pam).unwrap());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let launcher = loop {
+        let process = ProcessIdentity::from_pidfd(child.descriptor.as_fd()).unwrap();
+        if process.uid() == OWNER && process.gid() == OWNER { break process; }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let parent = launch_parent(&launcher, 19);
+    command(&control, b"RUN!");
+    let marker = home.join(".local/share/cos/apps/gui-boundary-test/metadata-ready");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let request = loop {
+        if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER)).into_iter().find(|request| {
+            request.verb == "fs.meta" && request.scope == Scope::path("/run/display-home/**")
+                && request.session.starts_with("app-") && request.operation_digest.is_some()
+        }) { break request; }
+        assert!(pam.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline, "this GUI window never requested ordinary protected metadata consent");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_ne!(request.session, parent, "inherited parent permissions are not per-window consent");
+    assert!(!marker.exists(), "App code ran before window-bound owner consent");
+    assert!(crate::approvals::approve_for_owner(&request.id, crate::approvals::GrantDuration::Once,
+        Some("uid:62051".into()), None, Some(OWNER + 1)).is_err());
+    crate::approvals::approve_for_owner(&request.id, crate::approvals::GrantDuration::Once,
+        Some("uid:62050".into()), None, Some(OWNER)).unwrap();
+    wait_marker(&marker, &mut pam);
+    assert!(matches!(crate::approvals::status_for_owner(&request.id, Some(OWNER)),
+        crate::approvals::RequestStatus::Consumed));
+    let retained = retained_instance(&request.session);
+    let process = ProcessIdentity::from_pidfd(retained.process.as_fd()).unwrap();
+    let mounts = std::fs::read_to_string(format!("/proc/{}/mountinfo", process.pid())).unwrap();
+    assert!(mounts.lines().any(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.get(4) == Some(&"/run/display-home") && fields.iter().position(|field| *field == "-")
+            .is_some_and(|at| fields.get(at + 1) == Some(&"fuse"))
+    }), "common GUI Host exposed something other than the filtered Home filesystem");
+    let runtime = Path::new("/run/cos/gui").join(claw_display_control::Epoch(retained.instance.0).label());
+    let metadata_path = runtime.join("home-metadata");
+    assert!(std::fs::read_to_string("/proc/self/mountinfo").unwrap().lines().any(|line| {
+        line.split_whitespace().nth(4) == metadata_path.to_str()
+    }));
+    let group_path = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
+    let processes = std::fs::read_to_string(group_path.join("cgroup.procs")).unwrap().lines().map(|pid| {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid.parse::<i32>().unwrap(), 0) };
+        assert!(fd >= 0);
+        unsafe { OwnedFd::from_raw_fd(fd as i32) }
+    }).collect::<Vec<_>>();
+    assert!(processes.len() >= 3, "metadata probe must retain its separate-process-group descendant");
+    let revoked = crate::clawd::client::request("/run/cos/clawd.sock", crate::clawd::wire::Request::new(
+        crate::clawd::routes::Command::PermissionRevoke,
+        serde_json::json!({"owner_uid":OWNER,"session":request.session}),
+    )).await.unwrap();
+    assert!(revoked.ok, "ordinary owner-window revocation did not complete: {:?}", revoked.error);
+    for process in processes {
+        assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+    }
+    assert!(!metadata_path.exists() && !runtime.exists(), "Home provider/runtime cleanup was not acknowledged");
+    assert_eq!(std::fs::read(home.join("metadata-visible")).unwrap(), b"metadata is not content\0\xff");
+    assert!(!home.join("metadata-new-file").exists());
+    command(&control, b"WAIT");
+    assert_eq!(status(&control, &pam, Instant::now() + Duration::from_secs(30)), *b"FAIL");
+    command(&control, b"CLSE");
+    assert!(pam.wait().unwrap().success());
+    println!("private GUI case 19: owner-window Home metadata, denied content and checked provider retirement passed");
+}
+
 async fn run_case(case: usize, group: &std::fs::File) {
+    if case == 19 { return run_home_metadata_case(group).await; }
     let (control, child_control) = bootstrap::pair().unwrap();
     let mut pam = spawn_pam("gui", &case.to_string(), group, Stdio::from(child_control));
     assert_eq!(
@@ -1377,7 +1471,7 @@ fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
         if !session_only && !file_manager_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
-            for case in 0..19 {
+            for case in 0..20 {
                 let group = session_group(root, &case.to_string());
                 run_case(case, &group).await;
             }

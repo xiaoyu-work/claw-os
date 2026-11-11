@@ -23,6 +23,9 @@ use super::output::{Captured, Output, Report};
 use super::proxy::Proxy;
 use super::transport::{Binding, Bootstrap, Guard, Targets};
 
+#[path = "resources.rs"]
+mod resources;
+
 const CONTROL: Duration = Duration::from_secs(2);
 const RETIREMENT: Duration = Duration::from_secs(5);
 
@@ -31,6 +34,8 @@ struct Supervised {
     runtime: Runtime,
     broker: Broker,
     resources: Option<LaunchResources>,
+    launch: Option<crate::worker::WorkerLaunch>,
+    home: Option<resources::HomeMetadata>,
     command: Option<Command>,
     child: Option<Child>,
     process: Option<ProcessIdentity>,
@@ -57,6 +62,9 @@ impl Supervised {
         if job.stopping() {
             return Err("GUI launch was cancelled before preparation".to_string());
         }
+        admit_home_metadata(&job).map_err(|error| error.message)?;
+        let consent = resources::consume(&job.registration, job.instance)?;
+        let sandbox_caps = resources::sandbox_caps(&job.registration)?;
         let mut runtime = Runtime::create(job.instance).map_err(|error| error.to_string())?;
         let listener = runtime
             .bind(Socket::Wayland, job.registration.owner())
@@ -75,7 +83,7 @@ impl Supervised {
             request.args.as_slice(),
             &request.presentation,
             &job.registration.session_id,
-            &job.registration.caps,
+            &sandbox_caps,
             job.instance,
             &runtime.socket(Socket::WaylandTransport),
         )?;
@@ -84,6 +92,7 @@ impl Supervised {
             job.registration.home.to_str()
                 .ok_or("Authenticated GUI owner home is not UTF-8")?.to_string(),
         );
+        resources::refuse_raw_home(&plan.launch.policy, &job.registration.home, consent.is_some())?;
         let egress_listener = if matches!(
             plan.launch.policy.network,
             crate::worker::NetworkPolicy::Brokered { .. }
@@ -103,25 +112,15 @@ impl Supervised {
             manager.admission.clone(),
             &manager.executor,
         )?;
-        let prepared = LinuxSandbox.prepare_gui(
-            &plan.launch,
-            GuiPreparation {
-                workload: &job.registration.control.workload,
-                instance: job.instance,
-                runtime: &mut runtime,
-            },
-        )?;
-        let digest = prepared.facts["policy"]
-            .as_str()
-            .ok_or("GUI policy has no audit digest")?
-            .to_string();
-        crate::worker::audit::launched(&prepared.facts, Some(&job.registration.session_id));
+        let home = consent.map(|consent| resources::HomeMetadata::reserve(consent, &runtime)).transpose()?;
         Ok(Self {
             job,
             runtime,
             broker,
-            resources: Some(prepared.resources),
-            command: Some(prepared.command),
+            resources: None,
+            launch: Some(plan.launch),
+            home,
+            command: None,
             child: None,
             process: None,
             status: None,
@@ -139,14 +138,38 @@ impl Supervised {
             egress_proxy: None,
             transport: None,
             binding: plan.binding,
-            digest,
+            digest: "unprepared".into(),
         })
+    }
+
+    fn prepare_resources(&mut self) -> Result<(), String> {
+        let mut launch = self.launch.take().ok_or("GUI sandbox plan is unavailable")?;
+        if let Some(home) = &mut self.home {
+            home.mount(&self.job.registration)?;
+            home.attach(&mut launch.policy, &self.job.registration)?;
+        }
+        let prepared = LinuxSandbox.prepare_gui(
+            &launch,
+            GuiPreparation {
+                workload: &self.job.registration.control.workload,
+                instance: self.job.instance,
+                runtime: &mut self.runtime,
+                home_metadata: self.home.is_some(),
+                retained: Some(&mut self.resources),
+            },
+        )?;
+        self.resources = Some(prepared.resources);
+        self.command = Some(prepared.command);
+        self.digest = prepared.facts["policy"].as_str().ok_or("GUI policy has no audit digest")?.to_string();
+        crate::worker::audit::launched(&prepared.facts, Some(&self.job.registration.session_id));
+        Ok(())
     }
 
     fn start(&mut self, manager: &Manager, request: &LaunchRequest) -> Result<GrantView, String> {
         if self.job.stopping() {
             return Err("GUI launch was cancelled before spawn".to_string());
         }
+        self.prepare_resources()?;
         let mut command = self
             .command
             .take()
@@ -189,6 +212,11 @@ impl Supervised {
             )
             .map_err(|error| format!("bind supervised GUI process: {error}"))?;
         self.process = Some(process.clone());
+        if let Some(home) = &self.home {
+            let view = self.job.registration.snapshot(&process)?;
+            home.bind(&self.job.registration, &process, resources, &view)?;
+            resources.release_gui_setup_gate()?;
+        }
         self.broker
             .bind(process.clone(), resources)
             .map_err(|error| format!("bind GUI SDK provider: {error}"))?;
@@ -260,6 +288,7 @@ impl Supervised {
         if current.id != view.id || current.generation != view.generation || self.job.stopping() {
             return Err("GUI authority changed before execution was released".to_string());
         }
+        if let Some(home) = &self.home { home.refresh(&self.job.registration, &current)?; }
         input
             .write_all(Epoch(self.job.instance.0).label().as_bytes())
             .map_err(|error| format!("release exact GUI execution gate: {error}"))?;
@@ -301,6 +330,7 @@ impl Supervised {
                 return Err("GUI instance authority was retired".to_string());
             }
             self.broker.health()?;
+            if let Some(home) = &self.home { home.health()?; }
             self.transport
                 .as_ref()
                 .ok_or("GUI syscall guard is unavailable")?
@@ -324,6 +354,7 @@ impl Supervised {
                 {
                     return Err("GUI permissions changed".to_string());
                 }
+                if let Some(home) = &self.home { home.refresh(&self.job.registration, &view)?; }
                 let reply = self.job.registration.control.exchange(
                     CompositorCommand::Refresh {
                         epoch: self.job.registration.control.epoch,
@@ -353,6 +384,7 @@ impl Supervised {
     fn retire(&mut self) -> Result<(), String> {
         let deadline = Instant::now() + RETIREMENT;
         self.broker.stop();
+        let home_stop_error = self.home.as_ref().and_then(|home| home.stop().err());
         if let Some(guard) = &self.transport {
             guard.stop();
         }
@@ -385,6 +417,10 @@ impl Supervised {
         if let Some(resources) = &self.resources {
             resources.retire_gui(deadline)?;
         }
+        if let Some(resources) = &mut self.resources {
+            if self.home.is_some() { resources.release_gui_source_pins(deadline)?; }
+        }
+        if let Some(home) = &mut self.home { home.retire(deadline)?; }
         if let Some(guard) = &mut self.transport {
             guard.finish(deadline)?;
         }
@@ -461,18 +497,24 @@ impl Supervised {
         if let Some(error) = service_error {
             return Err(error);
         }
+        if let Some(error) = home_stop_error { return Err(error); }
         Ok(())
     }
 }
 
 impl Drop for Supervised {
     fn drop(&mut self) {
-        if self.resources.is_some() || (self.creator_attempted && !self.creator_retired) {
+        if self.resources.is_some() || self.home.is_some() || (self.creator_attempted && !self.creator_retired) {
             if let Err(error) = self.retire() {
                 tracing::error!(%error, "GUI emergency retirement could not be verified");
             }
         }
     }
+}
+
+pub(super) fn admit_home_metadata(job: &Job) -> Result<(), crate::clawd::protocol::BrokerError> {
+    crate::paths::RoutedPathContext::for_owner(job.registration.owner(), job.registration.home.clone())
+        .scope_sync(|| resources::admit(&job.registration, job.instance))
 }
 
 fn lease_expiry(view: &GrantView) -> Result<u64, String> {

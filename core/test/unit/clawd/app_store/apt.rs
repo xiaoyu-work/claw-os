@@ -1,6 +1,6 @@
 // Actual APT/dpkg acceptance after synthetic catalog selection and publisher trust setup.
 // The signed repository uses private loopback HTTP, not production HTTPS/catalog keys.
-// Retained cases exercise ordinary and persistent MCP custody, not GUI or UI consent.
+// Retained cases exercise ordinary/MCP custody and installed-product HTTP, not GUI consent.
 // No live accounts or publication readiness: Root supplies synthetic owner decisions;
 // neither presentation flags nor digests approve. Run each main case in separate Root
 // mount/PID/network namespaces through `scripts/ci/test-boundaries.sh app-apt`.
@@ -14,9 +14,16 @@ use crate::clawd::wire::Request;
 use crate::provenance::{sign, PackageKind, TrustStore};
 use std::io::{BufRead, Read};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+mod app_stage {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_stage.rs"));
+}
 
 const BASE: &str = "/run/cos-app-apt-fixture";
 const TRUST_ROOT: &str = crate::provenance::trust::SYSTEM_TRUST_ROOT;
@@ -1093,16 +1100,15 @@ fn owned_directory(path: &Path, uid: u32) {
 }
 
 fn peer_command(uid: u32, test: &str) -> std::process::Command {
-    let home = fixture_home(uid);
-    let mut command = std::process::Command::new(Path::new(BASE).join("probe"));
+    let mut command = owner_command(uid, &Path::new(BASE).join("probe"));
+    command.args(["--exact", test, "--ignored", "--nocapture", "--test-threads=1"]);
     command
-        .args([
-            "--exact",
-            test,
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+}
+
+fn owner_command(uid: u32, program: &Path) -> std::process::Command {
+    let home = fixture_home(uid);
+    let mut command = std::process::Command::new(program);
+    command
         .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .env("HOME", &home)
@@ -1507,6 +1513,129 @@ fn activate_app(uid: u32, app: &str) {
         reviews::decide(uid, &activation.id, true, Some(package)).unwrap();
     }
     reviews::consume(uid, &activation.id, package).unwrap();
+}
+
+fn stage_real_web_client() -> PathBuf {
+    let source = app_sources::app_dir("kv");
+    let source_root = app_sources::source_root();
+    let _count = crate::test_env::TestEnvVarGuard::set("GIT_CONFIG_COUNT", "1");
+    let _key = crate::test_env::TestEnvVarGuard::set("GIT_CONFIG_KEY_0", "safe.directory");
+    let _value = crate::test_env::TestEnvVarGuard::set("GIT_CONFIG_VALUE_0", source_root);
+    let stage = Path::new(BASE).join("web-client-stage");
+    let app = app_stage::app(&source, "capability", "storage-sdk", "kv", &stage);
+    let runtime = app_stage::python_runtime(&source, &stage);
+    let key = sign::SigningKeyFile::generate(Some("private installed Web client".into())).unwrap();
+    std::fs::write(
+        Path::new(TRUST_ROOT).join("web-client.json"),
+        serde_json::to_vec(&key.trust_entry(&[PackageKind::App])).unwrap(),
+    )
+    .unwrap();
+    let roots = TrustStore::default_roots();
+    crate::test_env::record_trust_state(&roots);
+    crate::provenance::set_trust_store_for_roots(TrustStore::load_roots(&roots), roots);
+    let manifest: Value = serde_json::from_slice(&std::fs::read(app.join("app.json")).unwrap()).unwrap();
+    sign::sign_directory(
+        &app,
+        &sign::SignRequest {
+            kind: PackageKind::App,
+            id: "kv".into(),
+            version: manifest["version"].as_str().unwrap().into(),
+            manifest_schema: "cos.app/v2".into(),
+            manifest_path: "app.json".into(),
+            entrypoints: vec![manifest["mcp"]["entry"].as_str().unwrap().into()],
+            resources: vec!["web-ui.json".into(), "web/index.html".into()],
+        },
+        &key,
+    )
+    .unwrap();
+    checked(std::process::Command::new("cp").arg("-a").arg(&app).arg("/usr/lib/cos/apps"));
+    checked(std::process::Command::new("cp").arg("-a").arg(runtime.join(".")).arg("/usr/lib/cos/python"));
+    let installed = PathBuf::from("/usr/lib/cos/apps/kv");
+    crate::apps::find_verified(Path::new("/usr/lib/cos/apps"), "kv").unwrap();
+    activate_app(OWNER, "kv");
+    installed
+}
+
+const WEB_ORIGIN: &str = "http://127.0.0.1:38082";
+
+struct WebOwner {
+    child: std::process::Child,
+    session: String,
+}
+
+impl WebOwner {
+    async fn start() -> (Self, reqwest::Client, String) {
+        use crate::clawd::authority::{
+            authority, Audience, AudienceSet, Binding, Issuance, Issuer, Principal, Subject, Uses,
+        };
+        let session = crate::paths::RoutedPathContext::for_owner(OWNER, fixture_home(OWNER))
+            .scope_sync(|| crate::session::create("Private installed Web App acceptance"))
+            .unwrap().as_str().to_string();
+        let log = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(Path::new(BASE).join("web-host.log")).unwrap();
+        let child = owner_command(OWNER, Path::new("/usr/local/bin/cos"))
+            .args(["agent", "serve", "--bind", "127.0.0.1", "--port", "38082"])
+            .env("COS_SESSION", &session)
+            .stdin(Stdio::null()).stderr(Stdio::from(log)).spawn().unwrap();
+        let caps = crate::caps::CapSet::from_caps([
+            crate::agent::tools::app_gateway::invoke_cap("kv", "kv.get").unwrap(),
+            crate::agent::tools::app_gateway::invoke_cap("kv", "kv.set").unwrap(),
+            crate::caps::Cap::new(crate::caps::Verb::DATA_KV_READ, crate::caps::Scope::Wild),
+            crate::caps::Cap::new(crate::caps::Verb::DATA_KV_WRITE, crate::caps::Scope::name("web-proof")),
+        ]);
+        register_process_session(OWNER, child.id(), &session, None, caps.clone());
+        authority().issue(Issuance {
+            issuer: Issuer::TrustedSession,
+            principal: Principal::of_process(OWNER, child.id()).unwrap(),
+            binding: Binding::ProcessTree,
+            subject: Subject::session(&session),
+            audience: AudienceSet::one(Audience::SystemService),
+            caps,
+            lifetime: Duration::from_secs(120),
+            uses: Uses::Unbounded,
+            index_session: true,
+        }).unwrap();
+        let mut actor = Self { child, session };
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if client.get(format!("{WEB_ORIGIN}/api/meta")).send().await
+                .is_ok_and(|response| response.status().is_success())
+            {
+                break;
+            }
+            assert!(actor.child.try_wait().unwrap().is_none(), "real Web server exited before readiness");
+            assert!(std::time::Instant::now() < deadline, "real Web server did not become ready");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let bootstrap = std::fs::read_to_string(fixture_home(OWNER).join("state/agent/web/serve.token")).unwrap();
+        let response = client.post(format!("{WEB_ORIGIN}/api/auth/token"))
+            .header("Origin", WEB_ORIGIN).header("Authorization", format!("Bootstrap {}", bootstrap.trim()))
+            .json(&json!({"ttl_seconds": 120})).send().await.unwrap();
+        assert!(response.status().is_success(), "real owner token exchange failed");
+        let token = response.json::<Value>().await.unwrap()["access_token"].as_str().unwrap().to_string();
+        (actor, client, token)
+    }
+}
+
+impl Drop for WebOwner {
+    fn drop(&mut self) {
+        if self.child.try_wait().unwrap().is_none() {
+            self.child.kill().unwrap();
+        }
+        self.child.wait().unwrap();
+        crate::clawd::authority::revoke_session(&self.session);
+        crate::proc::deregister_session_for_owner(&self.session, OWNER);
+    }
+}
+
+async fn web_post(client: &reqwest::Client, token: &str, path: &str, body: Value) -> Value {
+    let response = client.post(format!("{WEB_ORIGIN}{path}"))
+        .header("Origin", WEB_ORIGIN).bearer_auth(token).json(&body).send().await.unwrap();
+    let status = response.status();
+    let value = response.json::<Value>().await.unwrap();
+    assert!(status.is_success(), "{path}: {status}: {value}");
+    value
 }
 
 impl OrdinaryActor {
@@ -2408,6 +2537,77 @@ async fn private_apt_ordinary_self_handoff_retains_receipt() {
     persistent_mcp_self_handoff(&fixture, &mut peer).await;
     drop(peer);
     fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Root private mount/PID/network namespaces and matching installed Web/App Host binaries"]
+async fn private_installed_product_web_calls_real_kv_without_model() {
+    use crate::clawd::routes::Command;
+    let _lock = crate::test_env::lock_env();
+    let fixture = Fixture::new();
+    fixture.enable_processes();
+    let installed = stage_real_web_client();
+    let (web, client, token) = WebOwner::start().await;
+    let inventory = client.get(format!("{WEB_ORIGIN}/api/apps"))
+        .bearer_auth(&token).send().await.unwrap()
+        .error_for_status().unwrap().json::<Value>().await.unwrap();
+    assert!(inventory["apps"].as_array().unwrap().iter()
+        .any(|app| app["id"] == "kv" && app["web_ready"] == true));
+    let opened = web_post(&client, &token, "/api/apps/kv/open", json!({})).await;
+    assert_eq!(opened["status"], "ready");
+    let view = opened["view_id"].as_str().unwrap();
+    for asset in ["index.html", "app.js", "shared/client.js", "shared/ui.js", "shared/ui.css"] {
+        let response = client.get(format!("{WEB_ORIGIN}/app-ui/{view}/{asset}"))
+            .send().await.unwrap().error_for_status().unwrap();
+        assert!(response.headers()["content-security-policy"].to_str().unwrap()
+            .contains("connect-src 'none'"));
+        assert_eq!(response.bytes().await.unwrap().as_ref(),
+            std::fs::read(installed.join("web").join(asset)).unwrap());
+    }
+    let call_count = || fixture.server.calls.lock().unwrap().iter()
+        .filter(|call| call.command == Command::AppServiceCliCall).count();
+    let before = call_count();
+    for (app, tool) in [(APPS[0], "kv.get"), ("kv", "agent.task.submit")] {
+        let response = client.post(format!("{WEB_ORIGIN}/api/apps/{app}/call"))
+            .header("Origin", WEB_ORIGIN).bearer_auth(&token)
+            .json(&json!({"view_id": view, "tool": tool, "arguments": {"key": "web-proof"}}))
+            .send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(call_count(), before, "a view escaped its owning App/tool boundary");
+    let value = "persistent signed KV over authenticated Web, without an AI request";
+    let set = web_post(&client, &token, "/api/apps/kv/call",
+        json!({"view_id": view, "tool": "kv.set",
+            "arguments": {"key": "web-proof", "value": value}})).await;
+    assert_ne!(set["result"]["isError"], true, "{set}");
+    let mut previous_session = None;
+    for _ in 0..2 {
+        let get = web_post(&client, &token, "/api/apps/kv/call",
+            json!({"view_id": view, "tool": "kv.get", "arguments": {"key": "web-proof"}})).await;
+        assert_eq!(get["result"]["content"][0]["text"], value);
+        let session = crate::proc::try_registry_sessions_for_owner(OWNER).unwrap()
+            .into_iter().find(|session| session.app_id.as_deref() == Some("kv")
+                && session.group.as_deref() == Some("app-mcp")).unwrap();
+        assert!(!session.pending_bind);
+        assert_ne!(previous_session.as_deref(), Some(session.session_id.as_str()));
+        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, session.pid, 0) };
+        assert!(raw >= 0);
+        let process = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+        assert!(!claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+        fixture.services.retire_app_for_owner("kv", Some(OWNER),
+            std::time::Instant::now() + Duration::from_secs(15)).await.unwrap();
+        assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+        assert!(fixture.services.retained_trust_bindings(Some(OWNER)).await.unwrap().is_empty());
+        previous_session = Some(session.session_id);
+    }
+    web_post(&client, &token, &format!("/api/app-views/{view}/close"), json!({})).await;
+    assert_eq!(client.get(format!("{WEB_ORIGIN}/app-ui/{view}/index.html"))
+        .send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(fixture.server.calls.lock().unwrap().iter()
+        .all(|call| call.command != Command::TaskSubmit));
+    drop(web);
+    fixture.finish().await;
+    eprintln!("private installed KV Web: signed resources, real MCP persistence and checked retirement without a model passed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -1,7 +1,10 @@
-# Private Native Filesystem Kernel Prototype
+# Filtered Native Metadata and Private Content Prototype
 
-This Linux-only, test-build internal provider is not a public App mount API, SDK contract
-or completed `controlled_full` filesystem. A Root controller supplies explicit
+The Linux production provider exposes only a read-only Home metadata view to
+the common authenticated GUI Host. Selected content/read/write/watch APIs and
+mutation fault injectors remain `cfg(test)`; promoting metadata does not
+publish them. This is not a public App mount API, frozen SDK contract or
+completed `controlled_full` filesystem. A Root controller supplies explicit
 per-window metadata consent, an owner-accessible pinned browse root and a
 bounded lease. Only that controller can bind an actual normal-UID process and
 its checked cgroup or choose resources. No FUSE request prompts or grants.
@@ -15,7 +18,16 @@ lifetime)`, `create_writable(..., root_session)`, one-use
 reads walk only beneath the retained descriptor. Writes currently select
 existing regular files, never a directory, delete right or executable.
 All choices expire with the nonrenewable view lease (at most five minutes).
-This is not a frozen API.
+These content APIs are private test-build APIs, not a frozen contract.
+
+The production entry is `create_home_metadata`: its source must be the
+authenticated NSS owner Home and match the Home inode included in the protected
+window decision. Its process/cgroup binding is one-use. `renew_home_metadata`
+is controller-only, requires a live bound instance, lasts at most two seconds
+and cannot cross the original consent's monotonic ceiling. The GUI controller
+performs fresh grant, package, parent, owner policy and consent-generation
+checks before each renewal. Metadata views cannot select content even in a
+test build.
 
 Internal limits are 32 selections of each kind, eight exact save reservations,
 4,096 nodes, 128 handles, 64 path components, 4,096 pathname bytes, 128 KiB per
@@ -124,6 +136,8 @@ An explicitly Root-selected regular-file watch supports native
 `FUSE_NOTIFY_DELETE` marks the exact cached object unlinked. File-watch
 `IN_DELETE_SELF` follows the last dentry reference closing; a retained open FD
 delays it. This does not inject a parent-directory `IN_DELETE` event.
+Parent-change handling must not pre-evict the child dentry needed by the exact
+delete notification.
 App-origin writes/atomic rename produce normal kernel inotify events.
 FUSE 7.31 cannot inject general external create/modify inotify events:
 cache invalidation is not such an event, and no fake write, grant or JSON
@@ -135,6 +149,38 @@ OS selection controller, not an App-selected path or authority-bearing CLI.
 The probe enters through the common App runner, which consumes its launch gate
 and closes inherited setup descriptors before executing native code.
 Unavailable FUSE, namespaces or cgroup facilities fail this explicit fixture.
+
+## Common GUI Home metadata
+
+The signed selected surface must have an explicit, unconditional mandatory
+`fs.meta` Home-recursive need, using `owner-path: "**"` or the exact canonical
+absolute Home-recursive scope. Legacy operation unions and broad inherited
+parent rights are not window consent. The Host files an ordinary protected
+exact-owner approval under this unique GUI session and an operation digest of
+the registered window, display epoch, surface, launcher and Home identity.
+Restoration receipts, another owner's decision, another window or a different
+surface cannot satisfy it. Optional metadata does not create a startup prompt.
+
+The approved Home metadata cap is removed only from raw-bind derivation, never
+from the real GUI authority. The FUSE view replaces Home inside the namespace;
+`HOME`, App data and XDG fallback state remain the private App partition.
+An independent Home content mount is still refused in this metadata-only path.
+`COS_OWNER_HOME` remains context, not a grant. No content selection UI, App-name
+exception, raw Home bind or public permission endpoint is introduced.
+
+The existing protected setup runner waits before bubblewrap. Root binds its
+actual PID/start/pidfd and exact checked instance cgroup, validates the live GUI
+grant and installs the metadata lease before releasing sandbox setup. The
+existing inner App gate is held until transport and creator checks finish.
+Metadata admission is not UID-only and never authorizes all `clawd` descendants.
+
+Cleanup stops metadata admission, checks the process tree dead, then closes
+Root bind-source pins, unmounts without lazy detach and joins the provider.
+Only then can the cgroup and runtime be removed. Failed preparation/retirement
+retains custody rather than treating an absent process, manager or pathname as
+proof. The existing GUI/PAM fixture adds one signed metadata-only surface with
+inherited parent metadata rights but a separate window decision, protected-name
+filtering, denied content, private state and checked revoke lifetime.
 
 Write/atomic-save/backing-watch kernel acceptance for this increment, complete
 directory/delete/rename semantics, non-UTF8 inverse paths, writable mmap,

@@ -277,6 +277,10 @@ pub struct LaunchResources {
     pub(crate) cgroup: Option<super::cgroup::Scope>,
     #[cfg(target_os = "linux")]
     pub(crate) cgroup_membership: Option<std::fs::File>,
+    #[cfg(target_os = "linux")]
+    pub(crate) gui_setup_gate: Option<super::app_custody::Gate>,
+    #[cfg(target_os = "linux")]
+    pub(crate) gui_group_attempted: bool,
 }
 
 impl LaunchResources {
@@ -293,6 +297,10 @@ impl LaunchResources {
             cgroup: None,
             #[cfg(target_os = "linux")]
             cgroup_membership: None,
+            #[cfg(target_os = "linux")]
+            gui_setup_gate: None,
+            #[cfg(target_os = "linux")]
+            gui_group_attempted: false,
         }
     }
 
@@ -349,8 +357,25 @@ impl LaunchResources {
     pub fn retire_gui(&self, deadline: std::time::Instant) -> Result<(), String> {
         self.cgroup
             .as_ref()
-            .ok_or_else(|| "GUI retirement has no checked cgroup governor".to_string())?
+            .ok_or_else(|| if self.gui_group_attempted {
+                "GUI cgroup preparation did not retain a checked handle; retirement remains pending".to_string()
+            } else {
+                "GUI retirement has no checked cgroup governor".to_string()
+            })?
             .retire_checked(deadline)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn release_gui_setup_gate(&self) -> Result<(), String> {
+        self.gui_setup_gate.as_ref().ok_or("GUI metadata setup gate is unavailable")?.release()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn release_gui_source_pins(&mut self, deadline: std::time::Instant) -> Result<(), String> {
+        self.retire_gui(deadline)?;
+        self.pinned.take();
+        self.gui_setup_gate.take();
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]

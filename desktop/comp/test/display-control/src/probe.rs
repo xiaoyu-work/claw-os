@@ -323,6 +323,51 @@ fn file_manager(args: &[String]) {
     println!("private FileManager1 signed GUI completed");
 }
 
+fn home_metadata() {
+    use std::fs::File;
+    use std::os::unix::ffi::OsStrExt;
+    let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").expect("authenticated Home context"));
+    let private = PathBuf::from(std::env::var_os("HOME").expect("private App Home"));
+    assert_ne!(home, private);
+    assert_eq!(private, PathBuf::from(std::env::var_os("COS_DATA_DIR").unwrap()));
+    assert!(!std::path::Path::new("/dev/fuse").exists());
+    let names = std::fs::read_dir(&home).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "metadata-visible"));
+    for protected in [b".ssh".as_slice(), b"metadata-symlink", b"metadata-hardlink"] {
+        assert!(!names.iter().any(|name| name.as_bytes() == protected));
+    }
+    let visible = home.join("metadata-visible");
+    assert_eq!(std::fs::metadata(&visible).unwrap().len(), b"metadata is not content\0\xff".len() as u64);
+    assert!(File::open(&visible).is_err());
+    assert!(std::fs::write(&visible, b"metadata never grants write").is_err());
+    assert!(std::fs::write(home.join("metadata-new-file"), b"no creation authority").is_err());
+    assert!(std::fs::metadata(home.join(".ssh/secret")).is_err());
+    assert!(std::fs::metadata(home.join(".config/cos")).is_err());
+    let directory = File::open(&home).unwrap();
+    assert!(directory.metadata().unwrap().is_dir());
+    let _peer = peer(Protocol::Core);
+    let group = unsafe { libc::getpgrp() };
+    let (mut ready, mut report) = UnixStream::pair().unwrap();
+    ready.set_read_timeout(Some(DEADLINE)).unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        drop(ready);
+        own_process_group(group);
+        assert!(directory.metadata().unwrap().is_dir());
+        report.write_all(b"ready").unwrap();
+        drop(report);
+        loop { std::thread::sleep(Duration::from_secs(1)); }
+    }
+    drop(report);
+    let mut confirmed = [0; 5];
+    ready.read_exact(&mut confirmed).unwrap();
+    assert_eq!(&confirmed, b"ready");
+    drop(ready);
+    std::fs::write(private_marker("metadata-ready"), b"metadata-only authenticated window").unwrap();
+    loop { std::thread::sleep(Duration::from_secs(1)); }
+}
+
 fn native_fs_kernel(view: &str) {
     use std::fs::{File, OpenOptions};
     use std::io::{Seek, SeekFrom};
@@ -637,6 +682,7 @@ fn main() {
         }
         "revoke" => revoke(),
         "aliases" => aliases(),
+        "metadata" => home_metadata(),
         _ => panic!("unknown private GUI probe mode"),
     }
     println!(

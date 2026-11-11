@@ -94,6 +94,34 @@ resource activation. `COS_OWNER_HOME` supplies the authenticated owner path
 for UI choices; `HOME` and App state remain private. Neither environment path
 grants filesystem access, defeats protected-store checks or supplies a user bus.
 
+### Filtered Home metadata
+
+A signed surface's explicit unconditional mandatory `fs.meta` need for the
+authenticated owner's `Home/**` may select the read-only filtered native view.
+Legacy operation unions, optional needs, App identity and broad parent rights
+do not prove this window's browsing consent. Before changing Reserved to
+Starting, `supervision::admit_home_metadata` uses the ordinary protected
+exact-owner approvals flow under this unique GUI session and a digest of its
+immutable window/surface/display/launcher/Home binding. The CLI waits on the
+existing approval-required response and retries this same registration.
+The manager preflight call is required before Starting; the supervisor's
+second admission check is fail-closed and cannot replace that retry point.
+
+The supervisor spends that decision once and retains its exact authorization,
+expiry and revocation generation. The original GUI capability remains in the
+live grant; only raw Home bind derivation is suppressed. The filtered mount
+precedes the nested private App-data bind. HOME and App state remain private,
+and independent/broad Home content mounts still refuse rather than exposing a
+raw directory or inventing a selected-content grant.
+
+A protected outer setup gate lets Root bind the exact normal-UID runner and
+checked instance cgroup before bubblewrap can inspect the FUSE source.
+Releasing setup does not release App code: the existing inner App gate still
+waits for transport, live grant and creator installation. Every metadata lease
+renewal follows a fresh registration snapshot and exact window-consent check;
+the bounded lease cannot outlive its original approval. No production content
+read/write API or mutation fault injector is promoted with metadata support.
+
 The Root [display registry](../../display_session/MODULE.md) supplies the
 authenticated owner and display epoch. The Host creates the instance ID, holds
 the actual launch-gated child pidfd and mandatory cgroup, and installs one
@@ -128,6 +156,7 @@ applies; no permanent GUI grant or Admin bootstrap is created.
 | `inputs.rs` | Closed launch/wait/stop shapes, argument limits and presentation-only keys |
 | `manager.rs` | Reservation, exact launcher ownership, results and checked retirement barriers |
 | `supervision.rs` | Sandbox/cgroup preparation, binding, creator installation, refresh and cleanup |
+| `resources.rs` | Exact owner/window Home metadata consent, filtered mount, bounded lease and checked provider retirement |
 | `broker.rs` | Instance-local authenticated provider relay into ordinary broker authorization |
 | `transport.rs` | Kernel syscall notification handling and the fixed connection targets |
 | `proxy.rs` | Per-segment kernel writer/cgroup checks, bounded bytes/connections/descriptors |
@@ -146,6 +175,10 @@ provider, proxy, transport and output cleanup. The App permission and Root
 approval-revocation controllers await these barriers before returning success.
 A session barrier also matches the Root-derived launcher grant session.
 Internal grant cleanup must not recursively wait on the same job.
+
+Filtered Home teardown also checks instance death before dropping Root source
+pins, exact unmount and provider joins. Failed metadata or checked-cgroup
+preparation remains retained and cannot acknowledge GUI retirement.
 
 The approval `None` owner is the distinct system bucket, not every user or
 UID 0. GUI instances are owner-bound, so only `Some(uid)` can match them.

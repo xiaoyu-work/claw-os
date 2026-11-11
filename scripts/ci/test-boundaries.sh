@@ -70,6 +70,7 @@ app_apt() {
         private_apt_owner_withdrawal_denies_live_calls_and_retires_only_owner
         private_apt_global_stop_is_separate_and_unreviewed_effect_is_not_applied
         private_apt_retained_payload_lifecycle_and_nonzero_completion
+        private_installed_product_web_calls_real_kv_without_model
     )
     for fixture in "${fixtures[@]}" private_apt_foreign_uid_probe private_apt_retained_peer private_apt_ordinary_actor; do
         grep -Fx -- "clawd::app_store::apt::tests::$fixture: test" \
@@ -293,8 +294,10 @@ display() {
     mkdir -p "$GITHUB_WORKSPACE/build"
     mkdir -m0700 "$private"
     local selectors=()
-    if [[ "$selection" == native-fs ]]; then
+    if [[ "$selection" == display || "$selection" == native-fs ]]; then
         test -c /dev/fuse
+    fi
+    if [[ "$selection" == native-fs ]]; then
         selectors=(--native-fs-only)
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)

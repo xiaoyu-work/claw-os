@@ -140,7 +140,7 @@ static int gui_fixture(void) {
     static const char *modes[] = {
         "zero", "read", "write", "both", "revoke", "aliases",
         "revoke", "revoke", "revoke", "revoke", "revoke", "revoke", "named",
-        "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke"
+        "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke", "metadata"
     };
     pid_t child = -1;
     int gate = -1, result = -1;
@@ -213,7 +213,8 @@ static int gui_fixture(void) {
                       scenario == 13 ? "--gui:panel" :
                       scenario == 14 || scenario == 17 || scenario == 18 ? "--gui:panel-read" :
                       scenario == 15 ? "--gui:panel-write" :
-                      scenario == 16 ? "--gui:window" : "surface",
+                      scenario == 16 ? "--gui:window" :
+                      scenario == 19 ? "--gui:home-metadata" : "surface",
                       modes[scenario], "literal ; quote' --flag", "", (char *)NULL);
                 _exit(123);
             }

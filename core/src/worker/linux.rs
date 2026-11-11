@@ -202,6 +202,43 @@ pub(crate) struct GuiPreparation<'a> {
     pub workload: &'a claw_display_control::workload::Workload,
     pub instance: claw_display_control::InstanceId,
     pub runtime: &'a mut crate::display_session::runtime::Runtime,
+    pub home_metadata: bool,
+    pub retained: Option<&'a mut Option<LaunchResources>>,
+}
+
+struct RetainedResources<'a> {
+    resources: Option<LaunchResources>,
+    destination: Option<&'a mut Option<LaunchResources>>,
+}
+
+impl<'a> RetainedResources<'a> {
+    fn new(destination: Option<&'a mut Option<LaunchResources>>) -> Self {
+        Self { resources: Some(LaunchResources::empty()), destination }
+    }
+
+    fn into_inner(mut self) -> LaunchResources {
+        self.destination.take();
+        self.resources.take().expect("prepared resource custody exists")
+    }
+}
+
+impl std::ops::Deref for RetainedResources<'_> {
+    type Target = LaunchResources;
+    fn deref(&self) -> &Self::Target { self.resources.as_ref().expect("resource custody exists") }
+}
+
+impl std::ops::DerefMut for RetainedResources<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target { self.resources.as_mut().expect("resource custody exists") }
+}
+
+impl Drop for RetainedResources<'_> {
+    fn drop(&mut self) {
+        if self.resources.as_ref().is_some_and(|resources| resources.gui_group_attempted) {
+            if let Some(destination) = self.destination.take() {
+                *destination = self.resources.take();
+            }
+        }
+    }
 }
 
 impl WorkerSandbox for LinuxSandbox {
@@ -295,6 +332,7 @@ impl LinuxSandbox {
         mut gui: Option<GuiPreparation<'_>>,
     ) -> Result<PreparedLaunch, String> {
         let policy = &launch.policy;
+        let home_metadata = gui.as_ref().is_some_and(|gui| gui.home_metadata);
         if policy.tier == super::policy::TrustTier::DesktopSurface && gui.is_none() {
             return Err("desktop surfaces require checked Root GUI custody".to_string());
         }
@@ -303,7 +341,8 @@ impl LinuxSandbox {
         let (uid, gid) = worker_identity()?;
         let id = super::runtime::launch_id();
 
-        let mut resources = LaunchResources::empty();
+        let destination = gui.as_mut().and_then(|gui| gui.retained.take());
+        let mut resources = RetainedResources::new(destination);
         let mut mounts = policy.mounts.clone();
 
         if launch.root_custody || policy.broker || matches!(policy.network, NetworkPolicy::Brokered { .. }) {
@@ -392,10 +431,14 @@ impl LinuxSandbox {
             policy, &pinned.mounts, uid, gid, &host_layout(),
             if actual_numbers { seccomp_raw } else { SECCOMP_FD },
         );
+        let mut pinned_fds = pinned.raw_fds();
+        resources.seccomp = Some(seccomp);
+        resources.pinned = Some(pinned);
         // A task extension host already lives in its own bounded cgroup. Its
         // reserved uid cannot create a nested cgroup, and every App child
         // inherits the host limit, so trying to re-join here fails in pre-exec.
         let cgroup = if let Some(gui) = gui {
+            resources.gui_group_attempted = true;
             Some(super::cgroup::create_gui(
                 gui.workload,
                 gui.instance,
@@ -413,19 +456,21 @@ impl LinuxSandbox {
                 false => None,
             }
         };
-        let governor = if cgroup.is_some() || launch.root_custody {
+        resources.cgroup = cgroup;
+        let governor = if resources.cgroup.is_some() || launch.root_custody {
             Governor::Cgroup
         } else {
             Governor::Rlimit
         };
-        let membership = cgroup.as_ref().map(|scope| {
+        let membership = resources.cgroup.as_ref().map(|scope| {
             std::fs::OpenOptions::new().write(true).open(scope.path().join("cgroup.procs"))
                 .map_err(|error| format!("pin worker cgroup membership: {error}"))
         }).transpose()?;
         let cgroup_procs = membership.as_ref().map(std::os::fd::AsRawFd::as_raw_fd);
 
         let custody_gate = launch.root_custody.then(super::app_custody::Gate::new).transpose()?;
-        let mut command = if let Some(gate) = &custody_gate {
+        let setup_gate = home_metadata.then(super::app_custody::Gate::new).transpose()?;
+        let mut command = if let Some(gate) = custody_gate.as_ref().or(setup_gate.as_ref()) {
             let runner = Path::new("/usr/local/bin/claw-app-runner");
             let metadata = crate::provenance::fsec::require_secure_location(runner, &[0])
                 .map_err(|error| format!("Root custody requires the protected App runner: {error}"))?;
@@ -443,10 +488,10 @@ impl LinuxSandbox {
         for (name, value) in &policy.env {
             command.env(name, value);
         }
-        let mut pinned_fds = pinned.raw_fds();
         if let Some(gate) = &custody_gate {
             pinned_fds.push(gate.fd());
         }
+        if let Some(gate) = &setup_gate { pinned_fds.push(gate.fd()); }
         install_pre_exec(
             &mut command,
             PreExecPlan {
@@ -467,20 +512,18 @@ impl LinuxSandbox {
             facts["provider"] = serde_json::json!("linux-bwrap");
             facts
         };
-        resources.seccomp = Some(seccomp);
-        resources.pinned = Some(pinned);
-        resources.cgroup = cgroup;
         resources.cgroup_membership = membership;
+        resources.gui_setup_gate = setup_gate;
         if let Some(gate) = custody_gate {
-            let custody = super::app_custody::Custody::start(resources, gate)?;
-            resources = LaunchResources::empty();
+            let custody = super::app_custody::Custody::start(resources.into_inner(), gate)?;
+            resources = RetainedResources::new(None);
             resources.app_custody = Some(custody);
         }
         Ok(PreparedLaunch {
             command,
             facts,
             governor,
-            resources,
+            resources: resources.into_inner(),
         })
     }
 }
