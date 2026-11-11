@@ -65,7 +65,38 @@ fn issuance(session: &str, audience: &[Audience]) -> Issuance {
 }
 
 fn store() -> Authority {
-    Authority::new()
+    Authority::for_unit_fixture()
+}
+
+#[cfg(unix)]
+#[test]
+fn provider_fixture_evidence_is_scoped_signed_and_never_implicit_in_a_root_store() {
+    let _lock = crate::test_env::lock_env();
+    let runtime = crate::test_env::secure_scratch_dir("missing-provider-runtime");
+    let _runtime = crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", &runtime);
+    let root_store = Authority::new();
+    let (_, missing) = root_store.issue(issuance("no-package", &[Audience::SystemService])).unwrap();
+    assert!(matches!(
+        root_store.consume(missing.id, &[read_cap()], &presentation(Audience::SystemService)),
+        Err(AuthorityError::AppPolicy(message)) if message.contains("no running-instance record")
+    ));
+
+    let store = store();
+    let mut request = issuance("signed-provider", &[Audience::SystemService]);
+    request.uses = Uses::Budget(2);
+    let (handle, view) = store.issue(request).unwrap();
+    let present = presentation(Audience::SystemService);
+    assert_eq!(store.consume(view.id, &[read_cap()], &present).unwrap().uses_remaining, Some(1));
+    let evidence = {
+        let inner = store.lock();
+        inner.grants.get(inner.id_index.get(&view.id).unwrap()).unwrap()
+            .unit_app_evidence.clone().unwrap()
+    };
+    assert!(evidence.check(current_uid().wrapping_add(1), "signed-provider", "power-manager").is_err());
+    std::fs::write(evidence.package_dir().join("main.py"), "# substituted unsigned bytes\n").unwrap();
+    assert!(matches!(store.consume(view.id, &[read_cap()], &present), Err(AuthorityError::AppPolicy(_))));
+    assert_eq!(store.resolve(&handle.into_wire(), &present).unwrap().uses_remaining, Some(1));
+    let _ = std::fs::remove_dir_all(runtime);
 }
 
 #[cfg(unix)]

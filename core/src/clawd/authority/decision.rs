@@ -282,6 +282,7 @@ impl Decision {
         session: Option<SessionInfo>,
         requirement: &Requirement,
     ) -> Self {
+        authority().attach_unit_app_fixture(&view).expect("authenticated unit App fixture");
         Self::new(
             view,
             route,

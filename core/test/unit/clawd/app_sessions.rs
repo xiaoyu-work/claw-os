@@ -4304,12 +4304,13 @@ fn a_relay_refuses_a_session_whose_package_was_revoked() {
         "unexpected: {missing}"
     );
 
-    // A recorded, un-revoked instance relays normally.
+    // An operator-configured MCP record is not authenticated App evidence.
     let owner = crate::provenance::fsec::effective_uid();
     crate::provenance::runtime::register_operator_mcp(owner, session_id);
-    e2e_runtime()
+    let unsupported = e2e_runtime()
         .block_on(assert_relay_package_live(&client, session_id))
-        .expect("a recorded instance relays");
+        .expect_err("an operator MCP record must not become an App relay");
+    assert!(unsupported.contains("supporting package evidence is missing"), "{unsupported}");
 
     // Once it is marked, the very next relay is refused — no grant TTL,
     // no notification, no restart.

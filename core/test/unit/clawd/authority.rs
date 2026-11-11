@@ -107,6 +107,7 @@ fn route_audiences_match_their_families() {
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
                 || name == "app.directory_install"
+                || name == "provenance.trust_withdrawal"
                 || name.starts_with("app_store.")
                 || name.starts_with("app.gui.")
                 || name.starts_with("app_session.")

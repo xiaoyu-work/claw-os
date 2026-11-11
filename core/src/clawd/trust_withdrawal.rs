@@ -290,8 +290,19 @@ fn check_reference(owner: u32, package: &PackageRef) -> Result<(), String> {
 }
 
 pub(crate) fn check_session(owner: u32, session: &str) -> Result<(), String> {
+    #[cfg(test)]
+    if !crate::test_env::root_app_backend_selected() {
+        if let Some(result) = super::authority::authority().check_unit_app_session(owner, session) {
+            return result;
+        }
+    }
+    if let Some(shutdown) = crate::provenance::runtime::shutdown_for(owner, session)? {
+        return Err(shutdown.reason);
+    }
     let instance = crate::provenance::runtime::instance_for(owner, session)?
-        .ok_or("Root App supporting instance evidence is missing")?;
+        .ok_or_else(|| format!(
+            "no running-instance record for App session `{session}`; its package cannot be confirmed as still trusted"
+        ))?;
     let package = instance
         .package
         .ok_or("Root App supporting package evidence is missing")?;

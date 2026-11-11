@@ -358,6 +358,8 @@ pub struct Grant {
     pub(crate) parent: Option<GrantId>,
     pub(crate) depth: u16,
     pub(crate) children: u32,
+    #[cfg(test)]
+    pub(crate) unit_app_evidence: Option<std::sync::Arc<crate::test_env::UnitAppEvidence>>,
 }
 
 impl Grant {
