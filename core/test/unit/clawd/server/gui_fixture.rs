@@ -1091,6 +1091,12 @@ fn private_native_fs_kernel() {
     assert_eq!(unsafe { libc::geteuid() }, 0);
     assert_ne!(std::fs::read_link("/proc/self/ns/mnt").unwrap(), std::fs::read_link("/proc/1/ns/mnt").unwrap());
     assert_eq!(std::fs::read("/run/gui-fixture/isolated").unwrap(), b"private-v1");
+    assert_eq!(std::env::var("COS_DATA_DIR").unwrap(), "/var/lib/cos");
+    assert!(std::fs::read_to_string("/proc/self/mountinfo").unwrap().lines().any(|line| {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        fields.get(4) == Some(&"/var/lib") && fields.iter().position(|field| *field == "-")
+            .is_some_and(|separator| fields.get(separator + 1) == Some(&"tmpfs"))
+    }), "native mutation evidence must use the private bootstrap's volatile state mount");
     assert_eq!(std::fs::read_to_string("/proc/self/loginuid").unwrap().trim(), "4294967295");
     let cgroup = std::fs::read_to_string("/run/gui-fixture/cgroup").unwrap();
     assert!(cgroup.trim().starts_with("/sys/fs/cgroup/claw-display-fixture."));
@@ -1098,11 +1104,14 @@ fn private_native_fs_kernel() {
     std::fs::write(cgroup.join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
     let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stderr).try_init();
-    for ending in ["revoke", "expiry", "worker-failure"] {
+    crate::agentd::guard::mark_broker_process();
+    for ending in ["revoke", "expiry", "worker-failure", "write"] {
         let source = Path::new("/run/display-home").join(format!("native-fs-source-{ending}"));
         let data = Path::new("/run/display-home").join(format!("native-fs-data-{ending}"));
         let mountpoint = Path::new("/run/gui-public").join(format!("native-fs-view-{ending}"));
-        for directory in [&source, &data, &source.join("selected-dir"), &source.join("selected-dir/deeper"), &source.join(".ssh")] {
+        for directory in [&source, &data, &source.join("selected-dir"), &source.join("selected-dir/deeper"),
+            &source.join(".ssh"), &source.join("empty-dir")]
+        {
             std::fs::create_dir(directory).unwrap();
             std::fs::set_permissions(directory, Permissions::from_mode(0o700)).unwrap();
             own(directory);
@@ -1119,19 +1128,32 @@ fn private_native_fs_kernel() {
             ("selected-dir/child".into(), b"selected directory content\0".as_slice()),
             ("selected-dir/deeper/child".into(), b"selected nested content\xff".as_slice()),
             (".ssh/secret".into(), b"synthetic credential: must never cross the view".as_slice()),
+            ("write-only".into(), b"previous write-only\0\xff".as_slice()),
+            ("atomic".into(), b"atomic-before\0\xfe".as_slice()),
+            ("read-only".into(), b"selected read-only content\0".as_slice()),
+            ("watched".into(), b"watch-before\0".as_slice()),
+            ("exec-target".into(), b"#!/bin/sh\nexit 0\n".as_slice()),
         ] {
             let path = source.join(name);
             std::fs::write(&path, bytes).unwrap();
             std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
             own(&path);
         }
+        std::fs::set_permissions(source.join("exec-target"), Permissions::from_mode(0o700)).unwrap();
         std::fs::hard_link(source.join(".ssh/secret"), source.join("hardlink-alias")).unwrap();
         std::os::unix::fs::symlink(".ssh/secret", source.join("symlink-alias")).unwrap();
         std::fs::write(source.join("owner-denied"), b"synthetic Root-only file").unwrap();
         std::fs::set_permissions(source.join("owner-denied"), Permissions::from_mode(0o600)).unwrap();
 
-        let duration = Duration::from_secs(if ending == "expiry" { 15 } else { 60 });
-        let mut view = NativeFsView::create(OWNER, &source, &mountpoint, duration).unwrap();
+        let duration = Duration::from_secs(if ending == "expiry" { 15 } else if ending == "write" { 120 } else { 60 });
+        let context = crate::paths::RoutedPathContext::for_owner(OWNER, PathBuf::from("/run/display-home"));
+        let sid = if ending == "write" {
+            Some(context.clone().scope_sync(|| crate::session::create("private selected native writes")).unwrap())
+        } else { None };
+        let mut view = match &sid {
+            Some(sid) => NativeFsView::create_writable(OWNER, &source, &mountpoint, duration, sid).unwrap(),
+            None => NativeFsView::create(OWNER, &source, &mountpoint, duration).unwrap(),
+        };
         view.health().unwrap();
         for denied in [Path::new(".ssh/secret"), Path::new("symlink-alias"), Path::new("hardlink-alias"),
             Path::new("../outside"), Path::new("owner-denied")]
@@ -1151,7 +1173,9 @@ fn private_native_fs_kernel() {
             argv: vec!["--launch-gate".into(), entry_token.clone(), "--".into(),
                 "/usr/lib/cos/bin/claw-gui-probe".into(), "native-fs-kernel".into(), "/resource-view".into()],
             workdir: "/data".into(),
-            mounts: vec![Mount::read_only(&mountpoint, "/resource-view", MountClass::Input),
+            mounts: vec![if ending == "write" {
+                    Mount::read_write(&mountpoint, "/resource-view", MountClass::Output)
+                } else { Mount::read_only(&mountpoint, "/resource-view", MountClass::Input) },
                 Mount::read_write(&data, "/data", MountClass::AppData)],
             network: NetworkPolicy::Denied,
             env: [
@@ -1160,7 +1184,7 @@ fn private_native_fs_kernel() {
                 ("COS_OWNER_HOME", "/run/display-home"),
             ].into_iter().map(|(key, value)| (key.into(), value.into())).collect(),
             limits: crate::worker::policy::Limits { memory_bytes: 268435456, pids_max: 16,
-                runtime: Duration::from_secs(60), ..crate::worker::policy::Limits::operation() },
+                runtime: duration, ..crate::worker::policy::Limits::operation() },
             seccomp: SeccompProfile::Strict, stdio: StdioPlan::Streamed, broker: false, umask: 0o077,
         };
         let (mut prepared, gate) = crate::worker::linux::prepare_native_fs_fixture(&policy, OWNER, &group).unwrap();
@@ -1178,6 +1202,68 @@ fn private_native_fs_kernel() {
         receive(&mut child, b"FILE");
         view.choose_read(Path::new("selected-dir")).unwrap();
         child.stdin.as_mut().unwrap().write_all(b"D").unwrap();
+        receive(&mut child, b"DIRS");
+        if ending == "write" {
+            for denied in [Path::new(".ssh/secret"), Path::new("symlink-alias"), Path::new("hardlink-alias"),
+                Path::new("../outside"), Path::new("owner-denied"), Path::new("selected-dir"), Path::new(&raw)]
+            {
+                assert!(view.choose_write(denied).is_err(), "write selection unexpectedly admitted {denied:?}");
+            }
+            for target in ["write-only", "atomic", "exec-target"] { view.choose_write(Path::new(target)).unwrap(); }
+            for target in ["read-only", "atomic", "watched"] { view.choose_read(Path::new(target)).unwrap(); }
+            view.choose_watch(Path::new("watched")).unwrap();
+            let saves = [view.reserve_save(Path::new("atomic")).unwrap(), view.reserve_save(Path::new("atomic")).unwrap()];
+            child.stdin.as_mut().unwrap().write_all(b"W").unwrap();
+            for save in &saves {
+                let name = save.as_os_str().as_bytes();
+                child.stdin.as_mut().unwrap().write_all(&(u16::try_from(name.len()).unwrap()).to_le_bytes()).unwrap();
+                child.stdin.as_mut().unwrap().write_all(name).unwrap();
+            }
+            receive(&mut child, b"WROK");
+            let mut written: Vec<u8> = (0_usize..2 * 1024 * 1024 + 29)
+                .map(|index| index.wrapping_mul(13).wrapping_add(29) as u8).collect();
+            written[12345..12352].copy_from_slice(b"\0\xffpatch");
+            assert_eq!(std::fs::read(source.join("write-only")).unwrap(), written);
+            let mut saved: Vec<u8> = (0_usize..262167).map(|index| index.wrapping_mul(19) as u8).collect();
+            saved[777..779].copy_from_slice(b"\0\xfd");
+            assert_eq!(std::fs::read(source.join("atomic")).unwrap(), saved);
+            assert_eq!(std::fs::read(source.join("unselected")).unwrap(), b"unselected content");
+            assert!(!source.join("arbitrary-sibling").exists());
+            for save in saves { assert!(!source.join(save).exists(), "view-only scratch escaped into owner siblings"); }
+            let sid = sid.as_ref().unwrap();
+            let mutations = context.clone().scope_sync(|| crate::session::iter_mutations(sid)).unwrap();
+            let atomic = mutations.iter().find_map(|record| match &record.mutation {
+                crate::session::Mutation::FsWrite { path, prev_blob: Some(blob) }
+                    if Path::new(path) == source.join("atomic") => Some(blob),
+                _ => None,
+            }).expect("canonical inverse for atomic save");
+            assert_eq!(context.clone().scope_sync(|| crate::session::read_blob(sid, atomic)).unwrap(), b"atomic-before\0\xfe");
+            let partition = crate::session::journal::Partition::Session(sid.clone());
+            let projection = context.clone().scope_sync(|| crate::session::journal::projection::build(&partition, OWNER)).unwrap();
+            assert!(projection.health.is_verified());
+            assert!(projection.mutations.len() >= 4);
+            assert!(projection.mutations.iter().all(|effect| effect.status == "committed"
+                && effect.session_mutation.is_some_and(|seq| mutations.iter().any(|record| record.seq == seq))));
+            assert!(projection.mutations.iter().any(|effect|
+                effect.route == crate::clawd::routes::Command::SystemFileReplace.route().name));
+
+            receive(&mut child, b"WATC");
+            {
+                let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+                std::fs::write(source.join("watched"), b"watch-after\0\xffexternal").unwrap();
+                std::fs::write(source.join("external-entry"), b"metadata only: no read grant").unwrap();
+            }
+            child.stdin.as_mut().unwrap().write_all(b"C").unwrap();
+            receive(&mut child, b"CHNG");
+            {
+                let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+                std::fs::remove_file(source.join("watched")).unwrap();
+            }
+            receive(&mut child, b"GONE");
+        } else {
+            assert!(view.choose_write(Path::new("binary")).is_err());
+            child.stdin.as_mut().unwrap().write_all(b"H").unwrap();
+        }
         receive(&mut child, b"HELD");
         let held: Vec<OwnedFd> = std::fs::read_to_string(group_path.join("cgroup.procs")).unwrap()
             .lines().map(|value| {
@@ -1190,6 +1276,17 @@ fn private_native_fs_kernel() {
         match ending {
             "revoke" => view.revoke().unwrap(),
             "worker-failure" => view.fail_worker_for_fixture().unwrap(),
+            "write" => {
+                let before = std::fs::read(source.join("write-only")).unwrap();
+                crate::session::journal::faults::arm(crate::session::journal::faults::Fault::AppendWrite);
+                child.stdin.as_mut().unwrap().write_all(b"F").unwrap();
+                receive(&mut child, b"DENY");
+                crate::session::journal::faults::disarm();
+                assert_eq!(std::fs::read(source.join("write-only")).unwrap(), before);
+                view.fail_completion_for_fixture().unwrap();
+                child.stdin.as_mut().unwrap().write_all(b"U").unwrap();
+                receive(&mut child, b"UNKN");
+            }
             "expiry" => {}
             _ => unreachable!(),
         }
@@ -1201,6 +1298,12 @@ fn private_native_fs_kernel() {
         };
         assert!(!status.success());
         assert!(view.health().is_err());
+        if let Some(sid) = &sid {
+            let partition = crate::session::journal::Partition::Session(sid.clone());
+            let unresolved = context.clone().scope_sync(|| crate::session::journal::unresolved_mutations(&partition, OWNER)).unwrap();
+            assert_eq!(unresolved.len(), 1, "failed completion must leave canonical replay refusal");
+            assert_eq!(std::fs::read(source.join("write-only")).unwrap()[3], 0xab);
+        }
         claw_display_control::workload::retire_cgroup(
             claw_display_control::workload::open_directory(&group_path).unwrap().as_fd(), deadline,
         ).unwrap();
@@ -1214,6 +1317,8 @@ fn private_native_fs_kernel() {
         assert!(std::fs::read_dir(&mountpoint).unwrap().next().is_none());
         assert!(!source.join("must-not-exist").exists());
         assert_eq!(std::fs::read(source.join("binary")).unwrap(), binary);
+        assert!(!std::fs::read_dir(&source).unwrap().any(|entry|
+            entry.unwrap().file_name().as_bytes().starts_with(b".cos-native-")));
         println!("private native FUSE metadata/selection/mmap/{ending} custody passed");
     }
 }

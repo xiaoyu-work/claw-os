@@ -1,12 +1,13 @@
-//! Internal, read-only kernel feasibility provider. Not an App mount API.
+//! Internal native resource kernel provider. Not an App mount API.
 
-use std::ffi::CString;
+use std::collections::BTreeMap;
+use std::ffi::{CString, OsString};
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -28,6 +29,24 @@ struct ChosenRead {
     directory: bool,
 }
 
+struct ChosenWrite {
+    relative: PathBuf,
+    pin: File,
+    parent: File,
+}
+
+struct SaveTarget {
+    relative: PathBuf,
+    target: PathBuf,
+}
+
+struct BackingStage {
+    parent: File,
+    name: OsString,
+    file: File,
+    published: bool,
+}
+
 struct Shared {
     owner: u32,
     controller: ProcessIdentity,
@@ -37,12 +56,25 @@ struct Shared {
     expires: Instant,
     binding: Mutex<Option<Binding>>,
     chosen: Mutex<Vec<ChosenRead>>,
+    writes: Mutex<Vec<ChosenWrite>>,
+    saves: Mutex<Vec<SaveTarget>>,
+    watches: Mutex<Vec<ChosenRead>>,
+    session: Option<crate::session::SessionId>,
+    effects: Mutex<()>,
+    stages: Mutex<Vec<BackingStage>>,
+    observed: Mutex<BTreeMap<u64, backend::Observed>>,
+    polls: Mutex<BTreeMap<u64, backend::Subscription>>,
+    notifier: Mutex<Option<fuser::Notifier>>,
     revoked: AtomicBool,
     ended: AtomicBool,
     monitor_stop: AtomicBool,
     cleanup_error: Mutex<Option<String>>,
     #[cfg(test)]
     fail_worker: AtomicBool,
+    fail_completion: AtomicBool,
+    scratch_bytes: AtomicU64,
+    inverse_bytes: AtomicU64,
+    mutation_attempts: AtomicU64,
 }
 
 impl Shared {
@@ -85,6 +117,58 @@ impl Shared {
             .map(|binding| binding.process.active().map_err(|error| error.to_string()))
             .unwrap_or(Ok(true))
     }
+
+    fn session_context<T>(&self, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        crate::paths::RoutedPathContext::for_owner(self.owner, self.owner_home.clone())
+            .scope_sync(run)
+    }
+
+    fn validate_session(&self) -> Result<(), String> {
+        let sid = self
+            .session
+            .as_ref()
+            .ok_or("native filesystem view is read-only")?;
+        self.session_context(|| {
+            let meta = crate::session::get_meta(sid).map_err(|error| error.to_string())?;
+            if !crate::session::record_is_root_owned(sid)
+                || meta.owner_uid != Some(self.owner)
+                || matches!(
+                    meta.status,
+                    crate::session::Status::Done | crate::session::Status::Failed
+                )
+            {
+                return Err(
+                    "native write evidence requires its retained Root-owned owner session".into(),
+                );
+            }
+            if !crate::session::journal::unresolved_mutations(
+                &crate::session::journal::Partition::Session(sid.clone()),
+                self.owner,
+            )
+            .map_err(|error| error.to_string())?
+            .is_empty()
+            {
+                return Err("native write session has unresolved canonical mutations".into());
+            }
+            Ok(())
+        })
+    }
+
+    fn indeterminate(&self, detail: String) {
+        if let Ok(mut error) = self.cleanup_error.lock() {
+            *error = Some(format!(
+                "native mutation indeterminate; canonical journal recovery required: {detail}"
+            ));
+        }
+        self.revoked.store(true, Ordering::Release);
+    }
+
+    fn provider_failed(&self, detail: String) {
+        if let Ok(mut error) = self.cleanup_error.lock() {
+            *error = Some(detail);
+        }
+        self.revoked.store(true, Ordering::Release);
+    }
 }
 
 /// A Root controller's per-window metadata consent and bounded read view.
@@ -98,6 +182,7 @@ pub(crate) struct NativeFsView {
     mounted: bool,
     worker: Option<JoinHandle<std::io::Result<()>>>,
     monitor: Option<JoinHandle<()>>,
+    watcher: Option<JoinHandle<()>>,
 }
 
 static PENDING: OnceLock<Mutex<Vec<NativeFsView>>> = OnceLock::new();
@@ -108,6 +193,32 @@ impl NativeFsView {
         browse_root: &Path,
         mountpoint: &Path,
         lifetime: Duration,
+    ) -> Result<Self, String> {
+        Self::create_inner(owner, browse_root, mountpoint, lifetime, None)
+    }
+
+    pub(crate) fn create_writable(
+        owner: u32,
+        browse_root: &Path,
+        mountpoint: &Path,
+        lifetime: Duration,
+        session: &crate::session::SessionId,
+    ) -> Result<Self, String> {
+        Self::create_inner(
+            owner,
+            browse_root,
+            mountpoint,
+            lifetime,
+            Some(session.clone()),
+        )
+    }
+
+    fn create_inner(
+        owner: u32,
+        browse_root: &Path,
+        mountpoint: &Path,
+        lifetime: Duration,
+        session: Option<crate::session::SessionId>,
     ) -> Result<Self, String> {
         if unsafe { libc::geteuid() } != 0
             || owner == 0
@@ -165,13 +276,29 @@ impl NativeFsView {
             expires: Instant::now() + lifetime,
             binding: Mutex::new(None),
             chosen: Mutex::new(Vec::new()),
+            writes: Mutex::new(Vec::new()),
+            saves: Mutex::new(Vec::new()),
+            watches: Mutex::new(Vec::new()),
+            session,
+            effects: Mutex::new(()),
+            stages: Mutex::new(Vec::new()),
+            observed: Mutex::new(BTreeMap::new()),
+            polls: Mutex::new(BTreeMap::new()),
+            notifier: Mutex::new(None),
             revoked: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             monitor_stop: AtomicBool::new(false),
             cleanup_error: Mutex::new(None),
             #[cfg(test)]
             fail_worker: AtomicBool::new(false),
+            fail_completion: AtomicBool::new(false),
+            scratch_bytes: AtomicU64::new(0),
+            inverse_bytes: AtomicU64::new(0),
+            mutation_attempts: AtomicU64::new(0),
         });
+        if shared.session.is_some() {
+            shared.validate_session()?;
+        }
         let filesystem = backend::Filesystem::new(shared.clone())?;
         let device = OpenOptions::new()
             .read(true)
@@ -193,7 +320,14 @@ impl NativeFsView {
                 source.as_ptr(),
                 target.as_ptr(),
                 c"fuse".as_ptr(),
-                libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+                libc::MS_NOSUID
+                    | libc::MS_NODEV
+                    | libc::MS_NOEXEC
+                    | if shared.session.is_none() {
+                        libc::MS_RDONLY
+                    } else {
+                        0
+                    },
                 options.as_ptr().cast(),
             )
         };
@@ -227,6 +361,7 @@ impl NativeFsView {
             mounted: true,
             worker: None,
             monitor: None,
+            watcher: None,
         };
         let state = shared.clone();
         view.worker = Some(
@@ -236,14 +371,44 @@ impl NativeFsView {
                     struct Ended(Arc<Shared>);
                     impl Drop for Ended {
                         fn drop(&mut self) {
+                            if let Ok(mut polls) = self.0.polls.lock() {
+                                polls.clear();
+                            }
+                            if let Ok(mut notifier) = self.0.notifier.lock() {
+                                notifier.take();
+                            }
                             self.0.ended.store(true, Ordering::Release);
                             self.0.revoked.store(true, Ordering::Release);
                         }
                     }
-                    let _ended = Ended(state);
+                    let _ended = Ended(state.clone());
                     let mut session =
                         fuser::Session::from_fd(filesystem, device.into(), fuser::SessionACL::All);
+                    *state
+                        .notifier
+                        .lock()
+                        .map_err(|_| std::io::Error::other("native notifier poisoned"))? =
+                        Some(session.notifier());
                     session.run()
+                })
+                .map_err(|error| error.to_string())?,
+        );
+        let observer = shared.clone();
+        view.watcher = Some(
+            std::thread::Builder::new()
+                .name("claw-native-fs-watch".into())
+                .spawn(move || {
+                    struct WatchEnded(Arc<Shared>);
+                    impl Drop for WatchEnded {
+                        fn drop(&mut self) {
+                            self.0.revoked.store(true, Ordering::Release);
+                        }
+                    }
+                    let _ended = WatchEnded(observer.clone());
+                    if let Err(error) = backend::observe(&observer) {
+                        observer
+                            .provider_failed(format!("native backing observer failed: {error}"));
+                    }
                 })
                 .map_err(|error| error.to_string())?,
         );
@@ -331,6 +496,51 @@ impl NativeFsView {
         Ok(())
     }
 
+    pub(crate) fn choose_write(&self, relative: &Path) -> Result<(), String> {
+        self.shared.controller()?;
+        self.shared.validate_session()?;
+        backend::choose_write(&self.shared, relative).map_err(|error| {
+            format!(
+                "chosen native write resource refused: {}",
+                std::io::Error::from_raw_os_error(error)
+            )
+        })
+    }
+
+    pub(crate) fn reserve_save(&self, target: &Path) -> Result<PathBuf, String> {
+        self.shared.controller()?;
+        self.shared.validate_session()?;
+        backend::reserve_save(&self.shared, target).map_err(|error| {
+            format!(
+                "native save reservation refused: {}",
+                std::io::Error::from_raw_os_error(error)
+            )
+        })
+    }
+
+    pub(crate) fn choose_watch(&self, relative: &Path) -> Result<(), String> {
+        self.shared.controller()?;
+        let pin = backend::open_relative(&self.shared, relative, false)
+            .map_err(|error| std::io::Error::from_raw_os_error(error).to_string())?;
+        if !pin.metadata().map_err(|error| error.to_string())?.is_file() {
+            return Err("native poll watch currently requires one regular file".into());
+        }
+        let mut watches = self
+            .shared
+            .watches
+            .lock()
+            .map_err(|_| "native watches poisoned")?;
+        if watches.len() >= 32 {
+            return Err("native watch limit reached".into());
+        }
+        watches.push(ChosenRead {
+            relative: relative.into(),
+            pin,
+            directory: false,
+        });
+        Ok(())
+    }
+
     pub(crate) fn revoke(&self) -> Result<(), String> {
         self.shared.controller()?;
         self.shared.revoked.store(true, Ordering::Release);
@@ -385,6 +595,27 @@ impl NativeFsView {
         self.shared.controller()?;
         self.shared.revoked.store(true, Ordering::Release);
         self.shared.retire_processes(deadline)?;
+        backend::cleanup_stages(&self.shared, deadline)?;
+        while self
+            .watcher
+            .as_ref()
+            .is_some_and(|watcher| !watcher.is_finished())
+        {
+            if Instant::now() >= deadline {
+                return Err("native backing observer has not retired; custody retained".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.shared
+            .notifier
+            .lock()
+            .map_err(|_| "native notifier poisoned")?
+            .take();
+        self.shared
+            .polls
+            .lock()
+            .map_err(|_| "native polls poisoned")?
+            .clear();
         if self.mounted {
             if mount_at(&self.mountpoint)?.map(|(id, _)| id) != Some(self.mount_id) {
                 return Err("native filesystem mount identity changed; custody retained".into());
@@ -406,6 +637,7 @@ impl NativeFsView {
         for done in [
             self.worker.as_ref().map(JoinHandle::is_finished),
             self.monitor.as_ref().map(JoinHandle::is_finished),
+            self.watcher.as_ref().map(JoinHandle::is_finished),
         ] {
             if done == Some(false) && Instant::now() >= deadline {
                 return Err("native filesystem provider retirement remains pending".into());
@@ -419,6 +651,10 @@ impl NativeFsView {
                 .monitor
                 .as_ref()
                 .is_some_and(|monitor| !monitor.is_finished())
+            || self
+                .watcher
+                .as_ref()
+                .is_some_and(|watcher| !watcher.is_finished())
         {
             if Instant::now() >= deadline {
                 return Err("native filesystem provider threads have not retired".into());
@@ -432,6 +668,9 @@ impl NativeFsView {
         }
         if let Some(monitor) = self.monitor.take() {
             let _ = monitor.join();
+        }
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
         }
         Ok(())
     }
@@ -450,11 +689,20 @@ impl NativeFsView {
         }
         Ok(())
     }
+
+    pub(crate) fn fail_completion_for_fixture(&self) -> Result<(), String> {
+        self.shared.controller()?;
+        self.shared.fail_completion.store(true, Ordering::Release);
+        Ok(())
+    }
 }
 
 impl Drop for NativeFsView {
     fn drop(&mut self) {
-        if (self.mounted || self.worker.is_some() || self.monitor.is_some())
+        if (self.mounted
+            || self.worker.is_some()
+            || self.monitor.is_some()
+            || self.watcher.is_some())
             && self
                 .retire_checked(Instant::now() + Duration::from_secs(3))
                 .is_err()
@@ -466,6 +714,7 @@ impl Drop for NativeFsView {
                 mounted: self.mounted,
                 worker: self.worker.take(),
                 monitor: self.monitor.take(),
+                watcher: self.watcher.take(),
             };
             self.mounted = false;
             PENDING
