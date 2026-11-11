@@ -960,7 +960,7 @@ ok "a signed build verifies against its key; an unsigned one carries no signatur
 BUILD_PROBE_OUT="$WORK/build-probe-debs"
 BUILD_PROBE_STAGE="$WORK/build-probe-stage"
 mkdir -p "$BUILD_PROBE_OUT" "$BUILD_PROBE_STAGE"
-if COS_PACKAGE_VERSION="1:0.2.0+gitprobe.gaaaaaaaaaaaa" \
+if COS_PACKAGE_VERSION="1:0.2.1+gitprobe.gaaaaaaaaaaaa" \
     COS_DEB_OUT_DIR="$BUILD_PROBE_OUT" \
     COS_DEB_STAGE_DIR="$BUILD_PROBE_STAGE" \
     CLAW_OS_RELEASE_SECURITY_KEY_ID="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF" \
