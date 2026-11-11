@@ -453,7 +453,7 @@ struct Broker {
     action: Arc<Mutex<Option<HookAction>>>,
     observed: Arc<Mutex<Vec<Observation>>>,
     calls: Arc<Mutex<Vec<RetainedCall>>>,
-    lose_package_reply: Arc<std::sync::atomic::AtomicBool>,
+    lose_mutation_reply: Arc<std::sync::atomic::AtomicBool>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -473,11 +473,11 @@ impl Broker {
         let action: Arc<Mutex<Option<HookAction>>> = Arc::new(Mutex::new(None));
         let observed = Arc::new(Mutex::new(Vec::new()));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let lose_package_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lose_mutation_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let next = action.clone();
         let captured = observed.clone();
         let captured_calls = calls.clone();
-        let lose_next = lose_package_reply.clone();
+        let lose_next = lose_mutation_reply.clone();
         let (stop, mut stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
@@ -556,8 +556,10 @@ impl Broker {
                             message: response.error.as_ref().map(|error| error.message.clone()),
                         });
                     } else {
-                        let package_call = command
+                        let retained_mutation = command
                             == crate::clawd::routes::Command::SystemPackageControl
+                            || command
+                                == crate::clawd::routes::Command::ProvenanceTrustWithdrawal
                             || (command == crate::clawd::routes::Command::AppSessionRelay
                                 && params["command"]
                                     == crate::clawd::routes::Command::SystemPackageControl
@@ -569,7 +571,7 @@ impl Broker {
                             result: response.result.clone(),
                             error: response.error.as_ref().map(|error| error.message.clone()),
                         });
-                        if package_call
+                        if retained_mutation
                             && response.ok
                             && lose_next.swap(false, std::sync::atomic::Ordering::SeqCst)
                         {
@@ -596,7 +598,7 @@ impl Broker {
             action,
             observed,
             calls,
-            lose_package_reply,
+            lose_mutation_reply,
             stop: Some(stop),
             task: Some(task),
         }
@@ -1167,12 +1169,55 @@ fn register_process_session(
 fn private_apt_retained_peer() {
     assert_eq!(std::env::var("COS_APP_APT_PROCESS").unwrap(), "1");
     assert_ne!(unsafe { libc::geteuid() }, 0);
+    if let Some(path) = std::env::var_os("COS_APP_APT_CHILD_PID") {
+        let parent = std::process::id() as libc::pid_t;
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", RETAINED_PEER, "--ignored", "--nocapture", "--test-threads=1"])
+            .env_remove("COS_APP_APT_CHILD_PID")
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                    || libc::getppid() != parent
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                crate::agentd::spawn::mark_inherited_descriptors_cloexec(3);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        crate::agent::util::atomic_write_with_fsync(
+            Path::new(&path), child.id().to_string().as_bytes(),
+        ).unwrap();
+        assert!(child.wait().unwrap().success());
+        return;
+    }
     let reply = PathBuf::from(std::env::var_os("COS_APP_APT_REPLY").unwrap());
     for line in std::io::stdin().lock().lines() {
         let request: Request = serde_json::from_str(&line.unwrap()).unwrap();
-        let result = match crate::clawd::client::request_blocking("/run/cos/clawd.sock", request) {
-            Ok(response) => json!({"response": response}),
-            Err(error) => json!({"transport_error": error.to_string()}),
+        let result = if request.command
+            == crate::clawd::routes::Command::ProvenanceTrustWithdrawal
+            && request.params["private_policy_key_id"].is_string()
+        {
+            let policy = crate::provenance::cli::run(
+                "trust",
+                &[
+                    "revoke".into(),
+                    "--key-id".into(),
+                    request.params["private_policy_key_id"].as_str().unwrap().into(),
+                ],
+            )
+            .unwrap();
+            json!({"policy": policy})
+        } else {
+            match crate::clawd::client::request_blocking("/run/cos/clawd.sock", request) {
+                Ok(response) => json!({"response": response}),
+                Err(error) => json!({"transport_error": error.to_string()}),
+            }
         };
         crate::agent::util::atomic_write_with_fsync(&reply, &serde_json::to_vec(&result).unwrap())
             .unwrap();
@@ -1181,6 +1226,7 @@ fn private_apt_retained_peer() {
 
 struct RetainedPeer {
     child: std::process::Child,
+    peer_pid: u32,
     uid: u32,
     reply: PathBuf,
     session: String,
@@ -1191,13 +1237,19 @@ impl RetainedPeer {
     fn start(uid: u32) -> Self {
         let home = fixture_home(uid);
         let reply = home.join(format!("reply-{}.json", uuid::Uuid::new_v4().simple()));
-        let parent = crate::paths::RoutedPathContext::for_owner(uid, home)
-            .scope_sync(|| crate::session::create("Private retained package acceptance"))
-            .unwrap()
-            .as_str()
-            .to_string();
-        let child = peer_command(uid, RETAINED_PEER)
+        let (parent, session) = crate::paths::RoutedPathContext::for_owner(uid, home)
+            .scope_sync(|| {
+                (
+                    crate::session::create("Private retained package parent").unwrap(),
+                    crate::session::create("Private retained package caller").unwrap(),
+                )
+            });
+        let parent = parent.as_str().to_string();
+        let session = session.as_str().to_string();
+        let pid_file = reply.with_extension("pid");
+        let mut child = peer_command(uid, RETAINED_PEER)
             .env("COS_APP_APT_REPLY", &reply)
+            .env("COS_APP_APT_CHILD_PID", &pid_file)
             .spawn()
             .unwrap();
         register_process_session(
@@ -1207,11 +1259,28 @@ impl RetainedPeer {
             None,
             crate::caps::CapSet::from_caps([]),
         );
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !pid_file.exists() {
+            assert!(child.try_wait().unwrap().is_none(), "private task parent exited");
+            assert!(std::time::Instant::now() < deadline, "private caller never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let peer_pid = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+        std::fs::remove_file(pid_file).unwrap();
+        assert_eq!(self::parent(peer_pid), child.id());
+        register_process_session(
+            uid,
+            peer_pid,
+            &session,
+            Some(parent.clone()),
+            crate::caps::CapSet::from_caps([]),
+        );
         Self {
             child,
+            peer_pid,
             uid,
             reply,
-            session: parent.clone(),
+            session,
             parent,
         }
     }
@@ -1230,15 +1299,15 @@ impl RetainedPeer {
         authority().revoke_session(&self.session);
         register_process_session(
             self.uid,
-            self.child.id(),
+            self.peer_pid,
             &self.session,
-            None,
+            Some(self.parent.clone()),
             caps.clone(),
         );
         authority()
             .issue(Issuance {
                 issuer: Issuer::TrustedSession,
-                principal: Principal::of_process(self.uid, self.child.id()).unwrap(),
+                principal: Principal::of_process(self.uid, self.peer_pid).unwrap(),
                 binding: Binding::ProcessTree,
                 subject: Subject::session(&self.session),
                 audience: AudienceSet::one(Audience::SystemService),
@@ -1355,11 +1424,16 @@ impl RetainedPeer {
 impl Drop for RetainedPeer {
     fn drop(&mut self) {
         self.child.stdin.take();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while self.child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         if self.child.try_wait().unwrap().is_none() {
             self.child.kill().unwrap();
         }
         self.child.wait().unwrap();
         crate::clawd::authority::revoke_session(&self.session);
+        crate::proc::deregister_session_for_owner(&self.session, self.uid);
         crate::proc::deregister_session_for_owner(&self.parent, self.uid);
     }
 }
@@ -2044,6 +2118,154 @@ async fn persistent_mcp_self_handoff(fixture: &Fixture, peer: &mut RetainedPeer)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Root private mount/PID/network namespaces and matching App Host executables"]
+async fn private_apt_owner_withdrawal_denies_live_calls_and_retires_only_owner() {
+    use crate::clawd::routes::Command;
+    let _lock = crate::test_env::lock_env();
+    let fixture = Fixture::new();
+    fixture.enable_processes();
+    fixture.install_bundle().await;
+    let mut owner_app = OrdinaryActor::start(OWNER, APPS[0], "handoff");
+    let mut foreign_app = OrdinaryActor::start(FOREIGN_UID, APPS[0], "hold");
+    owner_app.ready(&fixture).await;
+    foreign_app.ready(&fixture).await;
+    let mut owner = RetainedPeer::start(OWNER);
+    let mut foreign = RetainedPeer::start(FOREIGN_UID);
+    let invoke = crate::agent::tools::app_gateway::invoke_cap(APPS[0], "fixture.probe").unwrap();
+    for peer in [&mut owner, &mut foreign] {
+        peer.authorize_caps(crate::caps::CapSet::from_caps([invoke.clone()]));
+        peer.result(
+            Command::AppServiceCliCall,
+            json!({"app_id": APPS[0], "tool": "fixture.probe", "arguments": {}}),
+        )
+        .await;
+    }
+    let bindings = fixture.services.retained_trust_bindings(None).await.unwrap();
+    assert_eq!(bindings.len(), 2);
+    assert!(bindings.iter().any(|binding| binding.owner == OWNER));
+    assert!(bindings.iter().any(|binding| binding.owner == FOREIGN_UID));
+    let session = crate::proc::try_registry_sessions_for_owner(OWNER)
+        .unwrap()
+        .into_iter()
+        .find(|session| session.group.as_deref() == Some("app-mcp"))
+        .unwrap();
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, session.pid, 0) };
+    assert!(raw >= 0);
+    let process = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+    let package = crate::apps::find_verified(Path::new("/usr/lib/cos/apps"), APPS[0]).unwrap();
+    let key_id = package.require_verified().unwrap().audit_facts()["publisher_key_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let policy = owner
+        .exchange(
+            Command::ProvenanceTrustWithdrawal,
+            json!({"private_policy_key_id": key_id}),
+        )
+        .await;
+    assert_eq!(policy["policy"]["policy_withdrawn"], true);
+    assert_eq!(
+        policy["policy"]["root_retirement"]["root_retirement_confirmed"],
+        false
+    );
+    std::fs::write(owner_app.data().join("go"), b"probe withdrawn live authority").unwrap();
+    let reply = owner_app.data().join("reply.json");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !reply.exists() {
+        assert!(std::time::Instant::now() < deadline, "withdrawn provider call did not return");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let reply: Value = serde_json::from_slice(&std::fs::read(reply).unwrap()).unwrap();
+    assert_ne!(reply["code"], 0);
+    assert!(fixture.server.calls.lock().unwrap().iter().any(|call| {
+        call.uid == OWNER
+            && call.command == Command::AppSessionCheckLive
+            && call.error.as_deref().is_some_and(|error| error.contains("publisher key"))
+    }));
+    assert_eq!(fixture.server.count(), 1, "withdrawn authority must not dispatch APT");
+    owner.authorize_caps(crate::caps::CapSet::from_caps([invoke.clone()]));
+    assert!(
+        !owner
+            .call(
+                Command::AppServiceCliCall,
+                json!({"app_id": APPS[0], "tool": "fixture.probe", "arguments": {}}),
+            )
+            .await
+            .ok
+    );
+    fixture
+        .server
+        .lose_mutation_reply
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let lost = owner
+        .exchange(
+            Command::ProvenanceTrustWithdrawal,
+            json!({"action": "reconcile", "target": {"type": "revocation", "key_id": key_id}}),
+        )
+        .await;
+    assert!(lost["transport_error"].is_string());
+    let id = fixture
+        .server
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|call| call.uid == OWNER && call.command == Command::ProvenanceTrustWithdrawal)
+        .unwrap()
+        .result
+        .as_ref()
+        .unwrap()["request_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let status = owner
+        .result(
+            Command::ProvenanceTrustWithdrawal,
+            json!({"action": "status", "request_id": id}),
+        )
+        .await;
+    assert_eq!(status["state"], "retired", "{status}");
+    assert_eq!(status["root_retirement_confirmed"], true);
+    assert_eq!(status["non_app_retirement"]["confirmed"], false);
+    for app in status["apps"].as_array().unwrap() {
+        assert_eq!(app["owner_uid"], OWNER);
+        assert_eq!(app["app_id"], APPS[0]);
+        assert_eq!(app["retired"], true);
+    }
+    owner_app.assert_retired();
+    assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+    assert!(fixture.services.retained_trust_bindings(Some(OWNER)).await.unwrap().is_empty());
+    foreign_app.assert_running();
+    foreign.authorize_caps(crate::caps::CapSet::from_caps([invoke]));
+    foreign
+        .result(
+            Command::AppServiceCliCall,
+            json!({"app_id": APPS[0], "tool": "fixture.probe", "arguments": {}}),
+        )
+        .await;
+    assert!(
+        !foreign
+            .call(
+                Command::ProvenanceTrustWithdrawal,
+                json!({"action": "status", "request_id": id}),
+            )
+            .await
+            .ok
+    );
+    fixture.assert_installed();
+    let fence = Arc::new(
+        crate::clawd::app_mutation::fence_owner(APPS[0], FOREIGN_UID).await.unwrap(),
+    );
+    crate::clawd::app_store::retire_for_owner(&fixture.state, APPS[0], FOREIGN_UID, fence)
+        .await
+        .unwrap();
+    foreign_app.assert_retired();
+    owner_app.finish().await;
+    foreign_app.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "Root private mount/PID/network namespaces, cgroup v2, ptrace and matching COS_APP_APT_TEST_COS/RUNNER/HOOK"]
 async fn private_apt_ordinary_self_handoff_retains_receipt() {
     use crate::clawd::routes::Command;
@@ -2071,7 +2293,7 @@ async fn private_apt_ordinary_self_handoff_retains_receipt() {
 
     fixture
         .server
-        .lose_package_reply
+        .lose_mutation_reply
         .store(true, std::sync::atomic::Ordering::SeqCst);
     std::fs::write(
         caller.data().join("go"),
@@ -2431,7 +2653,7 @@ async fn private_apt_retained_payload_lifecycle_and_nonzero_completion() {
     let remove = peer.accept("remove", SUPPORT).await;
     let removed = peer.wait_phase(&remove, "applied").await;
     assert!(!Path::new(SUPPORT_PATH).exists());
-    assert_eq!(removed["rollback"]["available"], true);
+    assert_eq!(removed["rollback"]["available"], true, "{removed}");
     let seq = removed["rollback"]["mutation_seq"].as_u64().unwrap();
     peer.authorize(SUPPORT);
     let invocation =
