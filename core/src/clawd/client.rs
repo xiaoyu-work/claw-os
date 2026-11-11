@@ -91,10 +91,7 @@ fn transport_error(fault: Fault) -> String {
 
 fn requires_root_peer(command: super::routes::Command) -> bool {
     matches!(command,
-        super::routes::Command::SystemPackageInstall
-        | super::routes::Command::SystemPackageControl
-        | super::routes::Command::SystemPackageRestore
-        | super::routes::Command::SystemPackageStatus
+        super::routes::Command::SystemPackageStatus
         | super::routes::Command::SystemPackageRecover
         | super::routes::Command::AppStoreAptHook)
         || command == super::routes::Command::AppSessionRegister
@@ -107,6 +104,19 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
         || command.as_str().starts_with("system.review.")
 }
 
+fn requires_root_exchange(request: &Request) -> bool {
+    use super::routes::Command;
+
+    // Ordinary Apps reach a user-owned Host proxy first; authenticate Root
+    // when that proxy relays package work, not on the local provider hop.
+    requires_root_peer(request.command)
+        || (request.command == Command::AppSessionRelay
+            && matches!(
+                request.params.get("command").and_then(serde_json::Value::as_str),
+                Some("system.package.install" | "system.package.control" | "system.package.restore")
+            ))
+}
+
 #[cfg(unix)]
 pub fn request_blocking(
     socket_path: impl AsRef<Path>,
@@ -117,7 +127,7 @@ pub fn request_blocking(
     let mut stream = StdUnixStream::connect(socket_path.as_ref()).map_err(|err| {
         ClientError::before_dispatch(format!("failed to connect to clawd socket: {err}"))
     })?;
-    if requires_root_peer(request.command) {
+    if requires_root_exchange(&request) {
         require_root_broker_peer(&stream)?;
         let timeout = Some(std::time::Duration::from_secs(120));
         stream.set_read_timeout(timeout).map_err(|error| {
@@ -198,7 +208,7 @@ pub async fn request(
         .map_err(|err| {
             ClientError::before_dispatch(format!("failed to connect to clawd socket: {err}"))
         })?;
-    if requires_root_peer(request.command) {
+    if requires_root_exchange(&request) {
         let uid = stream
             .peer_cred()
             .map_err(|error| {

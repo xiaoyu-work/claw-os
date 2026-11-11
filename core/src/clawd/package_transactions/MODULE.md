@@ -14,8 +14,11 @@ pre-dpkg helper remain the package delivery boundary.
   spends all exact named requirements together, once.
 - Acceptance saves an owner/session/grant/invocation-bound Root record before
   starting an independent Root controller. `accepted` is not `applied`.
-  The original ordinary/GUI provider and outer MCP call return normally;
-  neither waits for the controller that may retire it. A cached exact
+  The original ordinary/GUI provider and outer MCP call do not wait for the
+  controller that may retire them; the caller can lose its receipt in transit.
+  Package providers use the ordinary App proxy, and the proxy authenticates
+  Root at the protected relay exchange. Owner status/recovery queries always
+  authenticate Root directly; a proxy receipt is not completion evidence. A cached exact
   invocation acknowledges its protected receipt without issuing another
   authorization proof or spending another use.
   Payload requests require a canonical invocation ID; the client creates it
