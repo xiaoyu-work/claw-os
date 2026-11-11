@@ -2,6 +2,21 @@ use super::*;
 
 #[cfg(target_os = "linux")]
 #[test]
+fn private_gui_provider_transport_cannot_be_used_for_root_control_commands() {
+    for command in [
+        super::super::routes::Command::SystemReviewShow,
+        super::super::routes::Command::SystemReviewDecide,
+        super::super::routes::Command::AppSessionRegister,
+        super::super::routes::Command::AppDirectoryInstall,
+    ] {
+        let error = request_gui_resource_blocking(Request::build(command, serde_json::json!({}))).unwrap_err();
+        assert!(!error.may_have_dispatched(), "{command}");
+        assert!(requires_root_peer(command), "{command}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn system_review_refuses_a_user_owned_broker_before_sending_any_data() {
     use std::io::Read;
     use std::os::unix::net::UnixListener;

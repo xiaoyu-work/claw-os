@@ -125,13 +125,38 @@ pub fn request_blocking(
     socket_path: impl AsRef<Path>,
     request: Request,
 ) -> Result<Response, ClientError> {
+    request_blocking_inner(socket_path.as_ref(), request, false)
+}
+
+/// Root authenticates this provider hop in its mandatory GUI connect mediator.
+/// Namespace-translated peer UIDs are never accepted as approval authority.
+#[cfg(target_os = "linux")]
+pub(crate) fn request_gui_resource_blocking(request: Request) -> Result<Response, ClientError> {
+    use super::routes::Command;
+    if !matches!(request.command, Command::GuiFileReadRequest | Command::GuiFileReadStatus) {
+        return Err(ClientError::before_dispatch("private GUI transport accepts only selected-file read resource commands"));
+    }
+    request_blocking_inner(
+        Path::new(crate::worker::linux::SANDBOX_BROKER_SOCKET), request, true,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn request_gui_resource_blocking(_request: Request) -> Result<Response, ClientError> {
+    Err(ClientError::before_dispatch("private GUI resource transport requires Linux"))
+}
+
+#[cfg(unix)]
+fn request_blocking_inner(
+    socket_path: &Path, request: Request, private_gui: bool,
+) -> Result<Response, ClientError> {
     use std::os::unix::net::UnixStream as StdUnixStream;
 
-    let mut stream = StdUnixStream::connect(socket_path.as_ref()).map_err(|err| {
+    let mut stream = StdUnixStream::connect(socket_path).map_err(|err| {
         ClientError::before_dispatch(format!("failed to connect to clawd socket: {err}"))
     })?;
     if requires_root_exchange(&request) {
-        require_root_broker_peer(&stream)?;
+        if !private_gui { require_root_broker_peer(&stream)?; }
         let timeout = Some(std::time::Duration::from_secs(120));
         stream.set_read_timeout(timeout).map_err(|error| {
             ClientError::before_dispatch(format!("set review read deadline: {error}"))

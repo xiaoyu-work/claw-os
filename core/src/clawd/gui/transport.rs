@@ -291,7 +291,11 @@ fn operation(
         if binding.stopping() {
             return Err(libc::EPERM);
         }
-        kernel::connect(socket.as_fd(), destination).map_err(errno)
+        kernel::connect(socket.as_fd(), destination).map_err(errno)?;
+        if destination == targets.broker.as_path() {
+            kernel::require_root_broker(socket.as_fd()).map_err(errno)?;
+        }
+        Ok(())
     } else {
         let target = ProcessIdentity::from_pidfd(descriptor.as_fd()).map_err(|_| libc::ESRCH)?;
         if !binding.accepts(&target).map_err(|_| libc::EPERM)? {
