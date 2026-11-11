@@ -180,6 +180,8 @@ def repository():
             postinst.write_text(
                 "#!/bin/sh\nset -eu\n"
                 "mkdir -p /usr/lib/cos/apps/apt-unreviewed\n"
+                "cp /usr/lib/cos/apps/apt-fixture-alpha/.provenance.json "
+                "/usr/lib/cos/apps/apt-unreviewed/.provenance.json\n"
                 "printf '%s\\n' "
                 "'{\"schema_version\":2,\"id\":\"apt-unreviewed\",\"version\":\"1.0.0\","
                 "\"runtime\":\"python\",\"name\":{\"en\":\"Unreviewed private App\"},"
