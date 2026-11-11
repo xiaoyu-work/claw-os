@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::Value;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
 
@@ -481,6 +482,26 @@ async fn serve_connection(
         || process.gid != lease.owner_gid
         || !request_allowed(&request, process, &lease)
     {
+        let session = crate::proc::nearest_session_for_owner(lease.owner_uid, process.pid);
+        tracing::warn!(
+            command = %request.command,
+            peer_uid = process.uid,
+            expected_uid = lease.extension_uid,
+            peer_gid = process.gid,
+            expected_gid = lease.owner_gid,
+            peer_is_host = process.pid == lease.host_pid,
+            descendant = crate::proc::process_descends_from(process.pid, lease.host_pid),
+            provider_route = child_route(request.command.route()),
+            session_group = ?session.as_ref().and_then(|session| session.group.as_deref()),
+            parent_matches = session.as_ref().is_some_and(|session| {
+                session.parent.as_deref() == lease.host_session_id.as_deref()
+            }),
+            session_matches = session.as_ref().is_some_and(|session| {
+                request.params.get("session").and_then(Value::as_str)
+                    == Some(session.session_id.as_str())
+            }),
+            "extension private route refused",
+        );
         write_fault(&mut peer_stream, id, Fault::NotAuthorized).await;
         return;
     }
