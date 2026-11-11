@@ -115,6 +115,20 @@ fi
     #[allow(dead_code)]
     pub fn provider(&self, binary: &str) -> PathBuf {
         let binary = Self::binary(binary);
+        let namespace = std::process::Command::new("/usr/bin/unshare")
+            .args([
+                "--user", "--map-root-user", "--mount", "/bin/sh", "-eu", "-c",
+                "/usr/bin/mount --bind \"$1\" /usr/local/bin",
+                "applet-fixture",
+            ])
+            .arg(&self.root)
+            .output()
+            .unwrap();
+        assert!(
+            namespace.status.success(),
+            "private provider namespace is unavailable: {}",
+            String::from_utf8_lossy(&namespace.stderr)
+        );
         let quoted = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
         let path = self.root.join("launch-provider");
         // Only this test child sees the synthetic kernel at the fixed path.
