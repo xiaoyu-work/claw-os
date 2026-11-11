@@ -664,6 +664,12 @@ pub(super) fn acquire_shared_lifecycle_lock(
     acquire_lifecycle_lock(path, create, false)
 }
 
+pub(super) fn acquire_initialization_lock(
+    path: &Path,
+) -> Result<Option<MemoryLifecycleLock>, MemoryError> {
+    acquire_lifecycle_lock(&suffix_path(path, ".open"), true, true)
+}
+
 pub(super) fn ensure_runtime_open_allowed(path: &Path) -> Result<(), MemoryError> {
     let snapshot = read_repair_log(path)?;
     if snapshot.malformed_lines > 0 {

@@ -137,10 +137,15 @@ fn concurrent_opens_migrate_without_corrupting_the_schema() {
     // The broker, the worker and a CLI can all migrate at once. Every
     // opener must succeed: the loser of the ALTER race sees either a
     // duplicate column or a busy database, and neither is an error.
+    let start = std::sync::Arc::new(std::sync::Barrier::new(8));
     let handles: Vec<_> = (0..8)
         .map(|_| {
             let path = path.clone();
-            std::thread::spawn(move || MemoryDb::open(&path).map(|db| db.recent("s", 10)))
+            let start = start.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                MemoryDb::open(&path).map(|db| db.recent("s", 10))
+            })
         })
         .collect();
     for handle in handles {

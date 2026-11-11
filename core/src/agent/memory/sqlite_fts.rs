@@ -351,6 +351,8 @@ impl MemoryDb {
             crate::storage::ensure_private_dir(parent)?;
         }
         let lifecycle_lock = recovery::acquire_shared_lifecycle_lock(path, true)?;
+        // Concurrent WAL-mode changes can refuse immediately despite a busy timeout.
+        let _initialization_lock = recovery::acquire_initialization_lock(path)?;
         recovery::ensure_runtime_open_allowed(path)?;
         let initialize = !path.exists()
             || std::fs::metadata(path)
