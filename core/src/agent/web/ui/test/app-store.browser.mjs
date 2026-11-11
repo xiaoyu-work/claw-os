@@ -316,7 +316,8 @@ async function installedProduct() {
     await wait(`location.origin === ${JSON.stringify(origin.origin)} && document.readyState === 'complete'`);
     await evaluate(`localStorage.setItem('cos.token',${JSON.stringify(token)}); location.reload()`);
     await wait("document.body.innerText.includes('Key-Value Store')");
-    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Open').click()");
+    await wait("Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === 'Open App' && !button.disabled)");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Open App' && !button.disabled).click()");
     await wait("!!document.querySelector('iframe') && document.querySelector('iframe').contentDocument === null");
     const src = await evaluate("document.querySelector('iframe').src");
     assert.ok(src.startsWith(`${origin.origin}/app-ui/`));
