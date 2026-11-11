@@ -2574,6 +2574,7 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
     fixture.enable_processes();
     let installed = stage_real_web_client();
     let (web, client, token) = WebOwner::start().await;
+    let mut web = Some(web);
     let inventory = client.get(format!("{WEB_ORIGIN}/api/apps"))
         .bearer_auth(&token).send().await.unwrap()
         .error_for_status().unwrap().json::<Value>().await.unwrap();
@@ -2632,6 +2633,27 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
         assert!(raw >= 0);
         let process = unsafe { OwnedFd::from_raw_fd(raw as i32) };
         assert!(!claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+        if pass == 1 {
+            web_post(&client, &token, &format!("/api/app-views/{view}/close"), json!({})).await;
+            assert_eq!(client.get(format!("{WEB_ORIGIN}/app-ui/{view}/index.html"))
+                .send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
+            drop(web.take());
+            assert!(!claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap(),
+                "Root-owned App MCP died with cos agent serve");
+            let mut cli = RetainedPeer::start(OWNER);
+            cli.authorize_caps(crate::caps::CapSet::from_caps([
+                crate::agent::tools::app_gateway::invoke_cap("kv", "kv.get").unwrap(),
+                crate::caps::Cap::new(crate::caps::Verb::DATA_KV_READ,
+                    crate::caps::Scope::name("web-proof")),
+            ]));
+            let read = cli.result(Command::AppServiceCliCall,
+                json!({"app_id": "kv", "tool": "kv.get", "arguments": {"key": "web-proof"}})).await;
+            assert_eq!(read["content"][0]["text"], value);
+            assert!(crate::proc::try_registry_sessions_for_owner(OWNER).unwrap().iter()
+                .any(|current| current.session_id == session.session_id && current.pid == session.pid),
+                "CLI had to replace the App service after its Web frontend stopped");
+            drop(cli);
+        }
         fixture.services.retire_app_for_owner("kv", Some(OWNER),
             std::time::Instant::now() + Duration::from_secs(15)).await.unwrap();
         assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
@@ -2639,14 +2661,11 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
         previous_session = Some(session.session_id);
     }
     assert!(claw_display_control::identity::pidfd_exited(browser_process.as_fd()).unwrap());
-    web_post(&client, &token, &format!("/api/app-views/{view}/close"), json!({})).await;
-    assert_eq!(client.get(format!("{WEB_ORIGIN}/app-ui/{view}/index.html"))
-        .send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
     assert!(fixture.server.calls.lock().unwrap().iter()
         .all(|call| call.command != Command::TaskSubmit));
     drop(web);
     fixture.finish().await;
-    eprintln!("private installed KV Web: real browser clicks, signed resources, UI-independent MCP persistence and checked retirement without a model passed");
+    eprintln!("private installed KV Web: real browser clicks, signed resources, UI/Serve-independent MCP persistence and checked retirement without a model passed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
