@@ -429,6 +429,11 @@ enum HookAction {
     },
 }
 
+struct LiveCheckBarrier {
+    arrived: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
 #[derive(Debug)]
 struct Observation {
     uid: u32,
@@ -451,6 +456,7 @@ struct RetainedCall {
 
 struct Broker {
     action: Arc<Mutex<Option<HookAction>>>,
+    live_check: Arc<Mutex<Option<LiveCheckBarrier>>>,
     observed: Arc<Mutex<Vec<Observation>>>,
     calls: Arc<Mutex<Vec<RetainedCall>>>,
     lose_mutation_reply: Arc<std::sync::atomic::AtomicBool>,
@@ -471,10 +477,12 @@ impl Broker {
         )
         .unwrap();
         let action: Arc<Mutex<Option<HookAction>>> = Arc::new(Mutex::new(None));
+        let live_check = Arc::new(Mutex::new(None::<LiveCheckBarrier>));
         let observed = Arc::new(Mutex::new(Vec::new()));
         let calls = Arc::new(Mutex::new(Vec::new()));
         let lose_mutation_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let next = action.clone();
+        let next_live_check = live_check.clone();
         let captured = observed.clone();
         let captured_calls = calls.clone();
         let lose_next = lose_mutation_reply.clone();
@@ -493,6 +501,7 @@ impl Broker {
                 let state = state.clone();
                 let admission = admission.clone();
                 let next = next.clone();
+                let next_live_check = next_live_check.clone();
                 let captured = captured.clone();
                 let captured_calls = captured_calls.clone();
                 let lose_next = lose_next.clone();
@@ -514,6 +523,13 @@ impl Broker {
                     let request: Request = serde_json::from_slice(&frame.body).unwrap();
                     let command = request.command;
                     let params = request.params.clone();
+                    if command == crate::clawd::routes::Command::AppSessionCheckLive && uid == OWNER {
+                        let barrier = next_live_check.lock().unwrap().take();
+                        if let Some(barrier) = barrier {
+                            barrier.arrived.send(()).unwrap();
+                            barrier.release.await.unwrap();
+                        }
+                    }
                     let hook = command == crate::clawd::routes::Command::AppStoreAptHook;
                     let action = if hook {
                         next.lock().unwrap().take()
@@ -596,6 +612,7 @@ impl Broker {
         });
         Self {
             action,
+            live_check,
             observed,
             calls,
             lose_mutation_reply,
@@ -2157,6 +2174,11 @@ async fn private_apt_owner_withdrawal_denies_live_calls_and_retires_only_owner()
         .as_str()
         .unwrap()
         .to_string();
+    let (arrived, waiting) = tokio::sync::oneshot::channel();
+    let (release, held) = tokio::sync::oneshot::channel();
+    *fixture.server.live_check.lock().unwrap() = Some(LiveCheckBarrier { arrived, release: held });
+    std::fs::write(owner_app.data().join("go"), b"probe withdrawn live authority").unwrap();
+    tokio::time::timeout(Duration::from_secs(10), waiting).await.unwrap().unwrap();
     let policy = owner
         .exchange(
             Command::ProvenanceTrustWithdrawal,
@@ -2168,20 +2190,20 @@ async fn private_apt_owner_withdrawal_denies_live_calls_and_retires_only_owner()
         policy["policy"]["root_retirement"]["root_retirement_confirmed"],
         false
     );
-    std::fs::write(owner_app.data().join("go"), b"probe withdrawn live authority").unwrap();
-    let reply = owner_app.data().join("reply.json");
+    release.send(()).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !reply.exists() {
-        assert!(std::time::Instant::now() < deadline, "withdrawn provider call did not return");
+    loop {
+        let denied = fixture.server.calls.lock().unwrap().iter().any(|call| {
+            call.uid == OWNER
+                && call.command == Command::AppSessionCheckLive
+                && call.error.as_deref().is_some_and(|error| error.contains("publisher key"))
+        });
+        if denied {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "Root did not deny the held live check");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let reply: Value = serde_json::from_slice(&std::fs::read(reply).unwrap()).unwrap();
-    assert_ne!(reply["code"], 0);
-    assert!(fixture.server.calls.lock().unwrap().iter().any(|call| {
-        call.uid == OWNER
-            && call.command == Command::AppSessionCheckLive
-            && call.error.as_deref().is_some_and(|error| error.contains("publisher key"))
-    }));
     assert_eq!(fixture.server.count(), 1, "withdrawn authority must not dispatch APT");
     owner.authorize_caps(crate::caps::CapSet::from_caps([invoke.clone()]));
     assert!(
