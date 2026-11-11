@@ -56,6 +56,9 @@ def main():
         mount("--bind", binary_dir, "/usr/local/bin")
         mount("--bind", helper_dir, "/usr/libexec")
         mount("-t", "tmpfs", "-o", "mode=0755,size=16M", "tmpfs", "/run")
+        runtime_root = Path("/run/cos/applet-probes")
+        runtime_root.mkdir(parents=True)
+        runtime_root.chmod(0o755)
         routed = Path("/run/cos/caps") / str(uid)
         (routed / "proc").mkdir(parents=True)
         os.chown(routed, 0, gid)
@@ -66,15 +69,17 @@ def main():
         cases = [
             "missing-session", "missing-grant", "wrong-scope", "wrong-pid",
             "exact-history-read", "untrusted-app", "wrong-app", "wrong-start",
-            "calendar-own", "calendar-foreign",
+            "calendar-unbrokered-own", "calendar-unbrokered-foreign",
         ]
         for case in cases:
             case_root = root / case
             case_root.mkdir()
             case_root.chmod(0o755)
-            for name in ("home", "data", "log", "runtime", "config", "cache", "provenance"):
+            for name in ("home", "data", "log", "config", "cache", "provenance"):
                 owned_directory(case_root / name, uid, gid)
-            database_uid = uid + 1 if case == "calendar-foreign" else uid
+            runtime = runtime_root / case
+            owned_directory(runtime, uid, gid)
+            database_uid = uid + 1 if case == "calendar-unbrokered-foreign" else uid
             owned_directory(case_root / "data", database_uid, database_uid)
             owned_directory(case_root / "data/calendar", database_uid, database_uid)
             database = case_root / "data/calendar/events.db"
@@ -85,13 +90,14 @@ def main():
                 )
             os.chown(database, database_uid, database_uid)
             database.chmod(0o600)
+            before = database.read_bytes()
             environment = {
                 "HOME": str(case_root / "home"),
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "LANG": "C.UTF-8",
                 "COS_DATA_DIR": str(case_root / "data"),
                 "COS_LOG_DIR": str(case_root / "log"),
-                "COS_RUNTIME_DIR": str(case_root / "runtime"),
+                "COS_RUNTIME_DIR": str(runtime),
                 "COS_CONFIG_DIR": str(case_root / "config"),
                 "COS_CACHE_DIR": str(case_root / "cache"),
                 "COS_PROVENANCE_RUNTIME_DIR": str(case_root / "provenance"),
@@ -159,6 +165,8 @@ def main():
                         child = None
                         if os.waitstatus_to_exitcode(status) != 0:
                             raise RuntimeError(f"real kernel case failed: {case}")
+                        if database.read_bytes() != before:
+                            raise RuntimeError(f"provider changed the decoy database: {case}")
                         break
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"real kernel fixture exceeded its deadline: {case}")

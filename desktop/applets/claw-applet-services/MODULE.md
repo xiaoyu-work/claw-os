@@ -94,6 +94,10 @@ The Root fixture creates private mount/network namespaces and runtime/data
 roots; each SDK client runs as the non-Root source owner with `no_new_privs`.
 It creates no production grant or package trust. Missing authenticated App
 provenance remains a denial, not a fixture bootstrap.
+Without a broker, Calendar must report unavailable even when `COS_DATA_DIR`
+contains an owner-readable or foreign decoy database; it never falls back to
+that file. The mandatory Core process fixture below covers successful brokered
+owner reads, not this deliberately unbrokered probe.
 
 The Core ignored `clawd::calendar::tests::process::calendar_mcp_to_broker_reader_and_public_sdk`
 fixture uses the actual staged Calendar MCP writer, real broker/reader and
