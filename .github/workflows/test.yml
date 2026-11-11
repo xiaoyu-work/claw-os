@@ -29,6 +29,9 @@ jobs:
       - name: Validate image provisioning scripts
         run: bash scripts/ci/check-provisioning.sh
 
+      - name: Prepare disposable hosted-runner DNS
+        run: bash scripts/ci/prepare-network.sh
+
       - name: Install APT validation tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends apt-utils gnupg
 
@@ -231,6 +234,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Prepare disposable hosted-runner DNS
+        run: bash scripts/ci/prepare-network.sh
       - name: Install authenticated display fixture dependencies
         run: |
           sudo apt-get update -qq
@@ -332,6 +337,9 @@ jobs:
           lfs: true
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Prepare disposable hosted-runner DNS
+        run: bash scripts/ci/prepare-network.sh
 
       - name: Install existing Desktop build prerequisites
         run: |
