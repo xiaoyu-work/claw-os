@@ -1115,7 +1115,6 @@ struct RetainedPeer {
     reply: PathBuf,
     session: String,
     parent: String,
-    sessions: Vec<String>,
 }
 
 impl RetainedPeer {
@@ -1138,14 +1137,12 @@ impl RetainedPeer {
             None,
             crate::caps::CapSet::from_caps([]),
         );
-        let sessions = vec![parent.clone()];
         Self {
             child,
             uid,
             reply,
-            session: String::new(),
+            session: parent.clone(),
             parent,
-            sessions,
         }
     }
 
@@ -1160,12 +1157,12 @@ impl RetainedPeer {
         use crate::clawd::authority::{
             authority, Audience, AudienceSet, Binding, Issuance, Issuer, Principal, Subject, Uses,
         };
-        self.session = uuid::Uuid::new_v4().to_string();
+        authority().revoke_session(&self.session);
         register_process_session(
             self.uid,
             self.child.id(),
             &self.session,
-            Some(self.parent.clone()),
+            None,
             caps.clone(),
         );
         authority()
@@ -1181,7 +1178,6 @@ impl RetainedPeer {
                 index_session: true,
             })
             .unwrap();
-        self.sessions.push(self.session.clone());
     }
 
     async fn exchange(&mut self, command: crate::clawd::routes::Command, params: Value) -> Value {
@@ -1286,10 +1282,8 @@ impl Drop for RetainedPeer {
             self.child.kill().unwrap();
         }
         self.child.wait().unwrap();
-        for session in &self.sessions {
-            crate::clawd::authority::revoke_session(session);
-            crate::proc::deregister_session_for_owner(session, self.uid);
-        }
+        crate::clawd::authority::revoke_session(&self.session);
+        crate::proc::deregister_session_for_owner(&self.parent, self.uid);
     }
 }
 
