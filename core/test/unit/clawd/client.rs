@@ -94,6 +94,7 @@ fn peer_authentication_includes_registration_without_changing_legacy_native_rout
     use super::super::routes::Command;
 
     assert!(requires_root_peer(Command::AppSessionRegister));
+    assert!(requires_root_peer(Command::AppSessionCheckLive));
     assert!(requires_root_peer(Command::AppDirectoryInstall));
     assert!(requires_root_peer(Command::SystemReviewPrepare));
     assert!(requires_root_peer(Command::SystemReviewShow));

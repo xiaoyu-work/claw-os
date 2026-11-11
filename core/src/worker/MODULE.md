@@ -129,6 +129,13 @@ their existing custody path and do not silently become ordinary workers.
 The response selects the mandatory path, not execution authority: Root must
 still verify the real gate, pidfd, cgroup and Host connection during binding.
 
+Before any broker or egress answer, managed Host proxies ask Root to recheck
+their bound session through the process-bound relay handle. Root retains the
+running record, positive publisher trust and live owner-denial checks. A normal
+UID Host never opens Root's running-state lock or supplies its own positive
+trust store. Missing Root, a missing binding or an unconfirmed response denies;
+the explicit local unit backend retains its separate local-record checks.
+
 The Root Store composes this custody with GUI/MCP barriers under an App-specific
 admission fence. Failed/cancelled acknowledgement keeps non-reusable custody.
 It does not turn process-local absence into proof for independent install,

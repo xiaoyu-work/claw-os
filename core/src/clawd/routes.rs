@@ -1893,6 +1893,19 @@ routes! {
                 .map_err(BrokerError::from)
         },
     }
+    AppSessionCheckLive {
+        name: "app_session.check_live",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::poll(),
+        authority: handle(Audience::AppRelay),
+        body: body::AppSessionCheckLive,
+        audit: &[("session_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            app_sessions::check_live(c.params, c.client, authority).await
+        },
+    }
     AppSessionSetTransient {
         name: "app_session.set_transient",
         access: Access::User,

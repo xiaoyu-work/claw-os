@@ -27,6 +27,7 @@ const HOST_LIFECYCLE_ROUTES: &[Command] = &[
     Command::AppSessionRegister,
     Command::McpSessionRegister,
     Command::AppSessionBind,
+    Command::AppSessionCheckLive,
     Command::AppSessionSetTransient,
     Command::AppSessionDeregister,
     Command::PermissionStatus,

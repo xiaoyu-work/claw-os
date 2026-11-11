@@ -44,6 +44,7 @@ pub struct BrokerAuthority {
     /// package behind them, which get the runtime-record check alone.
     package: Option<crate::provenance::runtime::PackageRef>,
     relay: RelayHandle,
+    root_liveness: bool,
 }
 
 /// Shared slot holding the launcher-bound relay grant.
@@ -74,6 +75,7 @@ impl BrokerAuthority {
             base_caps,
             package: None,
             relay,
+            root_liveness: false,
         }
     }
 
@@ -83,8 +85,16 @@ impl BrokerAuthority {
         self
     }
 
+    pub(crate) fn with_root_liveness(mut self, required: bool) -> Self {
+        self.root_liveness = required;
+        self
+    }
+
     /// Re-check the launch's provenance against the *current* trust
     /// store, before this endpoint answers anything.
+    ///
+    /// Managed sessions ask their authenticated Root broker. Only the local
+    /// unit backend checks the local running record and trust store below.
     ///
     /// Two independent inputs, both trusted, neither supplied by the
     /// worker:
@@ -102,6 +112,30 @@ impl BrokerAuthority {
     /// path that answers "allow" from a check that predates the
     /// revocation.
     pub fn assert_live(&self) -> Result<(), String> {
+        if self.root_liveness {
+            let handle = self
+                .relay_handle()
+                .ok_or("Root has not bound this App's liveness authority")?;
+            let response = crate::clawd::client::request_blocking(
+                crate::paths::clawd_socket_path(),
+                crate::clawd::protocol::Request::build(
+                    crate::clawd::routes::Command::AppSessionCheckLive,
+                    serde_json::json!({"session_id": self.session_id, "handle": handle}),
+                ),
+            )?;
+            if !response.ok {
+                return Err(response
+                    .error
+                    .map(|error| error.message)
+                    .unwrap_or_else(|| "Root App liveness was not confirmed".into()));
+            }
+            if response.result.as_ref().and_then(|value| value.get("live"))
+                != Some(&serde_json::Value::Bool(true))
+            {
+                return Err("Root App liveness was not confirmed".into());
+            }
+            return Ok(());
+        }
         let owner = crate::provenance::runtime::current_owner();
         let trust = crate::provenance::trust_store();
         if let Some(package) = &self.package {

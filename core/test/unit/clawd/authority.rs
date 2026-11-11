@@ -117,7 +117,7 @@ fn route_audiences_match_their_families() {
                 // launcher-held grant that authorizes *presenting* an
                 // App session, not launching one, so it has its own
                 // audience and reaches nothing directly.
-                if name == "app_session.relay" {
+                if matches!(name, "app_session.relay" | "app_session.check_live") {
                     Audience::AppRelay
                 } else {
                     Audience::AppLaunch

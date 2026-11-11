@@ -479,6 +479,7 @@ impl McpProcSession {
             CapSet::new(),
             self.relay.clone(),
         )
+        .with_root_liveness(true)
     }
 }
 
@@ -1014,6 +1015,7 @@ impl AppIdentitySession {
             self.granted_caps.clone(),
             self.relay.clone(),
         )
+        .with_root_liveness(!self.uses_local_backend())
     }
 
     pub fn granted_caps(&self) -> &CapSet {
