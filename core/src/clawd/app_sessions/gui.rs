@@ -152,7 +152,7 @@ impl Registration {
             return Err("selected read requires an explicit need of this signed surface".into());
         }
         let target = self.home.join(relative);
-        let paths = crate::caps::PathContext { home: self.home.clone(), cwd: None };
+        let paths = crate::caps::args::PathContext { home: self.home.clone(), cwd: None };
         let mut candidates = Vec::new();
         for need in selected.launch_needs().chain(selected.optional_needs.iter().copied()
             .filter(|need| selected.optional_need_is_bound(need)))
