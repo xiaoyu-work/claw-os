@@ -479,7 +479,6 @@ impl McpProcSession {
             CapSet::new(),
             self.relay.clone(),
         )
-        .with_root_liveness(true)
     }
 }
 
