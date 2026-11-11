@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
 
@@ -497,7 +496,7 @@ async fn serve_connection(
                 session.parent.as_deref() == lease.host_session_id.as_deref()
             }),
             session_matches = session.as_ref().is_some_and(|session| {
-                request.params.get("session").and_then(Value::as_str)
+                request.params.get("session").and_then(serde_json::Value::as_str)
                     == Some(session.session_id.as_str())
             }),
             "extension private route refused",
