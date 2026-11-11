@@ -64,6 +64,7 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
     assert!(child_route(Command::SystemNetworkDiagnose.route()));
     assert!(!child_route(Command::TaskCancel.route()));
     assert!(!child_route(Command::AppSessionRegister.route()));
+    assert!(!child_route(Command::AppSessionRelay.route()));
     assert!(!child_route(Command::PermissionDecide.route()));
 }
 
@@ -74,6 +75,7 @@ fn host_lifecycle_never_exposes_admin_or_decision_routes() {
         Command::McpSessionRegister,
         Command::AppSessionBind,
         Command::AppSessionCheckLive,
+        Command::AppSessionRelay,
         Command::AppSessionSetTransient,
         Command::AppSessionDeregister,
         Command::PermissionStatus,
@@ -85,6 +87,10 @@ fn host_lifecycle_never_exposes_admin_or_decision_routes() {
         Command::TaskCancel,
         Command::SchedulerRun,
         Command::ContextUpdate,
+        Command::SystemPackageInstall,
+        Command::SystemPackageControl,
+        Command::SystemPackageRestore,
+        Command::SystemFilesystemWrite,
     ] {
         assert!(!host_lifecycle_route(refused), "{}", refused.as_str());
     }
