@@ -645,11 +645,25 @@ impl Fixture {
             );
         }
         assert!(unsafe { libc::getgrgid(BROKER_GID) }.is_null());
+        let identities = crate::extension_host::identity::expected_identities(
+            crate::extension_host::identity::GROUP_GID,
+        );
+        assert!(unsafe {
+            libc::getgrgid(crate::extension_host::identity::GROUP_GID)
+        }.is_null());
+        let group = std::ffi::CString::new(crate::extension_host::identity::GROUP_NAME).unwrap();
+        assert!(unsafe { libc::getgrnam(group.as_ptr()) }.is_null());
+        for identity in &identities {
+            let name = std::ffi::CString::new(identity.username.as_str()).unwrap();
+            assert!(unsafe { libc::getpwuid(identity.uid) }.is_null());
+            assert!(unsafe { libc::getpwnam(name.as_ptr()) }.is_null());
+        }
         let helper = PathBuf::from(
             std::env::var_os("COS_APP_APT_TEST_HOOK")
                 .expect("compiled claw-app-apt-hook is required"),
         );
         plumbing("isolate");
+        Self::prepare_accounts();
         copy_executable(&helper, Path::new(HOOK));
         copy_executable(
             &std::env::current_exe().unwrap(),
@@ -674,7 +688,9 @@ impl Fixture {
         let group = RootGroup(group);
         let environment = vec![
             crate::test_env::TestEnvVarGuard::set("CLAWD_EXTENSION_CGROUP_ROOT", &group.0),
-            crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_EXEC_GROUP", "nogroup"),
+            crate::test_env::TestEnvVarGuard::set(
+                "COS_EXTENSION_EXEC_GROUP", crate::extension_host::identity::GROUP_NAME,
+            ),
             crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", format!("{BASE}/state")),
             crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", format!("{BASE}/state")),
             crate::test_env::TestEnvVarGuard::set("COS_RUNTIME_DIR", format!("{BASE}/runtime")),
@@ -937,19 +953,11 @@ impl Fixture {
         self.server.shutdown().await;
     }
 
-    fn enable_processes(&self) {
-        for (variable, destination) in [
-            ("COS_APP_APT_TEST_COS", "/usr/local/bin/cos"),
-            ("COS_APP_APT_TEST_RUNNER", "/usr/local/bin/claw-app-runner"),
-            ("COS_APP_APT_TEST_HOST", "/usr/local/bin/claw-extension-host"),
-        ] {
-            copy_executable(
-                &PathBuf::from(std::env::var_os(variable).expect("matching compiled OS binary")),
-                Path::new(destination),
-            );
-        }
+    fn prepare_accounts() {
+        use crate::extension_host::identity;
         let mut passwd = std::fs::read_to_string("/etc/passwd").unwrap();
         let mut group = std::fs::read_to_string("/etc/group").unwrap();
+        let mut shadow = String::from("root:!:20000:0:99999:7:::\n");
         for uid in [OWNER, FOREIGN_UID] {
             assert!(unsafe { libc::getpwuid(uid) }.is_null());
             assert!(unsafe { libc::getgrgid(uid) }.is_null());
@@ -963,14 +971,34 @@ impl Fixture {
                 home.display(),
             ));
             group.push_str(&format!("apt-fixture-{uid}:x:{uid}:\n"));
+            shadow.push_str(&format!("apt-fixture-{uid}:!:20000:0:99999:7:::\n"));
         }
         group.push_str(&format!(
             "apt-fixture-broker:x:{BROKER_GID}:apt-fixture-{OWNER},apt-fixture-{FOREIGN_UID}\n"
         ));
-        for (name, body) in [("passwd", passwd), ("group", group)] {
+        group.push_str(&format!("{}:x:{}:\n", identity::GROUP_NAME, identity::GROUP_GID));
+        for (index, account) in identity::expected_identities(identity::GROUP_GID).iter().enumerate() {
+            passwd.push_str(&format!(
+                "{}:x:{}:{}:Claw OS extension slot {index}:{}:{}\n",
+                account.username, account.uid, account.gid, identity::IDENTITY_HOME,
+                identity::IDENTITY_SHELL,
+            ));
+            shadow.push_str(&format!("{}:!:20000:0:99999:7:::\n", account.username));
+        }
+        for (name, body, mode) in [
+            ("passwd", passwd, 0o644),
+            ("group", group, 0o644),
+            ("shadow", shadow, 0o600),
+            ("subuid", String::new(), 0o644),
+            ("subgid", String::new(), 0o644),
+        ] {
+            if !Path::new("/etc").join(name).exists() {
+                assert!(matches!(name, "subuid" | "subgid"));
+                continue;
+            }
             let source = Path::new(BASE).join(name);
             std::fs::write(&source, body).unwrap();
-            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(mode)).unwrap();
             let source = std::ffi::CString::new(source.as_os_str().as_encoded_bytes()).unwrap();
             let target = std::ffi::CString::new(format!("/etc/{name}")).unwrap();
             assert_eq!(
@@ -986,6 +1014,32 @@ impl Fixture {
                 0,
                 "private account bind: {}",
                 std::io::Error::last_os_error()
+            );
+        }
+        std::fs::create_dir_all("/var/lib/cos").unwrap();
+        std::fs::write(
+            identity::RESERVATION_MANIFEST,
+            identity::reservation_manifest(identity::GROUP_GID),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            identity::RESERVATION_MANIFEST,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        identity::ExtensionIdentityPool::load(identity::GROUP_GID)
+            .expect("complete private package-reserved identity policy");
+    }
+
+    fn enable_processes(&self) {
+        for (variable, destination) in [
+            ("COS_APP_APT_TEST_COS", "/usr/local/bin/cos"),
+            ("COS_APP_APT_TEST_RUNNER", "/usr/local/bin/claw-app-runner"),
+            ("COS_APP_APT_TEST_HOST", "/usr/local/bin/claw-extension-host"),
+        ] {
+            copy_executable(
+                &PathBuf::from(std::env::var_os(variable).expect("matching compiled OS binary")),
+                Path::new(destination),
             );
         }
         assert_eq!(

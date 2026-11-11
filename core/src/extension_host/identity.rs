@@ -626,7 +626,7 @@ fn validate_execution_gid(gid: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn expected_identities(gid: u32) -> Vec<ExtensionIdentity> {
+pub(crate) fn expected_identities(gid: u32) -> Vec<ExtensionIdentity> {
     (0..IDENTITY_COUNT)
         .map(|index| ExtensionIdentity {
             uid: FIRST_UID + index,
@@ -880,7 +880,7 @@ fn validate_reservation_manifest(path: &Path, gid: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn reservation_manifest(gid: u32) -> String {
+pub(crate) fn reservation_manifest(gid: u32) -> String {
     let mut manifest = format!("version=1\ngroup={GROUP_NAME}:{gid}\n");
     for identity in expected_identities(gid) {
         manifest.push_str(&format!(
