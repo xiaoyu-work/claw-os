@@ -93,8 +93,8 @@ impl BrokerAuthority {
     /// Re-check the launch's provenance against the *current* trust
     /// store, before this endpoint answers anything.
     ///
-    /// Managed sessions ask their authenticated Root broker. Only the local
-    /// unit backend checks the local running record and trust store below.
+    /// Root-managed App sessions ask their authenticated broker. Other
+    /// callers retain their existing running-record and trust checks below.
     ///
     /// Two independent inputs, both trusted, neither supplied by the
     /// worker:

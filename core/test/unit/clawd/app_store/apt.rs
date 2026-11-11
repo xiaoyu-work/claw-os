@@ -636,6 +636,11 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        let _ = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_test_writer()
+            .with_env_filter("warn,cos::extension_host::client=debug")
+            .try_init();
         assert_eq!(unsafe { libc::getuid() }, 0);
         assert_eq!(unsafe { libc::geteuid() }, 0);
         assert!(std::process::id() > 1, "PID 1 must supervise the private controller");
@@ -1261,7 +1266,13 @@ impl RetainedPeer {
             serde_json::to_string(&request).unwrap()
         )
         .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let wait = if command == crate::clawd::routes::Command::AppServiceCliCall {
+            Duration::from_millis(crate::extension_host::protocol::READY_TIMEOUT_MS)
+                + Duration::from_secs(10)
+        } else {
+            Duration::from_secs(15)
+        };
+        let deadline = std::time::Instant::now() + wait;
         while !self.reply.exists() {
             assert!(
                 self.child.try_wait().unwrap().is_none(),
@@ -1269,7 +1280,8 @@ impl RetainedPeer {
             );
             assert!(
                 std::time::Instant::now() < deadline,
-                "private broker request did not return"
+                "private broker request {} did not return",
+                command.as_str(),
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
