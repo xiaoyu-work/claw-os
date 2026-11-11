@@ -388,6 +388,7 @@ struct RetainedCall {
     command: crate::clawd::routes::Command,
     params: Value,
     result: Option<Value>,
+    error: Option<String>,
 }
 
 struct Broker {
@@ -508,6 +509,7 @@ impl Broker {
                             command,
                             params,
                             result: response.result.clone(),
+                            error: response.error.as_ref().map(|error| error.message.clone()),
                         });
                         if package_call
                             && response.ok
@@ -1875,7 +1877,11 @@ async fn private_apt_ordinary_self_handoff_retains_receipt() {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "ordinary caller never handed off its real provider"
+            "ordinary caller never handed off its real provider; child reply: {:?}; calls: {:?}",
+            std::fs::read_to_string(caller.data().join("reply.json")),
+            fixture.server.calls.lock().unwrap().iter().map(|call| (
+                call.uid, call.command.as_str(), call.result.is_some(), &call.error,
+            )).collect::<Vec<_>>(),
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
