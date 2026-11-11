@@ -2575,9 +2575,11 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
     let installed = stage_real_web_client();
     let (web, client, token) = WebOwner::start().await;
     let mut web = Some(web);
-    let inventory = client.get(format!("{WEB_ORIGIN}/api/apps"))
-        .bearer_auth(&token).send().await.unwrap()
-        .error_for_status().unwrap().json::<Value>().await.unwrap();
+    let response = client.get(format!("{WEB_ORIGIN}/api/apps"))
+        .bearer_auth(&token).send().await.unwrap();
+    let status = response.status();
+    let inventory = response.json::<Value>().await.unwrap();
+    assert!(status.is_success(), "installed inventory: {status}: {inventory}");
     assert!(inventory["apps"].as_array().unwrap().iter()
         .any(|app| app["id"] == "kv" && app["web_ready"] == true));
     let opened = web_post(&client, &token, "/api/apps/kv/open", json!({})).await;

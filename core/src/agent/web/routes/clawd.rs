@@ -9,7 +9,7 @@ pub type ApiError = (StatusCode, Json<Value>);
 
 pub async fn request(command: Command, params: Value) -> Result<Value, RpcError> {
     let request = Request::build(command, params);
-    let response = crate::clawd::client::request(crate::paths::clawd_socket_path(), request)
+    let response = crate::clawd::client::request(crate::clawd::config::socket_path(), request)
         .await
         .map_err(|error| RpcError {
             status: StatusCode::BAD_GATEWAY,
