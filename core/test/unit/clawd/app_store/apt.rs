@@ -1987,6 +1987,7 @@ async fn persistent_mcp_self_handoff(fixture: &Fixture, peer: &mut RetainedPeer)
     .await;
     let bindings = fixture.services.retained_trust_bindings(Some(OWNER)).await.unwrap();
     assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].owner, OWNER);
     assert_eq!(bindings[0].app, APPS[0]);
     let session = crate::proc::try_registry_sessions_for_owner(OWNER)
         .unwrap()
@@ -1997,6 +1998,14 @@ async fn persistent_mcp_self_handoff(fixture: &Fixture, peer: &mut RetainedPeer)
         })
         .expect("a real bound persistent App MCP process");
     assert!(!session.pending_bind);
+    let status = std::fs::read_to_string(format!("/proc/{}/status", session.pid)).unwrap();
+    let execution_uid = status.lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap().parse::<u32>().unwrap();
+    let first = crate::extension_host::identity::FIRST_UID;
+    assert!((first..first + crate::extension_host::identity::IDENTITY_COUNT).contains(&execution_uid));
+    assert_ne!(execution_uid, OWNER);
     let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, session.pid, 0) };
     assert!(raw >= 0);
     let process = unsafe { OwnedFd::from_raw_fd(raw as i32) };

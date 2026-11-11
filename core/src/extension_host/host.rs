@@ -130,6 +130,7 @@ fn run() -> Result<(), String> {
     let enforce_groups = bootstrap.enforce_groups;
     let binding = bootstrap.into_current_binding()?;
     require_hardened_identity(binding.extension_uid, binding.owner_gid, enforce_groups)?;
+    crate::agent::tools::cos_apps_session::bind_host_owner(binding.owner_uid)?;
     let isolation = super::child_isolation::IsolationAuthority::from_binding(&binding)?;
     let control_socket = PathBuf::from(&binding.control_socket);
 

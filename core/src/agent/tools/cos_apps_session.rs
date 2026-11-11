@@ -82,6 +82,17 @@ use crate::worker::LaunchResources;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
+static HOST_OWNER_UID: OnceLock<u32> = OnceLock::new();
+
+pub(crate) fn bind_host_owner(owner_uid: u32) -> Result<(), String> {
+    if owner_uid == 0 {
+        return Err("App service ownership requires a non-root owner".into());
+    }
+    HOST_OWNER_UID
+        .set(owner_uid)
+        .map_err(|_| "App Host owner was already bound".into())
+}
+
 // ---------------------------------------------------------------------------
 // Process-wide session manager
 // ---------------------------------------------------------------------------
@@ -215,7 +226,7 @@ fn app_open_lock(key: &SessionKey) -> Arc<Mutex<()>> {
 }
 
 fn session_key(app_id: &str, apps_root: &Path) -> Result<SessionKey, String> {
-    let uid = match crate::paths::current_owner_uid_override() {
+    let uid = match HOST_OWNER_UID.get().copied().or_else(crate::paths::current_owner_uid_override) {
         Some(uid) => uid,
         None => {
             #[cfg(unix)]
@@ -2425,7 +2436,7 @@ fn resolve_daemon_authorized_call(
         .and_then(|service| service.tools.iter().find(|tool| tool.name == tool_name))
         .is_some_and(|tool| tool.needs.iter().any(|need| matches!(need.scope, crate::caps::manifest::ScopeBinding::OwnerPath { .. })))
     {
-        let owner = crate::paths::current_owner_uid_override()
+        let owner = HOST_OWNER_UID.get().copied().or_else(crate::paths::current_owner_uid_override)
             .ok_or("owner-path MCP needs require the Root-bound App Host owner")?;
         Some(crate::caps::args::PathContext {
             home: crate::paths::verified_home_for_uid(owner)?,
