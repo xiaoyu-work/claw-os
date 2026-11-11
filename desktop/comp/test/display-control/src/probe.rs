@@ -326,9 +326,9 @@ fn file_manager(args: &[String]) {
 fn native_fs_kernel(view: &str) {
     use std::fs::{File, OpenOptions};
     use std::io::{Seek, SeekFrom};
-    use std::os::fd::AsRawFd;
+    use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::os::unix::fs::FileExt;
+    use std::os::unix::fs::{FileExt, PermissionsExt};
     use std::path::Path;
 
     const SIZE: usize = 2 * 1024 * 1024 + 29;
@@ -344,6 +344,145 @@ fn native_fs_kernel(view: &str) {
     }
     fn denied(path: &Path) {
         assert!(File::open(path).is_err(), "unselected/protected content opened: {path:?}");
+    }
+    fn events(file: &mut File) -> Vec<(u32, Vec<u8>)> {
+        let mut poll = libc::pollfd { fd: file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        assert!(unsafe { libc::poll(&mut poll, 1, 5000) } > 0, "native inotify event deadline");
+        let mut buffer = [0_u8; 8192];
+        let count = file.read(&mut buffer).unwrap();
+        let mut at = 0;
+        let mut result = Vec::new();
+        while at + std::mem::size_of::<libc::inotify_event>() <= count {
+            let event = unsafe { std::ptr::read_unaligned(buffer.as_ptr().add(at).cast::<libc::inotify_event>()) };
+            at += std::mem::size_of::<libc::inotify_event>();
+            let end = at + event.len as usize;
+            assert!(end <= count);
+            let name = &buffer[at..end];
+            result.push((event.mask, name[..name.iter().position(|byte| *byte == 0).unwrap_or(name.len())].to_vec()));
+            at = end;
+        }
+        assert_eq!(at, count);
+        result
+    }
+    fn watcher(path: &Path, mask: u32) -> File {
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(fd >= 0);
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert!(unsafe { libc::inotify_add_watch(fd, path.as_ptr(), mask) } >= 0);
+        unsafe { File::from_raw_fd(fd) }
+    }
+    fn priority(file: &File) {
+        let mut poll = libc::pollfd { fd: file.as_raw_fd(), events: libc::POLLPRI, revents: 0 };
+        assert!(unsafe { libc::poll(&mut poll, 1, 5000) } > 0, "native backing poll deadline");
+        assert_ne!(poll.revents & libc::POLLPRI, 0);
+    }
+    fn selected_writes(view: &Path) -> File {
+        let mut names = Vec::new();
+        for _ in 0..2 {
+            let mut size = [0; 2];
+            std::io::stdin().read_exact(&mut size).unwrap();
+            let size = u16::from_le_bytes(size) as usize;
+            assert!((1..=512).contains(&size));
+            let mut name = vec![0; size];
+            std::io::stdin().read_exact(&mut name).unwrap();
+            let name = PathBuf::from(std::ffi::OsString::from_vec(name));
+            assert!(!name.is_absolute() && name.components().count() == 1);
+            names.push(view.join(name));
+        }
+        let mut directory_watch = watcher(view, libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_DELETE);
+        let mut output = OpenOptions::new().write(true).truncate(true).open(view.join("write-only")).unwrap();
+        denied(&view.join("write-only"));
+        assert!(OpenOptions::new().read(true).write(true).open(view.join("write-only")).is_err());
+        assert!(OpenOptions::new().write(true).open(view.join("read-only")).is_err());
+        assert_eq!(std::fs::read(view.join("read-only")).unwrap(), b"selected read-only content\0");
+        let mut data: Vec<u8> = (0_usize..2 * 1024 * 1024 + 29)
+            .map(|index| index.wrapping_mul(13).wrapping_add(29) as u8).collect();
+        output.write_all(&data).unwrap();
+        output.seek(SeekFrom::Start(12345)).unwrap();
+        output.write_all(b"\0\xffpatch").unwrap();
+        data[12345..12352].copy_from_slice(b"\0\xffpatch");
+        output.set_len(data.len() as u64).unwrap();
+        output.sync_all().unwrap();
+        assert!(output.set_len(8 * 1024 * 1024 + 1).is_err());
+        assert_eq!(std::fs::metadata(view.join("write-only")).unwrap().len(), data.len() as u64);
+        let mut handles = Vec::new();
+        loop {
+            match File::open(view.join("read-only")) {
+                Ok(file) => handles.push(file),
+                Err(error) => {
+                    assert_eq!(error.raw_os_error(), Some(libc::EMFILE));
+                    break;
+                }
+            }
+            assert!(handles.len() < 128);
+        }
+        let exhausted = OpenOptions::new().write(true).truncate(true)
+            .open(view.join("write-only")).unwrap_err();
+        assert_eq!(exhausted.raw_os_error(), Some(libc::EMFILE));
+        assert_eq!(output.metadata().unwrap().len(), data.len() as u64);
+        drop(handles);
+        assert!(std::fs::set_permissions(view.join("write-only"),
+            std::fs::Permissions::from_mode(0o700)).is_err());
+        assert!(std::fs::write(view.join("unselected"), b"must not replace sibling").is_err());
+        assert!(std::fs::write(view.join("arbitrary-sibling"), b"no new sibling authority").is_err());
+        assert!(std::fs::create_dir(view.join("arbitrary-directory")).is_err());
+        assert!(std::fs::remove_file(view.join("write-only")).is_err());
+        assert!(std::fs::remove_dir(view.join("empty-dir")).is_err());
+        assert!(std::fs::rename(view.join("write-only"), view.join("unselected")).is_err());
+        let error = std::process::Command::new(view.join("exec-target")).status().unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+        let mut old = File::open(view.join("atomic")).unwrap();
+        let writable = OpenOptions::new().read(true).write(true).open(view.join("atomic")).unwrap();
+        let mapping = unsafe { libc::mmap(std::ptr::null_mut(), 4096,
+            libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, writable.as_raw_fd(), 0) };
+        assert_eq!(mapping, libc::MAP_FAILED, "writable mmap must not bypass canonical mutation callbacks");
+        drop(writable);
+        let mut temp = OpenOptions::new().read(true).write(true).create_new(true).open(&names[0]).unwrap();
+        let mut saved: Vec<u8> = (0_usize..262167).map(|index| index.wrapping_mul(19) as u8).collect();
+        temp.write_all(&saved).unwrap();
+        temp.sync_all().unwrap();
+        assert!(std::fs::rename(&names[0], view.join("unselected")).is_err());
+        assert!(std::fs::rename(&names[0], view.join("selected-dir/child")).is_err());
+        std::fs::rename(&names[0], view.join("atomic")).unwrap();
+        let mut before = Vec::new();
+        old.read_to_end(&mut before).unwrap();
+        assert_eq!(before, b"atomic-before\0\xfe");
+        assert_eq!(std::fs::read(view.join("atomic")).unwrap(), saved);
+        temp.seek(SeekFrom::Start(0)).unwrap();
+        let mut own = Vec::new();
+        temp.read_to_end(&mut own).unwrap();
+        assert_eq!(own, saved);
+        temp.write_at(b"\0\xfd", 777).unwrap();
+        saved[777..779].copy_from_slice(b"\0\xfd");
+        temp.sync_all().unwrap();
+        assert_eq!(std::fs::read(view.join("atomic")).unwrap(), saved);
+        let discarded = OpenOptions::new().write(true).create_new(true).open(&names[1]).unwrap();
+        drop(discarded);
+        std::fs::remove_file(&names[1]).unwrap();
+        File::open(view).unwrap().sync_all().unwrap();
+        let seen = events(&mut directory_watch);
+        assert!(seen.iter().any(|(mask, name)| mask & libc::IN_MOVED_TO != 0 && name == b"atomic"));
+        assert!(!names[0].exists() && !names[1].exists());
+        tag(b"WROK");
+
+        let watched = File::open(view.join("watched")).unwrap();
+        assert_eq!(std::fs::read(view.join("watched")).unwrap(), b"watch-before\0");
+        let mut backing_watch = watcher(&view.join("watched"), libc::IN_DELETE_SELF | libc::IN_ATTRIB);
+        tag(b"WATC");
+        priority(&watched);
+        next(b'C');
+        let mut changed = [0_u8; 4096];
+        let count = watched.read_at(&mut changed, 0).unwrap();
+        assert_eq!(&changed[..count], b"watch-after\0\xffexternal");
+        assert!(std::fs::read_dir(view).unwrap().any(|entry| entry.unwrap().file_name() == "external-entry"));
+        denied(&view.join("external-entry"));
+        tag(b"CHNG");
+        priority(&watched);
+        let seen = events(&mut backing_watch);
+        assert!(seen.iter().any(|(mask, _)| mask & libc::IN_DELETE_SELF != 0));
+        assert!(std::fs::metadata(view.join("watched")).is_err());
+        tag(b"GONE");
+        output
     }
 
     assert_ne!(unsafe { libc::getuid() }, 0);
@@ -400,6 +539,11 @@ fn native_fs_kernel(view: &str) {
     assert_eq!(std::fs::read(view.join("selected-dir/deeper/child")).unwrap(), b"selected nested content\xff");
     denied(&other);
     denied(&view.join("owner-denied"));
+    tag(b"DIRS");
+    let mut mode = [0];
+    std::io::stdin().read_exact(&mut mode).unwrap();
+    assert!(matches!(mode[0], b'H' | b'W'));
+    let retained_write = if mode[0] == b'W' { Some(selected_writes(view)) } else { None };
     let mut ready = [-1; 2];
     assert_eq!(unsafe { libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
     let descendant = unsafe { libc::fork() };
@@ -420,6 +564,14 @@ fn native_fs_kernel(view: &str) {
     assert_eq!(&acknowledged, b"1");
     unsafe { libc::close(ready[0]); }
     tag(b"HELD");
+    if let Some(output) = retained_write.as_ref() {
+        next(b'F');
+        assert!(output.write_at(b"refused", 0).is_err());
+        tag(b"DENY");
+        next(b'U');
+        tag(b"UNKN");
+        assert!(output.write_at(b"\xab", 3).is_err(), "an unrecorded completion must not return write success");
+    }
     loop {
         let mut byte_read = [0; 1];
         assert_eq!(file.read_at(&mut byte_read, 7).unwrap(), 1);
