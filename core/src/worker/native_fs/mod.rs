@@ -21,6 +21,8 @@ use claw_display_control::{workload, ProcessIdentity};
 use crate::clawd::client_identity::FsIdentityGuard;
 
 mod backend;
+mod selected_read;
+pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider};
 
 struct Binding {
     process: workload::InstanceProcess,
@@ -86,6 +88,7 @@ struct Shared {
     observed: Mutex<BTreeMap<u64, backend::Observed>>,
     polls: Mutex<BTreeMap<u64, backend::Subscription>>,
     notifier: Mutex<Option<fuser::Notifier>>,
+    selected_reads: Mutex<BTreeMap<String, selected_read::GrantedRead>>,
     revoked: AtomicBool,
     ended: AtomicBool,
     monitor_stop: AtomicBool,
@@ -113,6 +116,9 @@ impl Shared {
     }
 
     fn live(&self) -> Result<(), i32> {
+        if self.selected_reads.lock().map_err(|_| libc::EIO)?.values().any(|read| read.expired()) {
+            self.revoked.store(true, Ordering::Release);
+        }
         if self.revoked.load(Ordering::Acquire)
             || Instant::now() >= self.expiry.lock().map_err(|_| libc::EIO)?.deadline
         {
@@ -341,7 +347,7 @@ impl NativeFsView {
         }
         #[cfg(not(test))]
         if !metadata_only || session.is_some() {
-            return Err("production native resources expose metadata only".into());
+            return Err("production native resources require the consented Home view, without write authority".into());
         }
         let writable = session.is_some();
         if metadata_only && writable {
@@ -413,6 +419,7 @@ impl NativeFsView {
             observed: Mutex::new(BTreeMap::new()),
             polls: Mutex::new(BTreeMap::new()),
             notifier: Mutex::new(None),
+            selected_reads: Mutex::new(BTreeMap::new()),
             revoked: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             monitor_stop: AtomicBool::new(false),
@@ -578,6 +585,7 @@ impl NativeFsView {
         if process.uid() != self.shared.owner {
             return Err("native filesystem process has another owner".into());
         }
+
         let process = workload::InstanceProcess::receive(
             process.pidfd().map_err(|error| error.to_string())?,
             group.try_clone().map_err(|error| error.to_string())?,
@@ -593,6 +601,10 @@ impl NativeFsView {
         }
         *binding = Some(Binding { process, group });
         Ok(())
+    }
+
+    pub(crate) fn read_provider(&self) -> Result<ReadProvider, String> {
+        ReadProvider::new(self.shared.clone())
     }
 
     #[cfg(test)]
@@ -740,6 +752,7 @@ impl NativeFsView {
         self.shared.controller()?;
         self.shared.revoked.store(true, Ordering::Release);
         self.shared.retire_processes(deadline)?;
+        self.shared.selected_reads.lock().map_err(|_| "native read leases poisoned")?.clear();
         #[cfg(test)]
         backend::cleanup_stages(&self.shared, deadline)?;
         while self

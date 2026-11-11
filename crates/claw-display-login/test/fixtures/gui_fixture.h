@@ -140,7 +140,8 @@ static int gui_fixture(void) {
     static const char *modes[] = {
         "zero", "read", "write", "both", "revoke", "aliases",
         "revoke", "revoke", "revoke", "revoke", "revoke", "revoke", "named",
-        "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke", "metadata"
+        "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke", "metadata",
+        "selected-read"
     };
     pid_t child = -1;
     int gate = -1, result = -1;
@@ -179,7 +180,9 @@ static int gui_fixture(void) {
                     _exit(121);
                 close(descriptors[0]);
                 char session[64];
-                int length = snprintf(session, sizeof(session), "gui-fixture-parent-%u", scenario);
+                int length = scenario == 20
+                    ? snprintf(session, sizeof(session), "gui-fixture-parent-%u-%ld", scenario, (long)getpid())
+                    : snprintf(session, sizeof(session), "gui-fixture-parent-%u", scenario);
                 if (length < 0 || (size_t)length >= sizeof(session))
                     _exit(122);
                 if (syscall(SYS_close_range, 3u, ~0u, 0u) != 0
@@ -214,7 +217,8 @@ static int gui_fixture(void) {
                       scenario == 14 || scenario == 17 || scenario == 18 ? "--gui:panel-read" :
                       scenario == 15 ? "--gui:panel-write" :
                       scenario == 16 ? "--gui:window" :
-                      scenario == 19 ? "--gui:home-metadata" : "surface",
+                      scenario == 19 ? "--gui:home-metadata" :
+                      scenario == 20 ? "--gui:selected-read" : "surface",
                       modes[scenario], "literal ; quote' --flag", "", (char *)NULL);
                 _exit(123);
             }

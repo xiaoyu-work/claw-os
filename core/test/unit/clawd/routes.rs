@@ -6,6 +6,8 @@ use serde_json::json;
 const EXPECTED_USER_COMMANDS: &[&str] = &[
     "provenance.trust_withdrawal",
     "ai.chat",
+    "gui.file.read.request",
+    "gui.file.read.status",
     "daemon.health",
     "daemon.status",
     "workspace.list",

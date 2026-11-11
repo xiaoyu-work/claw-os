@@ -1,6 +1,7 @@
 package clawossdk
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 )
@@ -56,5 +57,28 @@ func TestOpenAgentOverlayMissingBinary(t *testing.T) {
 	ctx := &GuiContext{AppID: "notes"}
 	if err := ctx.OpenAgentOverlay(""); err == nil {
 		t.Fatal("expected error when overlay binary is missing")
+	}
+}
+
+func TestSelectedReadReplyAndClosedInputs(t *testing.T) {
+	value := map[string]any{"version": json.Number("1.0"), "selection_id": "sr-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"node": json.Number("7e0"), "access": "read", "state": "pending"}
+	result, err := decodeSelectedRead(value)
+	if err != nil || result.State != "pending" {
+		t.Fatalf("pending is not selected: %v %v", result, err)
+	}
+	value["state"] = "selected"
+	if result, err = decodeSelectedRead(value); err != nil || result.State != "selected" {
+		t.Fatalf("selected decoder: %v %v", result, err)
+	}
+	value["owner_uid"] = 0
+	if _, err := decodeSelectedRead(value); err == nil {
+		t.Fatal("reply accepted owner claim")
+	}
+	if _, err := RequestFileRead(0); err == nil {
+		t.Fatal("invalid node reached transport")
+	}
+	if _, err := FileReadStatus("foreign-window", 7); err == nil {
+		t.Fatal("invalid selection reference reached transport")
 	}
 }

@@ -1,9 +1,10 @@
-# Filtered Native Metadata and Private Content Prototype
+# Filtered Native Home Resources
 
-The Linux production provider exposes only a read-only Home metadata view to
-the common authenticated GUI Host. Selected content/read/write/watch APIs and
-mutation fault injectors remain `cfg(test)`; promoting metadata does not
-publish them. This is not a public App mount API, frozen SDK contract or
+The Linux production provider defaults to a read-only Home metadata view in
+the common authenticated GUI Host. Its only production content operation is
+one separately owner-approved, pinned regular-file read. Write/watch, general
+mutations, the direct prototype selectors and mutation fault injectors remain
+`cfg(test)`. This is not a public App mount API, frozen SDK contract or
 completed `controlled_full` filesystem. A Root controller supplies explicit
 per-window metadata consent, an owner-accessible pinned browse root and a
 bounded lease. Only that controller can bind an actual normal-UID process and
@@ -26,8 +27,70 @@ window decision. Its process/cgroup binding is one-use. `renew_home_metadata`
 is controller-only, requires a live bound instance, lasts at most two seconds
 and cannot cross the original consent's monotonic ceiling. The GUI controller
 performs fresh grant, package, parent, owner policy and consent-generation
-checks before each renewal. Metadata views cannot select content even in a
-test build.
+checks before each renewal. The test-only `choose_read` API still refuses
+metadata views: their content admission requires the real Root decision and
+ordinary authority proof described below, even in a test build.
+
+## Protected selected file reads
+
+The four draft SDK GUI facades propose only a bounded virtual FUSE inode and
+query an opaque status ID. They never supply owner, window, source path or a
+grant. Root authenticates the exact live GUI peer/cgroup, retains the materialized
+node's no-follow descriptor, raw relative pathname, device/inode and revision,
+then checks that this selected signed surface declares eligible `fs.read`.
+Literal fixed/owner-relative file or subtree scopes are supported. A Wild
+declaration can use only already-bound, bounded Path caps; absent Wild bindings
+and argument-bound requests do not invent a Home grant.
+
+Every new selection files a separate ordinary protected owner review naming
+the exact escaped target, read-only access and window. The operation digest
+binds the raw pathname bytes, retained identity/revision, node, surface, display
+and live GUI authority. Pending, an approval ID and a proposal's display text
+are not content. Another owner, node, window, changed source or consumed/stale
+decision cannot install a read lease. The current source fingerprint is strict:
+content/mtime/ctime/link changes invalidate consent rather than following an
+external writer or replacement.
+
+Root consumes the exact decision once and issues a separate normal
+`Issuer::Approval`, process-tree-bound `GuiResource` grant in the existing store.
+It preserves App/session, Activity and Workspace checks and never changes the
+startup GUI cap set, parent/global grants or the session index. For a non-UTF8
+target the declared UTF-8 capability scope remains the technical upper bound;
+the unexported Root-held grant and operation-bound native lease expose only the
+one pinned file, not its siblings or directory. The status ID is not a grant
+handle. Names stay Unix bytes; only inert presentation is escaped.
+
+The fixed finite read deadline cannot exceed its own approval, live GUI grant
+or original metadata consent, including a shorter ordinary read grant. There
+is no automatic read renewal. Every native open/read rechecks source identity and ordinary
+authority, owner denial, declaration/package ceiling, GUI provenance and both
+decision generations. The independent provider custody thread also detects
+read expiry. Revocation/expiry/source failure fences the view and retires the
+whole checked instance, including separately grouped descendants, because
+held FDs and mmap/page-cache bytes cannot be revoked by a fictional per-read
+check. Already-read bytes cannot be erased.
+After checked process death, pending private read reviews are invalidated by
+the system and unused approved decisions are archived without rewriting the
+owner's decision. Store failures retain proposal custody for cleanup retry.
+
+Home-scoped filesystem capabilities remain authority, not raw bind requests,
+when this explicit metadata surface uses the controlled view. Optional startup
+resource validation applies the same mount projection without treating it as
+window consent. Actual mounting still waits for the separate owner decision.
+Read/write/delete/watch/exec scopes beneath Home are suppressed only from raw
+mount derivation; the FUSE provider retains its protected-path/alias checks,
+readonly/noexec mount and closed production mutation/watch APIs. Scalar
+filesystem read/write/replace relay is refused for this controlled GUI so it
+cannot bypass selection. Ordinary/MCP and non-metadata GUI behavior is unchanged.
+Mandatory Home write/delete/watch/exec needs remain refused while their native
+resource integration is unavailable; optional capability authority does not
+silently convert such a mandatory contract to a readonly fallback.
+
+`statfs` is metadata: after the same live peer and protected-node checks, it
+uses owner filesystem credentials and `fstatvfs` on the retained browse-root
+descriptor. Counts describe the backing filesystem; width overflow fails rather
+than reporting fabricated capacity. No global path lookup or file-content
+authority is introduced, and the App's filesystem magic remains FUSE.
 
 Internal limits are 32 selections of each kind, eight exact save reservations,
 4,096 nodes, 128 handles, 64 path components, 4,096 pathname bytes, 128 KiB per
@@ -40,6 +103,10 @@ failed starts cannot grow an unbounded snapshot/inode log.
 `mod.rs` owns the private FUSE connection/mount, monotonic expiry, worker health
 and checked process/mount/thread retirement. `backend.rs` separates native
 lookup/stat/readdir from independently selected binary reads and writes.
+`selected_read.rs` is the Root-only pinned candidate/read-permit seam; its
+provider handle is weak so status custody cannot prolong a retired backing
+view. Proposals and read pins close only after checked instance death; the
+existing exact nonlazy unmount/provider join precedes group/runtime removal.
 Backing IO uses authenticated
 owner filesystem credentials, pinned directory walks, actual object identity
 and the existing protected-path/alias guard. Names remain Unix bytes.
@@ -164,9 +231,10 @@ surface cannot satisfy it. Optional metadata does not create a startup prompt.
 The approved Home metadata cap is removed only from raw-bind derivation, never
 from the real GUI authority. The FUSE view replaces Home inside the namespace;
 `HOME`, App data and XDG fallback state remain the private App partition.
-An independent Home content mount is still refused in this metadata-only path.
-`COS_OWNER_HOME` remains context, not a grant. No content selection UI, App-name
-exception, raw Home bind or public permission endpoint is introduced.
+An independent Home content mount is still refused. `COS_OWNER_HOME` remains
+context, not a grant. File selection uses existing protected OS review, not
+an App-drawn picker, App-name exception, raw Home bind or alternate approval
+endpoint.
 
 The existing protected setup runner waits before bubblewrap. Root binds its
 actual PID/start/pidfd and exact checked instance cgroup, validates the live GUI
@@ -180,12 +248,20 @@ Only then can the cgroup and runtime be removed. Failed preparation/retirement
 retains custody rather than treating an absent process, manager or pathname as
 proof. The existing GUI/PAM fixture adds one signed metadata-only surface with
 inherited parent metadata rights but a separate window decision, protected-name
-filtering, denied content, private state and checked revoke lifetime.
+filtering, denied content, private state and checked revoke lifetime. Its inner
+App proves real FUSE with `fstatfs`; Root also checks the exact retained FUSE
+mount. Capacity fields are compared with the owner-accessed backing filesystem.
+The single selected-read case exercises both missing optional authority and
+already-inherited broad Home filesystem rights. It uses the actual Rust SDK,
+normal protected terminal review/Root decision, non-UTF8 binary IO/seek/mmap,
+unselected siblings and checked independent read revocation. None of those
+capability descriptions selects content before the exact file decision.
 
-Write/atomic-save/backing-watch kernel acceptance for this increment, complete
+Actual Linux acceptance of production selected reads, production write/watch
+integration, complete
 directory/delete/rename semantics, non-UTF8 inverse paths, writable mmap,
 external-writer concurrency, complete external inotify behavior, real OS
-selection UI, persistent grants, public four-language APIs and real Files/Editor
+picker UI, persistent grants, SDK publication and real Files/Editor
 adapters remain publication gates. No fixed-folder or read-only release is implied.
 
 ## Private Linux kernel check

@@ -140,6 +140,61 @@ impl Registration {
         self.session_id == session || self.delegation.session == session
     }
 
+    /// Validate a selected native file against this surface's own declared
+    /// read ceiling. This is eligibility, never a content selection or grant.
+    pub(crate) fn selected_read_capability(&self, relative: &std::path::Path) -> Result<Cap, String> {
+        use crate::caps::manifest::ScopeBinding;
+        if relative.as_os_str().is_empty() || relative.components().any(|part|
+            !matches!(part, std::path::Component::Normal(_)))
+        { return Err("selected read requires a retained view-relative file".into()); }
+        let selected = self.launch.manifest().gui_entry(self.gui_entry.as_deref())?;
+        if selected.legacy_needs {
+            return Err("selected read requires an explicit need of this signed surface".into());
+        }
+        let target = self.home.join(relative);
+        let paths = crate::caps::PathContext { home: self.home.clone(), cwd: None };
+        let mut candidates = Vec::new();
+        for need in selected.launch_needs().chain(selected.optional_needs.iter().copied()
+            .filter(|need| selected.optional_need_is_bound(need)))
+        {
+            if need.verb != Verb::FS_READ { continue; }
+            let scopes = match &need.scope {
+                ScopeBinding::OwnerPath { path } =>
+                    vec![crate::caps::manifest::resolve_owner_path(need.verb, path, &paths)?],
+                ScopeBinding::Fixed { scope: Scope::Path(path) } if std::path::Path::new(path).is_absolute() =>
+                    vec![Scope::path(path.clone()).canonicalized()],
+                ScopeBinding::Wild => self.caps.iter()
+                    .filter(|cap| cap.verb == Verb::FS_READ && matches!(cap.scope, Scope::Path(_)))
+                    .map(|cap| cap.scope.clone()).collect(),
+                _ => continue,
+            };
+            for scope in scopes {
+                let Scope::Path(pattern) = &scope else { continue; };
+                let root = pattern.strip_suffix("/**").unwrap_or(pattern);
+                if root.contains(['*', '?', '[', ']', '{', '}'])
+                    || !std::path::Path::new(root).starts_with(&self.home)
+                { continue; }
+                let covered = if pattern.ends_with("/**") {
+                    target.starts_with(root)
+                } else {
+                    target.as_os_str() == std::path::Path::new(root).as_os_str()
+                };
+                if covered { candidates.push(Cap::new(Verb::FS_READ, scope)); }
+            }
+        }
+        candidates.sort_by_key(|cap| std::cmp::Reverse(match &cap.scope {
+            Scope::Path(path) => path.len(), _ => 0,
+        }));
+        let cap = candidates.into_iter().next().ok_or("selected file is outside this surface's declared read needs")?;
+        let (_, ceiling) = super::installed_app_for_session(self.owner(), &self.session_id, self.launch.app_id())?;
+        let caps = CapSet::from_caps([cap.clone()]);
+        if ceiling.clamp(&caps).0 != caps {
+            return Err("selected read is outside the installed package's authority ceiling".into());
+        }
+        crate::approvals::app_policy::require(self.owner(), self.launch.app_id(), &caps)?;
+        Ok(cap)
+    }
+
     fn require_delegation(&self) -> Result<(), String> {
         if self.optional_approval_remaining()?.is_some_and(|remaining| remaining.is_zero()) {
             return Err("GUI optional approval expired; fresh registration is required".into());
@@ -342,5 +397,8 @@ pub(crate) fn kernel_peer(client: &ClientIdentity) -> Result<ProcessIdentity, St
 }
 
 pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::Route, String> {
+    if matches!(command, super::Command::GuiFileReadRequest | super::Command::GuiFileReadStatus) {
+        return Ok(command.route());
+    }
     super::relayable_route(command)
 }

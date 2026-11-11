@@ -724,6 +724,89 @@ pub fn revoke_session(session_id: &str) {
     );
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) struct GuiReadApproval<'a> {
+    pub process: &'a claw_display_control::ProcessIdentity,
+    pub gui: &'a GrantView,
+    pub capability: &'a crate::caps::Cap,
+    pub approval_session: &'a str,
+    pub operation_digest: &'a str,
+    pub lifetime: std::time::Duration,
+}
+
+/// Issue separate finite read authority from an exact protected operation
+/// decision. It never replaces the GUI session index or widens its cap set.
+#[cfg(target_os = "linux")]
+pub(crate) fn authorize_gui_file_read(
+    binding: GuiReadApproval<'_>,
+    approval: &crate::approvals::ConsumedGrant,
+) -> Result<(GrantView, Authorized), String> {
+    let owner = binding.gui.owner_uid;
+    let session = binding.gui.subject.session_id.as_deref().ok_or("GUI read has no bound session")?;
+    let authorization = &approval.authorization;
+    if binding.capability.verb != crate::caps::Verb::FS_READ
+        || matches!(binding.capability.scope, crate::caps::Scope::Wild)
+        || binding.process.uid() != owner || binding.process.pid() as u32 != binding.gui.bound_pid
+        || binding.gui.subject.app_id.is_none()
+        || !binding.gui.audience.contains(Audience::GuiResource)
+        || authorization.owner_uid != Some(owner)
+        || authorization.session != binding.approval_session
+        || authorization.capability != *binding.capability
+        || authorization.operation_digest.as_deref() != Some(binding.operation_digest)
+        || authorization.context.is_some() || authorization.execution.is_some()
+    { return Err("selected read approval does not match the live GUI/owner/capability/operation".into()); }
+    let presentation = Presentation {
+        uid: owner, pid: binding.process.pid() as u32,
+        start_time_ticks: Some(binding.process.start_ticks()), audience: Audience::GuiResource,
+        route: "gui.file.read.status", session_id: Some(session.to_string()),
+    };
+    let current = authority().resolve_session(session, &presentation).map_err(|error| error.to_string())?;
+    if current.id != binding.gui.id || current.generation != binding.gui.generation || current.caps != binding.gui.caps {
+        return Err("GUI authority changed before selected read issuance".into());
+    }
+    let lifetime = binding.lifetime.min(approval.expires_in()).min(current.expires_in);
+    if lifetime.is_zero() { return Err("selected read authority is expired".into()); }
+    let principal = Principal::of_process(owner, binding.process.pid() as u32)
+        .filter(|principal| principal.start_time_ticks == Some(binding.process.start_ticks()))
+        .ok_or("selected read process identity changed")?;
+    let (_handle, view) = authority().issue_with_generation(Issuance {
+        issuer: Issuer::Approval, principal, binding: Binding::ProcessTree,
+        subject: current.subject, audience: AudienceSet::one(Audience::GuiResource),
+        caps: CapSet::from_caps([binding.capability.clone()]), lifetime, uses: Uses::Unbounded,
+        index_session: false,
+    }, u64::from(approval.generation)).map_err(|error| error.to_string())?;
+    audit::record_issued(&view, None);
+    match crate::approvals::generations::current(Some(owner), binding.approval_session) {
+        Ok(generation) if generation == approval.generation => {}
+        _ => {
+            authority().revoke(view.id);
+            return Err("selected read decision changed or became unverifiable during issuance".into());
+        }
+    }
+    let decision = Decision::new(view.clone(), "gui.file.read.status", Audience::GuiResource,
+        presentation, None, None, &Requirement::exact([binding.capability.clone()]));
+    match decision.require(binding.capability.clone()) {
+        Ok(authorized) => Ok((view, authorized)),
+        Err(error) => { authority().revoke(view.id); Err(error) }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn exercise_gui_file_read(
+    id: GrantId,
+    capability: &crate::caps::Cap,
+    presentation: Presentation,
+) -> Result<Authorized, String> {
+    let view = authority().consume(id, std::slice::from_ref(capability), &presentation)
+        .map_err(|error| error.to_string())?;
+    if view.issuer != Issuer::Approval || presentation.audience != Audience::GuiResource
+        || capability.verb != crate::caps::Verb::FS_READ || view.subject.app_id.is_none()
+    { return Err("selected read is not an ordinary approved GUI read grant".into()); }
+    let decision = Decision::new(view, "gui.file.read.status", Audience::GuiResource,
+        presentation, None, None, &Requirement::exact([capability.clone()]));
+    decision.require(capability.clone())
+}
+
 /// Revoke the process-bound grant currently indexed by `session_id` while
 /// retaining an unindexed launch parent used to derive its replacement.
 pub(crate) fn revoke_indexed_session(session_id: &str) {

@@ -62,6 +62,14 @@ match owner-bound execution grants or GUI instances. A removed-grant count is
 not resource-retirement completion; the GUI controller separately awaits its
 checked process and transport barrier.
 
+Selected GUI reads likewise consume an exact operation-bound owner decision
+before issuing a finite `GuiResource`-only `Issuer::Approval` grant. It retains
+the live GUI's App/session, Activity and Workspace subject, exact process/start
+binding and consent generation, but never replaces the GUI session index or
+widens its startup/parent caps. Root keeps the handle; the native provider
+requires the ordinary unforgeable spend proof and live checks. Its separate
+approval session is also matched by the GUI's checked retirement barrier.
+
 Each `PeerSession` route also declares whether an App session's one-call
 transient capabilities count for it. `credential.oauth-refresh` excludes them,
 preserving what the credential broker checked before this module existed; the

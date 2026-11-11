@@ -129,6 +129,39 @@ export interface FileChangePlan {
 }
 
 /**
+ * Draft GUI selected file read.
+ * Root-owned status for one proposed file in this authenticated GUI instance.
+ * Pending or an approval request ID is not a selected resource. No owner,
+ * window, source path or grant handle is supplied by the App.
+ */
+export interface GuiFileRead {
+  version: 1;
+  selection_id: string;
+  node: number;
+  access: "read";
+  state: "pending" | "selected" | "denied" | "stale" | "expired" | "revoked";
+  approval_request_id?: string;
+  target_display?: string;
+  expires_in_ms?: number;
+  reason?: string;
+}
+
+/**
+ * GuiFileReadRequest.
+ */
+export interface GuiFileReadRequest {
+  node: number;
+}
+
+/**
+ * GuiFileReadStatusRequest.
+ */
+export interface GuiFileReadStatusRequest {
+  selection_id: string;
+  node: number;
+}
+
+/**
  * App manifest (app.json).
  * The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
  * versioned service with tools, lifecycle, caller restrictions, capability
@@ -836,6 +869,17 @@ export function normalizeFileChangePlanIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value);
 }
 
+const _WIRE_SCHEMA_GUI_FILE_READ: WireRule = decodeWireJson("{\"$defs\":{\"GuiFileReadRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"},\"GuiFileReadStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_read.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned status for one proposed file in this authenticated GUI instance. Pending or an approval request ID is not a selected resource. No owner, window, source path or grant handle is supplied by the App.\",\"properties\":{\"access\":{\"const\":\"read\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"denied\",\"stale\",\"expired\",\"revoked\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation only. Never a source identity or path authority.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"node\",\"access\",\"state\"],\"title\":\"Draft GUI selected file read\",\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileRead(value: unknown): asserts value is GuiFileRead & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_READ, _WIRE_SCHEMA_GUI_FILE_READ, value, "GuiFileRead", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ, _WIRE_SCHEMA_GUI_FILE_READ, value);
+}
+
+export function normalizeGuiFileReadIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ, _WIRE_SCHEMA_GUI_FILE_READ, value);
+}
+
 const _WIRE_SCHEMA_MCP_CALL_CONTEXT: WireRule = decodeWireJson("{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}") as WireRule;
 
 export function validateMcpCallContext(value: unknown): asserts value is McpCallContext & Record<string, unknown> {
@@ -889,5 +933,27 @@ export function validateTool(value: unknown): asserts value is Tool & Record<str
 
 export function normalizeToolIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_READ_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileReadRequest(value: unknown): asserts value is GuiFileReadRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_READ_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_REQUEST, value, "GuiFileReadRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_REQUEST, value);
+}
+
+export function normalizeGuiFileReadRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_REQUEST, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileReadStatusRequest(value: unknown): asserts value is GuiFileReadStatusRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, value, "GuiFileReadStatusRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, value);
+}
+
+export function normalizeGuiFileReadStatusRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, value);
 }
 

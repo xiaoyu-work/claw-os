@@ -1,7 +1,8 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 
 import * as gui from "./gui";
+import * as transport from "./transport";
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   const saved: Record<string, string | undefined> = {};
@@ -72,4 +73,29 @@ test("openAgentOverlay rejects when the binary is missing", async () => {
     });
     await assert.rejects(result);
   });
+});
+
+test("selected read transports native nodes and keeps pending distinct from selected", () => {
+  const selection = `sr-${"a".repeat(32)}`;
+  const calls: unknown[][] = [];
+  const primitive = mock.method(transport, "cosCallJson", (...args: unknown[]) => {
+    calls.push(args);
+    return { version: 1, selection_id: selection, node: 7, access: "read",
+      state: calls.length === 1 ? "pending" : "selected" };
+  });
+  try {
+    assert.equal(gui.requestFileRead(7).state, "pending");
+    assert.equal(gui.fileReadStatus(selection, 7).state, "selected");
+    assert.deepEqual(calls[0][1], ["__gui-file-read", "request", "--request-stdin"]);
+    assert.deepEqual(JSON.parse(calls[0][3] as string), { node: 7 });
+    assert.deepEqual(JSON.parse(calls[1][3] as string), { selection_id: selection, node: 7 });
+    assert.throws(() => gui.requestFileRead(0));
+    assert.throws(() => gui.fileReadStatus("foreign", 7));
+    assert.equal(calls.length, 2);
+    primitive.mock.mockImplementation(() => ({
+      version: 1, selection_id: selection, node: 7, access: "read",
+      state: "selected", owner_uid: 0,
+    }));
+    assert.throws(() => gui.requestFileRead(7));
+  } finally { primitive.mock.restore(); }
 });

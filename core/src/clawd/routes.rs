@@ -2221,6 +2221,32 @@ routes! {
             super::ai::chat(c.params, c.client, authority).await
         },
     }
+    GuiFileReadRequest {
+        name: "gui.file.read.request",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileReadRequest,
+        audit: &[("session", FieldRule::Token), ("node", FieldRule::Count)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::request_file_read(c.params, c.client, authority).await
+        },
+    }
+    GuiFileReadStatus {
+        name: "gui.file.read.status",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileReadStatusRequest,
+        audit: &[("session", FieldRule::Token), ("node", FieldRule::Count), ("selection_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::file_read_status(c.params, c.client, authority).await
+        },
+    }
     SystemFilesystemRead {
         name: "system.filesystem.read",
         access: Access::User,

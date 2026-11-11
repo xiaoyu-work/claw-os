@@ -59,4 +59,28 @@ fn gui_launch_does_not_accept_process_owner_or_lease_metadata() {
             "{key}"
         );
     }
+
+}
+
+#[test]
+fn selected_read_only_accepts_bounded_native_nodes_and_opaque_status_references() {
+    let request: FileReadRequest =
+        serde_json::from_str(r#"{"session":"app-window","node":2.0e0}"#).unwrap();
+    assert_eq!(request.node.get(), 2);
+    for node in ["0", "1", "4097", "-2", "2.00000000000000000000001", "\"2\""] {
+        assert!(serde_json::from_str::<FileReadRequest>(
+            &format!(r#"{{"session":"app-window","node":{node}}}"#)).is_err(), "{node}");
+    }
+    for key in ["path", "owner_uid", "window", "pid", "selected", "grant", "access"] {
+        assert!(serde_json::from_value::<FileReadRequest>(serde_json::json!({
+            "session": "app-window", "node": 2, (key): "claimed",
+        })).is_err(), "{key}");
+    }
+    let id = format!("sr-{}", "a".repeat(32));
+    assert!(serde_json::from_value::<FileReadStatusRequest>(serde_json::json!({
+        "session": "app-window", "selection_id": id, "node": 2,
+    })).is_ok());
+    assert!(serde_json::from_value::<FileReadStatusRequest>(serde_json::json!({
+        "session": "app-window", "selection_id": "../foreign", "node": 2,
+    })).is_err());
 }

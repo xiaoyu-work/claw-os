@@ -6,9 +6,7 @@ use std::os::fd::AsRawFd;
 #[cfg(test)]
 use std::os::fd::FromRawFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-#[cfg(test)]
-use std::os::unix::fs::FileExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -17,11 +15,11 @@ use std::time::Instant;
 use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, FileType, PollHandle, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    FileAttr, FileType, PollHandle, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs,
     Request,
 };
 #[cfg(test)]
-use fuser::{ReplyCreate, ReplyData, ReplyPoll, ReplyWrite, TimeOrNow};
+use fuser::{ReplyCreate, ReplyPoll, ReplyWrite, TimeOrNow};
 
 use super::Shared;
 #[cfg(test)]
@@ -51,6 +49,7 @@ struct Node {
 }
 
 enum Handle {
+    SelectedFile { inode: u64, file: File, selection: String },
     #[cfg(test)]
     File {
         inode: u64,
@@ -70,6 +69,7 @@ enum Handle {
 impl Handle {
     fn inode(&self) -> u64 {
         match self {
+            Self::SelectedFile { inode, .. } => *inode,
             #[cfg(test)]
             Self::File { inode, .. } => *inode,
             Self::Directory { inode, .. } => *inode,
@@ -78,12 +78,12 @@ impl Handle {
 }
 
 pub(super) struct Observed {
-    relative: PathBuf,
-    pin: File,
+    pub(super) relative: PathBuf,
+    pub(super) pin: File,
     parent: u64,
     stamp: [u64; 8],
-    version: u64,
-    linked: bool,
+    pub(super) version: u64,
+    pub(super) linked: bool,
 }
 
 pub(super) struct Subscription {
@@ -104,7 +104,7 @@ fn errno(error: std::io::Error) -> i32 {
     error.raw_os_error().unwrap_or(libc::EIO)
 }
 
-fn identity(file: &File) -> Result<(u64, u64), i32> {
+pub(super) fn identity(file: &File) -> Result<(u64, u64), i32> {
     file.metadata()
         .map(|metadata| (metadata.dev(), metadata.ino()))
         .map_err(errno)
@@ -209,7 +209,7 @@ fn walk(shared: &Shared, base: &File, path: &Path, readable: bool) -> Result<Fil
     Ok(file)
 }
 
-fn reopen(shared: &Shared, pin: &File) -> Result<File, i32> {
+pub(super) fn reopen(shared: &Shared, pin: &File) -> Result<File, i32> {
     reopen_as(shared, pin, libc::O_RDONLY)
 }
 
@@ -574,7 +574,7 @@ fn materialize(
     Ok(stages.pop().ok_or(libc::EIO)?.file)
 }
 
-fn fingerprint(metadata: &std::fs::Metadata) -> [u64; 8] {
+pub(super) fn fingerprint(metadata: &std::fs::Metadata) -> [u64; 8] {
     [
         metadata.dev(),
         metadata.ino(),
@@ -1395,6 +1395,39 @@ impl Filesystem {
         Ok(id)
     }
 
+    fn open_selected(&mut self, req: &Request<'_>, inode: u64, flags: i32, reply: ReplyOpen) {
+        let result = self.authorize(req, false, false).and_then(|_| {
+            if flags & libc::O_ACCMODE != libc::O_RDONLY || flags & (libc::O_TRUNC | libc::O_APPEND) != 0 {
+                return Err(libc::EACCES);
+            }
+            if self.handles.len() >= MAX_HANDLES || self.next_handle == u64::MAX { return Err(libc::EMFILE); }
+            let provider = super::ReadProvider::new(self.shared.clone()).map_err(|_| libc::EACCES)?;
+            let (selection, file) = provider.open(inode, None)?;
+            self.add_handle(Handle::SelectedFile { inode, file, selection })
+        });
+        match result { Ok(handle) => reply.opened(handle, 0), Err(error) => reply.error(error) }
+    }
+
+    fn read_selected(&self, req: &Request<'_>, inode: u64, fh: u64, offset: i64, size: u32,
+        reply: ReplyData)
+    {
+        let result = self.authorize(req, false, self.handles.contains_key(&fh)).and_then(|_| {
+            let Some(Handle::SelectedFile { inode: expected, file, selection }) = self.handles.get(&fh)
+                else { return Err(libc::EBADF); };
+            if *expected != inode || size > MAX_READ { return Err(libc::EINVAL); }
+            let offset = u64::try_from(offset).map_err(|_| libc::EINVAL)?;
+            let provider = super::ReadProvider::new(self.shared.clone()).map_err(|_| libc::EACCES)?;
+            let (_, current) = provider.open(inode, Some(selection))?;
+            if !same_file(file, &current) { provider.stop(); return Err(libc::ESTALE); }
+            let _owner = FsIdentityGuard::enter(self.shared.owner).map_err(|_| libc::EACCES)?;
+            let mut data = vec![0; size as usize];
+            let count = file.read_at(&mut data, offset).map_err(errno)?;
+            data.truncate(count);
+            Ok(data)
+        });
+        match result { Ok(data) => reply.data(&data), Err(error) => reply.error(error) }
+    }
+
     fn directory(&mut self, inode: u64) -> Result<Vec<(u64, FileType, OsString)>, i32> {
         let file = self.node_file(inode, true)?;
         if !file.metadata().map_err(errno)?.is_dir() {
@@ -1514,6 +1547,31 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
+    fn statfs(&mut self, req: &Request<'_>, inode: u64, reply: ReplyStatfs) {
+        let result = self.authorize(req, true, false).and_then(|_| {
+            let _node = self.node_file(inode, false)?;
+            let _owner = FsIdentityGuard::enter(self.shared.owner).map_err(|_| libc::EACCES)?;
+            let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstatvfs(self.shared.root.as_raw_fd(), &mut stats) } != 0 {
+                return Err(errno(std::io::Error::last_os_error()));
+            }
+            let sizes = (
+                u32::try_from(stats.f_bsize).map_err(|_| libc::EOVERFLOW)?,
+                u32::try_from(stats.f_namemax).map_err(|_| libc::EOVERFLOW)?,
+                u32::try_from(stats.f_frsize).map_err(|_| libc::EOVERFLOW)?,
+            );
+            self.shared.live()?;
+            Ok((stats, sizes))
+        });
+        match result {
+            Ok((stats, (bsize, namelen, frsize))) => reply.statfs(
+                stats.f_blocks, stats.f_bfree, stats.f_bavail, stats.f_files, stats.f_ffree,
+                bsize, namelen, frsize,
+            ),
+            Err(error) => reply.error(error),
+        }
+    }
+
     fn opendir(&mut self, req: &Request<'_>, inode: u64, flags: i32, reply: ReplyOpen) {
         let result = self.authorize(req, true, false).and_then(|_| {
             if flags & libc::O_ACCMODE != libc::O_RDONLY {
@@ -1562,14 +1620,14 @@ impl fuser::Filesystem for Filesystem {
     }
 
     #[cfg(not(test))]
-    fn open(&mut self, _req: &Request<'_>, _inode: u64, _flags: i32, reply: ReplyOpen) {
-        reply.error(libc::EACCES);
+    fn open(&mut self, req: &Request<'_>, inode: u64, flags: i32, reply: ReplyOpen) {
+        self.open_selected(req, inode, flags, reply);
     }
 
     #[cfg(test)]
     fn open(&mut self, req: &Request<'_>, inode: u64, flags: i32, reply: ReplyOpen) {
         if self.shared.metadata_only {
-            reply.error(libc::EACCES);
+            self.open_selected(req, inode, flags, reply);
             return;
         }
         let result = self
@@ -1602,6 +1660,10 @@ impl fuser::Filesystem for Filesystem {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
+        if matches!(self.handles.get(&fh), Some(Handle::SelectedFile { .. })) {
+            self.read_selected(req, inode, fh, offset, size, reply);
+            return;
+        }
         let result = self
             .authorize(req, false, self.handles.contains_key(&fh))
             .and_then(|_| {
@@ -1646,7 +1708,21 @@ impl fuser::Filesystem for Filesystem {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(not(test))]
+    fn read(
+        &mut self,
+        req: &Request<'_>,
+        inode: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyData,
+    ) {
+        self.read_selected(req, inode, fh, offset, size, reply);
+    }
+
     fn release(
         &mut self,
         _req: &Request<'_>,
@@ -1661,6 +1737,7 @@ impl fuser::Filesystem for Filesystem {
         if let Ok(mut polls) = self.shared.polls.lock() {
             polls.remove(&fh);
         }
+
         reply.ok();
     }
 

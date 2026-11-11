@@ -2328,7 +2328,7 @@ fn authorize_optional_gui_needs(
                     boundary.approval_needs(&caps).is_ok_and(|needs| needs.is_empty()))
                 && delegation.workspace.as_ref().is_none_or(|workspace| workspace.check(std::slice::from_ref(&cap)).is_ok())
                 && crate::paths::RoutedPathContext::for_owner(delegation.uid, delegation.paths.home.clone()).scope_sync(||
-                    crate::worker::derive::granted_path_mounts(&prospective).is_ok());
+                    super::gui::validate_optional_mounts(app, gui_entry, &delegation.paths.home, &prospective).is_ok());
             if !allowed {
                 complete = false;
                 continue;

@@ -33,6 +33,21 @@ fn context_rejects_malformed_file_arguments() {
 }
 
 #[test]
+fn selected_read_pending_and_closed_reply_are_not_authority() {
+    let mut reply: serde_json::Value = serde_json::from_str(&format!(r#"{{
+        "version":1.0,"selection_id":"sr-{}",
+        "node":7e0,"access":"read","state":"pending"
+    }}"#, "a".repeat(32))).unwrap();
+    assert_eq!(selected_read_response("request", reply.clone()).unwrap().state, "pending");
+    reply["state"] = serde_json::json!("selected");
+    assert_eq!(selected_read_response("status", reply.clone()).unwrap().state, "selected");
+    reply["owner_uid"] = serde_json::json!(0);
+    assert!(selected_read_response("status", reply).is_err());
+    assert!(request_file_read(0).is_err());
+    assert!(file_read_status("another-window", 7).is_err());
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn overlay_ignores_executable_environment_override() {
     use std::os::unix::fs::PermissionsExt;
