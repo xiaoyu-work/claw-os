@@ -638,6 +638,7 @@ impl Fixture {
     fn new() -> Self {
         assert_eq!(unsafe { libc::getuid() }, 0);
         assert_eq!(unsafe { libc::geteuid() }, 0);
+        assert!(std::process::id() > 1, "PID 1 must supervise the private controller");
         for uid in [OWNER, FOREIGN_UID] {
             assert!(
                 unsafe { libc::getpwuid(uid) }.is_null(),

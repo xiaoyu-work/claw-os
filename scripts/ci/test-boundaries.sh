@@ -90,7 +90,10 @@ app_apt() {
             bash --noprofile --norc -c '
                 set -euo pipefail
                 mount --make-rprivate /
-                exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
+                # PID 1 supervises; authenticated service controllers require pid > 1.
+                status=0
+                "$1" --exact "$2" --ignored --nocapture --test-threads=1 || status=$?
+                exit "$status"
             ' private-app-apt "$test_binary" "clawd::app_store::apt::tests::$fixture"
     done
 }
