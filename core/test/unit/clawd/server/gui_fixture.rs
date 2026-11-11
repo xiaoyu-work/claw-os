@@ -701,17 +701,14 @@ async fn run_home_metadata_case(group: &std::fs::File) {
     assert!(matches!(crate::approvals::status_for_owner(&request.id, Some(OWNER)),
         crate::approvals::RequestStatus::Consumed));
     let retained = retained_instance(&request.session);
-    let process = ProcessIdentity::from_pidfd(retained.process.as_fd()).unwrap();
-    let mounts = std::fs::read_to_string(format!("/proc/{}/mountinfo", process.pid())).unwrap();
-    assert!(mounts.lines().any(|line| {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        fields.get(4) == Some(&"/run/display-home") && fields.iter().position(|field| *field == "-")
-            .is_some_and(|at| fields.get(at + 1) == Some(&"fuse"))
-    }), "common GUI Host exposed something other than the filtered Home filesystem");
     let runtime = Path::new("/run/cos/gui").join(claw_display_control::Epoch(retained.instance.0).label());
     let metadata_path = runtime.join("home-metadata");
     assert!(std::fs::read_to_string("/proc/self/mountinfo").unwrap().lines().any(|line| {
-        line.split_whitespace().nth(4) == metadata_path.to_str()
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        fields.get(4).copied() == metadata_path.to_str()
+            && fields.iter().position(|field| *field == "-").is_some_and(|at|
+                fields.get(at + 1) == Some(&"fuse")
+                    && fields.get(at + 2).is_some_and(|source| source.starts_with("claw-native-fs-")))
     }));
     let group_path = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
     let processes = std::fs::read_to_string(group_path.join("cgroup.procs")).unwrap().lines().map(|pid| {
