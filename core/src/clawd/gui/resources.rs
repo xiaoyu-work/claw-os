@@ -282,7 +282,14 @@ pub(super) fn validate_optional_mounts(
         && caps.iter().any(|cap| cap == &Cap::new(Verb::FS_META, scope.clone()));
     if controlled { refuse_unsupported_home_needs(&selected, home, caps)?; }
     let projected = if controlled { raw_mount_caps(home, caps, true)? } else { caps.clone() };
-    crate::worker::derive::granted_path_mounts(&projected).map(|_| ())
+    let mounts = crate::worker::derive::granted_path_mounts(&projected)?;
+    if mounts.iter().any(|mount| {
+        matches!(mount.class, MountClass::Input | MountClass::Output)
+            && home.starts_with(&mount.target)
+    }) {
+        return Err("GUI Home resources require the filtered view, never a raw Home bind".into());
+    }
+    Ok(())
 }
 
 pub(super) fn refuse_raw_home(
