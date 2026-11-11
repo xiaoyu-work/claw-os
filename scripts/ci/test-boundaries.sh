@@ -51,9 +51,11 @@ nearby() {
 
 app_apt() {
     local program
-    for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare bwrap setfacl; do
+    for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare bwrap setfacl node google-chrome; do
         command -v "$program" > /dev/null
     done
+    local node_binary
+    node_binary="$(readlink -f -- "$(command -v node)")"
     python3 -I -c 'import apt_pkg'
     cargo build -p cos --bin cos --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
@@ -86,6 +88,7 @@ app_apt() {
                 COS_APP_APT_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
                 COS_APP_APT_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
                 COS_APP_APT_TEST_HOST="$CARGO_TARGET_DIR/debug/claw-extension-host" \
+                COS_APP_APT_TEST_NODE="$node_binary" \
                 COS_APP_APT_PARENT_MNT="$parent_mnt" \
                 COS_APP_APT_PARENT_PID="$parent_pid" \
                 COS_APP_APT_PARENT_NET="$parent_net" \
@@ -302,7 +305,12 @@ display() {
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
     fi
-    sudo timeout 240 unshare --mount --net --ipc --uts --fork \
+    local fixture_timeout=240
+    if [[ "$selection" == display ]]; then
+        # The full lane includes separate protected metadata and content cases.
+        fixture_timeout=360
+    fi
+    sudo timeout "$fixture_timeout" unshare --mount --net --ipc --uts --fork \
         bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
         "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
         "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
