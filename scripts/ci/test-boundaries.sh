@@ -55,7 +55,7 @@ app_apt() {
         command -v "$program" > /dev/null
     done
     python3 -I -c 'import apt_pkg'
-    cargo build -p cos --bin cos --bin claw-app-runner --bin claw-app-apt-hook --locked
+    cargo build -p cos --bin cos --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
     cargo test -p cos --lib --locked --no-run --message-format=json \
         > "$CARGO_TARGET_DIR/app-apt-tests.jsonl"
     local test_binary listing fixture
@@ -83,6 +83,7 @@ app_apt() {
             env COS_APP_APT_TEST_HOOK="$CARGO_TARGET_DIR/debug/claw-app-apt-hook" \
                 COS_APP_APT_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
                 COS_APP_APT_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
+                COS_APP_APT_TEST_HOST="$CARGO_TARGET_DIR/debug/claw-extension-host" \
                 COS_APP_APT_PARENT_MNT="$parent_mnt" \
                 COS_APP_APT_PARENT_PID="$parent_pid" \
                 COS_APP_APT_PARENT_NET="$parent_net" \
