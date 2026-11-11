@@ -467,7 +467,7 @@ fn native_fs_kernel(view: &str) {
 
         let watched = File::open(view.join("watched")).unwrap();
         assert_eq!(std::fs::read(view.join("watched")).unwrap(), b"watch-before\0");
-        let mut backing_watch = watcher(view, libc::IN_DELETE);
+        let mut backing_watch = watcher(&view.join("watched"), libc::IN_DELETE_SELF | libc::IN_ATTRIB);
         tag(b"WATC");
         priority(&watched);
         next(b'C');
@@ -478,8 +478,9 @@ fn native_fs_kernel(view: &str) {
         denied(&view.join("external-entry"));
         tag(b"CHNG");
         priority(&watched);
-        let seen = events(&mut backing_watch, "external directory deletion");
-        assert!(seen.iter().any(|(mask, name)| mask & libc::IN_DELETE != 0 && name == b"watched"));
+        drop(watched);
+        let seen = events(&mut backing_watch, "closed selected file deletion");
+        assert!(seen.iter().any(|(mask, _)| mask & libc::IN_DELETE_SELF != 0));
         assert!(std::fs::metadata(view.join("watched")).is_err());
         tag(b"GONE");
         output
