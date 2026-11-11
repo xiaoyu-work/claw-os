@@ -7,7 +7,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
-use super::presentation::{decision_for, show, DecisionBody};
+use super::presentation::{
+    decision_for, show, system_decision_for, DecisionBody, SystemDecisionBody,
+};
 use crate::agent::web::auth::AuthenticatedToken;
 use crate::agent::web::authorization::Snapshot;
 use crate::agent::web::state::AppState;
@@ -83,6 +85,25 @@ pub async fn start_authorization(
         ));
     }
     let decision = decision_for(&review, body)?;
+    let snapshot = state
+        .inner
+        .authorizations
+        .start(&caller, origin, review, decision)
+        .await
+        .map_err(failure)?;
+    reply(snapshot)
+}
+
+pub async fn start_system_authorization(
+    State(state): State<AppState>,
+    Extension(caller): Extension<AuthenticatedToken>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SystemDecisionBody>,
+) -> Result<Reply, Failure> {
+    let origin = origin(&headers, &state)?;
+    let review = show(&id).await?;
+    let decision = system_decision_for(&review, body, false)?;
     let snapshot = state
         .inner
         .authorizations

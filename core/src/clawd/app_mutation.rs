@@ -7,6 +7,11 @@ use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 type Gates = Mutex<HashMap<String, Weak<RwLock<()>>>>;
 
+fn admissions() -> Arc<RwLock<()>> {
+    static ADMISSIONS: OnceLock<Arc<RwLock<()>>> = OnceLock::new();
+    ADMISSIONS.get_or_init(|| Arc::new(RwLock::new(()))).clone()
+}
+
 fn gate(app: &str) -> Result<Arc<RwLock<()>>, String> {
     static GATES: OnceLock<Gates> = OnceLock::new();
     let mut gates = GATES
@@ -23,13 +28,24 @@ fn gate(app: &str) -> Result<Arc<RwLock<()>>, String> {
 }
 
 pub(crate) fn admit(app: &str) -> Result<OwnedRwLockReadGuard<()>, String> {
+    let _global = admissions().try_read_owned()
+        .map_err(|_| "A Root package transaction is draining App admissions")?;
     package_manager_idle()?;
+    #[cfg(target_os = "linux")]
+    if super::package_transactions::pending(app)? {
+        return Err("A retained Root package effect has an unconfirmed outcome".into());
+    }
     if super::app_store::delivery_pending(app)? || super::app_install::pending(app)? {
         return Err(format!("App `{app}` has an active or indeterminate package transaction"));
     }
     gate(app)?
         .try_read_owned()
         .map_err(|_| format!("App `{app}` package mutation is pending; retry admission afterwards"))
+}
+
+pub(crate) async fn fence_all() -> Result<OwnedRwLockWriteGuard<()>, String> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), admissions().write_owned())
+        .await.map_err(|_| "Root global App admission has not drained".into())
 }
 
 fn package_manager_idle() -> Result<(), String> {

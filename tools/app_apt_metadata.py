@@ -25,7 +25,7 @@ def classify(packages, cache, records, sources):
             raise ValueError("invalid bounded APT package identity")
         if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{1,254}", package["package"]) or (
             not 0 < len(package["version"]) <= 255
-            or package["architecture"] not in ("all", "amd64", "arm64")
+            or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,254}", package["architecture"])
             or not re.fullmatch(r"[0-9a-f]{64}", package["sha256"])
         ):
             raise ValueError("invalid APT package identity")

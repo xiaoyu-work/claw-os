@@ -118,6 +118,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.package.install",
     "system.package.control",
     "system.package.restore",
+    "system.package.status",
+    "system.package.recover",
     "system.power.control",
     "system.printer.control",
     "system.regional-settings.control",

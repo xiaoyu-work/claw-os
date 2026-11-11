@@ -19,6 +19,13 @@ web UI.
   Chat, Tasks and Approvals share compact, expandable rows. Resolved capability
   consent is labelled Authorized/Denied, never task completion. Only pending
   unsupported choices become blocking diagnostics; real status errors remain visible.
+- Present separate package-impact/all-App-stop reviews in top-level OS
+  Approvals, not App Store installation or capability rows. Root supplies the
+  plan, impact, uncertainty disclosures, current actions and displayed
+  revision. Global-stop confirmation only starts the existing process-bound
+  polkit/PAM dialog; owner cancellation uses `system.review.cancel`.
+  Confirmation recorded/used is never package-transaction success. Handled
+  reviews are refreshed from Root rather than inferred from queue absence.
 - Present OS password authentication in a bounded in-page dialog through a
   process-bound polkit agent, including WSL without a desktop/logind session.
   Bind responses to the owner, Web token, origin, displayed review and current
@@ -99,6 +106,7 @@ web UI.
 | `routes/workspaces.rs`, `ui/src/lib/workspaces.ts`, `ui/src/pages/workspaces.tsx` | Shared owner Workspace CRUD, source/search/index and temporary-read controls with strict bounded decoding and decimal-string revisions |
 | `routes/memory.rs`, `ui/src/pages/memory.tsx` | Same-owner memory inspection, checked learned-note editing and explicit forgetting through the shared broker |
 | `routes/approvals/presentation.rs`, `ui/src/components/chat-approvals.tsx` | Shared readable capability-review projection, same-task discovery, exact displayed-revision decisions and helper delegation |
+| `routes/approvals/{presentation,authorization}.rs` | Separate Root package-impact projection, revision-only authorization start and non-grant cancellation; never an App-install confirmation |
 | `authorization.rs`, `authorization/polkit.rs`, `routes/approvals/authorization.rs` | Ephemeral browser-bound polkit/PAM conversation, fixed OS helpers, deadlines/cancellation and root-broker outcome reconciliation |
 | `ui/src/components/os-authorization.tsx` | Password-only dialog outside untrusted Markdown; no secret React state, storage or automatic response replay |
 | `routes/notifications.rs` | Notification list, SSE, state, preferences and owner-scoped conversation-view bridge to `clawd` |
@@ -182,7 +190,14 @@ Activity adapters retain Main's authenticated owner transport and local/remote
 Web session provenance. Task submission, safe retry, App-service admission and
 protected owner App review remain backend responsibilities. The existing
 capability-approval Web page is not a replacement for `cos review` or the native
-OS review presenter, and Activity text remains labelled untrusted owner data.
+OS review authority, and Activity text remains labelled untrusted owner data.
+The Web is a presentation for separate `PackageImpact` reviews through that
+same protected OS authority. App frames receive neither its token nor new
+routes/privileges. Existing App-install/activation/update dialogs explicitly
+reject package-impact reviews. Password handling remains exclusively in
+`OsAuthorizationDialog` and the existing owner/token/origin/process/prompt-bound
+authorization controller; positive HTTP clicks never call
+`system.review.decide` directly.
 Main's protocol-11 worker keeps PREPARE/COMMIT admission and bound approvals;
 dynamic App/MCP execution stays in the isolated extension Host. Web adapters
 do not restore retired worker AppHost control or weaken nonce/digest/context

@@ -21,14 +21,14 @@ use crate::clawd::protocol::BrokerError;
 
 const HOOK: &str = "/usr/lib/cos/bin/claw-app-apt-hook";
 const TIMEOUT: Duration = Duration::from_secs(15 * 60);
-static TRANSACTION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static TRANSACTION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Plan {
+pub(crate) struct Plan {
     pub digest: String,
-    status_sha256: String,
-    packages: Vec<Package>,
+    pub(crate) status_sha256: String,
+    pub(crate) packages: Vec<Package>,
     pub reviews: Vec<AppReview>,
     pub affected_apps: Vec<String>,
     pub hook_consumed: bool,
@@ -36,25 +36,25 @@ pub(super) struct Plan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Package {
-    file: String,
-    identity: DeliveryPackage,
-    size: u64,
-    sha256: String,
-    inventory: Option<store::AptPackage>,
+pub(crate) struct Package {
+    pub(crate) file: String,
+    pub(crate) identity: DeliveryPackage,
+    pub(crate) size: u64,
+    pub(crate) sha256: String,
+    pub(crate) inventory: Option<store::AptPackage>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct AppReview {
+pub(crate) struct AppReview {
     pub app_id: String,
     pub review_id: String,
-    source: PathBuf,
-    package: PackageRef,
+    pub(crate) source: PathBuf,
+    pub(crate) package: PackageRef,
 }
 
 #[derive(Clone)]
-struct HookContext {
+pub(crate) struct HookContext {
     pid: u32,
     start: u64,
 }
@@ -64,12 +64,12 @@ fn hooks() -> &'static Mutex<BTreeMap<String, HookContext>> {
     HOOKS.get_or_init(Default::default)
 }
 
-fn directory(id: &str) -> Result<PathBuf, String> {
+pub(crate) fn directory(id: &str) -> Result<PathBuf, String> {
     super::request_path(id)?;
     Ok(root().join("staging").join(id))
 }
 
-fn verify_source(review: &AppReview) -> Result<crate::provenance::VerifiedPackage, String> {
+pub(crate) fn verify_source(review: &AppReview) -> Result<crate::provenance::VerifiedPackage, String> {
     let package = crate::provenance::verify::verify_package(
         &review.source,
         &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App),
@@ -82,13 +82,16 @@ fn verify_source(review: &AppReview) -> Result<crate::provenance::VerifiedPackag
     Ok(package)
 }
 
-async fn run(
+pub(crate) async fn run(
     program: &'static str,
     args: Vec<String>,
     commit: Option<String>,
     input: Option<Vec<u8>>,
 ) -> Result<crate::worker::exec::WorkerOutput, String> {
     tokio::task::spawn_blocking(move || {
+        let retained_package = commit.as_deref()
+            .map(crate::clawd::package_transactions::owns).transpose()?.unwrap_or(false);
+        let mut retained_identity = None;
         let mut registry = if commit.is_some() {
             Some(
                 hooks()
@@ -141,6 +144,15 @@ async fn run(
                 let _ = child.wait();
                 return Err("APT child kernel identity is unavailable".into());
             };
+            if retained_package {
+                if let Err(error) = crate::clawd::package_transactions::apt_started(id, pid, start) {
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                retained_identity = Some((id.clone(), start));
+            }
             registry
                 .as_mut()
                 .unwrap()
@@ -182,6 +194,11 @@ async fn run(
                 .map_err(|error| error.to_string())?;
         }
         let (status, timed_out) = waited?;
+        if !timed_out {
+            if let (Some((id, start)), Some(code)) = (retained_identity, status.code()) {
+                crate::clawd::package_transactions::apt_finished(&id, pid, start, code)?;
+            }
+        }
         if timed_out || stdout_truncated || stderr_truncated || !status.success() {
             return Err(format!(
                 "OS package command did not complete successfully (exit {:?})",
@@ -243,7 +260,7 @@ fn arguments(cache: &Path, selected: &store::AptPackage, install: bool) -> Vec<S
     args
 }
 
-async fn identity(path: &Path) -> Result<DeliveryPackage, String> {
+pub(crate) async fn identity(path: &Path) -> Result<DeliveryPackage, String> {
     let output = run(
         "/usr/bin/dpkg-deb",
         vec![
@@ -271,13 +288,11 @@ async fn identity(path: &Path) -> Result<DeliveryPackage, String> {
     };
     crate::clawd::packages::validate_package_name(&identity.package)?;
     crate::update::debver::Version::parse(&identity.version)?;
-    if !matches!(identity.architecture.as_str(), "all" | "amd64" | "arm64") {
-        return Err("Unsupported Debian package architecture".into());
-    }
+    crate::clawd::packages::validate_package_name(&format!("fixture:{}", identity.architecture))?;
     Ok(identity)
 }
 
-fn status_digest() -> Result<String, String> {
+pub(crate) fn status_digest() -> Result<String, String> {
     debian::file_binding(Path::new("/var/lib/dpkg/status")).map(|(_, digest)| digest)
 }
 
@@ -298,7 +313,7 @@ fn review_space(root: &Path) -> Result<u64, String> {
     Ok(budget)
 }
 
-fn download_budget(text: &str) -> Result<(), String> {
+pub(crate) fn download_budget(text: &str) -> Result<(), String> {
     let mut total = 0_u64;
     let mut count = 0;
     for line in text.lines().filter(|line| line.starts_with('\'')) {
@@ -320,7 +335,7 @@ fn download_budget(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn authenticated_sources(packages: &[Package]) -> Result<Vec<bool>, String> {
+pub(crate) async fn authenticated_sources(packages: &[Package]) -> Result<Vec<bool>, String> {
     let input = packages
         .iter()
         .map(|package| {
@@ -409,14 +424,32 @@ pub(super) async fn prepare(
     if files.is_empty() || files.len() > 512 {
         return Err("APT did not prepare a bounded concrete package transaction".into());
     }
+    prepare_packages(owner, id, Some(record), catalog, before, files, None).await
+}
+
+pub(crate) async fn prepare_packages(
+    owner: u32,
+    id: &str,
+    record: Option<&store::Record>,
+    catalog: &store::Catalog,
+    before: String,
+    files: Vec<PathBuf>,
+    context: Option<&Value>,
+) -> Result<Plan, String> {
+    if files.len() > 512 || record.is_some() && files.is_empty() {
+        return Err("APT did not prepare a bounded concrete package transaction".into());
+    }
+    let root = directory(id)?;
+    let selected = record.map(|record| catalog.apt_package(record)).transpose()?;
     let mut packages = Vec::new();
     let mut apps = Vec::new();
     let mut all_apps = false;
     let mut identities = BTreeSet::new();
-    let mut found = false;
+    let mut found = record.is_none();
     let inspected = root.join("inspect");
     secure_directory(&inspected, 0o755)?;
-    let mut expansion_budget = review_space(&inspected)?;
+    let mut expansion_budget = if files.is_empty() || catalog.packages.is_empty() { 0 }
+        else { review_space(&inspected)? };
     for path in &files {
         let identity = identity(path).await?;
         let (size, sha256) = debian::file_binding(path)?;
@@ -432,7 +465,8 @@ pub(super) async fn prepare(
             inventory: None,
         });
     }
-    let trusted_os = authenticated_sources(&packages).await?;
+    let trusted_os = if packages.is_empty() { Vec::new() }
+        else { authenticated_sources(&packages).await? };
     if packages
         .iter()
         .try_fold(0_u64, |total, package| total.checked_add(package.size))
@@ -445,7 +479,7 @@ pub(super) async fn prepare(
         if !identities.insert((identity.package.clone(), identity.architecture.clone())) {
             return Err("APT prepared duplicate package identities".into());
         }
-        if identity.package.starts_with("claw-os-") {
+        if record.is_some() && identity.package.starts_with("claw-os-") {
             return Err(
                 "Update the OS Agent/services separately before installing this App".into(),
             );
@@ -500,9 +534,10 @@ pub(super) async fn prepare(
                 if package.audit_facts().get("trust").and_then(Value::as_str) != Some("publisher") {
                     return Err("Official Debian Apps require ordinary publisher provenance".into());
                 }
-                if app.manifest.id == record.app_id {
+                if record.is_some_and(|record| app.manifest.id == record.app_id) {
+                    let record = record.ok_or("Missing selected App record")?;
                     record.verify_package(package)?;
-                    if official.sha256 != selected.sha256 {
+                    if official.sha256 != selected.ok_or("Missing selected App package")?.sha256 {
                         return Err("Selected App belongs to a different Debian package".into());
                     }
                     found = true;
@@ -521,9 +556,10 @@ pub(super) async fn prepare(
     if !found {
         return Err("APT did not download the authenticated selected App package".into());
     }
-    let digest = store::sha256(
-        &serde_json::to_vec(&(&before, &packages)).map_err(|error| error.to_string())?,
-    );
+    let digest = store::sha256(&match context {
+        Some(context) => serde_json::to_vec(&(&before, &packages, context)),
+        None => serde_json::to_vec(&(&before, &packages)),
+    }.map_err(|error| error.to_string())?);
     let delivery = DeliveryReview {
         digest: digest.clone(),
         packages: packages
@@ -542,7 +578,9 @@ pub(super) async fn prepare(
         let review = reviews::submit_delivery(
             owner,
             &package,
-            format!("Official APT Store install {id}"),
+            format!("{} {id}", if context.is_some() {
+                "Root system package transaction"
+            } else { "Official APT Store install" }),
             delivery.clone(),
         )?;
         reviews.push(AppReview {
@@ -577,9 +615,8 @@ pub(super) async fn publish(
     pending: &Prepared,
     catalog: &store::Catalog,
 ) -> Result<Value, String> {
-    let _transaction = TRANSACTION
-        .try_lock()
-        .map_err(|_| "Another App package transaction is active")?;
+    let _publication = super::PUBLICATION.lock().await;
+    crate::clawd::package_transactions::require_idle(None)?;
     let plan = pending
         .apt
         .as_ref()
@@ -605,6 +642,8 @@ pub(super) async fn publish(
         super::retire_installed(state, app, fence.clone()).await?;
         fences.push(fence);
     }
+    let _transaction = TRANSACTION.try_lock()
+        .map_err(|_| "Another package provider is still active")?;
     if status_digest()? != plan.status_sha256 {
         return Err(
             "Installed package state changed after review; prepare a new delivery plan".into(),
@@ -695,11 +734,6 @@ pub async fn hook(params: Value, client: &ClientIdentity) -> Result<Value, Broke
     let files: Vec<String> =
         serde_json::from_value(params.get("files").cloned().unwrap_or(Value::Null))
             .map_err(|_| BrokerError::authorization("Invalid APT archive list"))?;
-    if files.is_empty() || files.len() > 512 {
-        return Err(BrokerError::authorization(
-            "APT archive list exceeds its bound",
-        ));
-    }
     let context = hooks()
         .lock()
         .map_err(|_| BrokerError::unavailable("APT hook registry is unavailable"))?
@@ -724,6 +758,12 @@ pub async fn hook(params: Value, client: &ClientIdentity) -> Result<Value, Broke
         return Err(BrokerError::authorization(
             "APT helper is not the tracked protected transaction child",
         ));
+    }
+    if crate::clawd::package_transactions::owns(&id).map_err(BrokerError::authorization)? {
+        return crate::clawd::package_transactions::hook(&id, files, &context).await;
+    }
+    if files.is_empty() || files.len() > 512 {
+        return Err(BrokerError::authorization("APT archive list exceeds its bound"));
     }
     let mut pending: Prepared =
         super::read_json(&super::request_path(&id).map_err(BrokerError::authorization)?)

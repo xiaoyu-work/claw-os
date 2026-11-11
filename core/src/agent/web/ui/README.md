@@ -99,6 +99,14 @@ its authenticated owner's identity. HTTPS is required outside loopback, and
 responses are bound to the same origin, Web token and single-use prompt.
 Cancelling authentication does not undo an already recorded authorization.
 The Root helper and broker remain the only permission-decision authority.
+Top-level **Approvals** separately displays Root package-impact/global-stop
+reviews, including the exact plan/impact disclosures and unsaved-work warning.
+Its confirmation button starts the same OS-password dialog; it is not an
+App-install confirmation, capability choice, or package-success result.
+Only Root-offered actions for the displayed revision are available. Cancellation
+uses the owner-only non-grant path. Confirmation-used status is refreshed by
+review ID even after the request leaves the pending list; absence is never
+treated as success. App frames receive no Web token or OS approval interface.
 Agent Markdown cannot render password inputs or other active form controls;
 task-list checkboxes remain inert presentation. `cos review` remains the
 independent attended-terminal interface.

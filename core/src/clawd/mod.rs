@@ -69,6 +69,8 @@ pub mod notifications;
 pub mod observations;
 pub mod operation_previews;
 pub mod packages;
+#[cfg(target_os = "linux")]
+pub(crate) mod package_transactions;
 pub mod permissions;
 pub mod power;
 pub mod printer;

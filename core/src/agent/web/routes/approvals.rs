@@ -15,8 +15,12 @@ pub(super) mod authorization;
 mod presentation;
 pub use authorization::{
     authorization_response, authorization_status, cancel_authorization, start_authorization,
+    start_system_authorization,
 };
-pub use presentation::{decide_review, pending_reviews, recent_reviews, task_reviews};
+pub use presentation::{
+    cancel_system_review, decide_review, pending_reviews, recent_reviews, system_review,
+    task_reviews,
+};
 
 pub async fn pending(
     State(_state): State<AppState>,

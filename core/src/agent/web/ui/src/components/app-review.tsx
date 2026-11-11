@@ -22,7 +22,11 @@ export function AppReviewDialog({ review, onConfirmed, onCancel, progress }: {
     try {
       const value = await api.post(`/api/app-reviews/${encodeURIComponent(review.id)}/authorization`,
         { revision: review.revision }, { signal: AbortSignal.timeout(15_000) });
-      setAuthorization(readAuthorization(value, { review_id: review.id, revision: review.revision }));
+      setAuthorization(readAuthorization(value, {
+        review_id: review.id, revision: review.revision, choice: null,
+        action: review.kind === "activation" ? "confirm_activation"
+          : review.kind === "update" ? "confirm_update" : "confirm_install",
+      }));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "App confirmation could not start.");
     } finally {

@@ -11,6 +11,7 @@ test("isolated App messages cannot invoke another App or a system API", () => {
   expect(appMessage(message, nonce, app)?.tool).toBe("kv.get");
   expect(appMessage({ ...message, tool: "email.send" }, nonce, app)).toBeNull();
   expect(appMessage({ ...message, type: "task.submit" }, nonce, app)).toBeNull();
+  expect(appMessage({ ...message, type: "confirm_global_app_stop" }, nonce, app)).toBeNull();
   expect(appMessage({ ...message, nonce: "b".repeat(64) }, nonce, app)).toBeNull();
   expect(appMessage({ ...message, arguments: [] }, nonce, app)).toBeNull();
   expect(appMessage({ ...message, arguments: { value: "x".repeat(1024 * 1024) } }, nonce, app)).toBeNull();
@@ -32,6 +33,7 @@ test("App installation confirmation is distinct from runtime capability authoriz
   };
   expect(readAppReview(review).revision).toBe("18446744073709551615");
   expect(() => readAppReview({ ...review, revision: 9007199254740993 })).toThrow();
+  expect(() => readAppReview({ ...review, kind: "package_impact" })).toThrow();
   const auth = {
     id: nonce, review_id: review.id, revision: review.revision, label: "Key-value", target: "kv",
     choice: null, action: "confirm_install", phase: "starting", prompt: null, message: null,
@@ -39,6 +41,9 @@ test("App installation confirmation is distinct from runtime capability authoriz
   expect(readAuthorization(auth, { review_id: review.id, revision: review.revision }).choice).toBeNull();
   expect(() => readAuthorization({ ...auth, choice: "allow_forever" }, auth)).toThrow();
   expect(() => readAuthorization({ ...auth, action: "apply_choices" }, auth)).toThrow();
+  expect(() => readAuthorization({ ...auth, action: "confirm_global_app_stop" }, {
+    review_id: review.id, revision: review.revision, choice: null, action: "confirm_install",
+  })).toThrow();
 });
 
 test("official Store Apps bind the exact APT package rather than a snapshot installer", () => {

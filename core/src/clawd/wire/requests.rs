@@ -1752,6 +1752,8 @@ pub struct NetworkDiagnose {
 #[serde(deny_unknown_fields)]
 pub struct PackageInstall {
     pub session: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<Token<32>>,
     /// Overwritten with `install` by the route before dispatch; kept
     /// declarable so an existing caller that sends it is not refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1768,6 +1770,10 @@ pub struct PackageControl {
     pub session: Token,
     pub action: Token,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<Token<32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packages: Option<Vec<Name>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<Name>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Name>,
@@ -1777,12 +1783,29 @@ pub struct PackageControl {
 #[serde(deny_unknown_fields)]
 pub struct PackageRestore {
     pub session: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<Token<32>>,
     pub mutation_session: Token,
     pub mutation_seq: u64,
     pub package: Name,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_version: Option<Name>,
     pub was_held: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageTransactionStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Token<32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_id: Option<Token<32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageTransactionRecover {
+    pub request_id: Token<32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

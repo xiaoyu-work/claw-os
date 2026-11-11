@@ -63,6 +63,32 @@ fn dto_round_trips_without_core_or_gui_models() {
 
 #[test]
 fn malformed_or_new_wire_shapes_are_not_defaulted_to_pending_or_allow() {
+    let mut stop = review();
+    stop.kind = ReviewKind::PackageImpact;
+    stop.subject.app_id = None;
+    stop.subject.version = None;
+    stop.subject.publisher = None;
+    stop.permissions.clear();
+    stop.changes = None;
+    stop.actions = vec![ReviewAction::Cancel, ReviewAction::ConfirmGlobalAppStop];
+    stop.validate().unwrap();
+    let mut decision = ReviewDecision {
+        id: stop.id.clone(), revision: stop.revision,
+        action: ReviewAction::ConfirmGlobalAppStop, choices: Vec::new(),
+    };
+    decision.validate_for(&stop).unwrap();
+    decision.action = ReviewAction::ConfirmInstall;
+    assert!(decision.validate_for(&stop).is_err());
+    decision.action = ReviewAction::ConfirmGlobalAppStop;
+    decision.choices.push(PermissionSelection {
+        permission_id: "caller-choice".into(), choice: PermissionChoice::AllowForever,
+    });
+    assert!(decision.validate_for(&stop).is_err());
+    decision.choices.clear();
+    decision.revision += 1;
+    assert!(decision.validate_for(&stop).is_err());
+    stop.subject.app_id = Some("caller-business-name".into());
+    assert!(stop.validate().is_err());
     let original = serde_json::to_value(review()).unwrap();
     for (field, value) in [
         ("status", json!("unknown")),

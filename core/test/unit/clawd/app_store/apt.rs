@@ -1,9 +1,9 @@
 // Actual APT/dpkg acceptance after synthetic catalog selection and publisher trust setup.
 // The signed repository uses private loopback HTTP, not production HTTPS/catalog keys.
-// This does not exercise live accounts, App execution, active Host retirement, UI consent
-// or publication readiness. Root supplies decisions to the existing protected review store;
+// Retained cases also exercise real ordinary App custody, never GUI/MCP or UI consent.
+// No live accounts or publication readiness: Root supplies synthetic owner decisions;
 // neither presentation flags nor digests approve. Run each main case in separate Root
-// mount/network namespaces through `scripts/ci/test-boundaries.sh app-apt`.
+// mount/PID/network namespaces through `scripts/ci/test-boundaries.sh app-apt`.
 
 use super::*;
 use crate::clawd::app_store as controller;
@@ -13,8 +13,8 @@ use crate::clawd::transport::{frame::PeerStream, peer, ReadOutcome};
 use crate::clawd::wire::Request;
 use crate::provenance::trust::TrustRootSpec;
 use crate::provenance::{sign, PackageKind, TrustStore, TrustTier};
-use std::io::Read;
-use std::os::fd::{AsFd, AsRawFd};
+use std::io::{BufRead, Read};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -25,9 +25,12 @@ const FOREIGN_UID: u32 = 61995;
 const APPS: [&str; 2] = ["apt-fixture-alpha", "apt-fixture-beta"];
 const BUNDLE: &str = "claw-app-acceptance-bundle";
 const SUPPORT: &str = "claw-app-acceptance-support";
+const SIDE_EFFECT: &str = "claw-package-acceptance-side-effect";
 const SUPPORT_PATH: &str = "/usr/lib/cos/python/fixture_support.py";
 const SUPPORT_BYTES: &[u8] = b"VALUE = 'separately dpkg-owned fixture support'\n";
 const PROBE: &str = "clawd::app_store::apt::tests::private_apt_foreign_uid_probe";
+const RETAINED_PEER: &str = "clawd::app_store::apt::tests::private_apt_retained_peer";
+const ORDINARY_ACTOR: &str = "clawd::app_store::apt::tests::private_apt_ordinary_actor";
 const PLUMBING: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/test/unit/clawd/app_store/repository.py"
@@ -45,12 +48,23 @@ fn checked(command: &mut std::process::Command) -> Vec<u8> {
 }
 
 fn plumbing(action: &str) {
-    checked(
-        std::process::Command::new("/usr/bin/python3")
-            .args(["-I", "-B", PLUMBING, action])
-            .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
-    );
+    let mut command = std::process::Command::new("/usr/bin/python3");
+    command
+        .args(["-I", "-B", PLUMBING, action])
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+    private_namespace_environment(&mut command);
+    checked(&mut command);
+}
+
+fn private_namespace_environment(command: &mut std::process::Command) {
+    for namespace in ["MNT", "PID", "NET"] {
+        let name = format!("COS_APP_APT_PARENT_{namespace}");
+        command.env(
+            &name,
+            std::env::var(&name).expect("private namespace runner"),
+        );
+    }
 }
 
 fn copy_executable(source: &Path, destination: &Path) {
@@ -80,7 +94,29 @@ fn sign_app(directory: &Path, id: &str, key: &sign::SigningKeyFile) {
     std::fs::create_dir_all(directory.join("web")).unwrap();
     std::fs::write(
         directory.join("main.py"),
-        "def run(command, args):\n    return {'fixture': True}\n",
+        format!(
+            r#"
+import json, os, pathlib, subprocess, time
+
+def run(command, args):
+    if command == "probe":
+        return {{"fixture": True}}
+    data = pathlib.Path(os.environ["COS_DATA_DIR"])
+    (data / "ready.json").write_text(json.dumps({{"ready": True}}))
+    if command == "handoff":
+        while not (data / "go").exists():
+            time.sleep(0.01)
+        result = subprocess.run(
+            ["/usr/local/bin/cos", "__package", "--retained", "remove", "{BUNDLE}"],
+            capture_output=True, text=True,
+        )
+        (data / "reply.json").write_text(json.dumps({{
+            "code": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
+        }}))
+    while True:
+        time.sleep(1)
+"#
+        ),
     )
     .unwrap();
     std::fs::write(
@@ -88,9 +124,19 @@ fn sign_app(directory: &Path, id: &str, key: &sign::SigningKeyFile) {
         json!({
             "schema_version": 2, "id": id, "version": "1.0.0", "runtime": "python",
             "name": {"en": id}, "summary": {"en": "Private APT acceptance App"},
-            "operations": {"probe": {
-                "label": {"en": "Probe"}, "needs": [], "args": []
-            }}
+            "operations": {
+                "probe": {"label": {"en": "Probe"}, "needs": [], "args": []},
+                "hold": {"label": {"en": "Hold"}, "needs": [], "args": []},
+                "handoff": {
+                    "label": {"en": "Remove own package"},
+                    "needs": [{
+                        "verb": "sys.package",
+                        "scope": {"kind": "fixed", "scope": {"kind": "name", "value": BUNDLE}},
+                        "why": {"en": "Private self-handoff acceptance"}
+                    }],
+                    "args": []
+                }
+            }
         })
         .to_string(),
     )
@@ -227,6 +273,7 @@ impl LocalRepository {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
+        private_namespace_environment(&mut command);
         let parent = std::process::id() as libc::pid_t;
         unsafe {
             command.pre_exec(move || {
@@ -335,9 +382,19 @@ struct Observation {
     message: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct RetainedCall {
+    uid: u32,
+    command: crate::clawd::routes::Command,
+    params: Value,
+    result: Option<Value>,
+}
+
 struct Broker {
     action: Arc<Mutex<Option<HookAction>>>,
     observed: Arc<Mutex<Vec<Observation>>>,
+    calls: Arc<Mutex<Vec<RetainedCall>>>,
+    lose_package_reply: Arc<std::sync::atomic::AtomicBool>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -356,8 +413,12 @@ impl Broker {
         .unwrap();
         let action: Arc<Mutex<Option<HookAction>>> = Arc::new(Mutex::new(None));
         let observed = Arc::new(Mutex::new(Vec::new()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let lose_package_reply = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let next = action.clone();
         let captured = observed.clone();
+        let captured_calls = calls.clone();
+        let lose_next = lose_package_reply.clone();
         let (stop, mut stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
@@ -374,6 +435,8 @@ impl Broker {
                 let admission = admission.clone();
                 let next = next.clone();
                 let captured = captured.clone();
+                let captured_calls = captured_calls.clone();
+                let lose_next = lose_next.clone();
                 connections.spawn(async move {
                     let mut stream = PeerStream::new(accepted).unwrap();
                     let ReadOutcome::Frame(frame) = stream
@@ -390,11 +453,14 @@ impl Broker {
                     let executable = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
                     let client = ClientIdentity::from_peer(credentials);
                     let request: Request = serde_json::from_slice(&frame.body).unwrap();
-                    assert_eq!(
-                        request.command,
-                        crate::clawd::routes::Command::AppStoreAptHook
-                    );
-                    let action = next.lock().unwrap().take();
+                    let command = request.command;
+                    let params = request.params.clone();
+                    let hook = command == crate::clawd::routes::Command::AppStoreAptHook;
+                    let action = if hook {
+                        next.lock().unwrap().take()
+                    } else {
+                        None
+                    };
                     let mut lose_reply = false;
                     match action {
                         Some(HookAction::Substitute(substitution)) => {
@@ -420,22 +486,45 @@ impl Broker {
                         request, &client, &state, &admission,
                     )
                     .await;
-                    captured.lock().unwrap().push(Observation {
-                        uid,
-                        pid,
-                        parent,
-                        executable,
-                        ok: response.ok,
-                        code: response.error.as_ref().map(|error| error.code.clone()),
-                        message: response.error.as_ref().map(|error| error.message.clone()),
-                    });
+                    if hook {
+                        captured.lock().unwrap().push(Observation {
+                            uid,
+                            pid,
+                            parent,
+                            executable,
+                            ok: response.ok,
+                            code: response.error.as_ref().map(|error| error.code.clone()),
+                            message: response.error.as_ref().map(|error| error.message.clone()),
+                        });
+                    } else {
+                        let package_call = command
+                            == crate::clawd::routes::Command::SystemPackageControl
+                            || (command == crate::clawd::routes::Command::AppSessionRelay
+                                && params["command"]
+                                    == crate::clawd::routes::Command::SystemPackageControl
+                                        .as_str());
+                        captured_calls.lock().unwrap().push(RetainedCall {
+                            uid,
+                            command,
+                            params,
+                            result: response.result.clone(),
+                        });
+                        if package_call
+                            && response.ok
+                            && lose_next.swap(false, std::sync::atomic::Ordering::SeqCst)
+                        {
+                            lose_reply = true;
+                        }
+                    }
                     if !lose_reply {
-                        stream
+                        let written = stream
                             .write_response(
                                 &crate::clawd::protocol::encode_response(&response).unwrap(),
                             )
-                            .await
-                            .unwrap();
+                            .await;
+                        if hook {
+                            written.unwrap();
+                        }
                     }
                 });
             }
@@ -446,6 +535,8 @@ impl Broker {
         Self {
             action,
             observed,
+            calls,
+            lose_package_reply,
             stop: Some(stop),
             task: Some(task),
         }
@@ -476,6 +567,7 @@ struct Fixture {
     state: DaemonState,
     catalog: store::Catalog,
     server: Broker,
+    containment: PathBuf,
     _repository: LocalRepository,
     _services: Arc<crate::clawd::app_services::AppServiceManager>,
     _group: RootGroup,
@@ -612,7 +704,7 @@ impl Fixture {
             Path::new("/run/cos/clawd.sock").into(),
         )
         .unwrap();
-        broker.extension_containment().unwrap();
+        let containment = broker.extension_containment().unwrap().path().to_path_buf();
         crate::clawd::app_execution::initialize(&broker);
         crate::clawd::gui::Manager::start(state.clone(), admission.clone()).unwrap();
         let services = crate::clawd::app_services::AppServiceManager::new(broker);
@@ -622,6 +714,7 @@ impl Fixture {
             state,
             catalog,
             server,
+            containment,
             _repository: repository,
             _services: services,
             _group: group,
@@ -773,6 +866,533 @@ impl Fixture {
 
     async fn finish(mut self) {
         self.server.shutdown().await;
+    }
+
+    fn enable_processes(&self) {
+        for (variable, destination) in [
+            ("COS_APP_APT_TEST_COS", "/usr/local/bin/cos"),
+            ("COS_APP_APT_TEST_RUNNER", "/usr/local/bin/claw-app-runner"),
+        ] {
+            copy_executable(
+                &PathBuf::from(std::env::var_os(variable).expect("matching compiled OS binary")),
+                Path::new(destination),
+            );
+        }
+        let mut passwd = std::fs::read_to_string("/etc/passwd").unwrap();
+        let mut group = std::fs::read_to_string("/etc/group").unwrap();
+        for uid in [OWNER, FOREIGN_UID] {
+            assert!(unsafe { libc::getpwuid(uid) }.is_null());
+            assert!(unsafe { libc::getgrgid(uid) }.is_null());
+            let home = fixture_home(uid);
+            owned_directory(&home, uid);
+            for directory in ["data", "state", "log", "cache", "runtime"] {
+                owned_directory(&home.join(directory), uid);
+            }
+            passwd.push_str(&format!(
+                "apt-fixture-{uid}:x:{uid}:{uid}:private fixture:{}:/usr/sbin/nologin\n",
+                home.display(),
+            ));
+            group.push_str(&format!("apt-fixture-{uid}:x:{uid}:\n"));
+        }
+        for (name, body) in [("passwd", passwd), ("group", group)] {
+            let source = Path::new(BASE).join(name);
+            std::fs::write(&source, body).unwrap();
+            std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let source = std::ffi::CString::new(source.as_os_str().as_encoded_bytes()).unwrap();
+            let target = std::ffi::CString::new(format!("/etc/{name}")).unwrap();
+            assert_eq!(
+                unsafe {
+                    libc::mount(
+                        source.as_ptr(),
+                        target.as_ptr(),
+                        std::ptr::null(),
+                        libc::MS_BIND,
+                        std::ptr::null(),
+                    )
+                },
+                0,
+                "private account bind: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+
+    async fn install_bundle(&self) {
+        let id = self.prepare().await;
+        self.approve(&id, 2);
+        assert_eq!(self.commit(&id).await.unwrap()["status"], "installed");
+        self.assert_installed();
+    }
+}
+
+fn fixture_home(uid: u32) -> PathBuf {
+    Path::new(BASE).join("home").join(uid.to_string())
+}
+
+fn owned_directory(path: &Path, uid: u32) {
+    std::fs::create_dir_all(path).unwrap();
+    let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::chown(name.as_ptr(), uid, uid) }, 0);
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+fn peer_command(uid: u32, test: &str) -> std::process::Command {
+    let home = fixture_home(uid);
+    let mut command = std::process::Command::new(Path::new(BASE).join("probe"));
+    command
+        .args([
+            "--exact",
+            test,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", &home)
+        .env("COS_DATA_DIR", home.join("state"))
+        .env("COS_CAPS_DATA_DIR", home.join("state"))
+        .env("COS_USER_DATA_DIR", home.join("data"))
+        .env("COS_LOG_DIR", home.join("log"))
+        .env("COS_CACHE_DIR", home.join("cache"))
+        .env("COS_RUNTIME_DIR", home.join("runtime"))
+        .env("XDG_RUNTIME_DIR", home.join("runtime"))
+        .env("COS_PROC_DATA_DIR", format!("/run/cos/caps/{uid}"))
+        .env("COS_APPS_DIR", "/usr/lib/cos/apps")
+        .env("COS_BIN", "/usr/local/bin/cos")
+        .env("CLAWD_SOCKET", "/run/cos/clawd.sock")
+        .env("COS_APP_APT_PROCESS", "1")
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    let parent = std::process::id() as libc::pid_t;
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setgroups(0, std::ptr::null()) != 0
+                || libc::setresgid(uid, uid, uid) != 0
+                || libc::setresuid(uid, uid, uid) != 0
+                || libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+                || libc::getppid() != parent
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            crate::agentd::spawn::mark_inherited_descriptors_cloexec(3);
+            Ok(())
+        });
+    }
+    command
+}
+
+fn register_process_session(
+    uid: u32,
+    pid: u32,
+    id: &str,
+    parent: Option<String>,
+    caps: crate::caps::CapSet,
+) {
+    crate::proc::register_session_for_owner(
+        crate::proc::SessionInfo {
+            session_id: id.into(),
+            pid,
+            command: vec!["private-apt-fixture".into()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some("user-cli".into()),
+            parent,
+            workdir: None,
+            exit_code: None,
+            ended_at: None,
+            tier: Some(crate::caps::Role::Automator.credential_tier()),
+            scope: None,
+            priority: None,
+            caps: Some(caps),
+            transient_caps: None,
+            role: Some(crate::caps::Role::Automator.name().into()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+            client: crate::session::SessionClient::new(
+                crate::session::SessionSource::LocalCli,
+                false,
+                true,
+            ),
+        },
+        uid,
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "private real peer of the retained APT fixtures"]
+fn private_apt_retained_peer() {
+    assert_eq!(std::env::var("COS_APP_APT_PROCESS").unwrap(), "1");
+    assert_ne!(unsafe { libc::geteuid() }, 0);
+    let reply = PathBuf::from(std::env::var_os("COS_APP_APT_REPLY").unwrap());
+    for line in std::io::stdin().lock().lines() {
+        let request: Request = serde_json::from_str(&line.unwrap()).unwrap();
+        let result = match crate::clawd::client::request_blocking("/run/cos/clawd.sock", request) {
+            Ok(response) => json!({"response": response}),
+            Err(error) => json!({"transport_error": error.to_string()}),
+        };
+        crate::agent::util::atomic_write_with_fsync(&reply, &serde_json::to_vec(&result).unwrap())
+            .unwrap();
+    }
+}
+
+struct RetainedPeer {
+    child: std::process::Child,
+    uid: u32,
+    reply: PathBuf,
+    session: String,
+    parent: String,
+    sessions: Vec<String>,
+}
+
+impl RetainedPeer {
+    fn start(uid: u32) -> Self {
+        let home = fixture_home(uid);
+        let reply = home.join(format!("reply-{}.json", uuid::Uuid::new_v4().simple()));
+        let parent = crate::paths::RoutedPathContext::for_owner(uid, home)
+            .scope_sync(|| crate::session::create("Private retained package acceptance"))
+            .unwrap()
+            .as_str()
+            .to_string();
+        let child = peer_command(uid, RETAINED_PEER)
+            .env("COS_APP_APT_REPLY", &reply)
+            .spawn()
+            .unwrap();
+        Self {
+            child,
+            uid,
+            reply,
+            session: String::new(),
+            parent,
+            sessions: Vec::new(),
+        }
+    }
+
+    fn authorize(&mut self, package: &str) {
+        use crate::clawd::authority::{
+            authority, Audience, AudienceSet, Binding, Issuance, Issuer, Principal, Subject, Uses,
+        };
+        let caps = crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+            crate::caps::Verb::SYS_PACKAGE,
+            crate::caps::Scope::name(package),
+        )]);
+        self.session = uuid::Uuid::new_v4().to_string();
+        register_process_session(
+            self.uid,
+            self.child.id(),
+            &self.session,
+            Some(self.parent.clone()),
+            caps.clone(),
+        );
+        authority()
+            .issue(Issuance {
+                issuer: Issuer::TrustedSession,
+                principal: Principal::of_process(self.uid, self.child.id()).unwrap(),
+                binding: Binding::ProcessTree,
+                subject: Subject::session(&self.session),
+                audience: AudienceSet::one(Audience::SystemService),
+                caps,
+                lifetime: Duration::from_secs(120),
+                uses: Uses::Budget(1),
+                index_session: true,
+            })
+            .unwrap();
+        self.sessions.push(self.session.clone());
+    }
+
+    async fn exchange(&mut self, command: crate::clawd::routes::Command, params: Value) -> Value {
+        if self.reply.exists() {
+            std::fs::remove_file(&self.reply).unwrap();
+        }
+        let request = Request::build(command, params);
+        writeln!(
+            self.child.stdin.as_mut().unwrap(),
+            "{}",
+            serde_json::to_string(&request).unwrap()
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while !self.reply.exists() {
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "private peer exited"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "private broker request did not return"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        serde_json::from_slice(&std::fs::read(&self.reply).unwrap()).unwrap()
+    }
+
+    async fn call(
+        &mut self,
+        command: crate::clawd::routes::Command,
+        params: Value,
+    ) -> crate::clawd::protocol::Response {
+        let reply = self.exchange(command, params).await;
+        serde_json::from_value(
+            reply
+                .get("response")
+                .cloned()
+                .expect("authenticated broker reply"),
+        )
+        .unwrap()
+    }
+
+    async fn result(&mut self, command: crate::clawd::routes::Command, params: Value) -> Value {
+        let response = self.call(command, params).await;
+        assert!(response.ok, "{:?}", response.error);
+        response.result.unwrap()
+    }
+
+    async fn status(&mut self, id: &str) -> Value {
+        self.result(
+            crate::clawd::routes::Command::SystemPackageStatus,
+            json!({"request_id": id}),
+        )
+        .await
+    }
+
+    async fn wait_phase(&mut self, id: &str, phase: &str) -> Value {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let status = self.status(id).await;
+            if status["phase"] == phase {
+                return status;
+            }
+            assert!(
+                !matches!(
+                    status["phase"].as_str(),
+                    Some("applied" | "not_applied" | "indeterminate")
+                ),
+                "expected {phase}, got {status}",
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Root controller did not reach {phase}: {status}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn accept(&mut self, action: &str, package: &str) -> String {
+        self.authorize(package);
+        let receipt = self
+            .result(
+                crate::clawd::routes::Command::SystemPackageControl,
+                json!({
+                    "session": self.session, "action": action, "package": package,
+                    "invocation_id": uuid::Uuid::new_v4().simple().to_string(),
+                }),
+            )
+            .await;
+        assert_eq!(receipt["status"], "accepted");
+        assert_eq!(receipt["accepted"], true);
+        assert_eq!(receipt["completion"], "query_required");
+        receipt["request_id"].as_str().unwrap().into()
+    }
+}
+
+impl Drop for RetainedPeer {
+    fn drop(&mut self) {
+        self.child.stdin.take();
+        if self.child.try_wait().unwrap().is_none() {
+            self.child.kill().unwrap();
+        }
+        self.child.wait().unwrap();
+        for session in &self.sessions {
+            crate::clawd::authority::revoke_session(session);
+            crate::proc::deregister_session_for_owner(session, self.uid);
+        }
+    }
+}
+
+#[test]
+#[ignore = "private real ordinary Host of the retained APT fixtures"]
+fn private_apt_ordinary_actor() {
+    assert_eq!(std::env::var("COS_APP_APT_PROCESS").unwrap(), "1");
+    assert_ne!(unsafe { libc::geteuid() }, 0);
+    let roots = vec![TrustRootSpec {
+        path: Path::new(BASE).join("trust"),
+        tier: TrustTier::System,
+        allowed_uids: vec![0],
+        domain: crate::provenance::state::TrustDomain::System,
+    }];
+    let trust = TrustStore::load_roots(&roots);
+    assert!(trust.diagnostics().is_empty(), "{:?}", trust.diagnostics());
+    crate::provenance::set_trust_store_for_roots(trust, roots);
+    std::io::stdin().read_exact(&mut [0]).unwrap();
+    let id = std::env::var("COS_APP_APT_APP").unwrap();
+    let operation = std::env::var("COS_APP_APT_OPERATION").unwrap();
+    let app = crate::apps::find_verified(Path::new("/usr/lib/cos/apps"), &id).unwrap();
+    let launch = crate::bridge::AppLaunch::new(app.require_verified().unwrap().clone()).unwrap();
+    let result = crate::bridge::run_app(
+        &launch,
+        &operation,
+        &[],
+        fixture_home(unsafe { libc::geteuid() })
+            .join("data")
+            .to_str()
+            .unwrap(),
+        "/usr/lib/cos/apps",
+    );
+    eprintln!("real ordinary fixture returned after retirement: {result:?}");
+    std::io::stdin().read_exact(&mut [0]).unwrap();
+}
+
+struct OrdinaryActor {
+    child: std::process::Child,
+    uid: u32,
+    app: String,
+    parent: String,
+    process: Option<OwnedFd>,
+    group: PathBuf,
+    socket: PathBuf,
+}
+
+impl OrdinaryActor {
+    fn start(uid: u32, app: &str, operation: &str) -> Self {
+        let installed = crate::apps::find_verified(Path::new("/usr/lib/cos/apps"), app).unwrap();
+        let package = installed.require_verified().unwrap();
+        let activation = reviews::submit(
+            uid,
+            reviews::ReviewKind::AppActivation,
+            package,
+            "Private ordinary App acceptance".into(),
+        )
+        .unwrap();
+        if activation.effective_state().unwrap() == reviews::ReviewState::Pending {
+            reviews::decide(uid, &activation.id, true, Some(package)).unwrap();
+        }
+        reviews::consume(uid, &activation.id, package).unwrap();
+        let parent = uuid::Uuid::new_v4().to_string();
+        let mut child = peer_command(uid, ORDINARY_ACTOR)
+            .env("COS_SESSION", &parent)
+            .env("COS_APP_APT_APP", app)
+            .env("COS_APP_APT_OPERATION", operation)
+            .spawn()
+            .unwrap();
+        let mut caps = crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name(app),
+        )]);
+        if operation == "handoff" {
+            caps.insert(crate::caps::Cap::new(
+                crate::caps::Verb::SYS_PACKAGE,
+                crate::caps::Scope::name(BUNDLE),
+            ));
+        }
+        register_process_session(uid, child.id(), &parent, None, caps);
+        child.stdin.as_mut().unwrap().write_all(&[1]).unwrap();
+        Self {
+            child,
+            uid,
+            app: app.into(),
+            parent,
+            process: None,
+            group: PathBuf::new(),
+            socket: PathBuf::new(),
+        }
+    }
+
+    fn data(&self) -> PathBuf {
+        fixture_home(self.uid).join("data/apps").join(&self.app)
+    }
+
+    async fn ready(&mut self, fixture: &Fixture) {
+        let ready = self.data().join("ready.json");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !ready.exists() {
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "ordinary Host exited before bind"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "ordinary App never crossed Root custody gate"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(std::fs::metadata(ready).unwrap().uid(), self.uid);
+        let calls = fixture.server.calls.lock().unwrap();
+        let registration = calls
+            .iter()
+            .find(|call| {
+                call.uid == self.uid
+                    && call.command == crate::clawd::routes::Command::AppSessionRegister
+            })
+            .unwrap();
+        assert_eq!(registration.result.as_ref().unwrap()["root_custody"], true);
+        let bind = calls
+            .iter()
+            .find(|call| {
+                call.uid == self.uid
+                    && call.command == crate::clawd::routes::Command::AppSessionBind
+            })
+            .unwrap();
+        assert!(bind.result.is_some());
+        self.socket = bind.params["custody_socket"].as_str().unwrap().into();
+        self.group = fixture
+            .containment
+            .join(bind.params["session_id"].as_str().unwrap());
+        let pid = bind.params["pid"].as_u64().unwrap() as u32;
+        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        assert!(raw >= 0);
+        self.process = Some(unsafe { OwnedFd::from_raw_fd(raw as i32) });
+        self.assert_running();
+    }
+
+    fn assert_running(&self) {
+        assert!(!claw_display_control::identity::pidfd_exited(
+            self.process.as_ref().unwrap().as_fd()
+        )
+        .unwrap());
+        assert!(self.group.is_dir());
+        assert!(self.socket.exists());
+    }
+
+    fn assert_retired(&self) {
+        assert!(claw_display_control::identity::pidfd_exited(
+            self.process.as_ref().unwrap().as_fd()
+        )
+        .unwrap());
+        assert!(!self.group.exists(), "Root left an affected App cgroup");
+        assert!(
+            !self.socket.parent().unwrap().exists(),
+            "Host resources lack checked cleanup"
+        );
+    }
+
+    async fn finish(mut self) {
+        if self.child.try_wait().unwrap().is_none() {
+            self.child.stdin.as_mut().unwrap().write_all(&[2]).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while self.child.try_wait().unwrap().is_none() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "ordinary Host failed checked retirement"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        assert!(self.child.wait().unwrap().success());
+    }
+}
+
+impl Drop for OrdinaryActor {
+    fn drop(&mut self) {
+        if self.child.try_wait().unwrap().is_none() {
+            self.child.kill().unwrap();
+        }
+        self.child.wait().unwrap();
+        crate::proc::deregister_session_for_owner(&self.parent, self.uid);
     }
 }
 
@@ -1120,5 +1740,525 @@ async fn private_apt_completed_dispatch_failure_recovers_read_only() {
     for app in APPS {
         assert!(crate::clawd::app_mutation::admit(app).is_ok());
     }
+    fixture.finish().await;
+}
+
+fn retained_record(id: &str) -> Value {
+    serde_json::from_slice(
+        &std::fs::read(
+            Path::new("/var/lib/cos/package-transactions/requests").join(format!("{id}.json")),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn assert_children(id: &str, count: usize, success: bool) {
+    let record = retained_record(id);
+    let children = record["children"].as_array().unwrap();
+    assert_eq!(children.len(), count, "{record}");
+    for child in children {
+        assert_eq!(child["ended"], true);
+        let code = child["exit_code"]
+            .as_i64()
+            .expect("actual normal child exit was not retained");
+        assert_eq!(code == 0, success, "{child}");
+    }
+}
+
+async fn decide_global(
+    owner: u32,
+    view: &clawd_client::system_review::SystemReview,
+    action: clawd_client::system_review::ReviewAction,
+) -> crate::clawd::protocol::Response {
+    crate::clawd::client::request(
+        "/run/cos/clawd.sock",
+        Request::build(
+            crate::clawd::routes::Command::SystemReviewDecide,
+            json!({"owner_uid": owner, "review": {
+                "id": view.id, "revision": view.revision, "action": action, "choices": [],
+            }}),
+        ),
+    )
+    .await
+    .unwrap()
+}
+
+async fn global_view(
+    peer: &mut RetainedPeer,
+    id: &str,
+) -> clawd_client::system_review::SystemReview {
+    serde_json::from_value(
+        peer.result(
+            crate::clawd::routes::Command::SystemReviewShow,
+            json!({"id": id}),
+        )
+        .await,
+    )
+    .unwrap()
+}
+
+async fn refused_recovery(peer: &mut RetainedPeer, id: &str) -> crate::clawd::protocol::Response {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let response = peer
+            .call(
+                crate::clawd::routes::Command::SystemPackageRecover,
+                json!({"request_id": id}),
+            )
+            .await;
+        if !response.ok {
+            return response;
+        }
+        assert_eq!(response.result.unwrap()["phase"], "indeterminate");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Root controller never released its completed failure"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Root private mount/PID/network namespaces, cgroup v2, ptrace and matching COS_APP_APT_TEST_COS/RUNNER/HOOK"]
+async fn private_apt_ordinary_self_handoff_retains_receipt() {
+    use crate::clawd::routes::Command;
+    let _lock = crate::test_env::lock_env();
+    let fixture = Fixture::new();
+    fixture.enable_processes();
+    fixture.install_bundle().await;
+    let mut caller = OrdinaryActor::start(OWNER, APPS[0], "handoff");
+    let mut other_owner = OrdinaryActor::start(FOREIGN_UID, APPS[1], "hold");
+    caller.ready(&fixture).await;
+    other_owner.ready(&fixture).await;
+    let mut peer = RetainedPeer::start(OWNER);
+
+    // A real no-effect request must not retire either authenticated App owner.
+    let no_effect = peer.accept("install", BUNDLE).await;
+    let unchanged = peer.wait_phase(&no_effect, "applied").await;
+    assert!(unchanged["plan"]["actions"].as_array().unwrap().is_empty());
+    assert!(unchanged["checked_retired_apps"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    caller.assert_running();
+    other_owner.assert_running();
+    assert_eq!(fixture.server.count(), 1);
+
+    fixture
+        .server
+        .lose_package_reply
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    std::fs::write(
+        caller.data().join("go"),
+        b"remove own signed Debian package",
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let accepted = loop {
+        let call = fixture
+            .server
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|call| {
+                call.uid == OWNER
+                    && call.command == Command::AppSessionRelay
+                    && call.params["command"] == Command::SystemPackageControl.as_str()
+                    && call.params["params"]["action"] == "remove"
+                    && call.result.is_some()
+            })
+            .cloned();
+        if let Some(call) = call {
+            break call;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ordinary caller never handed off its real provider"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let receipt = accepted.result.unwrap()["result"].clone();
+    assert_eq!(receipt["status"], "accepted");
+    assert_eq!(receipt["accepted"], true);
+    assert_eq!(receipt["completion"], "query_required");
+    let id = receipt["request_id"].as_str().unwrap();
+    let applied = peer.wait_phase(id, "applied").await;
+    assert_eq!(applied["completion"]["confirmed"], true);
+    assert_eq!(applied["session"], accepted.params["session_id"]);
+    assert_eq!(applied["app_id"], APPS[0]);
+    assert_eq!(applied["impact"]["scope"], "affected_apps");
+    assert_eq!(applied["affected_apps"], json!(APPS));
+    assert_eq!(applied["checked_retired_apps"], json!(APPS));
+    assert!(applied["global_stop_review_id"].is_null());
+    assert_children(id, 1, true);
+    caller.assert_retired();
+    other_owner.assert_retired();
+    for app in APPS {
+        assert!(!Path::new("/usr/lib/cos/apps").join(app).exists());
+        assert!(crate::clawd::app_mutation::admit(app).is_ok());
+    }
+    assert_eq!(std::fs::read(SUPPORT_PATH).unwrap(), SUPPORT_BYTES);
+    assert!(
+        !crate::clawd::packages::query_package_state(BUNDLE)
+            .await
+            .unwrap()
+            .installed
+    );
+    let by_invocation = peer
+        .result(
+            Command::SystemPackageStatus,
+            json!({
+                "invocation_id": accepted.params["params"]["invocation_id"],
+            }),
+        )
+        .await;
+    assert_eq!(by_invocation["transactions"].as_array().unwrap().len(), 1);
+    assert_eq!(by_invocation["transactions"][0]["request_id"], id);
+    let installed = dpkg_state();
+    let recovered = peer
+        .result(Command::SystemPackageRecover, json!({"request_id": id}))
+        .await;
+    assert_eq!(recovered["phase"], "applied");
+    assert_eq!(dpkg_state(), installed);
+    assert_eq!(fixture.server.count(), 2, "lost caller reply replayed APT");
+    let mut foreign = RetainedPeer::start(FOREIGN_UID);
+    assert!(
+        !foreign
+            .call(Command::SystemPackageStatus, json!({"request_id": id}))
+            .await
+            .ok
+    );
+    drop(foreign);
+    caller.finish().await;
+    other_owner.finish().await;
+    drop(peer);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Root private mount/PID/network namespaces, cgroup v2, ptrace and matching COS_APP_APT_TEST_COS/RUNNER/HOOK"]
+async fn private_apt_global_stop_is_separate_and_unreviewed_effect_is_not_applied() {
+    use crate::clawd::routes::Command;
+    use clawd_client::system_review::{ReviewAction, ReviewKind, ReviewStatus};
+    let _lock = crate::test_env::lock_env();
+    let fixture = Fixture::new();
+    fixture.enable_processes();
+    fixture.install_bundle().await;
+    let mut alpha = OrdinaryActor::start(OWNER, APPS[0], "hold");
+    let mut beta = OrdinaryActor::start(FOREIGN_UID, APPS[1], "hold");
+    alpha.ready(&fixture).await;
+    beta.ready(&fixture).await;
+    let mut peer = RetainedPeer::start(OWNER);
+    peer.authorize(SIDE_EFFECT);
+    let params = json!({
+        "session": peer.session, "action": "install", "package": SIDE_EFFECT,
+        "invocation_id": uuid::Uuid::new_v4().simple().to_string(),
+    });
+    let receipt = peer
+        .result(Command::SystemPackageControl, params.clone())
+        .await;
+    let id = receipt["request_id"].as_str().unwrap();
+    assert!(
+        !peer
+            .call(Command::SystemPackageControl, params.clone())
+            .await
+            .ok,
+        "exhausted authority was accepted for another effect request"
+    );
+    let retained = peer
+        .result(
+            Command::SystemPackageStatus,
+            json!({
+                "invocation_id": params["invocation_id"],
+            }),
+        )
+        .await;
+    assert_eq!(retained["transactions"].as_array().unwrap().len(), 1);
+    assert_eq!(retained["transactions"][0]["request_id"], id);
+    let mut different = params.clone();
+    different["invocation_id"] = json!(uuid::Uuid::new_v4().simple().to_string());
+    assert!(
+        !peer.call(Command::SystemPackageControl, different).await.ok,
+        "acceptance did not consume the exact one-use package authority"
+    );
+    let pending = peer.wait_phase(id, "awaiting_impact_confirmation").await;
+    let review_id = pending["global_stop_review_id"].as_str().unwrap();
+    let view = global_view(&mut peer, review_id).await;
+    assert_eq!(view.kind, ReviewKind::PackageImpact);
+    assert_eq!(view.status, ReviewStatus::Pending);
+    assert!(pending["app_reviews"].as_array().unwrap().is_empty());
+    assert_eq!(pending["impact"]["known_affected_apps"], json!([]));
+    assert_eq!(pending["impact"]["all_apps"], json!(APPS));
+    assert!(pending["impact"]["uncertainties"].as_array().unwrap().len() >= 2);
+    let before = dpkg_state();
+    assert!(
+        !decide_global(OWNER, &view, ReviewAction::ConfirmInstall)
+            .await
+            .ok
+    );
+    assert!(
+        !decide_global(FOREIGN_UID, &view, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok
+    );
+    let mut stale = view.clone();
+    stale.revision += 1;
+    assert!(
+        !decide_global(OWNER, &stale, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok
+    );
+    assert!(
+        !peer
+            .call(
+                Command::SystemReviewDecide,
+                json!({
+                    "owner_uid": OWNER, "review": {
+                        "id": view.id, "revision": view.revision,
+                        "action": ReviewAction::ConfirmGlobalAppStop, "choices": [],
+                    },
+                })
+            )
+            .await
+            .ok
+    );
+    peer.result(
+        Command::SystemReviewCancel,
+        json!({"review": {
+            "id": view.id, "revision": view.revision, "action": ReviewAction::Cancel, "choices": [],
+        }}),
+    )
+    .await;
+    peer.wait_phase(id, "not_applied").await;
+    alpha.assert_running();
+    beta.assert_running();
+    assert_eq!(dpkg_state(), before);
+    assert_eq!(
+        fixture.server.count(),
+        1,
+        "refused global stop still dispatched APT"
+    );
+    for app in APPS {
+        assert!(crate::clawd::app_mutation::admit(app).is_ok());
+    }
+
+    let id = peer.accept("install", SIDE_EFFECT).await;
+    let pending = peer.wait_phase(&id, "awaiting_impact_confirmation").await;
+    let first_id = pending["global_stop_review_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first = global_view(&mut peer, &first_id).await;
+    assert!(
+        !decide_global(OWNER, &view, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok,
+        "a denied transaction's review approved a later request"
+    );
+    // Change real installed App impact while the first exact confirmation waits.
+    // This pre-existing quarantine is not approved by either stop confirmation.
+    let extra = Path::new("/usr/lib/cos/apps/apt-preexisting-quarantine");
+    std::fs::create_dir(extra).unwrap();
+    std::fs::write(
+        extra.join("app.json"),
+        json!({
+            "schema_version": 2, "id": "apt-preexisting-quarantine",
+            "version": "1.0.0", "runtime": "python",
+            "name": {"en": "Private quarantine"}, "summary": {"en": "Impact change"},
+            "operations": {"probe": {"label": {"en": "Probe"}, "needs": [], "args": []}},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert!(crate::apps::discover_all(Path::new("/usr/lib/cos/apps"))
+        .quarantined
+        .contains_key("apt-preexisting-quarantine"));
+    assert!(
+        decide_global(OWNER, &first, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let refreshed = loop {
+        let status = peer.status(&id).await;
+        if status["phase"] == "awaiting_impact_confirmation"
+            && status["global_stop_review_id"]
+                .as_str()
+                .is_some_and(|id| id != first_id)
+        {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "changed impact reused old approval: {status}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        global_view(&mut peer, &first_id).await.status,
+        ReviewStatus::Stale
+    );
+    assert!(
+        !decide_global(OWNER, &first, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok
+    );
+    alpha.assert_running();
+    beta.assert_running();
+    assert_eq!(fixture.server.count(), 1);
+    assert_eq!(dpkg_state(), before);
+    let current_id = refreshed["global_stop_review_id"].as_str().unwrap();
+    let current = global_view(&mut peer, current_id).await;
+    assert_ne!(current.contract_digest, first.contract_digest);
+    assert!(refreshed["impact"]["all_apps"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("apt-preexisting-quarantine")));
+    assert!(
+        decide_global(OWNER, &current, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok
+    );
+    let failed = peer.wait_phase(&id, "indeterminate").await;
+    assert!(
+        failed["completion"].is_null(),
+        "all-App stop consent became App delivery consent"
+    );
+    assert!(
+        failed["error"].as_str().unwrap().contains("quarantine"),
+        "{failed}"
+    );
+    assert_children(&id, 1, true);
+    let record = retained_record(&id);
+    assert!(record["plan"]["removed_apps"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(record["plan"]["delivery"]["hook_consumed"], true);
+    assert!(
+        crate::clawd::packages::query_package_state(SIDE_EFFECT)
+            .await
+            .unwrap()
+            .installed
+    );
+    assert!(Path::new("/usr/lib/cos/apps/apt-unreviewed/app.json").exists());
+    assert!(crate::apps::discover_all(Path::new("/usr/lib/cos/apps"))
+        .quarantined
+        .contains_key("apt-unreviewed"));
+    alpha.assert_retired();
+    beta.assert_retired();
+    assert_eq!(
+        global_view(&mut peer, current_id).await.status,
+        ReviewStatus::Consumed
+    );
+    assert!(
+        !decide_global(OWNER, &current, ReviewAction::ConfirmGlobalAppStop)
+            .await
+            .ok
+    );
+    assert!(crate::clawd::app_mutation::admit("otherwise-unaffected-app").is_err());
+    let installed = dpkg_state();
+    refused_recovery(&mut peer, &id).await;
+    assert_eq!(peer.status(&id).await["phase"], "indeterminate");
+    assert_eq!(dpkg_state(), installed);
+    assert_eq!(
+        fixture.server.count(),
+        2,
+        "outcome checking reran a successful maintainer effect"
+    );
+    alpha.finish().await;
+    beta.finish().await;
+    drop(peer);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Root private mount/PID/network namespaces and matching COS_APP_APT_TEST_COS/RUNNER/HOOK"]
+async fn private_apt_retained_payload_lifecycle_and_nonzero_completion() {
+    use crate::clawd::routes::Command;
+    let _lock = crate::test_env::lock_env();
+    let fixture = Fixture::new();
+    fixture.enable_processes();
+    let mut peer = RetainedPeer::start(OWNER);
+    let install = peer.accept("install", SUPPORT).await;
+    assert_eq!(
+        peer.wait_phase(&install, "applied").await["completion"]["confirmed"],
+        true
+    );
+    assert_eq!(std::fs::read(SUPPORT_PATH).unwrap(), SUPPORT_BYTES);
+    assert_children(&install, 1, true);
+    let remove = peer.accept("remove", SUPPORT).await;
+    let removed = peer.wait_phase(&remove, "applied").await;
+    assert!(!Path::new(SUPPORT_PATH).exists());
+    assert_eq!(removed["rollback"]["available"], true);
+    let seq = removed["rollback"]["mutation_seq"].as_u64().unwrap();
+    peer.authorize(SUPPORT);
+    let invocation =
+        crate::crypto::sha256_hex(format!("package-inverse:{}:{seq}", peer.parent).as_bytes());
+    let receipt = peer
+        .result(
+            Command::SystemPackageRestore,
+            json!({
+                "session": peer.session, "package": SUPPORT,
+                "previous_version": "1.0.0", "was_held": false,
+                "mutation_session": peer.parent, "mutation_seq": seq,
+                "invocation_id": &invocation[..32],
+            }),
+        )
+        .await;
+    assert_eq!(receipt["status"], "accepted");
+    let restore = receipt["request_id"].as_str().unwrap();
+    let restored = peer.wait_phase(restore, "applied").await;
+    assert_eq!(restored["completion"]["confirmed"], true);
+    assert_eq!(std::fs::read(SUPPORT_PATH).unwrap(), SUPPORT_BYTES);
+    assert_children(restore, 2, true);
+    let again = peer.accept("remove", SUPPORT).await;
+    peer.wait_phase(&again, "applied").await;
+    assert!(!Path::new(SUPPORT_PATH).exists());
+
+    std::fs::write(
+        "/etc/apt/apt.conf.d/99fixture-post-dpkg",
+        "DPkg::Post-Invoke { \"/usr/bin/false\"; };\n",
+    )
+    .unwrap();
+    let failed = peer.accept("install", SUPPORT).await;
+    let status = peer.wait_phase(&failed, "indeterminate").await;
+    assert!(status["completion"].is_null());
+    assert_children(&failed, 1, false);
+    assert_eq!(
+        retained_record(&failed)["plan"]["delivery"]["hook_consumed"],
+        true
+    );
+    let installed = crate::clawd::packages::query_package_state(SUPPORT)
+        .await
+        .unwrap();
+    assert!(installed.installed);
+    assert_eq!(installed.version.as_deref(), Some("1.0.0"));
+    assert_eq!(std::fs::read(SUPPORT_PATH).unwrap(), SUPPORT_BYTES);
+    assert!(checked(std::process::Command::new("/usr/bin/dpkg").arg("--audit")).is_empty());
+    let before = dpkg_state();
+    let dispatched = fixture.server.count();
+    for _ in 0..2 {
+        let response = refused_recovery(&mut peer, &failed).await;
+        assert!(
+            !response.ok,
+            "installed versions hid a normal nonzero APT exit"
+        );
+        assert!(response
+            .error
+            .unwrap()
+            .message
+            .contains("Successful Root package child completion"));
+        assert_eq!(peer.status(&failed).await["phase"], "indeterminate");
+        assert_eq!(dpkg_state(), before);
+        assert_eq!(
+            fixture.server.count(),
+            dispatched,
+            "read-only recovery replayed APT"
+        );
+    }
+    drop(peer);
     fixture.finish().await;
 }

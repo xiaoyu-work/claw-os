@@ -1,6 +1,10 @@
-//! Capability review presentation over the shared protected OS review contract.
+//! Separate capability and package-impact views over the protected OS review contract.
 
-use axum::{extract::Path, http::StatusCode, Json};
+use axum::{
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use clawd_client::system_review::{
     PendingReviews, PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision,
     ReviewKind, ReviewStatus, SystemReview,
@@ -28,6 +32,45 @@ struct ApprovalView {
     verb: String,
     details: Vec<clawd_client::system_review::ReviewDetail>,
     diagnostic: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SystemApprovalView {
+    id: String,
+    revision: String,
+    kind: ReviewKind,
+    status: ReviewStatus,
+    status_message: Option<String>,
+    subject: clawd_client::system_review::ReviewSubject,
+    initiator: String,
+    context: Vec<clawd_client::system_review::ReviewDetail>,
+    disclosures: Vec<clawd_client::system_review::ReviewDetail>,
+    contract_digest: Option<String>,
+    actions: Vec<ReviewAction>,
+}
+
+fn project_system(review: SystemReview) -> Result<SystemApprovalView, Failure> {
+    review
+        .validate()
+        .map_err(|error| internal(error.to_string()))?;
+    if review.kind != ReviewKind::PackageImpact || !review.permissions.is_empty() {
+        return Err(bad_request(
+            "This is not a separate package-impact OS review.".into(),
+        ));
+    }
+    Ok(SystemApprovalView {
+        id: review.id,
+        revision: review.revision.to_string(),
+        kind: review.kind,
+        status: review.status,
+        status_message: review.status_message,
+        subject: review.subject,
+        initiator: review.initiator,
+        context: review.context,
+        disclosures: review.disclosures,
+        contract_digest: review.contract_digest,
+        actions: review.actions,
+    })
 }
 
 fn project(review: SystemReview) -> Result<ApprovalView, Failure> {
@@ -97,9 +140,12 @@ pub async fn pending_reviews() -> Result<Json<Value>, Failure> {
         .map_err(|error| internal(format!("Invalid OS review inventory: {error}")))?;
     let mut reviews = Vec::new();
     let mut app_reviews = Vec::new();
+    let mut system_reviews = Vec::new();
     for review in pending.reviews {
         if review.kind == ReviewKind::Capability {
             reviews.push(project(review)?);
+        } else if review.kind == ReviewKind::PackageImpact {
+            system_reviews.push(project_system(review)?);
         } else {
             review
                 .validate()
@@ -107,7 +153,9 @@ pub async fn pending_reviews() -> Result<Json<Value>, Failure> {
             app_reviews.push(json!({"id":review.id,"label":review.subject.name}));
         }
     }
-    Ok(Json(json!({"reviews":reviews,"app_reviews":app_reviews})))
+    Ok(Json(
+        json!({"reviews":reviews,"app_reviews":app_reviews,"system_reviews":system_reviews}),
+    ))
 }
 
 pub async fn task_reviews(Path(id): Path<String>) -> Result<Json<Value>, Failure> {
@@ -129,6 +177,7 @@ pub async fn task_reviews(Path(id): Path<String>) -> Result<Json<Value>, Failure
     }
     let mut reviews = Vec::new();
     let mut app_reviews = Vec::new();
+    let mut system_reviews = Vec::new();
     for request_id in ids {
         let request_id = request_id
             .as_str()
@@ -136,12 +185,14 @@ pub async fn task_reviews(Path(id): Path<String>) -> Result<Json<Value>, Failure
         let review = show(request_id).await?;
         if review.kind == ReviewKind::Capability {
             reviews.push(project(review)?);
+        } else if review.kind == ReviewKind::PackageImpact {
+            system_reviews.push(project_system(review)?);
         } else {
             app_reviews.push(json!({"id":review.id,"label":review.subject.name}));
         }
     }
     Ok(Json(
-        json!({"task_id":id,"reviews":reviews,"app_reviews":app_reviews}),
+        json!({"task_id":id,"reviews":reviews,"app_reviews":app_reviews,"system_reviews":system_reviews}),
     ))
 }
 
@@ -161,7 +212,81 @@ pub async fn recent_reviews() -> Result<Json<Value>, Failure> {
             .ok_or_else(|| internal("Recent approval omitted its identity.".into()))?;
         reviews.push(project(show(id).await?)?);
     }
-    Ok(Json(json!({"reviews":reviews,"app_reviews":[]})))
+    Ok(Json(
+        json!({"reviews":reviews,"app_reviews":[],"system_reviews":[]}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemDecisionBody {
+    pub revision: String,
+}
+
+pub(super) fn system_decision_for(
+    review: &SystemReview,
+    body: SystemDecisionBody,
+    cancel: bool,
+) -> Result<ReviewDecision, Failure> {
+    if review.kind != ReviewKind::PackageImpact {
+        return Err(bad_request(
+            "App and capability reviews cannot approve a package-impact stop.".into(),
+        ));
+    }
+    let decision = ReviewDecision {
+        id: review.id.clone(),
+        revision: body
+            .revision
+            .parse::<u64>()
+            .map_err(|_| bad_request("Invalid review revision.".into()))?,
+        action: if cancel {
+            ReviewAction::Cancel
+        } else {
+            ReviewAction::ConfirmGlobalAppStop
+        },
+        choices: Vec::new(),
+    };
+    decision.validate_for(review).map_err(|error| {
+        (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error":error.to_string(), "code":"stale_review",
+                "hint":"Refresh and inspect the current OS plan and impact before deciding."
+            })),
+        )
+    })?;
+    Ok(decision)
+}
+
+pub async fn cancel_system_review(
+    State(state): State<crate::agent::web::state::AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SystemDecisionBody>,
+) -> Result<Json<Value>, Failure> {
+    super::authorization::origin(&headers, &state)?;
+    let review = show(&id).await?;
+    let decision = system_decision_for(&review, body, true)?;
+    clawd::request(Command::SystemReviewCancel, json!({"review":decision}))
+        .await
+        .map_err(clawd::RpcError::into_api_error)?;
+    let refreshed = show(&id).await?;
+    if refreshed.status == ReviewStatus::Pending {
+        return Err(internal(
+            "OS cancellation is unconfirmed; refresh instead of resubmitting.".into(),
+        ));
+    }
+    Ok(Json(
+        serde_json::to_value(project_system(refreshed)?)
+            .map_err(|error| internal(error.to_string()))?,
+    ))
+}
+
+pub async fn system_review(Path(id): Path<String>) -> Result<Json<Value>, Failure> {
+    Ok(Json(
+        serde_json::to_value(project_system(show(&id).await?)?)
+            .map_err(|error| internal(error.to_string()))?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,7 +296,10 @@ pub struct DecisionBody {
     pub choice: PermissionChoice,
 }
 
-pub(super) fn decision_for(review: &SystemReview, body: DecisionBody) -> Result<ReviewDecision, Failure> {
+pub(super) fn decision_for(
+    review: &SystemReview,
+    body: DecisionBody,
+) -> Result<ReviewDecision, Failure> {
     let revision = body
         .revision
         .parse::<u64>()

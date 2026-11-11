@@ -162,8 +162,15 @@ pub async fn rollback(
         .map_err(|error| {
             BrokerError::execution(format!("transaction rollback session scope: {error}"))
         })?;
+    let package_authority = super::packages::rollback_authority(client).await;
     crate::proc::with_trusted_session_override(session_info, async {
-        rollback_scoped(state, session_id, owner_uid)
+        rollback_scoped(
+            state,
+            session_id,
+            owner_uid,
+            client,
+            package_authority.as_ref(),
+        )
     })
     .await
 }
@@ -172,6 +179,8 @@ fn rollback_scoped(
     state: &DaemonState,
     session_id: SessionId,
     owner_uid: Option<u32>,
+    client: &ClientIdentity,
+    package_authority: Result<&super::authority::Decision, &String>,
 ) -> Result<Value, BrokerError> {
     let handle = state
         .take_transaction_for_owner(session_id.as_str(), owner_uid)?
@@ -181,23 +190,48 @@ fn rollback_scoped(
                 session_id.as_str()
             ))
         })?;
-    let rolled_back = match session::rollback(&session_id) {
-        Ok(rolled_back) => rolled_back,
-        Err(error) => {
-            return Err(restore_handle_after_error(
-                state,
-                handle,
-                "rollback",
-                error.to_string(),
-            ));
-        }
+    let mut restore = |session: &SessionId, seq, package: &str, version: Option<&str>, held| {
+        let authority = package_authority.map_err(|error| error.clone())?;
+        super::packages::restore_in_process(
+            state, client, authority, session, seq, package, version, held,
+        )
     };
+    let mut completion = |session: &SessionId, seq, package: &str, version: Option<&str>, held| {
+        super::packages::inverse_completion_in_process(client, session, seq, package, version, held)
+    };
+    let rolled_back =
+        match session::rollback_with_package_restore(&session_id, &mut restore, &mut completion) {
+            Ok(rolled_back) => rolled_back,
+            Err(error) => {
+                return Err(restore_handle_after_error(
+                    state,
+                    handle,
+                    "rollback",
+                    error.to_string(),
+                ));
+            }
+        };
+    if rolled_back
+        .iter()
+        .any(|entry| entry.status == crate::session::RollbackStatus::Pending)
+    {
+        state.insert_transaction(handle)?;
+        return Ok(json!({
+            "id": session_id.as_str(),
+            "status": "accepted",
+            "accepted": true,
+            "completion": "query_package_transactions",
+            "entries": rolled_back.into_iter().map(entry_value).collect::<Vec<_>>(),
+        }));
+    }
     let incomplete = rolled_back
         .iter()
         .filter(|entry| {
             matches!(
                 entry.status,
-                crate::session::RollbackStatus::Failed | crate::session::RollbackStatus::Skipped
+                crate::session::RollbackStatus::Failed
+                    | crate::session::RollbackStatus::Skipped
+                    | crate::session::RollbackStatus::Pending
             )
         })
         .map(|entry| format!("{}#{}: {}", entry.verb, entry.seq, entry.detail))
