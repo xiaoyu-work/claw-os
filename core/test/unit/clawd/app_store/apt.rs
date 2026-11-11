@@ -1,6 +1,6 @@
 // Actual APT/dpkg acceptance after synthetic catalog selection and publisher trust setup.
 // The signed repository uses private loopback HTTP, not production HTTPS/catalog keys.
-// Retained cases also exercise real ordinary App custody, never GUI/MCP or UI consent.
+// Retained cases exercise ordinary and persistent MCP custody, not GUI or UI consent.
 // No live accounts or publication readiness: Root supplies synthetic owner decisions;
 // neither presentation flags nor digests approve. Run each main case in separate Root
 // mount/PID/network namespaces through `scripts/ci/test-boundaries.sh app-apt`.
@@ -120,10 +120,67 @@ def run(command, args):
     )
     .unwrap();
     std::fs::write(
+        directory.join("server.py"),
+        format!(
+            r#"
+import json, os, subprocess, sys
+
+tools = [
+    {{"name": name, "description": name,
+      "inputSchema": {{"type": "object", "properties": {{}}, "additionalProperties": False}}}}
+    for name in ("fixture.probe", "fixture.remove")
+]
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        result = {{"protocolVersion": request["params"]["protocolVersion"],
+                  "capabilities": {{"tools": {{}}}},
+                  "serverInfo": {{"name": "private-apt-fixture", "version": "1.0.0"}}}}
+    elif method == "tools/list":
+        result = {{"tools": tools}}
+    elif method == "tools/call":
+        context = request["params"]["_meta"]["claw-os.dev/call-context"]
+        assert context["caller"]["kind"] == "cli"
+        if request["params"]["name"] == "fixture.remove":
+            completed = subprocess.run(
+                ["/usr/local/bin/cos", "__package", "--retained", "remove", "{BUNDLE}"],
+                capture_output=True, text=True,
+            )
+            result = {{"content": [{{"type": "text", "text": completed.stdout}}],
+                      "isError": completed.returncode != 0}}
+        else:
+            result = {{"content": [{{"type": "text", "text": "real persistent MCP"}}]}}
+    else:
+        assert method == "ping"
+        result = {{}}
+    print(json.dumps({{"jsonrpc": "2.0", "id": request["id"], "result": result}}), flush=True)
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
         directory.join("app.json"),
         json!({
             "schema_version": 2, "id": id, "version": "1.0.0", "runtime": "python",
             "name": {"en": id}, "summary": {"en": "Private APT acceptance App"},
+            "mcp": {
+                "entry": "server.py", "transport": "stdio", "lifecycle": "lazy",
+                "access": {"system_agent": true},
+                "tools": [
+                    {"name": "fixture.probe", "summary": {"en": "Probe"}, "args": [], "needs": []},
+                    {
+                        "name": "fixture.remove", "summary": {"en": "Remove own package"},
+                        "args": [], "needs": [{
+                            "verb": "sys.package",
+                            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": BUNDLE}},
+                            "why": {"en": "Private persistent MCP self-handoff acceptance"}
+                        }]
+                    }
+                ]
+            },
             "operations": {
                 "probe": {"label": {"en": "Probe"}, "needs": [], "args": []},
                 "hold": {"label": {"en": "Hold"}, "needs": [], "args": []},
@@ -165,7 +222,7 @@ def run(command, args):
             version: "1.0.0".into(),
             manifest_schema: "cos.app/v2".into(),
             manifest_path: "app.json".into(),
-            entrypoints: vec!["main.py".into()],
+            entrypoints: vec!["main.py".into(), "server.py".into()],
             resources: vec!["web-ui.json".into(), "web/index.html".into()],
         },
         key,
@@ -571,7 +628,7 @@ struct Fixture {
     server: Broker,
     containment: PathBuf,
     _repository: LocalRepository,
-    _services: Arc<crate::clawd::app_services::AppServiceManager>,
+    services: Arc<crate::clawd::app_services::AppServiceManager>,
     _group: RootGroup,
     _environment: Vec<crate::test_env::TestEnvVarGuard>,
 }
@@ -718,7 +775,7 @@ impl Fixture {
             server,
             containment,
             _repository: repository,
-            _services: services,
+            services,
             _group: group,
             _environment: environment,
         }
@@ -809,6 +866,7 @@ impl Fixture {
                 "app.json",
                 ".provenance.json",
                 "main.py",
+                "server.py",
                 "web-ui.json",
                 "web/index.html",
             ] {
@@ -874,6 +932,7 @@ impl Fixture {
         for (variable, destination) in [
             ("COS_APP_APT_TEST_COS", "/usr/local/bin/cos"),
             ("COS_APP_APT_TEST_RUNNER", "/usr/local/bin/claw-app-runner"),
+            ("COS_APP_APT_TEST_HOST", "/usr/local/bin/claw-extension-host"),
         ] {
             copy_executable(
                 &PathBuf::from(std::env::var_os(variable).expect("matching compiled OS binary")),
@@ -1084,13 +1143,16 @@ impl RetainedPeer {
     }
 
     fn authorize(&mut self, package: &str) {
+        self.authorize_caps(crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+            crate::caps::Verb::SYS_PACKAGE,
+            crate::caps::Scope::name(package),
+        )]));
+    }
+
+    fn authorize_caps(&mut self, caps: crate::caps::CapSet) {
         use crate::clawd::authority::{
             authority, Audience, AudienceSet, Binding, Issuance, Issuer, Principal, Subject, Uses,
         };
-        let caps = crate::caps::CapSet::from_caps([crate::caps::Cap::new(
-            crate::caps::Verb::SYS_PACKAGE,
-            crate::caps::Scope::name(package),
-        )]);
         self.session = uuid::Uuid::new_v4().to_string();
         register_process_session(
             self.uid,
@@ -1267,21 +1329,25 @@ struct OrdinaryActor {
     socket: PathBuf,
 }
 
+fn activate_app(uid: u32, app: &str) {
+    let installed = crate::apps::find_verified(Path::new("/usr/lib/cos/apps"), app).unwrap();
+    let package = installed.require_verified().unwrap();
+    let activation = reviews::submit(
+        uid,
+        reviews::ReviewKind::AppActivation,
+        package,
+        "Private App acceptance".into(),
+    )
+    .unwrap();
+    if activation.effective_state().unwrap() == reviews::ReviewState::Pending {
+        reviews::decide(uid, &activation.id, true, Some(package)).unwrap();
+    }
+    reviews::consume(uid, &activation.id, package).unwrap();
+}
+
 impl OrdinaryActor {
     fn start(uid: u32, app: &str, operation: &str) -> Self {
-        let installed = crate::apps::find_verified(Path::new("/usr/lib/cos/apps"), app).unwrap();
-        let package = installed.require_verified().unwrap();
-        let activation = reviews::submit(
-            uid,
-            reviews::ReviewKind::AppActivation,
-            package,
-            "Private ordinary App acceptance".into(),
-        )
-        .unwrap();
-        if activation.effective_state().unwrap() == reviews::ReviewState::Pending {
-            reviews::decide(uid, &activation.id, true, Some(package)).unwrap();
-        }
-        reviews::consume(uid, &activation.id, package).unwrap();
+        activate_app(uid, app);
         let parent = uuid::Uuid::new_v4().to_string();
         let mut child = peer_command(uid, ORDINARY_ACTOR)
             .env("COS_SESSION", &parent)
@@ -1829,6 +1895,72 @@ async fn refused_recovery(peer: &mut RetainedPeer, id: &str) -> crate::clawd::pr
     }
 }
 
+async fn persistent_mcp_self_handoff(fixture: &Fixture, peer: &mut RetainedPeer) {
+    use crate::clawd::routes::Command;
+    fixture.install_bundle().await;
+    activate_app(OWNER, APPS[0]);
+    peer.authorize_caps(crate::caps::CapSet::from_caps([
+        crate::caps::Cap::new(
+            crate::caps::Verb::SYS_PACKAGE,
+            crate::caps::Scope::name(BUNDLE),
+        ),
+        crate::agent::tools::app_gateway::invoke_cap(APPS[0], "fixture.probe").unwrap(),
+        crate::agent::tools::app_gateway::invoke_cap(APPS[0], "fixture.remove").unwrap(),
+    ]));
+    peer.result(
+        Command::AppServiceCliCall,
+        json!({"app_id": APPS[0], "tool": "fixture.probe", "arguments": {}}),
+    )
+    .await;
+    let bindings = fixture.services.retained_trust_bindings(Some(OWNER)).await.unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].app, APPS[0]);
+    let session = crate::proc::try_registry_sessions_for_owner(OWNER)
+        .unwrap()
+        .into_iter()
+        .find(|session| {
+            session.app_id.as_deref() == Some(APPS[0])
+                && session.group.as_deref() == Some("app-mcp")
+        })
+        .expect("a real bound persistent App MCP process");
+    assert!(!session.pending_bind);
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, session.pid, 0) };
+    assert!(raw >= 0);
+    let process = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+    let before = peer.result(Command::SystemPackageStatus, json!({})).await;
+    let previous: BTreeSet<_> = before["transactions"].as_array().unwrap().iter()
+        .map(|record| record["request_id"].as_str().unwrap().to_string()).collect();
+    let reply = peer.call(
+        Command::AppServiceCliCall,
+        json!({"app_id": APPS[0], "tool": "fixture.remove", "arguments": {}}),
+    ).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let id = loop {
+        let current = peer.result(Command::SystemPackageStatus, json!({})).await;
+        if let Some(record) = current["transactions"].as_array().unwrap().iter()
+            .find(|record| !previous.contains(record["request_id"].as_str().unwrap()))
+        {
+            assert_eq!(record["app_id"], APPS[0]);
+            assert_eq!(record["session"], session.session_id);
+            break record["request_id"].as_str().unwrap().to_string();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "MCP did not hand off to Root: {reply:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let applied = peer.wait_phase(&id, "applied").await;
+    assert_eq!(applied["completion"]["confirmed"], true);
+    assert_children(&id, 1, true);
+    assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+    assert!(fixture.services.retained_trust_bindings(Some(OWNER)).await.unwrap().is_empty());
+    assert!(!crate::clawd::packages::query_package_state(BUNDLE).await.unwrap().installed);
+    for app in APPS {
+        assert!(crate::clawd::app_mutation::admit(app).is_ok());
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "Root private mount/PID/network namespaces, cgroup v2, ptrace and matching COS_APP_APT_TEST_COS/RUNNER/HOOK"]
 async fn private_apt_ordinary_self_handoff_retains_receipt() {
@@ -1947,6 +2079,7 @@ async fn private_apt_ordinary_self_handoff_retains_receipt() {
     drop(foreign);
     caller.finish().await;
     other_owner.finish().await;
+    persistent_mcp_self_handoff(&fixture, &mut peer).await;
     drop(peer);
     fixture.finish().await;
 }
