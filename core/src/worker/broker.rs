@@ -636,7 +636,7 @@ fn relay(
         }),
     );
     let response =
-        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
+        crate::clawd::client::request_blocking(crate::clawd::config::socket_path(), request)
             .map_err(|error| {
                 if error.may_have_dispatched() {
                     BrokerError::indeterminate(
