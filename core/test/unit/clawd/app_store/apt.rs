@@ -1,6 +1,6 @@
 // Actual APT/dpkg acceptance after synthetic catalog selection and publisher trust setup.
 // The signed repository uses private loopback HTTP, not production HTTPS/catalog keys.
-// Retained cases exercise ordinary/MCP custody and installed-product HTTP, not GUI consent.
+// Retained cases exercise ordinary/MCP custody and installed-product browser/HTTP, not GUI consent.
 // No live accounts or publication readiness: Root supplies synthetic owner decisions;
 // neither presentation flags nor digests approve. Run each main case in separate Root
 // mount/PID/network namespaces through `scripts/ci/test-boundaries.sh app-apt`.
@@ -1599,7 +1599,7 @@ impl WebOwner {
         let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         loop {
-            if client.get(format!("{WEB_ORIGIN}/api/meta")).send().await
+            if client.get(format!("{WEB_ORIGIN}/")).send().await
                 .is_ok_and(|response| response.status().is_success())
             {
                 break;
@@ -1614,6 +1614,9 @@ impl WebOwner {
             .json(&json!({"ttl_seconds": 120})).send().await.unwrap();
         assert!(response.status().is_success(), "real owner token exchange failed");
         let token = response.json::<Value>().await.unwrap()["access_token"].as_str().unwrap().to_string();
+        let meta = client.get(format!("{WEB_ORIGIN}/api/meta")).bearer_auth(&token)
+            .send().await.unwrap().error_for_status().unwrap().json::<Value>().await.unwrap();
+        assert_eq!(meta["owner_uid"], OWNER);
         (actor, client, token)
     }
 }
@@ -1636,6 +1639,29 @@ async fn web_post(client: &reqwest::Client, token: &str, path: &str, body: Value
     let value = response.json::<Value>().await.unwrap();
     assert!(status.is_success(), "{path}: {status}: {value}");
     value
+}
+
+fn installed_product_browser(token: &str, value: &str) {
+    let script = Path::new(BASE).join("installed-app.browser.mjs");
+    std::fs::write(&script, include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"), "/src/agent/web/ui/test/app-store.browser.mjs",
+    ))).unwrap();
+    let token_file = fixture_home(OWNER).join("runtime/installed-browser.token");
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&token_file).unwrap();
+    file.write_all(token.as_bytes()).unwrap();
+    let name = std::ffi::CString::new(token_file.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::chown(name.as_ptr(), OWNER, OWNER) }, 0);
+    drop(file);
+    let mut command = owner_command(OWNER, Path::new("/usr/bin/node"));
+    command.arg("--experimental-websocket").arg(&script)
+        .env("APP_STORE_INSTALLED_ORIGIN", WEB_ORIGIN)
+        .env("APP_STORE_INSTALLED_TOKEN_FILE", &token_file)
+        .env("APP_STORE_INSTALLED_VALUE", value)
+        .stdout(Stdio::piped());
+    let output = checked(&mut command);
+    assert!(String::from_utf8_lossy(&output).contains("PASS installed signed product UI"));
+    std::fs::remove_file(token_file).unwrap();
 }
 
 impl OrdinaryActor {
@@ -2580,8 +2606,19 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
         json!({"view_id": view, "tool": "kv.set",
             "arguments": {"key": "web-proof", "value": value}})).await;
     assert_ne!(set["result"]["isError"], true, "{set}");
+    let before_browser = call_count();
+    installed_product_browser(&token, value);
+    assert!(call_count() >= before_browser + 3, "real UI button/form/get never reached the Root MCP route");
+    let browser_session = crate::proc::try_registry_sessions_for_owner(OWNER).unwrap()
+        .into_iter().find(|session| session.app_id.as_deref() == Some("kv")
+            && session.group.as_deref() == Some("app-mcp")).unwrap();
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, browser_session.pid, 0) };
+    assert!(raw >= 0);
+    let browser_process = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+    assert!(!claw_display_control::identity::pidfd_exited(browser_process.as_fd()).unwrap(),
+        "Root-owned App MCP died with its browser UI");
     let mut previous_session = None;
-    for _ in 0..2 {
+    for pass in 0..2 {
         let get = web_post(&client, &token, "/api/apps/kv/call",
             json!({"view_id": view, "tool": "kv.get", "arguments": {"key": "web-proof"}})).await;
         assert_eq!(get["result"]["content"][0]["text"], value);
@@ -2589,6 +2626,7 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
             .into_iter().find(|session| session.app_id.as_deref() == Some("kv")
                 && session.group.as_deref() == Some("app-mcp")).unwrap();
         assert!(!session.pending_bind);
+        if pass == 0 { assert_eq!(session.session_id, browser_session.session_id); }
         assert_ne!(previous_session.as_deref(), Some(session.session_id.as_str()));
         let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, session.pid, 0) };
         assert!(raw >= 0);
@@ -2600,6 +2638,7 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
         assert!(fixture.services.retained_trust_bindings(Some(OWNER)).await.unwrap().is_empty());
         previous_session = Some(session.session_id);
     }
+    assert!(claw_display_control::identity::pidfd_exited(browser_process.as_fd()).unwrap());
     web_post(&client, &token, &format!("/api/app-views/{view}/close"), json!({})).await;
     assert_eq!(client.get(format!("{WEB_ORIGIN}/app-ui/{view}/index.html"))
         .send().await.unwrap().status(), reqwest::StatusCode::NOT_FOUND);
@@ -2607,7 +2646,7 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
         .all(|call| call.command != Command::TaskSubmit));
     drop(web);
     fixture.finish().await;
-    eprintln!("private installed KV Web: signed resources, real MCP persistence and checked retirement without a model passed");
+    eprintln!("private installed KV Web: real browser clicks, signed resources, UI-independent MCP persistence and checked retirement without a model passed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

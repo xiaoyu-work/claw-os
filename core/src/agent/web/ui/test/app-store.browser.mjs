@@ -9,7 +9,11 @@ import { setTimeout as delay } from "node:timers/promises";
 const dist = path.resolve(process.env.APP_STORE_UI_DIST || ".activity-validation/store-dist");
 const product = path.resolve(process.env.APP_STORE_PRODUCT_FIXTURE || ".activity-validation/store-product");
 const profile = path.resolve(".activity-validation/store-browser");
-const browser = process.env.APP_STORE_BROWSER || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const browser = process.env.APP_STORE_BROWSER || (process.platform === "win32" ?
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" : "/usr/bin/google-chrome");
+if (process.env.APP_STORE_INSTALLED_ORIGIN) {
+  await installedProduct();
+} else {
 const nonce = "a".repeat(64);
 const digest = "b".repeat(64);
 const requestId = "c".repeat(32);
@@ -237,4 +241,122 @@ try {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
   await rm(profile, { recursive: true, force: true });
+}
+}
+
+async function installedProduct() {
+  assert.equal(process.platform, "linux");
+  assert.equal(process.env.COS_APP_APT_PROCESS, "1");
+  assert.notEqual(process.getuid(), 0);
+  const origin = new URL(process.env.APP_STORE_INSTALLED_ORIGIN);
+  assert.equal(origin.protocol, "http:");
+  assert.equal(origin.hostname, "127.0.0.1");
+  const token = (await readFile(process.env.APP_STORE_INSTALLED_TOKEN_FILE, "utf8")).trim();
+  const value = process.env.APP_STORE_INSTALLED_VALUE;
+  assert.ok(token && value);
+  await mkdir(profile, { recursive: true });
+  const chrome = spawn(browser, ["--headless=new", "--no-sandbox", "--disable-gpu",
+    "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
+    "--disable-background-networking", "--disable-component-update", "--disable-sync",
+    "--disable-extensions", `--user-data-dir=${profile}`, "--remote-debugging-port=0",
+    "--window-size=1440,1000", "about:blank"], { stdio: "ignore", detached: true });
+  let spawnError;
+  chrome.on("error", (error) => { spawnError = error; });
+  const exited = once(chrome, "close").catch(() => {});
+  let socket;
+  let send;
+  const issues = [];
+  try {
+    let port;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (spawnError) throw new Error("Installed-App Chromium could not start");
+      try { port = (await readFile(path.join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]; break; } catch {}
+      await delay(100);
+    }
+    assert.ok(port, "Installed-App Chromium did not become ready");
+    const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+    socket = new WebSocket(tabs.find((tab) => tab.type === "page").webSocketDebuggerUrl);
+    await once(socket, "open");
+    let sequence = 0;
+    const pending = new Map();
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data);
+      if (message.method === "Runtime.exceptionThrown" ||
+          message.method === "Log.entryAdded" && message.params.entry.level === "error" &&
+          message.params.entry.url?.includes("/app-ui/")) issues.push(message.method);
+      if (message.id && pending.has(message.id)) {
+        pending.get(message.id)(message); pending.delete(message.id);
+      }
+    });
+    send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+      const id = ++sequence;
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 15000);
+      pending.set(id, (message) => {
+        clearTimeout(timer);
+        message.error ? reject(new Error(`CDP failed: ${method}`)) : resolve(message.result);
+      });
+      socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+    const evaluate = async (expression, sessionId) => {
+      const result = await send("Runtime.evaluate",
+        { expression, returnByValue: true, awaitPromise: true }, sessionId);
+      assert.ok(!result.exceptionDetails, "Installed App browser JavaScript failed");
+      return result.result.value;
+    };
+    const wait = async (expression, sessionId) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await evaluate(expression, sessionId)) return;
+        await delay(100);
+      }
+      throw new Error(`Installed App browser condition failed: ${expression}`);
+    };
+    await send("Log.enable");
+    await send("Runtime.enable");
+    await send("Page.navigate", { url: `${origin.origin}/#/apps` });
+    await wait(`location.origin === ${JSON.stringify(origin.origin)} && document.readyState === 'complete'`);
+    await evaluate(`localStorage.setItem('cos.token',${JSON.stringify(token)}); location.reload()`);
+    await wait("document.body.innerText.includes('Key-Value Store')");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Open').click()");
+    await wait("!!document.querySelector('iframe') && document.querySelector('iframe').contentDocument === null");
+    const src = await evaluate("document.querySelector('iframe').src");
+    assert.ok(src.startsWith(`${origin.origin}/app-ui/`));
+    let target;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      target = (await send("Target.getTargets")).targetInfos.find((item) =>
+        item.type === "iframe" && item.url === src);
+      if (target) break;
+      await delay(100);
+    }
+    assert.ok(target, "Signed installed product frame did not finish navigation");
+    const attached = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+    const sessionId = attached.sessionId;
+    await send("Log.enable", {}, sessionId);
+    await send("Runtime.enable", {}, sessionId);
+    await wait("document.querySelector('#kv') && !document.querySelector('#kv').hidden", sessionId);
+    await evaluate("document.querySelector('#key').value='web-proof'; document.querySelector('#value').value='first browser click'; document.querySelector('#set').click()", sessionId);
+    await wait("document.querySelector('#result-state').textContent.includes('Set reported')", sessionId);
+    await evaluate("document.querySelector('details').open=true; [...document.querySelectorAll('details button')].find(button=>button.textContent==='set').click()", sessionId);
+    await wait("!!document.querySelector('dialog')", sessionId);
+    await evaluate(`document.querySelector('dialog [name=key]').value='web-proof';
+      document.querySelector('dialog [name=value]').value=${JSON.stringify(value)};
+      document.querySelector('dialog button[type=submit]').click()`, sessionId);
+    await wait("!document.querySelector('dialog')", sessionId);
+    await wait(`document.querySelector('#result').textContent.includes(${JSON.stringify(value)})`, sessionId);
+    await evaluate("document.querySelector('#result-state').textContent=''; document.querySelector('#value').value=''; document.querySelector('#get').click()", sessionId);
+    await wait(`document.querySelector('#result-state').textContent.includes('Get returned') &&
+      document.querySelector('#value').value === ${JSON.stringify(value)}`, sessionId);
+    assert.deepEqual(issues, [], "Signed product scripts must run without browser exceptions");
+  } finally {
+    if (socket?.readyState === WebSocket.OPEN) {
+      if (send) await Promise.race([send("Browser.close").catch(() => {}), delay(1000)]);
+      socket.close();
+    }
+    if (chrome.pid) {
+      try { process.kill(-chrome.pid, "SIGKILL"); }
+      catch (error) { if (error.code !== "ESRCH") throw error; }
+    }
+    await exited;
+    await rm(profile, { recursive: true, force: true });
+  }
+  console.log("PASS installed signed product UI: opaque frame, real button/form clicks and owning Root MCP read/write without a model");
 }
