@@ -47,7 +47,7 @@ fn refuse_unsupported_home_needs(
     {
         let scopes = match &need.scope {
             ScopeBinding::OwnerPath { path } => vec![crate::caps::manifest::resolve_owner_path(
-                need.verb, path, &crate::caps::PathContext { home: home.to_path_buf(), cwd: None })?],
+                need.verb, path, &crate::caps::args::PathContext { home: home.to_path_buf(), cwd: None })?],
             ScopeBinding::Fixed { scope } => vec![scope.clone()],
             ScopeBinding::Wild => caps.iter().filter(|cap| cap.verb == need.verb)
                 .map(|cap| cap.scope.clone()).collect(),
