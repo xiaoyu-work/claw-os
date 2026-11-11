@@ -36,19 +36,7 @@ async fn real_kernel_context() {
                 .unwrap();
             denied(client.require_history(HistoryPermission::Write).await);
         }
-        "calendar-own" => {
-            let events = client
-                .calendar_day(CalendarDate {
-                    year: 2026,
-                    month: 9,
-                    day: 9,
-                })
-                .await
-                .unwrap();
-            assert_eq!(events.len(), 1);
-            assert_eq!(events[0].id, "private-owner-event");
-        }
-        "calendar-foreign" => {
+        "calendar-unbrokered-own" | "calendar-unbrokered-foreign" => {
             let result = client
                 .calendar_day(CalendarDate {
                     year: 2026,
@@ -58,11 +46,11 @@ async fn real_kernel_context() {
                 .await;
             assert!(
                 matches!(
-                    result,
+                    &result,
                     Err(ClientError::Provider(Failure {
-                        code: ErrorCode::ProviderFailure,
-                        ..
-                    }))
+                        code: ErrorCode::ProviderUnavailable,
+                        message,
+                    })) if message.contains("clawd")
                 ),
                 "{result:?}"
             );
