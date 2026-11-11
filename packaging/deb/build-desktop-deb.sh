@@ -23,10 +23,6 @@ source "$PROJECT_DIR/scripts/lib/package-version.sh"
 VERSION="$(package_version "$PROJECT_DIR")"
 APP_RUNTIME_VERSION="$(python3 "$PROJECT_DIR/scripts/app_packages.py" runtime-version)"
 python3 "$PROJECT_DIR/scripts/app_packages.py" check-version --version "$VERSION"
-python3 "$PROJECT_DIR/scripts/app_packages.py" check \
-    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" >/dev/null
-python3 "$PROJECT_DIR/scripts/app_packages.py" native-boundary
-
 if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
     exit 1
@@ -63,6 +59,10 @@ for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
         exit 1
     fi
 done
+
+python3 "$PROJECT_DIR/scripts/app_packages.py" check \
+    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" >/dev/null
+python3 "$PROJECT_DIR/scripts/app_packages.py" native-boundary
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
