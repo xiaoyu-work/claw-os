@@ -433,6 +433,10 @@ async function fixture(req, res) {
   if (url.pathname === "/api/meta") {
     return reply(req, res, { hostname: "activity-test", provider: "test", model: "fixture", ready: providerReady });
   }
+  if (url.pathname === "/api/workspaces") {
+    assert.equal(req.method, "GET");
+    return reply(req, res, { schema: 1, workspaces: [] });
+  }
   if (url.pathname === "/api/nearby") {
     await delay(1700);
     return reply(req, res, nearby);
@@ -639,6 +643,21 @@ async function fixture(req, res) {
     return;
   }
   if (url.pathname === "/api/sessions") {
+    if (req.method === "POST") {
+      assert.deepEqual(body, {});
+      const session = {
+        id: `ses_browser_${++conversationNumber}`,
+        presentation_id: randomUUID(),
+        title: null,
+        workspace_id: null,
+        created_at: timestamp(),
+        updated_at: timestamp(),
+        archived: false,
+        deleted: false,
+      };
+      conversations.set(session.id, session);
+      return reply(req, res, { session });
+    }
     const archived = url.searchParams.get("archived") === "true";
     const sessions = [...conversations.values()]
       .filter((session) => session.archived === archived && !session.deleted)
@@ -1979,7 +1998,8 @@ try {
   assert.ok(!navigationButtons.includes("Tasks"), "Tasks is contextual rather than primary navigation");
   const chatSubmissionsBeforeNavigation = requests.filter((request) => request.path === "/api/chat").length;
   await clickText("New chat");
-  await wait("location.hash === '#/chat' && !!document.querySelector('textarea')", "New chat opens the composer");
+  await wait("location.hash.startsWith('#/chat/ses_browser_') && !!document.querySelector('textarea')", "New chat opens its created conversation");
+  assert.ok(conversations.has((await evaluate("location.hash")).slice("#/chat/".length)));
   assert.equal(requests.filter((request) => request.path === "/api/chat").length, chatSubmissionsBeforeNavigation,
     "opening New chat does not submit Agent work");
   await clickText("Activities");
