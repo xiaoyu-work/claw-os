@@ -489,9 +489,9 @@ apt_run() {
         "$@"
 }
 
-registered="$(apt-config -c "$WORK/apt/etc/50claw-os-security-floor" dump \
-    | grep -c "DPkg::Tools::options::$WORK/apt/hook::Version \"2\";" || true)"
-[ "$registered" = "1" ] \
+registered="$(apt-config -c "$WORK/apt/etc/50claw-os-security-floor" shell hook_version \
+    "DPkg::Tools::Options::$WORK/apt/hook::Version")"
+[ "$registered" = "hook_version='2'" ] \
     || fail "the apt.conf snippet must register the hook's protocol version"
 hook_registered="$(apt-config -c "$WORK/apt/etc/50claw-os-security-floor" dump \
     | grep -c "DPkg::Pre-Install-Pkgs:: \"$WORK/apt/hook\";" || true)"
