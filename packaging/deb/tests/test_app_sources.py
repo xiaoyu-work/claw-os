@@ -244,8 +244,9 @@ def shared_source(published_source, locked_source):
     root, lock = locked_source
     upstream = Path(lock["repository"])
     shutil.copy2(published_source / "tools/stage.py", upstream / "tools/stage.py")
+    shutil.copy2(published_source / "tools/web_ui.py", upstream / "tools/web_ui.py")
     shutil.copytree(published_source / "shared/python", upstream / "shared/python")
-    _pin_fixture(root, lock, "tools/stage.py", "shared/python")
+    _pin_fixture(root, lock, "tools/stage.py", "tools/web_ui.py", "shared/python")
     return root, lock
 
 
@@ -1043,19 +1044,29 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         ("summarize", "ai-helpers"),
     ):
         original = source / "capabilities" / group / "apps" / app_id
+        expected_ui = _app_payload(source / "capabilities" / group / "web")
+        expected_ui.update({
+            Path("shared") / path: entry
+            for path, entry in _app_payload(source / "shared/web").items()
+        })
         for partition_name in ("all", "agent", "agent-package"):
             installed = tmp_path / partition_name / "usr/lib/cos/apps" / app_id
-            if app_id in {"db", "kv", "net", "summarize"}:
-                assert _app_payload(installed) == _app_payload(original, source=True)
-            else:
-                assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
-                for name in ("app.json", "main.py", "server.py"):
-                    assert (installed / name).read_bytes() == (original / name).read_bytes()
-                    assert (installed / name).stat().st_mode == (original / name).stat().st_mode
+            code = {
+                path: entry for path, entry in _app_payload(installed).items()
+                if path != Path("web-ui.json") and path.parts[:1] != ("web",)
+            }
+            assert code == _app_payload(original, source=True)
+            assert _app_payload(installed / "web") == expected_ui
+            descriptor = json.loads((installed / "web-ui.json").read_text())
+            assert descriptor["schema"] == "claw.web-app/v1"
+            assert descriptor["app_id"] == app_id
+            assert descriptor["source_kind"] == "capability"
+            assert descriptor["source_name"] == group
+            assert descriptor["entry"] == "web/index.html"
     parser = python / "claw_files/document.py"
     assert parser.read_bytes() == (source / "products/files/python/claw_files/document.py").read_bytes()
     manifests = list((staged / "usr/lib/cos/apps").rglob("app.json"))
-    assert len(manifests) == 63
+    assert len(manifests) == len(expected - desktop)
     assert {json.loads(path.read_text())["id"] for path in manifests} == (
         expected - desktop
     )
@@ -1642,9 +1653,9 @@ def test_native_player_source_status_and_package_identity_are_consistent():
     assert not (ROOT / "desktop/player").exists()
     assert not (ROOT / "apps/cosmic-player").exists()
     status = (ROOT / "docs/app-product-redesign.md").read_text()
-    assert f"**{len(lock['apps'])} of the original 75 identities**" in status
+    assert f"retains **{len(lock['apps'])} identities**" in status
     desktop = len(set(lock["apps"]) & set(sources.desktop_apps()))
-    assert f"{len(lock['apps']) - desktop} Agent-package identities and {desktop} desktop identities" in status
+    assert f"{len(lock['apps']) - desktop} Agent-package identities and {desktop} desktop identities" in " ".join(status.split())
     assert f"**{len(lock['products'])} business product groups**" in status
     assert "clawos-app/products/media-player" in status
     assert "products/media-player" in (ROOT / "desktop/PROVENANCE.md").read_text()

@@ -16,9 +16,10 @@ ARCH = {"x86_64": "amd64", "aarch64": "arm64"}[machine()]
 
 def package_attempt(stage):
     epoch = json.loads((ROOT / "packaging/release-security/policy.json").read_text())["security_epoch"]
+    version = json.loads((ROOT / "packaging/app-platform.json").read_text())["version"]
     return subprocess.run(
         ["bash", str(ROOT / "packaging/deb/build-desktop-deb.sh"), str(stage)],
-        env={**os.environ, "ARCH": ARCH, "COS_PACKAGE_VERSION": f"{epoch}:0.0.0~applet-fixture"},
+        env={**os.environ, "ARCH": ARCH, "COS_PACKAGE_VERSION": f"{epoch}:{version}"},
         capture_output=True, text=True, timeout=10,
     )
 
