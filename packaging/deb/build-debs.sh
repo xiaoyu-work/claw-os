@@ -52,6 +52,13 @@ if [ -z "$DPKG_DEB" ]; then
     echo "error: dpkg-deb not found. Install it with: apt-get install dpkg-dev" >&2
     exit 1
 fi
+RELEASE_SECURITY_DIR="$PROJECT_DIR/packaging/release-security"
+source "$RELEASE_SECURITY_DIR/sign-manifest.sh"
+# Reject an unusable requested key before fetching App inputs or changing staging.
+RELEASE_SECURITY_PASSPHRASE="${GPG_PASSPHRASE:-}"
+unset GPG_PASSPHRASE
+RELEASE_SECURITY_KEY_ID="$(claw_resolve_signing_key)" || exit 1
+
 APP_RUNTIME_VERSION="$(python3 "$PROJECT_DIR/scripts/app_packages.py" runtime-version)"
 if [ "$PACKAGE_SET" = all ] || [ "$PACKAGE_SET" = agent ]; then
     python3 "$PROJECT_DIR/scripts/app_packages.py" check-version --version "$VERSION"
@@ -311,7 +318,6 @@ render_control() {
 #
 # See packaging/release-security/ and docs/updating.md.
 ###############################################################################
-RELEASE_SECURITY_DIR="$PROJECT_DIR/packaging/release-security"
 RELEASE_SECURITY_POLICY="$RELEASE_SECURITY_DIR/policy.json"
 MAKE_MANIFEST="$RELEASE_SECURITY_DIR/make-manifest.py"
 
@@ -336,17 +342,6 @@ MIN_AGENT_VERSION="$(policy_field minimum_compatible.claw-os-agent)"
 MIN_BASE_VERSION="$(policy_field minimum_compatible.claw-os-base)"
 MIN_DESKTOP_VERSION="$(policy_field minimum_compatible.claw-os-desktop)"
 RELEASE_SECURITY_SUITE="${SUITE:-trixie}"
-# Fail-closed key resolution and manifest emission are shared with the
-# desktop build, so both make the same decision and the decision itself
-# is directly testable.
-source "$RELEASE_SECURITY_DIR/sign-manifest.sh"
-# The passphrase is needed by exactly one child command. Hold it in a
-# shell-local and drop it from the exported environment immediately, so
-# no unrelated build step inherits it.
-RELEASE_SECURITY_PASSPHRASE="${GPG_PASSPHRASE:-}"
-unset GPG_PASSPHRASE
-RELEASE_SECURITY_KEY_ID="$(claw_resolve_signing_key)" || exit 1
-
 # Reproducible timestamps: two builds of the same commit must produce
 # byte-identical manifests, so the embedded digests are stable.
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
