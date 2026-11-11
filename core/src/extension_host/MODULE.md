@@ -118,6 +118,12 @@ Lifecycle routes are host-only; provider routes are child-only; task,
 scheduler, permission-decision, admin, and App-session routes are never
 available to an extension child.
 
+The validated private bootstrap binds the App session cache and owner-path
+metadata to its authenticated owner once per Host process. That metadata never
+changes the reserved execution uid or uses a routed-owner override to launch
+children; `/nonexistent` remains the reserved account home, not the App owner
+home or an owner-data grant.
+
 Notifications is admitted only through `system.notification.control`
 under the nearest child App session: native post/close and `notify` send
 require `ui.notify`; `notify` list requires `data.inbox.read`. The provider
