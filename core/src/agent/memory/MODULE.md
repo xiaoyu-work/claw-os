@@ -54,6 +54,11 @@ remain available to diagnostic and recovery paths. Model-visible exact and
 semantic recall honor replay exclusions, while canonical diagnostic reads and
 FTS projections retain the underlying evidence.
 
+File-backed opens serialize WAL/schema initialization through a separate private
+lock, then release it before returning. The shared lifecycle lock still guards
+the connection lifetime; ordinary readers/writers are not serialized by the
+initialization lock. Read-only inspection never acquires or creates that lock.
+
 `USER.md` and `[always]` entries enter the bounded request profile, not the
 frozen system prompt. Other notes are read deliberately through `cos_memory`.
 `cos_memory search` performs the model's literal query across all notes or one
