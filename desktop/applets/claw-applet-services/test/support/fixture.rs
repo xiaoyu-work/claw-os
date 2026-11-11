@@ -115,13 +115,13 @@ fi
     #[allow(dead_code)]
     pub fn provider(&self, binary: &str) -> PathBuf {
         let binary = Self::binary(binary);
-        let namespace = std::process::Command::new("/usr/bin/unshare")
+        let namespace = std::process::Command::new("/usr/bin/bwrap")
             .args([
-                "--user", "--map-root-user", "--mount", "/bin/sh", "-eu", "-c",
-                "/usr/bin/mount --bind \"$1\" /usr/local/bin",
-                "applet-fixture",
+                "--unshare-user", "--uid", "0", "--gid", "0",
+                "--ro-bind", "/", "/", "--bind",
             ])
             .arg(&self.root)
+            .args(["/usr/local/bin", "--", "/bin/true"])
             .output()
             .unwrap();
         assert!(
@@ -133,8 +133,9 @@ fi
         let path = self.root.join("launch-provider");
         // Only this test child sees the synthetic kernel at the fixed path.
         fs::write(&path, format!(
-            "#!/bin/sh\nexec /usr/bin/unshare --user --map-root-user --mount /bin/sh -eu -c '/usr/bin/mount --bind \"$1\" /usr/local/bin; shift; exec \"$@\"' applet-fixture {} {} \"$@\"\n",
-            quoted(self.root.to_str().unwrap()), quoted(binary.to_str().unwrap()),
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$$\" > {}/provider-group-pid\nexec /usr/bin/bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --bind {} /usr/local/bin -- {} \"$@\"\n",
+            quoted(self.root.to_str().unwrap()), quoted(self.root.to_str().unwrap()),
+            quoted(binary.to_str().unwrap()),
         )).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path

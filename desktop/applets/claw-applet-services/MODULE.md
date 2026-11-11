@@ -76,11 +76,14 @@ cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml --bi
 ```
 
 `tests/provider_process.rs` uses the actual public client and provider with a
-synthetic kernel mounted only inside fresh user/mount namespaces. It covers
+synthetic kernel mounted only inside fresh bubblewrap user/mount namespaces.
+The host root is read-only and only the synthetic kernel directory is writable;
+no global user-namespace policy or installed executable is changed. It covers
 per-operation denial, complete wire conformance, output bounds, real deadlines,
 read-only data and fixed executable selection. `tests/provider_lifecycle.rs`
 isolates orphan adoption in its own process and proves cancellation terminates
-the provider and active policy child, not GUI retirement.
+the provider, optional namespace monitor and active policy child in the SDK-owned
+process group, not GUI retirement.
 For exact installed-candidate checks, `CLAW_APPLET_TEST_PROVIDER` selects an
 absolute built ELF in these test fixtures only; the installed provider never
 consults this variable.
