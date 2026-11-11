@@ -1432,13 +1432,6 @@ impl Filesystem {
 
 impl fuser::Filesystem for Filesystem {
     fn init(&mut self, _req: &Request<'_>, config: &mut fuser::KernelConfig) -> Result<(), i32> {
-        config
-            .set_max_write(MAX_READ)
-            .map(|_| ())
-            .map_err(|_| libc::EINVAL)
-    }
-
-    fn init(&mut self, _req: &Request<'_>, config: &mut fuser::KernelConfig) -> Result<(), i32> {
         match config.set_max_write(MAX_READ) {
             Ok(_) => Ok(()),
             Err(nearest) if nearest > 0 && nearest <= MAX_READ => config
