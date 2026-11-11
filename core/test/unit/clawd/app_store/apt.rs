@@ -699,7 +699,7 @@ impl Fixture {
             ),
             crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", format!("{BASE}/state")),
             crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", format!("{BASE}/state")),
-            crate::test_env::TestEnvVarGuard::set("COS_RUNTIME_DIR", format!("{BASE}/runtime")),
+            crate::test_env::TestEnvVarGuard::set("COS_RUNTIME_DIR", "/run/cos"),
             crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", "/var/log/cos"),
             crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", "/usr/lib/cos/apps"),
             crate::test_env::TestEnvVarGuard::set("CLAWD_SOCKET", "/run/cos/clawd.sock"),
