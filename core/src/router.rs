@@ -1129,6 +1129,21 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__gui-file-read" {
+        if args.len() != 3 || !matches!(args[1].as_str(), "request" | "status")
+            || args[2] != "--request-stdin"
+        { return Err("GUI selected read bridge requires `request|status --request-stdin`".into()); }
+        let mut parameters = parse_internal_request_object(stdin_data.as_deref(), 4096, "GUI selected read")?;
+        if parameters.contains_key("session") {
+            return Err("GUI selected read derives its session from the bound Host".into());
+        }
+        let session = env::var("COS_SESSION").map_err(|_| "GUI selected read requires its bound session")?;
+        parameters.insert("session".into(), json!(session));
+        let command = if args[1] == "request" { Command::GuiFileReadRequest } else { Command::GuiFileReadStatus };
+        let value = request_wire_clawd(command, Value::Object(parameters))?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__filesystem" {
         if args.len() != 3
             || !matches!(args[1].as_str(), "read" | "write")

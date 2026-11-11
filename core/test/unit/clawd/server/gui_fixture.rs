@@ -167,6 +167,25 @@ fn install_packages() {
                 "needs":[{"verb":"fs.meta","scope":{"kind":"owner-path","path":"**"},
                     "why":{"en":"Browse Home names and metadata for this window, without content access"}}]
             });
+            desktop["entries"]["selected-read"] = serde_json::json!({
+                "entry":"gui-probe", "exec":"surface", "name":{"en":"Private selected binary read"},
+                "needs":[
+                    {"verb":"fs.meta","scope":{"kind":"owner-path","path":"**"},
+                        "why":{"en":"Browse Home metadata for this window, without content selection"}},
+                    {"verb":"fs.read","scope":{"kind":"owner-path","path":"read-delegated/**"},
+                        "why":{"en":"Exercise inherited read capability without implicit content selection"}}
+                ],
+                "optional_needs":[
+                    {"verb":"fs.read","scope":{"kind":"owner-path","path":"**"},
+                        "why":{"en":"Request protected owner consent for one selected file after startup"}},
+                    {"verb":"fs.write","scope":{"kind":"owner-path","path":"**"},
+                        "why":{"en":"Exercise capability authority without production native writes"}},
+                    {"verb":"fs.watch","scope":{"kind":"owner-path","path":"**"},
+                        "why":{"en":"Exercise capability authority without production native watches"}},
+                    {"verb":"fs.delete","scope":{"kind":"owner-path","path":"**"},
+                        "why":{"en":"Exercise capability authority without production deletion"}}
+                ]
+            });
             for (name, label, surface_needs) in [
                 ("read", "Private read-only selection", vec![needs[0].clone(), selection[0].clone()]),
                 ("write", "Private write-only selection", vec![needs[0].clone(), selection[1].clone()]),
@@ -275,10 +294,17 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     if case == 11 {
         caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("audio")));
     }
-    if case == 19 {
+    if [19, 20].contains(&case) {
         caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")));
     }
-    let session = format!("gui-fixture-parent-{case}");
+    if case == 20 {
+        caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/display-home/read-delegated/**")));
+    }
+    let session = if case == 20 {
+        format!("gui-fixture-parent-{case}-{}", process.pid())
+    } else {
+        format!("gui-fixture-parent-{case}")
+    };
     let info = crate::proc::SessionInfo {
         session_id: session.clone(),
         pid: process.pid() as u32,
@@ -698,6 +724,18 @@ async fn run_home_metadata_case(group: &std::fs::File) {
     crate::approvals::approve_for_owner(&request.id, crate::approvals::GrantDuration::Once,
         Some("uid:62050".into()), None, Some(OWNER)).unwrap();
     wait_marker(&marker, &mut pam);
+    let capacity: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(marker.with_file_name("metadata-statfs.json")).unwrap()).unwrap();
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        let source = std::fs::File::open(home).unwrap();
+        let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::fstatvfs(source.as_raw_fd(), &mut stats) }, 0);
+        assert_eq!(capacity, serde_json::json!({
+            "blocks":stats.f_blocks, "bsize":stats.f_bsize,
+            "frsize":stats.f_frsize, "namelen":stats.f_namemax,
+        }), "native metadata capacity must describe the retained owner backing filesystem");
+    }
     assert!(matches!(crate::approvals::status_for_owner(&request.id, Some(OWNER)),
         crate::approvals::RequestStatus::Consumed));
     let retained = retained_instance(&request.session);
@@ -735,8 +773,218 @@ async fn run_home_metadata_case(group: &std::fs::File) {
     println!("private GUI case 19: owner-window Home metadata, denied content and checked provider retirement passed");
 }
 
+async fn run_selected_read_case(group: &std::fs::File) {
+    for inherited in [false, true] {
+        run_selected_read_window(group, inherited).await;
+    }
+    println!("private GUI case 20: protected owner-window selected binary read, independent optional authority and checked revoke passed");
+}
+
+async fn run_selected_read_window(group: &std::fs::File, inherited: bool) {
+    use clawd_client::system_review::{
+        PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision, SystemReview,
+    };
+    use std::os::unix::ffi::OsStringExt;
+
+    let home = Path::new("/run/display-home");
+    let data = home.join(".local/share/cos/apps/gui-boundary-test");
+    let target = home.join("read-selected").join(std::ffi::OsString::from_vec(b"binary-\xff.bin".to_vec()));
+    let bytes = (0_usize..2 * 1024 * 1024 + 29)
+        .map(|index| index.wrapping_mul(43).wrapping_add(17) as u8).collect::<Vec<_>>();
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        std::fs::create_dir_all(home.join("read-selected")).unwrap();
+        std::fs::create_dir_all(home.join("read-delegated")).unwrap();
+        std::fs::write(&target, &bytes).unwrap();
+        std::fs::write(home.join("read-selected/sibling"), b"unselected sibling content").unwrap();
+        std::fs::write(home.join("read-delegated/not-selected"), b"capability is not selection").unwrap();
+        std::fs::write(home.join("read-unselected"), b"unselected owner content").unwrap();
+        for marker in ["selected-read-pending.json", "selected-read-ungranted.json", "selected-read-ready",
+            "selected-read-unfinished.json"] {
+            let marker = data.join(marker);
+            if marker.exists() { std::fs::remove_file(marker).unwrap(); }
+        }
+    }
+    let (control, child_control) = bootstrap::pair().unwrap();
+    let mut pam = spawn_pam("gui", "20", group, Stdio::from(child_control));
+    assert_eq!(status(&control, &pam, Instant::now() + Duration::from_secs(30)), *b"AUTH");
+    command(&control, b"CASE");
+    command(&control, b"20..");
+    let child = bootstrap::receive(control.as_fd(), *b"CHLD", Instant::now() + Duration::from_secs(5)).unwrap();
+    assert_eq!(kernel::sender(child.credentials).unwrap(), ProcessIdentity::child(&pam).unwrap());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let launcher = loop {
+        let process = ProcessIdentity::from_pidfd(child.descriptor.as_fd()).unwrap();
+        if process.uid() == OWNER && process.gid() == OWNER { break process; }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let parent = launch_parent(&launcher, 20);
+    if inherited {
+        crate::paths::RoutedPathContext::for_owner(OWNER, home.to_path_buf()).scope_sync(|| {
+            let mut session = crate::proc::session_info_by_id(&parent).unwrap();
+            let caps = session.caps.as_mut().unwrap();
+            for verb in [Verb::FS_READ, Verb::FS_WRITE, Verb::FS_WATCH, Verb::FS_DELETE] {
+                caps.insert(Cap::new(verb, Scope::path("/run/display-home/**")));
+            }
+            crate::proc::register_session_for_owner(session, OWNER).unwrap();
+        });
+    }
+    command(&control, b"RUN!");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let metadata = loop {
+        if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER)).into_iter().find(|request| {
+            request.verb == "fs.meta" && request.scope == Scope::path("/run/display-home/**")
+                && request.session.starts_with("app-") && request.operation_digest.is_some()
+        }) { break request; }
+        assert!(pam.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline, "selected-read window did not request separate metadata consent");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_ne!(metadata.session, parent);
+    assert!(!data.join("selected-read-pending.json").exists(), "App ran before metadata consent");
+    crate::approvals::approve_for_owner(&metadata.id, crate::approvals::GrantDuration::Once,
+        Some("uid:62050".into()), None, Some(OWNER)).unwrap();
+    wait_marker(&data.join("selected-read-pending.json"), &mut pam);
+    let ungranted: Vec<usize> = serde_json::from_slice(
+        &std::fs::read(data.join("selected-read-ungranted.json")).unwrap()).unwrap();
+    assert_eq!(ungranted, if inherited { vec![] } else { vec![0, 1, 2, 3] });
+    let pending: claw_os_sdk::generated::GuiFileRead =
+        serde_json::from_slice(&std::fs::read(data.join("selected-read-pending.json")).unwrap()).unwrap();
+    assert_eq!(pending.state, "pending");
+    let read = crate::approvals::list_pending_for_owner(Some(OWNER)).into_iter()
+        .find(|request| Some(&request.id) == pending.approval_request_id.as_ref()).unwrap();
+    assert_eq!(read.verb, "fs.read");
+    assert_eq!(read.scope, Scope::path("/run/display-home/**"));
+    assert!(read.session.starts_with("gui-read-"));
+    assert_ne!(read.session, metadata.session);
+    assert!(read.operation_digest.is_some());
+    assert!(!data.join("selected-read-ready").exists());
+    let retained = retained_instance(&metadata.session);
+    let original_caps = crate::paths::RoutedPathContext::for_owner(OWNER, home.to_path_buf()).scope_sync(|| {
+        let gui = crate::proc::session_info_by_id(&metadata.session).unwrap();
+        let parent = crate::proc::session_info_by_id(&parent).unwrap();
+        (gui.caps.unwrap(), parent.caps.unwrap())
+    });
+    let window = claw_display_control::Epoch(retained.instance.0).label();
+    assert!(read.session.starts_with(&format!("gui-read-{window}-")));
+    let mut review_command = ProcessCommand::new("/usr/local/bin/cos");
+    review_command.args(["review", "show", &read.id]).env_clear()
+        .env("HOME", home).env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .current_dir(home).stdin(Stdio::null());
+    unsafe {
+        review_command.pre_exec(|| {
+            if libc::setgroups(0, std::ptr::null()) != 0
+                || libc::setgid(OWNER) != 0 || libc::setuid(OWNER) != 0
+            { return Err(std::io::Error::last_os_error()); }
+            Ok(())
+        });
+    }
+    let mut review_command = tokio::process::Command::from(review_command);
+    review_command.kill_on_drop(true);
+    let shown = tokio::time::timeout(Duration::from_secs(15), review_command.output()).await.unwrap().unwrap();
+    assert!(shown.status.success(), "{}", String::from_utf8_lossy(&shown.stderr));
+    let review: SystemReview = serde_json::from_slice(&shown.stdout).unwrap();
+    review.validate().unwrap();
+    assert!(review.initiator.contains("gui-boundary-test"));
+    assert_eq!(review.permissions.len(), 1);
+    assert_eq!(review.permissions[0].verb, "fs.read");
+    assert!(review.context.iter().any(|detail| detail.value.contains("binary-\\xff.bin")
+        && detail.value.contains(&window) && detail.value.contains("Read ONLY selected file")));
+    let decision = ReviewDecision {
+        id: review.id.clone(), revision: review.revision, action: ReviewAction::ApplyChoices,
+        choices: vec![PermissionSelection {
+            permission_id: review.permissions[0].id.clone(), choice: PermissionChoice::AllowOnce,
+        }],
+    };
+    decision.validate_for(&review).unwrap();
+    let wrong = crate::clawd::client::request("/run/cos/clawd.sock", crate::clawd::wire::Request::new(
+        crate::clawd::routes::Command::SystemReviewDecide,
+        serde_json::json!({"owner_uid":OWNER + 1,"review":decision}),
+    )).await.unwrap();
+    assert!(!wrong.ok, "another owner approved this window's selected file");
+    assert!(matches!(crate::approvals::status_for_owner(&read.id, Some(OWNER)),
+        crate::approvals::RequestStatus::Pending));
+    let approved = crate::clawd::client::request("/run/cos/clawd.sock", crate::clawd::wire::Request::new(
+        crate::clawd::routes::Command::SystemReviewDecide,
+        serde_json::json!({"owner_uid":OWNER,"review":decision}),
+    )).await.unwrap();
+    assert!(approved.ok, "protected exact owner decision failed: {:?}", approved.error);
+    wait_marker(&data.join("selected-read-ready"), &mut pam);
+    assert!(matches!(crate::approvals::status_for_owner(&read.id, Some(OWNER)),
+        crate::approvals::RequestStatus::Consumed));
+    let repeated = crate::clawd::client::request("/run/cos/clawd.sock", crate::clawd::wire::Request::new(
+        crate::clawd::routes::Command::SystemReviewDecide,
+        serde_json::json!({"owner_uid":OWNER,"review":decision}),
+    )).await.unwrap();
+    assert!(!repeated.ok, "consumed selection decision was reusable");
+    let selected_cap = Cap::new(Verb::FS_READ, Scope::path("/run/display-home/**"));
+    crate::paths::RoutedPathContext::for_owner(OWNER, home.to_path_buf()).scope_sync(|| {
+        let gui = crate::proc::session_info_by_id(&metadata.session).unwrap();
+        let parent = crate::proc::session_info_by_id(&parent).unwrap();
+        assert_eq!(gui.caps.as_ref().unwrap(), &original_caps.0, "selection changed immutable GUI caps");
+        assert_eq!(parent.caps.as_ref().unwrap(), &original_caps.1, "selection changed parent authority");
+        assert_eq!(gui.caps.unwrap().covers(&selected_cap), inherited);
+        assert_eq!(parent.caps.unwrap().covers(&selected_cap), inherited);
+    });
+        let unfinished: Vec<claw_os_sdk::generated::GuiFileRead> = serde_json::from_slice(
+            &std::fs::read(data.join("selected-read-unfinished.json")).unwrap()).unwrap();
+        assert_eq!(unfinished.len(), 2);
+        let pending_id = unfinished[0].approval_request_id.as_ref().unwrap();
+        let unused_id = unfinished[1].approval_request_id.as_ref().unwrap();
+        crate::approvals::approve_for_owner(unused_id, crate::approvals::GrantDuration::Once,
+            Some("uid:62050".into()), None, Some(OWNER)).unwrap();
+        assert!(matches!(crate::approvals::status_for_owner(unused_id, Some(OWNER)),
+            crate::approvals::RequestStatus::Approved));
+    let runtime = Path::new("/run/cos/gui").join(window);
+    let mountpoint = runtime.join("home-metadata");
+    let group_path = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
+    let processes = std::fs::read_to_string(group_path.join("cgroup.procs")).unwrap().lines().map(|pid| {
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid.parse::<i32>().unwrap(), 0) };
+        assert!(descriptor >= 0);
+        unsafe { OwnedFd::from_raw_fd(descriptor as i32) }
+    }).collect::<Vec<_>>();
+    assert!(processes.len() >= 3, "selected read did not retain its separately grouped descendant");
+    let metadata_generation = crate::approvals::generations::current(Some(OWNER), &metadata.session).unwrap();
+    let revoked = crate::clawd::client::request("/run/cos/clawd.sock", crate::clawd::wire::Request::new(
+        crate::clawd::routes::Command::PermissionRevoke,
+        serde_json::json!({"owner_uid":OWNER,"session":read.session}),
+    )).await.unwrap();
+    assert!(revoked.ok, "independent read revocation did not complete: {:?}", revoked.error);
+    assert_eq!(crate::approvals::generations::current(Some(OWNER), &metadata.session).unwrap(),
+        metadata_generation, "read revocation must not replace the metadata decision");
+    assert!(matches!(crate::approvals::status_for_owner(pending_id, Some(OWNER)),
+        crate::approvals::RequestStatus::Denied));
+    assert!(matches!(crate::approvals::status_for_owner(unused_id, Some(OWNER)),
+        crate::approvals::RequestStatus::Consumed));
+    let recent = crate::approvals::list_recent_for_owner(1000, Some(OWNER));
+    assert!(recent.iter().any(|entry| &entry.request.id == pending_id
+        && entry.decision.decided_by.as_deref() == Some("system:validation")));
+    assert!(recent.iter().any(|entry| &entry.request.id == unused_id
+        && entry.decision.outcome == crate::approvals::Outcome::Approved
+        && entry.decision.decided_by.as_deref() == Some("uid:62050")));
+    for process in processes {
+        assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+    }
+    assert!(std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap()
+        .as_os_str().as_encoded_bytes().ends_with(b" (deleted)"));
+    assert!(!mountpoint.exists() && !runtime.exists(), "selected-read provider/runtime retirement was not checked");
+    assert!(!std::fs::read_to_string("/proc/self/mountinfo").unwrap().lines().any(|line|
+        line.split_whitespace().nth(4) == mountpoint.to_str()));
+    assert_eq!(std::fs::read(&target).unwrap(), bytes);
+    assert_eq!(std::fs::read(home.join("read-selected/sibling")).unwrap(), b"unselected sibling content");
+    assert_eq!(std::fs::read(home.join("read-delegated/not-selected")).unwrap(), b"capability is not selection");
+    command(&control, b"WAIT");
+    assert_eq!(status(&control, &pam, Instant::now() + Duration::from_secs(30)), *b"FAIL");
+    command(&control, b"CLSE");
+    assert!(pam.wait().unwrap().success());
+    println!("private GUI selected read authority {}: passed",
+        if inherited { "already inherited, never implicitly selected" } else { "separate post-start optional grant" });
+}
+
 async fn run_case(case: usize, group: &std::fs::File) {
     if case == 19 { return run_home_metadata_case(group).await; }
+    if case == 20 { return run_selected_read_case(group).await; }
     let (control, child_control) = bootstrap::pair().unwrap();
     let mut pam = spawn_pam("gui", &case.to_string(), group, Stdio::from(child_control));
     assert_eq!(
@@ -1468,7 +1716,7 @@ fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
         if !session_only && !file_manager_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
-            for case in 0..20 {
+            for case in 0..21 {
                 let group = session_group(root, &case.to_string());
                 run_case(case, &group).await;
             }

@@ -1657,6 +1657,62 @@ pub fn invalidate_pending_for_execution(
     Ok(invalidated)
 }
 
+/// Retire an exact Root-owned operation review without inventing an owner denial.
+/// Approved decisions remain historical evidence in the consumed archive.
+pub(crate) fn retire_operation_decision(
+    owner: u32,
+    session: &str,
+    id: &str,
+    digest: &str,
+    reason: &str,
+) -> Result<(), String> {
+    validate_approval_id(id)?;
+    ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        let file = format!("{id}.json");
+        for (directory, status) in [
+            (pending_dir(), RequestStatus::Pending),
+            (approved_dir(), RequestStatus::Approved),
+            (consumed_dir(), RequestStatus::Consumed),
+            (denied_dir(), RequestStatus::Denied),
+        ] {
+            let path = directory.join(&file);
+            let data = match fs::read_to_string(&path) {
+                Ok(data) => data,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("read operation approval {id}: {error}")),
+            };
+            let request = if status == RequestStatus::Pending {
+                serde_json::from_str::<Request>(&data).map_err(|error| error.to_string())?
+            } else {
+                serde_json::from_str::<Resolved>(&data).map_err(|error| error.to_string())?.request
+            };
+            if request.id != id || request.owner_uid != Some(owner) || request.session != session
+                || request.operation_digest.as_deref() != Some(digest)
+            {
+                return Err("operation approval identity changed; retirement remains pending".into());
+            }
+            match status {
+                RequestStatus::Pending => {
+                    let scratch = scratch_dir().join(format!("{id}.{}.json", short_id()));
+                    fs::rename(&path, &scratch)
+                        .map_err(|error| format!("claim retired operation approval {id}: {error}"))?;
+                    invalidate_claimed_request(id, &scratch, &request, reason)?;
+                    sync_dir(&pending_dir());
+                }
+                RequestStatus::Approved => {
+                    if !consume_grant_file(&path)? {
+                        return Err("operation approval retirement was not verified".into());
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        Err("operation approval evidence is unavailable; retirement remains pending".into())
+    })
+}
+
 /// Permanently retire all consent state for one in-process Agent invocation.
 ///
 /// The revocation marker is committed before files are moved, so a concurrent

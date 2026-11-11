@@ -41,6 +41,7 @@ pub(super) struct Job {
     pub instance: InstanceId,
     pub stopped: AtomicBool,
     pub state: Mutex<JobState>,
+    pub selected_reads: OnceLock<Arc<super::selected_read::SelectedReads>>,
 }
 
 impl Job {
@@ -156,6 +157,7 @@ impl Manager {
                 registration: Arc::new(registration),
                 instance,
                 stopped: AtomicBool::new(false),
+                selected_reads: OnceLock::new(),
                 state: Mutex::new(JobState {
                     phase: Phase::Reserved,
                     layer_shell: false,
@@ -448,9 +450,21 @@ pub(crate) fn retire_approval_scope(
     deadline: Instant,
 ) -> Result<(), String> {
     if let Some(manager) = MANAGER.get() {
+        let jobs = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
+            .values().cloned().collect::<Vec<_>>();
+        let mut selected = std::collections::HashSet::new();
+        for job in jobs {
+            let matches = match job.selected_reads.get() {
+                Some(reads) => reads.matches_approval(scope, deadline)?,
+                None => false,
+            };
+            if matches {
+                selected.insert(job.registration.session_id.clone());
+            }
+        }
         manager.retire_where(
             |registration, _| {
-                super::retirement::approval_matches(scope, registration.owner(), |session| {
+                selected.contains(&registration.session_id) || super::retirement::approval_matches(scope, registration.owner(), |session| {
                     registration.belongs_to_session(session)
                 })
             },
@@ -458,6 +472,23 @@ pub(crate) fn retire_approval_scope(
         )?;
     }
     Ok(())
+}
+
+pub(super) fn selected_reads(
+    authority: &crate::clawd::authority::Decision,
+    client: &ClientIdentity,
+) -> Result<Arc<super::selected_read::SelectedReads>, BrokerError> {
+    let manager = Manager::get().map_err(BrokerError::unavailable)?;
+    let session = authority.session_id().ok_or_else(|| BrokerError::authorization("selected read has no GUI session"))?;
+    let job = manager.jobs.lock().map_err(|_| BrokerError::unavailable("GUI registry lock poisoned"))?
+        .get(session).cloned().ok_or_else(|| BrokerError::authorization("selected read GUI is unavailable"))?;
+    if job.stopping() || job.state.lock().map_err(|_| BrokerError::unavailable("GUI state lock poisoned"))?.phase != Phase::Running {
+        return Err(BrokerError::authorization("selected reads require a running common GUI Host"));
+    }
+    let endpoint = job.selected_reads.get().cloned()
+        .ok_or_else(|| BrokerError::authorization("this GUI has no controlled native metadata view"))?;
+    endpoint.authorize_request(authority, client).map_err(BrokerError::authorization)?;
+    Ok(endpoint)
 }
 
 pub(crate) fn retire_epoch(epoch: Epoch, deadline: Instant) -> Result<(), String> {

@@ -29,10 +29,36 @@ import { createConnection } from "node:net";
 
 import * as ai from "./ai";
 import * as tools from "./tools";
+import {
+  type GuiFileRead, stringifyWireJson, validateGuiFileRead,
+  validateGuiFileReadRequest, validateGuiFileReadStatusRequest,
+} from "./generated";
+import { cosCallJson } from "./transport";
 
 const ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher";
 const ASK_CLAW_PROTOCOL = 1;
 const ASK_CLAW_REQUEST_LIMIT = 32 * 1024;
+
+/** Propose this filtered view's native inode. Pending is not selected content. */
+export function requestFileRead(node: number): GuiFileRead {
+  const request = { node };
+  validateGuiFileReadRequest(request);
+  return selectedReadCall("request", request);
+}
+
+/** Read the same window/node's Root-owned selection status; never approves. */
+export function fileReadStatus(selectionId: string, node: number): GuiFileRead {
+  const request = { selection_id: selectionId, node };
+  validateGuiFileReadStatusRequest(request);
+  return selectedReadCall("status", request);
+}
+
+function selectedReadCall(action: string, request: { node: number; selection_id?: string }): GuiFileRead {
+  const response = cosCallJson("GUI selected file read",
+    ["__gui-file-read", action, "--request-stdin"], 30_000, stringifyWireJson(request));
+  validateGuiFileRead(response);
+  return response;
+}
 
 /**
  * Return `true` when the current invocation is a desktop GUI launch.

@@ -55,14 +55,42 @@ import stat
 import struct
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from . import ai, tools
+from . import generated
+from .kernel import call_json_with_stdin_binary
 
 ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher"
 ASK_CLAW_PROTOCOL = 1
 ASK_CLAW_REQUEST_LIMIT = 32 * 1024
+
+
+def request_file_read(node: int) -> generated.GuiFileRead:
+    """Propose this view's native metadata inode; pending is not read authority."""
+    request = {"node": node}
+    generated.validate_gui_file_read_request(request)
+    return _selected_read_call("request", request)
+
+
+def file_read_status(selection_id: str, node: int) -> generated.GuiFileRead:
+    """Read Root's status for this same window and inode; never approves."""
+    request = {"selection_id": selection_id, "node": node}
+    generated.validate_gui_file_read_status_request(request)
+    return _selected_read_call("status", request)
+
+
+def _selected_read_call(action: str, request: dict[str, Any]) -> generated.GuiFileRead:
+    value = call_json_with_stdin_binary(
+        os.environ.get("CLAW_COS_BIN", "/usr/local/bin/cos"),
+        ["__gui-file-read", action, "--request-stdin"],
+        generated.encode_wire_json(request).encode("utf-8"),
+        deadline_unix_ms=time.time_ns() // 1_000_000 + 30_000,
+    )
+    generated.validate_gui_file_read(value)
+    return value
 
 
 def is_gui_launch() -> bool:

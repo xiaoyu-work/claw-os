@@ -14,6 +14,12 @@ pub(crate) mod retirement;
 #[cfg(target_os = "linux")]
 mod supervision;
 #[cfg(target_os = "linux")]
+mod selected_read;
+#[cfg(target_os = "linux")]
+pub(crate) use selected_read::{file_read_status, request_file_read};
+#[cfg(target_os = "linux")]
+pub(crate) use supervision::validate_optional_mounts;
+#[cfg(target_os = "linux")]
 mod transport;
 #[cfg(target_os = "linux")]
 pub(crate) use manager::*;
@@ -29,3 +35,21 @@ pub(crate) async fn launch(
 pub(crate) use launch as wait;
 #[cfg(not(target_os = "linux"))]
 pub(crate) use launch as stop;
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) async fn request_file_read(
+    _params: serde_json::Value, _client: &crate::clawd::client_identity::ClientIdentity,
+    _authority: &crate::clawd::authority::Decision,
+) -> Result<serde_json::Value, crate::clawd::protocol::BrokerError> {
+    Err(crate::clawd::protocol::BrokerError::unavailable("selected native file read requires Linux"))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) use request_file_read as file_read_status;
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn validate_optional_mounts(
+    _app: &crate::apps::App, _entry: Option<&str>, _home: &std::path::Path, caps: &crate::caps::CapSet,
+) -> Result<(), String> {
+    crate::worker::derive::granted_path_mounts(caps).map(|_| ())
+}

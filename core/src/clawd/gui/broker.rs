@@ -36,6 +36,7 @@ struct State {
     inflight: AtomicUsize,
     failure: Mutex<Option<String>>,
     shutdown: tokio::sync::watch::Sender<bool>,
+    home_metadata: bool,
 }
 
 pub(super) struct Broker {
@@ -49,6 +50,7 @@ impl Broker {
         daemon: DaemonState,
         admission: Arc<Admission>,
         executor: &tokio::runtime::Handle,
+        home_metadata: bool,
     ) -> Result<Self, String> {
         listener
             .set_nonblocking(true)
@@ -65,6 +67,7 @@ impl Broker {
             inflight: AtomicUsize::new(0),
             failure: Mutex::new(None),
             shutdown,
+            home_metadata,
         });
         let endpoint = state.clone();
         let context = crate::paths::RoutedPathContext::capture();
@@ -336,8 +339,14 @@ async fn serve(
             }
         }
         Validated::Provider(request) => {
-            crate::clawd::server::dispatch_verified_request(request, &client, &daemon, &admission)
-                .await
+            if endpoint.home_metadata && matches!(request.command,
+                Command::SystemFilesystemRead | Command::SystemFilesystemWrite | Command::SystemFileReplace)
+            {
+                Response::handler_error(request.id, BrokerError::authorization(
+                    "this GUI's native resources require exact selected-file consent; scalar filesystem providers cannot bypass it"))
+            } else {
+                crate::clawd::server::dispatch_verified_request(request, &client, &daemon, &admission).await
+            }
         }
     };
     respond(&mut stream, response).await;

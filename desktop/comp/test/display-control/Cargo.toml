@@ -16,6 +16,7 @@ path = "src/probe.rs"
 
 [dependencies]
 claw-display-control = { path = "../../../../crates/claw-display-control" }
+claw-os-sdk = { path = "../../../../claw-os-sdk/rust" }
 smithay = { path = "../../vendor/smithay", default-features = false, features = ["wayland_frontend"] }
 wayland-server = "=0.31.13"
 calloop = "=0.14.4"

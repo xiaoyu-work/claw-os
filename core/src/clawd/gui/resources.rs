@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use claw_display_control::{Epoch, InstanceId, ProcessIdentity};
@@ -21,6 +22,42 @@ struct Declaration {
     cap: Cap,
     digest: String,
     identity: (u64, u64),
+}
+
+fn declares_home_metadata(selected: &crate::caps::manifest::GuiEntry<'_>, scope: &Scope) -> bool {
+    !selected.legacy_needs && selected.launch_needs().any(|need| {
+        need.verb == Verb::FS_META && match &need.scope {
+            ScopeBinding::OwnerPath { path } => path == "**",
+            ScopeBinding::Fixed { scope: declared } => declared == scope,
+            _ => false,
+        }
+    })
+}
+
+fn beneath_home(scope: &Scope, home: &Path) -> bool {
+    matches!(scope, Scope::Path(path)
+        if Path::new(path.strip_suffix("/**").unwrap_or(path)).starts_with(home))
+}
+
+fn refuse_unsupported_home_needs(
+    selected: &crate::caps::manifest::GuiEntry<'_>, home: &Path, caps: &CapSet,
+) -> Result<(), String> {
+    for need in selected.launch_needs().filter(|need|
+        matches!(need.verb, Verb::FS_WRITE | Verb::FS_DELETE | Verb::FS_WATCH | Verb::FS_EXEC))
+    {
+        let scopes = match &need.scope {
+            ScopeBinding::OwnerPath { path } => vec![crate::caps::manifest::resolve_owner_path(
+                need.verb, path, &crate::caps::PathContext { home: home.to_path_buf(), cwd: None })?],
+            ScopeBinding::Fixed { scope } => vec![scope.clone()],
+            ScopeBinding::Wild => caps.iter().filter(|cap| cap.verb == need.verb)
+                .map(|cap| cap.scope.clone()).collect(),
+            _ => continue,
+        };
+        if scopes.iter().any(|scope| scope.is_wildcard() || beneath_home(scope, home)) {
+            return Err(format!("mandatory Home {} requires native resource integration that is not available", need.verb.as_str()));
+        }
+    }
+    Ok(())
 }
 
 fn home_scope(registration: &Registration) -> Result<Scope, String> {
@@ -76,15 +113,7 @@ fn declaration(
         .launch
         .manifest()
         .gui_entry(registration.gui_entry.as_deref())?;
-    let explicit = !selected.legacy_needs
-        && selected.launch_needs().any(|need| {
-            need.verb == Verb::FS_META
-                && match &need.scope {
-                    ScopeBinding::OwnerPath { path } => path == "**",
-                    ScopeBinding::Fixed { scope: declared } => declared == &scope,
-                    _ => false,
-                }
-        });
+    let explicit = declares_home_metadata(&selected, &scope);
     if !explicit {
         if !selected.legacy_needs
             && selected.optional_needs.iter().any(|need| {
@@ -108,6 +137,7 @@ fn declaration(
     if binding.is_developer() {
         return Err("Home metadata requires a signed installed GUI surface".into());
     }
+    refuse_unsupported_home_needs(&selected, &registration.home, &registration.caps)?;
     let metadata = {
         let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(registration.owner())?;
         std::fs::metadata(&registration.home).map_err(|error| error.to_string())?
@@ -221,16 +251,38 @@ pub(super) fn consume(
     }))
 }
 
-pub(super) fn sandbox_caps(registration: &Registration) -> Result<CapSet, String> {
-    let scope = home_scope(registration)?;
-    let bare = Scope::path(registration.home.to_str().ok_or("GUI Home is not UTF-8")?);
+pub(super) fn sandbox_caps(registration: &Registration, metadata_view: bool) -> Result<CapSet, String> {
+    home_scope(registration)?;
+    raw_mount_caps(&registration.home, &registration.caps, metadata_view)
+}
+
+fn raw_mount_caps(home: &Path, caps: &CapSet, metadata_view: bool) -> Result<CapSet, String> {
+    let text = home.to_str().ok_or("GUI Home is not UTF-8")?;
+    let scope = Scope::path(format!("{}/**", text.trim_end_matches('/')));
+    let bare = Scope::path(text);
     Ok(CapSet::from_caps(
-        registration
-            .caps
+        caps
             .iter()
             .filter(|cap| !(cap.verb == Verb::FS_META && (cap.scope == scope || cap.scope == bare)))
+            .filter(|cap| !(metadata_view && matches!(cap.verb,
+                Verb::FS_META | Verb::FS_READ | Verb::FS_WRITE | Verb::FS_DELETE | Verb::FS_WATCH | Verb::FS_EXEC)
+                && beneath_home(&cap.scope, home)))
             .cloned(),
     ))
+}
+
+/// Resource projection only: neither a declaration nor successful validation
+/// supplies the separate owner/window consent required before FUSE admission.
+pub(super) fn validate_optional_mounts(
+    app: &crate::apps::App, entry: Option<&str>, home: &Path, caps: &CapSet,
+) -> Result<(), String> {
+    let selected = app.manifest.gui_entry(entry)?;
+    let scope = Scope::path(format!("{}/**", home.to_str().ok_or("GUI Home is not UTF-8")?.trim_end_matches('/')));
+    let controlled = declares_home_metadata(&selected, &scope)
+        && caps.iter().any(|cap| cap == &Cap::new(Verb::FS_META, scope.clone()));
+    if controlled { refuse_unsupported_home_needs(&selected, home, caps)?; }
+    let projected = if controlled { raw_mount_caps(home, caps, true)? } else { caps.clone() };
+    crate::worker::derive::granted_path_mounts(&projected).map(|_| ())
 }
 
 pub(super) fn refuse_raw_home(
@@ -242,7 +294,7 @@ pub(super) fn refuse_raw_home(
         matches!(mount.class, MountClass::Input | MountClass::Output)
             && (home.starts_with(&mount.target) || metadata && mount.target.starts_with(home))
     }) {
-        return Err("GUI Home resources require the filtered metadata view; selected content is not integrated".into());
+        return Err("GUI Home resources require the filtered view and exact selected-file consent, never a raw Home bind".into());
     }
     Ok(())
 }
@@ -253,6 +305,7 @@ pub(super) struct HomeMetadata {
     directory: Option<File>,
     identity: Option<(u64, u64)>,
     view: Option<NativeFsView>,
+    selected_reads: OnceLock<Arc<crate::clawd::gui::selected_read::SelectedReads>>,
     created: bool,
     removed: bool,
 }
@@ -270,6 +323,7 @@ impl HomeMetadata {
             directory: None,
             identity: None,
             view: None,
+            selected_reads: OnceLock::new(),
             created: false,
             removed: false,
         })
@@ -342,18 +396,25 @@ impl HomeMetadata {
 
     pub(super) fn bind(
         &self,
-        registration: &Registration,
+        registration: &Arc<Registration>,
+        instance: InstanceId,
         process: &ProcessIdentity,
         resources: &LaunchResources,
         grant: &GrantView,
-    ) -> Result<(), String> {
+    ) -> Result<Arc<crate::clawd::gui::selected_read::SelectedReads>, String> {
         self.check(registration)?;
         let view = self
             .view
             .as_ref()
             .ok_or("GUI Home metadata provider is unavailable")?;
         view.bind(process, resources.gui_cgroup()?)?;
-        self.refresh(registration, grant)
+        self.refresh(registration, grant)?;
+        let selected = crate::clawd::gui::selected_read::SelectedReads::new(
+            registration.clone(), instance, process.clone(), resources.gui_cgroup()?,
+            view.read_provider()?, self.consent.ceiling, grant,
+        )?;
+        self.selected_reads.set(selected.clone()).map_err(|_| "selected read endpoint already bound")?;
+        Ok(selected)
     }
 
     pub(super) fn refresh(
@@ -374,6 +435,7 @@ impl HomeMetadata {
     }
 
     pub(super) fn stop(&self) -> Result<(), String> {
+        if let Some(selected) = self.selected_reads.get() { selected.stop(); }
         if let Some(view) = &self.view {
             view.revoke()?;
         }
@@ -381,6 +443,7 @@ impl HomeMetadata {
     }
 
     pub(super) fn health(&self) -> Result<(), String> {
+        if let Some(selected) = self.selected_reads.get() { selected.health()?; }
         self.view
             .as_ref()
             .ok_or("GUI Home metadata provider is unavailable")?
@@ -388,6 +451,10 @@ impl HomeMetadata {
     }
 
     pub(super) fn retire(&mut self, deadline: Instant) -> Result<(), String> {
+        if let Some(selected) = self.selected_reads.get() {
+            selected.stop();
+            selected.release_after_death(deadline)?;
+        }
         if let Some(view) = &mut self.view {
             view.retire_checked(deadline)?;
         }

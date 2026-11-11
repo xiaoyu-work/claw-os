@@ -327,6 +327,7 @@ fn home_metadata() {
     use std::fs::File;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
     let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").expect("authenticated Home context"));
     let private = PathBuf::from(std::env::var_os("HOME").expect("private App Home"));
     assert_ne!(home, private);
@@ -350,7 +351,16 @@ fn home_metadata() {
     assert_eq!(unsafe { libc::fstatfs(directory.as_raw_fd(), &mut filesystem) }, 0);
     assert_eq!(filesystem.f_type as u64, 0x6573_5546,
         "the inner App's opened Home descriptor must be a real FUSE filesystem");
+    let mut capacity: libc::statvfs = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::fstatvfs(directory.as_raw_fd(), &mut capacity) }, 0);
+    assert!(capacity.f_blocks > 0 && capacity.f_bsize > 0 && capacity.f_frsize > 0);
+    std::fs::write(private_marker("metadata-statfs.json"), serde_json::to_vec(&serde_json::json!({
+        "blocks":capacity.f_blocks, "bsize":capacity.f_bsize,
+        "frsize":capacity.f_frsize, "namelen":capacity.f_namemax,
+    })).unwrap()).unwrap();
     let _peer = peer(Protocol::Core);
+    assert!(claw_os_sdk::gui::request_file_read(std::fs::metadata(&visible).unwrap().ino()).is_err(),
+        "this metadata-only surface has no declared content-read authority");
     let group = unsafe { libc::getpgrp() };
     let (mut ready, mut report) = UnixStream::pair().unwrap();
     ready.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -371,6 +381,123 @@ fn home_metadata() {
     drop(ready);
     std::fs::write(private_marker("metadata-ready"), b"metadata-only authenticated window").unwrap();
     loop { std::thread::sleep(Duration::from_secs(1)); }
+}
+
+fn selected_read() {
+    use std::fs::{File, OpenOptions};
+    use std::io::{Seek, SeekFrom};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::{FileExt, MetadataExt};
+
+    const SIZE: usize = 2 * 1024 * 1024 + 29;
+    fn byte(index: usize) -> u8 { index.wrapping_mul(43).wrapping_add(17) as u8 }
+    let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").unwrap());
+    let ungranted = std::env::var("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap();
+    let _: Vec<usize> = serde_json::from_str(&ungranted).unwrap();
+    let directory = File::open(&home).unwrap();
+    let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::fstatfs(directory.as_raw_fd(), &mut filesystem) }, 0);
+    assert_eq!(filesystem.f_type as u64, 0x6573_5546);
+    let _peer = peer(Protocol::Core);
+    let selected = home.join("read-selected").join(std::ffi::OsString::from_vec(b"binary-\xff.bin".to_vec()));
+    let sibling = home.join("read-selected/sibling");
+    let inherited = home.join("read-delegated/not-selected");
+    let unselected = home.join("read-unselected");
+    for path in [&selected, &sibling, &inherited, &unselected] {
+        assert!(File::open(path).is_err(), "metadata or inherited read authority selected {path:?}");
+    }
+    let scalar = serde_json::json!({"action":"read","path":inherited}).to_string();
+    assert!(claw_os_sdk::cos_call_json_with_stdin("__filesystem", "read",
+        ["--request-stdin"], scalar.as_bytes()).is_err(),
+        "scalar filesystem providers must not bypass native selection");
+    let node = std::fs::metadata(&selected).unwrap().ino();
+    let sibling_node = std::fs::metadata(&sibling).unwrap().ino();
+    let directory_node = std::fs::metadata(home.join("read-selected")).unwrap().ino();
+    assert!(claw_os_sdk::gui::request_file_read(directory_node).is_err());
+    let pending = claw_os_sdk::gui::request_file_read(node).expect("Root selected-file proposal");
+    assert_eq!(pending.state, "pending");
+    assert!(File::open(&selected).is_err(), "request success is not a read selection");
+    assert!(claw_os_sdk::gui::file_read_status(&pending.selection_id, sibling_node).is_err());
+    assert!(claw_os_sdk::gui::file_read_status(&format!("sr-{}", "f".repeat(32)), node).is_err());
+    std::fs::write(private_marker("selected-read-ungranted.json"), ungranted).unwrap();
+    std::fs::write(private_marker("selected-read-pending.json"), serde_json::to_vec(&pending).unwrap()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let status = claw_os_sdk::gui::file_read_status(&pending.selection_id, node).unwrap();
+        if status.state == "selected" {
+            let remaining = status.expires_in_ms.filter(|remaining| *remaining > 0).unwrap();
+            let again = claw_os_sdk::gui::file_read_status(&pending.selection_id, node).unwrap();
+            assert_eq!(again.state, "selected");
+            assert!(again.expires_in_ms.is_some_and(|next| next <= remaining),
+                "status polling cannot extend the approved read deadline");
+            break;
+        }
+        assert_eq!(status.state, "pending");
+        assert!(File::open(&selected).is_err());
+        assert!(std::time::Instant::now() < deadline, "protected selected-file decision deadline");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut file = File::open(&selected).unwrap();
+    let mut data = Vec::new();
+    file.read_to_end(&mut data).unwrap();
+    assert_eq!(data.len(), SIZE);
+    assert!(data.iter().enumerate().all(|(index, actual)| *actual == byte(index)));
+    file.seek(SeekFrom::Start(19321)).unwrap();
+    let mut slice = [0; 257];
+    file.read_exact(&mut slice).unwrap();
+    assert!(slice.iter().enumerate().all(|(index, actual)| *actual == byte(19321 + index)));
+    let mapped = unsafe { libc::mmap(std::ptr::null_mut(), SIZE, libc::PROT_READ, libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
+    assert_ne!(mapped, libc::MAP_FAILED);
+    assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(SIZE - 1)) }, byte(SIZE - 1));
+    let executable = unsafe { libc::mmap(std::ptr::null_mut(), SIZE, libc::PROT_READ | libc::PROT_EXEC,
+        libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
+    assert_eq!(executable, libc::MAP_FAILED, "a read selection is not resource execution authority");
+    assert!(OpenOptions::new().read(true).write(true).open(&selected).is_err());
+    assert!(std::fs::write(&selected, b"read is not write").is_err());
+    assert!(File::open(&sibling).is_err(), "selected directory scope must not grant sibling content");
+    let scalar_sibling = serde_json::json!({"action":"read","path":sibling}).to_string();
+    assert!(claw_os_sdk::cos_call_json_with_stdin("__filesystem", "read",
+        ["--request-stdin"], scalar_sibling.as_bytes()).is_err(),
+        "selected status must not reopen an alternative scalar content route");
+    assert!(File::open(&inherited).is_err());
+    assert!(File::open(&unselected).is_err());
+    assert!(std::fs::metadata(home.join(".ssh/secret")).is_err());
+    let pending_sibling = claw_os_sdk::gui::request_file_read(sibling_node).unwrap();
+    let pending_unused = claw_os_sdk::gui::request_file_read(
+        std::fs::metadata(&unselected).unwrap().ino()).unwrap();
+    assert_eq!(pending_sibling.state, "pending");
+    assert_eq!(pending_unused.state, "pending");
+    std::fs::write(private_marker("selected-read-unfinished.json"),
+        serde_json::to_vec(&[pending_sibling, pending_unused]).unwrap()).unwrap();
+    let group = unsafe { libc::getpgrp() };
+    let (mut ready, mut report) = UnixStream::pair().unwrap();
+    ready.set_read_timeout(Some(DEADLINE)).unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        drop(ready);
+        own_process_group(group);
+        report.write_all(b"ready").unwrap();
+        drop(report);
+    } else {
+        drop(report);
+        let mut confirmed = [0; 5];
+        ready.read_exact(&mut confirmed).unwrap();
+        assert_eq!(&confirmed, b"ready");
+        drop(ready);
+        std::fs::write(private_marker("selected-read-ready"), b"Root-selected binary content, retained FD and mmap").unwrap();
+    }
+    loop {
+        assert!(File::open(&sibling).is_err());
+        assert!(File::open(&unselected).is_err(),
+            "an unused owner approval is not selected content");
+        let mut retained = [0; 1];
+        assert_eq!(file.read_at(&mut retained, 7).unwrap(), 1);
+        assert_eq!(retained[0], byte(7));
+        assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(SIZE - 1)) }, byte(SIZE - 1));
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn native_fs_kernel(view: &str) {
@@ -688,6 +815,7 @@ fn main() {
         "revoke" => revoke(),
         "aliases" => aliases(),
         "metadata" => home_metadata(),
+        "selected-read" => selected_read(),
         _ => panic!("unknown private GUI probe mode"),
     }
     println!(

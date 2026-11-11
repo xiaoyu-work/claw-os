@@ -4,6 +4,61 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::clawd::wire::bounded::{Text, TextList, Token};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct NativeNode(u64);
+
+impl NativeNode {
+    pub fn get(self) -> u64 { self.0 }
+}
+
+impl<'de> Deserialize<'de> for NativeNode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut request = serde_json::json!({ "node": value });
+        claw_os_sdk::generated::validate_gui_file_read_request(&request)
+            .map_err(serde::de::Error::custom)?;
+        claw_os_sdk::generated::normalize_gui_file_read_request_integers(&mut request);
+        request["node"].as_u64().map(Self)
+            .ok_or_else(|| serde::de::Error::custom("native file node is outside the view bound"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct ReadSelectionId(String);
+
+impl ReadSelectionId {
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+impl<'de> Deserialize<'de> for ReadSelectionId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if !value.strip_prefix("sr-").is_some_and(|id| id.len() == 32
+            && id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        {
+            return Err(serde::de::Error::custom("invalid selected read status identifier"));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileReadRequest {
+    pub session: Token,
+    pub node: NativeNode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileReadStatusRequest {
+    pub session: Token,
+    pub selection_id: ReadSelectionId,
+    pub node: NativeNode,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub struct EntryName(Text<64>);

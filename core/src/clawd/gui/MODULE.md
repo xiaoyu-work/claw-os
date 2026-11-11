@@ -43,7 +43,8 @@ This presentation data is not authority or feature readiness: live
 policy/provider checks still return ordinary denial errors, and AI consent,
 budgets and provider availability remain separate. Existing sessions never
 widen after a later approval. Expiry/revocation still uses checked instance
-retirement; there is no new live capability acquisition or file-picker grant.
+retirement. The bounded selected-file-read path below issues separate
+operation-bound authority, never a dynamic widening of this startup snapshot.
 
 The default GUI uses `desktop.entry`, falling back to top-level `entry` and the
 runtime default. Neither override changes ordinary operations or `mcp.entry`.
@@ -120,7 +121,50 @@ Releasing setup does not release App code: the existing inner App gate still
 waits for transport, live grant and creator installation. Every metadata lease
 renewal follows a fresh registration snapshot and exact window-consent check;
 the bounded lease cannot outlive its original approval. No production content
-read/write API or mutation fault injector is promoted with metadata support.
+write/watch API or mutation fault injector is promoted with metadata support.
+
+### Draft selected regular-file read
+
+`selected_read.rs` admits only a proposed virtual inode from this window's
+controlled metadata view. Typed request/status bodies carry no App-selected
+owner, source path, window, lease or approval flag. Root authenticates the
+live process/start and exact instance cgroup, then pins the source's raw bytes,
+device/inode and revision and checks this signed surface's own read declaration.
+Other GUI/MCP needs and parent `fs.read` are never selection. Unsupported
+argument-bound needs and missing Wild inheritance remain unbound.
+
+Each proposal creates an ordinary protected exact-owner review naming file,
+read-only access and window, with a digest binding that target, identity,
+revision and live GUI. Only a fresh matching decision can be spent once.
+Root issues a separate finite `Issuer::Approval` read grant, preserving ordinary
+package/denial, Activity and Workspace checks, without changing parent/global
+or immutable GUI startup caps. The Root-held grant is `GuiResource`-only and
+unindexed; no handle reaches the App. Its effective native lease is one pinned
+regular file even when the declared technical upper bound is Home-recursive.
+Non-UTF8 names use opaque node identity and escaped inert review display, not
+lossy paths.
+
+`pending`/accepted is not `selected`. The fixed read deadline is clipped by its
+own consent, metadata and GUI ceilings, including any shorter ordinary grant.
+Status polling and metadata refresh never renew or extend that deadline.
+Live authority/source checks govern native opens/reads; independent expiry and
+ordinary owner/session revocation also trigger checked whole-instance
+retirement for retained FDs/mappings and separate-process-group descendants.
+Changed sources are stale, not silently rebound. Failed cleanup retains custody.
+Checked window retirement also closes pending private read reviews and retires
+unused approved decisions, preserving the original owner decision as evidence.
+
+The controlled Home path suppresses all beneath-Home filesystem capabilities
+from raw bind derivation, not from capability authority. Optional registration
+resource validation uses that same projection only for an explicitly mandatory
+Home-metadata surface; it neither grants metadata nor replaces later protected
+window admission. Unrelated paths retain ordinary mount/protected-resource
+validation. Raw Home refusal is unchanged. The controlled broker also refuses
+legacy scalar filesystem read/write/replace so those routes cannot turn a broad
+startup cap into selected content. Production write/watch/general mutations
+remain closed.
+Unsupported mandatory Home write/delete/watch/exec still refuses launch rather
+than silently downgrading a mandatory contract to a readonly view.
 
 The Root [display registry](../../display_session/MODULE.md) supplies the
 authenticated owner and display epoch. The Host creates the instance ID, holds
@@ -153,10 +197,11 @@ applies; no permanent GUI grant or Admin bootstrap is created.
 
 | File | Responsibility |
 | --- | --- |
-| `inputs.rs` | Closed launch/wait/stop shapes, argument limits and presentation-only keys |
+| `inputs.rs` | Closed launch/wait/stop and selected-read shapes, bounded node/status references and presentation-only keys |
 | `manager.rs` | Reservation, exact launcher ownership, results and checked retirement barriers |
 | `supervision.rs` | Sandbox/cgroup preparation, binding, creator installation, refresh and cleanup |
 | `resources.rs` | Exact owner/window Home metadata consent, filtered mount, bounded lease and checked provider retirement |
+| `selected_read.rs` | Exact file/window proposal and protected decision, ordinary separate read authority and checked source/lease custody |
 | `broker.rs` | Instance-local authenticated provider relay into ordinary broker authorization |
 | `transport.rs` | Kernel syscall notification handling and the fixed connection targets |
 | `proxy.rs` | Per-segment kernel writer/cgroup checks, bounded bytes/connections/descriptors |

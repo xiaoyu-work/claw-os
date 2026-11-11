@@ -34,6 +34,61 @@ const askClawLauncher = "/usr/local/bin/cos-ask-claw-launcher"
 const askClawProtocol = 1
 const askClawRequestLimit = 32 * 1024
 
+// RequestFileRead proposes a native metadata inode; pending is not selected content.
+func RequestFileRead(node uint64) (*GuiFileRead, error) {
+	request := map[string]any{"node": node}
+	if err := ValidateGuiFileReadRequest(request); err != nil {
+		return nil, err
+	}
+	return selectedReadCall("request", request)
+}
+
+// FileReadStatus reads Root's status for this same window and proposed inode.
+func FileReadStatus(selectionID string, node uint64) (*GuiFileRead, error) {
+	request := map[string]any{"selection_id": selectionID, "node": node}
+	if err := ValidateGuiFileReadStatusRequest(request); err != nil {
+		return nil, err
+	}
+	return selectedReadCall("status", request)
+}
+
+func selectedReadCall(action string, request map[string]any) (*GuiFileRead, error) {
+	input, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	response, err := cosCallJSON("GUI selected file read",
+		[]string{"__gui-file-read", action, "--request-stdin"}, input)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSelectedRead(response.Data)
+}
+
+func decodeSelectedRead(value any) (*GuiFileRead, error) {
+	if err := ValidateGuiFileRead(value); err != nil {
+		return nil, err
+	}
+	normalized := make(map[string]any)
+	for key, field := range value.(map[string]any) {
+		normalized[key] = field
+	}
+	for _, key := range []string{"version", "node", "expires_in_ms"} {
+		if field, ok := normalized[key]; ok {
+			normalized[key] = asUint64(field)
+		}
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	var result GuiFileRead
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // IsGUILaunch reports whether the bridge marked this process as an
 // authenticated desktop launch.
 func IsGUILaunch() bool {

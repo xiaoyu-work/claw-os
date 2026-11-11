@@ -1,6 +1,7 @@
 """Unit tests for the desktop GUI bootstrap in `claw_os_sdk.gui`."""
 
 import os
+import json
 import stat
 import sys
 import unittest
@@ -93,6 +94,32 @@ class OverlayTests(unittest.TestCase):
             self.assertEqual(inspect.call_args_list[-1].args, (gui.ASK_CLAW_LAUNCHER,))
         finally:
             os.environ.pop("COS_AGENT_UI_BIN", None)
+
+class SelectedReadTests(unittest.TestCase):
+    def test_request_status_use_only_node_and_root_status_reference(self) -> None:
+        selection = "sr-" + "a" * 32
+        pending = {"version": 1, "selection_id": selection, "node": 7,
+                   "access": "read", "state": "pending", "approval_request_id": "ap-private"}
+        selected = {**pending, "state": "selected", "expires_in_ms": 120000}
+        with patch.object(gui, "call_json_with_stdin_binary", side_effect=[pending, selected]) as call:
+            self.assertEqual(gui.request_file_read(7)["state"], "pending")
+            self.assertEqual(gui.file_read_status(selection, 7)["state"], "selected")
+        self.assertEqual(call.call_args_list[0].args[1], ["__gui-file-read", "request", "--request-stdin"])
+        self.assertEqual(json.loads(call.call_args_list[0].args[2]), {"node": 7})
+        self.assertEqual(json.loads(call.call_args_list[1].args[2]), {"selection_id": selection, "node": 7})
+
+    def test_invalid_claims_are_refused_without_transport(self) -> None:
+        with patch.object(gui, "call_json_with_stdin_binary") as call:
+            with self.assertRaises(ValueError):
+                gui.request_file_read(0)
+            with self.assertRaises(ValueError):
+                gui.file_read_status("other-window", 7)
+            call.assert_not_called()
+        reply = {"version": 1, "selection_id": "sr-" + "a" * 32, "node": 7,
+                 "access": "read", "state": "selected", "owner_uid": 0}
+        with patch.object(gui, "call_json_with_stdin_binary", return_value=reply):
+            with self.assertRaises(ValueError):
+                gui.request_file_read(7)
 
 
 if __name__ == "__main__":

@@ -78,6 +78,53 @@ pub fn owner_home() -> Option<std::path::PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
+/// Propose a native FUSE metadata inode for protected owner read review.
+/// A pending response is not selected content or permission to read.
+pub fn request_file_read(node: u64) -> Result<crate::generated::GuiFileRead, crate::BridgeError> {
+    let request = serde_json::json!({ "node": node });
+    crate::generated::validate_gui_file_read_request(&request)
+        .map_err(|error| selected_read_decode("request", error))?;
+    selected_read_call("request", request)
+}
+
+/// Read this window's Root-owned selection status for the same proposed inode.
+pub fn file_read_status(
+    selection_id: &str,
+    node: u64,
+) -> Result<crate::generated::GuiFileRead, crate::BridgeError> {
+    let request = serde_json::json!({ "selection_id": selection_id, "node": node });
+    crate::generated::validate_gui_file_read_status_request(&request)
+        .map_err(|error| selected_read_decode("status", error))?;
+    selected_read_call("status", request)
+}
+
+fn selected_read_decode(verb: &str, error: impl std::fmt::Display) -> crate::BridgeError {
+    crate::BridgeError::Decode {
+        app: "__gui-file-read".into(), verb: verb.into(), message: error.to_string(),
+    }
+}
+
+fn selected_read_call(
+    verb: &str,
+    request: serde_json::Value,
+) -> Result<crate::generated::GuiFileRead, crate::BridgeError> {
+    let input = request.to_string();
+    let response = crate::cos_call_json_with_stdin(
+        "__gui-file-read", verb, ["--request-stdin"], input.as_bytes(),
+    )?;
+    selected_read_response(verb, response)
+}
+
+fn selected_read_response(
+    verb: &str,
+    mut response: serde_json::Value,
+) -> Result<crate::generated::GuiFileRead, crate::BridgeError> {
+    crate::generated::validate_gui_file_read(&response)
+        .map_err(|error| selected_read_decode(verb, error))?;
+    crate::generated::normalize_gui_file_read_integers(&mut response);
+    serde_json::from_value(response).map_err(|error| selected_read_decode(verb, error))
+}
+
 /// The kernel context handed to a desktop app at launch.
 #[derive(Debug, Clone)]
 pub struct Context {

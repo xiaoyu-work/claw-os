@@ -29,6 +29,12 @@ mod resources;
 const CONTROL: Duration = Duration::from_secs(2);
 const RETIREMENT: Duration = Duration::from_secs(5);
 
+pub(crate) fn validate_optional_mounts(
+    app: &crate::apps::App, entry: Option<&str>, home: &std::path::Path, caps: &crate::caps::CapSet,
+) -> Result<(), String> {
+    resources::validate_optional_mounts(app, entry, home, caps)
+}
+
 struct Supervised {
     job: Arc<Job>,
     runtime: Runtime,
@@ -64,7 +70,7 @@ impl Supervised {
         }
         admit_home_metadata(&job).map_err(|error| error.message)?;
         let consent = resources::consume(&job.registration, job.instance)?;
-        let sandbox_caps = resources::sandbox_caps(&job.registration)?;
+        let sandbox_caps = resources::sandbox_caps(&job.registration, consent.is_some())?;
         let mut runtime = Runtime::create(job.instance).map_err(|error| error.to_string())?;
         let listener = runtime
             .bind(Socket::Wayland, job.registration.owner())
@@ -111,6 +117,7 @@ impl Supervised {
             manager.daemon.clone(),
             manager.admission.clone(),
             &manager.executor,
+            consent.is_some(),
         )?;
         let home = consent.map(|consent| resources::HomeMetadata::reserve(consent, &runtime)).transpose()?;
         Ok(Self {
@@ -214,7 +221,8 @@ impl Supervised {
         self.process = Some(process.clone());
         if let Some(home) = &self.home {
             let view = self.job.registration.snapshot(&process)?;
-            home.bind(&self.job.registration, &process, resources, &view)?;
+            let selected = home.bind(&self.job.registration, self.job.instance, &process, resources, &view)?;
+            self.job.selected_reads.set(selected).map_err(|_| "GUI selected read binding was already used")?;
             resources.release_gui_setup_gate()?;
         }
         self.broker

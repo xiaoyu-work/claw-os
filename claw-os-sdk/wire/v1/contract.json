@@ -6,11 +6,16 @@
       "budget_show",
       "envelope",
       "file_change_plan",
+      "gui_file_read",
       "mcp_call_context",
       "object_ref",
       "owner_path_need",
       "tool_catalog",
       "tool"
+    ],
+    "targets": [
+      { "name": "gui_file_read_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadRequest"] },
+      { "name": "gui_file_read_status_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadStatusRequest"] }
     ],
     "integer_semantics": "lossless JSON decimal-rational lexemes; finite mathematical integers have denominator 1; type validation precedes minimum/maximum checks",
     "error_codes": {

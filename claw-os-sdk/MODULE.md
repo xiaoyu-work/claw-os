@@ -43,6 +43,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/file_change_plan.schema.json`, `wire/v1/file-change-plans.md` | Closed App-reported staged-plan value and semantic validation boundaries |
 | `wire/v1/file_change_plan.vectors.json` | Shared file-plan decoder conformance cases |
 | `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
+| `wire/v1/gui_file_read.schema.json`, `wire/v1/gui-selected-read.md` | Draft closed GUI native-node read proposal/status DTOs; thin facades only, protected owner decisions/provider stay Root-owned |
 | `wire/v1/manifest.schema.json` | Versioned App/MCP service, tool, access, and capability contract |
 | `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
@@ -111,6 +112,16 @@ All four generated bindings preserve the arrays; pure owner-path validation
 also checks them. Root startup indexes in
 `COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON` are presentation only. Existing live
 policy/provider errors remain authoritative; no dynamic widening is implied.
+
+The draft GUI `request_file_read(node)` / `file_read_status(selection_id, node)`
+facades (idiomatic names in Node/Go) use the ordinary controlled stdin transport
+and shared generated validators. A proposed native FUSE inode, pending status
+or approval ID grants no content. Root alone binds exact owner/window/file,
+consumes protected review once and installs a separate finite read lease,
+without widening the startup/parent grant. No path, owner, window, boolean
+approval or raw source FD crosses the facade. See the draft contract above;
+this is not SDK publication, an artifact/pin adoption, a trusted picker UI or
+production write/watch support.
 
 ## Dependencies
 

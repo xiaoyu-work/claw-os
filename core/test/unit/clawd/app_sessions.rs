@@ -1822,6 +1822,50 @@ fn optional_gui_unbound_or_unsupported_resources_are_ungranted_without_startup_r
     assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn controlled_home_optional_authority_is_not_a_raw_mount_or_a_protected_path_bypass() {
+    let _sandbox = approval_sandbox();
+    let mut app = app_from(r#"{
+        "id":"native-resource-window","version":"1","name":{"en":"Native resource window"},
+        "desktop":{"needs":[
+            {"verb":"fs.meta","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Window metadata"}}
+        ],"optional_needs":[
+            {"verb":"fs.read","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Read eligibility"}},
+            {"verb":"fs.write","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Write eligibility"}},
+            {"verb":"fs.watch","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Watch eligibility"}},
+            {"verb":"fs.delete","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Delete eligibility"}},
+            {"verb":"fs.read","scope":{"kind":"fixed","scope":{"kind":"path","value":"/proc"}},"why":{"en":"Forbidden external resource"}}
+        ]},
+        "operations":{"inspect":{"label":{"en":"Inspect"},"needs":[]}}
+    }"#);
+    let mut inherited = CapSet::new();
+    for verb in [Verb::FS_META, Verb::FS_READ, Verb::FS_WRITE, Verb::FS_WATCH, Verb::FS_DELETE] {
+        inherited.insert(Cap::new(verb, Scope::path("/home/u/**")));
+    }
+    inherited.insert(Cap::new(Verb::FS_READ, Scope::path("/proc")));
+    let launcher = delegation(inherited);
+    let (caps, optional) = optional_gui_caps(&app, None, "--gui", &launcher).unwrap();
+    assert_eq!(optional.ungranted, [4]);
+    for verb in [Verb::FS_READ, Verb::FS_WRITE, Verb::FS_WATCH, Verb::FS_DELETE] {
+        assert!(caps.covers(&Cap::new(verb, Scope::path("/home/u/**"))));
+    }
+    assert!(!caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/proc"))));
+    assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_ok());
+    let mut forbidden = caps.clone();
+    forbidden.insert(Cap::new(Verb::FS_READ, Scope::path("/proc")));
+    assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &forbidden).is_err());
+    app.manifest.desktop.as_mut().unwrap().needs.as_mut().unwrap().push(
+        serde_json::from_value(json!({
+            "verb":"fs.write","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Unsupported mandatory native write"}
+        })).unwrap());
+    assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_err(),
+        "unsupported mandatory writes must not silently become a readonly fallback");
+    app.manifest.desktop.as_mut().unwrap().needs = Some(Vec::new());
+    assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_err());
+    assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());
+}
+
 #[test]
 fn gui_fixed_needs_require_exact_owner_approval_before_launch() {
     let _sandbox = approval_sandbox();
