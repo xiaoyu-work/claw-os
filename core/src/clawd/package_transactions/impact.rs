@@ -74,13 +74,7 @@ fn relations(value: &str) -> Vec<(Vec<String>, bool)> {
         .map(|part| {
             let names = part
                 .split('|')
-                .filter_map(|alternative| {
-                    alternative
-                        .trim()
-                        .split_whitespace()
-                        .next()
-                        .map(str::to_string)
-                })
+                .filter_map(|alternative| alternative.split_whitespace().next().map(str::to_string))
                 .collect::<Vec<_>>();
             let ambiguous = names.len() != 1 || part.contains('[') || part.contains('<');
             (names, ambiguous)
