@@ -41,7 +41,7 @@ nearby() {
     cargo test --manifest-path crates/claw-nearby/Cargo.toml --locked
     cargo clippy --manifest-path crates/claw-nearby/Cargo.toml --all-targets --locked -- -D warnings
     cargo test --manifest-path crates/claw-nearby/vendor/owlyd/Cargo.toml --test service --locked
-    cargo test -p cos --lib --locked --no-run --message-format=json \
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/nearby-tests.jsonl"
     test_binary="$(cos_test_binary "$RUNNER_TEMP/nearby-tests.jsonl")"
     sudo timeout 60 unshare --mount --net --fork \
@@ -56,7 +56,7 @@ app_apt() {
     done
     python3 -I -c 'import apt_pkg'
     cargo build -p cos --bin cos --bin claw-app-runner --bin claw-app-apt-hook --bin claw-extension-host --locked
-    cargo test -p cos --lib --locked --no-run --message-format=json \
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/app-apt-tests.jsonl"
     local test_binary listing fixture
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/app-apt-tests.jsonl")"
@@ -102,7 +102,7 @@ app_apt() {
 app_bind() {
     cargo build -p cos --bin cos --bin claw-app-runner --locked
     sudo apt-get install -y --no-install-recommends acl
-    cargo test -p cos --lib --locked --no-run --message-format=json \
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl"
     local test_binary
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/ordinary-custody-tests.jsonl")"
@@ -145,7 +145,7 @@ calendar() {
     cargo build -p cos --bin cos --locked
     cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
         --features provider --bins --locked --target-dir "$RUNNER_TEMP/calendar-target"
-    cargo test -p cos --lib --locked --no-run --message-format=json \
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/calendar-tests.jsonl"
     test_binary="$(cos_test_binary "$RUNNER_TEMP/calendar-tests.jsonl")"
     sudo timeout 120 unshare --mount --net --fork \
@@ -171,7 +171,7 @@ extensions() {
         --test extension_host_boundary \
         --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/extension-tests.jsonl"
-    cargo test -p cos --lib --locked --no-run --message-format=json \
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/service-retirement-tests.jsonl"
     service_test_binary="$(cos_test_binary "$RUNNER_TEMP/service-retirement-tests.jsonl")"
     private_extension_case 120 \
@@ -276,7 +276,7 @@ display() {
         --bin claw-file-manager
     cargo test -p cos --bin claw-file-manager --locked -- --test-threads=1
     cargo build -p claw-display-login --locked
-    cargo test -p cos --lib --locked --no-run --message-format=json \
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/gui-tests.jsonl"
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/gui-tests.jsonl")"
     cargo clippy --manifest-path desktop/comp/test/display-control/Cargo.toml \
@@ -373,7 +373,7 @@ applets() {
     cargo clippy --manifest-path "$manifest" --features provider --all-targets --locked -- -D warnings
     cargo build -p cos --bin cos --locked
     cargo test --manifest-path "$manifest" --features provider --test kernel_policy \
-        --no-run --locked --message-format=json > "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl"
+        --no-run --locked --message-format=json-render-diagnostics > "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl"
     test_binary="$(python3 - "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl" <<'PY'
 import json
 import sys

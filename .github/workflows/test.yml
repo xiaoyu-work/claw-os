@@ -78,6 +78,7 @@ jobs:
           key: ${{ runner.os }}-cargo-test-nodebug-${{ steps.cargo-inputs.outputs.hash }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-nodebug-
+            ${{ runner.os }}-cargo-display-nodebug-${{ steps.cargo-inputs.outputs.hash }}
 
       # Lint on the host target so clippy shares its dependency build with
       # `cargo test` below. Building this step for musl instead compiled all
