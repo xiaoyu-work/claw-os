@@ -203,7 +203,7 @@ target; it creates no writable siblings, directory, delete or exec authority.
 `O_RDWR` requires both independently approved resources.
 
 Root creates one capability-empty canonical mutation evidence session for this
-GUI only when a write decision is installed. It uses existing inverse bytes and
+GUI only when a write or creation decision is installed. It uses existing inverse bytes and
 MAC-chained `MutationBracket` records, linking each production effect to the
 ordinary selected-write grant reference. Effects wait for durable starts; file
 and required parent sync plus committed completion precede successful replies.
@@ -215,7 +215,21 @@ Atomic save gives the App one opaque private scratch name under the pinned
 target parent. Only that name can be created and only that existing target can
 be replaced. Discarding private scratch is allowed, unlink/rmdir of owner data
 and general rename are not. Non-UTF8 inverse targets fail before effects rather
-than converting identity lossily; new-file Save As remains unsupported.
+than converting identity lossily. This existing-file path cannot create a new
+Save As target.
+
+The separate draft creation path accepts only one materialized directory node
+(including the view root) and a bounded literal UTF-8 leaf. Its independent
+protected owner/window `fs.write` decision binds the absent child and pinned
+parent. A selected or reserved status is not a created file. Root supplies one
+private scratch and one finalization attempt, records the genuine Missing
+inverse before staging, forces atomic `RENAME_NOREPLACE`, syncs the file and
+parent and commits canonical completion before reporting `created`.
+An existing or racing target is never overwritten or adopted. Creation grants
+neither content read nor subsequent overwrite; unknown effects retain custody
+and fence the instance. See the [native creation contract](../../worker/native_fs/MODULE.md#one-absent-regular-child--save-as).
+These draft interfaces do not complete installed Editor/Files UI acceptance or
+publish a new SDK/platform.
 
 Only verified committed own effects can advance matching selected resources.
 They preserve existing read consent and all original deadlines. In-place
@@ -256,11 +270,11 @@ applies; no permanent GUI grant or Admin bootstrap is created.
 
 | File | Responsibility |
 | --- | --- |
-| `inputs.rs` | Closed launch/wait/stop and selected-read shapes, bounded node/status references and presentation-only keys |
+| `inputs.rs` | Closed launch/wait/stop and selected-file shapes, bounded node/status references and presentation-only keys |
 | `manager.rs` | Reservation, exact launcher ownership, results and checked retirement barriers |
 | `supervision.rs` | Sandbox/cgroup preparation, binding, creator installation, refresh and cleanup |
 | `resources.rs` | Exact owner/window Home metadata consent, filtered mount, bounded lease and checked provider retirement |
-| `selected_read.rs` | Exact file/window proposal and protected decision, ordinary separate read authority and checked source/lease custody |
+| `selected_read.rs` | Exact file/window proposals and protected decisions, independent read/write/create authority and checked source/lease custody |
 | `broker.rs` | Instance-local authenticated provider relay into ordinary broker authorization |
 | `transport.rs` | Kernel syscall notification handling and the fixed connection targets |
 | `proxy.rs` | Per-segment kernel writer/cgroup checks, bounded bytes/connections/descriptors |
