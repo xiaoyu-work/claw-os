@@ -5,13 +5,16 @@ selection=all
 native_product_input=
 native_product=
 native_app=
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
-    else
+    elif [[ "${15}" == --native-files-only ]]; then
         native_product=files
         native_app=cosmic-files
+    else
+        native_product=terminal
+        native_app=cosmic-term
     fi
     selection="native-$native_product"
     native_product_input=$(realpath -- "${16}")
@@ -244,6 +247,7 @@ BUS
         native-fs) fixture_test=clawd::server::gui_fixture::private_native_fs_kernel ;;
         native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
+        native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
     listing=$("$registry" --list)

@@ -21,6 +21,7 @@ SPEC.loader.exec_module(app_sources)
 PRODUCTS = {
     "editor": ("cosmic-edit", "com.clawos.Edit", ()),
     "files": ("cosmic-files", "com.clawos.Files", ("bin/cosmic-files-applet",)),
+    "terminal": ("cosmic-term", "com.clawos.Term", ()),
 }
 
 
@@ -117,6 +118,10 @@ def payload_record(source, payload, lock, product="editor"):
         )
     ):
         raise ValueError("Native acceptance requires the published 0.2.1 platform pin")
+    if product == "terminal" and platform.get("sha256") != (
+        "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
+    ):
+        raise ValueError("Terminal acceptance requires the approved published platform bytes")
     for path, original in (
         (payload / "LICENSE", source / "products" / product / "native/LICENSE"),
         (payload / "licenses/claw-app-gui-argv/LICENSE", source / "LICENSE"),

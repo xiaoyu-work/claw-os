@@ -13,6 +13,13 @@ mod editor_save_as {
     ));
 }
 
+mod terminal_pty {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/terminal_pty.rs"
+    ));
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Product {
     pub(super) name: &'static str,
@@ -21,6 +28,7 @@ pub(super) struct Product {
     desktop_id: &'static str,
     entries: &'static [&'static str],
     ungranted: &'static [usize],
+    home_metadata: bool,
 }
 
 pub(super) const EDITOR: Product = Product {
@@ -30,6 +38,7 @@ pub(super) const EDITOR: Product = Product {
     desktop_id: "com.clawos.Edit",
     entries: &["bin/cosmic-edit"],
     ungranted: &[0, 1, 2],
+    home_metadata: true,
 };
 pub(super) const FILES: Product = Product {
     name: "files",
@@ -38,6 +47,16 @@ pub(super) const FILES: Product = Product {
     desktop_id: "com.clawos.Files",
     entries: &["bin/cosmic-files", "bin/cosmic-files-applet"],
     ungranted: &[0, 1, 2, 3],
+    home_metadata: true,
+};
+pub(super) const TERMINAL: Product = Product {
+    name: "terminal",
+    app: "cosmic-term",
+    case: 27,
+    desktop_id: "com.clawos.Term",
+    entries: &["bin/cosmic-term"],
+    ungranted: &[],
+    home_metadata: false,
 };
 
 impl Product {
@@ -104,6 +123,12 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
+    if product.name == "terminal" {
+        assert_eq!(
+            platform_digest,
+            "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
+        );
+    }
     assert_eq!(payload.entrypoints, product.entries);
     for required in [
         format!(
@@ -474,22 +499,53 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 .unwrap()
                 .caps
                 .unwrap();
-            let mut metadata = CapSet::new();
-            metadata.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")));
+            let mut expected_gui = CapSet::new();
+            let mut expected_parent =
+                CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name(product.app))]);
+            if product.home_metadata {
+                let metadata = Cap::new(Verb::FS_META, Scope::path("/run/display-home/**"));
+                expected_gui.insert(metadata.clone());
+                expected_parent.insert(metadata);
+            }
             assert_eq!(
-                gui, metadata,
-                "optional read/write/AI must not become startup authority"
+                gui, expected_gui,
+                "GUI startup must not inherit MCP, content, process or AI authority"
             );
-            let expected_parent = CapSet::from_caps([
-                Cap::new(Verb::AGENT_INVOKE, Scope::name(product.app)),
-                Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")),
-            ]);
             assert_eq!(
                 parent, expected_parent,
                 "launcher must not borrow a model, Admin or content grant"
             );
             (gui, parent)
         })
+}
+
+fn registered_gui_session<'a>(
+    sessions: &'a [crate::proc::SessionInfo],
+    parent: &str,
+    product: Product,
+) -> Option<&'a crate::proc::SessionInfo> {
+    let mut matching = sessions.iter().filter(|session| {
+        session.app_id.as_deref() == Some(product.app)
+            && session.parent.as_deref() == Some(parent)
+            && session.group.as_deref() == Some("app")
+            && !session.pending_bind
+            && session.pid > 1
+            && session.start_time_ticks.is_some()
+            && session.ended_at.is_none()
+    });
+    let session = matching.next();
+    assert!(
+        matching.next().is_none(),
+        "ambiguous Root-registered native GUI sessions"
+    );
+    session
+}
+
+fn bound_gui_session(parent: &str, product: Product) -> Option<String> {
+    let sessions = crate::proc::try_registry_sessions_for_owner(OWNER).unwrap();
+    let session = registered_gui_session(&sessions, parent, product)?;
+    crate::proc::process_identity_is_live(session.pid, session.start_time_ticks.unwrap(), OWNER)
+        .then(|| session.session_id.clone())
 }
 
 pub(super) async fn run(group: &std::fs::File, product: Product) {
@@ -555,54 +611,66 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     );
     let parent = launch_parent(&launcher, product.case);
     command(&control, b"RUN!");
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let metadata = loop {
-        if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER))
-            .into_iter()
-            .find(|request| {
-                request.verb == "fs.meta"
-                    && request.scope == Scope::path("/run/display-home/**")
-                    && request.session.starts_with("app-")
-                    && request.operation_digest.is_some()
-            })
-        {
-            break request;
-        }
+    let metadata = if product.home_metadata {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let metadata = loop {
+            if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER))
+                .into_iter()
+                .find(|request| {
+                    request.verb == "fs.meta"
+                        && request.scope == Scope::path("/run/display-home/**")
+                        && request.session.starts_with("app-")
+                        && request.operation_digest.is_some()
+                })
+            {
+                break request;
+            }
+            assert!(
+                pam.try_wait().unwrap().is_none() && Instant::now() < deadline,
+                "{}",
+                diagnostic("per-window metadata review")
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_ne!(metadata.session, parent);
         assert!(
-            pam.try_wait().unwrap().is_none() && Instant::now() < deadline,
-            "{}",
-            diagnostic("per-window metadata review")
+            observe().is_none(),
+            "actual App code ran before per-window metadata consent"
         );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !crate::approvals::list_pending_for_owner(Some(OWNER))
+                .iter()
+                .any(|request| request.verb == "fs.read"),
+            "content selection preceded metadata consent"
+        );
+        approve_native_resource(&metadata.id).await;
+        Some(metadata)
+    } else {
+        None
     };
-    assert_ne!(metadata.session, parent);
-    assert!(
-        observe().is_none(),
-        "actual App code ran before per-window metadata consent"
-    );
-    assert!(
-        !crate::approvals::list_pending_for_owner(Some(OWNER))
-            .iter()
-            .any(|request| request.verb == "fs.read"),
-        "content selection preceded metadata consent"
-    );
-    approve_native_resource(&metadata.id).await;
 
     let deadline = Instant::now() + Duration::from_secs(25);
-    let retained = loop {
-        let bound = crate::paths::RoutedPathContext::for_owner(OWNER, home.to_path_buf())
-            .scope_sync(|| {
-                crate::proc::session_info_by_id(&metadata.session)
-                    .is_some_and(|session| !session.pending_bind && session.pid > 1)
-            });
-        if bound
-            && Path::new("/run/cos/gui")
-                .read_dir()
-                .unwrap()
-                .next()
-                .is_some()
-        {
-            break retained_instance(&metadata.session);
+    let (session, retained) = loop {
+        let session = metadata
+            .as_ref()
+            .map(|request| request.session.clone())
+            .or_else(|| bound_gui_session(&parent, product));
+        if let Some(session) = session {
+            let bound = crate::paths::RoutedPathContext::for_owner(OWNER, home.to_path_buf())
+                .scope_sync(|| {
+                    crate::proc::session_info_by_id(&session)
+                        .is_some_and(|session| !session.pending_bind && session.pid > 1)
+                });
+            if bound
+                && Path::new("/run/cos/gui")
+                    .read_dir()
+                    .unwrap()
+                    .next()
+                    .is_some()
+            {
+                let retained = retained_instance(&session);
+                break (session, retained);
+            }
         }
         assert!(
             pam.try_wait().unwrap().is_none() && Instant::now() < deadline,
@@ -626,7 +694,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
-    let original = startup_authority(&metadata.session, &parent, product);
+    let original = startup_authority(&session, &parent, product);
     let environment = std::fs::read(format!("/proc/{}/environ", process.identity.pid())).unwrap();
     let value = |key: &str| {
         environment
@@ -636,7 +704,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     assert_eq!(value("COS_APP_GUI"), Some(b"1".as_slice()));
     assert_eq!(value("ICED_BACKEND"), Some(b"tiny-skia".as_slice()));
     assert_eq!(value("COS_COMMAND"), Some(b"--gui".as_slice()));
-    assert_eq!(value("COS_SESSION"), Some(metadata.session.as_bytes()));
+    assert_eq!(value("COS_SESSION"), Some(session.as_bytes()));
     assert_eq!(
         value("COS_OWNER_HOME"),
         Some(b"/run/display-home".as_slice())
@@ -651,14 +719,21 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 .as_encoded_bytes()
         )
     );
-    assert!(value("XDG_DATA_DIRS")
-        .unwrap()
-        .starts_with(format!("{}/resources/usr/share:", product.directory().display()).as_bytes()));
+    assert!(
+        value("XDG_DATA_DIRS").unwrap().starts_with(
+            format!("{}/resources/usr/share:", product.directory().display()).as_bytes()
+        )
+    );
     assert_ne!(value("HOME"), Some(b"/run/display-home".as_slice()));
     assert_ne!(value("COS_MCP_SERVER"), Some(b"1".as_slice()));
-    let ungranted: Vec<usize> =
-        serde_json::from_slice(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap()).unwrap();
-    assert_eq!(ungranted, product.ungranted);
+    if product.ungranted.is_empty() {
+        assert!(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").is_none());
+    } else {
+        let ungranted: Vec<usize> =
+            serde_json::from_slice(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap())
+                .unwrap();
+        assert_eq!(ungranted, product.ungranted);
+    }
     let args = if editor {
         format!("[\"{TARGET}\"]")
     } else {
@@ -694,7 +769,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 &mut pam,
                 &retained,
                 &process,
-                &metadata.session,
+                &session,
                 "actual xdg_toplevel configure/SHM frame and declared startup behavior",
             )
             .await;
@@ -707,15 +782,20 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "startup file was loaded before independent content consent"
         );
     } else {
-        assert!(!crate::approvals::list_pending_for_owner(Some(OWNER))
-            .iter()
-            .any(|request| request.verb == "fs.read"));
+        assert!(
+            !crate::approvals::list_pending_for_owner(Some(OWNER))
+                .iter()
+                .any(|request| request.verb == "fs.read")
+        );
     }
-    assert!(matches!(
-        crate::approvals::status_for_owner(&metadata.id, Some(OWNER)),
-        crate::approvals::RequestStatus::Consumed
-    ));
+    if let Some(metadata) = &metadata {
+        assert!(matches!(
+            crate::approvals::status_for_owner(&metadata.id, Some(OWNER)),
+            crate::approvals::RequestStatus::Consumed
+        ));
+    }
     if let Some(read) = &read {
+        let metadata = metadata.as_ref().unwrap();
         assert_eq!(read.owner_uid, Some(OWNER));
         assert_eq!(read.scope, Scope::path("/run/display-home/**"));
         assert_ne!(read.session, metadata.session);
@@ -747,7 +827,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                     &mut pam,
                     &retained,
                     &process,
-                    &metadata.session,
+                    &session,
                     "actual loaded-tab title and a newly rendered native frame",
                 )
                 .await;
@@ -759,35 +839,33 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             crate::approvals::RequestStatus::Consumed
         ));
     }
-    assert_eq!(
-        startup_authority(&metadata.session, &parent, product),
-        original
-    );
+    assert_eq!(startup_authority(&session, &parent, product), original);
     let saved = if editor {
         assert!(
             read.is_some(),
             "Editor Save As must follow its accepted startup read"
         );
-        Some(
-            editor_save_as::run(
-                &control,
-                &mut pam,
-                &retained,
-                &process,
-                &metadata.session,
-                &parent,
-            )
-            .await,
-        )
+        Some(editor_save_as::run(&control, &mut pam, &retained, &process, &session, &parent).await)
     } else {
         None
     };
-    assert!(
+    let pty = if product.name == "terminal" {
+        let proof = terminal_pty::run(
+            &control, &mut pam, &retained, &process, &session, deadline, &before,
+        )
+        .await;
+        assert_eq!(startup_authority(&session, &parent, product), original);
+        Some(proof)
+    } else {
+        None
+    };
+    assert_eq!(
         std::fs::read_to_string("/proc/self/mountinfo")
             .unwrap()
             .lines()
             .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str()),
-        "actual App must use the controlled native metadata/content mount"
+        product.home_metadata,
+        "only a metadata-authorized App may have the controlled Home mount"
     );
     let group_path =
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
@@ -802,8 +880,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         })
         .collect::<Vec<_>>();
     assert!(!processes.is_empty());
-    let generation =
-        crate::approvals::generations::current(Some(OWNER), &metadata.session).unwrap();
+    let generation = crate::approvals::generations::current(Some(OWNER), &session).unwrap();
     let revoked = crate::clawd::client::request(
         "/run/cos/clawd.sock",
         crate::clawd::wire::Request::new(
@@ -811,7 +888,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             serde_json::json!({
                 "owner_uid": OWNER,
                 "session": read.as_ref().map(|request| request.session.as_str())
-                    .unwrap_or(&metadata.session),
+                    .unwrap_or(&session),
             }),
         ),
     )
@@ -822,7 +899,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         "actual native resource retirement failed: {:?}",
         revoked.error
     );
-    let after = crate::approvals::generations::current(Some(OWNER), &metadata.session).unwrap();
+    let after = crate::approvals::generations::current(Some(OWNER), &session).unwrap();
     if editor {
         assert_eq!(after, generation);
     } else {
@@ -832,6 +909,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     assert!(claw_display_control::identity::pidfd_exited(process.pidfd.as_fd()).unwrap());
     for process in processes {
         assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+    }
+    if let Some(pty) = &pty {
+        pty.verify_after_retirement();
     }
     assert!(
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()))
@@ -844,10 +924,12 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         !runtime.exists() && !mountpoint.exists(),
         "actual native runtime/provider cleanup was not acknowledged"
     );
-    assert!(!std::fs::read_to_string("/proc/self/mountinfo")
-        .unwrap()
-        .lines()
-        .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str()));
+    assert!(
+        !std::fs::read_to_string("/proc/self/mountinfo")
+            .unwrap()
+            .lines()
+            .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str())
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if observe().is_some_and(|record| {
@@ -885,9 +967,21 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     );
     println!(
         "private actual {}: real signed ELF/resources, native window{} and checked process/runtime/PAM retirement passed; {}",
-        product.name, if editor { "/file load" } else { "/metadata-only Home" },
-        if editor { "UI Save As and separately pending overwrite verified" }
-            else { "additional UI mutations not exercised" },
+        product.name,
+        if editor {
+            "/file load"
+        } else if product.home_metadata {
+            "/metadata-only Home"
+        } else {
+            "/empty-authority private PTY"
+        },
+        if editor {
+            "UI Save As and separately pending overwrite verified"
+        } else if pty.is_some() {
+            "typed shell command, real PTY/shell/child identities and descendant retirement verified"
+        } else {
+            "additional UI mutations not exercised"
+        },
     );
 }
 
@@ -928,4 +1022,56 @@ fn private_native_editor() {
 #[ignore = "clean-GHA-only: actual Files ELF, authenticated private PAM/display, FUSE and cgroup v2"]
 fn private_native_files() {
     private_gui_fixture_selected(false, false, false, Some(FILES));
+}
+
+#[test]
+#[ignore = "clean-GHA-only: actual Terminal ELF/PTY, authenticated private PAM/display and cgroup v2"]
+fn private_native_terminal() {
+    private_gui_fixture_selected(false, false, false, Some(TERMINAL));
+}
+
+#[test]
+fn native_terminal_session_selection_refuses_unbound_foreign_and_mcp_rows() {
+    let row: crate::proc::SessionInfo = serde_json::from_value(serde_json::json!({
+        "session_id": "root-registered-session", "pid": 42, "command": [],
+        "started_at": "", "stdout_path": "", "stderr_path": "",
+        "group": "app", "parent": "parent", "app_id": "cosmic-term",
+        "pending_bind": false, "start_time_ticks": 1,
+    }))
+    .unwrap();
+    assert!(registered_gui_session(&[], "parent", TERMINAL).is_none());
+    let mut foreign = row.clone();
+    foreign.parent = Some("foreign".into());
+    let mut other_app = row.clone();
+    other_app.app_id = Some("cosmic-files".into());
+    let mut mcp = row.clone();
+    mcp.group = Some("app-mcp".into());
+    let mut pending = row.clone();
+    pending.pending_bind = true;
+    let mut ended = row.clone();
+    ended.ended_at = Some("ended".into());
+    let mut unpinned = row.clone();
+    unpinned.start_time_ticks = None;
+    let mut rows = vec![foreign, other_app, mcp, pending, ended, unpinned];
+    assert!(registered_gui_session(&rows, "parent", TERMINAL).is_none());
+    rows.push(row);
+    assert_eq!(
+        registered_gui_session(&rows, "parent", TERMINAL)
+            .unwrap()
+            .session_id,
+        "root-registered-session"
+    );
+}
+
+#[test]
+#[should_panic(expected = "ambiguous Root-registered native GUI sessions")]
+fn native_terminal_session_selection_refuses_ambiguous_root_rows() {
+    let row: crate::proc::SessionInfo = serde_json::from_value(serde_json::json!({
+        "session_id": "root-registered-session", "pid": 42, "command": [],
+        "started_at": "", "stdout_path": "", "stderr_path": "",
+        "group": "app", "parent": "parent", "app_id": "cosmic-term",
+        "pending_bind": false, "start_time_ticks": 1,
+    }))
+    .unwrap();
+    registered_gui_session(&[row.clone(), row], "parent", TERMINAL);
 }

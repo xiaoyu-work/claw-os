@@ -143,8 +143,19 @@ not establish a passing authenticated session.
 This is an explicit Root-only fixture, never a command to restart a real login
 or inspect a user's clipboard. It does not prove a real greetd/logind/KMS
 installation, hardware access or native producer permission readiness.
-Its named-GUI case selects a second signed executable with an explicit empty
-needs list under the same App identity, verifies literal argv and the actual
+The separate `scripts/ci/test-boundaries.sh native-terminal` mode supplies the
+real App-owned `cosmic-term` payload and selects case 27 through this same
+authenticated bootstrap. It leaves Terminal's GUI needs empty, does not add
+MCP process grants, and does not request or mount Home metadata. Root retains
+the actual registered session and the real native, shell and ordinary child
+processes, while the existing protected compositor/keyboard driver observes
+pixels and drives a private-state PTY command. It uses no test App hook,
+extra launcher arguments, shell/identity environment or host PTY bind.
+An unavailable default shell or PTY must fail within the original startup
+budget and retain diagnostics, not be replaced by a probe. Execute only on a
+clean disposable runner; parser/compile checks do not prove this runtime gate.
+The generic fixture's named-GUI case selects a second signed executable with an
+explicit empty needs list under the same App identity, verifies literal argv and the actual
 executed filename, and retains zero selection/LayerShell rights despite the
 default GUI's operation needs and MCP declarations.
 The named launcher has no `COS_SESSION` environment value: Root still derives

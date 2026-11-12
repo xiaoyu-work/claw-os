@@ -23,7 +23,7 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
-| `ci/native_editor_payload.py` | Explicit Editor/Files private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
+| `ci/native_editor_payload.py` | Explicit Editor/Files/Terminal private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
 | `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
@@ -71,6 +71,25 @@ passing native window or file-open result.
 ELFs, its exact manifest and original resources/licenses. Preparing those
 inputs alone does not establish a managed Files window, its auxiliary desktop
 surface or controlled file operations.
+`--product terminal` prepares the original `cosmic-term` ELF and installer
+resources/licenses, without changing its manifest or default shell. The
+`test-boundaries.sh native-terminal` lane uses the same normal PAM/common Host
+and sandbox, but requires **empty GUI capabilities** and only the launcher's
+exact `agent.invoke:cosmic-term`; MCP needs never become GUI authority.
+There is no Home-metadata approval or FUSE mount. Root discovers the unique
+bound App session through its typed owner registry, not App output.
+The original absolute 25-second startup budget includes real configured,
+nonuniform SHM pixels, a private PTY/default shell and one bounded keyboard
+command (`touch` in existing private App state, then a short-lived `sleep`).
+Keyboard delivery alone cannot pass: Root checks the actual private file,
+shell/child ELF identities and pidfds, matching PTY master/slave and separate
+shell session, then checked whole-cgroup/window/runtime/PAM retirement.
+Missing PTY/NSS/default-shell resources remain failures with ordinary captured
+diagnostics after checked retirement; no host devpts, passwd, user bus, Home,
+identity environment, process grant or model fallback is injected.
+This is a clean-GHA-only acceptance gate, not evidence that Terminal has passed
+or permission to publish/adopt another platform. Its public 0.2.1 ABI-1 input
+is restricted to the already approved archive digest.
 
 Production package/release/rootfs paths consume `app_packages.py`, not
 `app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,

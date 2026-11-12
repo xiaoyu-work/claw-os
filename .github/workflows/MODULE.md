@@ -23,6 +23,10 @@ dispatched and reusable test/publication pipelines.
   Private namespace cases cover startup-failure exit and deferred retirement
   reclamation as well as normal lifecycle. Agent packaging builds the PAM
   library for GNU/glibc even when core uses musl.
+- Keep actual Editor, Files and Terminal native acceptance visible as separate
+  display-matrix modes. Terminal uses the original published-platform build,
+  empty GUI authority and the common Host's existing private PTY/sandbox;
+  unsupported default-shell resources are failures, not injected privileges.
 - Run egress retirement cases against private listener queues and stalled DNS,
   with synthetic NSS configuration confined to a private mount/network namespace.
   Real lookup children must be reaped before the retirement acknowledgement.
