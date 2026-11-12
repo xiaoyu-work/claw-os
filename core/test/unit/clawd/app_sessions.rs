@@ -1857,10 +1857,10 @@ fn controlled_home_optional_authority_is_not_a_raw_mount_or_a_protected_path_byp
     assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &forbidden).is_err());
     app.manifest.desktop.as_mut().unwrap().needs.as_mut().unwrap().push(
         serde_json::from_value(json!({
-            "verb":"fs.write","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Unsupported mandatory native write"}
+            "verb":"fs.delete","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Unsupported mandatory native delete"}
         })).unwrap());
     assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_err(),
-        "unsupported mandatory writes must not silently become a readonly fallback");
+        "unsupported mandatory deletion must not silently become a readonly fallback");
     app.manifest.desktop.as_mut().unwrap().needs = Some(Vec::new());
     assert!(crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_err());
     assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());

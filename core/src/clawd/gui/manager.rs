@@ -491,6 +491,15 @@ pub(super) fn selected_reads(
     Ok(endpoint)
 }
 
+#[cfg(test)]
+pub(crate) fn selected_mutation_session(owner: u32, session: &str) -> Result<crate::session::SessionId, String> {
+    let manager = Manager::get()?;
+    let job = manager.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
+        .get(session).cloned().ok_or("GUI instance unavailable")?;
+    if job.registration.owner() != owner { return Err("GUI mutation session has another owner".into()); }
+    job.selected_reads.get().ok_or("GUI resource endpoint unavailable")?.mutation_session_id()
+}
+
 pub(crate) fn retire_epoch(epoch: Epoch, deadline: Instant) -> Result<(), String> {
     if let Some(manager) = MANAGER.get() {
         manager.retire_where(

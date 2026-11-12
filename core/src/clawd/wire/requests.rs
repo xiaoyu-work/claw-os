@@ -35,6 +35,10 @@ const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
+pub use crate::clawd::gui::inputs::{
+    FileWriteRequest as GuiFileWriteRequest, FileWriteStatusRequest as GuiFileWriteStatusRequest,
+    FileSaveReservationRequest as GuiFileSaveReservationRequest,
+};
 pub use crate::clawd::trust_withdrawal::Request as ProvenanceTrustWithdrawal;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

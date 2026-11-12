@@ -71,6 +71,7 @@ fn selected_read_only_accepts_bounded_native_nodes_and_opaque_status_references(
         assert!(serde_json::from_str::<FileReadRequest>(
             &format!(r#"{{"session":"app-window","node":{node}}}"#)).is_err(), "{node}");
     }
+
     for key in ["path", "owner_uid", "window", "pid", "selected", "grant", "access"] {
         assert!(serde_json::from_value::<FileReadRequest>(serde_json::json!({
             "session": "app-window", "node": 2, (key): "claimed",
@@ -83,4 +84,21 @@ fn selected_read_only_accepts_bounded_native_nodes_and_opaque_status_references(
     assert!(serde_json::from_value::<FileReadStatusRequest>(serde_json::json!({
         "session": "app-window", "selection_id": "../foreign", "node": 2,
     })).is_err());
+}
+
+#[test]
+fn selected_write_and_save_cannot_borrow_a_read_reference_or_choose_paths() {
+    let read = format!("sr-{}", "a".repeat(32));
+    let write = format!("sw-{}", "b".repeat(32));
+    assert!(serde_json::from_value::<FileWriteStatusRequest>(serde_json::json!({
+        "session":"app-window","selection_id":read,"node":2,
+    })).is_err());
+    assert!(serde_json::from_value::<FileSaveReservationRequest>(serde_json::json!({
+        "session":"app-window","selection_id":write,"node":2,
+    })).is_ok());
+    for key in ["path", "parent", "name", "approved", "owner_uid", "expires_in_ms"] {
+        assert!(serde_json::from_value::<FileWriteRequest>(serde_json::json!({
+            "session":"app-window","node":2,(key):"claimed",
+        })).is_err(), "{key}");
+    }
 }

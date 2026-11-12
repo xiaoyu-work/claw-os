@@ -185,6 +185,57 @@ class GuiFileReadStatusRequest(TypedDict):
     selection_id: str
     node: int
 
+class GuiFileSave(TypedDict):
+    """Draft GUI reserved atomic save.
+
+    One Root-reserved private scratch name for atomic replacement of an already
+    selected existing writable file. This is not arbitrary parent-directory
+    write or an owner-side temporary file.
+    """
+    version: int
+    reservation_id: str
+    selection_id: str
+    node: int
+    parent_node: int
+    name: str
+    expires_in_ms: int
+
+class _GuiFileWriteRequired(TypedDict):
+    version: int
+    selection_id: str
+    node: int
+    access: str
+    state: str
+
+class GuiFileWrite(_GuiFileWriteRequired, total=False):
+    """Draft GUI selected file write.
+
+    Root-owned independent write selection for one existing regular file in this
+    authenticated GUI instance. Pending is not permission. Write never grants
+    read, directory mutation, deletion or execution.
+    """
+    approval_request_id: str
+    target_display: str
+    expires_in_ms: int
+    reason: str
+
+class GuiFileWriteRequest(TypedDict):
+    """GuiFileWriteRequest.
+    """
+    node: int
+
+class GuiFileWriteStatusRequest(TypedDict):
+    """GuiFileWriteStatusRequest.
+    """
+    selection_id: str
+    node: int
+
+class GuiFileSaveReservationRequest(TypedDict):
+    """GuiFileSaveReservationRequest.
+    """
+    selection_id: str
+    node: int
+
 class _ManifestRequired(TypedDict):
     id: str
     version: str
@@ -562,6 +613,13 @@ def validate_gui_file_read_state(value: str) -> None:
     if value not in allowed:
         raise ValueError(f"invalid gui_file_read.state value: {value!r}")
 
+def validate_gui_file_write_state(value: str) -> None:
+    """Raise ValueError if value is not in the gui_file_write.state
+    enum. Mirrors generated::validate_gui_file_write_state."""
+    allowed = ['pending', 'selected', 'denied', 'stale', 'expired', 'revoked']
+    if value not in allowed:
+        raise ValueError(f"invalid gui_file_write.state value: {value!r}")
+
 def validate_manifest_runtime(value: str) -> None:
     """Raise ValueError if value is not in the manifest.runtime
     enum. Mirrors generated::validate_manifest_runtime."""
@@ -930,6 +988,18 @@ def validate_gui_file_read(value: Any) -> None:
     """Validate a value against wire/v1/gui_file_read.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_READ, _WIRE_SCHEMA_GUI_FILE_READ, value, "GuiFileRead", "$")
 
+_WIRE_SCHEMA_GUI_FILE_SAVE: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/gui_file_save.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"One Root-reserved private scratch name for atomic replacement of an already selected existing writable file. This is not arbitrary parent-directory write or an owner-side temporary file.","properties":{"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"name":{"pattern":"^\\.cos-save-[a-f0-9]{32}$","type":"string","x-full-match":true},"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reservation_id":{"pattern":"^ss-[a-f0-9]{32}$","type":"string","x-full-match":true},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","reservation_id","selection_id","node","parent_node","name","expires_in_ms"],"title":"Draft GUI reserved atomic save","type":"object"}''')
+
+def validate_gui_file_save(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_save.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_SAVE, _WIRE_SCHEMA_GUI_FILE_SAVE, value, "GuiFileSave", "$")
+
+_WIRE_SCHEMA_GUI_FILE_WRITE: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"GuiFileSaveReservationRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"},"GuiFileWriteRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"},"GuiFileWriteStatusRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/gui_file_write.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Root-owned independent write selection for one existing regular file in this authenticated GUI instance. Pending is not permission. Write never grants read, directory mutation, deletion or execution.","properties":{"access":{"const":"write","type":"string"},"approval_request_id":{"maxLength":128,"type":"string"},"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reason":{"maxLength":128,"type":"string"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true},"state":{"enum":["pending","selected","denied","stale","expired","revoked"],"type":"string"},"target_display":{"description":"Escaped inert presentation only. Never source identity or path authority.","maxLength":16384,"type":"string"},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","selection_id","node","access","state"],"title":"Draft GUI selected file write","type":"object"}''')
+
+def validate_gui_file_write(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_write.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_WRITE, _WIRE_SCHEMA_GUI_FILE_WRITE, value, "GuiFileWrite", "$")
+
 _WIRE_SCHEMA_MCP_CALL_CONTEXT: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","caller"],"title":"MCP call context","type":"object"}''')
 
 def validate_mcp_call_context(value: Any) -> None:
@@ -971,4 +1041,22 @@ _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST: Dict[str, Any] = decode_wire_json(r''
 def validate_gui_file_read_status_request(value: Any) -> None:
     """Validate a value against wire/v1/gui_file_read_status_request.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, value, "GuiFileReadStatusRequest", "$")
+
+_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"}''')
+
+def validate_gui_file_write_request(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_write_request.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, value, "GuiFileWriteRequest", "$")
+
+_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}''')
+
+def validate_gui_file_write_status_request(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_write_status_request.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, value, "GuiFileWriteStatusRequest", "$")
+
+_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}''')
+
+def validate_gui_file_save_reservation_request(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_save_reservation_request.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, value, "GuiFileSaveReservationRequest", "$")
 

@@ -2,14 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::ffi::CString;
-#[cfg(test)]
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,7 +20,9 @@ use crate::clawd::client_identity::FsIdentityGuard;
 
 mod backend;
 mod selected_read;
+mod selected_write;
 pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider};
+pub(crate) use selected_write::{SaveReservation, WriteLeaseCheck, WritePermit};
 
 struct Binding {
     process: workload::InstanceProcess,
@@ -36,20 +36,18 @@ struct ChosenRead {
     directory: bool,
 }
 
-#[cfg(test)]
 struct ChosenWrite {
     relative: PathBuf,
     pin: File,
     parent: File,
+    permission: Option<selected_write::WriteLease>,
 }
 
-#[cfg(test)]
 struct SaveTarget {
     relative: PathBuf,
     target: PathBuf,
 }
 
-#[cfg(test)]
 struct BackingStage {
     parent: File,
     name: OsString,
@@ -73,22 +71,20 @@ struct Shared {
     binding: Mutex<Option<Binding>>,
     #[cfg(test)]
     chosen: Mutex<Vec<ChosenRead>>,
-    #[cfg(test)]
     writes: Mutex<Vec<ChosenWrite>>,
-    #[cfg(test)]
     saves: Mutex<Vec<SaveTarget>>,
     #[cfg(test)]
     watches: Mutex<Vec<ChosenRead>>,
-    #[cfg(test)]
-    session: Option<crate::session::SessionId>,
-    #[cfg(test)]
+    session: OnceLock<crate::session::SessionId>,
     effects: Mutex<()>,
-    #[cfg(test)]
     stages: Mutex<Vec<BackingStage>>,
+    active_effect: AtomicBool,
+    own_invalidations: Mutex<BTreeMap<u64, bool>>,
     observed: Mutex<BTreeMap<u64, backend::Observed>>,
     polls: Mutex<BTreeMap<u64, backend::Subscription>>,
     notifier: Mutex<Option<fuser::Notifier>>,
     selected_reads: Mutex<BTreeMap<String, selected_read::GrantedRead>>,
+    selected_expiry: Mutex<Option<Instant>>,
     revoked: AtomicBool,
     ended: AtomicBool,
     monitor_stop: AtomicBool,
@@ -97,11 +93,8 @@ struct Shared {
     fail_worker: AtomicBool,
     #[cfg(test)]
     fail_completion: AtomicBool,
-    #[cfg(test)]
     scratch_bytes: AtomicU64,
-    #[cfg(test)]
     inverse_bytes: AtomicU64,
-    #[cfg(test)]
     mutation_attempts: AtomicU64,
 }
 
@@ -116,7 +109,8 @@ impl Shared {
     }
 
     fn live(&self) -> Result<(), i32> {
-        if self.selected_reads.lock().map_err(|_| libc::EIO)?.values().any(|read| read.expired()) {
+        if self.selected_expiry.lock().map_err(|_| libc::EIO)?
+            .is_some_and(|deadline| Instant::now() >= deadline) {
             self.revoked.store(true, Ordering::Release);
         }
         if self.revoked.load(Ordering::Acquire)
@@ -124,6 +118,12 @@ impl Shared {
         {
             return Err(libc::EACCES);
         }
+        Ok(())
+    }
+
+    fn bound_selection(&self, deadline: Instant) -> Result<(), String> {
+        let mut selected = self.selected_expiry.lock().map_err(|_| "native selection expiry poisoned")?;
+        *selected = Some(selected.map_or(deadline, |current| current.min(deadline)));
         Ok(())
     }
 
@@ -151,17 +151,15 @@ impl Shared {
             .unwrap_or(Ok(true))
     }
 
-    #[cfg(test)]
     fn session_context<T>(&self, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         crate::paths::RoutedPathContext::for_owner(self.owner, self.owner_home.clone())
             .scope_sync(run)
     }
 
-    #[cfg(test)]
     fn validate_session(&self) -> Result<(), String> {
         let sid = self
             .session
-            .as_ref()
+            .get()
             .ok_or("native filesystem view is read-only")?;
         self.session_context(|| {
             let meta = crate::session::get_meta(sid).map_err(|error| error.to_string())?;
@@ -189,7 +187,6 @@ impl Shared {
         })
     }
 
-    #[cfg(test)]
     fn indeterminate(&self, detail: String) {
         if let Ok(mut error) = self.cleanup_error.lock() {
             *error = Some(format!(
@@ -349,8 +346,8 @@ impl NativeFsView {
         if !metadata_only || session.is_some() {
             return Err("production native resources require the consented Home view, without write authority".into());
         }
-        let writable = session.is_some();
-        if metadata_only && writable {
+        let writable = session.is_some() || metadata_only;
+        if metadata_only && session.is_some() {
             return Err("metadata views cannot enable writes".into());
         }
         Self::retry_pending(Instant::now() + Duration::from_secs(3))?;
@@ -390,6 +387,10 @@ impl NativeFsView {
                 "native filesystem mountpoint must be a private empty Root directory".into(),
             );
         }
+        let write_session = OnceLock::new();
+        if let Some(session) = session {
+            write_session.set(session).map_err(|_| "native mutation session already initialized")?;
+        }
         let shared = Arc::new(Shared {
             owner,
             controller,
@@ -404,22 +405,20 @@ impl NativeFsView {
             binding: Mutex::new(None),
             #[cfg(test)]
             chosen: Mutex::new(Vec::new()),
-            #[cfg(test)]
             writes: Mutex::new(Vec::new()),
-            #[cfg(test)]
             saves: Mutex::new(Vec::new()),
             #[cfg(test)]
             watches: Mutex::new(Vec::new()),
-            #[cfg(test)]
-            session,
-            #[cfg(test)]
+            session: write_session,
             effects: Mutex::new(()),
-            #[cfg(test)]
             stages: Mutex::new(Vec::new()),
+            active_effect: AtomicBool::new(false),
+            own_invalidations: Mutex::new(BTreeMap::new()),
             observed: Mutex::new(BTreeMap::new()),
             polls: Mutex::new(BTreeMap::new()),
             notifier: Mutex::new(None),
             selected_reads: Mutex::new(BTreeMap::new()),
+            selected_expiry: Mutex::new(None),
             revoked: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             monitor_stop: AtomicBool::new(false),
@@ -428,15 +427,11 @@ impl NativeFsView {
             fail_worker: AtomicBool::new(false),
             #[cfg(test)]
             fail_completion: AtomicBool::new(false),
-            #[cfg(test)]
             scratch_bytes: AtomicU64::new(0),
-            #[cfg(test)]
             inverse_bytes: AtomicU64::new(0),
-            #[cfg(test)]
             mutation_attempts: AtomicU64::new(0),
         });
-        #[cfg(test)]
-        if shared.session.is_some() {
+        if shared.session.get().is_some() {
             shared.validate_session()?;
         }
         let filesystem = backend::Filesystem::new(shared.clone())?;
@@ -753,7 +748,6 @@ impl NativeFsView {
         self.shared.revoked.store(true, Ordering::Release);
         self.shared.retire_processes(deadline)?;
         self.shared.selected_reads.lock().map_err(|_| "native read leases poisoned")?.clear();
-        #[cfg(test)]
         backend::cleanup_stages(&self.shared, deadline)?;
         while self
             .watcher

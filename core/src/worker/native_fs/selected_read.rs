@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use super::{backend, Shared};
@@ -14,9 +15,17 @@ pub(crate) trait ReadLeaseCheck: Send + Sync {
 }
 
 pub(crate) struct FileCandidate {
-    view: Weak<Shared>,
+    pub(super) view: Weak<Shared>,
     node: u64,
     relative: PathBuf,
+    identity: (u64, u64),
+    stamp: [u64; 8],
+    generation: u64,
+    current: Mutex<CurrentRevision>,
+}
+
+struct CurrentRevision {
+    node: u64,
     pin: File,
     identity: (u64, u64),
     stamp: [u64; 8],
@@ -35,6 +44,51 @@ impl FileCandidate {
     }
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub(super) fn current_node(&self) -> Result<u64, String> {
+        Ok(self
+            .current
+            .lock()
+            .map_err(|_| "native revision poisoned")?
+            .node)
+    }
+
+    pub(super) fn current_identity(&self) -> Result<(u64, u64), String> {
+        Ok(self
+            .current
+            .lock()
+            .map_err(|_| "native revision poisoned")?
+            .identity)
+    }
+
+    pub(crate) fn require_inverse_path(&self) -> Result<(), String> {
+        let view = self.view.upgrade().ok_or("native view has retired")?;
+        if view.root_path.join(&self.relative).to_str().is_none() {
+            return Err("native write inverse requires a UTF-8 target; byte identity is never converted lossily".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn publish(
+        &self,
+        node: u64,
+        pin: &File,
+        metadata: &std::fs::Metadata,
+        generation: u64,
+    ) -> Result<(), String> {
+        let current = CurrentRevision {
+            node,
+            pin: pin.try_clone().map_err(|error| error.to_string())?,
+            identity: (metadata.dev(), metadata.ino()),
+            stamp: backend::fingerprint(metadata),
+            generation,
+        };
+        *self
+            .current
+            .lock()
+            .map_err(|_| "native revision poisoned")? = current;
+        Ok(())
     }
     pub(crate) fn stamp(&self) -> [u64; 8] {
         self.stamp
@@ -56,15 +110,37 @@ impl FileCandidate {
 
     pub(crate) fn revalidate(&self) -> Result<(), String> {
         let view = self.view.upgrade().ok_or("native view has retired")?;
+        let _serial = view.effects.lock().map_err(|_| "native effects poisoned")?;
+        self.revalidate_locked(&view)
+    }
+
+    pub(crate) fn health_validate(&self) -> Result<(), String> {
+        let view = self.view.upgrade().ok_or("native view has retired")?;
+        let _serial = match view.effects.try_lock() {
+            Ok(serial) => serial,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("native effects poisoned".into())
+            }
+        };
+        self.revalidate_locked(&view)
+    }
+
+    pub(super) fn revalidate_locked(&self, view: &Shared) -> Result<(), String> {
         view.live().map_err(|_| "native view lease ended")?;
-        let current = backend::open_relative(&view, &self.relative, false)
+        let revision = self
+            .current
+            .lock()
+            .map_err(|_| "native revision poisoned")?;
+        let current = backend::open_relative(view, &self.relative, false)
             .map_err(|error| std::io::Error::from_raw_os_error(error).to_string())?;
         let metadata = current.metadata().map_err(|error| error.to_string())?;
         if !metadata.is_file()
             || metadata.nlink() != 1
-            || (metadata.dev(), metadata.ino()) != self.identity
-            || backend::fingerprint(&metadata) != self.stamp
-            || backend::identity(&self.pin).map_err(|error| error.to_string())? != self.identity
+            || (metadata.dev(), metadata.ino()) != revision.identity
+            || backend::fingerprint(&metadata) != revision.stamp
+            || backend::identity(&revision.pin).map_err(|error| error.to_string())?
+                != revision.identity
         {
             return Err("selected source identity or revision changed".into());
         }
@@ -72,8 +148,8 @@ impl FileCandidate {
             .observed
             .lock()
             .map_err(|_| "native observations poisoned")?;
-        if !observed.get(&self.node).is_some_and(|node| {
-            node.linked && node.version == self.generation && node.relative == self.relative
+        if !observed.get(&revision.node).is_some_and(|node| {
+            node.linked && node.version == revision.generation && node.relative == self.relative
         }) {
             return Err("selected native node generation changed".into());
         }
@@ -112,21 +188,16 @@ impl ReadPermit {
 }
 
 pub(super) struct GrantedRead {
-    candidate: Arc<FileCandidate>,
+    pub(super) candidate: Arc<FileCandidate>,
     deadline: Instant,
     check: Arc<dyn ReadLeaseCheck>,
-    file: File,
-}
-
-impl GrantedRead {
-    pub(super) fn expired(&self) -> bool {
-        Instant::now() >= self.deadline
-    }
+    pub(super) file: File,
+    pub(super) history: BTreeMap<u64, (File, [u64; 8])>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ReadProvider {
-    shared: Weak<Shared>,
+    pub(super) shared: Weak<Shared>,
 }
 
 impl ReadProvider {
@@ -144,6 +215,10 @@ impl ReadProvider {
         let shared = self.shared.upgrade().ok_or("native view has retired")?;
         shared.controller()?;
         shared.live().map_err(|_| "native view lease ended")?;
+        let _serial = shared
+            .effects
+            .lock()
+            .map_err(|_| "native effects poisoned")?;
         if !(2..=4096).contains(&node) {
             return Err("unknown native file node".into());
         }
@@ -172,14 +247,22 @@ impl ReadProvider {
         {
             return Err("native node is not the retained regular file".into());
         }
+        let current_pin = pin.try_clone().map_err(|error| error.to_string())?;
+        let stamp = backend::fingerprint(&metadata);
         Ok(Arc::new(FileCandidate {
             view: Arc::downgrade(&shared),
             node,
             relative,
-            pin,
             identity,
-            stamp: backend::fingerprint(&metadata),
+            stamp,
             generation,
+            current: Mutex::new(CurrentRevision {
+                node,
+                pin: current_pin,
+                identity,
+                stamp,
+                generation,
+            }),
         }))
     }
 
@@ -204,8 +287,21 @@ impl ReadProvider {
             return Err("selected read exceeds its finite view authority".into());
         }
         permit.check.require()?;
-        permit.candidate.revalidate()?;
-        let file = backend::reopen(&shared, &permit.candidate.pin)
+        let _serial = shared
+            .effects
+            .lock()
+            .map_err(|_| "native effects poisoned")?;
+        permit.check.require()?;
+        permit.candidate.revalidate_locked(&shared)?;
+        let pin = permit
+            .candidate
+            .current
+            .lock()
+            .map_err(|_| "native revision poisoned")?
+            .pin
+            .try_clone()
+            .map_err(|error| error.to_string())?;
+        let file = backend::reopen(&shared, &pin)
             .map_err(|error| std::io::Error::from_raw_os_error(error).to_string())?;
         let mut selected = shared
             .selected_reads
@@ -214,6 +310,7 @@ impl ReadProvider {
         if selected.len() >= 32 || selected.contains_key(selection) {
             return Err("native selected-read lease bound reached".into());
         }
+        let deadline = permit.deadline;
         selected.insert(
             selection.into(),
             GrantedRead {
@@ -221,8 +318,11 @@ impl ReadProvider {
                 deadline: permit.deadline,
                 check: permit.check,
                 file,
+                history: BTreeMap::new(),
             },
         );
+        drop(selected);
+        shared.bound_selection(deadline)?;
         Ok(())
     }
 
@@ -237,32 +337,103 @@ impl ReadProvider {
         shared.live()?;
         let lease = {
             let reads = shared.selected_reads.lock().map_err(|_| libc::EIO)?;
-            reads
-                .iter()
-                .find(|(id, read)| {
-                    read.candidate.node == node
-                        && selection.is_none_or(|selected| id.as_str() == selected)
-                })
-                .map(|(id, read)| {
-                    (
+            let mut selected = None;
+            for (id, read) in reads.iter() {
+                if selection.is_some_and(|selection| selection != id) {
+                    continue;
+                }
+                let current = read.candidate.current_node().map_err(|_| libc::EIO)? == node;
+                let file = if current {
+                    Some((read.file.try_clone(), None))
+                } else if selection.is_some() {
+                    read.history
+                        .get(&node)
+                        .map(|(file, stamp)| (file.try_clone(), Some(*stamp)))
+                } else {
+                    None
+                };
+                if let Some((file, history)) = file {
+                    selected = Some((
                         id.clone(),
                         read.candidate.clone(),
                         read.deadline,
                         read.check.clone(),
-                        read.file.try_clone(),
-                    )
-                })
-                .ok_or(libc::EACCES)?
+                        file,
+                        history,
+                    ));
+                    break;
+                }
+            }
+            selected.ok_or(libc::EACCES)?
         };
-        let (id, candidate, deadline, check, file) = lease;
+        let (id, candidate, deadline, check, file, history) = lease;
         if Instant::now() >= deadline || check.require().is_err() || candidate.revalidate().is_err()
         {
             self.stop();
             return Err(libc::EACCES);
         }
-        Ok((
-            id,
-            file.map_err(|error| error.raw_os_error().unwrap_or(libc::EIO))?,
-        ))
+        let file = file.map_err(|error| error.raw_os_error().unwrap_or(libc::EIO))?;
+        if history.is_some_and(|stamp| {
+            file.metadata()
+                .map_or(true, |metadata| backend::fingerprint(&metadata) != stamp)
+        }) {
+            self.stop();
+            return Err(libc::ESTALE);
+        }
+        Ok((id, file))
+    }
+
+    pub(crate) fn check_histories(&self) -> Result<(), String> {
+        let shared = self.shared.upgrade().ok_or("native view has retired")?;
+        let _serial = match shared.effects.try_lock() {
+            Ok(serial) => serial,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err("native effects poisoned".into())
+            }
+        };
+        let reads = shared
+            .selected_reads
+            .lock()
+            .map_err(|_| "native read leases poisoned")?;
+        for read in reads.values() {
+            for (file, stamp) in read.history.values() {
+                if backend::fingerprint(&file.metadata().map_err(|error| error.to_string())?)
+                    != *stamp
+                {
+                    return Err("retained old selected-file revision changed externally".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn release_history(&self, node: u64) {
+        if let Some(shared) = self.shared.upgrade() {
+            if let Ok(mut reads) = shared.selected_reads.lock() {
+                for read in reads.values_mut() {
+                    read.history.remove(&node);
+                }
+            }
+        }
+    }
+
+    pub(super) fn read_existing(&self, node: u64) -> Result<(String, File), i32> {
+        let shared = self.shared.upgrade().ok_or(libc::EACCES)?;
+        let selection = {
+            let reads = shared.selected_reads.lock().map_err(|_| libc::EIO)?;
+            reads
+                .iter()
+                .find(|(_, read)| {
+                    read.history.contains_key(&node)
+                        || read
+                            .candidate
+                            .current_node()
+                            .is_ok_and(|current| current == node)
+                })
+                .map(|(id, _)| id.clone())
+                .ok_or(libc::EACCES)?
+        };
+        self.open(node, Some(&selection))
     }
 }

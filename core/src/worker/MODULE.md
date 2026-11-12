@@ -60,7 +60,7 @@ and a root-owned executed artifact.
 | `cgroup.rs` | cgroup v2 governor and `cgroup.kill` teardown |
 | `app_custody.rs` | Ordinary App pre-sandbox gate and authenticated OS Host resource-retirement acknowledgement, separate from raw App stdio |
 | `gui_transport/` | Mandatory inherited GUI syscall mediation and trusted runner bootstrap |
-| `native_fs/` | Common GUI's filtered Home metadata and separately protected regular-file reads; private test-build writes/watch only, exact window consent, bound PID/cgroup and checked retirement, never a public mount API or completed filesystem |
+| `native_fs/` | Filtered Home metadata, independent selected file reads/writes and target-only reserved save; private test-only watches/faults, bound PID/cgroup, canonical effects and checked retirement, never a completed filesystem |
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
 | `net_broker/resolver.rs` | Fixed system NSS lookup process, bounded output/deadline, endpoint cancellation and checked child reaping |

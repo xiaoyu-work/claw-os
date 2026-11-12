@@ -122,5 +122,31 @@ class SelectedReadTests(unittest.TestCase):
                 gui.request_file_read(7)
 
 
+class SelectedWriteTests(unittest.TestCase):
+    def test_write_and_target_only_save_keep_root_choice_out_of_stdin(self) -> None:
+        selection = "sw-" + "b" * 32
+        pending = {"version": 1, "selection_id": selection, "node": 9,
+                   "access": "write", "state": "pending"}
+        selected = {**pending, "state": "selected", "expires_in_ms": 180000}
+        save = {"version": 1, "reservation_id": "ss-" + "c" * 32,
+                "selection_id": selection, "node": 9, "parent_node": 1,
+                "name": ".cos-save-" + "c" * 32, "expires_in_ms": 170000}
+        with patch.object(gui, "call_json_with_stdin_binary", side_effect=[pending, selected, save]) as call:
+            self.assertEqual(gui.request_file_write(9)["state"], "pending")
+            self.assertEqual(gui.file_write_status(selection, 9)["access"], "write")
+            self.assertEqual(gui.reserve_file_save(selection, 9)["name"], save["name"])
+        for invocation, action in zip(call.call_args_list, ["request", "status", "reserve"]):
+            self.assertEqual(invocation.args[1], ["__gui-file-write", action, "--request-stdin"])
+        self.assertEqual(json.loads(call.call_args_list[0].args[2]), {"node": 9})
+        self.assertEqual(json.loads(call.call_args_list[2].args[2]), {"selection_id": selection, "node": 9})
+        with patch.object(gui, "call_json_with_stdin_binary") as call:
+            with self.assertRaises(ValueError):
+                gui.reserve_file_save("sr-" + "b" * 32, 9)
+            call.assert_not_called()
+        with patch.object(gui, "call_json_with_stdin_binary", return_value={**save, "name": "../sibling"}):
+            with self.assertRaises(ValueError):
+                gui.reserve_file_save(selection, 9)
+
+
 if __name__ == "__main__":
     unittest.main()

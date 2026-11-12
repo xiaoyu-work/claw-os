@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/gui_file_save.schema.json",
+  "title": "Draft GUI reserved atomic save",
+  "description": "One Root-reserved private scratch name for atomic replacement of an already selected existing writable file. This is not arbitrary parent-directory write or an owner-side temporary file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "reservation_id", "selection_id", "node", "parent_node", "name", "expires_in_ms"],
+  "properties": {
+    "version": { "type": "integer", "const": 1, "minimum": 1, "maximum": 1 },
+    "reservation_id": { "type": "string", "pattern": "^ss-[a-f0-9]{32}$", "x-full-match": true },
+    "selection_id": { "type": "string", "pattern": "^sw-[a-f0-9]{32}$", "x-full-match": true },
+    "node": { "type": "integer", "minimum": 2, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "parent_node": { "type": "integer", "minimum": 1, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "name": { "type": "string", "pattern": "^\\.cos-save-[a-f0-9]{32}$", "x-full-match": true },
+    "expires_in_ms": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615, "x-rust-type": "u64", "x-go-type": "uint64" }
+  }
+}

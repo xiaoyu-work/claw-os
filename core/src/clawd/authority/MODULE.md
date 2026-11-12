@@ -69,6 +69,10 @@ binding and consent generation, but never replaces the GUI session index or
 widens its startup/parent caps. Root keeps the handle; the native provider
 requires the ordinary unforgeable spend proof and live checks. Its separate
 approval session is also matched by the GUI's checked retirement barrier.
+Selected writes use the same issuer/checker path with independent `FS_WRITE`
+authority. The native provider spends it freshly before each canonical effect;
+read proof cannot substitute for write, and the evidence session itself holds
+no capabilities.
 
 Each `PeerSession` route also declares whether an App session's one-call
 transient capabilities count for it. `credential.oauth-refresh` excludes them,

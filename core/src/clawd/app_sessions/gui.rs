@@ -143,7 +143,14 @@ impl Registration {
     /// Validate a selected native file against this surface's own declared
     /// read ceiling. This is eligibility, never a content selection or grant.
     pub(crate) fn selected_read_capability(&self, relative: &std::path::Path) -> Result<Cap, String> {
+        self.selected_file_capability(relative, Verb::FS_READ)
+    }
+
+    pub(crate) fn selected_file_capability(&self, relative: &std::path::Path, verb: Verb) -> Result<Cap, String> {
         use crate::caps::manifest::ScopeBinding;
+        if !matches!(verb, Verb::FS_READ | Verb::FS_WRITE) {
+            return Err("native file selection supports only independent read or write".into());
+        }
         if relative.as_os_str().is_empty() || relative.components().any(|part|
             !matches!(part, std::path::Component::Normal(_)))
         { return Err("selected read requires a retained view-relative file".into()); }
@@ -157,14 +164,14 @@ impl Registration {
         for need in selected.launch_needs().chain(selected.optional_needs.iter().copied()
             .filter(|need| selected.optional_need_is_bound(need)))
         {
-            if need.verb != Verb::FS_READ { continue; }
+            if need.verb != verb { continue; }
             let scopes = match &need.scope {
                 ScopeBinding::OwnerPath { path } =>
                     vec![crate::caps::manifest::resolve_owner_path(need.verb, path, &paths)?],
                 ScopeBinding::Fixed { scope: Scope::Path(path) } if std::path::Path::new(path).is_absolute() =>
                     vec![Scope::path(path.clone()).canonicalized()],
                 ScopeBinding::Wild => self.caps.iter()
-                    .filter(|cap| cap.verb == Verb::FS_READ && matches!(cap.scope, Scope::Path(_)))
+                    .filter(|cap| cap.verb == verb && matches!(cap.scope, Scope::Path(_)))
                     .map(|cap| cap.scope.clone()).collect(),
                 _ => continue,
             };
@@ -179,7 +186,7 @@ impl Registration {
                 } else {
                     target.as_os_str() == std::path::Path::new(root).as_os_str()
                 };
-                if covered { candidates.push(Cap::new(Verb::FS_READ, scope)); }
+                if covered { candidates.push(Cap::new(verb, scope)); }
             }
         }
         candidates.sort_by_key(|cap| std::cmp::Reverse(match &cap.scope {
@@ -397,7 +404,9 @@ pub(crate) fn kernel_peer(client: &ClientIdentity) -> Result<ProcessIdentity, St
 }
 
 pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::Route, String> {
-    if matches!(command, super::Command::GuiFileReadRequest | super::Command::GuiFileReadStatus) {
+    if matches!(command, super::Command::GuiFileReadRequest | super::Command::GuiFileReadStatus
+        | super::Command::GuiFileWriteRequest | super::Command::GuiFileWriteStatus
+        | super::Command::GuiFileSaveReserve) {
         return Ok(command.route());
     }
     super::relayable_route(command)

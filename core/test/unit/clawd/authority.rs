@@ -104,7 +104,9 @@ fn route_audiences_match_their_families() {
                 Audience::Permission
             }
             name if name.starts_with("transaction.") => Audience::Transaction,
-            name if name.starts_with("gui.file.read.") => Audience::GuiResource,
+            name if name.starts_with("gui.file.read.")
+                || name.starts_with("gui.file.write.")
+                || name == "gui.file.save.reserve" => Audience::GuiResource,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
                 || name == "app.directory_install"
@@ -154,7 +156,8 @@ fn privileged_provider_routes_resolve_a_session_grant() {
     // rollback client holds no standing grant; everything else runs
     // under the App session grant issued at bind.
     for route in ROUTES {
-        if !(route.name.starts_with("system.") || route.name.starts_with("gui.file.read."))
+        if !(route.name.starts_with("system.") || route.name.starts_with("gui.file.read.")
+            || route.name.starts_with("gui.file.write.") || route.name == "gui.file.save.reserve")
             || route.name == "system.operations"
             || route.name.starts_with("system.review.")
             || matches!(route.name, "system.package.status" | "system.package.recover")

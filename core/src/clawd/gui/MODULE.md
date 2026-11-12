@@ -121,7 +121,9 @@ Releasing setup does not release App code: the existing inner App gate still
 waits for transport, live grant and creator installation. Every metadata lease
 renewal follows a fresh registration snapshot and exact window-consent check;
 the bounded lease cannot outlive its original approval. No production content
-write/watch API or mutation fault injector is promoted with metadata support.
+watch API or mutation fault injector is promoted with metadata support. The
+filtered proxy mount is write-capable only so later exact write selection can
+operate; its default file permissions and callbacks still deny writes.
 
 ### Draft selected regular-file read
 
@@ -161,10 +163,50 @@ Home-metadata surface; it neither grants metadata nor replaces later protected
 window admission. Unrelated paths retain ordinary mount/protected-resource
 validation. Raw Home refusal is unchanged. The controlled broker also refuses
 legacy scalar filesystem read/write/replace so those routes cannot turn a broad
-startup cap into selected content. Production write/watch/general mutations
-remain closed.
-Unsupported mandatory Home write/delete/watch/exec still refuses launch rather
+startup cap into selected content. Watch and general mutations remain closed.
+Unsupported mandatory Home delete/watch/exec still refuses launch rather
 than silently downgrading a mandatory contract to a readonly view.
+
+Selected-file CLI primitives use only the fixed private GUI provider transport.
+The mandatory Root connect mediator authenticates the actual socket peer as
+this retained Root controller in the host namespace before admitting that hop.
+The App's user/PID namespaces can translate host Root to an unmapped UID/PID,
+so those translated values are not accepted as approval authority. The narrow
+client helper cannot carry lifecycle, installation or review commands; their
+ordinary Root-peer checks remain unchanged. Socket names/environment select no
+authority, and every resource request still proves its live instance/cgroup.
+
+### Draft selected write and reserved save
+
+The same coordinator independently reviews `fs.write` for an existing regular
+file. Mandatory/optional declarations remain eligibility, not selection, and a
+read selection cannot become write or vice versa. A protected write decision
+can authorize bounded native writes and a Root-reserved replacement of that one
+target; it creates no writable siblings, directory, delete or exec authority.
+`O_RDWR` requires both independently approved resources.
+
+Root creates one capability-empty canonical mutation evidence session for this
+GUI only when a write decision is installed. It uses existing inverse bytes and
+MAC-chained `MutationBracket` records, linking each production effect to the
+ordinary selected-write grant reference. Effects wait for durable starts; file
+and required parent sync plus committed completion precede successful replies.
+Unknown outcomes fence and retire the instance while retaining unresolved
+canonical evidence. Test fault injectors and direct prototype selectors stay
+test-only.
+
+Atomic save gives the App one opaque private scratch name under the pinned
+target parent. Only that name can be created and only that existing target can
+be replaced. Discarding private scratch is allowed, unlink/rmdir of owner data
+and general rename are not. Non-UTF8 inverse targets fail before effects rather
+than converting identity lossily; new-file Save As remains unsupported.
+
+Only verified committed own effects can advance matching selected resources.
+They preserve existing read consent and all original deadlines. In-place
+changes retain same-object semantics. Atomic replacement uses a new native
+inode: new opens read the new object, old read FDs/mappings retain the old object,
+and detached old write FDs refuse further effects. Retained scratch reads its
+own authored bytes, never later target content. Pending proposals do not follow
+own revisions; external changes/conflicts still fail closed.
 
 The Root [display registry](../../display_session/MODULE.md) supplies the
 authenticated owner and display epoch. The Host creates the instance ID, holds

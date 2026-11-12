@@ -725,7 +725,7 @@ pub fn revoke_session(session_id: &str) {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) struct GuiReadApproval<'a> {
+pub(crate) struct GuiFileApproval<'a> {
     pub process: &'a claw_display_control::ProcessIdentity,
     pub gui: &'a GrantView,
     pub capability: &'a crate::caps::Cap,
@@ -734,17 +734,20 @@ pub(crate) struct GuiReadApproval<'a> {
     pub lifetime: std::time::Duration,
 }
 
-/// Issue separate finite read authority from an exact protected operation
+#[cfg(target_os = "linux")]
+pub(crate) type GuiReadApproval<'a> = GuiFileApproval<'a>;
+
+/// Issue separate finite file authority from an exact protected operation
 /// decision. It never replaces the GUI session index or widens its cap set.
 #[cfg(target_os = "linux")]
-pub(crate) fn authorize_gui_file_read(
-    binding: GuiReadApproval<'_>,
+pub(crate) fn authorize_gui_file(
+    binding: GuiFileApproval<'_>,
     approval: &crate::approvals::ConsumedGrant,
 ) -> Result<(GrantView, Authorized), String> {
     let owner = binding.gui.owner_uid;
     let session = binding.gui.subject.session_id.as_deref().ok_or("GUI read has no bound session")?;
     let authorization = &approval.authorization;
-    if binding.capability.verb != crate::caps::Verb::FS_READ
+    if !matches!(binding.capability.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE)
         || matches!(binding.capability.scope, crate::caps::Scope::Wild)
         || binding.process.uid() != owner || binding.process.pid() as u32 != binding.gui.bound_pid
         || binding.gui.subject.app_id.is_none()
@@ -755,10 +758,15 @@ pub(crate) fn authorize_gui_file_read(
         || authorization.operation_digest.as_deref() != Some(binding.operation_digest)
         || authorization.context.is_some() || authorization.execution.is_some()
     { return Err("selected read approval does not match the live GUI/owner/capability/operation".into()); }
+    let route = if binding.capability.verb == crate::caps::Verb::FS_READ {
+        "gui.file.read.status"
+    } else {
+        "gui.file.write.status"
+    };
     let presentation = Presentation {
         uid: owner, pid: binding.process.pid() as u32,
         start_time_ticks: Some(binding.process.start_ticks()), audience: Audience::GuiResource,
-        route: "gui.file.read.status", session_id: Some(session.to_string()),
+        route, session_id: Some(session.to_string()),
     };
     let current = authority().resolve_session(session, &presentation).map_err(|error| error.to_string())?;
     if current.id != binding.gui.id || current.generation != binding.gui.generation || current.caps != binding.gui.caps {
@@ -783,7 +791,7 @@ pub(crate) fn authorize_gui_file_read(
             return Err("selected read decision changed or became unverifiable during issuance".into());
         }
     }
-    let decision = Decision::new(view.clone(), "gui.file.read.status", Audience::GuiResource,
+    let decision = Decision::new(view.clone(), route, Audience::GuiResource,
         presentation, None, None, &Requirement::exact([binding.capability.clone()]));
     match decision.require(binding.capability.clone()) {
         Ok(authorized) => Ok((view, authorized)),
@@ -792,7 +800,17 @@ pub(crate) fn authorize_gui_file_read(
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn exercise_gui_file_read(
+pub(crate) fn authorize_gui_file_read(
+    binding: GuiReadApproval<'_>, approval: &crate::approvals::ConsumedGrant,
+) -> Result<(GrantView, Authorized), String> {
+    if binding.capability.verb != crate::caps::Verb::FS_READ {
+        return Err("read selection requires an independent read decision".into());
+    }
+    authorize_gui_file(binding, approval)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn exercise_gui_file(
     id: GrantId,
     capability: &crate::caps::Cap,
     presentation: Presentation,
@@ -800,11 +818,28 @@ pub(crate) fn exercise_gui_file_read(
     let view = authority().consume(id, std::slice::from_ref(capability), &presentation)
         .map_err(|error| error.to_string())?;
     if view.issuer != Issuer::Approval || presentation.audience != Audience::GuiResource
-        || capability.verb != crate::caps::Verb::FS_READ || view.subject.app_id.is_none()
+        || !matches!(capability.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE)
+        || view.subject.app_id.is_none()
     { return Err("selected read is not an ordinary approved GUI read grant".into()); }
-    let decision = Decision::new(view, "gui.file.read.status", Audience::GuiResource,
+    let route = if capability.verb == crate::caps::Verb::FS_READ {
+        "gui.file.read.status"
+    } else {
+        "gui.file.write.status"
+    };
+    if presentation.route != route { return Err("selected file authority has another access kind".into()); }
+    let decision = Decision::new(view, route, Audience::GuiResource,
         presentation, None, None, &Requirement::exact([capability.clone()]));
     decision.require(capability.clone())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn exercise_gui_file_read(
+    id: GrantId, capability: &crate::caps::Cap, presentation: Presentation,
+) -> Result<Authorized, String> {
+    if capability.verb != crate::caps::Verb::FS_READ {
+        return Err("read selection requires independent read authority".into());
+    }
+    exercise_gui_file(id, capability, presentation)
 }
 
 /// Revoke the process-bound grant currently indexed by `session_id` while

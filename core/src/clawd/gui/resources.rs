@@ -43,7 +43,7 @@ fn refuse_unsupported_home_needs(
     selected: &crate::caps::manifest::GuiEntry<'_>, home: &Path, caps: &CapSet,
 ) -> Result<(), String> {
     for need in selected.launch_needs().filter(|need|
-        matches!(need.verb, Verb::FS_WRITE | Verb::FS_DELETE | Verb::FS_WATCH | Verb::FS_EXEC))
+        matches!(need.verb, Verb::FS_DELETE | Verb::FS_WATCH | Verb::FS_EXEC))
     {
         let scopes = match &need.scope {
             ScopeBinding::OwnerPath { path } => vec![crate::caps::manifest::resolve_owner_path(
@@ -380,7 +380,7 @@ impl HomeMetadata {
         // Home must precede the already-private nested App data bind.
         policy.mounts.insert(
             0,
-            Mount::read_only(&self.path, &registration.home, MountClass::Input),
+            Mount::read_write(&self.path, &registration.home, MountClass::Output),
         );
         Ok(())
     }
@@ -474,6 +474,7 @@ impl HomeMetadata {
         }
         NativeFsView::retire_pending_metadata(deadline)?;
         self.view.take();
+        if let Some(selected) = self.selected_reads.get() { selected.finish_mutation_session()?; }
         if self.created && !self.removed {
             if self.directory.is_none() {
                 crate::provenance::fsec::require_secure_location(&self.path, &[0])
