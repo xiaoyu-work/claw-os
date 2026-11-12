@@ -273,8 +273,11 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
+        if [[ "$selection" == native-terminal ]]; then
+            cargo test -p cos --lib --locked native_terminal_session_selection -- --test-threads=1
+        fi
         cargo test --manifest-path desktop/comp/test/display-control/Cargo.toml \
             --locked keyboard_plan_refuses -- --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
@@ -323,7 +326,7 @@ display() {
     fi
     if [[ "$selection" == native-fs ]]; then
         selectors=(--native-fs-only)
-    elif [[ "$selection" == native-editor || "$selection" == native-files ]]; then
+    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal ]]; then
         selectors=("--$selection-only" "$GITHUB_WORKSPACE/build/$selection-input")
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
@@ -447,9 +450,10 @@ case "${1:-}" in
     native-package) display native-package ;;
     native-editor) display native-editor ;;
     native-files) display native-files ;;
+    native-terminal) display native-terminal ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|applets}" >&2
         exit 2
         ;;
 esac
