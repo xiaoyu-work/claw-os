@@ -131,6 +131,53 @@ type FileChangePlan struct {
 	Diagnostic *string `json:"diagnostic,omitempty"`
 }
 
+// GuiFileCreate — Draft GUI one-shot regular-file creation.
+// Root-owned protected fs.write selection for one absent literal child of this
+// window's metadata directory. Selected or reserved is not saved. Only created
+// reports a verified canonical creation; no content read or overwrite authority
+// is granted.
+type GuiFileCreate struct {
+	Version int `json:"version"`
+	SelectionId string `json:"selection_id"`
+	ParentNode uint64 `json:"parent_node"`
+	Name string `json:"name"`
+	Access string `json:"access"`
+	State string `json:"state"`
+	ApprovalRequestId string `json:"approval_request_id,omitempty"`
+	TargetDisplay string `json:"target_display,omitempty"`
+	ExpiresInMs uint64 `json:"expires_in_ms,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// GuiFileCreateRequest — GuiFileCreateRequest.
+type GuiFileCreateRequest struct {
+	ParentNode uint64 `json:"parent_node"`
+	Name string `json:"name"`
+}
+
+// GuiFileCreateStatusRequest — GuiFileCreateStatusRequest.
+type GuiFileCreateStatusRequest struct {
+	SelectionId string `json:"selection_id"`
+	ParentNode uint64 `json:"parent_node"`
+}
+
+// GuiFileCreateReservationRequest — GuiFileCreateReservationRequest.
+type GuiFileCreateReservationRequest struct {
+	SelectionId string `json:"selection_id"`
+	ParentNode uint64 `json:"parent_node"`
+}
+
+// GuiFileCreateSlot — Draft GUI one-shot no-replace creation slot.
+type GuiFileCreateSlot struct {
+	Version int `json:"version"`
+	ReservationId string `json:"reservation_id"`
+	SelectionId string `json:"selection_id"`
+	ParentNode uint64 `json:"parent_node"`
+	Name string `json:"name"`
+	TargetName string `json:"target_name"`
+	ExpiresInMs uint64 `json:"expires_in_ms"`
+}
+
 // GuiFileRead — Draft GUI selected file read.
 // Root-owned status for one proposed file in this authenticated GUI instance.
 // Pending or an approval request ID is not a selected resource. No owner,
@@ -522,6 +569,15 @@ func ValidateFileChangePlanState(value string) error {
 	return fmt.Errorf("invalid file_change_plan.state value: %q", value)
 }
 
+// ValidateGuiFileCreateState reports an error if value is not in the gui_file_create.state enum.
+func ValidateGuiFileCreateState(value string) error {
+	switch value {
+	case "pending", "selected", "created", "denied", "stale", "expired", "revoked", "failed", "uncertain":
+		return nil
+	}
+	return fmt.Errorf("invalid gui_file_create.state value: %q", value)
+}
+
 // ValidateGuiFileReadState reports an error if value is not in the gui_file_read.state enum.
 func ValidateGuiFileReadState(value string) error {
 	switch value {
@@ -776,6 +832,10 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 		if maximum, ok := wireExactInteger(rule["maxLength"]); ok && maximum.value != nil && utf8.RuneCountInString(text) > int(maximum.value.Int64()) {
 			return wireError(WireMaxLength, schemaName, path, "above maximum length")
 		}
+		if maximum, ok := wireExactInteger(rule["x-max-utf8-bytes"]); ok && maximum.value != nil {
+			if !utf8.ValidString(text) { return wireError(WireType, schemaName, path, "valid UTF-8 string required") }
+			if len(text) > int(maximum.value.Int64()) { return wireError(WireMaxLength, schemaName, path, "above maximum UTF-8 length") }
+		}
 		if pattern, ok := rule["pattern"].(string); ok {
 			matcher, err := regexp.Compile(pattern)
 			if err != nil { return wireError(WirePattern, schemaName, path, "invalid schema pattern") }
@@ -889,6 +949,32 @@ func ValidateFileChangePlan(value any) error {
 	return validateWireSchema(schema, schema, value, "FileChangePlan", "$")
 }
 
+const wireSchemaGuiFileCreate = "{\"$defs\":{\"GuiFileCreateRequest\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"parent_node\",\"name\"],\"type\":\"object\"},\"GuiFileCreateReservationRequest\":{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"},\"GuiFileCreateStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_create.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned protected fs.write selection for one absent literal child of this window's metadata directory. Selected or reserved is not saved. Only created reports a verified canonical creation; no content read or overwrite authority is granted.\",\"properties\":{\"access\":{\"const\":\"create\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"created\",\"denied\",\"stale\",\"expired\",\"revoked\",\"failed\",\"uncertain\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation, never source identity.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"parent_node\",\"name\",\"access\",\"state\"],\"title\":\"Draft GUI one-shot regular-file creation\",\"type\":\"object\"}"
+
+// ValidateGuiFileCreate validates a value against wire/v1/gui_file_create.schema.json.
+func ValidateGuiFileCreate(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileCreate))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileCreate", "$")
+}
+
+const wireSchemaGuiFileCreateSlot = "{\"$id\":\"https://claw-os.dev/wire/v1/gui_file_create_slot.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"name\":{\"pattern\":\"^\\\\.cos-save-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reservation_id\":{\"pattern\":\"^ss-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"target_name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"reservation_id\",\"selection_id\",\"parent_node\",\"name\",\"target_name\",\"expires_in_ms\"],\"title\":\"Draft GUI one-shot no-replace creation slot\",\"type\":\"object\"}"
+
+// ValidateGuiFileCreateSlot validates a value against wire/v1/gui_file_create_slot.schema.json.
+func ValidateGuiFileCreateSlot(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileCreateSlot))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileCreateSlot", "$")
+}
+
 const wireSchemaGuiFileRead = "{\"$defs\":{\"GuiFileReadRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"},\"GuiFileReadStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_read.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned status for one proposed file in this authenticated GUI instance. Pending or an approval request ID is not a selected resource. No owner, window, source path or grant handle is supplied by the App.\",\"properties\":{\"access\":{\"const\":\"read\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"denied\",\"stale\",\"expired\",\"revoked\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation only. Never a source identity or path authority.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"node\",\"access\",\"state\"],\"title\":\"Draft GUI selected file read\",\"type\":\"object\"}"
 
 // ValidateGuiFileRead validates a value against wire/v1/gui_file_read.schema.json.
@@ -991,6 +1077,45 @@ func ValidateTool(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "Tool", "$")
+}
+
+const wireSchemaGuiFileCreateRequest = "{\"additionalProperties\":false,\"properties\":{\"name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"parent_node\",\"name\"],\"type\":\"object\"}"
+
+// ValidateGuiFileCreateRequest validates a value against wire/v1/gui_file_create_request.schema.json.
+func ValidateGuiFileCreateRequest(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileCreateRequest))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileCreateRequest", "$")
+}
+
+const wireSchemaGuiFileCreateStatusRequest = "{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"}"
+
+// ValidateGuiFileCreateStatusRequest validates a value against wire/v1/gui_file_create_status_request.schema.json.
+func ValidateGuiFileCreateStatusRequest(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileCreateStatusRequest))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileCreateStatusRequest", "$")
+}
+
+const wireSchemaGuiFileCreateReservationRequest = "{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"}"
+
+// ValidateGuiFileCreateReservationRequest validates a value against wire/v1/gui_file_create_reservation_request.schema.json.
+func ValidateGuiFileCreateReservationRequest(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileCreateReservationRequest))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileCreateReservationRequest", "$")
 }
 
 const wireSchemaGuiFileReadRequest = "{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"}"

@@ -1146,11 +1146,11 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
-    if matches!(name.as_str(), "__gui-file-read" | "__gui-file-write") {
+    if matches!(name.as_str(), "__gui-file-read" | "__gui-file-write" | "__gui-file-create") {
         if args.len() != 3 || !(matches!(args[1].as_str(), "request" | "status")
-                || name == "__gui-file-write" && args[1] == "reserve")
+                || matches!(name.as_str(), "__gui-file-write" | "__gui-file-create") && args[1] == "reserve")
             || args[2] != "--request-stdin"
-        { return Err("GUI selected-file bridge requires `request|status` or write `reserve` with --request-stdin".into()); }
+        { return Err("GUI selected-file bridge requires `request|status` or write/create `reserve` with --request-stdin".into()); }
         let mut parameters = parse_internal_request_object(stdin_data.as_deref(), 4096, "GUI selected file")?;
         if parameters.contains_key("session") {
             return Err("GUI selected file derives its session from the bound Host".into());
@@ -1163,6 +1163,9 @@ fn dispatch_with_stdin_impl(
             ("__gui-file-write", "request") => Command::GuiFileWriteRequest,
             ("__gui-file-write", "status") => Command::GuiFileWriteStatus,
             ("__gui-file-write", "reserve") => Command::GuiFileSaveReserve,
+            ("__gui-file-create", "request") => Command::GuiFileCreateRequest,
+            ("__gui-file-create", "status") => Command::GuiFileCreateStatus,
+            ("__gui-file-create", "reserve") => Command::GuiFileCreateReserve,
             _ => unreachable!("selected-file primitive was checked"),
         };
         let value = request_gui_resource(command, Value::Object(parameters))?;

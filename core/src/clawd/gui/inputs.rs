@@ -91,6 +91,73 @@ pub struct FileWriteStatusRequest {
 
 pub type FileSaveReservationRequest = FileWriteStatusRequest;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct NativeDirectoryNode(u64);
+
+impl NativeDirectoryNode { pub fn get(self) -> u64 { self.0 } }
+
+impl<'de> Deserialize<'de> for NativeDirectoryNode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let mut request = serde_json::json!({"parent_node":value,"name":"leaf"});
+        claw_os_sdk::generated::validate_gui_file_create_request(&request).map_err(serde::de::Error::custom)?;
+        claw_os_sdk::generated::normalize_gui_file_create_request_integers(&mut request);
+        request["parent_node"].as_u64().map(Self)
+            .ok_or_else(|| serde::de::Error::custom("native directory node is outside the view bound"))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct CreateName(Text<255>);
+
+impl CreateName { pub fn as_str(&self) -> &str { self.0.as_str() } }
+
+impl<'de> Deserialize<'de> for CreateName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = Self(Text::<255>::deserialize(deserializer)?);
+        claw_os_sdk::generated::validate_gui_file_create_request(
+            &serde_json::json!({"parent_node":1,"name":name.as_str()}),
+        ).map_err(serde::de::Error::custom)?;
+        Ok(name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct CreateSelectionId(String);
+
+impl CreateSelectionId { pub fn as_str(&self) -> &str { &self.0 } }
+
+impl<'de> Deserialize<'de> for CreateSelectionId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        claw_os_sdk::generated::validate_gui_file_create_status_request(
+            &serde_json::json!({"selection_id":value,"parent_node":1}),
+        ).map_err(serde::de::Error::custom)?;
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileCreateRequest {
+    pub session: Token,
+    pub parent_node: NativeDirectoryNode,
+    pub name: CreateName,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileCreateStatusRequest {
+    pub session: Token,
+    pub selection_id: CreateSelectionId,
+    pub parent_node: NativeDirectoryNode,
+}
+
+pub type FileCreateReservationRequest = FileCreateStatusRequest;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub struct EntryName(Text<64>);

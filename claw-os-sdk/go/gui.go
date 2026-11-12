@@ -120,6 +120,39 @@ func selectedFileCall(bridge, action string, request map[string]any) (any, error
 	return response.Data, nil
 }
 
+// RequestFileCreate proposes one absent literal child, never a directory grant.
+func RequestFileCreate(parentNode uint64, name string) (*GuiFileCreate, error) {
+	request := map[string]any{"parent_node": parentNode, "name": name}
+	if err := ValidateGuiFileCreateRequest(request); err != nil { return nil, err }
+	return selectedCreateCall("request", request)
+}
+
+// FileCreateStatus distinguishes committed creation from selection/reservation.
+func FileCreateStatus(selectionID string, parentNode uint64) (*GuiFileCreate, error) {
+	request := map[string]any{"selection_id": selectionID, "parent_node": parentNode}
+	if err := ValidateGuiFileCreateStatusRequest(request); err != nil { return nil, err }
+	return selectedCreateCall("status", request)
+}
+
+// ReserveFileCreate reserves private scratch for one atomic NOREPLACE creation.
+func ReserveFileCreate(selectionID string, parentNode uint64) (*GuiFileCreateSlot, error) {
+	request := map[string]any{"selection_id": selectionID, "parent_node": parentNode}
+	if err := ValidateGuiFileCreateReservationRequest(request); err != nil { return nil, err }
+	value, err := selectedFileCall("__gui-file-create", "reserve", request)
+	if err != nil { return nil, err }
+	var result GuiFileCreateSlot
+	if err := decodeSelectedFile(value, ValidateGuiFileCreateSlot, &result); err != nil { return nil, err }
+	return &result, nil
+}
+
+func selectedCreateCall(action string, request map[string]any) (*GuiFileCreate, error) {
+	value, err := selectedFileCall("__gui-file-create", action, request)
+	if err != nil { return nil, err }
+	var result GuiFileCreate
+	if err := decodeSelectedFile(value, ValidateGuiFileCreate, &result); err != nil { return nil, err }
+	return &result, nil
+}
+
 func decodeSelectedRead(value any) (*GuiFileRead, error) {
 	var result GuiFileRead
 	if err := decodeSelectedFile(value, ValidateGuiFileRead, &result); err != nil {

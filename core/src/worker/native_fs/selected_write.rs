@@ -88,6 +88,22 @@ pub(crate) struct SaveReservation {
     pub(crate) deadline: Instant,
 }
 
+pub(super) fn bind_session(shared: &Shared, session: &crate::session::SessionId) -> Result<(), String> {
+    shared.session_context(|| {
+        let meta = crate::session::get_meta(session).map_err(|error| error.to_string())?;
+        if meta.owner_uid != Some(shared.owner) || !crate::session::record_is_root_owned(session) {
+            return Err("native mutation session is not the Root-owned owner record".into());
+        }
+        Ok(())
+    })?;
+    match shared.session.get() {
+        Some(current) if current != session => return Err("native mutation session cannot switch".into()),
+        Some(_) => {}
+        None => shared.session.set(session.clone()).map_err(|_| "native mutation session already bound")?,
+    }
+    shared.validate_session()
+}
+
 impl ReadProvider {
     pub(crate) fn install_write(&self, selection: &str, permit: WritePermit) -> Result<(), String> {
         let shared = self.shared.upgrade().ok_or("native view has retired")?;
@@ -135,29 +151,7 @@ impl ReadProvider {
             true,
         )
         .map_err(io_message)?;
-        shared.session_context(|| {
-            let meta =
-                crate::session::get_meta(&permit.session).map_err(|error| error.to_string())?;
-            if meta.owner_uid != Some(shared.owner)
-                || !crate::session::record_is_root_owned(&permit.session)
-            {
-                return Err("native write session is not the Root-owned owner record".into());
-            }
-            Ok(())
-        })?;
-        match shared.session.get() {
-            Some(session) if session != &permit.session => {
-                return Err("native write session cannot switch".into())
-            }
-            Some(_) => {}
-            None => {
-                shared
-                    .session
-                    .set(permit.session.clone())
-                    .map_err(|_| "native write session already bound")?;
-            }
-        }
-        shared.validate_session()?;
+        bind_session(&shared, &permit.session)?;
         let mut writes = shared
             .writes
             .lock()

@@ -18,12 +18,13 @@ use crate::clawd::authority::{self, Audience, Decision, GrantId, GrantView, Pres
 use crate::clawd::client_identity::ClientIdentity;
 use crate::clawd::protocol::BrokerError;
 use crate::worker::native_fs::{
-    FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider, WriteLeaseCheck, WritePermit,
+    CreateCandidate, CreatePermit, CreationState, FileCandidate, ReadLeaseCheck, ReadPermit,
+    ReadProvider, WriteLeaseCheck, WritePermit,
 };
 
 use super::inputs::{
     FileReadRequest, FileReadStatusRequest, FileSaveReservationRequest, FileWriteRequest,
-    FileWriteStatusRequest,
+    FileWriteStatusRequest, FileCreateRequest, FileCreateStatusRequest,
 };
 
 #[cfg(test)]
@@ -49,6 +50,7 @@ impl Drop for TestTiming {
 enum Access {
     Read,
     Write,
+    Create,
 }
 
 impl Access {
@@ -56,24 +58,27 @@ impl Access {
         match self {
             Self::Read => "read",
             Self::Write => "write",
+            Self::Create => "create",
         }
     }
     fn verb(self) -> Verb {
         match self {
             Self::Read => Verb::FS_READ,
-            Self::Write => Verb::FS_WRITE,
+            Self::Write | Self::Create => Verb::FS_WRITE,
         }
     }
     fn prefix(self) -> &'static str {
         match self {
             Self::Read => "sr",
             Self::Write => "sw",
+            Self::Create => "sc",
         }
     }
     fn route(self) -> &'static str {
         match self {
             Self::Read => "gui.file.read.status",
             Self::Write => "gui.file.write.status",
+            Self::Create => "gui.file.create.status",
         }
     }
     fn capability(
@@ -85,9 +90,26 @@ impl Access {
         let _timing = TestTiming("root_declared_capability", Instant::now());
         match self {
             Self::Read => registration.selected_read_capability(relative),
-            Self::Write => registration.selected_file_capability(relative, Verb::FS_WRITE),
+            Self::Write | Self::Create => registration.selected_file_capability(relative, Verb::FS_WRITE),
         }
     }
+}
+
+#[derive(Clone)]
+enum Target {
+    File(Arc<FileCandidate>),
+    Create(Arc<CreateCandidate>),
+}
+
+impl Target {
+    fn node(&self) -> u64 { match self { Self::File(file) => file.node(), Self::Create(file) => file.node() } }
+    fn relative(&self) -> &std::path::Path { match self { Self::File(file) => file.relative(), Self::Create(file) => file.relative() } }
+    fn identity(&self) -> (u64, u64) { match self { Self::File(file) => file.identity(), Self::Create(file) => file.identity() } }
+    fn stamp(&self) -> [u64; 8] { match self { Self::File(file) => file.stamp(), Self::Create(file) => file.stamp() } }
+    fn generation(&self) -> u64 { match self { Self::File(file) => file.generation(), Self::Create(file) => file.generation() } }
+    fn display(&self) -> Result<String, String> { match self { Self::File(file) => file.display(), Self::Create(file) => file.display() } }
+    fn revalidate(&self) -> Result<(), String> { match self { Self::File(file) => file.revalidate(), Self::Create(file) => file.revalidate() } }
+    fn health_validate(&self) -> Result<(), String> { match self { Self::File(file) => file.health_validate(), Self::Create(file) => file.health_validate() } }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -99,6 +121,9 @@ enum Stage {
     Stale,
     Expired,
     Revoked,
+    Created,
+    Failed,
+    Uncertain,
 }
 
 #[derive(Serialize)]
@@ -106,7 +131,12 @@ enum Stage {
 struct Status {
     version: u8,
     selection_id: String,
-    node: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_node: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     access: &'static str,
     state: Stage,
     approval_request_id: String,
@@ -120,7 +150,7 @@ struct Status {
 struct Proposal {
     access: Access,
     id: String,
-    candidate: Arc<FileCandidate>,
+    candidate: Target,
     capability: Cap,
     digest: String,
     approval_session: String,
@@ -135,7 +165,9 @@ impl Proposal {
         Status {
             version: 1,
             selection_id: self.id.clone(),
-            node: self.candidate.node(),
+            node: matches!(&self.candidate, Target::File(_)).then_some(self.candidate.node()),
+            parent_node: matches!(&self.candidate, Target::Create(_)).then_some(self.candidate.node()),
+            name: match &self.candidate { Target::Create(file) => Some(file.name().into()), _ => None },
             access: self.access.name(),
             state: self.stage,
             approval_request_id: self.approval_request.clone(),
@@ -152,6 +184,8 @@ impl Proposal {
                 Stage::Stale => Some("source_changed"),
                 Stage::Expired => Some("file_lease_expired"),
                 Stage::Revoked => Some("file_lease_revoked"),
+                Stage::Failed => Some("creation_not_published"),
+                Stage::Uncertain => Some("creation_outcome_unconfirmed"),
                 _ => None,
             },
         }
@@ -166,7 +200,7 @@ struct SelectionAuthority {
     gui_generation: u64,
     grant: GrantId,
     capability: Cap,
-    candidate: Arc<FileCandidate>,
+    candidate: Target,
     approval_session: String,
     generation: u32,
     deadline: Instant,
@@ -215,6 +249,9 @@ impl SelectionAuthority {
                 }
                 Access::Write => {
                     authority::exercise_gui_file(self.grant, &self.capability, presentation)
+                }
+                Access::Create => {
+                    authority::exercise_gui_file_create(self.grant, &self.capability, presentation)
                 }
             }
         })
@@ -376,12 +413,24 @@ impl SelectedReads {
             .provider
             .candidate(node)
             .map_err(BrokerError::authorization)?;
-        candidate.revalidate().map_err(BrokerError::authorization)?;
         if access == Access::Write {
             candidate
                 .require_inverse_path()
                 .map_err(BrokerError::authorization)?;
         }
+        self.propose(Target::File(candidate), access, &gui)
+    }
+
+    fn request_create(&self, parent_node: u64, name: &str) -> Result<Value, BrokerError> {
+        let gui = self.fresh().map_err(BrokerError::authorization)?;
+        let candidate = self.provider.creation_candidate(parent_node, name)
+            .map_err(BrokerError::authorization)?;
+        self.propose(Target::Create(candidate), Access::Create, &gui)
+    }
+
+    fn propose(&self, candidate: Target, access: Access, gui: &GrantView) -> Result<Value, BrokerError> {
+        candidate.revalidate().map_err(BrokerError::authorization)?;
+        let node = candidate.node();
         let capability = access
             .capability(&self.registration, candidate.relative())
             .map_err(BrokerError::authorization)?;
@@ -394,8 +443,9 @@ impl SelectedReads {
             proposal.access == access
                 && proposal.candidate.node() == node
                 && proposal.candidate.identity() == candidate.identity()
-                && proposal.candidate.stamp() == candidate.stamp()
-                && matches!(proposal.stage, Stage::Pending | Stage::Selected)
+                && proposal.candidate.relative() == candidate.relative()
+                && (access == Access::Create || proposal.candidate.stamp() == candidate.stamp()
+                    && matches!(proposal.stage, Stage::Pending | Stage::Selected))
         }) {
             return serde_json::to_value(proposal.status())
                 .map_err(|error| BrokerError::unavailable(error.to_string()));
@@ -438,10 +488,10 @@ impl SelectedReads {
             Epoch(self.instance.0).label()
         );
         let display = candidate.display().map_err(BrokerError::authorization)?;
-        let purpose = if access == Access::Read {
-            format!("Read ONLY selected file {display}; window {}, native node {node}. No directory, write, delete or execute access", Epoch(self.instance.0).label())
-        } else {
-            format!("Write ONLY selected existing file {display}, including a Root-reserved atomic replacement; window {}, native node {node}. No content read, sibling/directory write, delete or execute access", Epoch(self.instance.0).label())
+        let purpose = match access {
+            Access::Read => format!("Read ONLY selected file {display}; window {}, native node {node}. No directory, write, delete or execute access", Epoch(self.instance.0).label()),
+            Access::Write => format!("Write ONLY selected existing file {display}, including a Root-reserved atomic replacement; window {}, native node {node}. No content read, sibling/directory write, delete or execute access", Epoch(self.instance.0).label()),
+            Access::Create => format!("Create ONLY absent regular file {display} once, without replacing an existing target; window {}, parent native node {node}. No owner-content read, sibling/directory write, delete or execute access", Epoch(self.instance.0).label()),
         };
         {
             let mut sessions = self.approval_sessions.lock().map_err(|_| {
@@ -502,6 +552,7 @@ impl SelectedReads {
                     "selected read status belongs to another window or target",
                 )
             })?;
+        let selected_before = proposal.stage == Stage::Selected;
         if proposal.stage == Stage::Pending {
             if proposal.candidate.revalidate().is_err() {
                 proposal.stage = Stage::Stale;
@@ -547,6 +598,16 @@ impl SelectedReads {
                 }
             }
         } else if proposal.stage == Stage::Selected {
+            if access == Access::Create {
+                proposal.stage = match self.provider.creation_state(id).map_err(BrokerError::unavailable)? {
+                    CreationState::Created => Stage::Created,
+                    CreationState::Failed => Stage::Failed,
+                    CreationState::Uncertain => Stage::Uncertain,
+                    _ => Stage::Selected,
+                };
+            }
+        }
+        if selected_before && proposal.stage == Stage::Selected {
             let valid = proposal.authority.as_ref().is_some_and(|read| {
                 read.require().is_ok() && proposal.candidate.revalidate().is_ok()
             });
@@ -603,6 +664,7 @@ impl SelectedReads {
         let (grant, authorized) = match proposal.access {
             Access::Read => authority::authorize_gui_file_read(binding, approval)?,
             Access::Write => authority::authorize_gui_file(binding, approval)?,
+            Access::Create => authority::authorize_gui_file_create(binding, approval)?,
         };
         let deadline = deadline.min(authority_started + grant.expires_in);
         let read = Arc::new(SelectionAuthority {
@@ -619,10 +681,10 @@ impl SelectedReads {
             deadline,
             stopped: self.stopped.clone(),
         });
-        match proposal.access {
-            Access::Read => {
+        match (&proposal.candidate, proposal.access) {
+            (Target::File(candidate), Access::Read) => {
                 let permit = ReadPermit::new(
-                    proposal.candidate.clone(),
+                    candidate.clone(),
                     &authorized,
                     &proposal.capability,
                     deadline,
@@ -630,10 +692,10 @@ impl SelectedReads {
                 )?;
                 self.provider.install(&proposal.id, permit)?;
             }
-            Access::Write => {
+            (Target::File(candidate), Access::Write) => {
                 let session = self.write_session()?;
                 let permit = WritePermit::new(
-                    proposal.candidate.clone(),
+                    candidate.clone(),
                     &authorized,
                     &proposal.capability,
                     deadline,
@@ -642,6 +704,13 @@ impl SelectedReads {
                 )?;
                 self.provider.install_write(&proposal.id, permit)?;
             }
+            (Target::Create(candidate), Access::Create) => {
+                let session = self.write_session()?;
+                let permit = CreatePermit::new(candidate.clone(), &authorized,
+                    &proposal.capability, deadline, read.clone(), session)?;
+                self.provider.install_create(&proposal.id, permit)?;
+            }
+            _ => return Err("selected resource kind differs from its approval".into()),
         }
         proposal.authority = Some(read.clone());
         if read.require().is_err() || proposal.candidate.revalidate().is_err() {
@@ -780,6 +849,27 @@ impl SelectedReads {
             "version":1,"reservation_id":reserved.id,"selection_id":id,"node":node,
             "parent_node":reserved.parent_node,"name":reserved.name,
             "expires_in_ms":reserved.deadline.saturating_duration_since(Instant::now())
+                .as_millis().min(u128::from(u64::MAX)) as u64,
+        }))
+    }
+
+    fn reserve_create(&self, id: &str, parent_node: u64) -> Result<Value, BrokerError> {
+        self.fresh().map_err(BrokerError::authorization)?;
+        let proposals = self.proposals.lock()
+            .map_err(|_| BrokerError::unavailable("selected files poisoned"))?;
+        let proposal = proposals.get(id).filter(|proposal| {
+            proposal.access == Access::Create && proposal.stage == Stage::Selected
+                && proposal.candidate.node() == parent_node
+        }).ok_or_else(|| BrokerError::authorization("creation scratch requires this exact selected parent and leaf"))?;
+        let _authorized = proposal.authority.as_ref()
+            .ok_or_else(|| BrokerError::authorization("creation has no authority"))?
+            .authorize_capability().map_err(BrokerError::authorization)?;
+        proposal.candidate.revalidate().map_err(BrokerError::authorization)?;
+        let slot = self.provider.reserve_create(id).map_err(BrokerError::authorization)?;
+        Ok(serde_json::json!({
+            "version":1,"reservation_id":slot.id,"selection_id":id,"parent_node":slot.parent_node,
+            "name":slot.name,"target_name":slot.target_name,
+            "expires_in_ms":slot.deadline.saturating_duration_since(Instant::now())
                 .as_millis().min(u128::from(u64::MAX)) as u64,
         }))
     }
@@ -1049,4 +1139,43 @@ pub(crate) async fn reserve_file_save(
         .map_err(|error| {
             BrokerError::unavailable(format!("atomic save reservation failed: {error}"))
         })?
+}
+
+pub(crate) async fn request_file_create(
+    params: Value, client: &ClientIdentity, authority: &Decision,
+) -> Result<Value, BrokerError> {
+    let request: FileCreateRequest = serde_json::from_value(params)
+        .map_err(|_| BrokerError::execution("invalid file creation request"))?;
+    let endpoint = super::manager::selected_reads(authority, client)?;
+    let parent = request.parent_node.get();
+    let name = request.name.as_str().to_string();
+    let context = crate::paths::RoutedPathContext::capture();
+    tokio::task::spawn_blocking(move || context.scope_sync(|| endpoint.request_create(parent, &name)))
+        .await.map_err(|error| BrokerError::unavailable(format!("creation request failed: {error}")))?
+}
+
+pub(crate) async fn file_create_status(
+    params: Value, client: &ClientIdentity, authority: &Decision,
+) -> Result<Value, BrokerError> {
+    let request: FileCreateStatusRequest = serde_json::from_value(params)
+        .map_err(|_| BrokerError::execution("invalid file creation status"))?;
+    let endpoint = super::manager::selected_reads(authority, client)?;
+    let parent = request.parent_node.get();
+    let id = request.selection_id.as_str().to_string();
+    let context = crate::paths::RoutedPathContext::capture();
+    tokio::task::spawn_blocking(move || context.scope_sync(|| endpoint.status(&id, parent, Access::Create)))
+        .await.map_err(|error| BrokerError::unavailable(format!("creation status failed: {error}")))?
+}
+
+pub(crate) async fn reserve_file_create(
+    params: Value, client: &ClientIdentity, authority: &Decision,
+) -> Result<Value, BrokerError> {
+    let request: FileCreateStatusRequest = serde_json::from_value(params)
+        .map_err(|_| BrokerError::execution("invalid file creation reservation"))?;
+    let endpoint = super::manager::selected_reads(authority, client)?;
+    let parent = request.parent_node.get();
+    let id = request.selection_id.as_str().to_string();
+    let context = crate::paths::RoutedPathContext::capture();
+    tokio::task::spawn_blocking(move || context.scope_sync(|| endpoint.reserve_create(&id, parent)))
+        .await.map_err(|error| BrokerError::unavailable(format!("creation reservation failed: {error}")))?
 }

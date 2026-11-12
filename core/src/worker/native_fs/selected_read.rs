@@ -97,17 +97,7 @@ impl FileCandidate {
 
     pub(crate) fn display(&self) -> Result<String, String> {
         let view = self.view.upgrade().ok_or("native view has retired")?;
-        view.live().map_err(|_| "native view source or lease ended")?;
-        let mut display = String::new();
-        for byte in view.root_path.join(&self.relative).as_os_str().as_bytes() {
-            if (0x20..=0x7e).contains(byte) && !matches!(*byte, b'\\' | b'"' | b'\'') {
-                display.push(char::from(*byte));
-            } else {
-                use std::fmt::Write;
-                write!(&mut display, "\\x{byte:02x}").map_err(|error| error.to_string())?;
-            }
-        }
-        Ok(display)
+        display_path(&view, &self.relative)
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), String> {
@@ -158,6 +148,20 @@ impl FileCandidate {
         }
         Ok(())
     }
+}
+
+pub(super) fn display_path(view: &Shared, relative: &Path) -> Result<String, String> {
+    view.live().map_err(|_| "native view source or lease ended")?;
+    let mut display = String::new();
+    for byte in view.root_path.join(relative).as_os_str().as_bytes() {
+        if (0x20..=0x7e).contains(byte) && !matches!(*byte, b'\\' | b'"' | b'\'') {
+            display.push(char::from(*byte));
+        } else {
+            use std::fmt::Write;
+            write!(&mut display, "\\x{byte:02x}").map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(display)
 }
 
 pub(crate) struct ReadPermit {

@@ -56,6 +56,8 @@ pub(super) fn require_namespaces() {
 impl Repository {
     pub(super) fn start() -> Self {
         require_namespaces();
+        std::fs::create_dir_all("/run/lock").unwrap();
+        std::fs::set_permissions("/run/lock", std::fs::Permissions::from_mode(0o1777)).unwrap();
         crate::extension_host::identity::ExtensionIdentityPool::load(
             crate::extension_host::identity::GROUP_GID,
         ).expect("actual isolated reserved NSS identities");

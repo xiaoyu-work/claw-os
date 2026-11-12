@@ -45,6 +45,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
 | `wire/v1/gui_file_read.schema.json`, `wire/v1/gui-selected-read.md` | Draft closed GUI native-node read proposal/status DTOs; thin facades only, protected owner decisions/provider stay Root-owned |
 | `wire/v1/gui_file_write.schema.json`, `wire/v1/gui_file_save.schema.json`, `wire/v1/gui-selected-write.md` | Independent selected-write and exact private atomic-save reservation DTOs; no App-owned approval or directory/delete authority |
+| `wire/v1/gui_file_create.schema.json`, `wire/v1/gui_file_create_slot.schema.json`, `wire/v1/gui-selected-create.md` | Draft one-shot absent-child creation from a metadata directory; protected Root decision, private scratch and canonical atomic NOREPLACE completion |
 | `wire/v1/manifest.schema.json` | Versioned App/MCP service, tool, access, and capability contract |
 | `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
@@ -125,6 +126,14 @@ this is not SDK publication, an artifact/pin adoption, a trusted picker UI or
 write/watch authority through a read facade. The separate draft selected-write
 and reserved-save facades above still require their own Root decision and
 canonical effect checks.
+
+The separate draft creation facades propose only a native parent-directory node
+and one bounded literal UTF-8 leaf. They use independent Root `fs.write` review,
+the same bounded window ledger and a one-shot NOREPLACE scratch slot. Selected
+or reserved is not saved; only verified canonical completion reports `created`.
+Creation grants neither owner-content read nor subsequent overwrite. Generated
+`x-max-utf8-bytes` string constraints keep filename byte bounds consistent
+across the four clients; no lossy name/parent conversion is permitted.
 
 ## Dependencies
 

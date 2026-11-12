@@ -102,3 +102,28 @@ fn selected_write_and_save_cannot_borrow_a_read_reference_or_choose_paths() {
         })).is_err(), "{key}");
     }
 }
+
+#[test]
+fn create_directory_one_and_literal_names_are_closed_without_owner_claims() {
+    let request: super::FileCreateRequest = serde_json::from_str(
+        r#"{"session":"window","parent_node":1.0,"name":"报告 ; '$x'.txt"}"#,
+    ).unwrap();
+    assert_eq!(request.parent_node.get(), 1);
+    assert_eq!(request.name.as_str(), "报告 ; '$x'.txt");
+    for name in ["", ".", "..", "../leaf", "a/b", "a\\b", "a\0b"] {
+        assert!(serde_json::from_value::<super::FileCreateRequest>(serde_json::json!({
+            "session":"window","parent_node":1,"name":name,
+        })).is_err());
+    }
+    assert!(serde_json::from_value::<super::FileCreateRequest>(serde_json::json!({
+        "session":"window","parent_node":1,"name":"é".repeat(128),
+    })).is_err());
+    for field in ["path", "owner_uid", "approved", "expires_in_ms"] {
+        let mut value = serde_json::json!({"session":"window","parent_node":1,"name":"leaf"});
+        value[field] = serde_json::json!(true);
+        assert!(serde_json::from_value::<super::FileCreateRequest>(value).is_err());
+    }
+    assert!(serde_json::from_value::<super::FileCreateStatusRequest>(serde_json::json!({
+        "session":"window","parent_node":1,"selection_id":format!("sw-{}", "d".repeat(32)),
+    })).is_err());
+}

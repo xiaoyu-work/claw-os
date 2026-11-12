@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/gui_file_create_slot.schema.json",
+  "title": "Draft GUI one-shot no-replace creation slot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "reservation_id", "selection_id", "parent_node", "name", "target_name", "expires_in_ms"],
+  "properties": {
+    "version": { "type": "integer", "const": 1, "minimum": 1, "maximum": 1 },
+    "reservation_id": { "type": "string", "pattern": "^ss-[a-f0-9]{32}$", "x-full-match": true },
+    "selection_id": { "type": "string", "pattern": "^sc-[a-f0-9]{32}$", "x-full-match": true },
+    "parent_node": { "type": "integer", "minimum": 1, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "name": { "type": "string", "pattern": "^\\.cos-save-[a-f0-9]{32}$", "x-full-match": true },
+    "target_name": {
+      "type": "string", "minLength": 1, "maxLength": 255, "x-max-utf8-bytes": 255,
+      "pattern": "^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$",
+      "x-full-match": true
+    },
+    "expires_in_ms": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615, "x-rust-type": "u64", "x-go-type": "uint64" }
+  }
+}

@@ -34,7 +34,7 @@ fn peer(protocol: Protocol) -> Peer {
     assert!(!peer.has_global("wp_security_context_manager_v1"));
     let panel = std::env::args()
         .nth(2)
-        .is_some_and(|mode| mode.starts_with("panel"));
+        .is_some_and(|mode| mode.starts_with("panel") || mode == "metadata-subroot");
     assert_eq!(peer.has_global("zwlr_layer_shell_v1"), panel);
     for denied in [
         "zwp_virtual_keyboard_manager_v1",
@@ -761,6 +761,110 @@ fn selected_write() {
     }
 }
 
+fn selected_create() {
+    use std::fs::{File, OpenOptions};
+    use std::os::unix::fs::MetadataExt;
+    use std::time::Instant;
+
+    fn wait_create(pending: &claw_os_sdk::generated::GuiFileCreate) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let status = claw_os_sdk::gui::file_create_status(&pending.selection_id, pending.parent_node).unwrap();
+            if status.state == "selected" { return; }
+            assert_eq!(status.state, "pending");
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn wait_go(marker: &str) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !private_marker(marker).exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").unwrap());
+    let parent = home.join("Projects");
+    let _peer = peer(Protocol::Core);
+    let parent_node = std::fs::metadata(&parent).unwrap().ino();
+    assert_eq!(parent_node, 1, "declared metadata subroot must be a valid create parent");
+    let leaf = "new ; '$draft'.bin";
+    let target = parent.join(leaf);
+    assert!(!target.exists());
+    assert!(std::fs::write(&target, b"metadata must create nothing").is_err());
+    let pending = claw_os_sdk::gui::request_file_create(parent_node, leaf).unwrap();
+    assert_eq!(pending.state, "pending");
+    assert!(!target.exists());
+    std::fs::write(private_marker("create-pending.json"), serde_json::to_vec(&pending).unwrap()).unwrap();
+    wait_create(&pending);
+    let slot = claw_os_sdk::gui::reserve_file_create(&pending.selection_id, parent_node).unwrap();
+    let again = claw_os_sdk::gui::reserve_file_create(&pending.selection_id, parent_node).unwrap();
+    assert_eq!(again.reservation_id, slot.reservation_id);
+    assert!(again.expires_in_ms <= slot.expires_in_ms);
+    assert_eq!(slot.target_name, leaf);
+    assert!(!target.exists());
+    std::fs::write(private_marker("create-slot.json"), serde_json::to_vec(&slot).unwrap()).unwrap();
+    wait_go("create-go");
+    let bytes: Vec<u8> = (0_usize..16387).map(|index| index.wrapping_mul(47).wrapping_add(5) as u8).collect();
+    let scratch = parent.join(&slot.name);
+    let mut temporary = OpenOptions::new().read(true).write(true).create_new(true).open(&scratch).unwrap();
+    temporary.write_all(&bytes).unwrap();
+    temporary.sync_all().unwrap();
+    assert!(std::fs::rename(&scratch, parent.join("unselected-child")).is_err());
+    std::fs::rename(&scratch, &target).unwrap();
+    File::open(&parent).unwrap().sync_all().unwrap();
+    assert_eq!(claw_os_sdk::gui::file_create_status(&pending.selection_id, parent_node).unwrap().state, "created");
+    assert_eq!(std::fs::metadata(&target).unwrap().len(), bytes.len() as u64);
+    assert!(File::open(&target).is_err(), "creation must not mint a read grant");
+    assert!(OpenOptions::new().write(true).open(&target).is_err(), "creation became an overwrite lease");
+    assert!(claw_os_sdk::gui::reserve_file_create(&pending.selection_id, parent_node).is_err());
+    assert!(std::fs::rename(&scratch, &target).is_err(), "committed creation was replayed");
+
+    let race = claw_os_sdk::gui::request_file_create(parent_node, "collision").unwrap();
+    std::fs::write(private_marker("create-race-pending.json"), serde_json::to_vec(&race).unwrap()).unwrap();
+    wait_create(&race);
+    let race_slot = claw_os_sdk::gui::reserve_file_create(&race.selection_id, parent_node).unwrap();
+    let race_path = parent.join(&race_slot.name);
+    let mut race_scratch = OpenOptions::new().write(true).create_new(true).open(&race_path).unwrap();
+    race_scratch.write_all(b"must not replace foreign bytes\0\xff").unwrap();
+    race_scratch.sync_all().unwrap();
+    std::fs::write(private_marker("create-race-slot.json"), serde_json::to_vec(&race_slot).unwrap()).unwrap();
+    wait_go("create-race-go");
+    let error = std::fs::rename(&race_path, parent.join("collision")).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EEXIST));
+    assert_eq!(claw_os_sdk::gui::file_create_status(&race.selection_id, parent_node).unwrap().state, "failed");
+    assert!(File::open(parent.join("collision")).is_err());
+    assert!(claw_os_sdk::gui::reserve_file_create(&race.selection_id, parent_node).is_err());
+    let pending_cleanup = claw_os_sdk::gui::request_file_create(parent_node, "pending-cleanup").unwrap();
+    let unused_cleanup = claw_os_sdk::gui::request_file_create(parent_node, "unused-cleanup").unwrap();
+    assert_eq!(pending_cleanup.state, "pending");
+    assert_eq!(unused_cleanup.state, "pending");
+    std::fs::write(private_marker("create-cleanup-reviews.json"), serde_json::to_vec(
+        &serde_json::json!({"pending":pending_cleanup,"unused":unused_cleanup}),
+    ).unwrap()).unwrap();
+    let group = unsafe { libc::getpgrp() };
+    let (mut ready, mut report) = UnixStream::pair().unwrap();
+    ready.set_read_timeout(Some(DEADLINE)).unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        drop(ready);
+        own_process_group(group);
+        report.write_all(b"ready").unwrap();
+    } else {
+        drop(report);
+        let mut confirmed = [0; 5];
+        ready.read_exact(&mut confirmed).unwrap();
+        assert_eq!(&confirmed, b"ready");
+        std::fs::write(private_marker("selected-create-ready"), b"one-shot native create and no-replace denial").unwrap();
+    }
+    loop {
+        assert!(File::open(&target).is_err());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn native_fs_kernel(view: &str) {
     use std::fs::{File, OpenOptions};
     use std::io::{Seek, SeekFrom};
@@ -1079,6 +1183,7 @@ fn main() {
         "metadata-subroot" => { let _panel = panel(); home_metadata(true); }
         "selected-read" => selected_read(),
         "selected-write" => selected_write(),
+        "selected-create" => selected_create(),
         "package" => package_probe::run(),
         _ => panic!("unknown private GUI probe mode"),
     }

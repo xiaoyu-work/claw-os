@@ -2286,6 +2286,45 @@ routes! {
             super::gui::reserve_file_save(c.params, c.client, authority).await
         },
     }
+    GuiFileCreateRequest {
+        name: "gui.file.create.request",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileCreateRequest,
+        audit: &[("session", FieldRule::Token), ("parent_node", FieldRule::Count), ("name", FieldRule::Size)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::request_file_create(c.params, c.client, authority).await
+        },
+    }
+    GuiFileCreateStatus {
+        name: "gui.file.create.status",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileCreateStatusRequest,
+        audit: &[("session", FieldRule::Token), ("parent_node", FieldRule::Count), ("selection_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::file_create_status(c.params, c.client, authority).await
+        },
+    }
+    GuiFileCreateReserve {
+        name: "gui.file.create.reserve",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileCreateReservationRequest,
+        audit: &[("session", FieldRule::Token), ("parent_node", FieldRule::Count), ("selection_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::reserve_file_create(c.params, c.client, authority).await
+        },
+    }
     SystemFilesystemRead {
         name: "system.filesystem.read",
         access: Access::User,

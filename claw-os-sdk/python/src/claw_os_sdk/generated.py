@@ -155,6 +155,56 @@ class FileChangePlan(_FileChangePlanRequired, total=False):
     changed: Any
     diagnostic: Any
 
+class _GuiFileCreateRequired(TypedDict):
+    version: int
+    selection_id: str
+    parent_node: int
+    name: str
+    access: str
+    state: str
+
+class GuiFileCreate(_GuiFileCreateRequired, total=False):
+    """Draft GUI one-shot regular-file creation.
+
+    Root-owned protected fs.write selection for one absent literal child of this
+    window's metadata directory. Selected or reserved is not saved. Only created
+    reports a verified canonical creation; no content read or overwrite
+    authority is granted.
+    """
+    approval_request_id: str
+    target_display: str
+    expires_in_ms: int
+    reason: str
+
+class GuiFileCreateRequest(TypedDict):
+    """GuiFileCreateRequest.
+    """
+    parent_node: int
+    name: str
+
+class GuiFileCreateStatusRequest(TypedDict):
+    """GuiFileCreateStatusRequest.
+    """
+    selection_id: str
+    parent_node: int
+
+class GuiFileCreateReservationRequest(TypedDict):
+    """GuiFileCreateReservationRequest.
+    """
+    selection_id: str
+    parent_node: int
+
+class GuiFileCreateSlot(TypedDict):
+    """Draft GUI one-shot no-replace creation slot.
+    """
+    version: int
+    reservation_id: str
+    selection_id: str
+    parent_node: int
+    name: str
+    target_name: str
+    expires_in_ms: int
+
 class _GuiFileReadRequired(TypedDict):
     version: int
     selection_id: str
@@ -606,6 +656,13 @@ def validate_file_change_plan_state(value: str) -> None:
     if value not in allowed:
         raise ValueError(f"invalid file_change_plan.state value: {value!r}")
 
+def validate_gui_file_create_state(value: str) -> None:
+    """Raise ValueError if value is not in the gui_file_create.state
+    enum. Mirrors generated::validate_gui_file_create_state."""
+    allowed = ['pending', 'selected', 'created', 'denied', 'stale', 'expired', 'revoked', 'failed', 'uncertain']
+    if value not in allowed:
+        raise ValueError(f"invalid gui_file_create.state value: {value!r}")
+
 def validate_gui_file_read_state(value: str) -> None:
     """Raise ValueError if value is not in the gui_file_read.state
     enum. Mirrors generated::validate_gui_file_read_state."""
@@ -917,6 +974,14 @@ def _validate_wire_schema(
         maximum_length = rule.get("maxLength")
         if isinstance(maximum_length, int) and len(value) > maximum_length:
             raise _wire_error(WIRE_MAX_LENGTH, schema_name, path, f"length must be <= {maximum_length}")
+        maximum_bytes = rule.get("x-max-utf8-bytes")
+        if isinstance(maximum_bytes, int):
+            try:
+                encoded = value.encode("utf-8")
+            except UnicodeEncodeError:
+                raise _wire_error(WIRE_TYPE, schema_name, path, "valid UTF-8 string required") from None
+            if len(encoded) > maximum_bytes:
+                raise _wire_error(WIRE_MAX_LENGTH, schema_name, path, f"UTF-8 length must be <= {maximum_bytes}")
         pattern = rule.get("pattern")
         if isinstance(pattern, str):
             match = re.search(pattern, value)
@@ -982,6 +1047,18 @@ def validate_file_change_plan(value: Any) -> None:
     """Validate a value against wire/v1/file_change_plan.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value, "FileChangePlan", "$")
 
+_WIRE_SCHEMA_GUI_FILE_CREATE: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"GuiFileCreateRequest":{"additionalProperties":false,"properties":{"name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["parent_node","name"],"type":"object"},"GuiFileCreateReservationRequest":{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"},"GuiFileCreateStatusRequest":{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/gui_file_create.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Root-owned protected fs.write selection for one absent literal child of this window's metadata directory. Selected or reserved is not saved. Only created reports a verified canonical creation; no content read or overwrite authority is granted.","properties":{"access":{"const":"create","type":"string"},"approval_request_id":{"maxLength":128,"type":"string"},"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reason":{"maxLength":128,"type":"string"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true},"state":{"enum":["pending","selected","created","denied","stale","expired","revoked","failed","uncertain"],"type":"string"},"target_display":{"description":"Escaped inert presentation, never source identity.","maxLength":16384,"type":"string"},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","selection_id","parent_node","name","access","state"],"title":"Draft GUI one-shot regular-file creation","type":"object"}''')
+
+def validate_gui_file_create(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_create.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_CREATE, _WIRE_SCHEMA_GUI_FILE_CREATE, value, "GuiFileCreate", "$")
+
+_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/gui_file_create_slot.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"name":{"pattern":"^\\.cos-save-[a-f0-9]{32}$","type":"string","x-full-match":true},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reservation_id":{"pattern":"^ss-[a-f0-9]{32}$","type":"string","x-full-match":true},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true},"target_name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","reservation_id","selection_id","parent_node","name","target_name","expires_in_ms"],"title":"Draft GUI one-shot no-replace creation slot","type":"object"}''')
+
+def validate_gui_file_create_slot(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_create_slot.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, _WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, value, "GuiFileCreateSlot", "$")
+
 _WIRE_SCHEMA_GUI_FILE_READ: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"GuiFileReadRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"},"GuiFileReadStatusRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sr-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/gui_file_read.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Root-owned status for one proposed file in this authenticated GUI instance. Pending or an approval request ID is not a selected resource. No owner, window, source path or grant handle is supplied by the App.","properties":{"access":{"const":"read","type":"string"},"approval_request_id":{"maxLength":128,"type":"string"},"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reason":{"maxLength":128,"type":"string"},"selection_id":{"pattern":"^sr-[a-f0-9]{32}$","type":"string","x-full-match":true},"state":{"enum":["pending","selected","denied","stale","expired","revoked"],"type":"string"},"target_display":{"description":"Escaped inert presentation only. Never a source identity or path authority.","maxLength":16384,"type":"string"},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","selection_id","node","access","state"],"title":"Draft GUI selected file read","type":"object"}''')
 
 def validate_gui_file_read(value: Any) -> None:
@@ -1029,6 +1106,24 @@ _WIRE_SCHEMA_TOOL: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os
 def validate_tool(value: Any) -> None:
     """Validate a value against wire/v1/tool.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$")
+
+_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["parent_node","name"],"type":"object"}''')
+
+def validate_gui_file_create_request(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_create_request.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, value, "GuiFileCreateRequest", "$")
+
+_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"}''')
+
+def validate_gui_file_create_status_request(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_create_status_request.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, value, "GuiFileCreateStatusRequest", "$")
+
+_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"}''')
+
+def validate_gui_file_create_reservation_request(value: Any) -> None:
+    """Validate a value against wire/v1/gui_file_create_reservation_request.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, value, "GuiFileCreateReservationRequest", "$")
 
 _WIRE_SCHEMA_GUI_FILE_READ_REQUEST: Dict[str, Any] = decode_wire_json(r'''{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"}''')
 

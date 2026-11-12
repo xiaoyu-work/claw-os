@@ -222,6 +222,15 @@ fn install_packages(package_only: bool) {
                     {"verb":"fs.write","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Write or atomically replace one owner-selected file"}}
                 ]
             });
+            desktop["entries"]["selected-create"] = serde_json::json!({
+                "entry":"gui-probe","exec":"surface","name":{"en":"Private one-shot file creation"},
+                "needs":[{"verb":"fs.meta","scope":{"kind":"owner-path","path":"Projects/**"},
+                    "why":{"en":"Browse only the exact creation parent subroot"}}],
+                "optional_needs":[
+                    {"verb":"fs.read","scope":{"kind":"owner-path","path":"Projects/**"},"why":{"en":"Independent read eligibility"}},
+                    {"verb":"fs.write","scope":{"kind":"owner-path","path":"Projects/**"},"why":{"en":"Protected one-shot file creation"}}
+                ]
+            });
             if package_only {
                 let optional = [
                     "claw-app-acceptance-support", "claw-package-acceptance-side-effect",
@@ -350,7 +359,10 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     if case == 20 {
         caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/display-home/read-delegated/**")));
     }
-    let session = if case == 20 || case == 23 {
+    if case == 24 {
+        caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/Projects/**")));
+    }
+    let session = if case == 20 || case == 23 || case == 24 {
         format!("gui-fixture-parent-{case}-{}", process.pid())
     } else {
         format!("gui-fixture-parent-{case}")
@@ -1340,10 +1352,141 @@ async fn run_selected_write_case(group: &std::fs::File) {
     println!("private GUI case 21: independent selected writes, canonical atomic save, preserved read revisions and checked retirement passed");
 }
 
+async fn run_selected_create_case(group: &std::fs::File) {
+    let home = Path::new("/run/display-home");
+    let source = home.join("Projects");
+    let moved = home.join("Projects-created-moved");
+    let data = home.join(".local/share/cos/apps/gui-boundary-test");
+    let leaf = "new ; '$draft'.bin";
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        if source.exists() { std::fs::remove_dir_all(&source).unwrap(); }
+        std::fs::create_dir(&source).unwrap();
+        for marker in ["create-pending.json","create-slot.json","create-go","create-race-pending.json",
+            "create-race-slot.json","create-race-go","create-cleanup-reviews.json","selected-create-ready"]
+        {
+            let path = data.join(marker);
+            if path.exists() { std::fs::remove_file(path).unwrap(); }
+        }
+    }
+    let (control, child_control) = bootstrap::pair().unwrap();
+    let mut pam = spawn_pam("gui", "24", group, Stdio::from(child_control));
+    assert_eq!(status(&control, &pam, Instant::now() + Duration::from_secs(30)), *b"AUTH");
+    command(&control, b"CASE");
+    command(&control, b"24..");
+    let child = bootstrap::receive(control.as_fd(), *b"CHLD", Instant::now() + Duration::from_secs(5)).unwrap();
+    assert_eq!(kernel::sender(child.credentials).unwrap(), ProcessIdentity::child(&pam).unwrap());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let launcher = loop {
+        let process = ProcessIdentity::from_pidfd(child.descriptor.as_fd()).unwrap();
+        if process.uid() == OWNER && process.gid() == OWNER { break process; }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let parent_session = launch_parent(&launcher, 24);
+    command(&control, b"RUN!");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let metadata = loop {
+        if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER)).into_iter().find(|request|
+            request.verb == "fs.meta" && request.scope == Scope::path("/run/display-home/Projects/**")
+                && request.session.starts_with("app-") && request.operation_digest.is_some())
+        { break request; }
+        assert!(pam.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert!(!source.join(leaf).exists());
+    crate::approvals::approve_for_owner(&metadata.id, crate::approvals::GrantDuration::Once,
+        Some("uid:62050".into()), None, Some(OWNER)).unwrap();
+    wait_marker(&data.join("create-pending.json"), &mut pam);
+    let create: claw_os_sdk::generated::GuiFileCreate =
+        serde_json::from_slice(&std::fs::read(data.join("create-pending.json")).unwrap()).unwrap();
+    assert_eq!(create.parent_node, 1);
+    assert_eq!(create.state, "pending");
+    assert!(!source.join(leaf).exists());
+    let decision = approve_native_resource(create.approval_request_id.as_ref().unwrap()).await;
+    assert_eq!(decision.verb, "fs.write");
+    assert!(decision.operation_digest.is_some());
+    wait_marker(&data.join("create-slot.json"), &mut pam);
+    let slot: claw_os_sdk::generated::GuiFileCreateSlot =
+        serde_json::from_slice(&std::fs::read(data.join("create-slot.json")).unwrap()).unwrap();
+    assert_eq!(slot.target_name, leaf);
+    assert!(!source.join(leaf).exists() && !source.join(&slot.name).exists());
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        std::fs::write(data.join("create-go"), b"go").unwrap();
+    }
+    wait_marker(&data.join("create-race-pending.json"), &mut pam);
+    let race: claw_os_sdk::generated::GuiFileCreate =
+        serde_json::from_slice(&std::fs::read(data.join("create-race-pending.json")).unwrap()).unwrap();
+    let _race_decision = approve_native_resource(race.approval_request_id.as_ref().unwrap()).await;
+    wait_marker(&data.join("create-race-slot.json"), &mut pam);
+    let expected: Vec<u8> = (0_usize..16387).map(|index| index.wrapping_mul(47).wrapping_add(5) as u8).collect();
+    assert_eq!(std::fs::read(source.join(leaf)).unwrap(), expected);
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        std::fs::write(source.join("collision"), b"foreign creation must survive\0\xfe").unwrap();
+        std::fs::write(data.join("create-race-go"), b"go").unwrap();
+    }
+    wait_marker(&data.join("selected-create-ready"), &mut pam);
+    assert_eq!(std::fs::read(source.join("collision")).unwrap(), b"foreign creation must survive\0\xfe");
+    assert!(!source.join("unselected-child").exists() && !home.join(leaf).exists());
+    let retained = retained_instance(&metadata.session);
+    let runtime = Path::new("/run/cos/gui").join(claw_display_control::Epoch(retained.instance.0).label());
+    let context = crate::paths::RoutedPathContext::for_owner(OWNER, home.to_path_buf());
+    let sid = crate::clawd::gui::selected_mutation_session(OWNER, &metadata.session).unwrap();
+    let mutations = context.clone().scope_sync(|| crate::session::iter_mutations(&sid)).unwrap();
+    assert_eq!(mutations.len(), 1);
+    assert!(matches!(&mutations[0].mutation, crate::session::Mutation::FsWrite { path, prev_blob: None }
+        if Path::new(path) == source.join(leaf)));
+    let projection = context.clone().scope_sync(|| crate::session::journal::projection::build(
+        &crate::session::journal::Partition::Session(sid.clone()), OWNER)).unwrap();
+    assert!(projection.health.is_verified());
+    assert_eq!(projection.mutations.len(), 1);
+    assert_eq!(projection.mutations[0].status, "committed");
+    assert_eq!(projection.mutations[0].session_mutation, Some(mutations[0].seq));
+    context.clone().scope_sync(|| {
+        assert!(crate::session::get_caps(&sid).unwrap().is_empty());
+        for session in [&metadata.session, &parent_session] {
+            let caps = crate::proc::session_info_by_id(session).unwrap().caps.unwrap();
+            assert!(!caps.covers(&Cap::new(Verb::FS_WRITE, Scope::path("/run/display-home/Projects/**"))));
+        }
+    });
+    let reviews: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(data.join("create-cleanup-reviews.json")).unwrap()).unwrap();
+    let pending_id = reviews["pending"]["approval_request_id"].as_str().unwrap();
+    let unused_id = reviews["unused"]["approval_request_id"].as_str().unwrap();
+    approve_native_resource(unused_id).await;
+    let group_path = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
+    let processes: Vec<OwnedFd> = std::fs::read_to_string(group_path.join("cgroup.procs")).unwrap().lines().map(|pid| {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid.parse::<i32>().unwrap(), 0) };
+        assert!(fd >= 0);
+        unsafe { OwnedFd::from_raw_fd(fd as i32) }
+    }).collect();
+    assert!(processes.len() >= 3);
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        std::fs::rename(&source, &moved).unwrap();
+    }
+    command(&control, b"WAIT");
+    assert_eq!(status(&control, &pam, Instant::now() + Duration::from_secs(30)), *b"FAIL");
+    assert!(!runtime.exists());
+    for process in processes { assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap()); }
+    assert!(matches!(crate::approvals::status_for_owner(pending_id, Some(OWNER)), crate::approvals::RequestStatus::Denied));
+    assert!(matches!(crate::approvals::status_for_owner(unused_id, Some(OWNER)), crate::approvals::RequestStatus::Consumed));
+    assert_eq!(std::fs::read(moved.join(leaf)).unwrap(), expected);
+    assert_eq!(std::fs::read(moved.join("collision")).unwrap(), b"foreign creation must survive\0\xfe");
+    assert_eq!(context.scope_sync(|| crate::session::get_meta(&sid)).unwrap().status, crate::session::Status::Done);
+    command(&control, b"CLSE");
+    assert!(pam.wait().unwrap().success());
+    println!("private GUI case 24: protected absent-child creation, atomic no-replace, canonical Missing inverse and checked closing cleanup passed");
+}
+
 async fn run_case(case: usize, group: &std::fs::File) {
     if case == 19 || case == 23 { return run_home_metadata_case(group, case).await; }
     if case == 20 { return run_selected_read_case(group).await; }
     if case == 21 { return run_selected_write_case(group).await; }
+    if case == 24 { return run_selected_create_case(group).await; }
     let (control, child_control) = bootstrap::pair().unwrap();
     let mut pam = spawn_pam("gui", &case.to_string(), group, Stdio::from(child_control));
     assert_eq!(
@@ -2093,7 +2236,7 @@ fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, pac
         if !package_only && !session_only && !file_manager_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
-            for case in (0..20).chain([23, 20, 21]) {
+            for case in (0..20).chain([23, 20, 21, 24]) {
                 let group = session_group(root, &case.to_string());
                 run_case(case, &group).await;
             }

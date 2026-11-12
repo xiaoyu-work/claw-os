@@ -6,6 +6,8 @@
       "budget_show",
       "envelope",
       "file_change_plan",
+      "gui_file_create",
+      "gui_file_create_slot",
       "gui_file_read",
       "gui_file_save",
       "gui_file_write",
@@ -16,6 +18,9 @@
       "tool"
     ],
     "targets": [
+      { "name": "gui_file_create_request", "schema": "gui_file_create", "path": ["$defs", "GuiFileCreateRequest"] },
+      { "name": "gui_file_create_status_request", "schema": "gui_file_create", "path": ["$defs", "GuiFileCreateStatusRequest"] },
+      { "name": "gui_file_create_reservation_request", "schema": "gui_file_create", "path": ["$defs", "GuiFileCreateReservationRequest"] },
       { "name": "gui_file_read_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadRequest"] },
       { "name": "gui_file_read_status_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadStatusRequest"] },
       { "name": "gui_file_write_request", "schema": "gui_file_write", "path": ["$defs", "GuiFileWriteRequest"] },

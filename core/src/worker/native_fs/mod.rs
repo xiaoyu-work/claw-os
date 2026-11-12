@@ -23,8 +23,10 @@ mod metadata_scope;
 pub(crate) use metadata_scope::MetadataRoot;
 mod selected_read;
 mod selected_write;
+mod selected_create;
 pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider};
 pub(crate) use selected_write::{WriteLeaseCheck, WritePermit};
+pub(crate) use selected_create::{CreateCandidate, CreatePermit, CreationState};
 
 struct Binding {
     process: workload::InstanceProcess,
@@ -48,6 +50,7 @@ struct ChosenWrite {
 struct SaveTarget {
     relative: PathBuf,
     target: PathBuf,
+    creation: Option<String>,
 }
 
 struct BackingStage {
@@ -87,6 +90,7 @@ struct Shared {
     polls: Mutex<BTreeMap<u64, backend::Subscription>>,
     notifier: Mutex<Option<fuser::Notifier>>,
     selected_reads: Mutex<BTreeMap<String, selected_read::GrantedRead>>,
+    creations: Mutex<BTreeMap<String, Arc<selected_create::CreateLease>>>,
     selected_expiry: Mutex<Option<Instant>>,
     revoked: AtomicBool,
     ended: AtomicBool,
@@ -431,6 +435,7 @@ impl NativeFsView {
             polls: Mutex::new(BTreeMap::new()),
             notifier: Mutex::new(None),
             selected_reads: Mutex::new(BTreeMap::new()),
+            creations: Mutex::new(BTreeMap::new()),
             selected_expiry: Mutex::new(None),
             revoked: AtomicBool::new(false),
             ended: AtomicBool::new(false),

@@ -64,9 +64,10 @@ renewal. Whole checked cgroup retirement governs cached/mapped bytes. Pending
 and unused owner reviews retire with the window, and failed cleanup retains
 custody. Legacy scalar filesystem RPC remains refused in the controlled GUI.
 
-This increment selects existing files only. Save As/new owner-file creation,
-directories, delete/general rename/watch and Desktop-subroot metadata remain
-separate gates. The canonical inverse path is UTF-8: non-UTF8 write targets
+This existing-file API never creates absent owner files. The separate
+[one-shot creation draft](gui-selected-create.md) covers an exact absent child
+without overwrite. Directory CRUD, delete/general rename/watch and completed
+native product adoption remain separate gates. The canonical inverse path is UTF-8: non-UTF8 write targets
 refuse before effect without lossy conversion; metadata and selected reads
 continue to use byte-safe identities. Owner-write-only files that cannot supply
 an owner-readable inverse are likewise refused, not snapshotted as Root.
