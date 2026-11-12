@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, readlink, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -267,11 +267,30 @@ async function installedProduct() {
   let spawnError;
   chrome.on("error", (error) => { spawnError = error; });
   const exited = once(chrome, "close").catch(() => {});
-  const startupFailure = () => JSON.stringify({
-    message: "Installed-App Chromium did not become ready",
-    spawn_error: spawnError?.code, exit_code: chrome.exitCode, signal: chrome.signalCode,
-    untrusted_browser_stderr_tail: browserStderr.toString("utf8"),
-  });
+  const startupFailure = async () => {
+    const read = async (filename) => {
+      try { return (await readFile(filename)).subarray(0, 4096).toString("utf8"); }
+      catch (error) { return { unavailable: error.code }; }
+    };
+    const processState = async (pid) => ({
+      pid,
+      executable: await readlink(`/proc/${pid}/exe`).catch((error) => ({ unavailable: error.code })),
+      stat: await read(`/proc/${pid}/stat`), status: await read(`/proc/${pid}/status`),
+      wchan: await read(`/proc/${pid}/wchan`), syscall: await read(`/proc/${pid}/syscall`),
+      cmdline: await read(`/proc/${pid}/cmdline`),
+    });
+    const pid = !spawnError && chrome.exitCode === null && chrome.signalCode === null ? chrome.pid : undefined;
+    const raw = pid ? await read(`/proc/${pid}/task/${pid}/children`) : "";
+    const children = typeof raw === "string" ? raw.trim().split(/\s+/)
+      .filter((pid) => /^[1-9][0-9]*$/.test(pid)).slice(0, 16) : [];
+    return JSON.stringify({
+      message: "Installed-App Chromium did not become ready",
+      spawn_error: spawnError?.code, exit_code: chrome.exitCode, signal: chrome.signalCode,
+      untrusted_browser_stderr_tail: browserStderr.toString("utf8"),
+      process: pid ? await processState(pid) : null,
+      child_limit: 16, children: await Promise.all(children.map(processState)),
+    });
+  };
   let socket;
   let send;
   const issues = [];
@@ -279,12 +298,12 @@ async function installedProduct() {
     let port;
     for (let attempt = 0; attempt < 100; attempt++) {
       if (spawnError || chrome.exitCode !== null || chrome.signalCode !== null) {
-        throw new Error(startupFailure());
+        throw new Error(await startupFailure());
       }
       try { port = (await readFile(path.join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]; break; } catch {}
       await delay(100);
     }
-    assert.ok(port, startupFailure());
+    assert.ok(port, port ? undefined : await startupFailure());
     const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     socket = new WebSocket(tabs.find((tab) => tab.type === "page").webSocketDebuggerUrl);
     await once(socket, "open");
