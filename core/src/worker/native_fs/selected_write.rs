@@ -36,6 +36,8 @@ impl WritePermit {
         {
             return Err("selected write requires a spent ordinary write decision".into());
         }
+        candidate.view.upgrade().ok_or("native view has retired")?
+            .live().map_err(|_| "native view source or lease ended")?;
         let fresh = check.authorize()?;
         if fresh.spent() != std::slice::from_ref(capability) {
             return Err("write selection has another capability".into());
@@ -67,6 +69,7 @@ impl WriteLease {
     }
 
     pub(super) fn authorize(&self) -> Result<Authorized, i32> {
+        self.candidate.view.upgrade().ok_or(libc::EACCES)?.live()?;
         if self.expired() {
             return Err(libc::EACCES);
         }
@@ -89,6 +92,7 @@ impl ReadProvider {
     pub(crate) fn install_write(&self, selection: &str, permit: WritePermit) -> Result<(), String> {
         let shared = self.shared.upgrade().ok_or("native view has retired")?;
         shared.controller()?;
+        shared.live().map_err(io_message)?;
         let view = permit
             .candidate
             .view
@@ -258,6 +262,7 @@ pub(super) fn permission(
     path: &Path,
     pin: &File,
 ) -> Result<Option<WriteLease>, i32> {
+    shared.live()?;
     let expected = backend::identity(pin)?;
     let writes = shared.writes.lock().map_err(|_| libc::EIO)?;
     for write in writes.iter().filter(|write| write.relative == path) {

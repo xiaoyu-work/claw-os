@@ -15,23 +15,85 @@ use crate::clawd::app_sessions::gui::Registration;
 use crate::clawd::authority::GrantView;
 use crate::clawd::protocol::BrokerError;
 use crate::display_session::runtime::{Runtime, Socket};
-use crate::worker::native_fs::NativeFsView;
+use crate::worker::native_fs::{MetadataRoot, NativeFsView};
 use crate::worker::{LaunchPolicy, LaunchResources, Mount, MountClass};
 
 struct Declaration {
     cap: Cap,
     digest: String,
-    identity: (u64, u64),
+    source: MetadataRoot,
 }
 
-fn declares_home_metadata(selected: &crate::caps::manifest::GuiEntry<'_>, scope: &Scope) -> bool {
-    !selected.legacy_needs && selected.launch_needs().any(|need| {
-        need.verb == Verb::FS_META && match &need.scope {
-            ScopeBinding::OwnerPath { path } => path == "**",
-            ScopeBinding::Fixed { scope: declared } => declared == scope,
-            _ => false,
+fn controlled_metadata_scope(
+    selected: &crate::caps::manifest::GuiEntry<'_>,
+    home: &Path,
+    caps: &CapSet,
+) -> Result<Option<(Cap, PathBuf)>, String> {
+    if selected.legacy_needs {
+        return Ok(None);
+    }
+    let mut controlled: Option<(Cap, PathBuf)> = None;
+    for need in selected.launch_needs().filter(|need| need.verb == Verb::FS_META) {
+        let scope = match &need.scope {
+            ScopeBinding::OwnerPath { path } => {
+                let resolved = crate::caps::manifest::resolve_owner_path(
+                    need.verb, path, &crate::caps::args::PathContext { home: home.to_path_buf(), cwd: None },
+                )?;
+                let literal = Scope::path(home.join(path).to_str()
+                    .ok_or("GUI metadata scope is not UTF-8")?);
+                if resolved != literal {
+                    return Err("GUI metadata subroots cannot resolve through aliases".into());
+                }
+                resolved
+            }
+            ScopeBinding::Fixed { scope } => scope.clone(),
+            _ => continue,
+        };
+        if !beneath_home(&scope, home) {
+            continue;
         }
-    })
+        let Scope::Path(path) = &scope else { continue };
+        let root = Path::new(path.strip_suffix("/**")
+            .ok_or("GUI metadata requires an explicit recursive directory scope")?);
+        let relative = root.strip_prefix(home)
+            .map_err(|_| "GUI metadata scope escapes authenticated owner Home")?;
+        MetadataRoot::validate_relative(relative)?;
+        if !root.is_absolute() || home.join(relative).as_os_str() != root.as_os_str() {
+            return Err("GUI metadata requires a canonical owner-relative directory scope".into());
+        }
+        let cap = Cap::new(Verb::FS_META, scope.clone());
+        if !caps.iter().any(|granted| granted == &cap) {
+            return Err("GUI metadata requires this surface's exact bound metadata capability".into());
+        }
+        if controlled.as_ref().is_some_and(|(previous, _)| previous != &cap) {
+            return Err("a GUI window supports only one filtered metadata root".into());
+        }
+        controlled = Some((cap, relative.to_path_buf()));
+    }
+    if let Some((cap, _)) = &controlled {
+        if caps.iter().any(|granted| granted.verb == Verb::FS_META
+            && beneath_home(&granted.scope, home) && granted != cap)
+        {
+            return Err("overlapping or multiple GUI metadata roots are unsupported".into());
+        }
+    }
+    Ok(controlled)
+}
+
+fn validate_subroot(home: &Path, relative: &Path) -> Result<(), String> {
+    if relative.as_os_str().is_empty() {
+        return Ok(());
+    }
+    let root = home.join(relative);
+    crate::worker::derive::reject_forbidden_for_owner(&root, home)?;
+    let metadata = std::fs::symlink_metadata(&root).map_err(|error| error.to_string())?;
+    if !metadata.is_dir()
+        || root.canonicalize().map_err(|error| error.to_string())?.as_os_str()
+            != root.as_os_str()
+    {
+        return Err("GUI metadata subroot must be an existing non-symlink directory".into());
+    }
+    Ok(())
 }
 
 fn beneath_home(scope: &Scope, home: &Path) -> bool {
@@ -81,9 +143,14 @@ fn declaration(
     registration: &Registration,
     instance: InstanceId,
 ) -> Result<Option<Declaration>, String> {
-    let scope = home_scope(registration)?;
-    let cap = Cap::new(Verb::FS_META, scope.clone());
-    if !registration.caps.iter().any(|granted| granted == &cap) {
+    let home_scope = home_scope(registration)?;
+    let selected = registration
+        .launch
+        .manifest()
+        .gui_entry(registration.gui_entry.as_deref())?;
+    let Some((cap, relative)) = controlled_metadata_scope(
+        &selected, &registration.home, &registration.caps,
+    )? else {
         let bare = Cap::new(
             Verb::FS_META,
             Scope::path(
@@ -94,10 +161,6 @@ fn declaration(
             ),
         );
         if registration.caps.iter().any(|granted| granted == &bare) {
-            let selected = registration
-                .launch
-                .manifest()
-                .gui_entry(registration.gui_entry.as_deref())?;
             if selected.legacy_needs || selected.launch_needs().any(|need| {
                 need.verb == Verb::FS_META
                     && matches!(&need.scope, ScopeBinding::Fixed { scope } if scope == &bare.scope)
@@ -107,47 +170,36 @@ fn declaration(
                 );
             }
         }
-        return Ok(None);
-    }
-    let selected = registration
-        .launch
-        .manifest()
-        .gui_entry(registration.gui_entry.as_deref())?;
-    let explicit = declares_home_metadata(&selected, &scope);
-    if !explicit {
-        if !selected.legacy_needs
-            && selected.optional_needs.iter().any(|need| {
+        if registration.caps.iter().any(|granted|
+            granted == &Cap::new(Verb::FS_META, home_scope.clone()))
+        {
+            if !selected.legacy_needs && selected.optional_needs.iter().any(|need| {
                 need.verb == Verb::FS_META
                     && need.when.is_none()
                     && match &need.scope {
                         ScopeBinding::OwnerPath { path } => path == "**",
-                        ScopeBinding::Fixed { scope: declared } => declared == &scope,
+                        ScopeBinding::Fixed { scope: declared } => declared == &home_scope,
                         _ => false,
                     }
             })
-        {
-            // Optional startup authority is not a request for a new prompt.
-            return Ok(None);
+            {
+                return Ok(None);
+            }
+            return Err(
+                "Home metadata requires an explicit bound need of this signed GUI surface".into(),
+            );
         }
-        return Err(
-            "Home metadata requires an explicit bound need of this signed GUI surface".into(),
-        );
-    }
+        raw_mount_caps(&registration.home, &registration.caps, false)?;
+        return Ok(None);
+    };
     let binding = registration.launch.bind(&[selected.entry.to_string()])?;
     if binding.is_developer() {
         return Err("Home metadata requires a signed installed GUI surface".into());
     }
     refuse_unsupported_home_needs(&selected, &registration.home, &registration.caps)?;
-    let metadata = {
-        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(registration.owner())?;
-        std::fs::metadata(&registration.home).map_err(|error| error.to_string())?
-    };
-    if !metadata.is_dir() || metadata.uid() != registration.owner() {
-        return Err("GUI Home metadata source does not belong to its authenticated owner".into());
-    }
-    let identity = (metadata.dev(), metadata.ino());
+    let source = MetadataRoot::pin(registration.owner(), &registration.home, &relative)?;
     let material = serde_json::to_vec(&serde_json::json!([
-        "gui.home-metadata.v1",
+        "gui.home-metadata.v2",
         registration.owner(),
         registration.session_id,
         Epoch(instance.0).label(),
@@ -157,7 +209,9 @@ fn declaration(
         selected.entry,
         registration.selector,
         registration.home,
-        identity,
+        cap.scope,
+        source.relative(),
+        source.identities()?,
         registration.launcher.pid(),
         registration.launcher.start_ticks(),
     ]))
@@ -165,7 +219,7 @@ fn declaration(
     Ok(Some(Declaration {
         cap,
         digest: hex::encode(Sha256::digest(material)),
-        identity,
+        source,
     }))
 }
 
@@ -201,7 +255,7 @@ pub(super) fn admit(registration: &Registration, instance: InstanceId) -> Result
         Some(request) => request.id,
         None => crate::approvals::submit_owned_with_context_for_operation(
             declaration.cap.verb, declaration.cap.scope, registration.session_id.clone(),
-            "Browse Home names and metadata for this GUI window; no file content read, write, delete or execution",
+            "Browse names and metadata within this declared Home directory for this GUI window; no file content read, write, delete or execution",
             Some(format!("GUI {} {} window {}", registration.launch.app_id(),
                 registration.selector, Epoch(instance.0).label())),
             owner, None, Some(&declaration.digest),
@@ -286,9 +340,12 @@ pub(super) fn validate_optional_mounts(
 ) -> Result<(), String> {
     let selected = app.manifest.gui_entry(entry)?;
     let scope = Scope::path(format!("{}/**", home.to_str().ok_or("GUI Home is not UTF-8")?.trim_end_matches('/')));
-    let controlled = declares_home_metadata(&selected, &scope)
-        && caps.iter().any(|cap| cap == &Cap::new(Verb::FS_META, scope.clone()));
-    if controlled { refuse_unsupported_home_needs(&selected, home, caps)?; }
+    let metadata = controlled_metadata_scope(&selected, home, caps)?;
+    let controlled = metadata.is_some();
+    if let Some((_, relative)) = &metadata {
+        validate_subroot(home, relative)?;
+        refuse_unsupported_home_needs(&selected, home, caps)?;
+    }
     // Missing paths may resolve to no mounts; eligibility still binds the scope.
     if !controlled && caps.iter().any(|cap| {
         matches!(cap.verb, Verb::FS_META | Verb::FS_READ | Verb::FS_WRITE | Verb::FS_DELETE | Verb::FS_WATCH | Verb::FS_EXEC)
@@ -367,10 +424,8 @@ impl HomeMetadata {
             .map_err(|error| error.to_string())?;
         self.identity = Some((metadata.dev(), metadata.ino()));
         self.view = Some(NativeFsView::create_home_metadata(
-            registration.owner(),
-            &registration.home,
+            &self.consent.declaration.source,
             &self.path,
-            self.consent.declaration.identity,
             self.consent.ceiling,
         )?);
         Ok(())
@@ -385,10 +440,10 @@ impl HomeMetadata {
             return Err("GUI Home metadata provider is not mounted".into());
         }
         refuse_raw_home(policy, &registration.home, true)?;
-        // Home must precede the already-private nested App data bind.
+        // The filtered root must precede any already-private nested App data bind.
         policy.mounts.insert(
             0,
-            Mount::read_write(&self.path, &registration.home, MountClass::Output),
+            Mount::read_write(&self.path, self.consent.declaration.source.path(), MountClass::Output),
         );
         Ok(())
     }
@@ -413,6 +468,7 @@ impl HomeMetadata {
         {
             return Err("this window's Home metadata consent expired or was revoked".into());
         }
+        self.consent.declaration.source.revalidate()?;
         Ok(())
     }
 
@@ -433,7 +489,7 @@ impl HomeMetadata {
         self.refresh(registration, grant)?;
         let selected = crate::clawd::gui::selected_read::SelectedReads::new(
             registration.clone(), instance, process.clone(), resources.gui_cgroup()?,
-            view.read_provider()?, self.consent.ceiling, grant,
+            view.read_provider()?, self.consent.declaration.cap.clone(), self.consent.ceiling, grant,
         )?;
         self.selected_reads.set(selected.clone()).map_err(|_| "selected read endpoint already bound")?;
         Ok(selected)
@@ -522,4 +578,9 @@ impl HomeMetadata {
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/clawd/gui_metadata.rs"));
 }

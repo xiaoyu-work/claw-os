@@ -98,7 +98,9 @@ grants filesystem access, defeats protected-store checks or supplies a user bus.
 ### Filtered Home metadata
 
 A signed surface's explicit unconditional mandatory `fs.meta` need for the
-authenticated owner's `Home/**` may select the read-only filtered native view.
+authenticated owner's `Home/**` or one literal `Home/subdirectory/**` may select
+the read-only filtered native view. The exact mandatory capability, not a broader
+Home grant or optional declaration, binds that one directory.
 Legacy operation unions, optional needs, App identity and broad parent rights
 do not prove this window's browsing consent. Before changing Reserved to
 Starting, `supervision::admit_home_metadata` uses the ordinary protected
@@ -117,10 +119,14 @@ raw directory or inventing a selected-content grant.
 
 A protected outer setup gate lets Root bind the exact normal-UID runner and
 checked instance cgroup before bubblewrap can inspect the FUSE source.
-Owner-Home metadata subroots such as `Desktop/**` remain unsupported. Without
-the exact filtered Home view, Home-child metadata scopes refuse before mount
-derivation; they neither become readable raw binds nor request broader Home
-consent. A separate `ui.panel` declaration changes no filesystem eligibility.
+The source pins retain both authenticated Home and the exact declared directory.
+Subroots must exist, be owner-owned directories and resolve without symlinks,
+protected roots or aliases. Distinct overlapping or multiple mandatory metadata
+roots refuse rather than widening the one-view node API. Inode 1 is precisely
+the declared directory; Root-held node/candidate names remain relative to
+authenticated Home, not relabelled relative to the subroot. Uncontrolled
+Home-child metadata still refuses before raw mount derivation, including absent
+paths. A separate `ui.panel` declaration changes no filesystem eligibility.
 Releasing setup does not release App code: the existing inner App gate still
 waits for transport, live grant and creator installation. Every metadata lease
 renewal follows a fresh registration snapshot and exact window-consent check;
@@ -163,8 +169,8 @@ unused approved decisions, preserving the original owner decision as evidence.
 The controlled Home path suppresses all beneath-Home filesystem capabilities
 from raw bind derivation, not from capability authority. Optional registration
 resource validation uses that same projection only for an explicitly mandatory
-Home-metadata surface; it neither grants metadata nor replaces later protected
-window admission. Unrelated paths retain ordinary mount/protected-resource
+Home or Home-subroot metadata surface; it neither grants metadata nor replaces
+later protected window admission. Unrelated paths retain ordinary mount/protected-resource
 validation. Raw Home refusal is unchanged. The controlled broker also refuses
 legacy scalar filesystem read/write/replace so those routes cannot turn a broad
 startup cap into selected content. Watch and general mutations remain closed.

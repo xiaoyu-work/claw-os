@@ -132,7 +132,9 @@ fn request_leader(pid: u32) -> Result<i32, i32> {
 
 fn checked_object(shared: &Shared, file: &File) -> Result<(), i32> {
     let actual = fd_path(file)?;
-    if !actual.starts_with(&shared.root_path) {
+    let boundary = shared.metadata_root.as_ref()
+        .map_or(shared.root_path.as_path(), |source| source.path());
+    if !actual.starts_with(boundary) {
         return Err(libc::EACCES);
     }
     crate::worker::derive::reject_forbidden_for_owner(&actual, &shared.owner_home)
@@ -167,7 +169,13 @@ fn relative_parts(path: &Path) -> Result<Vec<&OsStr>, i32> {
 /// Every component is opened relative to retained descriptors under owner
 /// credentials. No caller path is continued by the kernel after inspection.
 pub(super) fn open_relative(shared: &Shared, path: &Path, readable: bool) -> Result<File, i32> {
-    walk(shared, &shared.root, path, readable)
+    if let Some(source) = &shared.metadata_root {
+        // Keep authorization Home-relative; strip the prefix only for descriptor IO.
+        let local = path.strip_prefix(&source.relative).map_err(|_| libc::EACCES)?;
+        walk(shared, &source.root, local, readable)
+    } else {
+        walk(shared, &shared.root, path, readable)
+    }
 }
 
 fn walk(shared: &Shared, base: &File, path: &Path, readable: bool) -> Result<File, i32> {
@@ -176,10 +184,16 @@ fn walk(shared: &Shared, base: &File, path: &Path, readable: bool) -> Result<Fil
     if fd_path(&shared.root)? != shared.root_path {
         return Err(libc::ESTALE);
     }
+    if let Some(source) = &shared.metadata_root {
+        if fd_path(&source.root)? != source.root_path {
+            return Err(libc::ESTALE);
+        }
+    }
     checked_object(shared, base)?;
     let parts = relative_parts(path)?;
     let mut file = base.try_clone().map_err(errno)?;
     if parts.is_empty() && readable {
+        drop(_identity);
         return reopen(shared, &file);
     }
     for (index, name) in parts.iter().enumerate() {
@@ -197,6 +211,7 @@ fn walk(shared: &Shared, base: &File, path: &Path, readable: bool) -> Result<Fil
             .map_err(errno)?;
         checked_object(shared, &file)?;
     }
+    drop(_identity);
     shared.live()?;
     Ok(file)
 }
@@ -933,19 +948,23 @@ pub(super) fn observe(shared: &Shared) -> Result<(), String> {
 
 impl Filesystem {
     pub(super) fn new(shared: Arc<Shared>) -> Result<Self, String> {
-        let root = shared.root.try_clone().map_err(|error| error.to_string())?;
+        let (root, relative) = if let Some(source) = &shared.metadata_root {
+            (source.root.try_clone().map_err(|error| error.to_string())?, source.relative.clone())
+        } else {
+            (shared.root.try_clone().map_err(|error| error.to_string())?, PathBuf::new())
+        };
         let filesystem = Self {
             shared,
             nodes: BTreeMap::from([(
                 1,
                 Node {
-                    relative: PathBuf::new(),
+                    relative: relative.clone(),
                     pin: root,
                     save: None,
                     detached: false,
                 },
             )]),
-            names: BTreeMap::from([(PathBuf::new(), 1)]),
+            names: BTreeMap::from([(relative, 1)]),
             handles: BTreeMap::new(),
             next_inode: 2,
             next_handle: 1,
@@ -1820,9 +1839,10 @@ impl fuser::Filesystem for Filesystem {
     fn statfs(&mut self, req: &Request<'_>, inode: u64, reply: ReplyStatfs) {
         let result = self.authorize(req, true, false).and_then(|_| {
             let _node = self.node_file(inode, false)?;
+            let root = self.node_file(1, false)?;
             let _owner = FsIdentityGuard::enter(self.shared.owner).map_err(|_| libc::EACCES)?;
             let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
-            if unsafe { libc::fstatvfs(self.shared.root.as_raw_fd(), &mut stats) } != 0 {
+            if unsafe { libc::fstatvfs(root.as_raw_fd(), &mut stats) } != 0 {
                 return Err(errno(std::io::Error::last_os_error()));
             }
             let sizes = (
@@ -1830,6 +1850,7 @@ impl fuser::Filesystem for Filesystem {
                 u32::try_from(stats.f_namemax).map_err(|_| libc::EOVERFLOW)?,
                 u32::try_from(stats.f_frsize).map_err(|_| libc::EOVERFLOW)?,
             );
+            drop(_owner);
             self.shared.live()?;
             Ok((stats, sizes))
         });

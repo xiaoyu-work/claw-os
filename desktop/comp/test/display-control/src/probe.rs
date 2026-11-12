@@ -325,7 +325,7 @@ fn file_manager(args: &[String]) {
     println!("private FileManager1 signed GUI completed");
 }
 
-fn home_metadata() {
+fn home_metadata(subroot: bool) {
     use std::fs::File;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -335,20 +335,32 @@ fn home_metadata() {
     assert_ne!(home, private);
     assert_eq!(private, PathBuf::from(std::env::var_os("COS_DATA_DIR").unwrap()));
     assert!(!std::path::Path::new("/dev/fuse").exists());
-    let names = std::fs::read_dir(&home).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+    let root = if subroot { home.join("Projects/review") } else { home.clone() };
+    let prefix = if subroot { "subroot-metadata" } else { "metadata" };
+    let names = std::fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
     assert!(names.iter().any(|name| name == "metadata-visible"));
     for protected in [b".ssh".as_slice(), b"metadata-symlink", b"metadata-hardlink"] {
         assert!(!names.iter().any(|name| name.as_bytes() == protected));
     }
-    let visible = home.join("metadata-visible");
+    let visible = root.join("metadata-visible");
     assert_eq!(std::fs::metadata(&visible).unwrap().len(), b"metadata is not content\0\xff".len() as u64);
     assert!(File::open(&visible).is_err());
     assert!(std::fs::write(&visible, b"metadata never grants write").is_err());
-    assert!(std::fs::write(home.join("metadata-new-file"), b"no creation authority").is_err());
-    assert!(std::fs::metadata(home.join(".ssh/secret")).is_err());
-    assert!(std::fs::metadata(home.join(".config/cos")).is_err());
-    let directory = File::open(&home).unwrap();
+    assert!(std::fs::write(root.join("metadata-new-file"), b"no creation authority").is_err());
+    assert!(std::fs::metadata(root.join(".ssh/secret")).is_err());
+    assert!(std::fs::metadata(root.join(".config/cos")).is_err());
+    let directory = File::open(&root).unwrap();
+    let mut retained_entries = std::fs::read_dir(&root).unwrap();
+    let saved_entry = retained_entries.next().map(|entry| entry.unwrap().file_name());
+    assert!(saved_entry.is_some());
     assert!(directory.metadata().unwrap().is_dir());
+    assert_eq!(directory.metadata().unwrap().ino(), 1, "inode 1 must be precisely the declared root");
+    if subroot {
+        for path in [home.join("metadata-visible"), home.join("Projects/metadata-outside"),
+            root.join("../metadata-outside")] {
+            assert!(std::fs::metadata(path).is_err(), "metadata escaped the declared subroot");
+        }
+    }
     let mut filesystem: libc::statfs = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::fstatfs(directory.as_raw_fd(), &mut filesystem) }, 0);
     assert_eq!(filesystem.f_type as u64, 0x6573_5546,
@@ -356,13 +368,19 @@ fn home_metadata() {
     let mut capacity: libc::statvfs = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::fstatvfs(directory.as_raw_fd(), &mut capacity) }, 0);
     assert!(capacity.f_blocks > 0 && capacity.f_bsize > 0 && capacity.f_frsize > 0);
-    std::fs::write(private_marker("metadata-statfs.json"), serde_json::to_vec(&serde_json::json!({
+    std::fs::write(private_marker(&format!("{prefix}-statfs.json")), serde_json::to_vec(&serde_json::json!({
         "blocks":capacity.f_blocks, "bsize":capacity.f_bsize,
         "frsize":capacity.f_frsize, "namelen":capacity.f_namemax,
     })).unwrap()).unwrap();
     let _peer = peer(Protocol::Core);
-    assert!(claw_os_sdk::gui::request_file_read(std::fs::metadata(&visible).unwrap().ino()).is_err(),
-        "this metadata-only surface has no declared content-read authority");
+    for guessed in [0, 1, 4096] {
+        assert!(claw_os_sdk::gui::request_file_read(guessed).is_err(),
+            "guessing nodes must not discover a parent or another part of Home");
+    }
+    if !subroot {
+        assert!(claw_os_sdk::gui::request_file_read(std::fs::metadata(&visible).unwrap().ino()).is_err(),
+            "this metadata-only surface has no declared content-read authority");
+    }
     let group = unsafe { libc::getpgrp() };
     let (mut ready, mut report) = UnixStream::pair().unwrap();
     ready.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -381,8 +399,49 @@ fn home_metadata() {
     ready.read_exact(&mut confirmed).unwrap();
     assert_eq!(&confirmed, b"ready");
     drop(ready);
-    std::fs::write(private_marker("metadata-ready"), b"metadata-only authenticated window").unwrap();
-    loop { std::thread::sleep(Duration::from_secs(1)); }
+    std::fs::write(private_marker(&format!("{prefix}-ready")), b"metadata-only authenticated window").unwrap();
+    let _selected = if subroot {
+        let ungranted: Vec<usize> = serde_json::from_str(
+            &std::env::var("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap()).unwrap();
+        assert_eq!(ungranted, [0, 1, 2, 3], "optional declarations must not become startup grants");
+        let node = std::fs::metadata(&visible).unwrap().ino();
+        let pending = claw_os_sdk::gui::request_file_read(node).unwrap();
+        assert_eq!(pending.state, "pending");
+        let status: serde_json::Value = serde_json::to_value(&pending).unwrap();
+        assert_eq!(status["target_display"], visible.to_str().unwrap());
+        std::fs::write(private_marker("subroot-metadata-pending.json"), serde_json::to_vec(&pending).unwrap()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            let status = claw_os_sdk::gui::file_read_status(&pending.selection_id, node).unwrap();
+            if status.state == "selected" { break; }
+            assert_eq!(status.state, "pending");
+            assert!(File::open(&visible).is_err());
+            assert!(std::time::Instant::now() < deadline, "subroot selected-file decision deadline");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut selected = File::open(&visible).unwrap();
+        let mut bytes = Vec::new();
+        selected.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"metadata is not content\0\xff");
+        assert!(File::open(home.join("metadata-visible")).is_err(),
+            "a subroot leaf must never select the same-named owner-Home leaf");
+        assert!(std::fs::write(&visible, b"read never grants write").is_err());
+        let live_read = claw_os_sdk::gui::file_read_status(&pending.selection_id, node).unwrap();
+        assert_eq!(live_read.state, "selected");
+        let read_remaining_ms = live_read.expires_in_ms.unwrap();
+        std::fs::write(private_marker("subroot-metadata-read-ready"),
+            serde_json::to_vec(&serde_json::json!({
+                "directory_fd":true, "directory_iterator":true, "saved_entries":saved_entry.is_some(),
+                "file_fd":true, "read_remaining_ms":read_remaining_ms,
+            })).unwrap()).unwrap();
+        Some(selected)
+    } else {
+        None
+    };
+    loop {
+        std::hint::black_box((&directory, &retained_entries, &saved_entry, &names, &_selected));
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn selected_read() {
@@ -987,7 +1046,8 @@ fn main() {
         }
         "revoke" => revoke(),
         "aliases" => aliases(),
-        "metadata" => home_metadata(),
+        "metadata" => home_metadata(false),
+        "metadata-subroot" => { let _panel = panel(); home_metadata(true); }
         "selected-read" => selected_read(),
         "selected-write" => selected_write(),
         "package" => package_probe::run(),

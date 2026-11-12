@@ -1944,6 +1944,10 @@ fn gui_fixed_needs_require_exact_owner_approval_before_launch() {
 #[test]
 fn desktop_metadata_subroots_cannot_fall_back_to_raw_read_binds() {
     let _sandbox = approval_sandbox();
+    std::fs::create_dir_all("build").unwrap();
+    let directory = tempfile::Builder::new()
+        .prefix("missing-gui-subroot-").tempdir_in("build").unwrap();
+    let home = directory.path().canonicalize().unwrap();
     let app = app_from(r#"{
         "id":"native-resource-applet","version":"1","name":{"en":"Native resource applet"},
         "desktop":{"panel_applet":true,"needs":[
@@ -1959,12 +1963,12 @@ fn desktop_metadata_subroots_cannot_fall_back_to_raw_read_binds() {
     }"#);
     for relative in ["Desktop", "Desktop/**"] {
         let caps = CapSet::from_caps([
-            Cap::new(Verb::FS_META, Scope::path(home().join(relative).to_str().unwrap())),
+            Cap::new(Verb::FS_META, Scope::path(home.join(relative).to_str().unwrap())),
             Cap::new(Verb::UI_PANEL, Scope::Wild),
         ]);
         assert!(
-            crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_err(),
-            "an unsupported metadata subroot must refuse even before its path exists"
+            crate::clawd::gui::validate_optional_mounts(&app, None, &home, &caps).is_err(),
+            "a missing or non-recursive metadata subroot must never become a raw bind"
         );
     }
 }
