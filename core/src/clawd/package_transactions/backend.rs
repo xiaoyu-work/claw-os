@@ -43,6 +43,15 @@ pub(super) struct Plan {
     pub(super) actions: Vec<Action>,
     pub(super) removed_apps: Vec<RemovedApp>,
     baseline: Option<AppBaseline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ensure: Option<EnsurePlan>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnsurePlan {
+    missing: Vec<String>,
+    already_present: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -58,7 +67,7 @@ impl Plan {
     }
 
     pub(super) fn summary(&self) -> Value {
-        json!({
+        let mut summary = json!({
             "digest": self.delivery.digest,
             "actions": self.actions,
             "packages": self.delivery.packages.iter().map(|package| json!({
@@ -69,7 +78,11 @@ impl Plan {
                 "sha256": package.sha256,
                 "app_channel": package.inventory.is_some(),
             })).collect::<Vec<_>>(),
-        })
+        });
+        if let Some(ensure) = &self.ensure {
+            summary["ensure"] = json!(ensure);
+        }
+        summary
     }
 }
 
@@ -102,6 +115,9 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
     let (action, package, version) = match operation {
         Operation::Install { package } => ("install", Some(package.as_str()), None),
         Operation::InstallPackages { .. } => ("install", None, None),
+        Operation::EnsurePackages { .. } => {
+            return Err("Package ensure requires its protected Root preflight".into());
+        }
         Operation::RemovePackages { .. } => ("remove", None, None),
         Operation::PurgePackages { .. } => ("purge", None, None),
         Operation::UpgradePackages { .. } => ("upgrade", None, None),
@@ -339,14 +355,37 @@ pub(super) async fn prepare(owner: u32, id: &str, operation: &Operation) -> Resu
         );
     }
     let before = apt::status_digest()?;
-    let mut simulated = arguments(operation, id, false)?;
-    simulated.insert(0, "--simulate".into());
-    let output = apt::run("/usr/bin/apt-get", simulated, None, None).await?;
-    let actions = simulation(
-        &output.stdout_string(),
-        matches!(operation, Operation::Purge { .. } | Operation::PurgePackages { .. }),
-    )
-    .await?;
+    let ensure = if let Operation::EnsurePackages { packages } = operation {
+        let mut missing = Vec::new();
+        let mut already_present = Vec::new();
+        for package in packages {
+            if crate::clawd::packages::query_package_state(package).await?.installed {
+                already_present.push(package.clone());
+            } else {
+                missing.push(package.clone());
+            }
+        }
+        Some(EnsurePlan { missing, already_present })
+    } else {
+        None
+    };
+    // Freeze only missing explicit targets under the same installed-state digest as the APT plan.
+    let resolved = ensure.as_ref().map(|ensure| Operation::InstallPackages {
+        packages: ensure.missing.clone(),
+    });
+    let operation = resolved.as_ref().unwrap_or(operation);
+    let actions = if ensure.as_ref().is_some_and(|ensure| ensure.missing.is_empty()) {
+        Vec::new()
+    } else {
+        let mut simulated = arguments(operation, id, false)?;
+        simulated.insert(0, "--simulate".into());
+        let output = apt::run("/usr/bin/apt-get", simulated, None, None).await?;
+        simulation(
+            &output.stdout_string(),
+            matches!(operation, Operation::Purge { .. } | Operation::PurgePackages { .. }),
+        )
+        .await?
+    };
     let controller = std::env::current_exe()
         .map_err(|error| format!("The active package controller cannot be identified: {error}"))?;
     let controller_packages = crate::clawd::packages::query_package_owners(&controller).await?;
@@ -458,6 +497,7 @@ pub(super) async fn prepare(owner: u32, id: &str, operation: &Operation) -> Resu
         actions,
         removed_apps,
         baseline: None,
+        ensure,
     })
 }
 
@@ -510,9 +550,17 @@ pub(super) async fn apply(
     plan: &Plan,
 ) -> Result<(), String> {
     if !plan.actions.is_empty() {
+        let resolved = if matches!(operation, Operation::EnsurePackages { .. }) {
+            Some(Operation::InstallPackages {
+                packages: plan.ensure.as_ref()
+                    .ok_or("Missing protected package ensure preflight")?.missing.clone(),
+            })
+        } else {
+            None
+        };
         apt::run(
             "/usr/bin/apt-get",
-            arguments(operation, id, true)?,
+            arguments(resolved.as_ref().unwrap_or(operation), id, true)?,
             Some(id.into()),
             None,
         )
@@ -819,11 +867,11 @@ pub(super) async fn verify(operation: &Operation, plan: &Plan) -> Result<Value, 
         None => None,
     };
     let mut installed = Vec::new();
-    if matches!(operation, Operation::InstallPackages { .. } | Operation::RemovePackages { .. }
+    if matches!(operation, Operation::InstallPackages { .. } | Operation::EnsurePackages { .. } | Operation::RemovePackages { .. }
         | Operation::PurgePackages { .. } | Operation::UpgradePackages { .. }) {
         for package in operation.packages() {
             let state = crate::clawd::packages::query_package_state(package).await?;
-            if matches!(operation, Operation::InstallPackages { .. }) && !state.installed {
+            if matches!(operation, Operation::InstallPackages { .. } | Operation::EnsurePackages { .. }) && !state.installed {
                 return Err("A requested package is not confirmed installed".into());
             }
             if matches!(operation, Operation::RemovePackages { .. } | Operation::PurgePackages { .. })

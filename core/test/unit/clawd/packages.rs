@@ -402,7 +402,7 @@ fn package_routes_keep_their_subjects_and_reject_caller_authority() {
             SubjectSource::Session
         };
         assert_eq!(route.authority.subject, expected);
-        for key in ["owner_uid", "caps", "app_id", "command"] {
+        for key in ["owner_uid", "caps", "app_id", "command", "missing", "already_present", "ensure"] {
             let mut params = json!({
                 "session":"fixture-session", "package":"fixture",
             });
@@ -451,6 +451,17 @@ fn global_and_versioned_action_shapes_are_strict() {
     assert!(validate_action("update-index", Some("curl"), None).is_err());
     assert!(validate_action("install-version", Some("curl"), None).is_err());
     assert!(validate_action("remove", Some("curl"), Some("8.0")).is_err());
+    use crate::clawd::package_transactions::Operation;
+    let ensure = Operation::ensure_packages(vec!["fixture-b".into(), "fixture-a".into(), "fixture-b".into()]).unwrap();
+    assert_eq!(serde_json::to_value(ensure).unwrap(), json!({
+        "action": "ensure-packages", "packages": ["fixture-a", "fixture-b"],
+    }));
+    for packages in [Vec::new(), vec!["-oHook=id".into()], vec!["../fixture".into()]] {
+        assert!(Operation::ensure_packages(packages).is_err());
+    }
+    assert!(serde_json::from_value::<Operation>(json!({
+        "action": "ensure-packages", "packages": ["fixture-a"], "missing": ["other"],
+    })).is_err());
 }
 
 #[test]

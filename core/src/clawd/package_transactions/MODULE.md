@@ -12,6 +12,13 @@ pre-dpkg helper remain the package delivery boundary.
   authenticated peer owner and live session authorize the exact package
   capability. Upgrade-all requires wildcard authority; an install batch
   spends all exact named requirements together, once.
+- A retained `ensure-packages` intent uses that same one exact authorization.
+  Its Root-owned preflight separates already-present targets from missing
+  targets under the APT plan's installed-state digest. Only missing explicit
+  targets reach install simulation/download/dispatch; existing dependencies
+  retain ordinary resolver behavior. The frozen partition appears in plan
+  status. Acceptance, including an eventual no-op, remains asynchronous and
+  never substitutes package authority for a general metadata-read grant.
 - Acceptance saves an owner/session/grant/invocation-bound Root record before
   starting an independent Root controller. `accepted` is not `applied`.
   The original ordinary/GUI provider and outer MCP call do not wait for the

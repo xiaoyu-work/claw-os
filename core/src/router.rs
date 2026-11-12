@@ -842,7 +842,7 @@ fn dispatch_with_stdin_impl(
         let action = args
             .get(if args.get(1).map(String::as_str) == Some("--retained") { 2 } else { 1 })
             .ok_or_else(|| "internal package command required".to_string())?;
-        if action == "install-packages" {
+        if matches!(action.as_str(), "install-packages" | "ensure-packages") {
             if !(2..=129).contains(&package_args.len()) {
                 return Err("internal package batch requires 1..128 packages".into());
             }

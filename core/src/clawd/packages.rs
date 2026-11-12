@@ -58,14 +58,18 @@ pub async fn control(
         let action = required_string(&params, "action")?;
         let package = optional_string(&params, "package")?;
         let version = optional_string(&params, "version")?;
-        if action == "install-packages" {
+        if matches!(action.as_str(), "install-packages" | "ensure-packages") {
             if package.is_some() || version.is_some() {
-                return Err("install-packages does not accept a single package or version".into());
+                return Err("Package batches do not accept a single package or version".into());
             }
             let packages: Vec<String> =
                 serde_json::from_value(params.get("packages").cloned().unwrap_or(Value::Null))
-                    .map_err(|_| "install-packages requires a bounded package list")?;
-            let operation = super::package_transactions::Operation::install_packages(packages)?;
+                    .map_err(|_| "Package batches require a bounded package list")?;
+            let operation = if action == "ensure-packages" {
+                super::package_transactions::Operation::ensure_packages(packages)?
+            } else {
+                super::package_transactions::Operation::install_packages(packages)?
+            };
             let invocation = optional_string(&params, "invocation_id")?;
             return super::package_transactions::accept(
                 state,
@@ -80,7 +84,7 @@ pub async fn control(
             .get("packages")
             .is_some_and(|packages| !packages.is_null())
         {
-            return Err("Only install-packages accepts a package list".into());
+            return Err("Only install-packages and ensure-packages accept a package list".into());
         }
         validate_action(&action, package.as_deref(), version.as_deref())?;
 
