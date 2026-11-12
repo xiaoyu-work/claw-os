@@ -13,6 +13,7 @@ use crate::caps::{Cap, Scope, Verb};
 const TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 const MAX_ERROR: usize = 64 * 1024;
+const MAX_WORKSPACE: u64 = 256 * 1024 * 1024;
 
 pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
     let session = std::env::var("COS_SESSION")
@@ -198,10 +199,11 @@ async fn execute(path: &str, args: &[&str], owner: u32) -> Result<Output, String
                 return Err(io::Error::other("Package query identity isolation failed"));
             }
             for (resource, maximum) in [
-                (libc::RLIMIT_AS, 256 * 1024 * 1024),
+                (libc::RLIMIT_AS, MAX_WORKSPACE),
                 (libc::RLIMIT_CPU, 10),
                 (libc::RLIMIT_CORE, 0),
-                (libc::RLIMIT_FSIZE, 0),
+                // APT reads can need temporary backing even with persistent caches disabled.
+                (libc::RLIMIT_FSIZE, MAX_WORKSPACE),
             ] {
                 let limit = libc::rlimit {
                     rlim_cur: maximum,

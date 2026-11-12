@@ -2676,16 +2676,22 @@ pub async fn relay(
         // Still refuse the response, but an unknown effect cannot be
         // downgraded to an ordinary failure merely because a provider also
         // violated its authority obligation.
-        return Err(match outcome {
-            Err(error) if error.kind == BrokerErrorKind::Indeterminate => error,
-            _ => BrokerError::execution("relayed route did not exercise its authority"),
-        });
+        return Err(unexercised_relay_error(outcome));
     }
     // Keep typed outcomes all the way to the outer route's journal bracket.
     // In particular, flattening Indeterminate here would retire an unknown
     // mutation as failed when server.rs calls journal::finish.
     let result = outcome?;
     Ok(json!({ "command": route.name, "result": result }))
+}
+
+fn unexercised_relay_error(outcome: Result<Value, BrokerError>) -> BrokerError {
+    match outcome {
+        Err(error) if error.kind == BrokerErrorKind::Indeterminate => error,
+        Err(error) if error.kind == BrokerErrorKind::Unauthorized =>
+            BrokerError::authorization("relayed route was not authorized"),
+        _ => BrokerError::execution("relayed route did not exercise its authority"),
+    }
 }
 
 /// Re-check the package behind an App session before relaying for it.

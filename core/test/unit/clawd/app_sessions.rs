@@ -3034,6 +3034,32 @@ fn swapping_a_call_scope_returns_the_exact_previous_set() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn unexercised_relay_withholds_success_and_private_errors_without_downgrading_unknown_effects() {
+    for outcome in [
+        Ok(json!({"private": "must not be released"})),
+        Err(BrokerError::execution("private unchecked provider failure")),
+    ] {
+        let error = unexercised_relay_error(outcome);
+        assert_eq!(error.kind, BrokerErrorKind::Execution);
+        assert_eq!(error.message, "relayed route did not exercise its authority");
+        assert!(error.data.is_none());
+    }
+    let mut denied = BrokerError::authorization("private policy details");
+    denied.data = Some(json!({"private": true}));
+    let denied = unexercised_relay_error(Err(denied));
+    assert_eq!(denied.kind, BrokerErrorKind::Unauthorized);
+    assert_eq!(denied.message, "relayed route was not authorized");
+    assert!(denied.data.is_none());
+
+    let mut unknown = BrokerError::indeterminate("unknown mutation outcome; do not replay");
+    unknown.data = Some(json!({"request_id": "retained-root-receipt"}));
+    let unknown = unexercised_relay_error(Err(unknown));
+    assert_eq!(unknown.kind, BrokerErrorKind::Indeterminate);
+    assert_eq!(unknown.message, "unknown mutation outcome; do not replay");
+    assert_eq!(unknown.data.unwrap()["request_id"], "retained-root-receipt");
+}
+
+#[test]
 fn only_session_scoped_system_service_routes_may_be_relayed() {
     for command in Command::ALL.iter().copied() {
         let route = command.route();

@@ -2506,6 +2506,8 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     fixture.enable_processes();
     fixture.install_bundle().await;
     let before = dpkg_state();
+    let persistent_caches = ["/var/cache/apt/pkgcache.bin", "/var/cache/apt/srcpkgcache.bin"];
+    assert!(persistent_caches.iter().all(|path| !Path::new(path).exists()));
     let mut caller = OrdinaryActor::start(OWNER, APPS[0], "catalog");
     caller.ready(&fixture).await;
     let path = caller.data().join("queries.json");
@@ -2529,6 +2531,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
                 "search", "--names-only", "--", BUNDLE,
             ])
             .env("HOME", "/").env("LC_ALL", "C").current_dir("/")
+            .stdout(Stdio::piped()).stderr(Stdio::piped())
             .output().unwrap();
         let metadata = ["/etc/apt/apt.conf.d/00private-fixture",
             "/etc/apt/sources.list.d/fixture.sources", "/var/lib/dpkg/status",
@@ -2575,6 +2578,8 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
         }));
     }
     assert_eq!(dpkg_state(), before, "metadata queries mutated installed package state");
+    assert!(persistent_caches.iter().all(|path| !Path::new(path).exists()),
+        "read-only queries wrote persistent APT caches");
     let process = caller.process.as_ref().unwrap().try_clone().unwrap();
     let group = caller.group.clone();
     let runtime = caller.socket.parent().unwrap().to_path_buf();
