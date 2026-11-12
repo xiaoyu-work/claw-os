@@ -139,6 +139,44 @@ fn selected_read_decode(verb: &str, error: impl std::fmt::Display) -> crate::Bri
     selected_file_decode("__gui-file-read", verb, error)
 }
 
+/// Ask Root to review one absent literal child of this metadata directory.
+/// Selected/reserved is not saved and never grants owner-content read.
+pub fn request_file_create(parent_node: u64, name: &str) -> Result<crate::generated::GuiFileCreate, crate::BridgeError> {
+    let request = serde_json::json!({"parent_node":parent_node,"name":name});
+    crate::generated::validate_gui_file_create_request(&request)
+        .map_err(|error| selected_file_decode("__gui-file-create", "request", error))?;
+    selected_create_call("request", request)
+}
+
+pub fn file_create_status(selection_id: &str, parent_node: u64) -> Result<crate::generated::GuiFileCreate, crate::BridgeError> {
+    let request = serde_json::json!({"selection_id":selection_id,"parent_node":parent_node});
+    crate::generated::validate_gui_file_create_status_request(&request)
+        .map_err(|error| selected_file_decode("__gui-file-create", "status", error))?;
+    selected_create_call("status", request)
+}
+
+/// Reserve private scratch for one atomic NOREPLACE creation, not overwrite.
+pub fn reserve_file_create(selection_id: &str, parent_node: u64) -> Result<crate::generated::GuiFileCreateSlot, crate::BridgeError> {
+    let request = serde_json::json!({"selection_id":selection_id,"parent_node":parent_node});
+    crate::generated::validate_gui_file_create_reservation_request(&request)
+        .map_err(|error| selected_file_decode("__gui-file-create", "reserve", error))?;
+    let mut response = selected_file_call("__gui-file-create", "reserve", request)?;
+    crate::generated::validate_gui_file_create_slot(&response)
+        .map_err(|error| selected_file_decode("__gui-file-create", "reserve", error))?;
+    crate::generated::normalize_gui_file_create_slot_integers(&mut response);
+    serde_json::from_value(response)
+        .map_err(|error| selected_file_decode("__gui-file-create", "reserve", error))
+}
+
+fn selected_create_call(verb: &str, request: serde_json::Value) -> Result<crate::generated::GuiFileCreate, crate::BridgeError> {
+    let mut response = selected_file_call("__gui-file-create", verb, request)?;
+    crate::generated::validate_gui_file_create(&response)
+        .map_err(|error| selected_file_decode("__gui-file-create", verb, error))?;
+    crate::generated::normalize_gui_file_create_integers(&mut response);
+    serde_json::from_value(response)
+        .map_err(|error| selected_file_decode("__gui-file-create", verb, error))
+}
+
 fn selected_file_decode(bridge: &str, verb: &str, error: impl std::fmt::Display) -> crate::BridgeError {
     crate::BridgeError::Decode {
         app: bridge.into(), verb: verb.into(), message: error.to_string(),

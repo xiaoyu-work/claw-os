@@ -125,6 +125,34 @@ def _selected_file_call(bridge: str, action: str, request: dict[str, Any]) -> An
         deadline_unix_ms=time.time_ns() // 1_000_000 + 30_000,
     )
 
+def request_file_create(parent_node: int, name: str) -> generated.GuiFileCreate:
+    """Request one absent literal child; metadata and pending create nothing."""
+    request = {"parent_node": parent_node, "name": name}
+    generated.validate_gui_file_create_request(request)
+    return _selected_create_call("request", request)
+
+
+def file_create_status(selection_id: str, parent_node: int) -> generated.GuiFileCreate:
+    """Only created reports Root's committed creation, never a read grant."""
+    request = {"selection_id": selection_id, "parent_node": parent_node}
+    generated.validate_gui_file_create_status_request(request)
+    return _selected_create_call("status", request)
+
+
+def reserve_file_create(selection_id: str, parent_node: int) -> generated.GuiFileCreateSlot:
+    """Reserve private native scratch for a one-shot NOREPLACE finalization."""
+    request = {"selection_id": selection_id, "parent_node": parent_node}
+    generated.validate_gui_file_create_reservation_request(request)
+    value = _selected_file_call("__gui-file-create", "reserve", request)
+    generated.validate_gui_file_create_slot(value)
+    return value
+
+
+def _selected_create_call(action: str, request: dict[str, Any]) -> generated.GuiFileCreate:
+    value = _selected_file_call("__gui-file-create", action, request)
+    generated.validate_gui_file_create(value)
+    return value
+
 
 def is_gui_launch() -> bool:
     """Return ``True`` when the current invocation is a desktop GUI launch.

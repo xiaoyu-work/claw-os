@@ -148,5 +148,43 @@ class SelectedWriteTests(unittest.TestCase):
                 gui.reserve_file_save(selection, 9)
 
 
+class SelectedCreateTests(unittest.TestCase):
+    def test_literal_parent_one_and_slot_do_not_mean_created(self) -> None:
+        selection = "sc-" + "d" * 32
+        leaf = "报告 ; '$x'.txt"
+        pending = {"version": 1, "selection_id": selection, "parent_node": 1,
+                   "name": leaf, "access": "create", "state": "pending"}
+        slot = {"version": 1, "reservation_id": "ss-" + "e" * 32, "selection_id": selection,
+                "parent_node": 1, "name": ".cos-save-" + "e" * 32,
+                "target_name": leaf, "expires_in_ms": 190000}
+        with patch.object(gui, "call_json_with_stdin_binary",
+                          side_effect=[pending, {**pending, "state": "selected"}, slot,
+                                       {**pending, "state": "created"}]) as call:
+            self.assertEqual(gui.request_file_create(1, leaf)["state"], "pending")
+            self.assertEqual(gui.file_create_status(selection, 1)["state"], "selected")
+            self.assertEqual(gui.reserve_file_create(selection, 1)["target_name"], leaf)
+            self.assertEqual(gui.file_create_status(selection, 1)["state"], "created")
+        for invocation, action in zip(call.call_args_list, ["request", "status", "reserve", "status"]):
+            self.assertEqual(invocation.args[1], ["__gui-file-create", action, "--request-stdin"])
+        self.assertEqual(json.loads(call.call_args_list[0].args[2]), {"parent_node": 1, "name": leaf})
+        self.assertEqual(json.loads(call.call_args_list[2].args[2]), {"selection_id": selection, "parent_node": 1})
+
+    def test_create_refuses_nonliteral_or_non_utf8_names_before_transport(self) -> None:
+        with patch.object(gui, "call_json_with_stdin_binary") as call:
+            for name in ["", ".", "..", "../leaf", "a/b", "a\\b", "a\0b", "\ud800", "é" * 128]:
+                with self.subTest(name=repr(name)), self.assertRaises(ValueError):
+                    gui.request_file_create(1, name)
+            with self.assertRaises(ValueError):
+                gui.request_file_create(0, "leaf")
+            with self.assertRaises(ValueError):
+                gui.reserve_file_create("sw-" + "d" * 32, 1)
+            call.assert_not_called()
+        forged = {"version": 1, "selection_id": "sc-" + "d" * 32, "parent_node": 1,
+                  "name": "leaf", "access": "create", "state": "created", "owner_uid": 0}
+        with patch.object(gui, "call_json_with_stdin_binary", return_value=forged):
+            with self.assertRaises(ValueError):
+                gui.request_file_create(1, "leaf")
+
+
 if __name__ == "__main__":
     unittest.main()

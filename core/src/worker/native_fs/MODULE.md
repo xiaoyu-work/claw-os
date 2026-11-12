@@ -221,6 +221,37 @@ identity check followed by rename is not a filesystem compare-and-swap against
 an uncooperative host writer. No wider external-writer serialization or full
 POSIX metadata/xattr contract is claimed.
 
+## One absent regular child / Save As
+
+The separate creation selection binds one materialized directory node (including
+inode 1) and a bounded literal UTF-8 leaf. Its candidate retains the actual
+parent descriptor and Home-relative path. Existing-file write selections cannot
+create missing targets; a creation selection cannot overwrite or become an
+existing-file write/read lease.
+
+Creation shares the window proposal ledger, eight scratch slots, node/scratch
+budgets, fixed minimum deadlines and canonical mutation-attempt counter. Each
+selection reserves at most one private scratch and latches one finalization
+attempt. Polling/reservation cannot reset quota, issue another slot or renew
+authority. All private pending and unused approved reviews retire with checked
+window death.
+
+Root requires a separate ordinary exact-owner fs.write decision and fresh
+parent/path/permission/source checks. Approved/reserved is not saved. A real
+Missing preimage uses the existing FsWrite inverse with no previous blob; no
+empty-file snapshot is fabricated. A durable mutation start precedes staging.
+Owner-credential file sync, atomic renameat2(RENAME_NOREPLACE), parent sync,
+stable exact expected-image checks and committed completion precede successful
+FUSE replies and created status. EEXIST never overwrites/adopts a foreign
+target. Unsupported atomic creation refuses without fallback.
+
+Known no-publication failures close as failed after checked staging cleanup.
+Unknown outcomes retain unresolved canonical evidence and fence/retire the
+instance, never claim success or delete a published target. External directory
+writers are not serialized into a fictional global CAS. Subsequent owner-file
+read/write still requires its own existing-file selection; retained private
+scratch contains only App-authored bytes.
+
 ## Canonical evidence and failure
 
 Writable construction retains a Root-authored session belonging to this owner.

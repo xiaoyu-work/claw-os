@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/gui_file_create.schema.json",
+  "title": "Draft GUI one-shot regular-file creation",
+  "description": "Root-owned protected fs.write selection for one absent literal child of this window's metadata directory. Selected or reserved is not saved. Only created reports a verified canonical creation; no content read or overwrite authority is granted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "selection_id", "parent_node", "name", "access", "state"],
+  "properties": {
+    "version": { "type": "integer", "const": 1, "minimum": 1, "maximum": 1 },
+    "selection_id": { "type": "string", "pattern": "^sc-[a-f0-9]{32}$", "x-full-match": true },
+    "parent_node": { "type": "integer", "minimum": 1, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "name": {
+      "type": "string", "minLength": 1, "maxLength": 255, "x-max-utf8-bytes": 255,
+      "pattern": "^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$",
+      "x-full-match": true
+    },
+    "access": { "type": "string", "const": "create" },
+    "state": { "type": "string", "enum": ["pending", "selected", "created", "denied", "stale", "expired", "revoked", "failed", "uncertain"] },
+    "approval_request_id": { "type": "string", "maxLength": 128 },
+    "target_display": { "type": "string", "maxLength": 16384, "description": "Escaped inert presentation, never source identity." },
+    "expires_in_ms": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "reason": { "type": "string", "maxLength": 128 }
+  },
+  "$defs": {
+    "GuiFileCreateRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["parent_node", "name"],
+      "properties": {
+        "parent_node": { "type": "integer", "minimum": 1, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" },
+        "name": {
+          "type": "string", "minLength": 1, "maxLength": 255, "x-max-utf8-bytes": 255,
+          "pattern": "^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$",
+          "x-full-match": true
+        }
+      }
+    },
+    "GuiFileCreateStatusRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["selection_id", "parent_node"],
+      "properties": {
+        "selection_id": { "type": "string", "pattern": "^sc-[a-f0-9]{32}$", "x-full-match": true },
+        "parent_node": { "type": "integer", "minimum": 1, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" }
+      }
+    },
+    "GuiFileCreateReservationRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["selection_id", "parent_node"],
+      "properties": {
+        "selection_id": { "type": "string", "pattern": "^sc-[a-f0-9]{32}$", "x-full-match": true },
+        "parent_node": { "type": "integer", "minimum": 1, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" }
+      }
+    }
+  }
+}

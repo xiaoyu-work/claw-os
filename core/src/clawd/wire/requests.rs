@@ -38,6 +38,8 @@ pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileR
 pub use crate::clawd::gui::inputs::{
     FileWriteRequest as GuiFileWriteRequest, FileWriteStatusRequest as GuiFileWriteStatusRequest,
     FileSaveReservationRequest as GuiFileSaveReservationRequest,
+    FileCreateRequest as GuiFileCreateRequest, FileCreateStatusRequest as GuiFileCreateStatusRequest,
+    FileCreateReservationRequest as GuiFileCreateReservationRequest,
 };
 pub use crate::clawd::trust_withdrawal::Request as ProvenanceTrustWithdrawal;
 

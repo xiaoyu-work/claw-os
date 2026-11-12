@@ -34,6 +34,9 @@ import {
   validateGuiFileReadRequest, validateGuiFileReadStatusRequest,
   validateGuiFileWrite, validateGuiFileWriteRequest, validateGuiFileWriteStatusRequest,
   validateGuiFileSave, validateGuiFileSaveReservationRequest,
+  type GuiFileCreate, type GuiFileCreateSlot, validateGuiFileCreate,
+  validateGuiFileCreateRequest, validateGuiFileCreateStatusRequest,
+  validateGuiFileCreateSlot, validateGuiFileCreateReservationRequest,
 } from "./generated";
 import { cosCallJson } from "./transport";
 
@@ -90,7 +93,36 @@ function selectedWriteCall(action: string, request: { node: number; selection_id
   return response;
 }
 
-function selectedFileCall(bridge: string, action: string, request: { node: number; selection_id?: string }): unknown {
+/** Propose one absent literal child of this window's metadata directory. */
+export function requestFileCreate(parentNode: number, name: string): GuiFileCreate {
+  const request = { parent_node: parentNode, name };
+  validateGuiFileCreateRequest(request);
+  return selectedCreateCall("request", request);
+}
+
+/** Only created is committed creation; selection/reservation is not saved. */
+export function fileCreateStatus(selectionId: string, parentNode: number): GuiFileCreate {
+  const request = { selection_id: selectionId, parent_node: parentNode };
+  validateGuiFileCreateStatusRequest(request);
+  return selectedCreateCall("status", request);
+}
+
+/** Reserve private scratch for exact one-shot NOREPLACE finalization. */
+export function reserveFileCreate(selectionId: string, parentNode: number): GuiFileCreateSlot {
+  const request = { selection_id: selectionId, parent_node: parentNode };
+  validateGuiFileCreateReservationRequest(request);
+  const value = selectedFileCall("__gui-file-create", "reserve", request);
+  validateGuiFileCreateSlot(value);
+  return value;
+}
+
+function selectedCreateCall(action: string, request: unknown): GuiFileCreate {
+  const value = selectedFileCall("__gui-file-create", action, request);
+  validateGuiFileCreate(value);
+  return value;
+}
+
+function selectedFileCall(bridge: string, action: string, request: unknown): unknown {
   return cosCallJson("GUI selected file", [bridge, action, "--request-stdin"],
     30_000, stringifyWireJson(request));
 }

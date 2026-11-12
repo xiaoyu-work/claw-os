@@ -29,10 +29,10 @@ use crate::clawd::client_identity::FsIdentityGuard;
 const MAX_NODES: usize = 4096;
 const MAX_HANDLES: usize = 128;
 const MAX_READ: u32 = 131072;
-const MAX_FILE: u64 = 8 * 1024 * 1024;
-const MAX_SAVES: usize = 8;
+pub(super) const MAX_FILE: u64 = 8 * 1024 * 1024;
+pub(super) const MAX_SAVES: usize = 8;
 const MAX_BYTES_PER_VIEW: u64 = 64 * 1024 * 1024;
-const MAX_MUTATIONS: u64 = 256;
+pub(super) const MAX_MUTATIONS: u64 = 256;
 const TTL: Duration = Duration::ZERO;
 
 struct Node {
@@ -40,6 +40,7 @@ struct Node {
     pin: File,
     save: Option<PathBuf>,
     detached: bool,
+    creation: Option<String>,
 }
 
 enum Handle {
@@ -149,7 +150,7 @@ fn checked_object(shared: &Shared, file: &File) -> Result<(), i32> {
     Ok(())
 }
 
-fn relative_parts(path: &Path) -> Result<Vec<&OsStr>, i32> {
+pub(super) fn relative_parts(path: &Path) -> Result<Vec<&OsStr>, i32> {
     if path.as_os_str().as_bytes().len() > 4096 {
         return Err(libc::ENAMETOOLONG);
     }
@@ -317,6 +318,7 @@ pub(super) fn reserve_save(shared: &Shared, target: &Path) -> Result<PathBuf, i3
     saves.push(SaveTarget {
         relative: relative.clone(),
         target: target.into(),
+        creation: None,
     });
     Ok(relative)
 }
@@ -389,7 +391,7 @@ pub(super) struct VerifiedMutation {
     old_stamp: Option<[u64; 8]>,
 }
 
-fn verify_exact_image(
+pub(super) fn verify_exact_image(
     owner: u32,
     file: &File,
     expected: &[u8],
@@ -962,6 +964,7 @@ impl Filesystem {
                     pin: root,
                     save: None,
                     detached: false,
+                    creation: None,
                 },
             )]),
             names: BTreeMap::from([(relative, 1)]),
@@ -1174,6 +1177,7 @@ impl Filesystem {
                 pin,
                 save: None,
                 detached: false,
+                creation: None,
             },
         );
         self.track(inode, parent)?;
@@ -1248,6 +1252,10 @@ impl Filesystem {
             return Err(libc::ESTALE);
         }
         if node.save.is_some() {
+            if let Some(selection) = &node.creation {
+                super::selected_create::authorize_scratch(&self.shared, selection)?;
+                return node.pin.try_clone().map_err(errno);
+            }
             if self.shared.metadata_only {
                 let target = node.save.as_ref().ok_or(libc::EACCES)?;
                 let pin = open_relative(&self.shared, target, false)?;
@@ -1290,6 +1298,9 @@ impl Filesystem {
             return Err(libc::EINVAL);
         }
         let file = if own_save {
+            if let Some(selection) = &self.nodes.get(&inode).ok_or(libc::ESTALE)?.creation {
+                super::selected_create::authorize_scratch(&self.shared, selection)?;
+            }
             self.node_file(inode, false)?
         } else if write {
             if read {
@@ -1378,14 +1389,14 @@ impl Filesystem {
             .clone();
         let relative = directory.join(name);
         relative_parts(&relative)?;
-        let target = self
+        let (target, creation) = self
             .shared
             .saves
             .lock()
             .map_err(|_| libc::EIO)?
             .iter()
             .find(|save| save.relative == relative)
-            .map(|save| save.target.clone())
+            .map(|save| (save.target.clone(), save.creation.clone()))
             .ok_or(libc::EACCES)?;
         if self.names.contains_key(&relative) {
             return Err(libc::EEXIST);
@@ -1393,23 +1404,23 @@ impl Filesystem {
         if self.nodes.len() >= MAX_NODES {
             return Err(libc::ENOSPC);
         }
-        let writes = self.shared.writes.lock().map_err(|_| libc::EIO)?;
-        let selected = writes
-            .iter()
-            .find(|write| write.relative == target)
-            .ok_or(libc::EACCES)?;
-        if !same_file(&self.node_file(parent, false)?, &selected.parent) {
-            return Err(libc::ESTALE);
-        }
-        if !same_file(&open_relative(&self.shared, &target, false)?, &selected.pin) {
-            return Err(libc::ESTALE);
+        if let Some(selection) = &creation {
+            super::selected_create::check_slot(&self.shared, selection,
+                &self.node_file(parent, false)?, &target)?;
+        } else {
+            let writes = self.shared.writes.lock().map_err(|_| libc::EIO)?;
+            let selected = writes.iter().find(|write| write.relative == target).ok_or(libc::EACCES)?;
+            if !same_file(&self.node_file(parent, false)?, &selected.parent)
+                || !same_file(&open_relative(&self.shared, &target, false)?, &selected.pin)
+            {
+                return Err(libc::ESTALE);
+            }
         }
         match open_relative(&self.shared, &relative, false) {
             Err(libc::ENOENT) => {}
             Err(error) => return Err(error),
             Ok(_) => return Err(libc::EEXIST),
         }
-        drop(writes);
         let descriptor =
             unsafe { libc::memfd_create(c"claw-native-save".as_ptr(), libc::MFD_CLOEXEC) };
         if descriptor < 0 {
@@ -1426,6 +1437,7 @@ impl Filesystem {
                 pin,
                 save: Some(target),
                 detached: false,
+                creation,
             },
         );
         let handle = match self.handle_file(inode, flags) {
@@ -1450,10 +1462,7 @@ impl Filesystem {
         if parent != newparent {
             return Err(libc::EXDEV);
         }
-        if flags == libc::RENAME_NOREPLACE {
-            return Err(libc::EEXIST);
-        }
-        if flags != 0 {
+        if flags != 0 && flags != libc::RENAME_NOREPLACE {
             return Err(libc::EOPNOTSUPP);
         }
         let directory = self
@@ -1478,6 +1487,10 @@ impl Filesystem {
         }
         let mut bytes = vec![0; size as usize];
         data.read_exact_at(&mut bytes, 0).map_err(errno)?;
+        if let Some(selection) = node.creation.clone() {
+            return self.save_creation(inode, parent, &from, &to, &selection, &bytes);
+        }
+        if flags == libc::RENAME_NOREPLACE { return Err(libc::EEXIST); }
         let (old, _) = self.lookup_node(newparent, newname)?;
         let previous = self
             .nodes
@@ -1581,6 +1594,45 @@ impl Filesystem {
             .lock()
             .map_err(|_| libc::EIO)?
             .retain(|save| save.relative != path);
+        Ok(())
+    }
+
+    fn save_creation(&mut self, inode: u64, parent: u64, from: &Path, target: &Path,
+        selection: &str, bytes: &[u8]) -> Result<(), i32>
+    {
+        let parent_pin = self.node_file(parent, false)?;
+        super::selected_create::check_slot(&self.shared, selection, &parent_pin, target)?;
+        let shared = self.shared.clone();
+        let _serial = shared.effects.lock().map_err(|_| libc::EIO)?;
+        shared.active_effect.store(true, Ordering::Release);
+        let _active = ActiveEffect(&shared.active_effect);
+        let proof = super::selected_create::commit(&shared, selection, target, &parent_pin, bytes)?;
+        let published = (|| -> Result<(), i32> {
+            if let Some(previous) = self.names.get(target).copied().filter(|previous| *previous != inode) {
+                self.nodes.get_mut(&previous).ok_or(libc::ESTALE)?.detached = true;
+                if let Some(node) = shared.observed.lock().map_err(|_| libc::EIO)?.get_mut(&previous) {
+                    node.linked = false;
+                }
+            }
+            let node = self.nodes.get_mut(&inode).ok_or(libc::ESTALE)?;
+            node.relative = target.into();
+            node.pin = proof.file().try_clone().map_err(errno)?;
+            node.save = None;
+            node.creation = None;
+            self.names.remove(from);
+            self.names.insert(target.into(), inode);
+            shared.saves.lock().map_err(|_| libc::EIO)?.retain(|slot| slot.relative != from);
+            self.track(inode, parent)?;
+            super::selected_create::publish_created(&shared, selection, &proof)?;
+            let mut invalidations = shared.own_invalidations.lock().map_err(|_| libc::EIO)?;
+            invalidations.insert(parent, true);
+            invalidations.insert(inode, false);
+            Ok(())
+        })();
+        if published.is_err() {
+            shared.provider_failed("committed creation could not publish its verified native node".into());
+            return Err(libc::EIO);
+        }
         Ok(())
     }
 

@@ -746,6 +746,29 @@ pub(crate) fn authorize_gui_file(
     binding: GuiFileApproval<'_>,
     approval: &crate::approvals::ConsumedGrant,
 ) -> Result<(GrantView, Authorized), String> {
+    let route = if binding.capability.verb == crate::caps::Verb::FS_READ {
+        "gui.file.read.status"
+    } else {
+        "gui.file.write.status"
+    };
+    authorize_gui_file_at(binding, approval, route)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn authorize_gui_file_create(
+    binding: GuiFileApproval<'_>, approval: &crate::approvals::ConsumedGrant,
+) -> Result<(GrantView, Authorized), String> {
+    if binding.capability.verb != crate::caps::Verb::FS_WRITE {
+        return Err("file creation requires an independent fs.write decision".into());
+    }
+    authorize_gui_file_at(binding, approval, "gui.file.create.status")
+}
+
+#[cfg(target_os = "linux")]
+fn authorize_gui_file_at(
+    binding: GuiFileApproval<'_>, approval: &crate::approvals::ConsumedGrant,
+    route: &'static str,
+) -> Result<(GrantView, Authorized), String> {
     let owner = binding.gui.owner_uid;
     let session = binding.gui.subject.session_id.as_deref().ok_or("GUI read has no bound session")?;
     let authorization = &approval.authorization;
@@ -760,11 +783,6 @@ pub(crate) fn authorize_gui_file(
         || authorization.operation_digest.as_deref() != Some(binding.operation_digest)
         || authorization.context.is_some() || authorization.execution.is_some()
     { return Err("selected read approval does not match the live GUI/owner/capability/operation".into()); }
-    let route = if binding.capability.verb == crate::caps::Verb::FS_READ {
-        "gui.file.read.status"
-    } else {
-        "gui.file.write.status"
-    };
     let presentation = Presentation {
         uid: owner, pid: binding.process.pid() as u32,
         start_time_ticks: Some(binding.process.start_ticks()), audience: Audience::GuiResource,
@@ -817,17 +835,35 @@ pub(crate) fn exercise_gui_file(
     capability: &crate::caps::Cap,
     presentation: Presentation,
 ) -> Result<Authorized, String> {
+    let route = if capability.verb == crate::caps::Verb::FS_READ {
+        "gui.file.read.status"
+    } else {
+        "gui.file.write.status"
+    };
+    exercise_gui_file_at(id, capability, presentation, route)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn exercise_gui_file_create(
+    id: GrantId, capability: &crate::caps::Cap, presentation: Presentation,
+) -> Result<Authorized, String> {
+    if capability.verb != crate::caps::Verb::FS_WRITE {
+        return Err("file creation requires independent fs.write authority".into());
+    }
+    exercise_gui_file_at(id, capability, presentation, "gui.file.create.status")
+}
+
+#[cfg(target_os = "linux")]
+fn exercise_gui_file_at(
+    id: GrantId, capability: &crate::caps::Cap, presentation: Presentation,
+    route: &'static str,
+) -> Result<Authorized, String> {
     let view = authority().consume(id, std::slice::from_ref(capability), &presentation)
         .map_err(|error| error.to_string())?;
     if view.issuer != Issuer::Approval || presentation.audience != Audience::GuiResource
         || !matches!(capability.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE)
         || view.subject.app_id.is_none()
     { return Err("selected read is not an ordinary approved GUI read grant".into()); }
-    let route = if capability.verb == crate::caps::Verb::FS_READ {
-        "gui.file.read.status"
-    } else {
-        "gui.file.write.status"
-    };
     if presentation.route != route { return Err("selected file authority has another access kind".into()); }
     let decision = Decision::new(view, route, Audience::GuiResource,
         presentation, None, None, &Requirement::exact([capability.clone()]));

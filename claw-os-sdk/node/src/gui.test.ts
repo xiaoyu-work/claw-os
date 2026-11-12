@@ -112,6 +112,38 @@ test("selected write and atomic save transmit only Root resource references", ()
     return { version: 1, selection_id: selection, node: 9, access: "write",
       state: calls.length === 1 ? "pending" : "selected" };
   });
+
+  test("one-shot creation keeps literal parent/name, selection, reservation and commit distinct", () => {
+    const selection = `sc-${"d".repeat(32)}`;
+    const name = "报告 ; '$x'.txt";
+    const pending = { version: 1, selection_id: selection, parent_node: 1, name, access: "create", state: "pending" };
+    const slot = { version: 1, reservation_id: `ss-${"e".repeat(32)}`, selection_id: selection,
+      parent_node: 1, name: `.cos-save-${"e".repeat(32)}`, target_name: name, expires_in_ms: 190000 };
+    const replies = [pending, { ...pending, state: "selected" }, slot, { ...pending, state: "created" }];
+    const calls: unknown[][] = [];
+    const primitive = mock.method(transport, "cosCallJson", (...args: unknown[]) => {
+      calls.push(args);
+      return replies[calls.length - 1];
+    });
+    try {
+      assert.equal(gui.requestFileCreate(1, name).state, "pending");
+      assert.equal(gui.fileCreateStatus(selection, 1).state, "selected");
+      assert.equal(gui.reserveFileCreate(selection, 1).target_name, name);
+      assert.equal(gui.fileCreateStatus(selection, 1).state, "created");
+      for (const [index, action] of ["request", "status", "reserve", "status"].entries()) {
+        assert.deepEqual(calls[index][1], ["__gui-file-create", action, "--request-stdin"]);
+      }
+      assert.deepEqual(JSON.parse(calls[0][3] as string), { parent_node: 1, name });
+      for (const leaf of ["", ".", "..", "../leaf", "a/b", "a\\b", "a\0b", "\ud800", "é".repeat(128)]) {
+        assert.throws(() => gui.requestFileCreate(1, leaf));
+      }
+      assert.throws(() => gui.requestFileCreate(0, "leaf"));
+      assert.throws(() => gui.reserveFileCreate(`sw-${"d".repeat(32)}`, 1));
+      assert.equal(calls.length, 4);
+      primitive.mock.mockImplementation(() => ({ ...pending, state: "created", owner_uid: 0 }));
+      assert.throws(() => gui.requestFileCreate(1, name));
+    } finally { primitive.mock.restore(); }
+  });
   try {
     assert.equal(gui.requestFileWrite(9).state, "pending");
     assert.equal(gui.fileWriteStatus(selection, 9).access, "write");

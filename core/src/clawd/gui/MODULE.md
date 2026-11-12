@@ -145,6 +145,13 @@ device/inode and revision and checks this signed surface's own read declaration.
 Other GUI/MCP needs and parent `fs.read` are never selection. Unsupported
 argument-bound needs and missing Wild inheritance remain unbound.
 
+Selected-file declaration checks freshly verify the exact package retained by
+registration, rather than rediscovering the whole installed App catalogue.
+The complete signature, file contents, permissions and inventory are still
+checked on every use. The retained directory identity and running package
+reference must also match; descriptor pinning is not treated as immutability.
+Only that freshly matched package can validate the retained manifest's needs.
+
 Each proposal creates an ordinary protected exact-owner review naming file,
 read-only access and window, with a digest binding that target, identity,
 revision and live GUI. Only a fresh matching decision can be spent once.

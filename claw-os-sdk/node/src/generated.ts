@@ -129,6 +129,63 @@ export interface FileChangePlan {
 }
 
 /**
+ * Draft GUI one-shot regular-file creation.
+ * Root-owned protected fs.write selection for one absent literal child of this
+ * window's metadata directory. Selected or reserved is not saved. Only created
+ * reports a verified canonical creation; no content read or overwrite
+ * authority is granted.
+ */
+export interface GuiFileCreate {
+  version: 1;
+  selection_id: string;
+  parent_node: number;
+  name: string;
+  access: "create";
+  state: "pending" | "selected" | "created" | "denied" | "stale" | "expired" | "revoked" | "failed" | "uncertain";
+  approval_request_id?: string;
+  target_display?: string;
+  expires_in_ms?: number;
+  reason?: string;
+}
+
+/**
+ * GuiFileCreateRequest.
+ */
+export interface GuiFileCreateRequest {
+  parent_node: number;
+  name: string;
+}
+
+/**
+ * GuiFileCreateStatusRequest.
+ */
+export interface GuiFileCreateStatusRequest {
+  selection_id: string;
+  parent_node: number;
+}
+
+/**
+ * GuiFileCreateReservationRequest.
+ */
+export interface GuiFileCreateReservationRequest {
+  selection_id: string;
+  parent_node: number;
+}
+
+/**
+ * Draft GUI one-shot no-replace creation slot.
+ */
+export interface GuiFileCreateSlot {
+  version: 1;
+  reservation_id: string;
+  selection_id: string;
+  parent_node: number;
+  name: string;
+  target_name: string;
+  expires_in_ms: number;
+}
+
+/**
  * Draft GUI selected file read.
  * Root-owned status for one proposed file in this authenticated GUI instance.
  * Pending or an approval request ID is not a selected resource. No owner,
@@ -785,6 +842,16 @@ function validateWireSchema(
     if (typeof maximumLength === "number" && length > maximumLength) {
       throw wireError(WIRE_MAX_LENGTH, schemaName, path, `length must be <= ${maximumLength}`);
     }
+    const maximumBytes = rule["x-max-utf8-bytes"];
+    if (typeof maximumBytes === "number") {
+      const encoded = Buffer.from(value, "utf8");
+      if (encoded.toString("utf8") !== value) {
+        throw wireError(WIRE_TYPE, schemaName, path, "valid UTF-8 string required");
+      }
+      if (encoded.length > maximumBytes) {
+        throw wireError(WIRE_MAX_LENGTH, schemaName, path, `UTF-8 length must be <= ${maximumBytes}`);
+      }
+    }
     const pattern = rule["pattern"];
     if (typeof pattern === "string") {
       const match = new RegExp(pattern, "u").exec(value);
@@ -926,6 +993,28 @@ export function normalizeFileChangePlanIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value);
 }
 
+const _WIRE_SCHEMA_GUI_FILE_CREATE: WireRule = decodeWireJson("{\"$defs\":{\"GuiFileCreateRequest\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"parent_node\",\"name\"],\"type\":\"object\"},\"GuiFileCreateReservationRequest\":{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"},\"GuiFileCreateStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_create.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned protected fs.write selection for one absent literal child of this window's metadata directory. Selected or reserved is not saved. Only created reports a verified canonical creation; no content read or overwrite authority is granted.\",\"properties\":{\"access\":{\"const\":\"create\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"created\",\"denied\",\"stale\",\"expired\",\"revoked\",\"failed\",\"uncertain\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation, never source identity.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"parent_node\",\"name\",\"access\",\"state\"],\"title\":\"Draft GUI one-shot regular-file creation\",\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileCreate(value: unknown): asserts value is GuiFileCreate & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_CREATE, _WIRE_SCHEMA_GUI_FILE_CREATE, value, "GuiFileCreate", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE, _WIRE_SCHEMA_GUI_FILE_CREATE, value);
+}
+
+export function normalizeGuiFileCreateIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE, _WIRE_SCHEMA_GUI_FILE_CREATE, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_SLOT: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/gui_file_create_slot.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"properties\":{\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"name\":{\"pattern\":\"^\\\\.cos-save-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reservation_id\":{\"pattern\":\"^ss-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"target_name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"reservation_id\",\"selection_id\",\"parent_node\",\"name\",\"target_name\",\"expires_in_ms\"],\"title\":\"Draft GUI one-shot no-replace creation slot\",\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileCreateSlot(value: unknown): asserts value is GuiFileCreateSlot & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, _WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, value, "GuiFileCreateSlot", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, _WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, value);
+}
+
+export function normalizeGuiFileCreateSlotIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, _WIRE_SCHEMA_GUI_FILE_CREATE_SLOT, value);
+}
+
 const _WIRE_SCHEMA_GUI_FILE_READ: WireRule = decodeWireJson("{\"$defs\":{\"GuiFileReadRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"},\"GuiFileReadStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_read.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned status for one proposed file in this authenticated GUI instance. Pending or an approval request ID is not a selected resource. No owner, window, source path or grant handle is supplied by the App.\",\"properties\":{\"access\":{\"const\":\"read\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sr-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"denied\",\"stale\",\"expired\",\"revoked\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation only. Never a source identity or path authority.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"node\",\"access\",\"state\"],\"title\":\"Draft GUI selected file read\",\"type\":\"object\"}") as WireRule;
 
 export function validateGuiFileRead(value: unknown): asserts value is GuiFileRead & Record<string, unknown> {
@@ -1012,6 +1101,39 @@ export function validateTool(value: unknown): asserts value is Tool & Record<str
 
 export function normalizeToolIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"name\":{\"maxLength\":255,\"minLength\":1,\"pattern\":\"^([^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.[^./\\\\\\\\\\\\x00-\\\\x1f\\\\x7f][^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]*|\\\\.\\\\.[^/\\\\\\\\\\\\x00-\\\\x1f\\\\x7f]+)$\",\"type\":\"string\",\"x-full-match\":true,\"x-max-utf8-bytes\":255},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"parent_node\",\"name\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileCreateRequest(value: unknown): asserts value is GuiFileCreateRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, value, "GuiFileCreateRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, value);
+}
+
+export function normalizeGuiFileCreateRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileCreateStatusRequest(value: unknown): asserts value is GuiFileCreateStatusRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, value, "GuiFileCreateStatusRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, value);
+}
+
+export function normalizeGuiFileCreateStatusRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sc-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"parent_node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileCreateReservationRequest(value: unknown): asserts value is GuiFileCreateReservationRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, value, "GuiFileCreateReservationRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, value);
+}
+
+export function normalizeGuiFileCreateReservationRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST, value);
 }
 
 const _WIRE_SCHEMA_GUI_FILE_READ_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"}") as WireRule;

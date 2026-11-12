@@ -154,6 +154,62 @@ pub struct FileChangePlan {
     pub diagnostic: Option<String>,
 }
 
+/// Draft GUI one-shot regular-file creation
+/// Root-owned protected fs.write selection for one absent literal child of this
+/// window's metadata directory. Selected or reserved is not saved. Only created
+/// reports a verified canonical creation; no content read or overwrite authority
+/// is granted.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileCreate {
+    pub version: u8,
+    pub selection_id: String,
+    pub parent_node: u64,
+    pub name: String,
+    pub access: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_display: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// GuiFileCreateRequest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileCreateRequest {
+    pub parent_node: u64,
+    pub name: String,
+}
+
+/// GuiFileCreateStatusRequest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileCreateStatusRequest {
+    pub selection_id: String,
+    pub parent_node: u64,
+}
+
+/// GuiFileCreateReservationRequest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileCreateReservationRequest {
+    pub selection_id: String,
+    pub parent_node: u64,
+}
+
+/// Draft GUI one-shot no-replace creation slot
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileCreateSlot {
+    pub version: u8,
+    pub reservation_id: String,
+    pub selection_id: String,
+    pub parent_node: u64,
+    pub name: String,
+    pub target_name: String,
+    pub expires_in_ms: u64,
+}
+
 /// Draft GUI selected file read
 /// Root-owned status for one proposed file in this authenticated GUI instance.
 /// Pending or an approval request ID is not a selected resource. No owner,
@@ -673,6 +729,19 @@ pub fn validate_file_change_plan_state(value: &str) -> Result<(), String> {
     }
 }
 
+/// Reject values outside the gui_file_create.state enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_gui_file_create_state(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["pending", "selected", "created", "denied", "stale", "expired", "revoked", "failed", "uncertain"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid gui_file_create.state value: {value}"))
+    }
+}
+
 /// Reject values outside the gui_file_read.state enum.
 ///
 /// The wire schema lists a closed set of allowed values; a kernel
@@ -907,6 +976,11 @@ fn validate_wire_schema(
                 return Err(wire_error(WIRE_MAX_LENGTH, schema_name, path, format!("length must be <= {maximum}")));
             }
         }
+        if let Some(maximum) = rule.get("x-max-utf8-bytes").and_then(serde_json::Value::as_u64) {
+            if text.len() > maximum as usize {
+                return Err(wire_error(WIRE_MAX_LENGTH, schema_name, path, format!("UTF-8 length must be <= {maximum}")));
+            }
+        }
         if let Some(pattern) = rule.get("pattern").and_then(serde_json::Value::as_str) {
             let pattern = regex::Regex::new(pattern).map_err(|error| {
                 wire_error(WIRE_PATTERN, schema_name, path, format!("invalid schema pattern: {error}"))
@@ -1083,6 +1157,32 @@ pub fn normalize_file_change_plan_integers(value: &mut serde_json::Value) {
     normalize_wire_integers(&schema, &schema, value);
 }
 
+const _WIRE_SCHEMA_GUI_FILE_CREATE: &str = r###"{"$defs":{"GuiFileCreateRequest":{"additionalProperties":false,"properties":{"name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["parent_node","name"],"type":"object"},"GuiFileCreateReservationRequest":{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"},"GuiFileCreateStatusRequest":{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/gui_file_create.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Root-owned protected fs.write selection for one absent literal child of this window's metadata directory. Selected or reserved is not saved. Only created reports a verified canonical creation; no content read or overwrite authority is granted.","properties":{"access":{"const":"create","type":"string"},"approval_request_id":{"maxLength":128,"type":"string"},"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reason":{"maxLength":128,"type":"string"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true},"state":{"enum":["pending","selected","created","denied","stale","expired","revoked","failed","uncertain"],"type":"string"},"target_display":{"description":"Escaped inert presentation, never source identity.","maxLength":16384,"type":"string"},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","selection_id","parent_node","name","access","state"],"title":"Draft GUI one-shot regular-file creation","type":"object"}"###;
+pub fn validate_gui_file_create(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileCreate", "$")
+}
+
+pub fn normalize_gui_file_create_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_SLOT: &str = r###"{"$id":"https://claw-os.dev/wire/v1/gui_file_create_slot.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"name":{"pattern":"^\\.cos-save-[a-f0-9]{32}$","type":"string","x-full-match":true},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reservation_id":{"pattern":"^ss-[a-f0-9]{32}$","type":"string","x-full-match":true},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true},"target_name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","reservation_id","selection_id","parent_node","name","target_name","expires_in_ms"],"title":"Draft GUI one-shot no-replace creation slot","type":"object"}"###;
+pub fn validate_gui_file_create_slot(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileCreateSlot", "$")
+}
+
+pub fn normalize_gui_file_create_slot_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_SLOT)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
 const _WIRE_SCHEMA_GUI_FILE_READ: &str = r###"{"$defs":{"GuiFileReadRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"},"GuiFileReadStatusRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sr-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/gui_file_read.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Root-owned status for one proposed file in this authenticated GUI instance. Pending or an approval request ID is not a selected resource. No owner, window, source path or grant handle is supplied by the App.","properties":{"access":{"const":"read","type":"string"},"approval_request_id":{"maxLength":128,"type":"string"},"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reason":{"maxLength":128,"type":"string"},"selection_id":{"pattern":"^sr-[a-f0-9]{32}$","type":"string","x-full-match":true},"state":{"enum":["pending","selected","denied","stale","expired","revoked"],"type":"string"},"target_display":{"description":"Escaped inert presentation only. Never a source identity or path authority.","maxLength":16384,"type":"string"},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","selection_id","node","access","state"],"title":"Draft GUI selected file read","type":"object"}"###;
 pub fn validate_gui_file_read(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_READ)
@@ -1183,6 +1283,45 @@ pub fn validate_tool(value: &serde_json::Value) -> Result<(), WireDecodeError> {
 
 pub fn normalize_tool_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST: &str = r###"{"additionalProperties":false,"properties":{"name":{"maxLength":255,"minLength":1,"pattern":"^([^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.[^./\\\\\\x00-\\x1f\\x7f][^/\\\\\\x00-\\x1f\\x7f]*|\\.\\.[^/\\\\\\x00-\\x1f\\x7f]+)$","type":"string","x-full-match":true,"x-max-utf8-bytes":255},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["parent_node","name"],"type":"object"}"###;
+pub fn validate_gui_file_create_request(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileCreateRequest", "$")
+}
+
+pub fn normalize_gui_file_create_request_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST: &str = r###"{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"}"###;
+pub fn validate_gui_file_create_status_request(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileCreateStatusRequest", "$")
+}
+
+pub fn normalize_gui_file_create_status_request_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_STATUS_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST: &str = r###"{"additionalProperties":false,"properties":{"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sc-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","parent_node"],"type":"object"}"###;
+pub fn validate_gui_file_create_reservation_request(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileCreateReservationRequest", "$")
+}
+
+pub fn normalize_gui_file_create_reservation_request_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_CREATE_RESERVATION_REQUEST)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

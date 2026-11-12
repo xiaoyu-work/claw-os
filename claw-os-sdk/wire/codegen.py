@@ -19,6 +19,7 @@ dependency. It handles the subset of JSON Schema used by wire/v1:
     bounds run afterward)
   - string `minLength`, `maxLength`, and `pattern` (`x-full-match`
     tightens a pattern to the complete string)
+  - `x-max-utf8-bytes` for literal filesystem components (valid UTF-8 only)
   - arrays (with `items`)
   - `enum` ⇒ becomes a string with a doc-listed allow-list (kept loose to
     stay forward-compatible with kernel additions). For Rust/Python/Go we
@@ -487,6 +488,11 @@ def _emit_rust_validation(
         '        if let Some(maximum) = rule.get("maxLength").and_then(serde_json::Value::as_u64) {',
         "            if text.chars().count() > maximum as usize {",
         '                return Err(wire_error(WIRE_MAX_LENGTH, schema_name, path, format!("length must be <= {maximum}")));',
+        "            }",
+        "        }",
+        '        if let Some(maximum) = rule.get("x-max-utf8-bytes").and_then(serde_json::Value::as_u64) {',
+        "            if text.len() > maximum as usize {",
+        '                return Err(wire_error(WIRE_MAX_LENGTH, schema_name, path, format!("UTF-8 length must be <= {maximum}")));',
         "            }",
         "        }",
         '        if let Some(pattern) = rule.get("pattern").and_then(serde_json::Value::as_str) {',
@@ -1044,6 +1050,14 @@ def _emit_python_validation(
         '        maximum_length = rule.get("maxLength")',
         "        if isinstance(maximum_length, int) and len(value) > maximum_length:",
         '            raise _wire_error(WIRE_MAX_LENGTH, schema_name, path, f"length must be <= {maximum_length}")',
+        '        maximum_bytes = rule.get("x-max-utf8-bytes")',
+        "        if isinstance(maximum_bytes, int):",
+        "            try:",
+        '                encoded = value.encode("utf-8")',
+        "            except UnicodeEncodeError:",
+        '                raise _wire_error(WIRE_TYPE, schema_name, path, "valid UTF-8 string required") from None',
+        "            if len(encoded) > maximum_bytes:",
+        '                raise _wire_error(WIRE_MAX_LENGTH, schema_name, path, f"UTF-8 length must be <= {maximum_bytes}")',
         '        pattern = rule.get("pattern")',
         "        if isinstance(pattern, str):",
         "            match = re.search(pattern, value)",
@@ -1396,6 +1410,16 @@ def _emit_ts_validation(
         '    const maximumLength = rule["maxLength"];',
         '    if (typeof maximumLength === "number" && length > maximumLength) {',
         "      throw wireError(WIRE_MAX_LENGTH, schemaName, path, `length must be <= ${maximumLength}`);",
+        "    }",
+        '    const maximumBytes = rule["x-max-utf8-bytes"];',
+        '    if (typeof maximumBytes === "number") {',
+        '      const encoded = Buffer.from(value, "utf8");',
+        '      if (encoded.toString("utf8") !== value) {',
+        '        throw wireError(WIRE_TYPE, schemaName, path, "valid UTF-8 string required");',
+        "      }",
+        "      if (encoded.length > maximumBytes) {",
+        "        throw wireError(WIRE_MAX_LENGTH, schemaName, path, `UTF-8 length must be <= ${maximumBytes}`);",
+        "      }",
         "    }",
         '    const pattern = rule["pattern"];',
         '    if (typeof pattern === "string") {',
@@ -1836,6 +1860,10 @@ def _emit_go_validation(
         "\t\t}",
         '\t\tif maximum, ok := wireExactInteger(rule["maxLength"]); ok && maximum.value != nil && utf8.RuneCountInString(text) > int(maximum.value.Int64()) {',
         '\t\t\treturn wireError(WireMaxLength, schemaName, path, "above maximum length")',
+        "\t\t}",
+        '\t\tif maximum, ok := wireExactInteger(rule["x-max-utf8-bytes"]); ok && maximum.value != nil {',
+        '\t\t\tif !utf8.ValidString(text) { return wireError(WireType, schemaName, path, "valid UTF-8 string required") }',
+        '\t\t\tif len(text) > int(maximum.value.Int64()) { return wireError(WireMaxLength, schemaName, path, "above maximum UTF-8 length") }',
         "\t\t}",
         '\t\tif pattern, ok := rule["pattern"].(string); ok {',
         "\t\t\tmatcher, err := regexp.Compile(pattern)",
