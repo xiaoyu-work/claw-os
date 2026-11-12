@@ -175,7 +175,7 @@ jobs:
           python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src
           packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py
           scripts/tests/test_app_platform.py packaging/deb/tests/test_applet_provider.py
-          core/tests/test_app_apt_metadata.py
+          scripts/tests/test_native_editor_payload.py core/tests/test_app_apt_metadata.py
 
       - name: Retain matching Linux acceptance executables
         if: always()
@@ -227,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs, file-manager, native-package]
+        mode: [display, native-fs, file-manager, native-package, native-editor]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -251,6 +251,13 @@ jobs:
         if: matrix.mode == 'native-package'
         run: |
           sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
+      - name: Install real Editor build and software-renderer prerequisites
+        if: matrix.mode == 'native-editor'
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            cmake just libfontconfig-dev libfreetype-dev libglib2.0-dev libudev-dev \
+            libinput-dev libdbus-1-dev libsystemd-dev libegl-dev libgbm-dev \
+            libvulkan1 mesa-vulkan-drivers fonts-dejavu-core
       - name: Pin Cargo cache identity before private fixtures
         id: cargo-inputs
         env:
@@ -293,6 +300,20 @@ jobs:
       - name: Test retained package self-handoff through a signed common-Host GUI probe
         if: matrix.mode == 'native-package'
         run: bash scripts/ci/test-boundaries.sh native-package
+      - name: Test actual Editor ELF window, independent startup-file read and checked retirement
+        if: matrix.mode == 'native-editor'
+        run: bash scripts/ci/test-boundaries.sh native-editor
+      - name: Retain exact Editor input and compositor observations
+        if: always() && matrix.mode == 'native-editor'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-editor-acceptance-${{ github.sha }}
+          path: |
+            build/native-editor-input/app-sources.json
+            build/native-editor-input/native-editor.json
+            build/native-editor-authenticated.*/native-editor*.json
+          if-no-files-found: error
+          retention-days: 7
 
   sdk-bindings:
     runs-on: ubuntu-latest

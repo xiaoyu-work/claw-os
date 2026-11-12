@@ -231,6 +231,26 @@ and fence the instance. See the [native creation contract](../../worker/native_f
 These draft interfaces do not complete installed Editor/Files UI acceptance or
 publish a new SDK/platform.
 
+The separate candidate acceptance selector
+`clawd::server::gui_fixture::native_products::private_native_editor` requires
+the real immutable App-owned Editor release ELF, original installer resources
+and licenses, prepared against the published platform pin. It uses the unchanged
+manifest, private fixture signing/activation, actual normal-owner PAM login and
+common GUI Host. A protected compositor witness must observe a configured,
+buffered window while the startup file's independent Root read review is still
+pending; only a separate owner decision may produce the actual loaded-tab title
+and another rendered frame. Read revocation must acknowledge actual process,
+window, cgroup, native provider and runtime retirement. Neither a title alone,
+SDK status nor a probe marker satisfies readiness.
+
+This is a pending clean-GHA proof, not passing product acceptance or publication.
+In particular, Editor's unconditional Unix `fork::daemon` startup currently
+conflicts with the Host's foreground-child lifetime (`Supervised::poll_exit` /
+`watch` in `supervision.rs`). The test does not suppress that exit, keep a fake
+parent alive or adopt a daemon by name. Any product lifecycle or software-renderer
+failure must be resolved separately and rerun. Save As is not exercised without
+an existing trusted UI/dialog control.
+
 Only verified committed own effects can advance matching selected resources.
 They preserve existing read consent and all original deadlines. In-place
 changes retain same-object semantics. Atomic replacement uses a new native

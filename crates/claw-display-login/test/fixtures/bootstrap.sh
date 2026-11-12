@@ -2,7 +2,14 @@
 set -euo pipefail
 
 selection=all
-if [[ $# == 15 ]]; then
+native_editor_input=
+if [[ $# == 16 && "${15}" == --native-editor-only ]]; then
+    selection=native-editor
+    native_editor_input=$(realpath -- "${16}")
+    [[ -d "$native_editor_input/cosmic-edit" && ! -L "$native_editor_input/cosmic-edit" \
+        && -f "$native_editor_input/native-editor.json" && ! -L "$native_editor_input/native-editor.json" ]] || exit 64
+    set -- "${@:1:14}"
+elif [[ $# == 15 ]]; then
     case "${15}" in
         --session-startup-only) selection=startup ;;
         --file-manager-only) selection=file-manager ;;
@@ -87,6 +94,10 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$pam_fixture" /usr/lib/cos/bin/pam-login-fixture
     install -d -m0755 /usr/lib/cos/apps /usr/lib/cos/trust/publishers.d
     mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/lib/cos/apps
+    if [[ "$selection" == native-editor ]]; then
+        cp -a -- "$native_editor_input/cosmic-edit" /usr/lib/cos/apps/cosmic-edit
+        chown -hR 0:0 /usr/lib/cos/apps/cosmic-edit
+    fi
 fi
 printf '%s\n' \
     'root:x:0:0:root:/root:/bin/sh' \
@@ -158,6 +169,12 @@ trap cleanup EXIT
 if [[ "$gui" == 1 ]]; then
     install -d -m0700 /run/gui-fixture
     install -d -m0755 /run/gui-public
+    if [[ "$selection" == native-editor ]]; then
+        install -m0644 "$native_editor_input/native-editor.json" /run/gui-fixture/native-editor.json
+        install -d -m0700 -o62050 -g62050 /run/user/62050/native-editor-observer
+        printf 'private-native-editor-v1' >/run/gui-public/native-editor-enabled
+        chmod 0644 /run/gui-public/native-editor-enabled
+    fi
     printf 'private-v1' >/run/gui-public/isolated
     chmod 0644 /run/gui-public/isolated
     for kind in mnt net; do
@@ -216,6 +233,7 @@ BUS
         startup) fixture_test=clawd::server::gui_fixture::private_session_startup_failure ;;
         file-manager) fixture_test=clawd::server::gui_fixture::private_file_manager_session ;;
         native-fs) fixture_test=clawd::server::gui_fixture::private_native_fs_kernel ;;
+        native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
     listing=$("$registry" --list)
@@ -234,7 +252,15 @@ BUS
     else
         "$registry" --exact "$fixture_test" --ignored --nocapture --test-threads=1 || result=$?
     fi
-    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..24} session-startup file-manager; do
+    if [[ "$selection" == native-editor ]]; then
+        cp /run/gui-fixture/native-editor.json "$private/native-editor.json"
+        chmod 0644 "$private/native-editor.json"
+        if [[ -f /run/user/62050/native-editor-observer/window.json ]]; then
+            cp /run/user/62050/native-editor-observer/window.json "$private/native-editor-window.json"
+            chmod 0644 "$private/native-editor-window.json"
+        fi
+    fi
+    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..24} session-startup file-manager native-editor; do
         if [[ -f "/run/gui-fixture/pam-$case.log" ]]; then
             cp "/run/gui-fixture/pam-$case.log" "$private/pam-$case.log"
             if [[ "$result" != 0 ]]; then cat "$private/pam-$case.log" >&2; fi

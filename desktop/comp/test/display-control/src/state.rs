@@ -64,6 +64,7 @@ pub struct State {
     layer: WlrLayerShellState,
     dragging: bool,
     pub witness: crate::witness::Witness,
+    pub native_window: Option<crate::native_window::Window>,
 }
 
 impl State {
@@ -113,6 +114,7 @@ impl State {
             vec!["text/plain;charset=utf-8".to_string()],
             b"private-primary-fixture".to_vec(),
         );
+        let native_window = crate::native_window::enable(&dh)?;
         Ok(Self {
             common: Common {
                 display_handle: dh,
@@ -130,6 +132,7 @@ impl State {
             layer,
             dragging: false,
             witness: Default::default(),
+            native_window,
         })
     }
 
@@ -143,7 +146,11 @@ impl State {
     }
 
     pub fn witness_writes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.witness.dispatch(&self.seat)
+        self.witness.dispatch(&self.seat)?;
+        if let Some(window) = &mut self.native_window {
+            window.publish()?;
+        }
+        Ok(())
     }
 }
 
@@ -171,6 +178,13 @@ impl CompositorHandler for State {
         &client.get_data::<ClientState>().unwrap().compositor
     }
     fn commit(&mut self, surface: &WlSurface) {
+        if let Some(window) = &mut self.native_window {
+            if let Err(error) = window.commit(surface) {
+                eprintln!("private actual native window gate: {error}");
+                self.common.should_stop = true;
+            }
+            return;
+        }
         self.seat.get_keyboard().unwrap().set_focus(
             self,
             Some(surface.clone()),

@@ -5,6 +5,7 @@
 mod display_authority;
 #[path = "../../../src/wayland/handlers/security_context.rs"]
 mod security_context;
+mod native_window;
 mod state;
 mod witness;
 

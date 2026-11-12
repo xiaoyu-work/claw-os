@@ -38,6 +38,17 @@ The authenticated process fixture creates real overlay surfaces with explicit
 panel grants, keeps selection read/write independent, rejects an ordinary
 window's Panel label, and checks panel revocation/display-control expiry.
 
+The Editor-only candidate adds `test/display-control/src/native_window.rs`.
+Only its Root-created private selector enables standard XDG toplevel, output
+and SHM globals; existing synthetic selections retain their original dispatch.
+The witness records an authenticated instance's actual configure acknowledgement,
+nonuniform client-authored pixel buffer, subsequent frames/title and window
+destruction outside the App sandbox. It never writes an App result or grants
+input, Layer Shell, a bus, a render device or file access. Unsupported renderer
+or protocol requirements remain a hard failure. This headless buffered-window
+check is not physical-display/pixel-perfect acceptance. It supplies no trusted
+keyboard/dialog driver, so it does not claim Editor Save As.
+
 From the OS repository root:
 
 ```bash
