@@ -597,6 +597,20 @@ fn selected_write() {
     use std::os::unix::fs::{FileExt, MetadataExt};
     use std::time::Instant;
 
+    let started = Instant::now();
+    let mut trace_file = OpenOptions::new().write(true).create(true).truncate(true)
+        .open(private_marker("selected-write-timing.jsonl")).ok();
+    let mut stage = |source_step: &'static str| {
+        let timing = serde_json::json!({
+            "sourceStep": source_step,
+            "elapsedMs": started.elapsed().as_millis() as u64,
+        });
+        eprintln!("private selected-write timing {timing}");
+        if let Some(file) = trace_file.as_mut() {
+            let _ = writeln!(file, "{timing}");
+        }
+    };
+
     fn wait_write(pending: &claw_os_sdk::generated::GuiFileWrite) {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
@@ -620,6 +634,7 @@ fn selected_write() {
     let pending_read = claw_os_sdk::gui::request_file_read(node).unwrap();
     assert_eq!(pending_read.state, "pending");
     std::fs::write(private_marker("write-read-pending.json"), serde_json::to_vec(&pending_read).unwrap()).unwrap();
+    stage("write_read_request_pending");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let status = claw_os_sdk::gui::file_read_status(&pending_read.selection_id, node).unwrap();
@@ -628,6 +643,7 @@ fn selected_write() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(20));
     }
+    stage("write_read_selected");
     assert!(OpenOptions::new().write(true).open(&shared).is_err(), "read selection granted write");
     assert!(claw_os_sdk::gui::request_file_write(std::fs::metadata(&non_utf).unwrap().ino()).is_err(),
         "non-UTF8 inverse identity must refuse, never convert lossily");
@@ -639,18 +655,22 @@ fn selected_write() {
     std::fs::write(private_marker("write-pending.json"), serde_json::to_vec(&serde_json::json!({
         "write_only":pending_only, "shared":pending_write,
     })).unwrap()).unwrap();
+    stage("write_requests_pending");
     wait_write(&pending_only);
     wait_write(&pending_write);
+    stage("write_selected");
     let only_bytes: Vec<u8> = (0_usize..8199).map(|index| index.wrapping_mul(31).wrapping_add(3) as u8).collect();
     let mut only = OpenOptions::new().write(true).truncate(true).open(&write_only).unwrap();
     only.write_all(&only_bytes).unwrap();
     only.sync_all().unwrap();
     assert!(File::open(&write_only).is_err(), "write-only selection exposed owner content");
     assert!(OpenOptions::new().read(true).write(true).open(&write_only).is_err());
+    stage("write_only_complete");
 
     let mut old_read = File::open(&shared).unwrap();
     let mut version_one = Vec::new();
     old_read.read_to_end(&mut version_one).unwrap();
+    stage("original_read_complete");
     let size = version_one.len();
     let mapped = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ, libc::MAP_PRIVATE, old_read.as_raw_fd(), 0) };
     assert_ne!(mapped, libc::MAP_FAILED);
@@ -658,6 +678,7 @@ fn selected_write() {
     writer.write_all_at(b"owned\0\xff", 7).unwrap();
     writer.set_len((size + 19) as u64).unwrap();
     writer.sync_all().unwrap();
+    stage("direct_write_synced");
     version_one[7..14].copy_from_slice(b"owned\0\xff");
     version_one.resize(size + 19, 0);
     let deadline = Instant::now() + DEADLINE;
@@ -669,8 +690,10 @@ fn selected_write() {
     let mut current = Vec::new();
     old_read.read_to_end(&mut current).unwrap();
     assert_eq!(current, version_one);
+    stage("direct_read_revalidated");
 
     let reservation = claw_os_sdk::gui::reserve_file_save(&pending_write.selection_id, node).unwrap();
+    stage("save_reserved");
     assert_eq!(reservation.parent_node, std::fs::metadata(&home).unwrap().ino());
     let scratch = home.join(&reservation.name);
     assert!(std::fs::write(home.join("unreserved-save-sibling"), b"no directory grant").is_err());
@@ -685,6 +708,7 @@ fn selected_write() {
     File::open(&home).unwrap().sync_all().unwrap();
     assert!(!scratch.exists());
     assert_eq!(std::fs::read(&shared).unwrap(), version_two, "own replacement lost the existing read selection");
+    stage("save_installed");
     old_read.seek(SeekFrom::Start(0)).unwrap();
     current.clear();
     old_read.read_to_end(&mut current).unwrap();
@@ -695,6 +719,7 @@ fn selected_write() {
     current.clear();
     temporary.read_to_end(&mut current).unwrap();
     assert_eq!(current, version_two, "retained private scratch lost its authored bytes");
+    stage("retained_versions_verified");
     let newest = OpenOptions::new().write(true).open(&shared).unwrap();
     newest.write_all_at(b"Z", 0).unwrap();
     newest.sync_all().unwrap();
@@ -703,13 +728,16 @@ fn selected_write() {
     let mut first = [0];
     temporary.read_exact(&mut first).unwrap();
     assert_eq!(first[0], version_two[0], "scratch read exposed later target content");
+    stage("final_write_verified");
     assert_eq!(claw_os_sdk::gui::file_read_status(&pending_read.selection_id, node).unwrap().state, "selected");
     assert_eq!(claw_os_sdk::gui::file_write_status(&pending_write.selection_id, node).unwrap().state, "selected");
+    stage("write_statuses_verified");
     let unused = claw_os_sdk::gui::request_file_write(std::fs::metadata(&sibling).unwrap().ino()).unwrap();
     let pending = claw_os_sdk::gui::request_file_write(std::fs::metadata(home.join("write-pending-sibling")).unwrap().ino()).unwrap();
     std::fs::write(private_marker("write-cleanup-reviews.json"), serde_json::to_vec(&serde_json::json!({
         "unused":unused,"pending":pending,
     })).unwrap()).unwrap();
+    stage("write_cleanup_pending");
     let group = unsafe { libc::getpgrp() };
     let (mut ready, mut report) = UnixStream::pair().unwrap();
     ready.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -725,6 +753,7 @@ fn selected_write() {
         ready.read_exact(&mut confirmed).unwrap();
         assert_eq!(&confirmed, b"ready");
         std::fs::write(private_marker("selected-write-ready"), b"canonical write/save and retained read revisions").unwrap();
+        stage("write_ready");
     }
     loop {
         assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(7)) }, b'o');
