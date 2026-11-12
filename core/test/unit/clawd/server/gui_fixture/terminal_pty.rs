@@ -200,13 +200,27 @@ pub(super) async fn run(
     assert!(std::fs::metadata(root.join("run/display-home/native-editor-unselected.txt")).is_err());
     assert!(std::fs::metadata(root.join("run/user/62050/bus")).is_err());
     assert!(crate::approvals::list_pending_for_owner(Some(OWNER)).is_empty());
-    let passwd = std::fs::metadata(root.join("etc/passwd"));
+    let passwd_path = root.join("etc/passwd");
+    let passwd = std::fs::metadata(&passwd_path).unwrap();
+    assert!(passwd.is_file() && passwd.mode() & 0o222 == 0);
+    let record =
+        claw_display_control::identity::read_bounded(passwd_path.to_str().unwrap(), 8192).unwrap();
+    let lines = record.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1);
+    let fields = lines[0].split(':').collect::<Vec<_>>();
+    assert_eq!(fields.len(), 7);
+    assert_eq!(fields[2].parse::<u32>().unwrap(), OWNER);
+    assert_eq!(fields[3].parse::<u32>().unwrap(), OWNER);
+    assert_eq!(fields[5], state.to_str().unwrap());
+    assert_eq!(fields[6], "/bin/sh");
+    assert!(!root.join("etc/shadow").exists());
+    assert!(value("USER").is_none() && value("SHELL").is_none());
     eprintln!(
         "private actual Terminal default-shell inputs {}",
         serde_json::json!({
             "user_env_present": value("USER").is_some(), "shell_env_present": value("SHELL").is_some(),
-            "passwd_present": passwd.is_ok(), "passwd_errno": passwd.err().and_then(|error| error.raw_os_error()),
-            "no_identity_or_pty_resource_injected": true,
+            "private_readonly_account_view": true, "account_rows": lines.len(),
+            "no_host_passwd_or_pty_resource": true,
         })
     );
 

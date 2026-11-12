@@ -85,8 +85,11 @@ Keyboard delivery alone cannot pass: Root checks the actual private file,
 shell/child ELF identities and pidfds, matching PTY master/slave and separate
 shell session, then checked whole-cgroup/window/runtime/PAM retirement.
 Missing PTY/NSS/default-shell resources remain failures with ordinary captured
-diagnostics after checked retirement; no host devpts, passwd, user bus, Home,
-identity environment, process grant or model fallback is injected.
+diagnostics after checked retirement. The common worker's sealed single-account
+NSS view now binds its runtime UID/GID, OS login shell and private Home; no host
+passwd store, devpts, user bus, Home, identity environment, process grant or
+model fallback is injected. The actual panel/PTY gates remain separate from
+source-level account-view validation.
 This is a clean-GHA-only acceptance gate, not evidence that Terminal has passed
 or permission to publish/adopt another platform. Its public 0.2.1 ABI-1 input
 is restricted to the already approved archive digest.

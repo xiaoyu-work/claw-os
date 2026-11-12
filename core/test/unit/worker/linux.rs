@@ -46,6 +46,90 @@ fn pair_index(args: &[String], flag: &str, value: &str) -> Option<usize> {
 }
 
 #[test]
+fn private_account_records_bind_only_runtime_identity_and_private_home() {
+    let records = account_records(4242, 4343, "fixture-user", "/private/app", "/bin/sh").unwrap();
+    assert_eq!(
+        records,
+        [
+            (
+                "/etc/passwd",
+                "fixture-user:x:4242:4343::/private/app:/bin/sh\n".into()
+            ),
+            ("/etc/group", "worker:x:4343:\n".into()),
+        ]
+    );
+    for (name, home, shell) in [
+        ("bad:root", "/private/app", "/bin/sh"),
+        (
+            "fixture-user",
+            "/private/app\nroot:x:0:0::/:/bin/sh",
+            "/bin/sh",
+        ),
+        ("fixture-user", "relative", "/bin/sh"),
+        ("fixture-user", "/private/app", "relative"),
+    ] {
+        assert!(account_records(4242, 4343, name, home, shell).is_err());
+    }
+    assert!(account_records(0, 0, "root", "/private/app", "/bin/sh").is_err());
+}
+
+#[test]
+fn private_account_views_are_sealed_readonly_descriptor_mounts() {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let mut pinned = PinnedSources {
+        mounts: vec![Mount::read_only(
+            "/explicit-account",
+            "/etc/passwd",
+            MountClass::Input,
+        )],
+        files: Vec::new(),
+    };
+    for (target, bytes) in
+        account_records(4242, 4343, "fixture-user", "/private/app", "/bin/sh").unwrap()
+    {
+        pinned
+            .add_system_data(target, bytes.as_bytes(), false)
+            .unwrap();
+    }
+    let args = build_bwrap_args(
+        &policy(NetworkPolicy::Denied),
+        &pinned.mounts,
+        4242,
+        4343,
+        &HostLayout::default(),
+    );
+    assert!(args
+        .windows(3)
+        .any(|args| args == ["--ro-bind", "/proc/self/fd/200", "/etc/passwd"]));
+    assert!(args
+        .windows(3)
+        .any(|args| args == ["--ro-bind", "/proc/self/fd/201", "/etc/group"]));
+    let base = args
+        .windows(3)
+        .position(|args| args == ["--ro-bind", "/proc/self/fd/200", "/etc/passwd"])
+        .unwrap();
+    let explicit = args
+        .windows(3)
+        .position(|args| args == ["--ro-bind", "/explicit-account", "/etc/passwd"])
+        .unwrap();
+    assert!(
+        base < explicit,
+        "the default account view cannot mask an explicitly authorized file"
+    );
+    let file = &mut pinned.files[0];
+    assert_eq!(file.metadata().unwrap().mode() & 0o777, 0o444);
+    assert!(unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) } & libc::F_SEAL_WRITE != 0);
+    assert!(file.write_all(b"root:x:0:0::/:/bin/sh\n").is_err());
+    file.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = String::new();
+    file.read_to_string(&mut bytes).unwrap();
+    assert_eq!(bytes, "fixture-user:x:4242:4343::/private/app:/bin/sh\n");
+}
+
+#[test]
 fn every_namespace_is_named_explicitly() {
     let args = args(&policy(NetworkPolicy::Denied));
     for flag in [

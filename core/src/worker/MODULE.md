@@ -13,6 +13,18 @@ There is no second isolation implementation. `crate::sandbox`
 services) and `crate::agent::tools::mcp::integration` (external MCP servers and
 adapters) are consumers of this module, not peers of it.
 
+Linux workers receive sealed, read-only single-account `/etc/passwd` and
+single-group `/etc/group` views through the existing descriptor-pinned mounts.
+The account binds the runtime UID/GID and its OS-resolved name/login shell;
+its home is the sandbox's private HOME (or declared work directory), never
+the host account's home. Password hashes, GECOS, other users and shadow files
+are not copied. Fields that cannot be represented safely fail preparation.
+Like other base system resources, these defaults precede explicit authorized
+policy mounts rather than silently replacing a requested host-file view.
+This generic Unix identity metadata grants no capability, process, Home,
+device or bus access and does not change kernel, session or audit identity.
+No product-specific USER/SHELL override or raw host passwd mount is supplied.
+
 ## Trust tiers
 
 | Tier | Selected for | Sandbox | Display | Egress |
