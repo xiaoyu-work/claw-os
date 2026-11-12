@@ -21,7 +21,9 @@ use fuser::{ReplyCreate, ReplyWrite, TimeOrNow};
 use fuser::ReplyPoll;
 
 use super::Shared;
-use super::{BackingStage, ChosenWrite, SaveTarget};
+use super::{BackingStage, SaveTarget};
+#[cfg(test)]
+use super::ChosenWrite;
 use crate::clawd::client_identity::FsIdentityGuard;
 
 const MAX_NODES: usize = 4096;
@@ -478,7 +480,7 @@ impl VerifiedMutation {
 
 fn charge(counter: &std::sync::atomic::AtomicU64, bytes: u64) -> Result<(), i32> {
     counter
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             current
                 .checked_add(bytes)
                 .filter(|total| *total <= MAX_BYTES_PER_VIEW)
@@ -526,7 +528,7 @@ fn mutate_locked(
     let before = fingerprint(&pin.metadata().map_err(errno)?);
     shared
         .mutation_attempts
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
             (current < MAX_MUTATIONS).then_some(current + 1)
         })
         .map_err(|_| libc::ENOSPC)?;
