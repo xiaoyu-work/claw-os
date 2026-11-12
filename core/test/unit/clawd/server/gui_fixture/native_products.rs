@@ -322,16 +322,37 @@ fn find_native(retained: &RetainedInstance, product: Product) -> Option<NativePr
     matched.pop()
 }
 
-fn native_process(retained: &RetainedInstance, editor: &NativeProcess, stage: &str) {
-    host_live(retained, stage);
-    assert!(
-        !claw_display_control::identity::pidfd_exited(editor.pidfd.as_fd()).unwrap(),
-        "{}",
-        diagnostic(stage)
-    );
-    editor.identity.assert_current().unwrap();
-    let running = std::fs::metadata(format!("/proc/{}/exe", editor.identity.pid())).unwrap();
-    assert_eq!((running.dev(), running.ino()), editor.inode);
+fn check_native_process(retained: &RetainedInstance, native: &NativeProcess) -> Result<(), String> {
+    for (name, descriptor) in [
+        ("common Host", retained.process.as_fd()),
+        ("native App", native.pidfd.as_fd()),
+    ] {
+        if claw_display_control::identity::pidfd_exited(descriptor)
+            .map_err(|error| error.to_string())?
+        {
+            return Err(format!("{name} exited"));
+        }
+    }
+    let host =
+        ProcessIdentity::from_pidfd(retained.process.as_fd()).map_err(|error| error.to_string())?;
+    if host.uid() != OWNER {
+        return Err("common Host owner changed".into());
+    }
+    native
+        .identity
+        .assert_current()
+        .map_err(|error| error.to_string())?;
+    let running = std::fs::metadata(format!("/proc/{}/exe", native.identity.pid()))
+        .map_err(|error| error.to_string())?;
+    if (running.dev(), running.ino()) != native.inode {
+        return Err("native executable identity changed".into());
+    }
+    Ok(())
+}
+
+fn native_process(retained: &RetainedInstance, native: &NativeProcess, stage: &str) {
+    let checked = check_native_process(retained, native);
+    assert!(checked.is_ok(), "{}; {checked:?}", diagnostic(stage));
 }
 
 fn launcher_output_tail() -> std::io::Result<serde_json::Value> {
@@ -719,11 +740,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 .as_encoded_bytes()
         )
     );
-    assert!(
-        value("XDG_DATA_DIRS").unwrap().starts_with(
-            format!("{}/resources/usr/share:", product.directory().display()).as_bytes()
-        )
-    );
+    assert!(value("XDG_DATA_DIRS")
+        .unwrap()
+        .starts_with(format!("{}/resources/usr/share:", product.directory().display()).as_bytes()));
     assert_ne!(value("HOME"), Some(b"/run/display-home".as_slice()));
     assert_ne!(value("COS_MCP_SERVER"), Some(b"1".as_slice()));
     if product.ungranted.is_empty() {
@@ -743,11 +762,17 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
 
     let mut read = None;
     let before = loop {
-        native_process(
-            &retained,
-            &process,
-            "actual configured/buffered window and startup read request",
-        );
+        if let Err(error) = check_native_process(&retained, &process) {
+            renderer_failure(
+                &control,
+                &mut pam,
+                &retained,
+                &process,
+                &session,
+                &format!("actual native startup stopped before its real window: {error}"),
+            )
+            .await;
+        }
         if editor && read.is_none() {
             read = crate::approvals::list_pending_for_owner(Some(OWNER))
                 .into_iter()
@@ -782,11 +807,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "startup file was loaded before independent content consent"
         );
     } else {
-        assert!(
-            !crate::approvals::list_pending_for_owner(Some(OWNER))
-                .iter()
-                .any(|request| request.verb == "fs.read")
-        );
+        assert!(!crate::approvals::list_pending_for_owner(Some(OWNER))
+            .iter()
+            .any(|request| request.verb == "fs.read"));
     }
     if let Some(metadata) = &metadata {
         assert!(matches!(
@@ -924,12 +947,10 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         !runtime.exists() && !mountpoint.exists(),
         "actual native runtime/provider cleanup was not acknowledged"
     );
-    assert!(
-        !std::fs::read_to_string("/proc/self/mountinfo")
-            .unwrap()
-            .lines()
-            .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str())
-    );
+    assert!(!std::fs::read_to_string("/proc/self/mountinfo")
+        .unwrap()
+        .lines()
+        .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str()));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if observe().is_some_and(|record| {
