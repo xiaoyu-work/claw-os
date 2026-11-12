@@ -1304,7 +1304,7 @@ pub fn deny_if_pending_for_owner(
     validate_approval_id(id)?;
     ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
-        match status_for_owner(id, owner_uid) {
+        match status_for_owner_locked(id, owner_uid) {
             RequestStatus::Pending => {
                 resolve_locked(id, Outcome::Denied, None, decided_by, note, owner_uid)?;
                 Ok(RequestStatus::Denied)
@@ -2282,6 +2282,17 @@ pub fn status_for_owner(id: &str, owner_uid: Option<u32>) -> RequestStatus {
     if validate_approval_id(id).is_err() {
         return RequestStatus::Unknown;
     }
+    if ensure_dirs().is_err() {
+        return RequestStatus::Unknown;
+    }
+    // Decision and consumption moves must share one complete status snapshot.
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        Ok(status_for_owner_locked(id, owner_uid))
+    })
+    .unwrap_or(RequestStatus::Unknown)
+}
+
+fn status_for_owner_locked(id: &str, owner_uid: Option<u32>) -> RequestStatus {
     let file = format!("{id}.json");
     for (dir, status) in [
         (pending_dir(), RequestStatus::Pending),

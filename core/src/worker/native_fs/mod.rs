@@ -22,7 +22,7 @@ mod backend;
 mod selected_read;
 mod selected_write;
 pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider};
-pub(crate) use selected_write::{SaveReservation, WriteLeaseCheck, WritePermit};
+pub(crate) use selected_write::{WriteLeaseCheck, WritePermit};
 
 struct Binding {
     process: workload::InstanceProcess,

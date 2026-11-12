@@ -708,6 +708,54 @@ fn authoritative_decision_wins_over_leftover_scratch() {
 // What an approval actually authorises
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
+#[test]
+fn status_waits_for_the_complete_owner_decision_snapshot() {
+    use std::sync::mpsc::{channel, RecvTimeoutError};
+    use std::time::Duration;
+
+    let _tmp = isolated_env();
+    let id = submit_owned(
+        Verb::FS_READ, Scope::path("/fixture/input"), "sess-status-snapshot",
+        "read input", None, Some(1000),
+    ).unwrap();
+    let (started_tx, started_rx) = channel();
+    let (result_tx, result_rx) = channel();
+    let context = crate::paths::RoutedPathContext::capture();
+    let read_id = id.clone();
+    let (reader, started, early, resolved) =
+        crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+            let reader = std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                let status = context.scope_sync(|| status_for_owner(&read_id, Some(1000)));
+                result_tx.send(status).unwrap();
+            });
+            let started = started_rx.recv_timeout(Duration::from_secs(5));
+            let early = result_rx.recv_timeout(Duration::from_millis(200));
+            let resolved = resolve_locked(
+                &id, Outcome::Approved, Some(GrantDuration::Once),
+                Some("uid:0".into()), None, Some(1000),
+            );
+            Ok((reader, started, early, resolved))
+        }).unwrap();
+    let waited = matches!(early, Err(RecvTimeoutError::Timeout));
+    let completed = match early {
+        Ok(status) => Ok(status),
+        Err(_) => result_rx.recv_timeout(Duration::from_secs(5)),
+    };
+    reader.join().unwrap();
+    started.unwrap();
+    resolved.unwrap();
+    assert!(waited, "status scanned an in-flight owner decision without the store lock");
+    assert_eq!(completed.unwrap(), RequestStatus::Approved);
+    assert_eq!(status_for_owner(&id, Some(1001)), RequestStatus::Unknown);
+    assert_eq!(
+        deny_if_pending_for_owner(&id, None, None, Some(1000)).unwrap(),
+        RequestStatus::Approved,
+        "the already-locked caller must not reacquire its own grant lock"
+    );
+}
+
 #[test]
 fn an_approval_carries_a_bounded_grant() {
     let _tmp = isolated_env();
