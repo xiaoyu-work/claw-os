@@ -268,7 +268,7 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         if [[ "$selection" == native-calendar ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
@@ -330,7 +330,7 @@ display() {
     elif [[ "$selection" == native-calendar ]]; then
         selectors=("--native-calendar-only" "$GITHUB_WORKSPACE/build/native-calendar-input"
             "$CARGO_TARGET_DIR/native-calendar-service/debug/claw-calendar-reader")
-    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal ]]; then
+    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-store ]]; then
         selectors=("--$selection-only" "$GITHUB_WORKSPACE/build/$selection-input")
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
@@ -456,9 +456,10 @@ case "${1:-}" in
     native-files) display native-files ;;
     native-terminal) display native-terminal ;;
     native-calendar) display native-calendar ;;
+    native-store) display native-store ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|applets}" >&2
         exit 2
         ;;
 esac

@@ -349,6 +349,8 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
         "cosmic-term"
     } else if case == 28 {
         "panel-calendar"
+    } else if case == 29 {
+        "cosmic-store"
     } else if case == 0 {
         "gui-boundary-zero"
     } else {
@@ -356,7 +358,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     };
     let mut caps = CapSet::new();
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));
-    if ![25, 26, 27, 28].contains(&case) {
+    if ![25, 26, 27, 28, 29].contains(&case) {
         caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/gui-public")));
     }
     if [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 14, 17, 18].contains(&case) {

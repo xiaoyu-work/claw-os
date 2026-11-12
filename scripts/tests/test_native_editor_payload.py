@@ -17,7 +17,7 @@ editor = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(editor)
 
 
-@pytest.fixture(params=["editor", "files", "terminal", "calendar"])
+@pytest.fixture(params=["editor", "files", "terminal", "calendar", "store"])
 def payload(tmp_path, request):
     if platform.machine() not in ("x86_64", "AMD64") or not Path("/bin/true").is_file():
         pytest.skip("This payload parser test uses an existing real amd64 Linux ELF")
@@ -49,6 +49,14 @@ def payload(tmp_path, request):
                 {"verb": "ui.panel", "scope": {"kind": "fixed", "scope": {"kind": "wild"}}},
             ],
         }
+    elif product == "store":
+        manifest["desktop"] = {
+            "exec": "--gui",
+            "needs": [{"verb": "sys.observe", "scope": {
+                "kind": "fixed", "scope": {"kind": "name", "value": "packages"},
+            }}],
+            "optional_needs": [{"verb": "sys.package", "scope": {"kind": "wild"}}],
+        }
     for root, relative, content in (
         (source, f"products/{product}/apps/{app}/app.json", json.dumps(manifest)),
         (source, f"products/{product}/native/LICENSE", "synthetic product license\n"),
@@ -67,7 +75,7 @@ def payload(tmp_path, request):
         "version": "0.2.1", "runtime_abi": 1,
         "sha256": (
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
-            if product in ("terminal", "calendar") else "a" * 64
+            if product in ("terminal", "calendar", "store") else "a" * 64
         ),
         "url": "https://github.com/xiaoyu-work/claw-os/releases/download/"
                "app-platform-v0.2.1/claw-os-app-platform-0.2.1.tar.gz",
@@ -128,7 +136,7 @@ def test_header_only_elf_and_missing_installer_resources_cannot_enter_lane(paylo
         editor.payload_record(source, prepared, {}, product)
 
 
-@pytest.mark.parametrize("payload", ["terminal", "calendar"], indirect=True)
+@pytest.mark.parametrize("payload", ["terminal", "calendar", "store"], indirect=True)
 def test_native_product_refuses_an_unapproved_platform_digest(payload):
     source, prepared, product = payload
     path = source / "platform.lock.json"

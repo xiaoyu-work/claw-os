@@ -156,7 +156,7 @@ fn audit_file() -> std::fs::File {
     file
 }
 
-fn audit_since(offset: u64) -> Vec<serde_json::Value> {
+pub(super) fn audit_since(offset: u64) -> Vec<serde_json::Value> {
     let mut file = audit_file();
     assert!(
         file.metadata().unwrap().len() >= offset,
