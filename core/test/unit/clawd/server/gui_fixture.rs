@@ -392,24 +392,32 @@ fn private_audit_tail() -> String {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut output = String::new();
-    if let Ok(file) = std::fs::File::open(
-        "/run/display-home/.local/share/cos/apps/gui-boundary-test/selected-read-timing.jsonl",
-    ) {
-        let mut bytes = Vec::new();
-        if file.take(4096).read_to_end(&mut bytes).is_ok() {
-            for line in String::from_utf8_lossy(&bytes).lines().take(16) {
-                let Ok(timing) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
-                let (Some(step), Some(ms)) = (
-                    timing.get("sourceStep").and_then(serde_json::Value::as_str),
-                    timing.get("elapsedMs").and_then(serde_json::Value::as_u64),
-                ) else { continue; };
-                if matches!(step, "request_pending" | "status_selected" | "native_file_opened"
-                    | "native_read_complete" | "seek_mmap_complete" | "scalar_denial_done"
-                    | "pending_sibling_cleanup_ready")
-                {
-                    output.push_str(&format!(
-                        "\nprivate selected-read timing sourceStep={step} elapsedMs={ms}",
-                    ));
+    for kind in ["selected-read", "selected-write"] {
+        if let Ok(file) = std::fs::File::open(
+            Path::new("/run/display-home/.local/share/cos/apps/gui-boundary-test")
+                .join(format!("{kind}-timing.jsonl")),
+        ) {
+            let mut bytes = Vec::new();
+            if file.take(4096).read_to_end(&mut bytes).is_ok() {
+                for line in String::from_utf8_lossy(&bytes).lines().take(16) {
+                    let Ok(timing) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+                    let (Some(step), Some(ms)) = (
+                        timing.get("sourceStep").and_then(serde_json::Value::as_str),
+                        timing.get("elapsedMs").and_then(serde_json::Value::as_u64),
+                    ) else { continue; };
+                    if matches!(step, "request_pending" | "status_selected" | "native_file_opened"
+                        | "native_read_complete" | "seek_mmap_complete" | "scalar_denial_done"
+                        | "pending_sibling_cleanup_ready" | "write_read_request_pending"
+                        | "write_read_selected" | "write_requests_pending" | "write_selected"
+                        | "write_only_complete" | "original_read_complete" | "direct_write_synced"
+                        | "direct_read_revalidated" | "save_reserved" | "save_installed"
+                        | "retained_versions_verified" | "final_write_verified"
+                        | "write_statuses_verified" | "write_cleanup_pending" | "write_ready")
+                    {
+                        output.push_str(&format!(
+                            "\nprivate {kind} timing sourceStep={step} elapsedMs={ms}",
+                        ));
+                    }
                 }
             }
         }
