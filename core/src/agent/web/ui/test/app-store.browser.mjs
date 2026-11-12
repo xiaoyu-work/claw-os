@@ -308,7 +308,14 @@ async function installedProduct() {
         if (await evaluate(expression, sessionId)) return;
         await delay(100);
       }
-      throw new Error(`Installed App browser condition failed: ${expression}`);
+      const state = await evaluate(`({
+        readyState: document.readyState,
+        result: document.querySelector('#result-state')?.textContent,
+        notice: document.querySelector('#notice')?.textContent,
+        setBound: typeof document.querySelector('#set')?.onclick === 'function',
+        setDisabled: document.querySelector('#set')?.disabled
+      })`, sessionId);
+      throw new Error(`Installed App browser condition failed: ${expression}; state=${JSON.stringify(state)}`);
     };
     await send("Log.enable");
     await send("Runtime.enable");
@@ -333,7 +340,7 @@ async function installedProduct() {
     const sessionId = attached.sessionId;
     await send("Log.enable", {}, sessionId);
     await send("Runtime.enable", {}, sessionId);
-    await wait("document.querySelector('#kv') && !document.querySelector('#kv').hidden", sessionId);
+    await wait("document.querySelector('#kv') && !document.querySelector('#kv').hidden && typeof document.querySelector('#set')?.onclick === 'function'", sessionId);
     await evaluate("document.querySelector('#key').value='web-proof'; document.querySelector('#value').value='first browser click'; document.querySelector('#set').click()", sessionId);
     await wait("document.querySelector('#result-state').textContent.includes('Set reported')", sessionId);
     await evaluate("document.querySelector('details').open=true; [...document.querySelectorAll('details button')].find(button=>button.textContent==='set').click()", sessionId);
