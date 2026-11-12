@@ -93,6 +93,22 @@ consumer lane, but audit does not expose returned records and no exact agenda
 text rendering is asserted. Source/pure checks are not a passing actual panel
 or consumer result; both remain clean-GHA-only gates.
 
+The Calendar-only synthetic fixture can arm a passive SHM evidence selector
+owned by Root and bound to that exact instance. Only its current live,
+Layer-parented, configure-acknowledged popup is sampled. Visible pixel bytes
+are copied once alongside the existing checksum calculation, without pool
+padding or unrelated SHM contents. A single `native-calendar-agenda.shm`
+container atomically couples immutable JSON metadata and packed native
+BGRA/BGRX bytes; each real popup buffer attachment replaces it, through
+ordinary close.
+Publication is capped at 32 frames, 4 MiB of pixels per frame and 32 MiB total.
+Limits/I/O/unsupported formats invalidate the optional evidence, not the
+existing acceptance gates. Final window metadata distinguishes the latest
+captured live commit from unmap/close or a later unmatched configure.
+There is no new App input, capture or accessibility grant, render alteration,
+service reply hook, OCR or text claim. A snapshot can still precede App reply
+processing; Parent's later visual inspection is separate evidence.
+
 From the OS repository root:
 
 ```bash

@@ -286,7 +286,7 @@ display() {
             cargo test -p cos --lib --locked native_terminal_session_selection -- --test-threads=1
         fi
         cargo test --manifest-path desktop/comp/test/display-control/Cargo.toml \
-            --locked -- keyboard_plan_refuses pointer_plan_refuses --test-threads=1
+            --locked -- keyboard_plan_refuses pointer_plan_refuses calendar_snapshot --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
             --product "${selection#native-}" \
             --output "$GITHUB_WORKSPACE/build/$selection-input" \

@@ -345,6 +345,28 @@ pub(super) async fn run(
         }
     }
     let offset = audit_offset();
+    assert_eq!(std::fs::read(&fixture.database).unwrap(), fixture.before);
+    let selector = Path::new("/run/gui-public/native-calendar-snapshot-enabled");
+    let mut snapshot = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(selector)
+        .unwrap();
+    snapshot
+        .set_permissions(std::fs::Permissions::from_mode(0o644))
+        .unwrap();
+    assert!(snapshot.metadata().unwrap().uid() == 0 && snapshot.metadata().unwrap().nlink() == 1);
+    snapshot
+        .write_all(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema":"claw.private-calendar-synthetic-shm/v1", "instance":driver.instance,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    drop(snapshot);
     driver.click().await;
     let (frame, request, use_record) = loop {
         driver
@@ -379,20 +401,20 @@ pub(super) async fn run(
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     driver.click().await;
-    loop {
+    let closed_frame = loop {
         driver
             .live("Calendar original popup close while panel and native process remain live")
             .await;
-        if observe().is_some_and(|record| {
-            buffered_panel(&record, &driver.instance, CALENDAR.desktop_id)
+        if let Some(record) = observe().filter(|record| {
+            buffered_panel(record, &driver.instance, CALENDAR.desktop_id)
                 && record["popup"]["parent_instance"] == driver.instance
                 && record["popup"]["closed"] == true
                 && record["popup"]["open"] == false
         }) {
-            break;
+            break record;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    };
     assert_eq!(std::fs::read(&fixture.database).unwrap(), fixture.before);
     let queries = Path::new("/run/cos/calendar-queries");
     if !queries.is_dir() || queries.read_dir().unwrap().next().is_some() {
@@ -406,6 +428,7 @@ pub(super) async fn run(
         "fixture_event_id": EVENT_ID, "fixture_event_title": EVENT_TITLE,
         "fixture_first_day": fixture.first.to_string(), "fixture_end_day_exclusive": fixture.end.to_string(),
         "request": request, "exact_scope_use": use_record, "popup": frame["popup"],
+        "passive_agenda_snapshot": closed_frame["popup"]["snapshot"],
         "ordinary_pointer_deliveries": driver.sequence, "original_popup_closed": true,
         "real_existing_reader_success": true,
         "sdk_reply_delivery_and_decode_asserted": false,

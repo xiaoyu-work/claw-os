@@ -18,7 +18,7 @@ use smithay::{
     },
 };
 use std::{
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     time::Instant,
@@ -30,7 +30,198 @@ use wayland_server::{
 };
 
 pub(crate) const OBSERVER: &str = "/run/user/62050/native-product-observer";
+const SNAPSHOT_SELECTOR: &str = "/run/gui-public/native-calendar-snapshot-enabled";
+const SNAPSHOT_FILE: &str = "native-calendar-agenda.shm";
+const SNAPSHOT_MAGIC: &[u8; 12] = b"CLAWCALSHM1\0";
+const SNAPSHOT_FRAME_BYTES: usize = 4 * 1024 * 1024;
+const SNAPSHOT_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+const SNAPSHOT_FRAMES: usize = 32;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Default)]
+struct PassiveSnapshot {
+    frames: usize,
+    bytes: usize,
+    stopped: bool,
+    index: Option<serde_json::Value>,
+}
+
+fn synthetic_snapshot_enabled(instance: &str) -> Result<bool> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(SNAPSHOT_SELECTOR)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o022 != 0
+        || metadata.len() > 512
+    {
+        return Err("unprotected synthetic Calendar snapshot selector".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(513).read_to_end(&mut bytes)?;
+    if bytes.len() > 512 {
+        return Err("synthetic snapshot selector grew beyond its bound".into());
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    check_snapshot_selector(&value, instance)?;
+    Ok(true)
+}
+
+fn check_snapshot_selector(value: &serde_json::Value, instance: &str) -> Result<()> {
+    if value.as_object().is_none_or(|fields| fields.len() != 2)
+        || value["schema"] != "claw.private-calendar-synthetic-shm/v1"
+        || value["instance"] != instance
+    {
+        return Err("snapshot is not bound to this synthetic Root instance".into());
+    }
+    Ok(())
+}
+
+fn snapshot_container(metadata: &serde_json::Value, pixels: &[u8]) -> Result<Vec<u8>> {
+    let header = serde_json::to_vec(metadata)?;
+    if header.len() > 4096 || pixels.len() > SNAPSHOT_FRAME_BYTES {
+        return Err("passive Calendar snapshot exceeds its file bound".into());
+    }
+    let mut bytes = Vec::with_capacity(SNAPSHOT_MAGIC.len() + 4 + header.len() + pixels.len());
+    bytes.extend_from_slice(SNAPSHOT_MAGIC);
+    bytes.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&header);
+    bytes.extend_from_slice(pixels);
+    Ok(bytes)
+}
+
+impl PassiveSnapshot {
+    fn allowance(&self) -> usize {
+        if self.stopped || self.frames >= SNAPSHOT_FRAMES {
+            0
+        } else {
+            SNAPSHOT_FRAME_BYTES.min(SNAPSHOT_TOTAL_BYTES.saturating_sub(self.bytes))
+        }
+    }
+
+    fn unavailable(&mut self, instance: &str, commit: u64, reason: &str) {
+        self.stopped = true;
+        let _ = std::fs::remove_file(Path::new(OBSERVER).join(SNAPSHOT_FILE));
+        let _ = std::fs::remove_file(Path::new(OBSERVER).join("agenda-snapshot.next"));
+        self.index = Some(serde_json::json!({
+            "schema": "claw.private-calendar-shm-index/v1", "instance": instance,
+            "status": reason, "latest_buffer_commit": commit,
+            "mapped": true, "closed": false, "file": null,
+            "publications": self.frames, "total_bytes": self.bytes,
+        }));
+    }
+
+    fn publish(
+        &mut self,
+        instance: &str,
+        commit: u64,
+        geometry: (i32, i32, i32, i32),
+        configure: Serial,
+        raster: &serde_json::Value,
+        pixels: Option<ShmPixels>,
+    ) {
+        if self.stopped {
+            if let Some(index) = &mut self.index {
+                index["latest_buffer_commit"] = commit.into();
+            }
+            return;
+        }
+        let Some(pixels) = pixels else {
+            self.unavailable(instance, commit, "size-format-or-publication-limit");
+            return;
+        };
+        if raster["width"].as_i64() != Some(i64::from(geometry.2))
+            || raster["height"].as_i64() != Some(i64::from(geometry.3))
+        {
+            self.unavailable(instance, commit, "buffer-configure-mismatch");
+            return;
+        }
+        let observed_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|time| time.as_millis());
+        let metadata = serde_json::json!({
+            "schema": "claw.private-calendar-shm-frame/v1", "instance": instance,
+            "synthetic_fixture": true, "captured_live": true, "owner_uid": 62050,
+            "role": "xdg_popup", "parent_role": "zwlr_layer_surface_v1",
+            "parent_instance": instance, "configure_serial": u32::from(configure),
+            "geometry": [geometry.0, geometry.1, geometry.2, geometry.3],
+            "buffer_commit": commit, "raster": raster, "observed_unix_ms": observed_ms,
+            "source_format": pixels.format, "source_stride": pixels.source_stride,
+            "source_offset": pixels.source_offset, "stored_stride": geometry.2 * 4,
+            "stored_offset": 0, "stored_bytes": pixels.bytes.len(),
+            "byte_order": "little-endian", "packing": "visible BGRA/BGRX rows only; no pool padding",
+            "alpha": "argb8888 is premultiplied; xrgb8888 X byte is ignored",
+            "checksum_algorithm": "fnv1a64-visible-bytes", "pixel_checksum": raster["pixel_checksum"],
+            "reply_decode_asserted": false, "event_text_asserted": false,
+        });
+        let result = (|| -> std::result::Result<usize, &'static str> {
+            let bytes = snapshot_container(&metadata, &pixels.bytes)
+                .map_err(|_| "snapshot-header-or-frame-limit")?;
+            if bytes.len() > SNAPSHOT_TOTAL_BYTES.saturating_sub(self.bytes) {
+                return Err("snapshot-cumulative-byte-limit");
+            }
+            let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
+            if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
+                return Err("snapshot-own-limit-unavailable");
+            }
+            if bytes.len() as u64 > limit.rlim_cur {
+                return Err("snapshot-own-file-size-limit");
+            }
+            let root = Path::new(OBSERVER);
+            let candidate = root.join("agenda-snapshot.next");
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&candidate)
+                .map_err(|_| "snapshot-create-error")?;
+            file.write_all(&bytes).map_err(|_| "snapshot-write-error")?;
+            drop(file);
+            std::fs::rename(candidate, root.join(SNAPSHOT_FILE))
+                .map_err(|_| "snapshot-publish-error")?;
+            Ok(bytes.len())
+        })();
+        match result {
+            Ok(size) => {
+                self.frames += 1;
+                self.bytes += size;
+                self.index = Some(serde_json::json!({
+                    "schema": "claw.private-calendar-shm-index/v1", "instance": instance,
+                    "status": "saved", "file": SNAPSHOT_FILE, "file_bytes": size,
+                    "snapshot_commit": commit, "latest_buffer_commit": commit,
+                    "configure_serial": u32::from(configure), "matches_current_configure": true,
+                    "mapped": true, "closed": false, "publications": self.frames,
+                    "total_bytes": self.bytes, "pixel_checksum": raster["pixel_checksum"],
+                }));
+            }
+            Err(reason) => self.unavailable(instance, commit, reason),
+        }
+    }
+
+    fn unmap(&mut self, closed: bool) {
+        if let Some(index) = &mut self.index {
+            index["mapped"] = false.into();
+            index["closed"] = closed.into();
+        }
+    }
+}
+
+struct ShmPixels {
+    bytes: Vec<u8>,
+    format: &'static str,
+    source_stride: usize,
+    source_offset: usize,
+}
 
 #[derive(Default)]
 struct Auxiliary {
@@ -62,9 +253,11 @@ struct PanelPopup {
     configures: Vec<Serial>,
     parent_bound: bool,
     configured: bool,
+    acknowledged: Option<Serial>,
     commits: u64,
     raster: Option<serde_json::Value>,
     closed: bool,
+    snapshot: PassiveSnapshot,
 }
 
 #[derive(Default)]
@@ -391,6 +584,11 @@ impl Window {
             geometry.size.h,
         ));
         popup.configured = true;
+        popup.acknowledged = Some(configure.serial);
+        if let Some(index) = &mut popup.snapshot.index {
+            index["matches_current_configure"] =
+                (index["configure_serial"] == u32::from(configure.serial)).into();
+        }
     }
 
     fn close_panel_popup(&mut self, surface: &PopupSurface) -> Result<()> {
@@ -400,6 +598,7 @@ impl Window {
         }
         popup.surface = None;
         popup.closed = true;
+        popup.snapshot.unmap(true);
         self.publish()
     }
 
@@ -576,15 +775,37 @@ impl Window {
                             .ok_or("panel frame count overflow")?;
                         self.output.enter(surface);
                     } else if is_popup {
+                        let instance = self.instance.as_deref().unwrap();
+                        let capture = synthetic_snapshot_enabled(instance)?;
                         let popup = &mut self.panel.as_mut().unwrap().popup;
                         if !popup.parent_bound || !popup.configured {
                             return Err("native popup attached pixels before parent/configure acknowledgement".into());
                         }
-                        popup.raster = Some(raster(&buffer)?);
+                        let (observed, pixels) = raster_with_pixels(
+                            &buffer,
+                            if capture {
+                                Some(popup.snapshot.allowance())
+                            } else {
+                                None
+                            },
+                        )?;
+                        popup.raster = Some(observed);
                         popup.commits = popup
                             .commits
                             .checked_add(1)
                             .ok_or("popup frame count overflow")?;
+                        if capture {
+                            popup.snapshot.publish(
+                                instance,
+                                popup.commits,
+                                popup.geometry.unwrap(),
+                                popup
+                                    .acknowledged
+                                    .expect("real popup configure acknowledgement"),
+                                popup.raster.as_ref().unwrap(),
+                                pixels,
+                            );
+                        }
                         self.output.enter(surface);
                     }
                     buffer.release();
@@ -598,6 +819,7 @@ impl Window {
                         self.panel.as_mut().unwrap().raster = None;
                     } else if is_popup {
                         self.panel.as_mut().unwrap().popup.raster = None;
+                        self.panel.as_mut().unwrap().popup.snapshot.unmap(false);
                     }
                 }
             }
@@ -632,6 +854,7 @@ impl Window {
                     "open": panel.popup.surface.is_some(), "closed": panel.popup.closed,
                     "geometry": panel.popup.geometry, "configure_acked": panel.popup.configured,
                     "buffer_commits": panel.popup.commits, "raster": panel.popup.raster,
+                    "snapshot": panel.popup.snapshot.index,
                 },
             }));
         }
@@ -738,6 +961,58 @@ impl Window {
 }
 
 fn raster(buffer: &WlBuffer) -> Result<serde_json::Value> {
+    raster_with_pixels(buffer, None).map(|(raster, _)| raster)
+}
+
+fn visible_pixels(
+    width: usize,
+    height: usize,
+    stride: usize,
+    offset: usize,
+    mut read: impl FnMut(usize) -> u8,
+    capture: Option<usize>,
+    format: Option<&'static str>,
+) -> (serde_json::Value, Option<ShmPixels>) {
+    let packed = width * height * 4;
+    let mut pixels = capture
+        .filter(|limit| packed <= *limit)
+        .and(format)
+        .map(|format| ShmPixels {
+            bytes: Vec::with_capacity(packed),
+            format,
+            source_stride: stride,
+            source_offset: offset,
+        });
+    let mut first = None;
+    let mut nonuniform = false;
+    let mut checksum = 0xcbf29ce484222325_u64;
+    for row in 0..height {
+        for column in 0..width {
+            let at = offset + row * stride + column * 4;
+            let pixel: [u8; 4] = std::array::from_fn(|index| read(at + index));
+            nonuniform |= first.is_some_and(|first| first != pixel);
+            first.get_or_insert(pixel);
+            if let Some(pixels) = &mut pixels {
+                pixels.bytes.extend_from_slice(&pixel);
+            }
+            for byte in pixel {
+                checksum = (checksum ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+            }
+        }
+    }
+    (
+        serde_json::json!({
+            "width": width, "height": height, "nonuniform_pixels": nonuniform,
+            "pixel_checksum": format!("{checksum:016x}"),
+        }),
+        pixels,
+    )
+}
+
+fn raster_with_pixels(
+    buffer: &WlBuffer,
+    capture: Option<usize>,
+) -> Result<(serde_json::Value, Option<ShmPixels>)> {
     with_buffer_contents(buffer, |pointer, length, metadata| {
         let width = usize::try_from(metadata.width)?;
         let height = usize::try_from(metadata.height)?;
@@ -754,27 +1029,102 @@ fn raster(buffer: &WlBuffer) -> Result<serde_json::Value> {
         }
         // No Rust references may alias this client-writable mapping.
         // The SHM helper also brackets these raw reads with SIGBUS containment.
-        let mut first = None;
-        let mut nonuniform = false;
-        let mut checksum = 0xcbf29ce484222325_u64;
-        for row in 0..height {
-            for column in 0..width {
-                let at = offset + row * stride + column * 4;
-                let pixel: [u8; 4] = std::array::from_fn(|index| unsafe {
-                    std::ptr::read_volatile(pointer.add(at + index))
-                });
-                nonuniform |= first.is_some_and(|first| first != pixel);
-                first.get_or_insert(pixel);
-                for byte in pixel {
-                    checksum = (checksum ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-                }
+        let format = if cfg!(target_endian = "little") {
+            match metadata.format {
+                wayland_server::protocol::wl_shm::Format::Argb8888 => Some("argb8888"),
+                wayland_server::protocol::wl_shm::Format::Xrgb8888 => Some("xrgb8888"),
+                _ => None,
             }
-        }
-        Ok(serde_json::json!({
-            "width": width, "height": height, "nonuniform_pixels": nonuniform,
-            "pixel_checksum": format!("{checksum:016x}"),
-        }))
+        } else {
+            None
+        };
+        Ok(visible_pixels(
+            width,
+            height,
+            stride,
+            offset,
+            |at| unsafe { std::ptr::read_volatile(pointer.add(at)) },
+            capture,
+            format,
+        ))
     })?
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn calendar_snapshot_copies_visible_rows_once_without_padding_or_pool_bytes() {
+        let pool = [
+            99, 99, 1, 2, 3, 4, 5, 6, 7, 8, 99, 99, 99, 99, 9, 10, 11, 12, 13, 14, 15, 16, 99,
+        ];
+        let mut reads = [0; 23];
+        let (raster, pixels) = visible_pixels(
+            2,
+            2,
+            12,
+            2,
+            |at| {
+                reads[at] += 1;
+                pool[at]
+            },
+            Some(16),
+            Some("argb8888"),
+        );
+        let pixels = pixels.unwrap();
+        assert_eq!(pixels.bytes, (1..=16).collect::<Vec<_>>());
+        assert_eq!((pixels.source_stride, pixels.source_offset), (12, 2));
+        let (packed, _) = visible_pixels(2, 2, 8, 0, |at| pixels.bytes[at], None, None);
+        assert_eq!(raster, packed);
+        assert_eq!(raster["nonuniform_pixels"], true);
+        for (index, count) in reads.into_iter().enumerate() {
+            assert_eq!(
+                count,
+                usize::from((2..10).contains(&index) || (14..22).contains(&index))
+            );
+        }
+        assert!(
+            visible_pixels(2, 2, 12, 2, |at| pool[at], Some(15), Some("argb8888"))
+                .1
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn calendar_snapshot_container_is_one_commit_and_budget_is_finite() {
+        let metadata =
+            serde_json::json!({"instance":"synthetic","buffer_commit":3,"stored_bytes":4});
+        let bytes = snapshot_container(&metadata, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(&bytes[..12], SNAPSHOT_MAGIC);
+        let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes[16..16 + length]).unwrap(),
+            metadata
+        );
+        assert_eq!(&bytes[16 + length..], &[1, 2, 3, 4]);
+        let mut snapshot = PassiveSnapshot::default();
+        assert_eq!(snapshot.allowance(), SNAPSHOT_FRAME_BYTES);
+        snapshot.frames = SNAPSHOT_FRAMES;
+        assert_eq!(snapshot.allowance(), 0);
+        snapshot.frames = 0;
+        snapshot.bytes = SNAPSHOT_TOTAL_BYTES - 3;
+        assert_eq!(snapshot.allowance(), 3);
+        snapshot.bytes = SNAPSHOT_TOTAL_BYTES;
+        assert_eq!(snapshot.allowance(), 0);
+        assert!(snapshot_container(&serde_json::json!({"large":"x".repeat(4097)}), &[]).is_err());
+    }
+
+    #[test]
+    fn calendar_snapshot_selector_requires_exact_root_synthetic_instance() {
+        let mut selector = serde_json::json!({
+            "schema":"claw.private-calendar-synthetic-shm/v1","instance":"bound-instance",
+        });
+        assert!(check_snapshot_selector(&selector, "bound-instance").is_ok());
+        assert!(check_snapshot_selector(&selector, "foreign-instance").is_err());
+        selector["capture_desktop"] = true.into();
+        assert!(check_snapshot_selector(&selector, "bound-instance").is_err());
+    }
 }
 
 impl BufferHandler for State {
