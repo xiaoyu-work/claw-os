@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io;
 use std::process::Stdio;
 use std::time::Duration;
@@ -20,7 +20,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
         .map_err(|_| "package queries require an authenticated App session")?;
     let body = match args {
         [action] if action == "installed" => json!({"session": session, "action": action}),
-        [action, name] if action == "show" => {
+        [action, name] if matches!(action.as_str(), "show" | "available") => {
             json!({"session": session, "action": action, "name": name})
         }
         [action, query, limit] if action == "search" => {
@@ -31,7 +31,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
         }
         _ => {
             return Err(
-                "usage: internal package query <installed | show name | search query limit>".into(),
+                "usage: internal package query <installed | show name | available name | search query limit>".into(),
             );
         }
     };
@@ -51,6 +51,15 @@ pub(super) fn required_cap(request: &PackageQuery) -> Result<Cap, String> {
         ("installed", None, None, None) => Scope::name("packages"),
         ("show", Some(name), None, None) => {
             super::validate_package_name(name.as_str())?;
+            Scope::name(name.as_str())
+        }
+        ("available", Some(name), None, None)
+            if !name.as_str().trim().is_empty()
+                && !name.as_str().starts_with('-')
+                && !name.as_str().contains('/')
+                && !matches!(name.as_str(), "." | "..")
+                && !name.as_str().chars().any(char::is_control) =>
+        {
             Scope::name(name.as_str())
         }
         ("search", None, Some(query), Some(1..=100))
@@ -84,6 +93,9 @@ pub(crate) async fn query(
         .map_err(|_| BrokerError::execution("Invalid package query"))?;
     let owner = client.require_uid().map_err(BrokerError::authorization)?;
     let _authorized = authorize(authority, owner, &request).map_err(BrokerError::authorization)?;
+    if request.action.as_str() == "available" {
+        return availability(request.name.as_ref().unwrap().as_str(), owner).await;
+    }
     let (path, args) = match request.action.as_str() {
         "search" => (
             "/usr/bin/apt-cache",
@@ -137,7 +149,8 @@ pub(crate) async fn query(
             }));
         }
         return Err(BrokerError::unavailable(format!(
-            "The system package metadata query failed ({})", output.status,
+            "The system package metadata query failed ({})",
+            output.status,
         )));
     }
     match request.action.as_str() {
@@ -151,6 +164,56 @@ pub(crate) async fn query(
         _ => unreachable!("authorized closed package query"),
     }
     .map_err(BrokerError::unavailable)
+}
+
+async fn availability(name: &str, owner: u32) -> Result<Value, BrokerError> {
+    if super::validate_package_name(name).is_ok() {
+        let output = execute(
+            "/usr/bin/dpkg-query",
+            &["--show", "--showformat=${db:Status-Status}\n", "--", name],
+            owner,
+        )
+        .await
+        .map_err(BrokerError::unavailable)?;
+        if output.status.success() && output.stdout.lines().any(|line| line == "installed") {
+            return Ok(json!({
+                "name": name, "available": true, "type": "system",
+                "details": "installed via dpkg",
+            }));
+        }
+        if !output.status.success()
+            && !(output.status.code() == Some(1) && output.stdout.is_empty())
+        {
+            return Err(BrokerError::unavailable(
+                "The package availability query failed",
+            ));
+        }
+    }
+    let output = execute(
+        "/usr/bin/python3",
+        &[
+            "-I", "-S", "-B", "-c",
+            "import json, shutil, sys; print(json.dumps(shutil.which(sys.argv[1], path='/usr/local/bin:/usr/bin:/bin')))",
+            name,
+        ],
+        owner,
+    )
+    .await
+    .map_err(BrokerError::unavailable)?;
+    if !output.status.success() {
+        return Err(BrokerError::unavailable(
+            "The command availability query failed",
+        ));
+    }
+    let path: Option<String> = serde_json::from_str(&output.stdout)
+        .map_err(|_| BrokerError::unavailable("Invalid command availability metadata"))?;
+    Ok(match path {
+        Some(path) => json!({
+            "name": name, "available": true, "type": "command",
+            "details": format!("found at {path}"),
+        }),
+        None => json!({"name": name, "available": false, "type": "", "details": "not found"}),
+    })
 }
 
 struct Output {

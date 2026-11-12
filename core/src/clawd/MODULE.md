@@ -101,7 +101,7 @@ and agent tasks.
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `regional_settings/` | Closed locale/owner-language/static-hostname service; three separate exact grants, authenticated owner, root-owned D-Bus backends and confirmed/indeterminate outcomes |
-| `packages.rs`, `packages/query.rs` | System-wide package effects under Critical `sys.package`; separate bounded catalog reads under exact `sys.observe` scopes, with no fixed client identity, raw bus or package-state mount |
+| `packages.rs`, `packages/query.rs` | System-wide package effects under Critical `sys.package`; separate bounded catalog/installed-state and named package/command availability reads under exact `sys.observe` scopes, with no fixed client identity, raw bus, package-state mount or requested-command execution |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |

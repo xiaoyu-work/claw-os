@@ -162,6 +162,8 @@ fn package_queries_require_live_read_scopes_not_a_product_name_or_package_mutati
             (json!({"session": "fixture", "action": "installed"}), "packages"),
             (json!({"session": "fixture", "action": "search", "query": "editor", "limit": 25}), "packages"),
             (json!({"session": "fixture", "action": "show", "name": "fixture-one:amd64"}), "fixture-one:amd64"),
+            (json!({"session": "fixture", "action": "available", "name": "fixture-one:amd64"}), "fixture-one:amd64"),
+            (json!({"session": "fixture", "action": "available", "name": "FixtureCommand"}), "FixtureCommand"),
         ] {
             let request = serde_json::from_value(body).unwrap();
             let cap = Cap::new(Verb::SYS_OBSERVE, Scope::name(scope));
@@ -214,6 +216,9 @@ fn package_query_wire_rejects_authority_paths_mutation_actions_and_unbounded_sea
     assert!((route.decode)(too_long).is_err());
     for name in ["-oHook=id", "../fixture", "/local.deb", "*", "x\0y"] {
         assert!(parse(json!({"session": "fixture", "action": "show", "name": name})).is_err());
+    }
+    for name in ["", "-oHook=id", "../fixture", "/usr/bin/fixture", ".", "..", "x\nid"] {
+        assert!(parse(json!({"session": "fixture", "action": "available", "name": name})).is_err());
     }
 }
 
