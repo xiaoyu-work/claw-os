@@ -168,7 +168,7 @@ if __name__ == "__main__":
                       "capabilities": {"tools": {}},
                       "serverInfo": {"name": "private-package-denial", "version": "1"}}
         elif method == "tools/list":
-            result = {"tools": [{"name": "fixture.package-intent", "description": "Refuse GUI-only intent",
+            result = {"tools": [{"name": "gui-package-denied.intent-probe", "description": "Refuse GUI-only intent",
                       "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}}]}
         elif method == "tools/call":
             context = message["params"]["_meta"]["claw-os.dev/call-context"]
@@ -186,7 +186,7 @@ if __name__ == "__main__":
         "operations": {"probe": {"label": {"en": "Reject ordinary GUI intent"}, "args": [], "needs": []}},
         "mcp": {"entry": "main.py", "transport": "stdio", "lifecycle": "lazy",
             "access": {"system_agent": true},
-            "tools": [{"name": "fixture.package-intent", "summary": {"en": "Reject MCP GUI intent"},
+            "tools": [{"name": "gui-package-denied.intent-probe", "summary": {"en": "Reject MCP GUI intent"},
                 "args": [], "needs": []}]},
     }).to_string()).unwrap();
     for name in ["main.py", "app.json"] {
@@ -256,7 +256,7 @@ fn private_native_package_owner() {
         }
         assert!(matches!(argv.first().map(String::as_str),
             Some("package-transactions" | "review" | "app" | "__package_intent")));
-        let result = if argv == ["app", DENIED_APP, "fixture.package-intent", "--args-stdin"] {
+        let result = if argv == ["app", DENIED_APP, "intent-probe", "--args-stdin"] {
             claw_os_sdk::cos_call_json_with_stdin("native-package-fixture", "owner", argv, b"{}")
         } else {
             claw_os_sdk::cos_call_json_with_binary(
@@ -274,7 +274,7 @@ fn private_native_package_owner() {
 fn owner_invoke_caps() -> CapSet {
     CapSet::from_caps([
         Cap::new(Verb::AGENT_INVOKE, Scope::name(DENIED_APP)),
-        crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "fixture.package-intent").unwrap(),
+        crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "gui-package-denied.intent-probe").unwrap(),
     ])
 }
 
@@ -443,7 +443,7 @@ pub(super) async fn run(group: &std::fs::File) {
     let mut owner = OwnerPeer::start().await;
     for arguments in [
         vec!["app", DENIED_APP, "probe"],
-        vec!["app", DENIED_APP, "fixture.package-intent", "--args-stdin"],
+        vec!["app", DENIED_APP, "intent-probe", "--args-stdin"],
     ] {
         let denied = owner.result(&arguments).await;
         assert_eq!(denied["intent_refused"], true, "{denied}");
