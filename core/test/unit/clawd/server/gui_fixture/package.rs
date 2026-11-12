@@ -252,6 +252,9 @@ struct OwnerPeer {
 
 impl OwnerPeer {
     async fn start() -> Self {
+        use crate::clawd::authority::{
+            authority, Audience, AudienceSet, Binding, Issuance, Issuer, Principal, Subject, Uses,
+        };
         use tokio::io::AsyncBufReadExt;
         let mut command = ProcessCommand::new("/usr/local/bin/claw-gui-broker-fixture");
         command.args(["--exact", PEER, "--ignored", "--nocapture", "--test-threads=1"])
@@ -282,22 +285,34 @@ impl OwnerPeer {
         let descriptor = unsafe { OwnedFd::from_raw_fd(raw as i32) };
         let process = ProcessIdentity::from_pidfd(descriptor.as_fd()).unwrap();
         peer.session = format!("native-package-owner-{pid}");
+        let caps = CapSet::from_caps([
+            Cap::new(Verb::AGENT_INVOKE, Scope::name(DENIED_APP)),
+            crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "fixture.package-intent").unwrap(),
+        ]);
         let info = crate::proc::SessionInfo {
             session_id: peer.session.clone(), pid,
             command: vec!["/usr/local/bin/claw-gui-broker-fixture".into(), PEER.into()],
             started_at: chrono::Utc::now().to_rfc3339(), stdout_path: String::new(), stderr_path: String::new(),
             group: Some("user".into()), parent: None, workdir: None, exit_code: None, ended_at: None,
             tier: Some(2), scope: None, priority: None,
-            caps: Some(CapSet::from_caps([
-                Cap::new(Verb::AGENT_INVOKE, Scope::name(DENIED_APP)),
-                crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "fixture.package-intent").unwrap(),
-            ])),
+            caps: Some(caps.clone()),
             transient_caps: None, role: None, app_id: None, pending_bind: false,
             start_time_ticks: Some(process.start_ticks()),
             client: crate::session::SessionClient::new(crate::session::SessionSource::LocalCli, true, true),
         };
         crate::paths::RoutedPathContext::for_owner(OWNER, PathBuf::from("/run/display-home"))
             .scope_sync(|| crate::proc::register_session_for_owner(info, OWNER)).unwrap();
+        authority().issue(Issuance {
+            issuer: Issuer::TrustedSession,
+            principal: Principal::of_process(OWNER, pid).unwrap(),
+            binding: Binding::ProcessTree,
+            subject: Subject::session(&peer.session),
+            audience: AudienceSet::one(Audience::SystemService),
+            caps,
+            lifetime: Duration::from_secs(120),
+            uses: Uses::Budget(2),
+            index_session: true,
+        }).unwrap();
         peer
     }
 
@@ -331,6 +346,7 @@ impl OwnerPeer {
         self.input.write_all(b"[\"stop\"]\n").await.unwrap();
         self.input.flush().await.unwrap();
         assert!(tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await.unwrap().unwrap().success());
+        crate::clawd::authority::revoke_session(&self.session);
         crate::paths::RoutedPathContext::for_owner(OWNER, PathBuf::from("/run/display-home"))
             .scope_sync(|| crate::proc::try_deregister_session_for_owner(&self.session, OWNER)).unwrap();
     }
