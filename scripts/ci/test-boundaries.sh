@@ -6,15 +6,22 @@ cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
 
 cos_test_binary() {
-    python3 - "$1" <<'PY'
+    python3 - "$1" "${2:-cos}" "${3:-lib}" "$GITHUB_WORKSPACE/core/Cargo.toml" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
-    records = map(json.loads, handle)
-    print(next(row["executable"] for row in records
-               if row.get("executable") and row.get("profile", {}).get("test")
-               and row.get("target", {}).get("name") == "cos"))
+    matches = [
+        row["executable"] for row in map(json.loads, handle)
+        if row.get("reason") == "compiler-artifact"
+        and row.get("executable") and row.get("profile", {}).get("test")
+        and row.get("target", {}).get("name") == sys.argv[2]
+        and row.get("target", {}).get("kind") == [sys.argv[3]]
+        and row.get("manifest_path") == sys.argv[4]
+    ]
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one current Cargo test artifact for {sys.argv[2]}, got {len(matches)}")
+print(matches[0])
 PY
 }
 
@@ -204,22 +211,9 @@ extensions() {
     }
     trap cleanup EXIT
 
-    agentd_test=$(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-        -name 'agentd_process_boundary-*' ! -name '*.d' -printf '%T@ %p\n' |
-        sort -nr | head -n1 | cut -d' ' -f2-)
-    extension_test=$(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-        -name 'extension_host_boundary-*' ! -name '*.d' -printf '%T@ %p\n' |
-        sort -nr | head -n1 | cut -d' ' -f2-)
-    lib_test=
-    while IFS= read -r candidate; do
-        if "$candidate" --list 2>/dev/null |
-            grep '^extension_host::child_isolation::tests::' >/dev/null; then
-            lib_test=$candidate
-            break
-        fi
-    done < <(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-        -name 'cos-*' ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' \
-        -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+    agentd_test="$(cos_test_binary "$RUNNER_TEMP/extension-tests.jsonl" agentd_process_boundary test)"
+    extension_test="$(cos_test_binary "$RUNNER_TEMP/extension-tests.jsonl" extension_host_boundary test)"
+    lib_test=$service_test_binary
     test -n "$agentd_test"
     test -n "$extension_test"
     test -n "$lib_test"
