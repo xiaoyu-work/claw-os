@@ -273,11 +273,12 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
-            --output "$GITHUB_WORKSPACE/build/native-editor-input" \
-            --target-dir "$CARGO_TARGET_DIR/native-editor"
+            --product "${selection#native-}" \
+            --output "$GITHUB_WORKSPACE/build/$selection-input" \
+            --target-dir "$CARGO_TARGET_DIR/$selection"
     fi
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
@@ -315,13 +316,13 @@ display() {
     mkdir -p "$GITHUB_WORKSPACE/build"
     mkdir -m0700 "$private"
     local selectors=()
-    if [[ "$selection" == display || "$selection" == native-fs || "$selection" == native-editor ]]; then
+    if [[ "$selection" == display || "$selection" == native-fs || "$selection" == native-editor || "$selection" == native-files ]]; then
         test -c /dev/fuse
     fi
     if [[ "$selection" == native-fs ]]; then
         selectors=(--native-fs-only)
-    elif [[ "$selection" == native-editor ]]; then
-        selectors=(--native-editor-only "$GITHUB_WORKSPACE/build/native-editor-input")
+    elif [[ "$selection" == native-editor || "$selection" == native-files ]]; then
+        selectors=("--$selection-only" "$GITHUB_WORKSPACE/build/$selection-input")
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
     elif [[ "$selection" == native-package ]]; then
@@ -443,9 +444,10 @@ case "${1:-}" in
     file-manager) display file-manager ;;
     native-package) display native-package ;;
     native-editor) display native-editor ;;
+    native-files) display native-files ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|applets}" >&2
         exit 2
         ;;
 esac

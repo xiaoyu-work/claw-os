@@ -28,7 +28,7 @@ use wayland_server::{
     protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
 };
 
-const OBSERVER: &str = "/run/user/62050/native-editor-observer";
+const OBSERVER: &str = "/run/user/62050/native-product-observer";
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Default)]
@@ -54,7 +54,7 @@ fn buffer_kind(assignment: Option<&BufferAssignment>) -> u8 {
 }
 
 pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
-    let marker = Path::new("/run/gui-public/native-editor-enabled");
+    let marker = Path::new("/run/gui-public/native-product-enabled");
     match marker.symlink_metadata() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
@@ -62,9 +62,9 @@ pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
             if !metadata.is_file()
                 || metadata.uid() != 0
                 || metadata.mode() & 0o022 != 0
-                || std::fs::read(marker)? != b"private-native-editor-v1"
+                || std::fs::read(marker)? != b"private-native-product-v1"
             {
-                return Err("unprotected native Editor fixture selector".into());
+                return Err("unprotected native product fixture selector".into());
             }
             let observer = Path::new(OBSERVER).symlink_metadata()?;
             if !observer.is_dir() || observer.uid() != 62050 || observer.mode() & 0o077 != 0 {
@@ -94,13 +94,13 @@ pub struct Window {
 impl Window {
     pub fn new(display: &DisplayHandle) -> Self {
         let output = Output::new(
-            "private-native-editor".into(),
+            "private-native-product".into(),
             PhysicalProperties {
                 size: (210, 158).into(),
                 subpixel: Subpixel::Unknown,
                 make: "Private acceptance".into(),
                 model: "Headless SHM".into(),
-                serial_number: "private-native-editor".into(),
+                serial_number: "private-native-product".into(),
             },
         );
         output.create_global::<State>(display);

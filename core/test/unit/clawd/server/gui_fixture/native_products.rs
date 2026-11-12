@@ -1,12 +1,47 @@
 use super::*;
 use std::os::unix::fs::MetadataExt;
 
-const APP: &str = "cosmic-edit";
-const ENTRY: &str = "/usr/lib/cos/apps/cosmic-edit/bin/cosmic-edit";
-const OBSERVER: &str = "/run/user/62050/native-editor-observer/window.json";
+const OBSERVER: &str = "/run/user/62050/native-product-observer/window.json";
 const TARGET: &str = "/run/display-home/native-editor-startup.txt";
 const CONTENT: &[u8] =
     b"Actual product-owned Editor startup.\nMetadata consent is not content consent.\n";
+
+#[derive(Clone, Copy)]
+pub(super) struct Product {
+    pub(super) name: &'static str,
+    pub(super) app: &'static str,
+    pub(super) case: usize,
+    desktop_id: &'static str,
+    entries: &'static [&'static str],
+    ungranted: &'static [usize],
+}
+
+pub(super) const EDITOR: Product = Product {
+    name: "editor",
+    app: "cosmic-edit",
+    case: 25,
+    desktop_id: "com.clawos.Edit",
+    entries: &["bin/cosmic-edit"],
+    ungranted: &[0, 1, 2],
+};
+pub(super) const FILES: Product = Product {
+    name: "files",
+    app: "cosmic-files",
+    case: 26,
+    desktop_id: "com.clawos.Files",
+    entries: &["bin/cosmic-files", "bin/cosmic-files-applet"],
+    ungranted: &[0, 1, 2, 3],
+};
+
+impl Product {
+    fn directory(self) -> std::path::PathBuf {
+        Path::new("/usr/lib/cos/apps").join(self.app)
+    }
+
+    fn entry(self) -> std::path::PathBuf {
+        self.directory().join(self.entries[0])
+    }
+}
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,19 +54,22 @@ struct Payload {
     payload_inventory: Vec<crate::provenance::envelope::FileEntry>,
 }
 
-pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile) {
+pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Product) {
     use crate::provenance::{
         envelope::PackageKind,
         sign::{sign_directory, SignRequest},
         verify::{verify_package, VerifyOptions},
     };
 
-    let receipt = Path::new("/run/gui-fixture/native-editor.json");
-    let metadata = std::fs::symlink_metadata(receipt).unwrap();
+    let receipt = Path::new("/run/gui-fixture").join(format!("native-{}.json", product.name));
+    let metadata = std::fs::symlink_metadata(&receipt).unwrap();
     assert!(metadata.is_file() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0);
     assert!(metadata.len() <= 2 * 1024 * 1024);
     let mut payload: Payload = serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
-    assert_eq!(payload.schema, "claw.private-native-editor/v1");
+    assert_eq!(
+        payload.schema,
+        format!("claw.private-native-{}/v1", product.name)
+    );
     assert_eq!(payload.source_lock["version"], 1);
     let revision = payload.source_lock["revision"].as_str().unwrap();
     assert!(
@@ -59,32 +97,46 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile) {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
-    assert_eq!(payload.entrypoints, ["bin/cosmic-edit"]);
+    assert_eq!(payload.entrypoints, product.entries);
     for required in [
-        "resources/usr/share/applications/com.clawos.Edit.desktop",
-        "resources/usr/share/metainfo/com.clawos.Edit.metainfo.xml",
-        "resources/usr/share/icons/hicolor/scalable/apps/com.clawos.Edit.svg",
+        format!(
+            "resources/usr/share/applications/{}.desktop",
+            product.desktop_id
+        ),
+        format!(
+            "resources/usr/share/metainfo/{}.metainfo.xml",
+            product.desktop_id
+        ),
+        format!(
+            "resources/usr/share/icons/hicolor/scalable/apps/{}.svg",
+            product.desktop_id
+        ),
     ] {
         assert!(payload
             .resources
             .iter()
-            .any(|resource| resource == required));
+            .any(|resource| resource == &required));
     }
-    let dir = Path::new("/usr/lib/cos/apps/cosmic-edit");
+    let dir = product.directory();
     assert!(
         !dir.join(".provenance.json").exists(),
         "fixture input was already signed"
     );
-    assert_eq!(std::fs::read(ENTRY).unwrap()[..7], *b"\x7fELF\x02\x01\x01");
+    for entry in product.entries {
+        assert_eq!(
+            std::fs::read(dir.join(entry)).unwrap()[..7],
+            *b"\x7fELF\x02\x01\x01"
+        );
+    }
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("app.json")).unwrap()).unwrap();
-    assert_eq!(manifest["id"], APP);
+    assert_eq!(manifest["id"], product.app);
     assert_eq!(manifest["schema_version"], 2);
     sign_directory(
-        dir,
+        &dir,
         &SignRequest {
             kind: PackageKind::App,
-            id: APP.into(),
+            id: product.app.into(),
             version: manifest["version"].as_str().unwrap().into(),
             manifest_schema: "cos.app-manifest/v2".into(),
             manifest_path: "app.json".into(),
@@ -100,8 +152,8 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile) {
     )
     .unwrap();
     let package = verify_package(
-        dir,
-        &VerifyOptions::new(PackageKind::App).expect_id(APP),
+        &dir,
+        &VerifyOptions::new(PackageKind::App).expect_id(product.app),
         &crate::provenance::trust_store(),
     )
     .unwrap();
@@ -118,20 +170,21 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile) {
         OWNER,
         crate::approvals::system_review::ReviewKind::AppActivation,
         &package,
-        "private real Editor acceptance controller".into(),
+        format!("private real {} acceptance controller", product.name),
     )
     .unwrap();
     crate::approvals::system_review::decide(OWNER, &review.id, true, Some(&package)).unwrap();
     println!(
-        "private actual Editor input: App revision {revision}, public platform {platform_digest}, signed ELF/resources/licenses verified"
+        "private actual {} input: App revision {revision}, public platform {platform_digest}, signed ELF/resources/licenses verified",
+        product.name
     );
 }
 
 fn diagnostic(stage: &str) -> String {
-    let log = std::fs::read("/run/gui-fixture/pam-native-editor.log").unwrap_or_default();
+    let log = std::fs::read("/run/gui-fixture/pam-native-product.log").unwrap_or_default();
     let tail = &log[log.len().saturating_sub(8192)..];
     format!(
-        "actual Editor gate {stage}: {}{}",
+        "actual native gate {stage}: {}{}",
         String::from_utf8_lossy(tail),
         private_audit_tail()
     )
@@ -177,7 +230,7 @@ fn loaded(record: &serde_json::Value) -> bool {
         .is_some_and(|title| title.starts_with("native-editor-startup.txt - "))
 }
 
-struct EditorProcess {
+struct NativeProcess {
     identity: ProcessIdentity,
     pidfd: OwnedFd,
     inode: (u64, u64),
@@ -193,10 +246,10 @@ fn host_live(retained: &RetainedInstance, stage: &str) {
     assert_eq!(process.uid(), OWNER);
 }
 
-fn find_editor(retained: &RetainedInstance) -> Option<EditorProcess> {
+fn find_native(retained: &RetainedInstance, product: Product) -> Option<NativeProcess> {
     let group =
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
-    let expected = std::fs::metadata(ENTRY).unwrap();
+    let expected = std::fs::metadata(product.entry()).unwrap();
     let mut matched = Vec::new();
     // The registered Host pid can be bubblewrap, not the native executable.
     for pid in std::fs::read_to_string(group.join("cgroup.procs"))
@@ -213,7 +266,7 @@ fn find_editor(retained: &RetainedInstance) -> Option<EditorProcess> {
         let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0_u32) };
         assert!(
             raw >= 0,
-            "actual Editor exited while its ELF identity was being retained"
+            "actual native process exited while its ELF identity was being retained"
         );
         let pidfd = unsafe { OwnedFd::from_raw_fd(raw as i32) };
         let identity = ProcessIdentity::from_pidfd(pidfd.as_fd()).unwrap();
@@ -224,7 +277,7 @@ fn find_editor(retained: &RetainedInstance) -> Option<EditorProcess> {
             (current.dev(), current.ino()),
             (expected.dev(), expected.ino())
         );
-        matched.push(EditorProcess {
+        matched.push(NativeProcess {
             identity,
             pidfd,
             inode: (current.dev(), current.ino()),
@@ -232,12 +285,12 @@ fn find_editor(retained: &RetainedInstance) -> Option<EditorProcess> {
     }
     assert!(
         matched.len() <= 1,
-        "actual Editor daemonized into multiple native processes"
+        "actual App daemonized into multiple native processes"
     );
     matched.pop()
 }
 
-fn native_process(retained: &RetainedInstance, editor: &EditorProcess, stage: &str) {
+fn native_process(retained: &RetainedInstance, editor: &NativeProcess, stage: &str) {
     host_live(retained, stage);
     assert!(
         !claw_display_control::identity::pidfd_exited(editor.pidfd.as_fd()).unwrap(),
@@ -253,7 +306,7 @@ fn launcher_output_tail() -> std::io::Result<serde_json::Value> {
     use std::io::{Read, Seek, SeekFrom};
 
     const LIMIT: u64 = 16384;
-    let mut file = std::fs::File::open("/run/gui-fixture/pam-native-editor.log")?;
+    let mut file = std::fs::File::open("/run/gui-fixture/pam-native-product.log")?;
     let length = file.metadata()?.len();
     file.seek(SeekFrom::Start(length.saturating_sub(LIMIT)))?;
     let mut bytes = Vec::new();
@@ -268,7 +321,7 @@ async fn renderer_failure(
     control: &OwnedFd,
     pam: &mut Child,
     retained: &RetainedInstance,
-    editor: &EditorProcess,
+    editor: &NativeProcess,
     session: &str,
     stage: &str,
 ) -> ! {
@@ -281,7 +334,7 @@ async fn renderer_failure(
         })
         .count();
     eprintln!(
-        "private actual Editor renderer failure before cleanup {}",
+        "private actual native renderer failure before cleanup {}",
         serde_json::json!({
             "stage": stage, "readiness_gate_failed": true, "window": window,
             "pending_read_reviews": pending, "witness": observe(),
@@ -352,15 +405,15 @@ async fn renderer_failure(
         report["retired_witness"] = observe().unwrap_or(serde_json::Value::Null);
     }
     // JSON escaping keeps captured App text inert in the CI log.
-    eprintln!("private actual Editor renderer failure after cleanup {report}");
+    eprintln!("private actual native renderer failure after cleanup {report}");
     panic!("{original}");
 }
 
-fn startup_authority(session: &str, parent: &str) -> (CapSet, CapSet) {
+fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, CapSet) {
     crate::paths::RoutedPathContext::for_owner(OWNER, Path::new("/run/display-home").to_path_buf())
         .scope_sync(|| {
             let gui = crate::proc::session_info_by_id(session).unwrap();
-            assert_eq!(gui.app_id.as_deref(), Some(APP));
+            assert_eq!(gui.app_id.as_deref(), Some(product.app));
             let gui = gui.caps.unwrap();
             let parent = crate::proc::session_info_by_id(parent)
                 .unwrap()
@@ -373,7 +426,7 @@ fn startup_authority(session: &str, parent: &str) -> (CapSet, CapSet) {
                 "optional read/write/AI must not become startup authority"
             );
             let expected_parent = CapSet::from_caps([
-                Cap::new(Verb::AGENT_INVOKE, Scope::name(APP)),
+                Cap::new(Verb::AGENT_INVOKE, Scope::name(product.app)),
                 Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")),
             ]);
             assert_eq!(
@@ -384,7 +437,8 @@ fn startup_authority(session: &str, parent: &str) -> (CapSet, CapSet) {
         })
 }
 
-pub(super) async fn run(group: &std::fs::File) {
+pub(super) async fn run(group: &std::fs::File, product: Product) {
+    let editor = product.name == "editor";
     let home = Path::new("/run/display-home");
     {
         let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
@@ -400,13 +454,19 @@ pub(super) async fn run(group: &std::fs::File) {
         "stale window observations cannot satisfy a new launch"
     );
     let (control, child_control) = bootstrap::pair().unwrap();
-    let mut pam = spawn_pam("gui", "native-editor", group, Stdio::from(child_control));
+    let mut pam = spawn_pam("gui", "native-product", group, Stdio::from(child_control));
     assert_eq!(
         status(&control, &pam, Instant::now() + Duration::from_secs(30)),
         *b"AUTH"
     );
     command(&control, b"CASE");
-    command(&control, b"25..");
+    command(
+        &control,
+        format!("{:02}..", product.case)
+            .as_bytes()
+            .try_into()
+            .unwrap(),
+    );
     let child = bootstrap::receive(
         control.as_fd(),
         *b"CHLD",
@@ -438,7 +498,7 @@ pub(super) async fn run(group: &std::fs::File) {
             .owner_uid,
         OWNER
     );
-    let parent = launch_parent(&launcher, 25);
+    let parent = launch_parent(&launcher, product.case);
     command(&control, b"RUN!");
     let deadline = Instant::now() + Duration::from_secs(20);
     let metadata = loop {
@@ -501,17 +561,17 @@ pub(super) async fn run(group: &std::fs::File) {
     let mountpoint = runtime.join("home-metadata");
     let process = loop {
         host_live(&retained, "signed native ELF startup/foreground lifetime");
-        if let Some(process) = find_editor(&retained) {
+        if let Some(process) = find_native(&retained, product) {
             break process;
         }
         assert!(
             Instant::now() < deadline,
             "{}",
-            diagnostic("exact signed Editor ELF execution")
+            diagnostic("exact signed native ELF execution")
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
-    let original = startup_authority(&metadata.session, &parent);
+    let original = startup_authority(&metadata.session, &parent, product);
     let environment = std::fs::read(format!("/proc/{}/environ", process.identity.pid())).unwrap();
     let value = |key: &str| {
         environment
@@ -528,20 +588,28 @@ pub(super) async fn run(group: &std::fs::File) {
     );
     assert_eq!(
         value("COS_APP_RESOURCE_DIR"),
-        Some(b"/usr/lib/cos/apps/cosmic-edit/resources".as_slice())
+        Some(
+            product
+                .directory()
+                .join("resources")
+                .as_os_str()
+                .as_encoded_bytes()
+        )
     );
     assert!(value("XDG_DATA_DIRS")
         .unwrap()
-        .starts_with(b"/usr/lib/cos/apps/cosmic-edit/resources/usr/share:"));
+        .starts_with(format!("{}/resources/usr/share:", product.directory().display()).as_bytes()));
     assert_ne!(value("HOME"), Some(b"/run/display-home".as_slice()));
     assert_ne!(value("COS_MCP_SERVER"), Some(b"1".as_slice()));
     let ungranted: Vec<usize> =
         serde_json::from_slice(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap()).unwrap();
-    assert_eq!(ungranted, [0, 1, 2]);
-    assert_eq!(
-        value("COS_ARGS_JSON"),
-        Some(format!("[\"{TARGET}\"]").as_bytes())
-    );
+    assert_eq!(ungranted, product.ungranted);
+    let args = if editor {
+        format!("[\"{TARGET}\"]")
+    } else {
+        "[]".into()
+    };
+    assert_eq!(value("COS_ARGS_JSON"), Some(args.as_bytes()));
 
     let mut read = None;
     let before = loop {
@@ -550,7 +618,7 @@ pub(super) async fn run(group: &std::fs::File) {
             &process,
             "actual configured/buffered window and startup read request",
         );
-        if read.is_none() {
+        if editor && read.is_none() {
             read = crate::approvals::list_pending_for_owner(Some(OWNER))
                 .into_iter()
                 .find(|request| {
@@ -558,9 +626,11 @@ pub(super) async fn run(group: &std::fs::File) {
                         && request.session.starts_with(&format!("gui-read-{window}-"))
                 });
         }
-        if let Some(record) =
-            observe().filter(|record| buffered_window(record, &window) && read.is_some())
-        {
+        if let Some(record) = observe().filter(|record| {
+            buffered_window(record, &window)
+                && record["app_id"] == product.desktop_id
+                && (!editor || read.is_some())
+        }) {
             break record;
         }
         if pam.try_wait().unwrap().is_some() || Instant::now() >= deadline {
@@ -570,66 +640,80 @@ pub(super) async fn run(group: &std::fs::File) {
                 &retained,
                 &process,
                 &metadata.session,
-                "actual xdg_toplevel configure/SHM frame and independent fs.read",
+                "actual xdg_toplevel configure/SHM frame and declared startup behavior",
             )
             .await;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
-    assert!(
-        !loaded(&before),
-        "startup file was loaded before independent content consent"
-    );
+    if editor {
+        assert!(
+            !loaded(&before),
+            "startup file was loaded before independent content consent"
+        );
+    } else {
+        assert!(!crate::approvals::list_pending_for_owner(Some(OWNER))
+            .iter()
+            .any(|request| request.verb == "fs.read"));
+    }
     assert!(matches!(
         crate::approvals::status_for_owner(&metadata.id, Some(OWNER)),
         crate::approvals::RequestStatus::Consumed
     ));
-    let read = read.unwrap();
-    assert_eq!(read.owner_uid, Some(OWNER));
-    assert_eq!(read.scope, Scope::path("/run/display-home/**"));
-    assert_ne!(read.session, metadata.session);
-    assert!(read.operation_digest.is_some() && read.operation_digest != metadata.operation_digest);
-    println!("private actual Editor window ready; separate startup-file fs.read remains pending");
-    approve_native_resource(&read.id).await;
-    let deadline = Instant::now() + Duration::from_secs(25);
-    loop {
-        native_process(
-            &retained,
-            &process,
-            "actual native file load after independent consent",
+    if let Some(read) = &read {
+        assert_eq!(read.owner_uid, Some(OWNER));
+        assert_eq!(read.scope, Scope::path("/run/display-home/**"));
+        assert_ne!(read.session, metadata.session);
+        assert!(
+            read.operation_digest.is_some() && read.operation_digest != metadata.operation_digest
         );
-        if observe().is_some_and(|record| {
-            buffered_window(&record, &window)
-                && loaded(&record)
-                && record["buffer_commits"].as_u64().unwrap()
-                    > before["buffer_commits"].as_u64().unwrap()
-        }) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            renderer_failure(
-                &control,
-                &mut pam,
+        println!(
+            "private actual Editor window ready; separate startup-file fs.read remains pending"
+        );
+        approve_native_resource(&read.id).await;
+        let deadline = Instant::now() + Duration::from_secs(25);
+        loop {
+            native_process(
                 &retained,
                 &process,
-                &metadata.session,
-                "actual loaded-tab title and a newly rendered native frame",
-            )
-            .await;
+                "actual native file load after independent consent",
+            );
+            if observe().is_some_and(|record| {
+                buffered_window(&record, &window)
+                    && loaded(&record)
+                    && record["buffer_commits"].as_u64().unwrap()
+                        > before["buffer_commits"].as_u64().unwrap()
+            }) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                renderer_failure(
+                    &control,
+                    &mut pam,
+                    &retained,
+                    &process,
+                    &metadata.session,
+                    "actual loaded-tab title and a newly rendered native frame",
+                )
+                .await;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(matches!(
+            crate::approvals::status_for_owner(&read.id, Some(OWNER)),
+            crate::approvals::RequestStatus::Consumed
+        ));
     }
-    assert!(matches!(
-        crate::approvals::status_for_owner(&read.id, Some(OWNER)),
-        crate::approvals::RequestStatus::Consumed
-    ));
-    assert_eq!(startup_authority(&metadata.session, &parent), original);
+    assert_eq!(
+        startup_authority(&metadata.session, &parent, product),
+        original
+    );
     assert!(
         std::fs::read_to_string("/proc/self/mountinfo")
             .unwrap()
             .lines()
             .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str()),
-        "actual Editor must use the controlled native metadata/content mount"
+        "actual App must use the controlled native metadata/content mount"
     );
     let group_path =
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd())).unwrap();
@@ -650,20 +734,26 @@ pub(super) async fn run(group: &std::fs::File) {
         "/run/cos/clawd.sock",
         crate::clawd::wire::Request::new(
             crate::clawd::routes::Command::PermissionRevoke,
-            serde_json::json!({"owner_uid": OWNER, "session": read.session}),
+            serde_json::json!({
+                "owner_uid": OWNER,
+                "session": read.as_ref().map(|request| request.session.as_str())
+                    .unwrap_or(&metadata.session),
+            }),
         ),
     )
     .await
     .unwrap();
     assert!(
         revoked.ok,
-        "actual Editor selected-read retirement failed: {:?}",
+        "actual native resource retirement failed: {:?}",
         revoked.error
     );
-    assert_eq!(
-        crate::approvals::generations::current(Some(OWNER), &metadata.session).unwrap(),
-        generation
-    );
+    let after = crate::approvals::generations::current(Some(OWNER), &metadata.session).unwrap();
+    if editor {
+        assert_eq!(after, generation);
+    } else {
+        assert!(after > generation);
+    }
     assert!(claw_display_control::identity::pidfd_exited(retained.process.as_fd()).unwrap());
     assert!(claw_display_control::identity::pidfd_exited(process.pidfd.as_fd()).unwrap());
     for process in processes {
@@ -678,7 +768,7 @@ pub(super) async fn run(group: &std::fs::File) {
     );
     assert!(
         !runtime.exists() && !mountpoint.exists(),
-        "actual Editor runtime/provider cleanup was not acknowledged"
+        "actual native runtime/provider cleanup was not acknowledged"
     );
     assert!(!std::fs::read_to_string("/proc/self/mountinfo")
         .unwrap()
@@ -693,7 +783,7 @@ pub(super) async fn run(group: &std::fs::File) {
         }
         assert!(
             Instant::now() < deadline,
-            "actual Editor Wayland window did not close"
+            "actual native Wayland window did not close"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -717,7 +807,8 @@ pub(super) async fn run(group: &std::fs::File) {
             .any(|line| line == "populated 0")
     );
     println!(
-        "private actual Editor: real signed ELF/resources, native window/file load and checked process/runtime/PAM retirement passed; Save As not exercised"
+        "private actual {}: real signed ELF/resources, native window{} and checked process/runtime/PAM retirement passed; additional UI mutations not exercised",
+        product.name, if editor { "/file load" } else { "/metadata-only Home" },
     );
 }
 
@@ -751,5 +842,11 @@ fn native_editor_readiness_rejects_titles_without_real_configured_pixels() {
 #[test]
 #[ignore = "clean-GHA-only: actual Editor ELF, authenticated private PAM/display, FUSE and cgroup v2"]
 fn private_native_editor() {
-    private_gui_fixture_selected(false, false, false, true);
+    private_gui_fixture_selected(false, false, false, Some(EDITOR));
+}
+
+#[test]
+#[ignore = "clean-GHA-only: actual Files ELF, authenticated private PAM/display, FUSE and cgroup v2"]
+fn private_native_files() {
+    private_gui_fixture_selected(false, false, false, Some(FILES));
 }
