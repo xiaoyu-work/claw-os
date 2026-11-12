@@ -249,12 +249,14 @@ window, cgroup, native provider and runtime retirement. Neither a title alone,
 SDK status nor a probe marker satisfies readiness.
 
 This is a pending clean-GHA proof, not passing product acceptance or publication.
-Managed Editor foreground startup now reaches the authenticated XDG configure
-acknowledgement and its separately pending read review. First-buffer/rendering
-readiness remains a measured gate, not a missing-content-grant diagnosis.
+Exact source `2f33a5e1a` passed all ten Test jobs, including the actual signed
+Editor from immutable App source `cc75d4f1` and the public platform 0.2.1.
 The hardware-free CI explicitly selects the real binary's already compiled
-`tiny-skia` software backend; it does not replace the ELF or manufacture pixels.
-The normal WGPU path and physical-display acceptance remain separate.
+`tiny-skia` backend through ordinary presentation. It verifies authenticated
+configure, nonuniform 800-by-600 SHM pixels, an independently reviewed startup
+file load and checked process/provider/window/PAM retirement. It neither replaces
+the ELF nor manufactures pixels. Actual Save As, other native products, the
+normal WGPU path and physical-display acceptance remain separate.
 On a rendering deadline failure, the fixture records the original witness,
 then uses existing checked retirement before the ordinary owner CLI receives
 its normal bounded stdout/stderr outcome. Only then may a JSON-escaped 16-KiB
@@ -330,6 +332,8 @@ Internal grant cleanup must not recursively wait on the same job.
 Filtered Home teardown also checks instance death before dropping Root source
 pins, exact unmount and provider joins. Failed metadata or checked-cgroup
 preparation remains retained and cannot acknowledge GUI retirement.
+Successfully retired metadata custody is consumed before removing the cgroup;
+supervisor drop must not reopen that already removed containment.
 
 The approval `None` owner is the distinct system bucket, not every user or
 UID 0. GUI instances are owner-bound, so only `Some(uid)` can match them.
