@@ -118,7 +118,7 @@ def run(command, args):
         for args in (
             ["search", "{BUNDLE}", "25"], ["show", "{BUNDLE}"],
             ["installed"], ["available", "{BUNDLE}"],
-            ["available", "cos"], ["catalog"], ["show", "{SIDE_EFFECT}"],
+            ["available", "cos"], ["catalog"], ["updates"], ["show", "{SIDE_EFFECT}"],
         ):
             result = subprocess.run(
                 ["/usr/local/bin/cos", "--wire=1", "__package_query", *args],
@@ -2543,8 +2543,8 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     assert_eq!(result["raw_apt_visible"], false);
     assert_eq!(result["raw_catalog_visible"], false);
     let queries = result["queries"].as_array().unwrap();
-    assert_eq!(queries.len(), 7);
-    if queries[..6].iter().any(|query| query["code"] != 0) {
+    assert_eq!(queries.len(), 8);
+    if queries[..7].iter().any(|query| query["code"] != 0) {
         let output = owner_command(OWNER, Path::new("/usr/bin/timeout"))
             .args([
                 "20", "/usr/bin/apt-cache",
@@ -2567,7 +2567,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
             "queries": queries,
         }));
     }
-    for query in &queries[..6] {
+    for query in &queries[..7] {
         assert_eq!(query["code"], 0, "{query}");
         assert_eq!(query["reply"]["wire_version"], 1);
         assert_eq!(query["reply"]["ok"], true, "{query}");
@@ -2599,15 +2599,17 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     for value in [BUNDLE, SUPPORT, "org.claw.fixture.Catalog0", "Catalogue prive"] {
         assert!(xml.contains(value));
     }
-    assert_ne!(queries[6]["code"], 0);
-    assert_eq!(queries[6]["reply"]["code"], "PERMISSION_DENIED");
+    assert_eq!(queries[6]["reply"]["data"]["upgradable"], json!([]));
+    assert_eq!(queries[6]["reply"]["data"]["count"], 0);
+    assert_ne!(queries[7]["code"], 0);
+    assert_eq!(queries[7]["reply"]["code"], "PERMISSION_DENIED");
     {
         let calls = fixture.server.calls.lock().unwrap();
         let requests = calls.iter().filter(|call| {
             call.command == Command::AppSessionRelay
                 && call.params["command"] == Command::SystemPackageQuery.as_str()
         }).collect::<Vec<_>>();
-        assert_eq!(requests.len(), 7);
+        assert_eq!(requests.len(), 8);
         assert!(requests.iter().all(|call| call.uid == OWNER));
         assert!(!calls.iter().any(|call| {
             call.command == Command::AppSessionRelay

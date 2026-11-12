@@ -1527,41 +1527,45 @@ fn cmd_pkg_updates() -> Result<Value, String> {
     #[cfg(target_os = "linux")]
     {
         let stdout = run_cmd("apt", &["list", "--upgradable"])?;
-        let mut packages: Vec<Value> = Vec::new();
-        for line in stdout.lines().skip(1) {
-            if line.is_empty() {
-                continue;
-            }
-            if let Some(slash) = line.find('/') {
-                let pkg = &line[..slash];
-                let rest = &line[slash + 1..];
-                let mut parts = rest.split_whitespace();
-                let codename = parts.next().unwrap_or("");
-                let version = parts.next().unwrap_or("");
-                let arch = parts.next().unwrap_or("");
-                let old_version = if let Some(start) = line.find("[upgradable from:") {
-                    line[start + "[upgradable from:".len()..]
-                        .trim()
-                        .trim_end_matches(']')
-                        .trim()
-                        .to_string()
-                } else {
-                    String::new()
-                };
-                packages.push(json!({
-                    "package": pkg,
-                    "codename": codename,
-                    "new_version": version,
-                    "arch": arch,
-                    "old_version": old_version,
-                }));
-            }
-        }
-        let count = packages.len();
-        Ok(json!({"upgradable": packages, "count": count}))
+        package_updates_result(&stdout)
     }
     #[cfg(not(target_os = "linux"))]
     Err("sys pkg_updates requires Debian-based Linux with apt".into())
+}
+
+pub(crate) fn package_updates_result(stdout: &str) -> Result<Value, String> {
+    let mut packages: Vec<Value> = Vec::new();
+    for line in stdout.lines().skip(1) {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(slash) = line.find('/') {
+            let pkg = &line[..slash];
+            let rest = &line[slash + 1..];
+            let mut parts = rest.split_whitespace();
+            let codename = parts.next().unwrap_or("");
+            let version = parts.next().unwrap_or("");
+            let arch = parts.next().unwrap_or("");
+            let old_version = if let Some(start) = line.find("[upgradable from:") {
+                line[start + "[upgradable from:".len()..]
+                    .trim()
+                    .trim_end_matches(']')
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            packages.push(json!({
+                "package": pkg,
+                "codename": codename,
+                "new_version": version,
+                "arch": arch,
+                "old_version": old_version,
+            }));
+        }
+    }
+    let count = packages.len();
+    Ok(json!({"upgradable": packages, "count": count}))
 }
 
 fn cmd_disk_io(args: &[String]) -> Result<Value, String> {
