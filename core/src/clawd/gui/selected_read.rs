@@ -597,15 +597,13 @@ impl SelectedReads {
                     }
                 }
             }
-        } else if proposal.stage == Stage::Selected {
-            if access == Access::Create {
-                proposal.stage = match self.provider.creation_state(id).map_err(BrokerError::unavailable)? {
-                    CreationState::Created => Stage::Created,
-                    CreationState::Failed => Stage::Failed,
-                    CreationState::Uncertain => Stage::Uncertain,
-                    _ => Stage::Selected,
-                };
-            }
+        } else if proposal.stage == Stage::Selected && access == Access::Create {
+            proposal.stage = match self.provider.creation_state(id).map_err(BrokerError::unavailable)? {
+                CreationState::Created => Stage::Created,
+                CreationState::Failed => Stage::Failed,
+                CreationState::Uncertain => Stage::Uncertain,
+                _ => Stage::Selected,
+            };
         }
         if selected_before && proposal.stage == Stage::Selected {
             let valid = proposal.authority.as_ref().is_some_and(|read| {
