@@ -58,7 +58,13 @@ fn controlled_metadata_scope(
         let relative = root.strip_prefix(home)
             .map_err(|_| "GUI metadata scope escapes authenticated owner Home")?;
         MetadataRoot::validate_relative(relative)?;
-        if !root.is_absolute() || home.join(relative).as_os_str() != root.as_os_str() {
+        // Joining an empty relative path adds a separator to the exact Home spelling.
+        let literal_root = if relative.as_os_str().is_empty() {
+            home.to_path_buf()
+        } else {
+            home.join(relative)
+        };
+        if !root.is_absolute() || literal_root.as_os_str() != root.as_os_str() {
             return Err("GUI metadata requires a canonical owner-relative directory scope".into());
         }
         let cap = Cap::new(Verb::FS_META, scope.clone());
@@ -160,15 +166,15 @@ fn declaration(
                     .ok_or("authenticated GUI Home is not UTF-8")?,
             ),
         );
-        if registration.caps.iter().any(|granted| granted == &bare) {
-            if selected.legacy_needs || selected.launch_needs().any(|need| {
+        if registration.caps.iter().any(|granted| granted == &bare)
+            && (selected.legacy_needs || selected.launch_needs().any(|need| {
                 need.verb == Verb::FS_META
                     && matches!(&need.scope, ScopeBinding::Fixed { scope } if scope == &bare.scope)
-            }) {
-                return Err(
-                    "a bare Home scope cannot authorize recursive metadata browsing".into(),
-                );
-            }
+            }))
+        {
+            return Err(
+                "a bare Home scope cannot authorize recursive metadata browsing".into(),
+            );
         }
         if registration.caps.iter().any(|granted|
             granted == &Cap::new(Verb::FS_META, home_scope.clone()))

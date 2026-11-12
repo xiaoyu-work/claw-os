@@ -2066,7 +2066,12 @@ fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, pac
         let socket = Path::new("/run/cos/clawd.sock");
         let listener = tokio::net::UnixListener::bind(socket).unwrap();
         enable_credential_passing(&listener, socket).unwrap();
-        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        if package_only {
+            std::os::unix::fs::chown(socket, None, Some(OWNER)).unwrap();
+            std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o660)).unwrap();
+        } else {
+            std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        }
         let server = tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
