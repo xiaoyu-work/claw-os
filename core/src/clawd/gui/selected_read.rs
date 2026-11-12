@@ -1,6 +1,6 @@
 //! Protected, operation-bound selected file reads. App proposals are not grants.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -161,6 +161,9 @@ pub(super) struct SelectedReads {
     gui_generation: u64,
     stopped: Arc<AtomicBool>,
     proposals: Mutex<BTreeMap<String, Proposal>>,
+    approval_sessions: Mutex<BTreeSet<String>>,
+    checker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    checker_error: Mutex<Option<String>>,
 }
 
 impl SelectedReads {
@@ -183,7 +186,7 @@ impl SelectedReads {
         {
             return Err("selected read endpoint has another GUI identity".into());
         }
-        Ok(Arc::new(Self {
+        let endpoint = Arc::new(Self {
             registration,
             instance,
             process,
@@ -195,7 +198,46 @@ impl SelectedReads {
             gui_generation: gui.generation,
             stopped: Arc::new(AtomicBool::new(false)),
             proposals: Mutex::new(BTreeMap::new()),
-        }))
+            approval_sessions: Mutex::new(BTreeSet::new()),
+            checker: Mutex::new(None),
+            checker_error: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&endpoint);
+        let context = crate::paths::RoutedPathContext::for_owner(
+            endpoint.registration.owner(),
+            endpoint.registration.home.clone(),
+        );
+        let checked = weak.clone();
+        // Full selected-file checks must not run on the two-second metadata heartbeat.
+        let thread = std::thread::Builder::new()
+            .name("gui-file-checks".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    loop {
+                        let Some(endpoint) = weak.upgrade() else {
+                            return;
+                        };
+                        if endpoint.stopped.load(Ordering::Acquire) {
+                            return;
+                        }
+                        if let Err(error) = context.clone().scope_sync(|| endpoint.check_selected()) {
+                            endpoint.checker_failed(error);
+                            return;
+                        }
+                        drop(endpoint);
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }));
+                if let (Err(_), Some(endpoint)) = (result, checked.upgrade()) {
+                    endpoint.checker_failed("Root selected-file checker panicked".into());
+                }
+            })
+            .map_err(|error| format!("start Root selected-file checks: {error}"))?;
+        *endpoint
+            .checker
+            .lock()
+            .map_err(|_| "selected-file checker custody poisoned")? = Some(thread);
+        Ok(endpoint)
     }
 
     fn fresh(&self) -> Result<GrantView, String> {
@@ -292,6 +334,17 @@ impl SelectedReads {
         let id = format!("sr-{nonce}");
         let approval_session = format!("gui-read-{}-{nonce}", Epoch(self.instance.0).label());
         let display = candidate.display().map_err(BrokerError::authorization)?;
+        {
+            let mut sessions = self.approval_sessions.lock().map_err(|_| {
+                BrokerError::unavailable("selected-file session catalogue poisoned")
+            })?;
+            if sessions.len() >= 32 {
+                return Err(BrokerError::unavailable(
+                    "window selected-file session limit reached",
+                ));
+            }
+            sessions.insert(approval_session.clone());
+        }
         let approval_request = crate::approvals::submit_owned_with_context_for_operation(
             Verb::FS_READ, capability.scope.clone(), approval_session.clone(),
             format!("Read ONLY selected file {display}; window {}, native node {node}. No directory, write, delete or execute access",
@@ -465,13 +518,43 @@ impl SelectedReads {
     }
 
     pub(super) fn health(&self) -> Result<(), String> {
+        if let Some(error) = self
+            .checker_error
+            .lock()
+            .map_err(|_| "selected-file checker result poisoned")?
+            .clone()
+        {
+            return Err(error);
+        }
+        if self.stopped.load(Ordering::Acquire) {
+            return Err("selected-file checks retired".into());
+        }
+        let checker = self
+            .checker
+            .lock()
+            .map_err(|_| "selected-file checker custody poisoned")?;
+        if checker.as_ref().is_none_or(|checker| checker.is_finished()) {
+            return Err("Root selected-file checker ended unexpectedly".into());
+        }
+        Ok(())
+    }
+
+    fn checker_failed(&self, error: String) {
+        tracing::warn!(%error, "Root selected-file checks failed");
+        if let Ok(mut failure) = self.checker_error.lock() {
+            *failure = Some(error);
+        }
+        self.stop();
+    }
+
+    fn check_selected(&self) -> Result<(), String> {
         if self.stopped.load(Ordering::Acquire) {
             return Err("selected read endpoint retired".into());
         }
         let selected = self
             .proposals
             .lock()
-            .map_err(|_| "selected reads poisoned")?
+            .map_err(|_| "selected files poisoned")?
             .values()
             .filter_map(|proposal| proposal.authority.clone())
             .collect::<Vec<_>>();
@@ -497,6 +580,25 @@ impl SelectedReads {
         {
             return Err("selected read source pins require checked instance death".into());
         }
+        {
+            let mut checker = self
+                .checker
+                .lock()
+                .map_err(|_| "selected-file checker custody poisoned")?;
+            if let Some(worker) = checker.as_ref() {
+                while !worker.is_finished() {
+                    if Instant::now() >= deadline {
+                        return Err("Root selected-file checks still running; custody retained".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                checker
+                    .take()
+                    .ok_or("selected-file checker custody lost")?
+                    .join()
+                    .map_err(|_| "Root selected-file checker join failed")?;
+            }
+        }
         let decisions = self.lock_until(deadline)?.values().map(|proposal| {
             (proposal.approval_session.clone(), proposal.approval_request.clone(), proposal.digest.clone())
         }).collect::<Vec<_>>();
@@ -515,6 +617,10 @@ impl SelectedReads {
             crate::clawd::audit::record_approval_revocation(&scope, &session, generation);
         }
         self.lock_until(deadline)?.clear();
+        self.approval_sessions
+            .lock()
+            .map_err(|_| "selected-file session catalogue poisoned")?
+            .clear();
         Ok(())
     }
 
@@ -561,10 +667,22 @@ impl SelectedReads {
         }
         match scope {
             crate::approvals::RevocationScope::Owner { .. } => Ok(true),
-            crate::approvals::RevocationScope::Session { session, .. } => Ok(self
-                .lock_until(deadline)?
-                .values()
-                .any(|proposal| proposal.approval_session == *session)),
+            crate::approvals::RevocationScope::Session { session, .. } => loop {
+                match self.approval_sessions.try_lock() {
+                    Ok(sessions) => return Ok(sessions.contains(session)),
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        return Err("selected-file session catalogue poisoned".into())
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        if Instant::now() >= deadline {
+                            return Err(
+                                "selected-file session catalogue busy; custody retained".into(),
+                            );
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            },
         }
     }
 }
