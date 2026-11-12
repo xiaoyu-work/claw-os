@@ -277,12 +277,15 @@ display() {
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         if [[ "$selection" == native-calendar ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
+            cargo test -p cos --lib --locked native_calendar_popup -- --test-threads=1
+            cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+                --bin claw-calendar-reader --locked --target-dir "$CARGO_TARGET_DIR/native-calendar-service"
         fi
         if [[ "$selection" == native-terminal ]]; then
             cargo test -p cos --lib --locked native_terminal_session_selection -- --test-threads=1
         fi
         cargo test --manifest-path desktop/comp/test/display-control/Cargo.toml \
-            --locked keyboard_plan_refuses -- --test-threads=1
+            --locked -- keyboard_plan_refuses pointer_plan_refuses --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
             --product "${selection#native-}" \
             --output "$GITHUB_WORKSPACE/build/$selection-input" \
@@ -329,7 +332,10 @@ display() {
     fi
     if [[ "$selection" == native-fs ]]; then
         selectors=(--native-fs-only)
-    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar ]]; then
+    elif [[ "$selection" == native-calendar ]]; then
+        selectors=("--native-calendar-only" "$GITHUB_WORKSPACE/build/native-calendar-input"
+            "$CARGO_TARGET_DIR/native-calendar-service/debug/claw-calendar-reader")
+    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal ]]; then
         selectors=("--$selection-only" "$GITHUB_WORKSPACE/build/$selection-input")
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)

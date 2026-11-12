@@ -3,8 +3,11 @@
 use super::{ClientState, State};
 use crate::display_authority::ClientOrigin;
 use smithay::{
-    backend::input::KeyState,
-    input::keyboard::{FilterResult, Keycode},
+    backend::input::{ButtonState, KeyState},
+    input::{
+        keyboard::{FilterResult, Keycode},
+        pointer::{ButtonEvent, MotionEvent},
+    },
     utils::SERIAL_COUNTER,
 };
 use std::{
@@ -30,6 +33,7 @@ struct Request {
     surface: String,
     expires: u64,
     strokes: VecDeque<Stroke>,
+    pointer: bool,
 }
 
 fn text_code(byte: u8) -> Option<u32> {
@@ -81,12 +85,17 @@ fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request>
         || !instance
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || !matches!(surface, "primary" | "auxiliary")
+        || !matches!(surface, "primary" | "auxiliary" | "panel")
     {
         return Err("stale, replayed or unbound keyboard request".into());
     }
     let text = value["value"].as_str().ok_or("keyboard value")?;
+    let pointer = value["kind"] == "pointer";
+    if pointer != (surface == "panel") {
+        return Err("pointer/keyboard action does not match its bounded surface role".into());
+    }
     let strokes = match value["kind"].as_str() {
+        Some("pointer") if text == "center-click" => VecDeque::new(),
         Some("text") if !text.is_empty() && text.len() <= 128 => text
             .bytes()
             .map(|byte| {
@@ -133,7 +142,85 @@ fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request>
         surface: surface.into(),
         expires,
         strokes,
+        pointer,
     })
+}
+
+fn pointer_click(state: &mut State, instance: &str, now: u64) -> Result<()> {
+    let (surface, center) = state
+        .native_window
+        .as_ref()
+        .and_then(|window| window.panel_pointer_target(instance))
+        .ok_or("pointer target is not this live configured buffered panel")?;
+    let client = state.common.display_handle.get_client(surface.id())?;
+    let origin = client
+        .get_data::<ClientState>()
+        .and_then(|data| data.display_origin.as_ref())
+        .ok_or("pointer target has no authenticated display origin")?;
+    if !matches!(origin, ClientOrigin::Instance(_))
+        || !origin.layer_shell()
+        || origin.selection_read()
+        || origin.selection_write()
+        || origin
+            .instance()
+            .map(|id| claw_display_control::Epoch(id.0).label())
+            .as_deref()
+            != Some(instance)
+    {
+        return Err("pointer target lost its live Root instance/ui.panel lease".into());
+    }
+    let pointer = state
+        .seat
+        .get_pointer()
+        .ok_or("fixture pointer unavailable")?;
+    if pointer.is_grabbed() {
+        return Err("private pointer already has an unrelated grab".into());
+    }
+    pointer.motion(
+        state,
+        Some((surface, (0.0, 0.0).into())),
+        &MotionEvent {
+            location: center.into(),
+            serial: SERIAL_COUNTER.next_serial(),
+            time: now as u32,
+        },
+    );
+    for button_state in [ButtonState::Pressed, ButtonState::Released] {
+        pointer.button(
+            state,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time: now as u32,
+                button: 0x110,
+                state: button_state,
+            },
+        );
+    }
+    pointer.frame(state);
+    Ok(())
+}
+
+fn acknowledge(directory: &Path, request: &Request) -> Result<()> {
+    let mut ack = serde_json::json!({
+        "schema": SCHEMA, "sequence": request.sequence,
+        "instance": request.instance, "surface": request.surface,
+    });
+    ack[if request.pointer {
+        "pointer_events_sent"
+    } else {
+        "keyboard_events_sent"
+    }] = true.into();
+    let temporary = directory.join("keyboard-ack.next");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    use std::io::Write;
+    file.write_all(&serde_json::to_vec(&ack)?)?;
+    drop(file);
+    std::fs::rename(temporary, directory.join("keyboard-ack.json"))?;
+    Ok(())
 }
 
 fn read_request(path: &Path) -> Result<Option<serde_json::Value>> {
@@ -191,6 +278,12 @@ impl Control {
         if now >= request.expires {
             return Err("keyboard command expired before delivery".into());
         }
+        if request.pointer {
+            pointer_click(state, &request.instance, now)?;
+            acknowledge(directory, request)?;
+            self.active = None;
+            return Ok(());
+        }
         let surface = state
             .native_window
             .as_ref()
@@ -247,21 +340,7 @@ impl Control {
             }
         }
         if request.strokes.is_empty() {
-            let ack = serde_json::json!({
-                "schema": SCHEMA, "sequence": request.sequence,
-                "instance": request.instance, "surface": request.surface,
-                "keyboard_events_sent": true
-            });
-            let temporary = directory.join("keyboard-ack.next");
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temporary)?;
-            use std::io::Write;
-            file.write_all(&serde_json::to_vec(&ack)?)?;
-            drop(file);
-            std::fs::rename(temporary, directory.join("keyboard-ack.json"))?;
+            acknowledge(directory, request)?;
             self.active = None;
         }
         Ok(())
@@ -296,5 +375,33 @@ mod tests {
         let mut bad = value;
         bad["surface"] = "foreign".into();
         assert!(decode(&bad, 0, 1000).is_err());
+    }
+
+    #[test]
+    fn pointer_plan_refuses_keyboard_focus_other_roles_arbitrary_coordinates_and_replay() {
+        let mut value = request();
+        value["surface"] = "panel".into();
+        assert!(decode(&value, 0, 1000).is_err());
+        value["kind"] = "key".into();
+        value["value"] = "focus".into();
+        assert!(decode(&value, 0, 1000).is_err());
+        value["kind"] = "pointer".into();
+        value["value"] = "center-click".into();
+        assert!(decode(&value, 0, 1000).unwrap().pointer);
+        assert!(decode(&value, 1, 1000).is_err());
+        assert!(decode(&value, 0, 2000).is_err());
+        for surface in ["primary", "auxiliary", "foreign"] {
+            let mut bad = value.clone();
+            bad["surface"] = surface.into();
+            assert!(decode(&bad, 0, 1000).is_err());
+        }
+        let mut bad = value.clone();
+        bad["expires_ms"] = 6001.into();
+        assert!(decode(&bad, 0, 1000).is_err());
+        let mut bad = value.clone();
+        bad["x"] = 12.into();
+        assert!(decode(&bad, 0, 1000).is_err());
+        value["value"] = "12,20".into();
+        assert!(decode(&value, 0, 1000).is_err());
     }
 }

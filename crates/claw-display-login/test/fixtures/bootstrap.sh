@@ -5,6 +5,15 @@ selection=all
 native_product_input=
 native_product=
 native_app=
+native_calendar_reader=
+if [[ $# == 17 && "${15}" == --native-calendar-only ]]; then
+    native_calendar_reader=$(realpath -- "${17}")
+    [[ -f "$native_calendar_reader" && -x "$native_calendar_reader" && ! -L "$native_calendar_reader" ]] || exit 64
+    set -- "${@:1:16}"
+elif [[ $# == 16 && "${15}" == --native-calendar-only ]]; then
+    printf 'actual Calendar consumer requires the existing compiled OS reader\n' >&2
+    exit 64
+fi
 if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
@@ -112,6 +121,10 @@ if [[ "$gui" == 1 ]]; then
     if [[ -n "$native_product" ]]; then
         cp -a -- "$native_product_input/$native_app" "/usr/lib/cos/apps/$native_app"
         chown -hR 0:0 "/usr/lib/cos/apps/$native_app"
+    fi
+    if [[ "$native_product" == calendar ]]; then
+        [[ -n "$native_calendar_reader" ]] || exit 64
+        install -m0755 "$native_calendar_reader" /usr/lib/cos/bin/claw-calendar-reader
     fi
 fi
 printf '%s\n' \
@@ -276,6 +289,10 @@ BUS
         if [[ -f /run/user/62050/native-product-observer/window.json ]]; then
             cp /run/user/62050/native-product-observer/window.json "$private/$selection-window.json"
             chmod 0644 "$private/$selection-window.json"
+        fi
+        if [[ "$native_product" == calendar && -f /run/gui-fixture/native-calendar-consumer.json ]]; then
+            cp /run/gui-fixture/native-calendar-consumer.json "$private/native-calendar-consumer.json"
+            chmod 0644 "$private/native-calendar-consumer.json"
         fi
     fi
     for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..24} session-startup file-manager native-product; do

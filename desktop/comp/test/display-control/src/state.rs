@@ -25,6 +25,7 @@ use smithay::{
         shell::wlr_layer::{
             Layer, LayerSurface, LayerSurfaceConfigure, WlrLayerShellHandler, WlrLayerShellState,
         },
+        shell::xdg::PopupSurface,
     },
 };
 use std::{io::Write, os::fd::OwnedFd};
@@ -337,6 +338,14 @@ impl WlrLayerShellHandler for State {
     fn ack_configure(&mut self, surface: WlSurface, configure: LayerSurfaceConfigure) {
         if let Some(window) = &mut self.native_window {
             window.ack_panel(&surface, configure.serial);
+        }
+    }
+
+    fn new_popup(&mut self, parent: LayerSurface, popup: PopupSurface) {
+        if let Some(window) = &mut self.native_window {
+            window
+                .bind_panel_popup(parent, popup)
+                .expect("native popup Layer-parent binding failed");
         }
     }
 

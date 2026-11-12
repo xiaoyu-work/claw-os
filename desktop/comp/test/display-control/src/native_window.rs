@@ -52,6 +52,19 @@ struct Panel {
     commits: u64,
     raster: Option<serde_json::Value>,
     closed: bool,
+    popup: PanelPopup,
+}
+
+#[derive(Default)]
+struct PanelPopup {
+    surface: Option<PopupSurface>,
+    geometry: Option<(i32, i32, i32, i32)>,
+    configures: Vec<Serial>,
+    parent_bound: bool,
+    configured: bool,
+    commits: u64,
+    raster: Option<serde_json::Value>,
+    closed: bool,
 }
 
 #[derive(Default)]
@@ -186,6 +199,7 @@ impl Window {
             commits: 0,
             raster: None,
             closed: false,
+            popup: PanelPopup::default(),
         });
         self.publish()
     }
@@ -215,6 +229,177 @@ impl Window {
         }
         panel.surface = None;
         panel.closed = true;
+        self.publish()
+    }
+
+    pub fn panel_pointer_target(&self, instance: &str) -> Option<(WlSurface, (f64, f64))> {
+        if self.instance.as_deref() != Some(instance) {
+            return None;
+        }
+        let panel = self.panel.as_ref()?;
+        let surface = panel.surface.as_ref()?.wl_surface();
+        let (width, height) = panel.size?;
+        let raster = panel.raster.as_ref()?;
+        if panel.closed
+            || !panel.configured
+            || panel.commits == 0
+            || !surface.is_alive()
+            || panel.keyboard_interactivity.as_deref() != Some("None")
+            || raster["nonuniform_pixels"] != true
+            || raster["width"].as_i64() != Some(i64::from(width))
+            || raster["height"].as_i64() != Some(i64::from(height))
+        {
+            return None;
+        }
+        Some((
+            surface.clone(),
+            (f64::from(width) / 2.0, f64::from(height) / 2.0),
+        ))
+    }
+
+    fn panel_popup_origin(&self, surface: &WlSurface) -> Result<()> {
+        let panel = self.panel.as_ref().ok_or("popup has no native panel")?;
+        let parent = panel
+            .surface
+            .as_ref()
+            .ok_or("popup Layer parent is gone")?
+            .wl_surface();
+        let client = surface.client().ok_or("popup client is gone")?;
+        let origin = client
+            .get_data::<crate::state::ClientState>()
+            .and_then(|state| state.display_origin.as_ref())
+            .ok_or("popup has no authenticated display origin")?;
+        if !matches!(origin, ClientOrigin::Instance(_))
+            || !origin.layer_shell()
+            || origin.selection_read()
+            || origin.selection_write()
+            || origin
+                .instance()
+                .map(|id| claw_display_control::Epoch(id.0).label())
+                != self.instance
+            || parent.client().map(|client| client.id()) != Some(client.id())
+        {
+            return Err("popup is not the live same-client Root panel instance".into());
+        }
+        Ok(())
+    }
+
+    pub fn pending_panel_popup(
+        &mut self,
+        surface: PopupSurface,
+        positioner: PositionerState,
+    ) -> Result<()> {
+        self.panel_popup_origin(surface.wl_surface())?;
+        if self
+            .panel_pointer_target(self.instance.as_deref().unwrap())
+            .is_none()
+        {
+            return Err("popup preceded the real configured panel pixels".into());
+        }
+        let popup = &mut self.panel.as_mut().unwrap().popup;
+        if popup.surface.is_some() || popup.closed {
+            return Err("only one real Calendar popup lifetime is in scope".into());
+        }
+        let geometry = positioner.get_geometry();
+        if geometry.size.w <= 0
+            || geometry.size.h <= 0
+            || geometry.size.w > 4096
+            || geometry.size.h > 4096
+        {
+            return Err("native popup geometry exceeded the bounded original request".into());
+        }
+        surface.with_pending_state(|state| state.geometry = geometry);
+        popup.geometry = Some((
+            geometry.loc.x,
+            geometry.loc.y,
+            geometry.size.w,
+            geometry.size.h,
+        ));
+        popup.surface = Some(surface);
+        self.publish()
+    }
+
+    pub fn bind_panel_popup(&mut self, parent: LayerSurface, surface: PopupSurface) -> Result<()> {
+        self.panel_popup_origin(surface.wl_surface())?;
+        let panel = self.panel.as_mut().unwrap();
+        if panel.surface.as_ref() != Some(&parent)
+            || panel.popup.surface.as_ref() != Some(&surface)
+            || surface.get_parent_surface().as_ref() != Some(parent.wl_surface())
+            || panel.popup.parent_bound
+        {
+            return Err("popup did not bind exactly the authenticated Layer parent".into());
+        }
+        panel.popup.parent_bound = true;
+        panel.popup.configures.push(surface.send_configure()?);
+        self.publish()
+    }
+
+    fn reposition_panel_popup(
+        &mut self,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
+    ) -> Result<()> {
+        self.panel_popup_origin(surface.wl_surface())?;
+        let panel = self.panel.as_mut().unwrap();
+        let popup = &mut panel.popup;
+        if popup.surface.as_ref() != Some(&surface)
+            || !popup.parent_bound
+            || popup.closed
+            || surface.get_parent_surface().as_ref()
+                != panel.surface.as_ref().map(LayerSurface::wl_surface)
+            || popup.configures.len() >= 8
+        {
+            return Err("unbound or excessive native popup reposition".into());
+        }
+        let geometry = positioner.get_geometry();
+        if geometry.size.w <= 0
+            || geometry.size.h <= 0
+            || geometry.size.w > 4096
+            || geometry.size.h > 4096
+        {
+            return Err("native popup reposition exceeded its bounded original geometry".into());
+        }
+        surface.with_pending_state(|state| state.geometry = geometry);
+        popup.configures.push(surface.send_repositioned(token));
+        self.publish()
+    }
+
+    fn ack_panel_popup(&mut self, surface: &WlSurface, configure: Configure) {
+        let popup = &mut self.panel.as_mut().unwrap().popup;
+        assert!(
+            popup
+                .surface
+                .as_ref()
+                .is_some_and(|popup| popup.wl_surface() == surface)
+        );
+        let Configure::Popup(configure) = configure else {
+            panic!("native panel popup acknowledged a non-popup configure");
+        };
+        assert!(popup.parent_bound);
+        let issued = popup
+            .configures
+            .iter()
+            .position(|serial| *serial == configure.serial)
+            .expect("popup acknowledged a configure not issued to this same Layer child");
+        popup.configures.drain(..=issued);
+        let geometry = configure.state.geometry;
+        popup.geometry = Some((
+            geometry.loc.x,
+            geometry.loc.y,
+            geometry.size.w,
+            geometry.size.h,
+        ));
+        popup.configured = true;
+    }
+
+    fn close_panel_popup(&mut self, surface: &PopupSurface) -> Result<()> {
+        let popup = &mut self.panel.as_mut().unwrap().popup;
+        if popup.surface.as_ref() != Some(surface) {
+            return Err("foreign native popup destruction".into());
+        }
+        popup.surface = None;
+        popup.closed = true;
         self.publish()
     }
 
@@ -266,6 +451,16 @@ impl Window {
     }
 
     pub fn commit(&mut self, surface: &WlSurface) -> Result<()> {
+        let is_popup = self.panel.as_ref().is_some_and(|panel| {
+            panel
+                .popup
+                .surface
+                .as_ref()
+                .is_some_and(|popup| popup.wl_surface() == surface)
+        });
+        if is_popup {
+            self.panel_popup_origin(surface)?;
+        }
         let is_panel = self.panel.as_ref().is_some_and(|panel| {
             panel
                 .surface
@@ -380,6 +575,17 @@ impl Window {
                             .checked_add(1)
                             .ok_or("panel frame count overflow")?;
                         self.output.enter(surface);
+                    } else if is_popup {
+                        let popup = &mut self.panel.as_mut().unwrap().popup;
+                        if !popup.parent_bound || !popup.configured {
+                            return Err("native popup attached pixels before parent/configure acknowledgement".into());
+                        }
+                        popup.raster = Some(raster(&buffer)?);
+                        popup.commits = popup
+                            .commits
+                            .checked_add(1)
+                            .ok_or("popup frame count overflow")?;
+                        self.output.enter(surface);
                     }
                     buffer.release();
                 }
@@ -390,6 +596,8 @@ impl Window {
                         self.auxiliary.raster = None;
                     } else if is_panel {
                         self.panel.as_mut().unwrap().raster = None;
+                    } else if is_popup {
+                        self.panel.as_mut().unwrap().popup.raster = None;
                     }
                 }
             }
@@ -418,6 +626,13 @@ impl Window {
                 "keyboard_interactivity": panel.keyboard_interactivity,
                 "configure_acked": panel.configured, "configure_size": panel.size,
                 "buffer_commits": panel.commits, "raster": panel.raster, "closed": panel.closed,
+                "popup": {
+                    "role": "xdg_popup", "parent_role": "zwlr_layer_surface_v1",
+                    "parent_instance": instance, "parent_bound": panel.popup.parent_bound,
+                    "open": panel.popup.surface.is_some(), "closed": panel.popup.closed,
+                    "geometry": panel.popup.geometry, "configure_acked": panel.popup.configured,
+                    "buffer_commits": panel.popup.commits, "raster": panel.popup.raster,
+                },
             }));
         }
         let (title, app_id) = self.surface.as_ref().map_or((None, None), |surface| {
@@ -634,7 +849,7 @@ impl XdgShellHandler for State {
             .expect("native window witness publication failed");
     }
 
-    fn ack_configure(&mut self, surface: WlSurface, _: Configure) {
+    fn ack_configure(&mut self, surface: WlSurface, configure: Configure) {
         let window = self.native_window.as_mut().unwrap();
         if window
             .surface
@@ -650,10 +865,24 @@ impl XdgShellHandler for State {
             .is_some_and(|top| top.wl_surface() == &surface)
         {
             window.auxiliary.configured = true;
+        } else if window.panel.is_some() {
+            window.ack_panel_popup(&surface, configure);
         }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        if self
+            .native_window
+            .as_ref()
+            .is_some_and(|window| window.panel.is_some())
+        {
+            self.native_window
+                .as_mut()
+                .unwrap()
+                .pending_panel_popup(surface, positioner)
+                .expect("native panel popup admission failed");
+            return;
+        }
         surface.with_pending_state(|state| state.geometry = positioner.get_geometry());
         surface
             .send_configure()
@@ -668,8 +897,32 @@ impl XdgShellHandler for State {
         positioner: PositionerState,
         token: u32,
     ) {
+        if self
+            .native_window
+            .as_ref()
+            .is_some_and(|window| window.panel.is_some())
+        {
+            self.native_window
+                .as_mut()
+                .unwrap()
+                .reposition_panel_popup(surface, positioner, token)
+                .expect("native Calendar popup reposition failed");
+            return;
+        }
         surface.with_pending_state(|state| state.geometry = positioner.get_geometry());
         surface.send_repositioned(token);
+    }
+
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        if let Some(window) = self
+            .native_window
+            .as_mut()
+            .filter(|window| window.panel.is_some())
+        {
+            window
+                .close_panel_popup(&surface)
+                .expect("native popup closure witness failed");
+        }
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
