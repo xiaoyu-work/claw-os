@@ -23,6 +23,7 @@ PRODUCTS = {
     "files": ("cosmic-files", "com.clawos.Files", ("bin/cosmic-files-applet",)),
     "terminal": ("cosmic-term", "com.clawos.Term", ()),
     "calendar": ("panel-calendar", "com.clawos.PanelCalendarButton", ()),
+    "store": ("cosmic-store", "com.clawos.Store", ()),
 }
 
 
@@ -126,7 +127,7 @@ def payload_record(source, payload, lock, product="editor"):
         )
     ):
         raise ValueError("Native acceptance requires the published 0.2.1 platform pin")
-    if product in ("terminal", "calendar") and platform.get("sha256") != (
+    if product in ("terminal", "calendar", "store") and platform.get("sha256") != (
         "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
     ):
         raise ValueError("Native acceptance requires the approved published platform bytes")

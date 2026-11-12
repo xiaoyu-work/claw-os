@@ -14,7 +14,7 @@ elif [[ $# == 16 && "${15}" == --native-calendar-only ]]; then
     printf 'actual Calendar consumer requires the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -24,6 +24,9 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-terminal-only ]]; then
         native_product=terminal
         native_app=cosmic-term
+    elif [[ "${15}" == --native-store-only ]]; then
+        native_product=store
+        native_app=cosmic-store
     else
         native_product=calendar
         native_app=panel-calendar
@@ -92,6 +95,11 @@ if [[ "$gui" == 1 && "$selection" != native-package ]]; then
     mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/log
     install -d -m0755 /etc/cos
     mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /etc/cos
+    if [[ "$selection" == native-store ]]; then
+        mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/cache
+        install -d -m0755 /etc/apt
+        mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /etc/apt
+    fi
 fi
 install -d -m0755 /usr/lib/cos/bin
 install -m0755 "$host" /usr/lib/cos/bin/claw-display-host
@@ -265,6 +273,7 @@ BUS
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
         native-calendar) fixture_test=clawd::server::gui_fixture::native_products::private_native_calendar ;;
+        native-store) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
     listing=$("$registry" --list)
@@ -289,6 +298,10 @@ BUS
         if [[ -f /run/user/62050/native-product-observer/window.json ]]; then
             cp /run/user/62050/native-product-observer/window.json "$private/$selection-window.json"
             chmod 0644 "$private/$selection-window.json"
+        fi
+        if [[ "$native_product" == store && -f /run/gui-fixture/native-store-consumer.json ]]; then
+            cp /run/gui-fixture/native-store-consumer.json "$private/native-store-consumer.json"
+            chmod 0644 "$private/native-store-consumer.json"
         fi
         if [[ "$native_product" == calendar && -f /run/gui-fixture/native-calendar-consumer.json ]]; then
             cp /run/gui-fixture/native-calendar-consumer.json "$private/native-calendar-consumer.json"

@@ -236,6 +236,16 @@ and fence the instance. See the [native creation contract](../../worker/native_f
 These draft interfaces do not complete installed Editor/Files UI acceptance or
 publish a new SDK/platform.
 
+The separate `native-store` candidate lane uses the original signed Store ELF,
+installer resources and published platform pin. Its launcher has invocation
+authority only; ordinary `sys.observe:packages` startup review is independent
+of the ungranted optional Critical package feature. Private canonical standard
+catalog/inventory data goes through the real SDK/Root readers without raw state
+or bus mounts. The unchanged startup bound requires configured nonuniform client
+pixels and real read requests, followed by checked whole-instance/PAM retirement.
+This first gate does not assert reply decoding, exact painted entries or the
+native GUI's payload self-handoff; those remain separate acceptance work.
+
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
 the real immutable App-owned Editor release ELF, original installer resources

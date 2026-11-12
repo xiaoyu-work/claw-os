@@ -27,6 +27,13 @@ mod calendar_popup {
     ));
 }
 
+mod store_catalog {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/store_catalog.rs"
+    ));
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Product {
     pub(super) name: &'static str,
@@ -38,6 +45,7 @@ pub(super) struct Product {
     home_metadata: bool,
     selector: &'static str,
     panel: bool,
+    observation: Option<&'static str>,
 }
 
 pub(super) const EDITOR: Product = Product {
@@ -50,6 +58,7 @@ pub(super) const EDITOR: Product = Product {
     home_metadata: true,
     selector: "--gui",
     panel: false,
+    observation: None,
 };
 pub(super) const FILES: Product = Product {
     name: "files",
@@ -61,6 +70,7 @@ pub(super) const FILES: Product = Product {
     home_metadata: true,
     selector: "--gui",
     panel: false,
+    observation: None,
 };
 pub(super) const TERMINAL: Product = Product {
     name: "terminal",
@@ -72,6 +82,7 @@ pub(super) const TERMINAL: Product = Product {
     home_metadata: false,
     selector: "--gui",
     panel: false,
+    observation: None,
 };
 pub(super) const CALENDAR: Product = Product {
     name: "calendar",
@@ -83,6 +94,19 @@ pub(super) const CALENDAR: Product = Product {
     home_metadata: false,
     selector: "open",
     panel: true,
+    observation: None,
+};
+pub(super) const STORE: Product = Product {
+    name: "store",
+    app: "cosmic-store",
+    case: 29,
+    desktop_id: "com.clawos.Store",
+    entries: &["bin/cosmic-store"],
+    ungranted: &[0],
+    home_metadata: false,
+    selector: "--gui",
+    panel: false,
+    observation: Some("packages"),
 };
 
 impl Product {
@@ -149,7 +173,7 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
-    if product.name == "terminal" || product.panel {
+    if product.name == "terminal" || product.panel || product.observation.is_some() {
         assert_eq!(
             platform_digest,
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
@@ -599,6 +623,9 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 expected_gui.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
                 expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
             }
+            if let Some(domain) = product.observation {
+                expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name(domain)));
+            }
             assert_eq!(
                 gui, expected_gui,
                 "GUI startup must not inherit MCP, content, process or AI authority"
@@ -611,20 +638,20 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
         })
 }
 
-async fn approve_panel_startup(
+async fn approve_native_startup(
     pam: &mut Child,
     product: Product,
     parent: &str,
 ) -> Vec<crate::approvals::Request> {
-    if !product.panel {
-        return Vec::new();
-    }
+    let needs = if product.panel {
+        vec![("data.db.read", Scope::name("calendar")), ("ui.panel", Scope::Wild)]
+    } else {
+        product.observation.into_iter()
+            .map(|domain| ("sys.observe", Scope::name(domain))).collect()
+    };
     let mut approved: Vec<crate::approvals::Request> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(20);
-    for (verb, scope) in [
-        ("data.db.read", Scope::name("calendar")),
-        ("ui.panel", Scope::Wild),
-    ] {
+    for (verb, scope) in needs {
         let request = loop {
             if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER))
                 .into_iter()
@@ -637,7 +664,7 @@ async fn approve_panel_startup(
             assert!(
                 pam.try_wait().unwrap().is_none() && Instant::now() < deadline,
                 "{}",
-                diagnostic("ordinary mandatory Calendar/panel owner review")
+                diagnostic("ordinary mandatory native owner review")
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
@@ -648,7 +675,7 @@ async fn approve_panel_startup(
         }
         assert!(
             observe().is_none(),
-            "native panel ran before mandatory owner decisions"
+            "native App ran before mandatory owner decisions"
         );
         approved.push(approve_protected_owner_request(&request.id).await);
     }
@@ -687,6 +714,7 @@ fn bound_gui_session(parent: &str, product: Product) -> Option<String> {
 pub(super) async fn run(group: &std::fs::File, product: Product) {
     let editor = product.name == "editor";
     let calendar_fixture = product.panel.then(calendar_popup::Fixture::prepare);
+    let store_fixture = product.observation.is_some().then(store_catalog::Fixture::prepare);
     let home = Path::new("/run/display-home");
     {
         let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
@@ -748,7 +776,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     );
     let parent = launch_parent(&launcher, product.case);
     command(&control, b"RUN!");
-    let panel_approvals = approve_panel_startup(&mut pam, product, &parent).await;
+    let panel_approvals = approve_native_startup(&mut pam, product, &parent).await;
     let metadata = if product.home_metadata {
         let deadline = Instant::now() + Duration::from_secs(20);
         let metadata = loop {
@@ -1016,6 +1044,12 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         calendar_popup::run(&control, &mut pam, &retained, &process, &session, fixture).await;
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
+    if let Some(fixture) = &store_fixture {
+        if let Err(error) = fixture.consume(&retained, &process, &session, deadline, &before).await {
+            renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+        }
+        assert_eq!(startup_authority(&session, &parent, product), original);
+    }
     assert_eq!(
         std::fs::read_to_string("/proc/self/mountinfo")
             .unwrap()
@@ -1071,6 +1105,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         pty.verify_after_retirement();
     }
     if let Some(fixture) = &calendar_fixture {
+        fixture.verify_after_retirement();
+    }
+    if let Some(fixture) = &store_fixture {
         fixture.verify_after_retirement();
     }
     assert!(
@@ -1140,6 +1177,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "/metadata-only Home"
         } else if product.panel {
             "/Layer Shell panel with independent protected owner approvals"
+        } else if product.observation.is_some() {
+            "/protected ordinary package observation"
         } else {
             "/empty-authority private PTY"
         },
@@ -1149,6 +1188,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "typed shell command, real PTY/shell/child identities and descendant retirement verified"
         } else if product.panel {
             "original popup pixels/open/close and authenticated same-owner real SDK/Calendar reader success verified; exact returned/painted event text NOT inspected"
+        } else if product.observation.is_some() {
+            "real controlled catalog/inventory/update SDK requests verified without raw system state or Critical startup authority; entry pixels and package UI mutations NOT inspected"
         } else {
             "additional UI mutations not exercised"
         },
@@ -1204,6 +1245,12 @@ fn private_native_terminal() {
 #[ignore = "clean-GHA-only: actual Calendar Layer Shell ELF, authenticated private PAM/display and cgroup v2"]
 fn private_native_calendar() {
     private_gui_fixture_selected(false, false, false, Some(CALENDAR));
+}
+
+#[test]
+#[ignore = "clean-GHA-only: actual Store ELF, authenticated private PAM/display/catalog and cgroup v2"]
+fn private_native_store() {
+    private_gui_fixture_selected(false, false, false, Some(STORE));
 }
 
 #[test]
