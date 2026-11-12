@@ -265,9 +265,12 @@ fn startup_authority(session: &str, parent: &str) -> (CapSet, CapSet) {
                 gui, metadata,
                 "optional read/write/AI must not become startup authority"
             );
-            metadata.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(APP)));
+            let expected_parent = CapSet::from_caps([
+                Cap::new(Verb::AGENT_INVOKE, Scope::name(APP)),
+                Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")),
+            ]);
             assert_eq!(
-                parent, metadata,
+                parent, expected_parent,
                 "launcher must not borrow a model, Admin or content grant"
             );
             (gui, parent)
