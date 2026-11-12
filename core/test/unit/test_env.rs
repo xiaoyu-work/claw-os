@@ -27,7 +27,21 @@ pub(crate) fn lock_env() -> MutexGuard<'static, ()> {
 pub(crate) fn use_stripped_app_runner() -> TestEnvVarGuard {
     static RUNNER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     let runner = RUNNER.get_or_init(|| {
-        let source = crate::bridge::app_runner_path()
+        let output = std::process::Command::new(env!("CARGO"))
+            .args(["metadata", "--locked", "--format-version", "1", "--no-deps"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("read Cargo target directory for the test App runner");
+        assert!(
+            output.status.success(),
+            "Cargo metadata failed for the test App runner"
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .expect("decode Cargo metadata for the test App runner");
+        // The prerequisite builds the final dev binary; test executables use Cargo's private layout.
+        let source = std::path::Path::new(metadata["target_directory"].as_str().unwrap())
+            .join("debug")
+            .join("claw-app-runner")
             .canonicalize()
             .expect("resolve the current claw-app-runner");
         let dir = secure_scratch_dir("app-runner");
