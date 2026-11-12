@@ -320,11 +320,11 @@ pub(super) mod aes_gcm {
         /// Encrypt one 16-byte block in place (AES-256, encryption direction only).
         fn encrypt_block(&self, blk: &mut [u8; 16]) {
             xor_block(blk, &self.rk[0]);
-            for round in 1..14 {
+            for round_key in &self.rk[1..14] {
                 sub_bytes(blk);
                 shift_rows(blk);
                 mix_columns(blk);
-                xor_block(blk, &self.rk[round]);
+                xor_block(blk, round_key);
             }
             sub_bytes(blk);
             shift_rows(blk);
