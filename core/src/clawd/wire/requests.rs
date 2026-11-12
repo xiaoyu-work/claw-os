@@ -1795,6 +1795,13 @@ pub struct PackageControl {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PackageCatalogPage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Token<128>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageQuery {
     pub session: Token,
     pub action: Token,
@@ -1804,6 +1811,8 @@ pub struct PackageQuery {
     pub query: Option<Text<512>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<PackageCatalogPage>,
 }
 
 pub(crate) type PackageIntent = crate::clawd::packages::intent::Request;

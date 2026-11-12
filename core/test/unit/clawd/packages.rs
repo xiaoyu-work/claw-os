@@ -160,6 +160,7 @@ fn package_queries_require_live_read_scopes_not_a_product_name_or_package_mutati
     for app in [Some("cosmic-store"), Some("independent-package-client"), None] {
         for (body, scope) in [
             (json!({"session": "fixture", "action": "installed"}), "packages"),
+            (json!({"session": "fixture", "action": "catalog", "catalog": {}}), "packages"),
             (json!({"session": "fixture", "action": "search", "query": "editor", "limit": 25}), "packages"),
             (json!({"session": "fixture", "action": "show", "name": "fixture-one:amd64"}), "fixture-one:amd64"),
             (json!({"session": "fixture", "action": "available", "name": "fixture-one:amd64"}), "fixture-one:amd64"),
@@ -220,6 +221,11 @@ fn package_query_wire_rejects_authority_paths_mutation_actions_and_unbounded_sea
     for name in ["", "-oHook=id", "../fixture", "/usr/bin/fixture", ".", "..", "x\nid"] {
         assert!(parse(json!({"session": "fixture", "action": "available", "name": name})).is_err());
     }
+    for cursor in ["", "/var/cache/catalog", "invalid:1", "A:0"] {
+        assert!(parse(json!({"session": "fixture", "action": "catalog", "catalog": {"cursor": cursor}})).is_err());
+    }
+    assert!(parse(json!({"session": "fixture", "action": "catalog", "catalog": {"cursor": format!("{}-100", "a".repeat(64))}})).is_ok());
+    assert!(parse(json!({"session": "fixture", "action": "catalog", "catalog": {"path": "/private"}})).is_err());
 }
 
 #[test]

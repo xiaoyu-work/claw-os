@@ -14,12 +14,19 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_OUTPUT: usize = 8 * 1024 * 1024;
 const MAX_ERROR: usize = 64 * 1024;
 const MAX_WORKSPACE: u64 = 256 * 1024 * 1024;
+const CATALOG_READER: &str = include_str!("catalog_reader.py");
 
 pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
     let session = std::env::var("COS_SESSION")
         .map_err(|_| "package queries require an authenticated App session")?;
     let body = match args {
         [action] if action == "installed" => json!({"session": session, "action": action}),
+        [action] if action == "catalog" => {
+            json!({"session": session, "action": action, "catalog": {}})
+        }
+        [action, cursor] if action == "catalog" => {
+            json!({"session": session, "action": action, "catalog": {"cursor": cursor}})
+        }
         [action, name] if matches!(action.as_str(), "show" | "available") => {
             json!({"session": session, "action": action, "name": name})
         }
@@ -31,7 +38,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
         }
         _ => {
             return Err(
-                "usage: internal package query <installed | show name | available name | search query limit>".into(),
+                "usage: internal package query <installed | catalog [cursor] | show name | available name | search query limit>".into(),
             );
         }
     };
@@ -47,13 +54,22 @@ pub(super) fn required_cap(request: &PackageQuery) -> Result<Cap, String> {
         request.name.as_ref(),
         request.query.as_ref(),
         request.limit,
+        request.catalog.as_ref(),
     ) {
-        ("installed", None, None, None) => Scope::name("packages"),
-        ("show", Some(name), None, None) => {
+        ("installed", None, None, None, None) => Scope::name("packages"),
+        ("catalog", None, None, None, Some(page))
+            if page
+                .cursor
+                .as_ref()
+                .is_none_or(|cursor| valid_catalog_cursor(cursor.as_str())) =>
+        {
+            Scope::name("packages")
+        }
+        ("show", Some(name), None, None, None) => {
             super::validate_package_name(name.as_str())?;
             Scope::name(name.as_str())
         }
-        ("available", Some(name), None, None)
+        ("available", Some(name), None, None, None)
             if !name.as_str().trim().is_empty()
                 && !name.as_str().starts_with('-')
                 && !name.as_str().contains('/')
@@ -62,7 +78,7 @@ pub(super) fn required_cap(request: &PackageQuery) -> Result<Cap, String> {
         {
             Scope::name(name.as_str())
         }
-        ("search", None, Some(query), Some(1..=100))
+        ("search", None, Some(query), Some(1..=100), None)
             if !query.as_str().trim().is_empty()
                 && !query.as_str().chars().any(char::is_control) =>
         {
@@ -71,6 +87,18 @@ pub(super) fn required_cap(request: &PackageQuery) -> Result<Cap, String> {
         _ => return Err("invalid closed package query or search limit (1..100)".into()),
     };
     Ok(Cap::new(Verb::SYS_OBSERVE, scope))
+}
+
+fn valid_catalog_cursor(cursor: &str) -> bool {
+    cursor.split_once('-').is_some_and(|(revision, offset)| {
+        revision.len() == 64
+            && revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && !offset.is_empty()
+            && offset.bytes().all(|byte| byte.is_ascii_digit())
+            && offset.parse::<u32>().is_ok_and(|offset| offset <= 100_000)
+    })
 }
 
 pub(super) fn authorize(
@@ -93,6 +121,32 @@ pub(crate) async fn query(
         .map_err(|_| BrokerError::execution("Invalid package query"))?;
     let owner = client.require_uid().map_err(BrokerError::authorization)?;
     let _authorized = authorize(authority, owner, &request).map_err(BrokerError::authorization)?;
+    if let Some(page) = request.catalog {
+        let output = execute(
+            "/usr/bin/python3",
+            &[
+                "-I",
+                "-B",
+                "-c",
+                CATALOG_READER,
+                page.cursor.as_ref().map_or("", |cursor| cursor.as_str()),
+            ],
+            owner,
+        )
+        .await
+        .map_err(BrokerError::unavailable)?;
+        if !output.status.success() {
+            return Err(BrokerError::unavailable(
+                if output.status.code() == Some(2) {
+                    "The package catalog changed; restart from its first page"
+                } else {
+                    "The system package catalog is unavailable"
+                },
+            ));
+        }
+        return serde_json::from_str(&output.stdout)
+            .map_err(|_| BrokerError::unavailable("Invalid system package catalog metadata"));
+    }
     if request.action.as_str() == "available" {
         return availability(request.name.as_ref().unwrap().as_str(), owner).await;
     }

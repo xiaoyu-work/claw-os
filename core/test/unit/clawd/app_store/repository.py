@@ -5,6 +5,7 @@ import datetime
 import email.utils
 import fcntl
 import functools
+import gzip
 import http.server
 import os
 from pathlib import Path
@@ -283,6 +284,32 @@ def update():
     run("/usr/bin/apt-get", "update", "--error-on=any")
 
 
+def catalog():
+    require_private_mounts()
+    for prefix in ("/usr/share", "/var/lib", "/var/cache"):
+        for name in ("swcatalog", "app-info"):
+            directory = Path(prefix) / name
+            directory.mkdir(parents=True, exist_ok=True)
+            mount("tmpfs", directory, "tmpfs", flags=2 | 4 | 8, options="mode=0755")
+    directory = Path("/var/lib/swcatalog/xml")
+    directory.mkdir(mode=0o755)
+    directory.chmod(0o755)
+    components = "".join(
+        f'<component type="desktop-application"><id>org.claw.fixture.Catalog{index}</id>'
+        f"<pkgname>{package}</pkgname><name>Controlled catalog fixture {index}</name>"
+        '<name xml:lang="fr">Catalogue prive</name>'
+        "<summary>Public synthetic metadata only</summary>"
+        '<icon type="stock">package-x-generic</icon></component>'
+        for index, package in enumerate((BUNDLE, SUPPORT))
+    )
+    path = directory / "private.xml.gz"
+    path.write_bytes(gzip.compress(
+        f'<components version="1.0" origin="private-catalog">{components}</components>'.encode(),
+        mtime=0,
+    ))
+    path.chmod(0o644)
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["isolate"]:
         isolate()
@@ -295,5 +322,7 @@ if __name__ == "__main__":
         serve()
     elif sys.argv[1:] == ["update"]:
         update()
+    elif sys.argv[1:] == ["catalog"]:
+        catalog()
     else:
-        raise SystemExit("usage: repository.py {isolate|repository|repository-native-package|serve|update}")
+        raise SystemExit("usage: repository.py {isolate|repository|repository-native-package|serve|update|catalog}")
