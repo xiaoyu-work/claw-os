@@ -394,6 +394,20 @@ fn selected_read() {
 
     const SIZE: usize = 2 * 1024 * 1024 + 29;
     fn byte(index: usize) -> u8 { index.wrapping_mul(43).wrapping_add(17) as u8 }
+    let started = std::time::Instant::now();
+    let mut trace_file = OpenOptions::new().write(true).create(true).truncate(true)
+        .open(private_marker("selected-read-timing.jsonl")).ok();
+    let mut stage = |source_step: &'static str| {
+        let timing = serde_json::json!({
+            "sourceStep": source_step,
+            "elapsedMs": started.elapsed().as_millis() as u64,
+        });
+        eprintln!("private selected-read timing {timing}");
+        // Host stderr is buffered until retirement; retain only safe phases.
+        if let Some(file) = trace_file.as_mut() {
+            let _ = writeln!(file, "{timing}");
+        }
+    };
     let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").unwrap());
     let ungranted = std::env::var("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap();
     let _: Vec<usize> = serde_json::from_str(&ungranted).unwrap();
@@ -426,6 +440,7 @@ fn selected_read() {
     }
     let pending = pending.expect("Root selected-file proposal through the authenticated private GUI hop");
     assert_eq!(pending.state, "pending");
+    stage("request_pending");
     assert!(File::open(&selected).is_err(), "request success is not a read selection");
     assert!(claw_os_sdk::gui::file_read_status(&pending.selection_id, sibling_node).is_err());
     assert!(claw_os_sdk::gui::file_read_status(&format!("sr-{}", "f".repeat(32)), node).is_err());
@@ -436,6 +451,7 @@ fn selected_read() {
         let status = claw_os_sdk::gui::file_read_status(&pending.selection_id, node).unwrap();
         if status.state == "selected" {
             let remaining = status.expires_in_ms.filter(|remaining| *remaining > 0).unwrap();
+            stage("status_selected");
             let again = claw_os_sdk::gui::file_read_status(&pending.selection_id, node).unwrap();
             assert_eq!(again.state, "selected");
             assert!(again.expires_in_ms.is_some_and(|next| next <= remaining),
@@ -448,10 +464,12 @@ fn selected_read() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let mut file = File::open(&selected).unwrap();
+    stage("native_file_opened");
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
     assert_eq!(data.len(), SIZE);
     assert!(data.iter().enumerate().all(|(index, actual)| *actual == byte(index)));
+    stage("native_read_complete");
     file.seek(SeekFrom::Start(19321)).unwrap();
     let mut slice = [0; 257];
     file.read_exact(&mut slice).unwrap();
@@ -462,6 +480,7 @@ fn selected_read() {
     let executable = unsafe { libc::mmap(std::ptr::null_mut(), SIZE, libc::PROT_READ | libc::PROT_EXEC,
         libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
     assert_eq!(executable, libc::MAP_FAILED, "a read selection is not resource execution authority");
+    stage("seek_mmap_complete");
     assert!(OpenOptions::new().read(true).write(true).open(&selected).is_err());
     assert!(std::fs::write(&selected, b"read is not write").is_err());
     assert!(File::open(&sibling).is_err(), "selected directory scope must not grant sibling content");
@@ -472,6 +491,7 @@ fn selected_read() {
     assert!(File::open(&inherited).is_err());
     assert!(File::open(&unselected).is_err());
     assert!(std::fs::metadata(home.join(".ssh/secret")).is_err());
+    stage("scalar_denial_done");
     let pending_sibling = claw_os_sdk::gui::request_file_read(sibling_node).unwrap();
     let pending_unused = claw_os_sdk::gui::request_file_read(
         std::fs::metadata(&unselected).unwrap().ino()).unwrap();
@@ -479,6 +499,7 @@ fn selected_read() {
     assert_eq!(pending_unused.state, "pending");
     std::fs::write(private_marker("selected-read-unfinished.json"),
         serde_json::to_vec(&[pending_sibling, pending_unused]).unwrap()).unwrap();
+    stage("pending_sibling_cleanup_ready");
     let group = unsafe { libc::getpgrp() };
     let (mut ready, mut report) = UnixStream::pair().unwrap();
     ready.set_read_timeout(Some(DEADLINE)).unwrap();

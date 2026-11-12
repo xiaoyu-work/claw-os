@@ -26,6 +26,25 @@ use super::inputs::{
     FileWriteStatusRequest,
 };
 
+#[cfg(test)]
+struct TestTiming(&'static str, Instant);
+
+#[cfg(test)]
+impl Drop for TestTiming {
+    fn drop(&mut self) {
+        let thread = std::thread::current();
+        let lane = match thread.name() {
+            Some("gui-file-checks") => "checker",
+            Some("claw-native-fs") => "native_io",
+            _ => "controller",
+        };
+        eprintln!(
+            "private selected-file timing sourceStep={} sourceLane={lane} elapsedMs={}",
+            self.0, self.1.elapsed().as_millis(),
+        );
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Access {
     Read,
@@ -62,6 +81,8 @@ impl Access {
         registration: &Registration,
         relative: &std::path::Path,
     ) -> Result<Cap, String> {
+        #[cfg(test)]
+        let _timing = TestTiming("root_declared_capability", Instant::now());
         match self {
             Self::Read => registration.selected_read_capability(relative),
             Self::Write => registration.selected_file_capability(relative, Verb::FS_WRITE),
@@ -162,7 +183,11 @@ impl SelectionAuthority {
             self.registration.home.clone(),
         )
         .scope_sync(|| {
-            let gui = self.registration.snapshot(&self.process)?;
+            let gui = {
+                #[cfg(test)]
+                let _timing = TestTiming("root_registration_snapshot", Instant::now());
+                self.registration.snapshot(&self.process)?
+            };
             if gui.id != self.gui
                 || gui.generation != self.gui_generation
                 || self
