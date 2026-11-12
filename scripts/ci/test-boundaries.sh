@@ -274,10 +274,10 @@ extensions() {
 display() {
     local selection="${1:-display}"
     if [[ "$selection" == native-editor ]]; then
+        cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
             --output "$GITHUB_WORKSPACE/build/native-editor-input" \
             --target-dir "$CARGO_TARGET_DIR/native-editor"
-        cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
     fi
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
