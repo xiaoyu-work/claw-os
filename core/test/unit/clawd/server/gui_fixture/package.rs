@@ -135,6 +135,7 @@ pub(super) fn install_denied_app(key: &crate::provenance::sign::SigningKeyFile) 
     use crate::provenance::{PackageKind, sign};
     let directory = Path::new("/usr/lib/cos/apps").join(DENIED_APP);
     std::fs::create_dir_all(&directory).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
     let body = r#"
 import json, os, subprocess, sys
 
@@ -187,6 +188,11 @@ if __name__ == "__main__":
     }).to_string()).unwrap();
     for name in ["main.py", "app.json"] {
         std::fs::set_permissions(directory.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    {
+        let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
+        assert!(std::fs::File::open(directory.join("app.json")).is_ok(),
+            "the normal-UID denial actor must be able to discover its real installed App");
     }
     sign::sign_directory(&directory, &sign::SignRequest {
         kind: PackageKind::App, id: DENIED_APP.into(), version: "1.0.0".into(),
