@@ -259,21 +259,32 @@ async function installedProduct() {
     "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
     "--disable-background-networking", "--disable-component-update", "--disable-sync",
     "--disable-extensions", `--user-data-dir=${profile}`, "--remote-debugging-port=0",
-    "--window-size=1440,1000", "about:blank"], { stdio: "ignore", detached: true });
+    "--window-size=1440,1000", "about:blank"], { stdio: ["ignore", "ignore", "pipe"], detached: true });
+  let browserStderr = Buffer.alloc(0);
+  chrome.stderr.on("data", (chunk) => {
+    browserStderr = Buffer.concat([browserStderr, chunk]).subarray(-8192);
+  });
   let spawnError;
   chrome.on("error", (error) => { spawnError = error; });
   const exited = once(chrome, "close").catch(() => {});
+  const startupFailure = () => JSON.stringify({
+    message: "Installed-App Chromium did not become ready",
+    spawn_error: spawnError?.code, exit_code: chrome.exitCode, signal: chrome.signalCode,
+    untrusted_browser_stderr_tail: browserStderr.toString("utf8"),
+  });
   let socket;
   let send;
   const issues = [];
   try {
     let port;
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (spawnError) throw new Error("Installed-App Chromium could not start");
+      if (spawnError || chrome.exitCode !== null || chrome.signalCode !== null) {
+        throw new Error(startupFailure());
+      }
       try { port = (await readFile(path.join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]; break; } catch {}
       await delay(100);
     }
-    assert.ok(port, "Installed-App Chromium did not become ready");
+    assert.ok(port, startupFailure());
     const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     socket = new WebSocket(tabs.find((tab) => tab.type === "page").webSocketDebuggerUrl);
     await once(socket, "open");
