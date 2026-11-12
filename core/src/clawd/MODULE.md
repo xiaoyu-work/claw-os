@@ -243,6 +243,13 @@ timeouts and missing readers are explicit. Missing databases retain empty-event
 semantics after authorization. A finite read grant is spent once, not again
 by a local preflight.
 
+The validated Root-owned query parent explicitly retains search-only `0711`
+access despite clawd's `0077` umask: SQLite resolves the private reader's cwd
+through that parent. This does not expose a database in the host or App
+namespace, allow directory enumeration or relax the daemon's private umask.
+The genuine native Calendar consumer regression runs under `0077` and checks
+the parent mode, actual dropped-reader success and checked view retirement.
+
 Task Host ordinary-operation registrations additionally return
 `task_app_data_dir`, the private view of the authenticated owner/App partition.
 The request cannot choose a data path, owner or mount namespace. Preparation
