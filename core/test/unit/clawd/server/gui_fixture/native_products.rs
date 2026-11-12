@@ -589,8 +589,8 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 expected_parent.insert(metadata);
             }
             if product.panel {
-                expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
                 expected_gui.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
+                expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
             }
             assert_eq!(
                 gui, expected_gui,
