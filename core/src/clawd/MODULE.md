@@ -102,6 +102,7 @@ and agent tasks.
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `regional_settings/` | Closed locale/owner-language/static-hostname service; three separate exact grants, authenticated owner, root-owned D-Bus backends and confirmed/indeterminate outcomes |
 | `packages.rs`, `packages/query.rs` | System-wide package effects under Critical `sys.package`; separate bounded catalog/installed-state and named package/command availability reads under exact `sys.observe` scopes, with no fixed client identity, raw bus, package-state mount or requested-command execution |
+| `packages/catalog_reader.py` | Bounded, revision-paged standard system AppStream metadata under `sys.observe:packages`; unprivileged Metadata parsing preserves XML/YAML/localization for product-owned UI conversion, without Pool refresh, persistent cache writes, caller paths or authority-bearing cursors |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |

@@ -118,7 +118,7 @@ def run(command, args):
         for args in (
             ["search", "{BUNDLE}", "25"], ["show", "{BUNDLE}"],
             ["installed"], ["available", "{BUNDLE}"],
-            ["available", "cos"], ["show", "{SIDE_EFFECT}"],
+            ["available", "cos"], ["catalog"], ["show", "{SIDE_EFFECT}"],
         ):
             result = subprocess.run(
                 ["/usr/local/bin/cos", "--wire=1", "__package_query", *args],
@@ -131,6 +131,7 @@ def run(command, args):
             "queries": queries,
             "raw_dpkg_visible": pathlib.Path("/var/lib/dpkg/status").exists(),
             "raw_apt_visible": pathlib.Path("/var/lib/apt/lists").exists(),
+            "raw_catalog_visible": pathlib.Path("/var/lib/swcatalog").exists(),
         }}))
         os.replace(temporary, data / "queries.json")
         while not (data / "queries-finish").exists():
@@ -2521,6 +2522,9 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     let fixture = Fixture::new();
     fixture.enable_processes();
     fixture.install_bundle().await;
+    plumbing("catalog");
+    let catalog_path = Path::new("/var/lib/swcatalog/xml/private.xml.gz");
+    let catalog_before = std::fs::read(catalog_path).unwrap();
     let before = dpkg_state();
     let persistent_caches = ["/var/cache/apt/pkgcache.bin", "/var/cache/apt/srcpkgcache.bin"];
     assert!(persistent_caches.iter().all(|path| !Path::new(path).exists()));
@@ -2537,9 +2541,10 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     assert_eq!(std::fs::metadata(path).unwrap().uid(), OWNER);
     assert_eq!(result["raw_dpkg_visible"], false);
     assert_eq!(result["raw_apt_visible"], false);
+    assert_eq!(result["raw_catalog_visible"], false);
     let queries = result["queries"].as_array().unwrap();
-    assert_eq!(queries.len(), 6);
-    if queries[..5].iter().any(|query| query["code"] != 0) {
+    assert_eq!(queries.len(), 7);
+    if queries[..6].iter().any(|query| query["code"] != 0) {
         let output = owner_command(OWNER, Path::new("/usr/bin/timeout"))
             .args([
                 "20", "/usr/bin/apt-cache",
@@ -2562,7 +2567,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
             "queries": queries,
         }));
     }
-    for query in &queries[..5] {
+    for query in &queries[..6] {
         assert_eq!(query["code"], 0, "{query}");
         assert_eq!(query["reply"]["wire_version"], 1);
         assert_eq!(query["reply"]["ok"], true, "{query}");
@@ -2584,15 +2589,25 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
         "name": "cos", "available": true, "type": "command",
         "details": "found at /usr/local/bin/cos",
     }));
-    assert_ne!(queries[5]["code"], 0);
-    assert_eq!(queries[5]["reply"]["code"], "PERMISSION_DENIED");
+    let catalog = &queries[5]["reply"]["data"];
+    assert_eq!(catalog["configured"], true);
+    assert_eq!(catalog["count"], 2);
+    assert_eq!(catalog["total"], 2);
+    assert!(catalog["next"].is_null());
+    let xml = catalog["items"].as_array().unwrap().iter()
+        .map(|item| item["xml"].as_str().unwrap()).collect::<String>();
+    for value in [BUNDLE, SUPPORT, "org.claw.fixture.Catalog0", "Catalogue prive"] {
+        assert!(xml.contains(value));
+    }
+    assert_ne!(queries[6]["code"], 0);
+    assert_eq!(queries[6]["reply"]["code"], "PERMISSION_DENIED");
     {
         let calls = fixture.server.calls.lock().unwrap();
         let requests = calls.iter().filter(|call| {
             call.command == Command::AppSessionRelay
                 && call.params["command"] == Command::SystemPackageQuery.as_str()
         }).collect::<Vec<_>>();
-        assert_eq!(requests.len(), 6);
+        assert_eq!(requests.len(), 7);
         assert!(requests.iter().all(|call| call.uid == OWNER));
         assert!(!calls.iter().any(|call| {
             call.command == Command::AppSessionRelay
@@ -2603,6 +2618,11 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     assert_eq!(dpkg_state(), before, "metadata queries mutated installed package state");
     assert!(persistent_caches.iter().all(|path| !Path::new(path).exists()),
         "read-only queries wrote persistent APT caches");
+    assert_eq!(std::fs::read(catalog_path).unwrap(), catalog_before);
+    for path in ["/var/cache/swcatalog", "/var/cache/app-info"] {
+        assert!(std::fs::read_dir(path).unwrap().next().is_none(),
+            "catalog observation wrote persistent system cache data");
+    }
     let process = caller.process.as_ref().unwrap().try_clone().unwrap();
     let group = caller.group.clone();
     let runtime = caller.socket.parent().unwrap().to_path_buf();
