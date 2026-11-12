@@ -275,9 +275,12 @@ pub(super) async fn run(
         .write(true)
         .create_new(true)
         .custom_flags(libc::O_NOFOLLOW)
-        .mode(0o600)
+        .mode(0o644)
         .open(&next)
         .unwrap();
+    file.set_permissions(std::fs::Permissions::from_mode(0o644))
+        .unwrap();
+    assert_eq!(file.metadata().unwrap().uid(), 0);
     file.write_all(&serde_json::to_vec(&request).unwrap())
         .unwrap();
     drop(file);
