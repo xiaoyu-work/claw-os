@@ -117,7 +117,8 @@ def run(command, args):
         queries = []
         for args in (
             ["search", "{BUNDLE}", "25"], ["show", "{BUNDLE}"],
-            ["installed"], ["show", "{SIDE_EFFECT}"],
+            ["installed"], ["available", "{BUNDLE}"],
+            ["available", "cos"], ["show", "{SIDE_EFFECT}"],
         ):
             result = subprocess.run(
                 ["/usr/local/bin/cos", "--wire=1", "__package_query", *args],
@@ -132,6 +133,9 @@ def run(command, args):
             "raw_apt_visible": pathlib.Path("/var/lib/apt/lists").exists(),
         }}))
         os.replace(temporary, data / "queries.json")
+        while not (data / "queries-finish").exists():
+            time.sleep(0.01)
+        return {{"fixture": True}}
     if command == "handoff":
         while not (data / "go").exists():
             time.sleep(0.01)
@@ -225,6 +229,11 @@ for line in sys.stdin:
                             "verb": "sys.observe",
                             "scope": {"kind": "fixed", "scope": {"kind": "name", "value": BUNDLE}},
                             "why": {"en": "Read only this private package's details"}
+                        },
+                        {
+                            "verb": "sys.observe",
+                            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "cos"}},
+                            "why": {"en": "Check the fixed command's availability without executing it"}
                         }
                     ],
                     "args": []
@@ -1741,7 +1750,7 @@ impl OrdinaryActor {
                 crate::caps::Scope::name(BUNDLE),
             ));
         } else if operation == "catalog" {
-            for name in ["packages", BUNDLE] {
+            for name in ["packages", BUNDLE, "cos"] {
                 caps.insert(crate::caps::Cap::new(
                     crate::caps::Verb::SYS_OBSERVE,
                     crate::caps::Scope::name(name),
@@ -2522,8 +2531,8 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     assert_eq!(result["raw_dpkg_visible"], false);
     assert_eq!(result["raw_apt_visible"], false);
     let queries = result["queries"].as_array().unwrap();
-    assert_eq!(queries.len(), 4);
-    if queries[..3].iter().any(|query| query["code"] != 0) {
+    assert_eq!(queries.len(), 6);
+    if queries[..5].iter().any(|query| query["code"] != 0) {
         let output = owner_command(OWNER, Path::new("/usr/bin/timeout"))
             .args([
                 "20", "/usr/bin/apt-cache",
@@ -2546,7 +2555,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
             "queries": queries,
         }));
     }
-    for query in &queries[..3] {
+    for query in &queries[..5] {
         assert_eq!(query["code"], 0, "{query}");
         assert_eq!(query["reply"]["wire_version"], 1);
         assert_eq!(query["reply"]["ok"], true, "{query}");
@@ -2561,15 +2570,22 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
         assert!(installed.iter().any(|entry| entry == package));
         assert_eq!(queries[2]["reply"]["data"]["versions"][package], "1.0.0");
     }
-    assert_ne!(queries[3]["code"], 0);
-    assert_eq!(queries[3]["reply"]["code"], "PERMISSION_DENIED");
+    assert_eq!(queries[3]["reply"]["data"], json!({
+        "name": BUNDLE, "available": true, "type": "system", "details": "installed via dpkg",
+    }));
+    assert_eq!(queries[4]["reply"]["data"], json!({
+        "name": "cos", "available": true, "type": "command",
+        "details": "found at /usr/local/bin/cos",
+    }));
+    assert_ne!(queries[5]["code"], 0);
+    assert_eq!(queries[5]["reply"]["code"], "PERMISSION_DENIED");
     {
         let calls = fixture.server.calls.lock().unwrap();
         let requests = calls.iter().filter(|call| {
             call.command == Command::AppSessionRelay
                 && call.params["command"] == Command::SystemPackageQuery.as_str()
         }).collect::<Vec<_>>();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 6);
         assert!(requests.iter().all(|call| call.uid == OWNER));
         assert!(!calls.iter().any(|call| {
             call.command == Command::AppSessionRelay
@@ -2583,6 +2599,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     let process = caller.process.as_ref().unwrap().try_clone().unwrap();
     let group = caller.group.clone();
     let runtime = caller.socket.parent().unwrap().to_path_buf();
+    std::fs::write(caller.data().join("queries-finish"), b"queries checked").unwrap();
     caller.finish().await;
     assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
     assert!(!group.exists() && !runtime.exists(), "read-only App custody was not retired");
