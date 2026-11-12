@@ -49,7 +49,7 @@ fn generic_subroot_projection_preserves_home_relative_identity_without_raw_conte
 
 #[test]
 fn metadata_projection_keeps_full_home_and_exact_fixed_subroot_scopes() {
-    let home = Path::new("/home/owner");
+    let home = Path::new("/run/display-home");
     for relative in ["**", "Projects/review/**"] {
         let mut app = metadata_app(&[relative, relative], false);
         let cap = metadata_cap(home, relative);
@@ -104,6 +104,10 @@ fn one_view_refuses_conflicting_scopes_and_broad_or_optional_substitutes() {
 fn metadata_subroot_refuses_bare_glob_escaping_and_noncanonical_scopes() {
     let home = Path::new("/home/owner");
     for path in [
+        "/home/owner",
+        "/home/owner//**",
+        "/home/owner/./**",
+        "/home/owner/../owner/**",
         "/home/owner/Projects",
         "/home/owner/Projects/*/**",
         "/home/owner/Projects/../Other/**",
