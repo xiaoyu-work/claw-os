@@ -160,6 +160,7 @@ fn package_queries_require_live_read_scopes_not_a_product_name_or_package_mutati
     for app in [Some("cosmic-store"), Some("independent-package-client"), None] {
         for (body, scope) in [
             (json!({"session": "fixture", "action": "installed"}), "packages"),
+            (json!({"session": "fixture", "action": "updates"}), "packages"),
             (json!({"session": "fixture", "action": "catalog", "catalog": {}}), "packages"),
             (json!({"session": "fixture", "action": "search", "query": "editor", "limit": 25}), "packages"),
             (json!({"session": "fixture", "action": "show", "name": "fixture-one:amd64"}), "fixture-one:amd64"),
@@ -248,6 +249,13 @@ fn package_query_projection_preserves_catalog_shapes_and_excludes_noninstalled_s
     assert_eq!(result["packages"], json!(["fixture-one:amd64"]));
     assert_eq!(result["versions"], json!({"fixture-one:amd64": "2.0"}));
     assert!(super::query::installed_result("malformed\n").is_err());
+    let updates = crate::sysinfo::package_updates_result(
+        "Listing...\nfixture-one/stable 2.0 all [upgradable from: 1.0]\n",
+    ).unwrap();
+    assert_eq!(updates["upgradable"], json!([{
+        "package": "fixture-one", "codename": "stable", "new_version": "2.0",
+        "arch": "all", "old_version": "1.0",
+    }]));
 }
 
 #[test]

@@ -20,7 +20,9 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
     let session = std::env::var("COS_SESSION")
         .map_err(|_| "package queries require an authenticated App session")?;
     let body = match args {
-        [action] if action == "installed" => json!({"session": session, "action": action}),
+        [action] if matches!(action.as_str(), "installed" | "updates") => {
+            json!({"session": session, "action": action})
+        }
         [action] if action == "catalog" => {
             json!({"session": session, "action": action, "catalog": {}})
         }
@@ -38,7 +40,7 @@ pub(crate) fn cli(args: &[String]) -> Result<Value, String> {
         }
         _ => {
             return Err(
-                "usage: internal package query <installed | catalog [cursor] | show name | available name | search query limit>".into(),
+                "usage: internal package query <installed | updates | catalog [cursor] | show name | available name | search query limit>".into(),
             );
         }
     };
@@ -56,7 +58,7 @@ pub(super) fn required_cap(request: &PackageQuery) -> Result<Cap, String> {
         request.limit,
         request.catalog.as_ref(),
     ) {
-        ("installed", None, None, None, None) => Scope::name("packages"),
+        ("installed" | "updates", None, None, None, None) => Scope::name("packages"),
         ("catalog", None, None, None, Some(page))
             if page
                 .cursor
@@ -183,6 +185,17 @@ pub(crate) async fn query(
                 "--showformat=${binary:Package}\t${db:Status-Status}\t${Version}\n",
             ],
         ),
+        "updates" => (
+            "/usr/bin/apt",
+            vec![
+                "-o",
+                "Dir::Cache::pkgcache=",
+                "-o",
+                "Dir::Cache::srcpkgcache=",
+                "list",
+                "--upgradable",
+            ],
+        ),
         _ => unreachable!("authorized closed package query"),
     };
     let output = execute(path, &args, owner)
@@ -215,6 +228,7 @@ pub(crate) async fn query(
         ),
         "show" => show_result(request.name.as_ref().unwrap().as_str(), &output.stdout),
         "installed" => installed_result(&output.stdout),
+        "updates" => crate::sysinfo::package_updates_result(&output.stdout),
         _ => unreachable!("authorized closed package query"),
     }
     .map_err(BrokerError::unavailable)
