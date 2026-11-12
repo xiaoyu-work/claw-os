@@ -9,6 +9,9 @@ use crate::bridge::AppLaunch;
 use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::display_session::registry::{GuiControl, Registry};
 
+#[cfg(test)]
+use crate::provenance::verify::test_profile::{Guard as ProfileGuard, Span, Step};
+
 use super::{authority, ClientIdentity};
 
 mod selected_source;
@@ -149,6 +152,10 @@ impl Registration {
     }
 
     pub(crate) fn selected_file_capability(&self, relative: &std::path::Path, verb: Verb) -> Result<Cap, String> {
+        #[cfg(test)]
+        let _profile = ProfileGuard::enter();
+        #[cfg(test)]
+        let _needs = Span::new(Step::Needs);
         use crate::caps::manifest::ScopeBinding;
         if !matches!(verb, Verb::FS_READ | Verb::FS_WRITE) {
             return Err("native file selection supports only independent read or write".into());
@@ -195,22 +202,42 @@ impl Registration {
             Scope::Path(path) => path.len(), _ => 0,
         }));
         let cap = candidates.into_iter().next().ok_or("selected file is outside this surface's declared read needs")?;
+        #[cfg(test)]
+        drop(_needs);
+        #[cfg(test)]
+        let _runtime_before = Span::new(Step::RuntimeBefore);
         let expected = crate::provenance::runtime::package_for(self.owner(), &self.session_id)?
             .ok_or("App session has no bound package identity")?;
         if expected != self.launch.package_ref() {
             return Err("selected file registration has another running package identity".into());
         }
+        #[cfg(test)]
+        drop(_runtime_before);
         let current = selected_source::reverify(
             self.launch.package(),
             &crate::provenance::trust_store(),
         )?;
+        #[cfg(test)]
+        let _withdrawal_package = Span::new(Step::WithdrawalPackage);
         crate::clawd::trust_withdrawal::check_package(self.owner(), &current)?;
+        #[cfg(test)]
+        drop(_withdrawal_package);
+        #[cfg(test)]
+        let _withdrawal_session = Span::new(Step::WithdrawalSession);
         crate::clawd::trust_withdrawal::check_session(self.owner(), &self.session_id)?;
+        #[cfg(test)]
+        drop(_withdrawal_session);
+        #[cfg(test)]
+        let _runtime_after = Span::new(Step::RuntimeAfter);
         if crate::provenance::runtime::package_for(self.owner(), &self.session_id)?.as_ref()
             != Some(&expected)
         {
             return Err("selected file package identity changed during validation".into());
         }
+        #[cfg(test)]
+        drop(_runtime_after);
+        #[cfg(test)]
+        let _ceiling_policy = Span::new(Step::CeilingPolicy);
         let ceiling = current.ceiling();
         let caps = CapSet::from_caps([cap.clone()]);
         if ceiling.clamp(&caps).0 != caps {
