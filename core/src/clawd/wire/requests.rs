@@ -1793,6 +1793,19 @@ pub struct PackageControl {
     pub version: Option<Name>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageQuery {
+    pub session: Token,
+    pub action: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<Text<512>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+}
+
 pub(crate) type PackageIntent = crate::clawd::packages::intent::Request;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

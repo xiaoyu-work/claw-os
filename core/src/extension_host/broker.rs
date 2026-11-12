@@ -67,6 +67,7 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemLocationQuery,
     Command::SystemNetworkControl,
     Command::SystemNetworkDiagnose,
+    Command::SystemPackageQuery,
     Command::SystemPackageInstall,
     Command::SystemPackageControl,
     Command::SystemPackageRestore,

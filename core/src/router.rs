@@ -829,6 +829,12 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__package_query" {
+        let params = crate::clawd::packages::query::cli(&args[1..])?;
+        let value = request_wire_clawd(Command::SystemPackageQuery, params)?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__package" {
         let package_args = if args.get(1).map(String::as_str) == Some("--retained") {
             &args[2..]

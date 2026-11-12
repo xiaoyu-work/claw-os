@@ -2625,6 +2625,28 @@ routes! {
     network_diagnostics::diagnose(c.params, authority).await
         },
     }
+    SystemPackageQuery {
+        name: "system.package.query",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget {
+            max_in_flight: 4,
+            deadline: Deadline::Interruptible(Duration::from_secs(25)),
+        },
+        authority: session(Audience::SystemService),
+        body: body::PackageQuery,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Enum(&["search", "show", "installed"])),
+            ("name", FieldRule::Identifier),
+            ("query", FieldRule::Size),
+            ("limit", FieldRule::Count),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            packages::query::query(c.params, c.client, authority).await
+        },
+    }
     SystemPackageInstall {
         name: "system.package.install",
         access: Access::User,

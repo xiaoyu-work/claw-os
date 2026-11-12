@@ -13,6 +13,7 @@ use super::client_identity::ClientIdentity;
 const PACKAGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub(crate) mod intent;
+pub(crate) mod query;
 #[cfg(target_os = "linux")]
 pub(crate) mod gui;
 

@@ -68,6 +68,7 @@ app_apt() {
         private_apt_refuses_substituted_bytes_plan_and_status_before_dpkg
         private_apt_hook_identity_and_lost_reply_never_replay
         private_apt_completed_dispatch_failure_recovers_read_only
+        private_apt_package_queries_use_ordinary_app_custody_and_exact_read_scopes
         private_apt_ordinary_self_handoff_retains_receipt
         private_apt_owner_withdrawal_denies_live_calls_and_retires_only_owner
         private_apt_global_stop_is_separate_and_unreviewed_effect_is_not_applied
