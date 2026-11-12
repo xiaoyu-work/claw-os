@@ -119,8 +119,11 @@ pub(super) fn custody(state: &DaemonState, admission: &Arc<Admission>) -> Custod
     let root = std::fs::read_to_string("/run/gui-fixture/cgroup").unwrap();
     assert!(root.trim().starts_with("/sys/fs/cgroup/claw-display-fixture."));
     std::fs::write(Path::new(root.trim()).join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
+    let hosts = Path::new(root.trim()).join("package-hosts");
+    std::fs::create_dir(&hosts).unwrap();
+    std::fs::write(hosts.join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
     let environment = crate::test_env::TestEnvVarGuard::set(
-        "CLAWD_EXTENSION_CGROUP_ROOT", Path::new(root.trim()).join("package-hosts"),
+        "CLAWD_EXTENSION_CGROUP_ROOT", hosts,
     );
     let broker = crate::agentd::supervisor::BrokerContext::new(
         state.clone(), admission.clone(), "/run/cos/clawd.sock".into(),
