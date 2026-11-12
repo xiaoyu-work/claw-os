@@ -467,6 +467,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.location.query" => &[Verb::DEVICE_LOCATION],
         "system.accessibility.control" => &[Verb::UI_ACCESSIBILITY],
         "system.backup.control" => &[Verb::DATA_BACKUP],
+        "system.package.query" => &[Verb::SYS_OBSERVE],
         "system.package.control" | "system.package.install" | "system.package.restore" => {
             &[Verb::SYS_PACKAGE]
         }
