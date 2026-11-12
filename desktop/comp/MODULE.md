@@ -48,6 +48,11 @@ input, Layer Shell, a bus, a render device or file access. Unsupported renderer
 or protocol requirements remain a hard failure. This headless buffered-window
 check is not physical-display/pixel-perfect acceptance. It supplies no trusted
 keyboard/dialog driver, so it does not claim Editor Save As.
+The private `render_trace` records read-only pre-commit/pending versus committed
+buffer counts, other-surface buffers, actual frame callbacks sent and output
+bindings. Buffer kinds are 0 absent, 1 new and 2 removed; a current snapshot may
+already be empty after the normal witness consumed it. These counters and
+configure acknowledgements never substitute for a real top-level pixel buffer.
 
 From the OS repository root:
 
