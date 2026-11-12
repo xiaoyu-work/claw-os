@@ -347,6 +347,8 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
         "cosmic-files"
     } else if case == 27 {
         "cosmic-term"
+    } else if case == 28 {
+        "panel-calendar"
     } else if case == 0 {
         "gui-boundary-zero"
     } else {
@@ -354,7 +356,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     };
     let mut caps = CapSet::new();
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));
-    if ![25, 26, 27].contains(&case) {
+    if ![25, 26, 27, 28].contains(&case) {
         caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/gui-public")));
     }
     if [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 14, 17, 18].contains(&case) {
@@ -1202,10 +1204,14 @@ async fn run_selected_read_window(group: &std::fs::File, inherited: bool) {
 }
 
 async fn approve_native_resource(id: &str) -> crate::approvals::Request {
+    assert!(crate::approvals::lookup_pending(id).unwrap().operation_digest.is_some());
+    approve_protected_owner_request(id).await
+}
+
+async fn approve_protected_owner_request(id: &str) -> crate::approvals::Request {
     use clawd_client::system_review::{PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision, SystemReview};
     let request = crate::approvals::lookup_pending(id).unwrap();
     assert_eq!(request.owner_uid, Some(OWNER));
-    assert!(request.operation_digest.is_some());
     let mut command = ProcessCommand::new("/usr/local/bin/cos");
     command.args(["review", "show", id]).env_clear().env("HOME", "/run/display-home")
         .env("PATH", "/usr/local/bin:/usr/bin:/bin").current_dir("/run/display-home").stdin(Stdio::null());

@@ -29,6 +29,8 @@ pub(super) struct Product {
     entries: &'static [&'static str],
     ungranted: &'static [usize],
     home_metadata: bool,
+    selector: &'static str,
+    panel: bool,
 }
 
 pub(super) const EDITOR: Product = Product {
@@ -39,6 +41,8 @@ pub(super) const EDITOR: Product = Product {
     entries: &["bin/cosmic-edit"],
     ungranted: &[0, 1, 2],
     home_metadata: true,
+    selector: "--gui",
+    panel: false,
 };
 pub(super) const FILES: Product = Product {
     name: "files",
@@ -48,6 +52,8 @@ pub(super) const FILES: Product = Product {
     entries: &["bin/cosmic-files", "bin/cosmic-files-applet"],
     ungranted: &[0, 1, 2, 3],
     home_metadata: true,
+    selector: "--gui",
+    panel: false,
 };
 pub(super) const TERMINAL: Product = Product {
     name: "terminal",
@@ -57,6 +63,19 @@ pub(super) const TERMINAL: Product = Product {
     entries: &["bin/cosmic-term"],
     ungranted: &[],
     home_metadata: false,
+    selector: "--gui",
+    panel: false,
+};
+pub(super) const CALENDAR: Product = Product {
+    name: "calendar",
+    app: "panel-calendar",
+    case: 28,
+    desktop_id: "com.clawos.PanelCalendarButton",
+    entries: &["bin/claw-applet-calendar"],
+    ungranted: &[],
+    home_metadata: false,
+    selector: "open",
+    panel: true,
 };
 
 impl Product {
@@ -123,31 +142,47 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
-    if product.name == "terminal" {
+    if product.name == "terminal" || product.panel {
         assert_eq!(
             platform_digest,
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
         );
     }
     assert_eq!(payload.entrypoints, product.entries);
-    for required in [
-        format!(
-            "resources/usr/share/applications/{}.desktop",
-            product.desktop_id
-        ),
-        format!(
-            "resources/usr/share/metainfo/{}.metainfo.xml",
-            product.desktop_id
-        ),
-        format!(
-            "resources/usr/share/icons/hicolor/scalable/apps/{}.svg",
-            product.desktop_id
-        ),
-    ] {
-        assert!(payload
-            .resources
-            .iter()
-            .any(|resource| resource == &required));
+    let required = if product.panel {
+        vec![
+            format!(
+                "resources/usr/share/applications/{}.desktop",
+                product.desktop_id
+            ),
+            format!(
+                "resources/usr/share/icons/hicolor/scalable/actions/{}-symbolic.svg",
+                product.desktop_id
+            ),
+        ]
+    } else {
+        vec![
+            format!(
+                "resources/usr/share/applications/{}.desktop",
+                product.desktop_id
+            ),
+            format!(
+                "resources/usr/share/metainfo/{}.metainfo.xml",
+                product.desktop_id
+            ),
+            format!(
+                "resources/usr/share/icons/hicolor/scalable/apps/{}.svg",
+                product.desktop_id
+            ),
+        ]
+    };
+    for required in required {
+        assert!(
+            payload
+                .resources
+                .iter()
+                .any(|resource| resource == &required)
+        );
     }
     let dir = product.directory();
     assert!(
@@ -253,6 +288,31 @@ fn buffered_window(record: &serde_json::Value, instance: &str) -> bool {
         && record["raster"]["height"]
             .as_u64()
             .is_some_and(|size| size >= 100)
+        && record["raster"]["nonuniform_pixels"] == true
+}
+
+fn buffered_panel(record: &serde_json::Value, instance: &str, namespace: &str) -> bool {
+    record["schema"] == "claw.private-native-panel/v1"
+        && record["instance"] == instance
+        && record["role"] == "zwlr_layer_surface_v1"
+        && record["namespace"] == namespace
+        && record["layer"] == "Top"
+        && record["layer_surfaces"] == 1
+        && record["toplevels"] == 0
+        && record["keyboard_interactivity"] == "None"
+        && record["configure_acked"] == true
+        && record["closed"] == false
+        && record["buffer_commits"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+        && record["raster"]["width"]
+            .as_u64()
+            .is_some_and(|size| (16..=512).contains(&size))
+        && record["raster"]["height"]
+            .as_u64()
+            .is_some_and(|size| (16..=128).contains(&size))
+        && record["configure_size"][0] == record["raster"]["width"]
+        && record["configure_size"][1] == record["raster"]["height"]
         && record["raster"]["nonuniform_pixels"] == true
 }
 
@@ -528,6 +588,10 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 expected_gui.insert(metadata.clone());
                 expected_parent.insert(metadata);
             }
+            if product.panel {
+                expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
+                expected_gui.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
+            }
             assert_eq!(
                 gui, expected_gui,
                 "GUI startup must not inherit MCP, content, process or AI authority"
@@ -538,6 +602,50 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
             );
             (gui, parent)
         })
+}
+
+async fn approve_panel_startup(
+    pam: &mut Child,
+    product: Product,
+    parent: &str,
+) -> Vec<crate::approvals::Request> {
+    if !product.panel {
+        return Vec::new();
+    }
+    let mut approved: Vec<crate::approvals::Request> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    for (verb, scope) in [
+        ("data.db.read", Scope::name("calendar")),
+        ("ui.panel", Scope::Wild),
+    ] {
+        let request = loop {
+            if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER))
+                .into_iter()
+                .find(|request| {
+                    request.session == parent && request.verb == verb && request.scope == scope
+                })
+            {
+                break request;
+            }
+            assert!(
+                pam.try_wait().unwrap().is_none() && Instant::now() < deadline,
+                "{}",
+                diagnostic("ordinary mandatory Calendar/panel owner review")
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(request.owner_uid, Some(OWNER));
+        assert!(request.operation_digest.is_none());
+        if let Some(first) = approved.first() {
+            assert_eq!(request.session, first.session);
+        }
+        assert!(
+            observe().is_none(),
+            "native panel ran before mandatory owner decisions"
+        );
+        approved.push(approve_protected_owner_request(&request.id).await);
+    }
+    approved
 }
 
 fn registered_gui_session<'a>(
@@ -632,6 +740,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     );
     let parent = launch_parent(&launcher, product.case);
     command(&control, b"RUN!");
+    let panel_approvals = approve_panel_startup(&mut pam, product, &parent).await;
     let metadata = if product.home_metadata {
         let deadline = Instant::now() + Duration::from_secs(20);
         let metadata = loop {
@@ -716,6 +825,13 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
     let original = startup_authority(&session, &parent, product);
+    for request in &panel_approvals {
+        assert_eq!(request.session, parent);
+        assert!(matches!(
+            crate::approvals::status_for_owner(&request.id, Some(OWNER)),
+            crate::approvals::RequestStatus::Consumed
+        ));
+    }
     let environment = std::fs::read(format!("/proc/{}/environ", process.identity.pid())).unwrap();
     let value = |key: &str| {
         environment
@@ -724,7 +840,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     };
     assert_eq!(value("COS_APP_GUI"), Some(b"1".as_slice()));
     assert_eq!(value("ICED_BACKEND"), Some(b"tiny-skia".as_slice()));
-    assert_eq!(value("COS_COMMAND"), Some(b"--gui".as_slice()));
+    assert_eq!(value("COS_COMMAND"), Some(product.selector.as_bytes()));
     assert_eq!(value("COS_SESSION"), Some(session.as_bytes()));
     assert_eq!(
         value("COS_OWNER_HOME"),
@@ -782,9 +898,11 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 });
         }
         if let Some(record) = observe().filter(|record| {
-            buffered_window(record, &window)
-                && record["app_id"] == product.desktop_id
-                && (!editor || read.is_some())
+            (if product.panel {
+                buffered_panel(record, &window, product.desktop_id)
+            } else {
+                buffered_window(record, &window) && record["app_id"] == product.desktop_id
+            }) && (!editor || read.is_some())
         }) {
             break record;
         }
@@ -795,7 +913,11 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 &retained,
                 &process,
                 &session,
-                "actual xdg_toplevel configure/SHM frame and declared startup behavior",
+                if product.panel {
+                    "actual Layer Shell configure/SHM icon pixels under the live ui.panel lease"
+                } else {
+                    "actual xdg_toplevel configure/SHM frame and declared startup behavior"
+                },
             )
             .await;
         }
@@ -954,7 +1076,13 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if observe().is_some_and(|record| {
-            record["instance"] == window && record["closed"] == true && record["toplevels"] == 0
+            record["instance"] == window
+                && record["closed"] == true
+                && record["toplevels"] == 0
+                && (!product.panel
+                    || (record["schema"] == "claw.private-native-panel/v1"
+                        && record["role"] == "zwlr_layer_surface_v1"
+                        && record["layer_surfaces"] == 0))
         }) {
             break;
         }
@@ -993,6 +1121,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "/file load"
         } else if product.home_metadata {
             "/metadata-only Home"
+        } else if product.panel {
+            "/Layer Shell panel with independent protected owner approvals"
         } else {
             "/empty-authority private PTY"
         },
@@ -1000,6 +1130,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "UI Save As and separately pending overwrite verified"
         } else if pty.is_some() {
             "typed shell command, real PTY/shell/child identities and descendant retirement verified"
+        } else if product.panel {
+            "original icon pixels only; popup interaction/Calendar-service consumer NOT exercised"
         } else {
             "additional UI mutations not exercised"
         },
@@ -1049,6 +1181,56 @@ fn private_native_files() {
 #[ignore = "clean-GHA-only: actual Terminal ELF/PTY, authenticated private PAM/display and cgroup v2"]
 fn private_native_terminal() {
     private_gui_fixture_selected(false, false, false, Some(TERMINAL));
+}
+
+#[test]
+#[ignore = "clean-GHA-only: actual Calendar Layer Shell ELF, authenticated private PAM/display and cgroup v2"]
+fn private_native_calendar() {
+    private_gui_fixture_selected(false, false, false, Some(CALENDAR));
+}
+
+#[test]
+fn native_calendar_readiness_requires_typed_configured_panel_pixels_not_an_xdg_window() {
+    let record = serde_json::json!({
+        "schema": "claw.private-native-panel/v1", "instance": "instance",
+        "role": "zwlr_layer_surface_v1", "namespace": CALENDAR.desktop_id, "layer": "Top",
+        "layer_surfaces": 1, "toplevels": 0, "keyboard_interactivity": "None",
+        "configure_acked": true, "configure_size": [40, 40], "closed": false,
+        "buffer_commits": 1, "raster": {"width": 40, "height": 40, "nonuniform_pixels": true},
+    });
+    assert!(buffered_panel(&record, "instance", CALENDAR.desktop_id));
+    assert!(!buffered_window(&record, "instance"));
+    assert!(!buffered_panel(&record, "foreign", CALENDAR.desktop_id));
+    for (field, invalid) in [
+        ("schema", serde_json::json!("claw.private-native-window/v1")),
+        ("role", serde_json::json!("xdg_toplevel")),
+        ("namespace", serde_json::json!("another.panel")),
+        ("toplevels", serde_json::json!(1)),
+        ("layer_surfaces", serde_json::json!(0)),
+        ("configure_acked", serde_json::json!(false)),
+        ("configure_size", serde_json::json!([48, 40])),
+        ("buffer_commits", serde_json::json!(0)),
+        ("keyboard_interactivity", serde_json::json!("Exclusive")),
+        (
+            "raster",
+            serde_json::json!({"width": 40, "height": 40, "nonuniform_pixels": false}),
+        ),
+        ("closed", serde_json::json!(true)),
+    ] {
+        let mut invalid_record = record.clone();
+        invalid_record[field] = invalid;
+        assert!(
+            !buffered_panel(&invalid_record, "instance", CALENDAR.desktop_id),
+            "{field}"
+        );
+    }
+    let mut ordinary = record;
+    ordinary["schema"] = "claw.private-native-window/v1".into();
+    ordinary["toplevels"] = 1.into();
+    assert!(
+        !buffered_window(&ordinary, "instance"),
+        "small panels must not lower ordinary-window bounds"
+    );
 }
 
 #[test]

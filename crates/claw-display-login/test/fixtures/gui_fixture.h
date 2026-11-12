@@ -87,8 +87,10 @@ static int gui_entry(int count, char **arguments) {
         && strcmp(arguments[2], "cosmic-files") == 0 && strcmp(arguments[3], "--gui") == 0;
     int terminal = count == 4 && strcmp(arguments[1], "app") == 0
         && strcmp(arguments[2], "cosmic-term") == 0 && strcmp(arguments[3], "--gui") == 0;
+    int calendar = count == 4 && strcmp(arguments[1], "app") == 0
+        && strcmp(arguments[2], "panel-calendar") == 0 && strcmp(arguments[3], "--gui") == 0;
     if (getuid() != 62050 || geteuid() != 62050 || getgid() != 62050
-        || (count != 7 && !editor && !files && !terminal)
+        || (count != 7 && !editor && !files && !terminal && !calendar)
         || strcmp(arguments[0], "/usr/local/bin/cos") != 0)
         return 64;
     const char *runtime = getenv("XDG_RUNTIME_DIR");
@@ -150,7 +152,7 @@ static int gui_fixture(void) {
         "revoke", "revoke", "revoke", "revoke", "revoke", "revoke", "named",
         "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke", "metadata",
         "selected-read", "selected-write", "package", "metadata-subroot", "selected-create",
-        "native-editor", "native-files", "native-terminal"
+        "native-editor", "native-files", "native-terminal", "native-calendar"
     };
     pid_t child = -1;
     int gate = -1, result = -1;
@@ -213,13 +215,14 @@ static int gui_fixture(void) {
                     || setenv("COSMIC_SESSION_SOCK", "/run/forged-session", 1) != 0
                     || setenv("CLAW_DISPLAY_CONTROL_FD", "97", 1) != 0)
                     _exit(122);
-                if (scenario == 25 || scenario == 26 || scenario == 27) {
+                if (scenario == 25 || scenario == 26 || scenario == 27 || scenario == 28) {
                     if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0)
                         _exit(122);
-                    if (scenario == 26 || scenario == 27) {
+                    if (scenario == 26 || scenario == 27 || scenario == 28) {
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                               "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
-                              "app", scenario == 26 ? "cosmic-files" : "cosmic-term",
+                              "app", scenario == 26 ? "cosmic-files" :
+                                     scenario == 27 ? "cosmic-term" : "panel-calendar",
                               "--gui", (char *)NULL);
                         _exit(123);
                     }

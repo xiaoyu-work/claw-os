@@ -9,6 +9,7 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{BufferAssignment, SurfaceAttributes, add_pre_commit_hook, with_states},
         output::{OutputHandler, OutputManagerState},
+        shell::wlr_layer::{KeyboardInteractivity, Layer, LayerSurface, LayerSurfaceCachedState},
         shell::xdg::{
             Configure, PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler,
             XdgShellState, XdgToplevelSurfaceData,
@@ -34,6 +35,19 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[derive(Default)]
 struct Auxiliary {
     surface: Option<ToplevelSurface>,
+    configured: bool,
+    commits: u64,
+    raster: Option<serde_json::Value>,
+    closed: bool,
+}
+
+struct Panel {
+    surface: Option<LayerSurface>,
+    namespace: String,
+    layer: Layer,
+    configure: Option<Serial>,
+    size: Option<(i32, i32)>,
+    keyboard_interactivity: Option<String>,
     configured: bool,
     commits: u64,
     raster: Option<serde_json::Value>,
@@ -99,6 +113,7 @@ pub struct Window {
     closed: bool,
     trace: FrameTrace,
     auxiliary: Auxiliary,
+    panel: Option<Panel>,
 }
 
 impl Window {
@@ -140,7 +155,67 @@ impl Window {
             closed: false,
             trace: FrameTrace::default(),
             auxiliary: Auxiliary::default(),
+            panel: None,
         }
+    }
+
+    pub fn new_panel(
+        &mut self,
+        surface: LayerSurface,
+        instance: String,
+        layer: Layer,
+        namespace: String,
+    ) -> Result<()> {
+        if self.instance.is_some()
+            || self.surface.is_some()
+            || self.auxiliary.surface.is_some()
+            || self.panel.is_some()
+            || namespace.len() > 1024
+        {
+            return Err("only one real same-instance native panel is in scope".into());
+        }
+        self.instance = Some(instance);
+        self.panel = Some(Panel {
+            surface: Some(surface),
+            namespace,
+            layer,
+            configure: None,
+            size: None,
+            keyboard_interactivity: None,
+            configured: false,
+            commits: 0,
+            raster: None,
+            closed: false,
+        });
+        self.publish()
+    }
+
+    pub fn ack_panel(&mut self, surface: &WlSurface, serial: Serial) {
+        let panel = self
+            .panel
+            .as_mut()
+            .expect("native panel configure without panel");
+        assert!(
+            panel
+                .surface
+                .as_ref()
+                .is_some_and(|layer| layer.wl_surface() == surface)
+        );
+        assert_eq!(panel.configure, Some(serial));
+        panel.configured = true;
+    }
+
+    pub fn close_panel(&mut self, surface: &LayerSurface) -> Result<()> {
+        let panel = self
+            .panel
+            .as_mut()
+            .ok_or("native panel destruction without panel")?;
+        if panel.surface.as_ref() != Some(surface) {
+            return Err("foreign native panel destruction".into());
+        }
+        panel.surface = None;
+        panel.closed = true;
+        self.publish()
     }
 
     pub fn input_surface(&self, instance: &str, target: &str) -> Option<WlSurface> {
@@ -191,6 +266,55 @@ impl Window {
     }
 
     pub fn commit(&mut self, surface: &WlSurface) -> Result<()> {
+        let is_panel = self.panel.as_ref().is_some_and(|panel| {
+            panel
+                .surface
+                .as_ref()
+                .is_some_and(|layer| layer.wl_surface() == surface)
+        });
+        if is_panel {
+            let client = surface.client().ok_or("native panel client disappeared")?;
+            let origin = client
+                .get_data::<crate::state::ClientState>()
+                .and_then(|state| state.display_origin.as_ref())
+                .ok_or("native panel has no authenticated origin")?;
+            if !matches!(origin, ClientOrigin::Instance(_))
+                || !origin.layer_shell()
+                || origin.selection_read()
+                || origin.selection_write()
+                || origin
+                    .instance()
+                    .map(|id| claw_display_control::Epoch(id.0).label())
+                    != self.instance
+            {
+                return Err("native panel lost its live Root instance/ui.panel lease".into());
+            }
+            let panel = self.panel.as_mut().unwrap();
+            let current = with_states(surface, |states| {
+                *states
+                    .cached_state
+                    .get::<LayerSurfaceCachedState>()
+                    .current()
+            });
+            if current.layer != panel.layer
+                || current.keyboard_interactivity != KeyboardInteractivity::None
+            {
+                return Err("native panel changed its bounded layer/input role".into());
+            }
+            panel.keyboard_interactivity = Some(format!("{:?}", current.keyboard_interactivity));
+            if panel.configure.is_none() {
+                let size = current.size;
+                if size.w <= 0 || size.h <= 0 || size.w > 512 || size.h > 128 {
+                    return Err(
+                        "native panel did not request a bounded original applet size".into(),
+                    );
+                }
+                let layer = panel.surface.as_ref().unwrap();
+                layer.with_pending_state(|state| state.size = Some(size));
+                panel.size = Some((size.w, size.h));
+                panel.configure = Some(layer.send_configure());
+            }
+        }
         let is_top = self
             .surface
             .as_ref()
@@ -242,6 +366,20 @@ impl Window {
                             .checked_add(1)
                             .ok_or("auxiliary frame count overflow")?;
                         self.output.enter(surface);
+                    } else if is_panel {
+                        let panel = self.panel.as_mut().unwrap();
+                        if !panel.configured {
+                            return Err(
+                                "native panel attached pixels before configure acknowledgement"
+                                    .into(),
+                            );
+                        }
+                        panel.raster = Some(raster(&buffer)?);
+                        panel.commits = panel
+                            .commits
+                            .checked_add(1)
+                            .ok_or("panel frame count overflow")?;
+                        self.output.enter(surface);
                     }
                     buffer.release();
                 }
@@ -250,6 +388,8 @@ impl Window {
                         self.raster = None;
                     } else if is_auxiliary {
                         self.auxiliary.raster = None;
+                    } else if is_panel {
+                        self.panel.as_mut().unwrap().raster = None;
                     }
                 }
             }
@@ -269,6 +409,17 @@ impl Window {
         let Some(instance) = &self.instance else {
             return Ok(());
         };
+        if let Some(panel) = &self.panel {
+            return self.publish_record(serde_json::json!({
+                "schema": "claw.private-native-panel/v1", "instance": instance,
+                "role": "zwlr_layer_surface_v1", "layer": format!("{:?}", panel.layer),
+                "namespace": panel.namespace, "layer_surfaces": usize::from(panel.surface.is_some()),
+                "toplevels": usize::from(self.surface.is_some()) + usize::from(self.auxiliary.surface.is_some()),
+                "keyboard_interactivity": panel.keyboard_interactivity,
+                "configure_acked": panel.configured, "configure_size": panel.size,
+                "buffer_commits": panel.commits, "raster": panel.raster, "closed": panel.closed,
+            }));
+        }
         let (title, app_id) = self.surface.as_ref().map_or((None, None), |surface| {
             with_states(surface.wl_surface(), |states| {
                 let role = states
@@ -350,6 +501,10 @@ impl Window {
                 "current_frame_callbacks": current_callbacks,
             },
         });
+        self.publish_record(record)
+    }
+
+    fn publish_record(&mut self, record: serde_json::Value) -> Result<()> {
         if self.last.as_ref() != Some(&record) {
             let root = Path::new(OBSERVER);
             let candidate = root.join("window.next");
