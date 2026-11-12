@@ -245,6 +245,10 @@ or bus mounts. The unchanged startup bound requires configured nonuniform client
 pixels and real read requests, followed by checked whole-instance/PAM retirement.
 This first gate does not assert reply decoding, exact painted entries or the
 native GUI's payload self-handoff; those remain separate acceptance work.
+Its separate bounded ordinary-key search phase may retain the current
+authenticated own-instance top-level SHM bytes for inspection. The fixed Store
+and Calendar snapshot selectors/roles remain distinct, share only the existing
+finite visible-row copier, and confer no App capture or input authority.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

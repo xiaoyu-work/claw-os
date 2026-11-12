@@ -1,4 +1,6 @@
 use super::*;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -143,5 +145,80 @@ Description: Private controlled Store inventory\n\n".to_vec();
         for path in ["/var/cache/swcatalog", "/var/cache/app-info"] {
             assert!(std::fs::read_dir(path).unwrap().next().is_none());
         }
+    }
+
+    pub(super) async fn search_frame(
+        &self,
+        retained: &RetainedInstance,
+        native: &NativeProcess,
+        before: &serde_json::Value,
+    ) -> Result<(), String> {
+        let instance = claw_display_control::Epoch(retained.instance.0).label();
+        let selector = serde_json::json!({
+            "schema": "claw.private-store-synthetic-shm/v1", "instance": instance,
+        });
+        let mut selected = std::fs::OpenOptions::new().write(true).create_new(true)
+            .mode(0o644).custom_flags(libc::O_NOFOLLOW)
+            .open("/run/gui-public/native-store-snapshot-enabled").map_err(|error| error.to_string())?;
+        selected.set_permissions(std::fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())?;
+        selected.write_all(&serde_json::to_vec(&selector).unwrap()).map_err(|error| error.to_string())?;
+        drop(selected);
+        let directory = Path::new(OBSERVER).parent().unwrap();
+        let next = directory.join("keyboard-command.next");
+        let request = serde_json::json!({
+            "schema": "claw.private-keyboard/v1", "sequence": 1, "instance": instance,
+            "surface": "primary", "expires_ms": claw_display_control::wire::monotonic_ms().unwrap() + 5_000,
+            "kind": "text", "value": "prive",
+        });
+        let mut command = std::fs::OpenOptions::new().write(true).create_new(true)
+            .mode(0o644).custom_flags(libc::O_NOFOLLOW)
+            .open(&next).map_err(|error| error.to_string())?;
+        command.set_permissions(std::fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())?;
+        command.write_all(&serde_json::to_vec(&request).unwrap()).map_err(|error| error.to_string())?;
+        drop(command);
+        std::fs::rename(next, directory.join("keyboard-command.json")).map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(25);
+        let baseline = before["buffer_commits"].as_u64().unwrap();
+        let captured = loop {
+            check_native_process(retained, native)?;
+            let ack = (|| {
+                let file = std::fs::OpenOptions::new().read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(directory.join("keyboard-ack.json")).ok()?;
+                let metadata = file.metadata().ok()?;
+                if !metadata.is_file() || metadata.uid() != OWNER || metadata.nlink() != 1
+                    || metadata.mode() & 0o077 != 0 || metadata.len() > 1024 {
+                    return None;
+                }
+                let mut bytes = Vec::new();
+                file.take(1025).read_to_end(&mut bytes).ok()?;
+                (bytes.len() <= 1024).then(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok()).flatten()
+            })();
+            if ack.is_some_and(|ack| ack["instance"] == instance && ack["sequence"] == 1
+                && ack["surface"] == "primary" && ack["keyboard_events_sent"] == true) {
+                if let Some(record) = observe().filter(|record| {
+                    buffered_window(record, &instance) && record["app_id"] == STORE.desktop_id
+                        && record["buffer_commits"].as_u64().is_some_and(|count| count > baseline)
+                        && record["snapshot"]["status"] == "saved"
+                        && record["snapshot"]["snapshot_commit"] == record["buffer_commits"]
+                        && record["snapshot"]["latest_buffer_commit"] == record["buffer_commits"]
+                        && record["snapshot"]["matches_current_configure"] == true
+                }) {
+                    break record;
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err("actual Store ordinary search/passive frame observation deadline".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(REPORT).unwrap()).unwrap();
+        report["ordinary_search"] = "prive".into();
+        report["ordinary_keyboard_events_sent"] = true.into();
+        report["passive_window_snapshot"] = captured["snapshot"].clone();
+        report["window_after_search"] = captured;
+        report["coverage"] = "Actual signed native Store reached real Root catalog/inventory/update reads and a new authenticated configured frame after ordinary search keys. Passive own-instance bytes are evidence for inspection, not an automated exact-entry text or reply-decode assertion; payload UI self-handoff remains separate.".into();
+        std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap()).map_err(|error| error.to_string())?;
+        Ok(())
     }
 }

@@ -299,19 +299,21 @@ BUS
             cp /run/user/62050/native-product-observer/window.json "$private/$selection-window.json"
             chmod 0644 "$private/$selection-window.json"
         fi
-        if [[ "$native_product" == store && -f /run/gui-fixture/native-store-consumer.json ]]; then
-            cp /run/gui-fixture/native-store-consumer.json "$private/native-store-consumer.json"
-            chmod 0644 "$private/native-store-consumer.json"
-        fi
-        if [[ "$native_product" == calendar && -f /run/gui-fixture/native-calendar-consumer.json ]]; then
-            cp /run/gui-fixture/native-calendar-consumer.json "$private/native-calendar-consumer.json"
-            chmod 0644 "$private/native-calendar-consumer.json"
-            /usr/bin/python3 -I -B - "$private" <<'PY'
+        if [[ ( "$native_product" == calendar || "$native_product" == store ) && -f "/run/gui-fixture/native-$native_product-consumer.json" ]]; then
+            cp "/run/gui-fixture/native-$native_product-consumer.json" "$private/native-$native_product-consumer.json"
+            chmod 0644 "$private/native-$native_product-consumer.json"
+            /usr/bin/python3 -I -B - "$private" "$native_product" <<'PY'
 import json, os, pathlib, stat, sys
 
 destination = pathlib.Path(sys.argv[1])
 owner = destination.stat()
 source = pathlib.Path("/run/user/62050/native-product-observer")
+product = sys.argv[2]
+assert product in ("calendar", "store")
+calendar = product == "calendar"
+filename = "native-calendar-agenda.shm" if calendar else "native-store-window.shm"
+magic = b"CLAWCALSHM1\0" if calendar else b"CLAWSTRSHM1\0"
+prefix = "claw.private-calendar" if calendar else "claw.private-store"
 
 def protected(path, uid, limit):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -330,29 +332,46 @@ def publish(name, data):
         stream.write(data)
 
 window = json.loads(protected(source / "window.json", 62050, 8192))
-consumer = json.loads(protected(pathlib.Path("/run/gui-fixture/native-calendar-consumer.json"), 0, 16384))
-assert window["instance"] == consumer["instance"] and window["popup"]["closed"]
-index = window["popup"].get("snapshot") or {}
-assert index == (consumer.get("passive_agenda_snapshot") or {})
+consumer = json.loads(protected(pathlib.Path(f"/run/gui-fixture/native-{product}-consumer.json"), 0, 16384))
+assert window["instance"] == consumer["instance"]
+if calendar:
+    assert window["popup"]["closed"]
+    index = window["popup"].get("snapshot") or {}
+    assert index == (consumer.get("passive_agenda_snapshot") or {})
+    latest_commit = window["popup"]["buffer_commits"]
+else:
+    assert window["closed"] and window["toplevels"] == 0
+    index = window.get("snapshot") or {}
+    observed = consumer.get("passive_window_snapshot") or {}
+    if index.get("status") == "saved":
+        assert observed["instance"] == index["instance"] == window["instance"]
+        assert observed["snapshot_commit"] <= index["snapshot_commit"]
+    latest_commit = window["buffer_commits"]
 copied, reason = False, index.get("status", "no-captured-frame")
 if index.get("status") == "saved" and index.get("closed") and not index.get("mapped"):
     if index.get("matches_current_configure") and index["snapshot_commit"] == index["latest_buffer_commit"]:
-        assert index["latest_buffer_commit"] == window["popup"]["buffer_commits"]
+        assert index["latest_buffer_commit"] == latest_commit
         assert 1 <= index["publications"] <= 32 and index["total_bytes"] <= 32 * 1024 * 1024
-        data = protected(source / "native-calendar-agenda.shm", 62050, 4 * 1024 * 1024 + 4112)
-        assert len(data) == index["file_bytes"] and data[:12] == b"CLAWCALSHM1\0"
+        data = protected(source / filename, 62050, 4 * 1024 * 1024 + 4112)
+        assert len(data) == index["file_bytes"] and data[:12] == magic
         size = int.from_bytes(data[12:16], "little")
         assert size <= 4096 and 16 + size <= len(data)
         frame = json.loads(data[16:16 + size])
         pixels = data[16 + size:]
-        assert frame["schema"] == "claw.private-calendar-shm-frame/v1"
+        assert frame["schema"] == prefix + "-shm-frame/v1"
         assert frame["synthetic_fixture"] and frame["captured_live"]
         assert frame["owner_uid"] == 62050 and frame["byte_order"] == "little-endian"
-        assert frame["instance"] == frame["parent_instance"] == window["instance"] == index["instance"]
-        assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
+        assert frame["instance"] == window["instance"] == index["instance"]
+        if calendar:
+            assert frame["parent_instance"] == window["instance"]
+            assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
+            assert frame["geometry"] == window["popup"]["geometry"]
+        else:
+            assert frame["role"] == "xdg_toplevel"
+            assert frame["parent_role"] is None and frame["parent_instance"] is None
+            assert frame["geometry"] == [0, 0, 800, 600]
         assert frame["buffer_commit"] == index["snapshot_commit"]
         assert frame["configure_serial"] == index["configure_serial"]
-        assert frame["geometry"] == window["popup"]["geometry"]
         width, height = frame["geometry"][2:]
         assert 100 <= width <= 4096 and 100 <= height <= 4096
         assert (frame["raster"]["width"], frame["raster"]["height"]) == (width, height)
@@ -363,12 +382,12 @@ if index.get("status") == "saved" and index.get("closed") and not index.get("map
         for byte in pixels:
             checksum = ((checksum ^ byte) * 0x100000001b3) & 0xffffffffffffffff
         assert f"{checksum:016x}" == frame["pixel_checksum"] == index["pixel_checksum"] == frame["raster"]["pixel_checksum"]
-        publish("native-calendar-agenda.shm", data)
+        publish(filename, data)
         copied, reason = True, "latest-live-frame-retained-through-original-close"
     else:
         reason = "latest-frame-or-configure-not-captured"
-publish("native-calendar-agenda-export.json", (json.dumps({
-    "schema": "claw.private-calendar-shm-export/v1", "instance": window["instance"],
+publish("native-calendar-agenda-export.json" if calendar else "native-store-window-export.json", (json.dumps({
+    "schema": prefix + "-shm-export/v1", "instance": window["instance"],
     "copied": copied, "reason": reason, "snapshot": index,
     "reply_decode_asserted": False, "event_text_asserted": False,
 }) + "\n").encode())

@@ -1048,6 +1048,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         if let Err(error) = fixture.consume(&retained, &process, &session, deadline, &before).await {
             renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
         }
+        if let Err(error) = fixture.search_frame(&retained, &process, &before).await {
+            renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+        }
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
     assert_eq!(
