@@ -226,6 +226,31 @@ fn private_native_package_owner() {
     for line in std::io::stdin().lock().lines() {
         let argv: Vec<String> = serde_json::from_str(&line.unwrap()).unwrap();
         if argv == ["stop"] { break; }
+        if argv == ["binding"] {
+            let session = crate::proc::current_session_id().unwrap();
+            let registry = crate::proc::registry_path_for_caps();
+            let state: Value = serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+            let row = state["sessions"].as_array().unwrap().iter()
+                .find(|row| row["session_id"] == session).unwrap();
+            let info: crate::proc::SessionInfo = serde_json::from_value(row.clone()).unwrap();
+            assert_eq!(info.pid, std::process::id());
+            assert_eq!(info.start_time_ticks, crate::proc::read_start_time_ticks_pub(info.pid));
+            assert!(info.app_id.is_none());
+            assert!(!info.pending_bind);
+            assert_eq!(info.caps.as_ref().unwrap(), &owner_invoke_caps());
+            crate::caps::enforcement::require_current_session_identity(&session, info.pid).unwrap();
+            let liveness = crate::provenance::runtime::assert_live_now(OWNER, &session);
+            println!("{}", json!({
+                "native_package_peer": true, "ok": true, "result": {
+                    "pid": info.pid, "uid": unsafe { libc::geteuid() },
+                    "session": session, "registry": registry, "caps": info.caps,
+                    "runtime_record": crate::provenance::runtime::state_path_for(OWNER),
+                    "local_liveness_error": liveness.err(),
+                },
+            }));
+            std::io::stdout().flush().unwrap();
+            continue;
+        }
         assert!(matches!(argv.first().map(String::as_str),
             Some("package-transactions" | "review" | "app" | "__package_intent")));
         let result = if argv == ["app", DENIED_APP, "fixture.package-intent", "--args-stdin"] {
@@ -241,6 +266,13 @@ fn private_native_package_owner() {
         });
         std::io::stdout().flush().unwrap();
     }
+}
+
+fn owner_invoke_caps() -> CapSet {
+    CapSet::from_caps([
+        Cap::new(Verb::AGENT_INVOKE, Scope::name(DENIED_APP)),
+        crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "fixture.package-intent").unwrap(),
+    ])
 }
 
 struct OwnerPeer {
@@ -285,10 +317,7 @@ impl OwnerPeer {
         let descriptor = unsafe { OwnedFd::from_raw_fd(raw as i32) };
         let process = ProcessIdentity::from_pidfd(descriptor.as_fd()).unwrap();
         peer.session = format!("native-package-owner-{pid}");
-        let caps = CapSet::from_caps([
-            Cap::new(Verb::AGENT_INVOKE, Scope::name(DENIED_APP)),
-            crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "fixture.package-intent").unwrap(),
-        ]);
+        let caps = owner_invoke_caps();
         let info = crate::proc::SessionInfo {
             session_id: peer.session.clone(), pid,
             command: vec!["/usr/local/bin/claw-gui-broker-fixture".into(), PEER.into()],
@@ -308,11 +337,17 @@ impl OwnerPeer {
             binding: Binding::ProcessTree,
             subject: Subject::session(&peer.session),
             audience: AudienceSet::one(Audience::SystemService),
-            caps,
+            caps: caps.clone(),
             lifetime: Duration::from_secs(120),
             uses: Uses::Budget(2),
             index_session: true,
         }).unwrap();
+        let binding = peer.result(&["binding"]).await;
+        assert_eq!(binding["pid"], pid);
+        assert_eq!(binding["uid"], OWNER);
+        assert_eq!(binding["session"], peer.session);
+        assert_eq!(serde_json::from_value::<CapSet>(binding["caps"].clone()).unwrap(), caps);
+        eprintln!("native package real owner CLI binding: {binding}");
         peer
     }
 

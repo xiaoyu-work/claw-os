@@ -2168,14 +2168,14 @@ fn run_app_command(
     let data = data_dir();
     let apps = apps_dir().to_string_lossy().to_string();
 
-    // Capability gate: callers (interactive CLI or agent) must hold
-    // `agent.invoke` on the app's name to dispatch any command.
-    // Schema introspection is allowed unconditionally so tooling can
-    // describe apps it cannot run. Strict is the default mode — the
-    // user-terminal CLI gets its caps from the session it was started
-    // in; ad-hoc development can opt into `COS_PERMS_MODE=permissive`.
+    // Root settles exact invoke and target authority together, as for MCP.
+    // Keep reference narrowing here without spending consent or opening writable
+    // Root provenance locks. The bridge validates the parent process/session;
+    // Root rederives caller liveness, trust and the plan before any execution.
     if command != "__schema__" {
-        if let Err(denial) = caps::require(caps::Verb::AGENT_INVOKE, caps::Scope::name(app_name)) {
+        if let Err(denial) = caps::enforcement::require_capability_reference(
+            caps::Verb::AGENT_INVOKE, &caps::Scope::name(app_name),
+        ) {
             return Err(denial.summary());
         }
     }

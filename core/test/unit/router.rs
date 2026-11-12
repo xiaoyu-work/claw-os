@@ -3,6 +3,34 @@ use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
 #[test]
+fn ordinary_app_cli_preflight_keeps_reference_narrowing_without_local_consent_spend() {
+    use crate::test_env::TestEnvVarGuard;
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path());
+    let _caps = TestEnvVarGuard::set("COS_CAPS_DATA_DIR", root.path());
+    let _session = TestEnvVarGuard::remove("COS_SESSION");
+    let app = apps::App {
+        manifest: caps::Manifest::from_json(r#"{
+            "id":"ordinary-reference-test","version":"1.0.0","name":{"en":"Reference fixture"},
+            "operations":{"probe":{"label":{"en":"Probe"},"args":[],"needs":[]}}
+        }"#).unwrap(),
+        dir: root.path().join("not-an-installed-app"),
+        provenance: Err("unverified fixture must not execute".into()),
+    };
+    let result = run_app_command("ordinary-reference-test", "probe", &[], &app, None).unwrap_err();
+    assert_eq!(result, "unverified fixture must not execute");
+    assert!(crate::approvals::list_pending().is_empty(), "CLI preflight spent/filed local consent");
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let narrowed = runtime.block_on(caps::enforcement::with_capability_ceiling(
+        caps::CapSet::new(),
+        async { run_app_command("ordinary-reference-test", "probe", &[], &app, None) },
+    )).unwrap_err();
+    assert!(narrowed.contains("outside granted scope"), "{narrowed}");
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[test]
 fn app_permissions_bridge_validates_json_after_its_command_name() {
     for payload in [
         r#"{"action":"list","session":"forged"}"#,
