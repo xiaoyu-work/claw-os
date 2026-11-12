@@ -112,6 +112,12 @@ phase. Its two closed pointer commands target the center of the actual
 authenticated, configured, nonuniform panel; neither keyboard focus nor global
 input authority is granted. The same-instance popup must acquire the real
 Layer parent, acknowledge its original geometry and commit real SHM pixels.
+Each click ends with ordinary pointer leave just outside the actual panel
+geometry. The published tooltip queues a 100 ms task on entry and checks its
+shared hover flag when that task fires; leaving cancels that hover without an
+App hook or arbitrary sleep. A persistent hover can otherwise make the toolkit
+destroy the agenda and create its sibling tooltip. The witness keeps its
+single agenda lifetime and never substitutes stale-generation pixels or ACKs.
 
 Only this lane builds the existing OS `claw-calendar-reader` and stages it at
 its fixed service path inside the fresh isolated bootstrap. No provider enters

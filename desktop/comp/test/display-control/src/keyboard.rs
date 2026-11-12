@@ -36,6 +36,26 @@ struct Request {
     pointer: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PointerStep {
+    Enter((f64, f64)),
+    Button(ButtonState),
+    Leave((f64, f64)),
+}
+
+fn panel_click_steps(center: (f64, f64)) -> Result<[PointerStep; 4]> {
+    let (width, height) = (center.0 * 2.0, center.1 * 2.0);
+    if !(16.0..=512.0).contains(&width) || !(16.0..=128.0).contains(&height) {
+        return Err("pointer gesture has no bounded acknowledged panel geometry".into());
+    }
+    Ok([
+        PointerStep::Enter(center),
+        PointerStep::Button(ButtonState::Pressed),
+        PointerStep::Button(ButtonState::Released),
+        PointerStep::Leave((width + 1.0, center.1)),
+    ])
+}
+
 fn text_code(byte: u8) -> Option<u32> {
     const LETTERS: [u32; 26] = [
         30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17,
@@ -176,25 +196,38 @@ fn pointer_click(state: &mut State, instance: &str, now: u64) -> Result<()> {
     if pointer.is_grabbed() {
         return Err("private pointer already has an unrelated grab".into());
     }
-    pointer.motion(
-        state,
-        Some((surface, (0.0, 0.0).into())),
-        &MotionEvent {
-            location: center.into(),
-            serial: SERIAL_COUNTER.next_serial(),
-            time: now as u32,
-        },
-    );
-    for button_state in [ButtonState::Pressed, ButtonState::Released] {
-        pointer.button(
-            state,
-            &ButtonEvent {
-                serial: SERIAL_COUNTER.next_serial(),
-                time: now as u32,
-                button: 0x110,
-                state: button_state,
-            },
-        );
+    for step in panel_click_steps(center)? {
+        match step {
+            PointerStep::Enter(location) => pointer.motion(
+                state,
+                Some((surface.clone(), (0.0, 0.0).into())),
+                &MotionEvent {
+                    location: location.into(),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: now as u32,
+                },
+            ),
+            PointerStep::Button(button_state) => pointer.button(
+                state,
+                &ButtonEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: now as u32,
+                    button: 0x110,
+                    state: button_state,
+                },
+            ),
+            // End hover too: the original tooltip's queued task checks
+            // CursorLeft's shared hover state, not the later has_popup flag.
+            PointerStep::Leave(location) => pointer.motion(
+                state,
+                None,
+                &MotionEvent {
+                    location: location.into(),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: now as u32,
+                },
+            ),
+        }
     }
     pointer.frame(state);
     Ok(())
@@ -403,5 +436,37 @@ mod tests {
         assert!(decode(&bad, 0, 1000).is_err());
         value["value"] = "12,20".into();
         assert!(decode(&value, 0, 1000).is_err());
+    }
+
+    #[test]
+    fn pointer_plan_refuses_lingering_hover_or_held_button_at_delivery_end() {
+        for center in [(24.0, 20.0), (8.0, 8.0), (256.0, 64.0)] {
+            let (mut hovered, mut held) = (false, false);
+            for step in panel_click_steps(center).unwrap() {
+                match step {
+                    PointerStep::Enter(location) => {
+                        assert_eq!(location, center);
+                        hovered = true;
+                    }
+                    PointerStep::Button(ButtonState::Pressed) => {
+                        assert!(hovered && !held);
+                        held = true;
+                    }
+                    PointerStep::Button(ButtonState::Released) => {
+                        assert!(held);
+                        held = false;
+                    }
+                    PointerStep::Leave(location) => {
+                        assert!(!held);
+                        assert!(location.0 > center.0 * 2.0);
+                        hovered = false;
+                    }
+                }
+            }
+            assert!(!hovered && !held, "a queued tooltip must see hover cancelled");
+        }
+        for center in [(0.0, 20.0), (257.0, 20.0), (24.0, 65.0), (f64::NAN, 20.0)] {
+            assert!(panel_click_steps(center).is_err());
+        }
     }
 }

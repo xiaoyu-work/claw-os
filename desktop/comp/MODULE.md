@@ -77,6 +77,12 @@ clicks: original panel open and close, always at the center of its actual
 already-buffered configure geometry. No caller coordinates, virtual-pointer
 global or input capability is added. Replays, expiry, keyboard actions aimed
 at a noninteractive panel and pointer actions aimed at XDG windows refuse.
+Each finite click releases the button and moves one logical pixel beyond the
+acknowledged panel width, sending ordinary pointer leave before its frame.
+This clears the original toolkit tooltip's shared hover flag; otherwise its
+already-queued 100 ms task can replace the agenda with a sibling tooltip.
+No timer, App action or frame is forged, and the one-agenda-lifetime bound is
+retained rather than crediting a destroyed agenda's pixels to its replacement.
 The new bounded popup witness waits for the real `wlr_layer_surface.get_popup`
 parent assignment under the same live authenticated client/instance before
 configuring or accepting SHM pixels. Its own configure acknowledgement,
