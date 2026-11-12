@@ -120,7 +120,7 @@ def run(command, args):
             ["installed"], ["show", "{SIDE_EFFECT}"],
         ):
             result = subprocess.run(
-                ["/usr/local/bin/cos", "--json", "__package_query", *args],
+                ["/usr/local/bin/cos", "--wire=1", "__package_query", *args],
                 capture_output=True, text=True, timeout=25,
             )
             queries.append({{"args": args, "code": result.returncode,
@@ -2537,7 +2537,7 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
         assert_eq!(queries[2]["reply"]["data"]["versions"][package], "1.0.0");
     }
     assert_ne!(queries[3]["code"], 0);
-    assert_eq!(queries[3]["reply"]["error"]["code"], "denied");
+    assert_eq!(queries[3]["reply"]["code"], "PERMISSION_DENIED");
     {
         let calls = fixture.server.calls.lock().unwrap();
         let requests = calls.iter().filter(|call| {
