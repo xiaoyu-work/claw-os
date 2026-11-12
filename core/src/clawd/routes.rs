@@ -2605,6 +2605,23 @@ routes! {
     packages::install(c.state, c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
+    GuiPackageIntent {
+        name: "gui.package.intent",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::GuiResource),
+        body: body::PackageIntent,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("invocation_id", FieldRule::Token),
+            ("mode", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("packages", FieldRule::Size),
+        ],
+        run: |_c| Err(BrokerError::authorization(
+            "package intents require the exact Root-held private GUI endpoint")),
+    }
     SystemPackageControl {
         name: "system.package.control",
         access: Access::User,

@@ -1,4 +1,83 @@
 use super::*;
+
+#[test]
+fn native_package_intents_reject_authority_fields_and_noncanonical_targets() {
+    let body = json!({
+        "session": "synthetic-gui-session", "invocation_id": "a".repeat(32),
+        "mode": "submit", "action": "remove", "packages": ["fixture-one", "fixture-two:amd64"],
+    });
+    let request: super::intent::Request = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(request.names().unwrap(), ["fixture-one", "fixture-two:amd64"]);
+    for field in ["owner_uid", "approved", "confirmation", "command", "source", "provider", "path"] {
+        let mut invalid = body.clone();
+        invalid[field] = json!(true);
+        assert!(serde_json::from_value::<super::intent::Request>(invalid).is_err(), "{field}");
+    }
+    for packages in [
+        json!([]), json!(["fixture-two", "fixture-one"]),
+        json!(["fixture-one", "fixture-one"]), json!(["/local.deb"]),
+        json!(["app/org.example.Fixture/x86_64/stable"]), json!(["*"]),
+    ] {
+        let mut invalid = body.clone();
+        invalid["packages"] = packages;
+        let parsed = serde_json::from_value::<super::intent::Request>(invalid);
+        assert!(parsed.is_err() || parsed.unwrap().names().is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_package_window_registry_bounds_and_exact_reuse() {
+    use super::gui::{IntentLedger, ReviewIdentity};
+    use crate::clawd::package_transactions::Operation;
+    let mut registry = IntentLedger::default();
+    for index in 0..32 {
+        let package = format!("fixture-{index}");
+        registry.reserve("root-window", &format!("{index}"),
+            Operation::Install { package: package.clone() },
+            vec![Cap::new(Verb::SYS_PACKAGE, Scope::name(package))]).unwrap();
+    }
+    registry.entries.get_mut("0").unwrap().targets[0].identity =
+        ReviewIdentity::Tracked("ap-partially-approved".into());
+    let operation = Operation::Install { package: "fixture-0".into() };
+    let required = vec![Cap::new(Verb::SYS_PACKAGE, Scope::name("fixture-0"))];
+    registry.reserve("root-window", "0", operation.clone(), required.clone()).unwrap();
+    assert_eq!(registry.entries.len(), 32);
+    assert_eq!(registry.target_count, 32);
+    assert_eq!(registry.entries["0"].targets[0].identity,
+        ReviewIdentity::Tracked("ap-partially-approved".into()));
+    assert!(registry.reserve("root-window", "33", operation.clone(), required.clone()).is_err());
+    assert!(registry.reserve("another-window", "0", operation, required.clone()).is_err());
+    assert!(registry.reserve("root-window", "0",
+        Operation::Remove { package: "fixture-0".into() }, required).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_package_window_partial_creation_and_close_never_reset_quota() {
+    use super::gui::{IntentLedger, ReviewIdentity};
+    use crate::clawd::package_transactions::Operation;
+    let names = (0..128).map(|index| format!("fixture-{index:03}")).collect::<Vec<_>>();
+    let required = names.iter().map(|name| Cap::new(Verb::SYS_PACKAGE, Scope::name(name))).collect::<Vec<_>>();
+    let operation = Operation::install_packages(names).unwrap();
+    let mut registry = IntentLedger::default();
+    registry.reserve("root-window", "batch", operation.clone(), required.clone()).unwrap();
+    registry.entries.get_mut("batch").unwrap().targets[0].identity = ReviewIdentity::Tracked("ap-known".into());
+    registry.entries.get_mut("batch").unwrap().targets[1].identity = ReviewIdentity::Unconfirmed;
+    registry.reserve("root-window", "batch", operation.clone(), required.clone()).unwrap();
+    assert_eq!(registry.target_count, 128);
+    assert!(registry.reserve("root-window", "another",
+        Operation::Install { package: "fixture-extra".into() },
+        vec![Cap::new(Verb::SYS_PACKAGE, Scope::name("fixture-extra"))]).is_err());
+    let first = registry.fence();
+    assert!(registry.reserve("root-window", "batch", operation, required).is_err());
+    let retry = registry.fence();
+    assert_eq!(first[0].1.targets[0].identity, retry[0].1.targets[0].identity);
+    assert_eq!(retry[0].1.targets[1].identity, ReviewIdentity::Unconfirmed);
+    assert!(!registry.retired);
+    assert_eq!(registry.entries.len(), 1);
+    assert_eq!(registry.target_count, 128);
+}
 use crate::clawd::authority::{
     authority, Audience, AudienceSet, Binding, Issuance, Issuer, Presentation, Principal,
     Requirement, Subject, Uses,

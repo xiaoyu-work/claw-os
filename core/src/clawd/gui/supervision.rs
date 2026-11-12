@@ -495,6 +495,7 @@ impl Supervised {
             std::thread::sleep(Duration::from_millis(10));
         }
         if let Some(resources) = &mut self.resources {
+            self.broker.retire_package_intents_after_death(resources.gui_cgroup()?, deadline)?;
             resources.remove_gui_cgroup()?;
         }
         self.resources.take();

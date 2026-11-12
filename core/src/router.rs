@@ -824,6 +824,11 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__package_intent" {
+        let value = crate::clawd::packages::intent::cli(&args[1..])?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__package" {
         let package_args = if args.get(1).map(String::as_str) == Some("--retained") {
             &args[2..]

@@ -2360,12 +2360,24 @@ pub fn consume_grant_set_once_for_owner(
     required: &[Cap],
     owner_uid: Option<u32>,
 ) -> Result<bool, String> {
+    consume_grant_set_once_for_owner_operation_evidence(session, required, owner_uid, None)
+        .map(|evidence| evidence.is_some())
+}
+
+pub(crate) fn consume_grant_set_once_for_owner_operation_evidence(
+    session: &str,
+    required: &[Cap],
+    owner_uid: Option<u32>,
+    operation_digest: Option<&str>,
+) -> Result<Option<Vec<ConsumedGrant>>, String> {
+    let operation_digest = canonical_operation_digest(operation_digest)?;
     if required.is_empty() {
-        return Ok(true);
+        return Ok(Some(Vec::new()));
     }
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         let mut claimed: Vec<PathBuf> = Vec::new();
+        let mut evidence = Vec::with_capacity(required.len());
         for cap in required {
             let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
             let expected = ApprovalAuthorization {
@@ -2377,15 +2389,26 @@ pub fn consume_grant_set_once_for_owner(
                 execution: None,
                 resume_request_id: None,
                 resumable_until: None,
-                operation_digest: None,
+                operation_digest: operation_digest.clone(),
             };
-            let found = list_dir(&approved_dir()).into_iter().find(|path| {
-                !claimed.contains(path) && load_matching_grant(path, &expected, None).is_some()
+            let found = list_dir(&approved_dir()).into_iter().find_map(|path| {
+                if claimed.contains(&path) { return None; }
+                let resolved = load_matching_grant(&path, &expected, None)?;
+                let binding = resolved.decision.grant.as_ref()?;
+                let receipt = ConsumedGrant {
+                    duration: resolved.decision.duration?,
+                    expires_at: binding.expires_at,
+                    uses_remaining: 0,
+                    generation: binding.generation?,
+                    reference: binding.reference.clone(),
+                    authorization: binding.authorization.clone()?,
+                };
+                Some((path, receipt))
             });
             match found {
-                Some(path) => claimed.push(path),
+                Some((path, receipt)) => { claimed.push(path); evidence.push(receipt); }
                 // Nothing has moved yet, so there is nothing to undo.
-                None => return Ok(false),
+                None => return Ok(None),
             }
         }
 
@@ -2406,7 +2429,7 @@ pub fn consume_grant_set_once_for_owner(
         }
         sync_dir(&approved_dir());
         sync_dir(&consumed_dir());
-        Ok(true)
+        Ok(Some(evidence))
     })
 }
 

@@ -102,6 +102,9 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
     let (action, package, version) = match operation {
         Operation::Install { package } => ("install", Some(package.as_str()), None),
         Operation::InstallPackages { .. } => ("install", None, None),
+        Operation::RemovePackages { .. } => ("remove", None, None),
+        Operation::PurgePackages { .. } => ("purge", None, None),
+        Operation::UpgradePackages { .. } => ("upgrade", None, None),
         Operation::InstallVersion { package, version } => (
             "install-version",
             Some(package.as_str()),
@@ -148,8 +151,8 @@ fn arguments(operation: &Operation, id: &str, dispatch: bool) -> Result<Vec<Stri
             Some(version) => format!("{package}={version}"),
             None => package.to_string(),
         });
-    } else if let Operation::InstallPackages { packages } = operation {
-        args.extend(packages.iter().cloned());
+    } else {
+        args.extend(operation.packages().into_iter().map(str::to_string));
     }
     Ok(args)
 }
@@ -341,7 +344,7 @@ pub(super) async fn prepare(owner: u32, id: &str, operation: &Operation) -> Resu
     let output = apt::run("/usr/bin/apt-get", simulated, None, None).await?;
     let actions = simulation(
         &output.stdout_string(),
-        matches!(operation, Operation::Purge { .. }),
+        matches!(operation, Operation::Purge { .. } | Operation::PurgePackages { .. }),
     )
     .await?;
     let controller = std::env::current_exe()
@@ -816,11 +819,22 @@ pub(super) async fn verify(operation: &Operation, plan: &Plan) -> Result<Value, 
         None => None,
     };
     let mut installed = Vec::new();
-    if let Operation::InstallPackages { packages } = operation {
-        for package in packages {
+    if matches!(operation, Operation::InstallPackages { .. } | Operation::RemovePackages { .. }
+        | Operation::PurgePackages { .. } | Operation::UpgradePackages { .. }) {
+        for package in operation.packages() {
             let state = crate::clawd::packages::query_package_state(package).await?;
-            if !state.installed {
+            if matches!(operation, Operation::InstallPackages { .. }) && !state.installed {
                 return Err("A requested package is not confirmed installed".into());
+            }
+            if matches!(operation, Operation::RemovePackages { .. } | Operation::PurgePackages { .. })
+                && state.installed {
+                return Err("A requested package is not confirmed removed".into());
+            }
+            if matches!(operation, Operation::PurgePackages { .. }) {
+                let status = crate::clawd::packages::query_package_status(package).await?;
+                if status.is_some_and(|(status, _, _)| !status.ends_with(" ok not-installed")) {
+                    return Err("The requested purge still retains package configuration".into());
+                }
             }
             installed.push(state);
         }
