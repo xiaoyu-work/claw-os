@@ -66,6 +66,8 @@ fn trust_cell() -> &'static Mutex<Option<TrustCache>> {
 /// Call this on the authority path — before a launch, a disclosure, an
 /// attach or a relay — not once at startup.
 pub fn trust_store() -> Arc<TrustStore> {
+    #[cfg(test)]
+    let _fresh_trust = verify::test_profile::Span::new(verify::test_profile::Step::FreshTrust);
     let mut guard = trust_cell().lock().unwrap_or_else(|p| p.into_inner());
     if let Some((existing, roots)) = guard.as_ref() {
         if existing.is_current(roots) {

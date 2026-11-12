@@ -36,6 +36,11 @@ use super::envelope::{
 use super::fsec::{self, DirHandle, NodeMeta};
 use super::trust::{TrustError, TrustStore, TrustTier};
 
+#[cfg(test)]
+pub(crate) mod test_profile;
+#[cfg(test)]
+use test_profile::{Span, Step};
+
 /// Approved system roots whose contents inherit Debian/rootfs package
 /// trust. Anything outside this list — including a development
 /// checkout reached through an environment override — must present a
@@ -655,6 +660,8 @@ pub fn verify_package(
     options: &VerifyOptions,
     trust: &TrustStore,
 ) -> Result<VerifiedPackage, ProvenanceError> {
+    #[cfg(test)]
+    let _package_open = Span::new(Step::PackageOpen);
     let handle = DirHandle::open(dir).map_err(|e| ProvenanceError::Io {
         path: dir.to_path_buf(),
         reason: format!("open package directory: {e}"),
@@ -670,7 +677,11 @@ pub fn verify_package(
         });
     }
     let identity = (dir_meta.dev, dir_meta.ino);
+    #[cfg(test)]
+    drop(_package_open);
 
+    #[cfg(test)]
+    let _envelope_read = Span::new(Step::EnvelopeRead);
     let envelope_raw = match handle
         .open_file(ENVELOPE_FILE)
         .and_then(|fd| fd.read_bounded(super::envelope::MAX_ENVELOPE_BYTES as u64))
@@ -684,6 +695,8 @@ pub fn verify_package(
             });
         }
     };
+    #[cfg(test)]
+    drop(_envelope_read);
 
     match envelope_raw {
         Some(raw) => verify_signed(dir, handle, identity, &raw, options, trust),
@@ -851,10 +864,14 @@ fn verify_signed(
     options: &VerifyOptions,
     trust: &TrustStore,
 ) -> Result<VerifiedPackage, ProvenanceError> {
+    #[cfg(test)]
+    let _envelope_parse = Span::new(Step::EnvelopeParse);
     let envelope = Envelope::parse(raw).map_err(|source| ProvenanceError::Envelope {
         path: dir.join(ENVELOPE_FILE),
         source,
     })?;
+    #[cfg(test)]
+    drop(_envelope_parse);
     let body = &envelope.package;
     if body.kind != options.kind {
         return Err(ProvenanceError::KindMismatch {
@@ -875,6 +892,8 @@ fn verify_signed(
 
     // Signature first: never spend I/O hashing a tree that no trusted
     // key vouches for.
+    #[cfg(test)]
+    let _signer_context = Span::new(Step::SignerContext);
     let public_key = envelope
         .public_key_bytes()
         .map_err(|source| ProvenanceError::Envelope {
@@ -903,6 +922,10 @@ fn verify_signed(
         VerifyingKey::from_bytes(&public_key).map_err(|_| ProvenanceError::BadSignature {
             path: dir.to_path_buf(),
         })?;
+    #[cfg(test)]
+    drop(_signer_context);
+    #[cfg(test)]
+    let _signature = Span::new(Step::Signature);
     verifying
         .verify_strict(
             &envelope.signing_bytes(),
@@ -911,6 +934,8 @@ fn verify_signed(
         .map_err(|_| ProvenanceError::BadSignature {
             path: dir.to_path_buf(),
         })?;
+    #[cfg(test)]
+    drop(_signature);
 
     verify_tree(dir, &handle, &body.files, options.max_bytes)?;
 
@@ -1193,12 +1218,18 @@ fn scan_tree(
     let mut total: u64 = 0;
     let mut stack: Vec<Option<String>> = vec![None];
     while let Some(rel) = stack.pop() {
+        #[cfg(test)]
+        test_profile::directory();
+        #[cfg(test)]
+        let _directory_inventory = Span::new(Step::DirectoryInventory);
         let entries = handle
             .entries(rel.as_deref())
             .map_err(|e| ProvenanceError::Io {
                 path: dir.join(rel.clone().unwrap_or_default()),
                 reason: e.to_string(),
             })?;
+        #[cfg(test)]
+        drop(_directory_inventory);
         for (name, meta) in entries {
             let child = match &rel {
                 Some(parent) => format!("{parent}/{name}"),
@@ -1267,24 +1298,38 @@ fn scan_tree(
                     reason: format!("package exceeds {} entries", super::envelope::MAX_FILES),
                 });
             }
+            #[cfg(test)]
+            let _file_open = Span::new(Step::FileOpen);
             let fd = handle
                 .open_file(&child)
                 .map_err(|e| ProvenanceError::TreeMismatch {
                     path: dir.join(&child),
                     reason: e.to_string(),
                 })?;
+            #[cfg(test)]
+            drop(_file_open);
+            #[cfg(test)]
+            let _file_read = Span::new(Step::FileRead);
             let bytes = fd
                 .read_bounded(max_bytes)
                 .map_err(|e| ProvenanceError::TreeMismatch {
                     path: dir.join(&child),
                     reason: e.to_string(),
                 })?;
+            #[cfg(test)]
+            drop(_file_read);
+            #[cfg(test)]
+            test_profile::file(bytes.len() as u64);
             files.push(FileEntry {
                 path: child,
                 kind: NodeKind::File,
                 mode: meta.mode,
                 size: bytes.len() as u64,
-                digest: digest_bytes(&bytes),
+                digest: {
+                    #[cfg(test)]
+                    let _file_hash = Span::new(Step::FileHash);
+                    digest_bytes(&bytes)
+                },
             });
         }
     }
@@ -1300,7 +1345,13 @@ fn verify_tree(
     declared: &[FileEntry],
     max_bytes: u64,
 ) -> Result<(), ProvenanceError> {
+    #[cfg(test)]
+    let _tree_scan = Span::new(Step::TreeScan);
     let actual = scan_tree(dir, handle, max_bytes, false)?;
+    #[cfg(test)]
+    drop(_tree_scan);
+    #[cfg(test)]
+    let _tree_compare = Span::new(Step::TreeCompare);
     let declared_map: BTreeMap<&str, &FileEntry> =
         declared.iter().map(|f| (f.path.as_str(), f)).collect();
     let actual_map: BTreeMap<&str, &FileEntry> =
