@@ -126,6 +126,10 @@ fn install_packages(package_only: bool) {
     let trust = TrustStore::load_roots(&roots);
     assert!(!trust.is_empty(), "{:?}", trust.diagnostics());
     crate::provenance::set_trust_store_for_roots(trust, roots);
+    eprintln!(
+        "private selected-read timing sourceStep=fixture_probe_elf_bytes probeElfBytes={}",
+        std::fs::metadata("/usr/lib/cos/bin/claw-gui-probe").unwrap().len(),
+    );
     for id in ["gui-boundary-test", "gui-boundary-zero", "gui-file-manager-test"] {
         let dir = Path::new("/usr/lib/cos/apps").join(id);
         std::fs::create_dir_all(&dir).unwrap();
@@ -369,6 +373,28 @@ fn private_audit_tail() -> String {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut output = String::new();
+    if let Ok(file) = std::fs::File::open(
+        "/run/display-home/.local/share/cos/apps/gui-boundary-test/selected-read-timing.jsonl",
+    ) {
+        let mut bytes = Vec::new();
+        if file.take(4096).read_to_end(&mut bytes).is_ok() {
+            for line in String::from_utf8_lossy(&bytes).lines().take(16) {
+                let Ok(timing) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+                let (Some(step), Some(ms)) = (
+                    timing.get("sourceStep").and_then(serde_json::Value::as_str),
+                    timing.get("elapsedMs").and_then(serde_json::Value::as_u64),
+                ) else { continue; };
+                if matches!(step, "request_pending" | "status_selected" | "native_file_opened"
+                    | "native_read_complete" | "seek_mmap_complete" | "scalar_denial_done"
+                    | "pending_sibling_cleanup_ready")
+                {
+                    output.push_str(&format!(
+                        "\nprivate selected-read timing sourceStep={step} elapsedMs={ms}",
+                    ));
+                }
+            }
+        }
+    }
     for path in [
         "/var/lib/cos/clawd/audit.jsonl",
         "/run/display-home/.local/share/cos/logs/audit.jsonl",
@@ -827,7 +853,7 @@ async fn run_selected_read_window(group: &std::fs::File, inherited: bool) {
         std::fs::write(home.join("read-delegated/not-selected"), b"capability is not selection").unwrap();
         std::fs::write(home.join("read-unselected"), b"unselected owner content").unwrap();
         for marker in ["selected-read-pending.json", "selected-read-ungranted.json", "selected-read-ready",
-            "selected-read-unfinished.json"] {
+            "selected-read-unfinished.json", "selected-read-timing.jsonl"] {
             let marker = data.join(marker);
             if marker.exists() { std::fs::remove_file(marker).unwrap(); }
         }

@@ -1636,6 +1636,10 @@ impl Filesystem {
     }
 
     fn open_selected(&mut self, req: &Request<'_>, inode: u64, flags: i32, reply: ReplyOpen) {
+        #[cfg(test)]
+        let started = Instant::now();
+        #[cfg(test)]
+        eprintln!("private selected-file timing sourceStep=native_open_begin elapsedMs=0");
         let result = self.authorize(req, false, false).and_then(|_| {
             if flags & libc::O_ACCMODE != libc::O_RDONLY || flags & (libc::O_TRUNC | libc::O_APPEND) != 0 {
                 return Err(libc::EACCES);
@@ -1645,19 +1649,40 @@ impl Filesystem {
             let (selection, file) = provider.open(inode, None)?;
             self.add_handle(Handle::SelectedFile { inode, file, selection })
         });
+        #[cfg(test)]
+        eprintln!(
+            "private selected-file timing sourceStep=native_open_end elapsedMs={} ok={}",
+            started.elapsed().as_millis(), result.is_ok(),
+        );
         match result { Ok(handle) => reply.opened(handle, 0), Err(error) => reply.error(error) }
     }
 
     fn read_selected(&self, req: &Request<'_>, inode: u64, fh: u64, offset: i64, size: u32,
         reply: ReplyData)
     {
+        #[cfg(test)]
+        let started = Instant::now();
+        #[cfg(test)]
+        eprintln!(
+            "private selected-file timing sourceStep=native_read_begin elapsedMs=0 offset={offset} requestedBytes={size}",
+        );
         let result = self.authorize(req, false, self.handles.contains_key(&fh)).and_then(|_| {
             let Some(Handle::SelectedFile { inode: expected, file, selection }) = self.handles.get(&fh)
                 else { return Err(libc::EBADF); };
             if *expected != inode || size > MAX_READ { return Err(libc::EINVAL); }
             let offset = u64::try_from(offset).map_err(|_| libc::EINVAL)?;
             let provider = super::ReadProvider::new(self.shared.clone()).map_err(|_| libc::EACCES)?;
-            let (_, current) = provider.open(inode, Some(selection))?;
+            let (_, current) = {
+                #[cfg(test)]
+                let permission_started = Instant::now();
+                let permission = provider.open(inode, Some(selection));
+                #[cfg(test)]
+                eprintln!(
+                    "private selected-file timing sourceStep=native_read_fresh_permission elapsedMs={} ok={}",
+                    permission_started.elapsed().as_millis(), permission.is_ok(),
+                );
+                permission?
+            };
             if !same_file(file, &current) { provider.stop(); return Err(libc::ESTALE); }
             let _owner = FsIdentityGuard::enter(self.shared.owner).map_err(|_| libc::EACCES)?;
             let mut data = vec![0; size as usize];
@@ -1665,6 +1690,12 @@ impl Filesystem {
             data.truncate(count);
             Ok(data)
         });
+        #[cfg(test)]
+        eprintln!(
+            "private selected-file timing sourceStep=native_read_end elapsedMs={} ok={} readBytes={}",
+            started.elapsed().as_millis(), result.is_ok(),
+            result.as_ref().map_or(0, |bytes| bytes.len()),
+        );
         match result { Ok(data) => reply.data(&data), Err(error) => reply.error(error) }
     }
 
