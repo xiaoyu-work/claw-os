@@ -16,11 +16,16 @@ adapters) are consumers of this module, not peers of it.
 Linux workers receive sealed, read-only single-account `/etc/passwd` and
 single-group `/etc/group` views through the existing descriptor-pinned mounts.
 The account binds the runtime UID/GID and its OS-resolved name/login shell;
+an authenticated kernel identity without a host login account receives a
+private `worker-<uid>` namespace record instead. Host-lookup errors remain
+errors, and Root owner/group resolution still requires its real account.
 its home is the sandbox's private HOME (or declared work directory), never
 the host account's home. Password hashes, GECOS, other users and shadow files
 are not copied. Fields that cannot be represented safely fail preparation.
 Like other base system resources, these defaults precede explicit authorized
 policy mounts rather than silently replacing a requested host-file view.
+Bubblewrap consumes the rewound sealed file descriptors with its read-only
+data interface; anonymous files are not treated as filesystem source paths.
 This generic Unix identity metadata grants no capability, process, Home,
 device or bus access and does not change kernel, session or audit identity.
 No product-specific USER/SHELL override or raw host passwd mount is supplied.

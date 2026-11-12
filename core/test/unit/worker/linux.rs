@@ -71,6 +71,22 @@ fn private_account_records_bind_only_runtime_identity_and_private_home() {
         assert!(account_records(4242, 4343, name, home, shell).is_err());
     }
     assert!(account_records(0, 0, "root", "/private/app", "/bin/sh").is_err());
+    let virtual_account = view_account_records(4242, 4343, "/private/app", None).unwrap();
+    assert_eq!(
+        virtual_account[0].1,
+        "worker-4242:x:4242:4343::/private/app:/bin/sh\n"
+    );
+    let namespaced = view_account_records(
+        4242,
+        4343,
+        "/private/app",
+        Some(WorkerAccount {
+            gid: 9999,
+            name: "fixture-user".into(),
+            shell: "/bin/sh".into(),
+        })
+    ).unwrap();
+    assert_eq!(namespaced[0].1, "fixture-user:x:4242:4343::/private/app:/bin/sh\n");
 }
 
 #[test]
@@ -86,6 +102,7 @@ fn private_account_views_are_sealed_readonly_descriptor_mounts() {
             MountClass::Input,
         )],
         files: Vec::new(),
+        data: Vec::new(),
     };
     for (target, bytes) in
         account_records(4242, 4343, "fixture-user", "/private/app", "/bin/sh").unwrap()
@@ -94,22 +111,24 @@ fn private_account_views_are_sealed_readonly_descriptor_mounts() {
             .add_system_data(target, bytes.as_bytes(), false)
             .unwrap();
     }
-    let args = build_bwrap_args(
+    let args = build_bwrap_args_with_seccomp(
         &policy(NetworkPolicy::Denied),
         &pinned.mounts,
         4242,
         4343,
         &HostLayout::default(),
+        SECCOMP_FD,
+        &pinned.data,
     );
     assert!(args
         .windows(3)
-        .any(|args| args == ["--ro-bind", "/proc/self/fd/200", "/etc/passwd"]));
+        .any(|args| args == ["--ro-bind-data", "200", "/etc/passwd"]));
     assert!(args
         .windows(3)
-        .any(|args| args == ["--ro-bind", "/proc/self/fd/201", "/etc/group"]));
+        .any(|args| args == ["--ro-bind-data", "201", "/etc/group"]));
     let base = args
         .windows(3)
-        .position(|args| args == ["--ro-bind", "/proc/self/fd/200", "/etc/passwd"])
+        .position(|args| args == ["--ro-bind-data", "200", "/etc/passwd"])
         .unwrap();
     let explicit = args
         .windows(3)
@@ -120,6 +139,11 @@ fn private_account_views_are_sealed_readonly_descriptor_mounts() {
         "the default account view cannot mask an explicitly authorized file"
     );
     let file = &mut pinned.files[0];
+    assert_eq!(
+        file.stream_position().unwrap(),
+        0,
+        "bwrap consumes data from the current offset"
+    );
     assert_eq!(file.metadata().unwrap().mode() & 0o777, 0o444);
     assert!(unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) } & libc::F_SEAL_WRITE != 0);
     assert!(file.write_all(b"root:x:0:0::/:/bin/sh\n").is_err());
