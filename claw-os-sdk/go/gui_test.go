@@ -93,29 +93,6 @@ func TestSelectedWriteAndReservedSaveClosedReplies(t *testing.T) {
 		t.Fatalf("write pending is not permission: %+v %v", write, err)
 	}
 
-	func TestOneShotCreateLiteralLeafClosedStateAndSlot(t *testing.T) {
-		request := map[string]any{"parent_node": json.Number("1.0"), "name": "报告 ; '$x'.txt"}
-		if err := ValidateGuiFileCreateRequest(request); err != nil { t.Fatal(err) }
-		for _, name := range []string{"", ".", "..", "../leaf", "a/b", "a\\b", "a\x00b", string([]byte{0xff}), strings.Repeat("é", 128)} {
-			if _, err := RequestFileCreate(1, name); err == nil { t.Fatalf("invalid create name reached transport: %q", name) }
-		}
-		if _, err := RequestFileCreate(0, "leaf"); err == nil { t.Fatal("zero parent reached transport") }
-		if _, err := ReserveFileCreate("sw-"+strings.Repeat("d", 32), 1); err == nil { t.Fatal("write selection became creation") }
-		value := map[string]any{"version": 1, "selection_id": "sc-"+strings.Repeat("d", 32),
-			"parent_node": json.Number("1e0"), "name": "leaf", "access": "create", "state": "selected"}
-		var status GuiFileCreate
-		if err := decodeSelectedFile(value, ValidateGuiFileCreate, &status); err != nil || status.State != "selected" { t.Fatalf("%+v %v", status, err) }
-		value["state"] = "created"
-		if err := decodeSelectedFile(value, ValidateGuiFileCreate, &status); err != nil { t.Fatal(err) }
-		value["owner_uid"] = 0
-		if err := ValidateGuiFileCreate(value); err == nil { t.Fatal("creation accepted owner claim") }
-		slot := map[string]any{"version": 1, "reservation_id": "ss-"+strings.Repeat("e", 32),
-			"selection_id": "sc-"+strings.Repeat("d", 32), "parent_node": 1,
-			"name": ".cos-save-"+strings.Repeat("e", 32), "target_name": "leaf", "expires_in_ms": 190000}
-		if err := ValidateGuiFileCreateSlot(slot); err != nil { t.Fatal(err) }
-		slot["target_name"] = "../another"
-		if err := ValidateGuiFileCreateSlot(slot); err == nil { t.Fatal("creation slot accepted traversal") }
-	}
 	value["access"] = "read"
 	if err := decodeSelectedFile(value, ValidateGuiFileWrite, &write); err == nil {
 		t.Fatal("a read reply cannot become write selection")
@@ -133,5 +110,47 @@ func TestSelectedWriteAndReservedSaveClosedReplies(t *testing.T) {
 	}
 	if _, err := ReserveFileSave("sr-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 9); err == nil {
 		t.Fatal("read-only selection reached save transport")
+	}
+}
+
+func TestOneShotCreateLiteralLeafClosedStateAndSlot(t *testing.T) {
+	request := map[string]any{"parent_node": json.Number("1.0"), "name": "报告 ; '$x'.txt"}
+	if err := ValidateGuiFileCreateRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"", ".", "..", "../leaf", "a/b", "a\\b", "a\x00b", string([]byte{0xff}), strings.Repeat("é", 128)} {
+		if _, err := RequestFileCreate(1, name); err == nil {
+			t.Fatalf("invalid create name reached transport: %q", name)
+		}
+	}
+	if _, err := RequestFileCreate(0, "leaf"); err == nil {
+		t.Fatal("zero parent reached transport")
+	}
+	if _, err := ReserveFileCreate("sw-"+strings.Repeat("d", 32), 1); err == nil {
+		t.Fatal("write selection became creation")
+	}
+	value := map[string]any{"version": 1, "selection_id": "sc-" + strings.Repeat("d", 32),
+		"parent_node": json.Number("1e0"), "name": "leaf", "access": "create", "state": "selected"}
+	var status GuiFileCreate
+	if err := decodeSelectedFile(value, ValidateGuiFileCreate, &status); err != nil || status.State != "selected" {
+		t.Fatalf("%+v %v", status, err)
+	}
+	value["state"] = "created"
+	if err := decodeSelectedFile(value, ValidateGuiFileCreate, &status); err != nil {
+		t.Fatal(err)
+	}
+	value["owner_uid"] = 0
+	if err := ValidateGuiFileCreate(value); err == nil {
+		t.Fatal("creation accepted owner claim")
+	}
+	slot := map[string]any{"version": 1, "reservation_id": "ss-" + strings.Repeat("e", 32),
+		"selection_id": "sc-" + strings.Repeat("d", 32), "parent_node": 1,
+		"name": ".cos-save-" + strings.Repeat("e", 32), "target_name": "leaf", "expires_in_ms": 190000}
+	if err := ValidateGuiFileCreateSlot(slot); err != nil {
+		t.Fatal(err)
+	}
+	slot["target_name"] = "../another"
+	if err := ValidateGuiFileCreateSlot(slot); err == nil {
+		t.Fatal("creation slot accepted traversal")
 	}
 }
