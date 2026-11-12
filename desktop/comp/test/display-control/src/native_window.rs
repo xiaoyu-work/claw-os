@@ -691,6 +691,19 @@ impl Window {
             .cloned()
     }
 
+    pub fn input_buffer_commit(&self, instance: &str, target: &str) -> Option<u64> {
+        if target == "panel" {
+            self.panel_pointer_target(instance)?;
+            return Some(self.panel.as_ref()?.commits);
+        }
+        self.input_surface(instance, target)?;
+        match target {
+            "primary" => Some(self.commits),
+            "auxiliary" => Some(self.auxiliary.commits),
+            _ => None,
+        }
+    }
+
     fn pre_commit(&mut self, surface: &WlSurface) {
         if self
             .surface
