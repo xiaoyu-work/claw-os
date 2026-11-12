@@ -85,6 +85,14 @@ and a root-owned executed artifact.
 | `runtime.rs` | Private per-launch runtime directory |
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
+The ordinary worker's explicit broker admission table includes
+`system.package.query` only for the live `sys.observe` family. Root still
+derives and spends the exact catalog/package scope from its closed query body.
+Package mutation authority does not admit reads, and this entry admits no
+mutation, review or identity route. It supplies neither raw package-state
+mounts nor system D-Bus; extension Host and ordinary worker proxies retain
+their separate admission checks.
+
 ## Protected App registration
 
 All ordinary launchers, including UID 0, and supervised Hosts use the

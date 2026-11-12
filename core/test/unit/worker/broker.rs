@@ -164,6 +164,23 @@ fn calendar_relay_requires_database_read_without_exposing_other_routes() {
 }
 
 #[test]
+fn package_catalog_relay_requires_read_authority_without_admitting_package_mutation() {
+    let read = Cap::new(Verb::SYS_OBSERVE, Scope::name("packages"));
+    admit(Command::SystemPackageQuery, &relaying_authority(vec![read.clone()])).unwrap();
+    assert!(admit(Command::SystemPackageQuery, &authority(vec![read.clone()])).is_err());
+    for command in [
+        Command::SystemPackageInstall, Command::SystemPackageControl,
+        Command::SystemPackageRestore, Command::AppSessionRegister, Command::SystemReviewDecide,
+    ] {
+        assert!(admit(command, &relaying_authority(vec![read.clone()])).is_err(), "{command:?}");
+    }
+    for verb in [Verb::SYS_PACKAGE, Verb::FS_READ, Verb::DATA_DB_READ, Verb::AGENT_OBSERVE] {
+        let unrelated = relaying_authority(vec![Cap::new(verb, Scope::name("packages"))]);
+        assert!(admit(Command::SystemPackageQuery, &unrelated).is_err());
+    }
+}
+
+#[test]
 fn screenshot_admission_requires_capture_not_file_or_clipboard_authority() {
     let capture = relaying_authority(vec![Cap::new(Verb::DESKTOP_CAPTURE, Scope::name("screen"))]);
     admit(Command::SystemScreenshotCapture, &capture).unwrap();
