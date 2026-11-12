@@ -22,7 +22,7 @@ struct Payload {
 pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile) {
     use crate::provenance::{
         envelope::PackageKind,
-        sign::{sign_package, SignRequest},
+        sign::{sign_directory, SignRequest},
         verify::{verify_package, VerifyOptions},
     };
 
@@ -80,9 +80,9 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile) {
         serde_json::from_slice(&std::fs::read(dir.join("app.json")).unwrap()).unwrap();
     assert_eq!(manifest["id"], APP);
     assert_eq!(manifest["schema_version"], 2);
-    sign_package(
+    sign_directory(
+        dir,
         &SignRequest {
-            root: dir.to_path_buf(),
             kind: PackageKind::App,
             id: APP.into(),
             version: manifest["version"].as_str().unwrap().into(),
