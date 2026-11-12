@@ -499,6 +499,7 @@ impl Broker {
         let (stop, mut stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
+            let (draining, _) = tokio::sync::watch::channel(false);
             loop {
                 let accepted = tokio::select! {
                     _ = &mut stopped => break,
@@ -515,12 +516,14 @@ impl Broker {
                 let captured = captured.clone();
                 let captured_calls = captured_calls.clone();
                 let lose_next = lose_next.clone();
+                let mut drain = draining.subscribe();
                 connections.spawn(async move {
                     let mut stream = PeerStream::new(accepted).unwrap();
-                    let ReadOutcome::Frame(frame) = stream
-                        .read_request(crate::clawd::wire::MAX_REQUEST_BYTES)
-                        .await
-                        .unwrap()
+                    let outcome = tokio::select! {
+                        _ = drain.changed() => return,
+                        outcome = stream.read_request(crate::clawd::wire::MAX_REQUEST_BYTES) => outcome.unwrap(),
+                    };
+                    let ReadOutcome::Frame(frame) = outcome
                     else {
                         panic!("expected a real hook/probe request");
                     };
@@ -569,10 +572,19 @@ impl Broker {
                         }
                         None => {}
                     }
-                    let response = crate::clawd::server::dispatch_verified_request(
+                    let dispatch = crate::clawd::server::dispatch_verified_request(
                         request, &client, &state, &admission,
-                    )
-                    .await;
+                    );
+                    // Closing the frontend may leave its read-only notification poll.
+                    // Admitted mutations still run to completion before fixture shutdown.
+                    let response = if command == crate::clawd::routes::Command::NotificationSubscribe {
+                        tokio::select! {
+                            _ = drain.changed() => return,
+                            response = dispatch => response,
+                        }
+                    } else {
+                        dispatch.await
+                    };
                     if let Some(completed) = live_check_completed {
                         completed.send((response.ok, response.error.as_ref().map(|error| error.code.clone())))
                             .unwrap();
@@ -622,6 +634,7 @@ impl Broker {
                     }
                 });
             }
+            draining.send_replace(true);
             while let Some(completed) = connections.join_next().await {
                 completed.unwrap();
             }
@@ -2675,6 +2688,7 @@ async fn private_installed_product_web_calls_real_kv_without_model() {
     assert!(fixture.server.calls.lock().unwrap().iter()
         .all(|call| call.command != Command::TaskSubmit));
     drop(web);
+    eprintln!("private installed KV Web: actual browser, UI/Serve-independent MCP and checked service retirement passed; draining read-only frontend polls");
     fixture.finish().await;
     eprintln!("private installed KV Web: real browser clicks, signed resources, UI/Serve-independent MCP persistence and checked retirement without a model passed");
 }
