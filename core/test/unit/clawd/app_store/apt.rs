@@ -2521,6 +2521,28 @@ async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_sco
     assert_eq!(result["raw_apt_visible"], false);
     let queries = result["queries"].as_array().unwrap();
     assert_eq!(queries.len(), 4);
+    if queries[..3].iter().any(|query| query["code"] != 0) {
+        let output = owner_command(OWNER, Path::new("/usr/bin/timeout"))
+            .args([
+                "20", "/usr/bin/apt-cache",
+                "-o", "Dir::Cache::pkgcache=", "-o", "Dir::Cache::srcpkgcache=",
+                "search", "--names-only", "--", BUNDLE,
+            ])
+            .env("HOME", "/").env("LC_ALL", "C").current_dir("/")
+            .output().unwrap();
+        let metadata = ["/etc/apt/apt.conf.d/00private-fixture",
+            "/etc/apt/sources.list.d/fixture.sources", "/var/lib/dpkg/status",
+            "/var/lib/apt/lists"].into_iter().map(|path| {
+                let info = std::fs::symlink_metadata(path).unwrap();
+                json!({"path": path, "uid": info.uid(), "mode": info.mode() & 0o777})
+            }).collect::<Vec<_>>();
+        eprintln!("private package reader failure evidence {}", json!({
+            "status": output.status.to_string(), "inputs": metadata,
+            "direct_owner_stdout": String::from_utf8_lossy(&output.stdout[..output.stdout.len().min(8192)]),
+            "direct_owner_stderr": String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(8192)]),
+            "queries": queries,
+        }));
+    }
     for query in &queries[..3] {
         assert_eq!(query["code"], 0, "{query}");
         assert_eq!(query["reply"]["wire_version"], 1);
