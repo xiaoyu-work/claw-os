@@ -19,6 +19,8 @@ use claw_display_control::{workload, ProcessIdentity};
 use crate::clawd::client_identity::FsIdentityGuard;
 
 mod backend;
+mod metadata_scope;
+pub(crate) use metadata_scope::MetadataRoot;
 mod selected_read;
 mod selected_write;
 pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider};
@@ -68,6 +70,7 @@ struct Shared {
     owner_home: PathBuf,
     expiry: Mutex<Expiry>,
     metadata_only: bool,
+    metadata_root: Option<MetadataRoot>,
     binding: Mutex<Option<Binding>>,
     #[cfg(test)]
     chosen: Mutex<Vec<ChosenRead>>,
@@ -109,6 +112,17 @@ impl Shared {
     }
 
     fn live(&self) -> Result<(), i32> {
+        self.lease_live()?;
+        if let Some(source) = &self.metadata_root {
+            if source.revalidate().is_err() {
+                self.revoked.store(true, Ordering::Release);
+                return Err(libc::EACCES);
+            }
+        }
+        self.lease_live()
+    }
+
+    fn lease_live(&self) -> Result<(), i32> {
         if self.selected_expiry.lock().map_err(|_| libc::EIO)?
             .is_some_and(|deadline| Instant::now() >= deadline) {
             self.revoked.store(true, Ordering::Release);
@@ -229,7 +243,7 @@ impl NativeFsView {
         mountpoint: &Path,
         lifetime: Duration,
     ) -> Result<Self, String> {
-        Self::create_inner(owner, browse_root, mountpoint, lifetime, false, None)
+        Self::create_inner(owner, browse_root, mountpoint, lifetime, false, None, None)
     }
 
     #[cfg(test)]
@@ -247,37 +261,25 @@ impl NativeFsView {
             lifetime,
             false,
             Some(session.clone()),
+            None,
         )
     }
 
     pub(crate) fn create_home_metadata(
-        owner: u32,
-        home: &Path,
+        source: &MetadataRoot,
         mountpoint: &Path,
-        identity: (u64, u64),
         ceiling: Instant,
     ) -> Result<Self, String> {
-        let authenticated = crate::paths::verified_home_for_uid(owner)?
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
-        if authenticated != home {
-            return Err("metadata source differs from authenticated owner Home".into());
-        }
         let lifetime = ceiling
             .saturating_duration_since(Instant::now())
             .min(Duration::from_secs(10));
         if lifetime < Duration::from_millis(250) {
             return Err("Home metadata consent is expiring".into());
         }
-        let view = Self::create_inner(owner, home, mountpoint, lifetime, true, None)?;
-        let actual = view
-            .shared
-            .root
-            .metadata()
-            .map_err(|error| error.to_string())?;
-        if (actual.dev(), actual.ino()) != identity {
-            return Err("authenticated Home identity changed after window consent".into());
-        }
+        let view = Self::create_inner(
+            source.owner, &source.home_path, mountpoint, lifetime, true, None,
+            Some(source.try_clone()?),
+        )?;
         view.shared
             .expiry
             .lock()
@@ -331,6 +333,7 @@ impl NativeFsView {
         lifetime: Duration,
         metadata_only: bool,
         session: Option<crate::session::SessionId>,
+        metadata_root: Option<MetadataRoot>,
     ) -> Result<Self, String> {
         if unsafe { libc::geteuid() } != 0
             || owner == 0
@@ -350,6 +353,9 @@ impl NativeFsView {
         if metadata_only && session.is_some() {
             return Err("metadata views cannot enable writes".into());
         }
+        if metadata_only != metadata_root.is_some() {
+            return Err("metadata views require their authenticated pinned directory scope".into());
+        }
         Self::retry_pending(Instant::now() + Duration::from_secs(3))?;
         let controller = ProcessIdentity::current().map_err(|error| error.to_string())?;
         let owner_home = crate::paths::verified_home_for_uid(owner)?;
@@ -357,7 +363,13 @@ impl NativeFsView {
             .canonicalize()
             .map_err(|error| error.to_string())?;
         crate::worker::derive::reject_forbidden_for_owner(&root_path, &owner_home)?;
-        let root = {
+        let root = if let Some(source) = &metadata_root {
+            source.revalidate()?;
+            if source.owner != owner || source.home_path != root_path {
+                return Err("metadata source differs from its authenticated Home binding".into());
+            }
+            source.home.try_clone().map_err(|error| error.to_string())?
+        } else {
             let _identity = FsIdentityGuard::enter(owner)?;
             OpenOptions::new()
                 .read(true)
@@ -402,6 +414,7 @@ impl NativeFsView {
                 ceiling: Instant::now() + lifetime,
             }),
             metadata_only,
+            metadata_root,
             binding: Mutex::new(None),
             #[cfg(test)]
             chosen: Mutex::new(Vec::new()),

@@ -22,9 +22,15 @@ existing regular files, never a directory, delete right or executable.
 All choices expire with the nonrenewable view lease (at most five minutes).
 These content APIs are private test-build APIs, not a frozen contract.
 
-The production entry is `create_home_metadata`: its source must be the
-authenticated NSS owner Home and match the Home inode included in the protected
-window decision. Its process/cgroup binding is one-use. `renew_home_metadata`
+The production entry is `create_home_metadata`: its `MetadataRoot` source
+retains the authenticated NSS owner Home plus one exact, no-follow directory
+descriptor beneath it, matching both inode identities in the protected window
+decision. A full-Home view uses an empty relative prefix. A subroot view's inode 1
+is that declared directory, while every node and selected-file candidate keeps
+its authenticated Home-relative name (for example `Projects/review/leaf`).
+Only descriptor IO strips that prefix; it never becomes the authorization path.
+Open/walk and protected-object checks independently refuse outside that root.
+Its process/cgroup binding is one-use. `renew_home_metadata`
 is controller-only, requires a live bound instance, lasts at most two seconds
 and cannot cross the original consent's monotonic ceiling. The GUI controller
 performs fresh grant, package, parent, owner policy and consent-generation
@@ -102,6 +108,17 @@ or discarded operations do not refund these conservative lifetime budgets.
 At most 256 owner mutation attempts may prepare canonical inverse records;
 failed starts cannot grow an unbounded snapshot/inode log.
 
+`metadata_scope.rs` pins and revalidates the authenticated Home/directory pair.
+Every authority-bearing native operation, including retained directory/file or
+private-scratch handles, passes the shared live gate. That gate freshly walks
+authenticated Home to the literal root under owner credentials and checks owner
+access, no-follow paths, protection and retained endpoint identities. Failure
+latches across all source clones and revokes the view; restoring paths or modes
+cannot revive the window. Health, renewal and independent custody monitoring use
+the same gate, including when no App IO reaches FUSE. Cleanup-only releases,
+stop and checked retirement do not depend on source validity. This fences and
+retires held descriptors/mappings; it cannot erase already-read cached bytes or
+validate individual memory loads.
 `mod.rs` owns the private FUSE connection/mount, monotonic expiry, worker health
 and checked process/mount/thread retirement. `backend.rs` separates native
 lookup/stat/readdir from independently selected binary reads and writes.
@@ -253,8 +270,11 @@ Unavailable FUSE, namespaces or cgroup facilities fail this explicit fixture.
 ## Common GUI Home metadata
 
 The signed selected surface must have an explicit, unconditional mandatory
-`fs.meta` Home-recursive need, using `owner-path: "**"` or the exact canonical
-absolute Home-recursive scope. Legacy operation unions and broad inherited
+`fs.meta` recursive directory need, using `owner-path: "**"`, one literal
+owner-relative `subdirectory/**`, or the exact canonical absolute equivalent.
+Bare directories, missing/non-directory roots, aliases, protected roots and
+multiple distinct metadata views refuse; there is no raw Home-child fallback.
+Legacy operation unions and broad inherited
 parent rights are not window consent. The Host files an ordinary protected
 exact-owner approval under this unique GUI session and an operation digest of
 the registered window, display epoch, surface, launcher and Home identity.
@@ -289,6 +309,13 @@ already-inherited broad Home filesystem rights. It uses the actual Rust SDK,
 normal protected terminal review/Root decision, non-UTF8 binary IO/seek/mmap,
 unselected siblings and checked independent read revocation. None of those
 capability descriptions selects content before the exact file decision.
+
+The generic subroot GUI fixture additionally requires real FUSE at inode 1,
+independent panel admission, protected-name filtering, no parent/sibling metadata,
+unknown-node refusal, an exact owner-window metadata decision and a separate
+selected read whose Home-relative target differs from a same-named Home file.
+It checks the source filesystem's capacity and checked whole-instance retirement.
+These added source regressions still require actual Linux execution.
 
 Actual Linux acceptance of production selected reads/writes/reserved saves,
 watch integration, complete

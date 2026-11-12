@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::caps::{Cap, Scope, Verb};
+use crate::caps::{Cap, Verb};
 use crate::clawd::app_sessions::gui::{kernel_peer, Registration};
 use crate::clawd::authority::{self, Audience, Decision, GrantId, GrantView, Presentation};
 use crate::clawd::client_identity::ClientIdentity;
@@ -246,6 +246,7 @@ pub(super) struct SelectedReads {
     containment: InstanceProcess,
     group: std::os::fd::OwnedFd,
     provider: ReadProvider,
+    metadata_cap: Cap,
     metadata_ceiling: Instant,
     gui: GrantId,
     gui_generation: u64,
@@ -264,6 +265,7 @@ impl SelectedReads {
         process: ProcessIdentity,
         group: std::os::fd::OwnedFd,
         provider: ReadProvider,
+        metadata_cap: Cap,
         metadata_ceiling: Instant,
         gui: &GrantView,
     ) -> Result<Arc<Self>, String> {
@@ -274,6 +276,9 @@ impl SelectedReads {
         .map_err(|error| error.to_string())?;
         if process.uid() != registration.owner()
             || gui.subject.app_id.as_deref() != Some(registration.launch.app_id())
+            || metadata_cap.verb != Verb::FS_META
+            || !gui.caps.iter().any(|cap| cap == &metadata_cap)
+            || !registration.caps.iter().any(|cap| cap == &metadata_cap)
         {
             return Err("selected read endpoint has another GUI identity".into());
         }
@@ -284,6 +289,7 @@ impl SelectedReads {
             containment,
             group,
             provider,
+            metadata_cap,
             metadata_ceiling,
             gui: gui.id,
             gui_generation: gui.generation,
@@ -359,11 +365,7 @@ impl SelectedReads {
         {
             return Err("selected read request is outside this exact GUI instance".into());
         }
-        let meta = Cap::new(
-            Verb::FS_META,
-            Scope::path(format!("{}/**", self.registration.home.display())),
-        );
-        let _authorized = authority.require(meta)?;
+        let _authorized = authority.require(self.metadata_cap.clone())?;
         self.fresh()?;
         Ok(())
     }

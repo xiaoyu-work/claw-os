@@ -64,6 +64,7 @@ impl FileCandidate {
 
     pub(crate) fn require_inverse_path(&self) -> Result<(), String> {
         let view = self.view.upgrade().ok_or("native view has retired")?;
+        view.live().map_err(|_| "native view source or lease ended")?;
         if view.root_path.join(&self.relative).to_str().is_none() {
             return Err("native write inverse requires a UTF-8 target; byte identity is never converted lossily".into());
         }
@@ -96,6 +97,7 @@ impl FileCandidate {
 
     pub(crate) fn display(&self) -> Result<String, String> {
         let view = self.view.upgrade().ok_or("native view has retired")?;
+        view.live().map_err(|_| "native view source or lease ended")?;
         let mut display = String::new();
         for byte in view.root_path.join(&self.relative).as_os_str().as_bytes() {
             if (0x20..=0x7e).contains(byte) && !matches!(*byte, b'\\' | b'"' | b'\'') {
@@ -116,6 +118,7 @@ impl FileCandidate {
 
     pub(crate) fn health_validate(&self) -> Result<(), String> {
         let view = self.view.upgrade().ok_or("native view has retired")?;
+        view.live().map_err(|_| "native view source or lease ended")?;
         let _serial = match view.effects.try_lock() {
             Ok(serial) => serial,
             Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
@@ -177,6 +180,8 @@ impl ReadPermit {
         {
             return Err("selected read requires a spent ordinary read authority proof".into());
         }
+        candidate.view.upgrade().ok_or("native view has retired")?
+            .live().map_err(|_| "native view source or lease ended")?;
         check.require()?;
         candidate.revalidate()?;
         Ok(Self {
@@ -269,6 +274,7 @@ impl ReadProvider {
     pub(crate) fn install(&self, selection: &str, permit: ReadPermit) -> Result<(), String> {
         let shared = self.shared.upgrade().ok_or("native view has retired")?;
         shared.controller()?;
+        shared.live().map_err(|_| "native view source or lease ended")?;
         let candidate_view = permit
             .candidate
             .view
@@ -385,6 +391,7 @@ impl ReadProvider {
 
     pub(crate) fn check_histories(&self) -> Result<(), String> {
         let shared = self.shared.upgrade().ok_or("native view has retired")?;
+        shared.live().map_err(|_| "native view source or lease ended")?;
         let _serial = match shared.effects.try_lock() {
             Ok(serial) => serial,
             Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
