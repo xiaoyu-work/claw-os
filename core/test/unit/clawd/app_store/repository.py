@@ -154,7 +154,7 @@ def run(*arguments, cwd=BASE, input=None):
     return result.stdout
 
 
-def repository():
+def repository(*, native_package=False):
     require_private_mounts()
     for directory in (
         "/var/lib/dpkg/info", "/var/lib/dpkg/updates", "/var/lib/dpkg/triggers",
@@ -199,7 +199,7 @@ def repository():
             "Maintainer: Private Acceptance <noreply@fixture.invalid>\n"
             f"{dependency}Description: Isolated signed App delivery acceptance fixture\n"
         )
-        if package == SIDE_EFFECT:
+        if package == SIDE_EFFECT and not native_package:
             postinst = control / "postinst"
             postinst.write_text(
                 "#!/bin/sh\nset -eu\n"
@@ -287,9 +287,12 @@ if __name__ == "__main__":
         isolate()
     elif sys.argv[1:] == ["repository"]:
         repository()
+    elif sys.argv[1:] == ["repository-native-package"]:
+        # Preserve the original SIDE_EFFECT postinst/quarantine acceptance.
+        repository(native_package=True)
     elif sys.argv[1:] == ["serve"]:
         serve()
     elif sys.argv[1:] == ["update"]:
         update()
     else:
-        raise SystemExit("usage: repository.py {isolate|repository|serve|update}")
+        raise SystemExit("usage: repository.py {isolate|repository|repository-native-package|serve|update}")

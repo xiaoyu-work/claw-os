@@ -4,6 +4,8 @@
 #[path = "../../selection-read/tests/support/client.rs"]
 mod client;
 
+mod package_probe;
+
 use client::{Peer, Protocol, read_pipe};
 use smithay::wayland::selection::SelectionTarget;
 use std::{
@@ -967,6 +969,7 @@ fn main() {
         "metadata" => home_metadata(),
         "selected-read" => selected_read(),
         "selected-write" => selected_write(),
+        "package" => package_probe::run(),
         _ => panic!("unknown private GUI probe mode"),
     }
     println!(

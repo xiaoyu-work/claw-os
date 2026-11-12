@@ -7,12 +7,15 @@ if [[ $# == 15 ]]; then
         --session-startup-only) selection=startup ;;
         --file-manager-only) selection=file-manager ;;
         --native-fs-only) selection=native-fs ;;
+        --native-package-only) selection=native-package ;;
         *) exit 64 ;;
     esac
     set -- "${@:1:14}"
 fi
 [[ "$EUID" == 0 && ( $# == 6 || $# == 14 ) ]] || exit 64
-[[ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)" ]] || exit 64
+if [[ "$selection" != native-package ]]; then
+    [[ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)" ]] || exit 64
+fi
 registry=$(realpath -- "$1")
 host=$(realpath -- "$2")
 compositor=$(realpath -- "$3")
@@ -22,7 +25,9 @@ private=$(realpath -- "$6")
 gui=0
 if [[ $# == 14 ]]; then
     gui=1
-    [[ "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)" ]] || exit 64
+    if [[ "$selection" != native-package ]]; then
+        [[ "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)" ]] || exit 64
+    fi
     cos=$(realpath -- "$7")
     gui_runner=$(realpath -- "$8")
     app_runner=$(realpath -- "$9")
@@ -38,12 +43,17 @@ fi
 [[ -x "$registry" && -x "$host" && -x "$compositor" && -f "$pam_module" ]] || exit 64
 [[ -x "$pam_fixture" && -d "$private" && "$private" != / ]] || exit 64
 mount --make-rprivate /
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/lib
-mkdir "$private/usr-upper" "$private/usr-work"
-mount -t overlay overlay \
-    -o "lowerdir=/usr,upperdir=$private/usr-upper,workdir=$private/usr-work" /usr
-if [[ "$gui" == 1 ]]; then
+if [[ "$selection" == native-package ]]; then
+    package_setup=$(realpath -- core/test/unit/clawd/server/gui_fixture/package_setup.py)
+    /usr/bin/python3 -I -B "$package_setup" isolate
+else
+    mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+    mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /var/lib
+    mkdir "$private/usr-upper" "$private/usr-work"
+    mount -t overlay overlay \
+        -o "lowerdir=/usr,upperdir=$private/usr-upper,workdir=$private/usr-work" /usr
+fi
+if [[ "$gui" == 1 && "$selection" != native-package ]]; then
     mkdir "$private/etc-upper" "$private/etc-work"
     mount -t overlay overlay \
         -o "lowerdir=/etc,upperdir=$private/etc-upper,workdir=$private/etc-work" /etc
@@ -64,9 +74,15 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$gui_runner" /usr/local/bin/claw-gui-runner
     install -m0755 "$app_runner" /usr/local/bin/claw-app-runner
     install -m0755 "$session" /usr/local/bin/claw-display-session
-    install -m0755 "$cosmic_session" /usr/bin/cosmic-session
-    install -m0755 "$file_manager" /usr/lib/cos/bin/claw-file-manager
-    install -Dm0644 "$file_manager_autostart" /etc/xdg/autostart/claw-file-manager.desktop
+    if [[ "$selection" != native-package ]]; then
+        install -m0755 "$cosmic_session" /usr/bin/cosmic-session
+        install -m0755 "$file_manager" /usr/lib/cos/bin/claw-file-manager
+        install -Dm0644 "$file_manager_autostart" /etc/xdg/autostart/claw-file-manager.desktop
+    else
+        install -m0755 "${COS_APP_APT_TEST_HOOK:?matching compiled APT helper}" /usr/lib/cos/bin/claw-app-apt-hook
+        install -m0755 "${COS_APP_APT_TEST_HOST:?matching compiled App Host}" /usr/local/bin/claw-extension-host
+        install -m0644 tools/app_apt_metadata.py /usr/lib/cos/app-apt-metadata.py
+    fi
     install -m0755 "$probe" /usr/lib/cos/bin/claw-gui-probe
     install -m0755 "$pam_fixture" /usr/lib/cos/bin/pam-login-fixture
     install -d -m0755 /usr/lib/cos/apps /usr/lib/cos/trust/publishers.d
@@ -82,6 +98,9 @@ hash=$(printf '%s\n' 'private-disposable-display-fixture-password' | openssl pas
 printf 'root:!:20000:0:99999:7:::\nclaw-display-test:%s:20000:0:99999:7:::\nclaw-display-other:!:20000:0:99999:7:::\n' "$hash" \
     >"$private/shadow"
 chmod 0600 "$private/shadow"
+if [[ "$selection" == native-package ]]; then
+    /usr/bin/python3 -I -B "$package_setup" accounts "$private"
+fi
 mount --bind "$private/passwd" /etc/passwd
 mount --bind "$private/group" /etc/group
 mount --bind "$private/shadow" /etc/shadow
@@ -197,14 +216,25 @@ BUS
         startup) fixture_test=clawd::server::gui_fixture::private_session_startup_failure ;;
         file-manager) fixture_test=clawd::server::gui_fixture::private_file_manager_session ;;
         native-fs) fixture_test=clawd::server::gui_fixture::private_native_fs_kernel ;;
+        native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
     listing=$("$registry" --list)
     grep -Fx "$fixture_test: test" <<< "$listing" >/dev/null
+    if [[ "$selection" == native-package ]]; then
+        grep -Fx 'clawd::server::gui_fixture::package::private_native_package_owner: test' <<< "$listing" >/dev/null
+    fi
     grep -Fx 'clawd::server::gui_fixture::file_manager::private_file_manager_client: test' \
         <<< "$listing" >/dev/null
-    "$registry" --exact "$fixture_test" \
-        --ignored --nocapture --test-threads=1 || result=$?
-    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..21} session-startup file-manager; do
+    if [[ "$selection" == native-package ]]; then
+        # PID 1 supervises; authenticated Root providers require pid > 1.
+        "$registry" --exact "$fixture_test" --ignored --nocapture --test-threads=1 &
+        registry_pid=$!
+        wait "$registry_pid" || result=$?
+        registry_pid=
+    else
+        "$registry" --exact "$fixture_test" --ignored --nocapture --test-threads=1 || result=$?
+    fi
+    for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..22} session-startup file-manager; do
         if [[ -f "/run/gui-fixture/pam-$case.log" ]]; then
             cp "/run/gui-fixture/pam-$case.log" "$private/pam-$case.log"
             if [[ "$result" != 0 ]]; then cat "$private/pam-$case.log" >&2; fi

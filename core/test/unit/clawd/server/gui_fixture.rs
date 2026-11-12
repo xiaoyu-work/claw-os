@@ -11,6 +11,10 @@ use claw_display_control::ProcessIdentity;
 
 const OWNER: u32 = 62050;
 
+mod package {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/clawd/server/gui_fixture/package.rs"));
+}
+
 mod file_manager {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -86,7 +90,7 @@ fn status(channel: &OwnedFd, pam: &Child, deadline: Instant) -> [u8; 4] {
     bytes[..4].try_into().unwrap()
 }
 
-fn install_packages() {
+fn install_packages(package_only: bool) {
     use crate::provenance::{
         envelope::PackageKind,
         sign::{self, SignRequest, SigningKeyFile},
@@ -195,6 +199,19 @@ fn install_packages() {
                     {"verb":"fs.write","scope":{"kind":"owner-path","path":"**"},"why":{"en":"Write or atomically replace one owner-selected file"}}
                 ]
             });
+            if package_only {
+                let optional = [
+                    "claw-app-acceptance-support", "claw-package-acceptance-side-effect",
+                    "claw-native-package-unused", "claw-native-package-pending",
+                ].into_iter().map(|name| serde_json::json!({
+                    "verb":"sys.package", "scope":{"kind":"fixed","scope":{"kind":"name","value":name}},
+                    "why":{"en":"Request this exact private Debian target through protected Critical OS review"}
+                })).collect::<Vec<_>>();
+                desktop["entries"]["package"] = serde_json::json!({
+                    "entry":"gui-probe", "exec":"surface", "name":{"en":"Private retained package handoff"},
+                    "needs":[], "optional_needs":optional,
+                });
+            }
             for (name, label, surface_needs) in [
                 ("read", "Private read-only selection", vec![needs[0].clone(), selection[0].clone()]),
                 ("write", "Private write-only selection", vec![needs[0].clone(), selection[1].clone()]),
@@ -277,6 +294,7 @@ fn install_packages() {
         .unwrap();
         crate::approvals::system_review::decide(OWNER, &review.id, true, Some(&package)).unwrap();
     }
+    if package_only { package::install_denied_app(&key); }
 }
 
 fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
@@ -1843,11 +1861,19 @@ fn private_native_fs_kernel() {
 }
 
 fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
+    private_gui_fixture_selected(session_only, file_manager_only, false);
+}
+
+fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, package_only: bool) {
     assert_eq!(unsafe { libc::geteuid() }, 0);
-    assert_ne!(
-        std::fs::read_link("/proc/self/ns/mnt").unwrap(),
-        std::fs::read_link("/proc/1/ns/mnt").unwrap()
-    );
+    if package_only {
+        package::require_namespaces();
+    } else {
+        assert_ne!(
+            std::fs::read_link("/proc/self/ns/mnt").unwrap(),
+            std::fs::read_link("/proc/1/ns/mnt").unwrap()
+        );
+    }
     assert_eq!(
         std::fs::read("/run/gui-fixture/isolated").unwrap(),
         b"private-v1"
@@ -1863,7 +1889,8 @@ fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
     crate::storage::harden_clawd_runtime().unwrap();
     crate::storage::harden_clawd_state().unwrap();
     runtime_layout();
-    install_packages();
+    install_packages(package_only);
+    let _package_repository = package_only.then(package::Repository::start);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -1872,6 +1899,7 @@ fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
     runtime.block_on(async {
         let state = DaemonState::try_new().unwrap();
         let admission = Admission::new(Limits::default());
+        let _package_custody = package_only.then(|| package::custody(&state, &admission));
         let _manager = crate::clawd::gui::Manager::start(state.clone(), admission.clone()).unwrap();
         let _registry = crate::display_session::registry::Registry::start().unwrap();
         let socket = Path::new("/run/cos/clawd.sock");
@@ -1893,7 +1921,10 @@ fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
         assert!(path.starts_with("/sys/fs/cgroup/claw-display-fixture."));
         let root = Path::new(path);
         std::fs::write(root.join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
-        if !session_only && !file_manager_only {
+        if package_only {
+            package::run(&session_group(root, "22")).await;
+        }
+        if !package_only && !session_only && !file_manager_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
             for case in 0..22 {
@@ -1901,10 +1932,10 @@ fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
                 run_case(case, &group).await;
             }
         }
-        if !session_only {
+        if !package_only && !session_only {
             file_manager::run(root).await;
         }
-        if !file_manager_only {
+        if !package_only && !file_manager_only {
             session_startup_failure(root);
         }
         server.abort();

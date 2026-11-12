@@ -278,6 +278,18 @@ display() {
     cargo build -p cos --locked --bin cos --bin claw-display-host \
         --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
         --bin claw-file-manager
+    if [[ "$selection" == native-package ]]; then
+        local program
+        for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare bwrap setfacl; do
+            command -v "$program" >/dev/null
+        done
+        python3 -I -c 'import apt_pkg'
+        cargo build -p cos --locked --bin claw-app-apt-hook --bin claw-extension-host
+        cargo test -p cos --lib --locked -- native_package_window \
+            operation_bound_grant_sets_preserve_digest_bounds_and_atomicity \
+            issuance_never_extends_a_fixed_operation_deadline \
+            --test-threads=1
+    fi
     cargo test -p cos --bin claw-file-manager --locked -- --test-threads=1
     cargo build -p claw-display-login --locked
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
@@ -304,14 +316,24 @@ display() {
         selectors=(--native-fs-only)
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
+    elif [[ "$selection" == native-package ]]; then
+        selectors=(--native-package-only)
     fi
     local fixture_timeout=240
     if [[ "$selection" == display ]]; then
         # The full lane includes separate protected metadata and content cases.
         fixture_timeout=360
     fi
-    sudo timeout "$fixture_timeout" unshare --mount --net --ipc --uts --fork \
-        bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
+    local isolated=(sudo timeout "$fixture_timeout" unshare --mount --net --ipc --uts --fork)
+    if [[ "$selection" == native-package ]]; then
+        isolated=(sudo timeout --kill-after=5 "$fixture_timeout" unshare --mount --pid --net --ipc --uts --fork --mount-proc --kill-child=KILL
+            env "COS_APP_APT_PARENT_MNT=$(readlink /proc/self/ns/mnt)"
+                "COS_APP_APT_PARENT_PID=$(readlink /proc/self/ns/pid)"
+                "COS_APP_APT_PARENT_NET=$(readlink /proc/self/ns/net)"
+                "COS_APP_APT_TEST_HOOK=$CARGO_TARGET_DIR/debug/claw-app-apt-hook"
+                "COS_APP_APT_TEST_HOST=$CARGO_TARGET_DIR/debug/claw-extension-host")
+    fi
+    "${isolated[@]}" bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
         "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
         "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
         "$CARGO_TARGET_DIR/debug/libpam_claw_display.so" \
@@ -411,9 +433,10 @@ case "${1:-}" in
     display) display ;;
     native-fs) display native-fs ;;
     file-manager) display file-manager ;;
+    native-package) display native-package ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|applets}" >&2
         exit 2
         ;;
 esac
