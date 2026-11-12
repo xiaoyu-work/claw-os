@@ -296,17 +296,34 @@ pub(super) async fn run(
     assert_eq!(mutations.len(), 1);
     assert!(matches!(&mutations[0].mutation,
         crate::session::Mutation::FsWrite { path: written, prev_blob: None } if Path::new(written) == path));
-    let projection = context
-        .clone()
-        .scope_sync(|| {
-            crate::session::journal::projection::build(
-                &crate::session::journal::Partition::Session(journal.clone()),
-                OWNER,
-            )
-        })
-        .unwrap();
-    assert!(projection.health.is_verified());
-    assert_eq!(projection.mutations.len(), 1);
+    let projection = loop {
+        native_process(
+            retained,
+            process,
+            "canonical actual Editor Save As completion",
+        );
+        if Instant::now() >= deadline {
+            driver
+                .fail("actual Editor Save As canonical completion")
+                .await;
+        }
+        let projection = context
+            .clone()
+            .scope_sync(|| {
+                crate::session::journal::projection::build(
+                    &crate::session::journal::Partition::Session(journal.clone()),
+                    OWNER,
+                )
+            })
+            .unwrap();
+        assert!(projection.health.is_verified());
+        assert_eq!(projection.mutations.len(), 1);
+        if projection.mutations[0].status == "committed" {
+            break projection;
+        }
+        assert_eq!(projection.mutations[0].status, "started");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(projection.mutations[0].status, "committed");
     assert_eq!(
         projection.mutations[0].session_mutation,
