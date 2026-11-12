@@ -2,8 +2,9 @@
 
 The Linux production provider defaults to a read-only Home metadata view in
 the common authenticated GUI Host. Its bounded content operations are separately
-owner-approved regular-file reads/writes and a Root-reserved replacement of an
-already selected existing writable file. Watch, direct prototype selectors and
+owner-approved regular-file reads/writes, a Root-reserved replacement of an
+already selected existing writable file and the separate bounded absent-child
+creation contract below. Watch, direct prototype selectors and
 mutation fault injectors remain `cfg(test)`; directory creation/delete/general
 rename are not implemented. This is not a public App mount API, frozen SDK contract or
 completed `controlled_full` filesystem. A Root controller supplies explicit
@@ -178,9 +179,10 @@ Native pwrite/append/truncate/fsync use the selected file and owner credentials.
 Writable FUSE handles use direct IO; writeback and writable mmap cannot bypass
 the mutation brackets. The mount remains `nosuid,nodev,noexec`, and resource
 execute bits are never exposed. `fs.write` does not become `fs.delete` or
-`fs.exec`: unlink/rmdir of owner content, general moves/renames, new owner-file
-creation, arbitrary writable siblings and writable directory selection remain
-unsupported.
+`fs.exec`: unlink/rmdir of owner content, general moves/renames, unselected
+owner-file creation, arbitrary writable siblings and writable directory
+selection remain unsupported. An absent child requires the independent
+one-shot creation selection below, never an existing-file write lease.
 
 For atomic save Root reserves one opaque, same-parent temporary name for one
 already selected target. Only that exact name can be created as private bounded
