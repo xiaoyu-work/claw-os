@@ -117,6 +117,10 @@ raw directory or inventing a selected-content grant.
 
 A protected outer setup gate lets Root bind the exact normal-UID runner and
 checked instance cgroup before bubblewrap can inspect the FUSE source.
+Owner-Home metadata subroots such as `Desktop/**` remain unsupported. Without
+the exact filtered Home view, Home-child metadata scopes refuse before mount
+derivation; they neither become readable raw binds nor request broader Home
+consent. A separate `ui.panel` declaration changes no filesystem eligibility.
 Releasing setup does not release App code: the existing inner App gate still
 waits for transport, live grant and creator installation. Every metadata lease
 renewal follows a fresh registration snapshot and exact window-consent check;
