@@ -260,6 +260,14 @@ fn raw_mount_caps(home: &Path, caps: &CapSet, metadata_view: bool) -> Result<Cap
     let text = home.to_str().ok_or("GUI Home is not UTF-8")?;
     let scope = Scope::path(format!("{}/**", text.trim_end_matches('/')));
     let bare = Scope::path(text);
+    if !metadata_view && caps.iter().any(|cap| {
+        cap.verb == Verb::FS_META
+            && cap.scope != scope
+            && cap.scope != bare
+            && beneath_home(&cap.scope, home)
+    }) {
+        return Err("GUI metadata subroots require an authenticated filtered view, never a raw Home-child bind".into());
+    }
     Ok(CapSet::from_caps(
         caps
             .iter()
@@ -288,7 +296,7 @@ pub(super) fn validate_optional_mounts(
     }) {
         return Err("GUI Home resources require the filtered view, never a raw Home bind".into());
     }
-    let projected = if controlled { raw_mount_caps(home, caps, true)? } else { caps.clone() };
+    let projected = raw_mount_caps(home, caps, controlled)?;
     let mounts = crate::worker::derive::granted_path_mounts(&projected)?;
     if mounts.iter().any(|mount| {
         matches!(mount.class, MountClass::Input | MountClass::Output)

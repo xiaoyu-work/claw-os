@@ -1883,6 +1883,35 @@ fn gui_fixed_needs_require_exact_owner_approval_before_launch() {
     assert!(gui_caps(&app, "--gui", &launcher).is_err());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn desktop_metadata_subroots_cannot_fall_back_to_raw_read_binds() {
+    let _sandbox = approval_sandbox();
+    let app = app_from(r#"{
+        "id":"native-resource-applet","version":"1","name":{"en":"Native resource applet"},
+        "desktop":{"panel_applet":true,"needs":[
+            {"verb":"fs.meta","scope":{"kind":"owner-path","path":"Desktop/**"},"why":{"en":"Desktop metadata"}},
+            {"verb":"ui.panel","scope":{"kind":"fixed","scope":{"kind":"wild"}},"why":{"en":"Panel presentation"}}
+        ],"optional_needs":[
+            {"verb":"fs.read","scope":{"kind":"owner-path","path":"Desktop/**"},"why":{"en":"Read eligibility"}},
+            {"verb":"fs.write","scope":{"kind":"owner-path","path":"Desktop/**"},"why":{"en":"Write eligibility"}},
+            {"verb":"fs.delete","scope":{"kind":"owner-path","path":"Desktop/**"},"why":{"en":"Delete eligibility"}},
+            {"verb":"fs.watch","scope":{"kind":"owner-path","path":"Desktop/**"},"why":{"en":"Watch eligibility"}}
+        ]},
+        "operations":{"inspect":{"label":{"en":"Inspect"},"needs":[]}}
+    }"#);
+    for relative in ["Desktop", "Desktop/**"] {
+        let caps = CapSet::from_caps([
+            Cap::new(Verb::FS_META, Scope::path(home().join(relative).to_str().unwrap())),
+            Cap::new(Verb::UI_PANEL, Scope::Wild),
+        ]);
+        assert!(
+            crate::clawd::gui::validate_optional_mounts(&app, None, &home(), &caps).is_err(),
+            "an unsupported metadata subroot must refuse even before its path exists"
+        );
+    }
+}
+
 #[test]
 fn gui_wildcard_need_never_inherits_unbounded_authority() {
     let delegation = delegation(CapSet::from_caps([Cap::new(Verb::FS_META, Scope::Wild)]));

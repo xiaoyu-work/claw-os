@@ -193,6 +193,7 @@ def repository(*, native_package=False):
         root = BASE / "payloads" / payload
         control = root / "DEBIAN"
         control.mkdir(mode=0o755)
+        control.chmod(0o755)
         (control / "control").write_text(
             f"Package: {package}\nVersion: {VERSION}\nArchitecture: all\n"
             "Section: misc\nPriority: optional\n"
