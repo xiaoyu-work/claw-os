@@ -249,6 +249,113 @@ fn native_process(retained: &RetainedInstance, editor: &EditorProcess, stage: &s
     assert_eq!((running.dev(), running.ino()), editor.inode);
 }
 
+fn launcher_output_tail() -> std::io::Result<serde_json::Value> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const LIMIT: u64 = 16384;
+    let mut file = std::fs::File::open("/run/gui-fixture/pam-native-editor.log")?;
+    let length = file.metadata()?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(LIMIT)))?;
+    let mut bytes = Vec::new();
+    file.take(LIMIT).read_to_end(&mut bytes)?;
+    Ok(serde_json::json!({
+        "untrusted_ordinary_launcher_output": String::from_utf8_lossy(&bytes),
+        "log_bytes": length, "tail_truncated": length > LIMIT,
+    }))
+}
+
+async fn renderer_failure(
+    control: &OwnedFd,
+    pam: &mut Child,
+    retained: &RetainedInstance,
+    editor: &EditorProcess,
+    session: &str,
+    stage: &str,
+) -> ! {
+    let original = diagnostic(stage);
+    let window = claw_display_control::Epoch(retained.instance.0).label();
+    let pending = crate::approvals::list_pending_for_owner(Some(OWNER))
+        .into_iter()
+        .filter(|request| {
+            request.verb == "fs.read" && request.session.starts_with(&format!("gui-read-{window}-"))
+        })
+        .count();
+    eprintln!(
+        "private actual Editor renderer failure before cleanup {}",
+        serde_json::json!({
+            "stage": stage, "readiness_gate_failed": true, "window": window,
+            "pending_read_reviews": pending, "witness": observe(),
+        })
+    );
+
+    // Keep the broker alive until the ordinary owner CLI can receive its checked outcome.
+    let stopped = tokio::time::timeout(
+        Duration::from_secs(5),
+        crate::clawd::client::request(
+            "/run/cos/clawd.sock",
+            crate::clawd::wire::Request::new(
+                crate::clawd::routes::Command::PermissionRevoke,
+                serde_json::json!({"owner_uid": OWNER, "session": session}),
+            ),
+        ),
+    )
+    .await;
+    let (revoked, error) = match stopped {
+        Ok(Ok(reply)) if reply.ok => (true, None),
+        Ok(Ok(reply)) => (false, Some(format!("{:?}", reply.error))),
+        Ok(Err(error)) => (false, Some(error.to_string())),
+        Err(_) => (
+            false,
+            Some("checked failure retirement deadline".to_string()),
+        ),
+    };
+    let host_exited =
+        claw_display_control::identity::pidfd_exited(retained.process.as_fd()).unwrap();
+    let editor_exited = claw_display_control::identity::pidfd_exited(editor.pidfd.as_fd()).unwrap();
+    let group_deleted = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()))
+        .unwrap()
+        .as_os_str()
+        .as_encoded_bytes()
+        .ends_with(b" (deleted)");
+    let runtime = Path::new("/run/cos/gui").join(&window);
+    let mountpoint = runtime.join("home-metadata");
+    let runtime_removed = !runtime.exists()
+        && !mountpoint.exists()
+        && !std::fs::read_to_string("/proc/self/mountinfo")
+            .unwrap()
+            .lines()
+            .any(|line| line.split_whitespace().nth(4) == mountpoint.to_str());
+    let retired = revoked && host_exited && editor_exited && group_deleted && runtime_removed;
+    let mut report = serde_json::json!({
+        "stage": stage, "checked_retired": retired, "retirement_error": error,
+        "host_exited": host_exited, "editor_exited": editor_exited,
+        "group_deleted": group_deleted, "runtime_removed": runtime_removed,
+    });
+    if retired {
+        command(control, b"WAIT");
+        let ended = status(control, pam, Instant::now() + Duration::from_secs(5));
+        report["launcher_status"] = String::from_utf8_lossy(&ended).into_owned().into();
+        report["ordinary_output_after_checked_retirement"] = launcher_output_tail()
+            .unwrap_or_else(|error| serde_json::json!({"unavailable": error.to_string()}));
+        command(control, b"CLSE");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pam_end = loop {
+            if let Some(ended) = pam.try_wait().unwrap() {
+                break serde_json::json!({"exited": true, "exit_code": ended.code()});
+            }
+            if Instant::now() >= deadline {
+                break serde_json::json!({"exited": false});
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        report["pam"] = pam_end;
+        report["retired_witness"] = observe().unwrap_or(serde_json::Value::Null);
+    }
+    // JSON escaping keeps captured App text inert in the CI log.
+    eprintln!("private actual Editor renderer failure after cleanup {report}");
+    panic!("{original}");
+}
+
 fn startup_authority(session: &str, parent: &str) -> (CapSet, CapSet) {
     crate::paths::RoutedPathContext::for_owner(OWNER, Path::new("/run/display-home").to_path_buf())
         .scope_sync(|| {
@@ -455,11 +562,17 @@ pub(super) async fn run(group: &std::fs::File) {
         {
             break record;
         }
-        assert!(
-            pam.try_wait().unwrap().is_none() && Instant::now() < deadline,
-            "{}",
-            diagnostic("actual xdg_toplevel configure/SHM frame and independent fs.read")
-        );
+        if pam.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+            renderer_failure(
+                &control,
+                &mut pam,
+                &retained,
+                &process,
+                &metadata.session,
+                "actual xdg_toplevel configure/SHM frame and independent fs.read",
+            )
+            .await;
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert!(
@@ -492,11 +605,17 @@ pub(super) async fn run(group: &std::fs::File) {
         }) {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "{}",
-            diagnostic("actual loaded-tab title and a newly rendered native frame")
-        );
+        if Instant::now() >= deadline {
+            renderer_failure(
+                &control,
+                &mut pam,
+                &retained,
+                &process,
+                &metadata.session,
+                "actual loaded-tab title and a newly rendered native frame",
+            )
+            .await;
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(matches!(
@@ -612,6 +731,16 @@ fn native_editor_readiness_rejects_titles_without_real_configured_pixels() {
     record["raster"] = serde_json::json!({"width": 800, "height": 600, "nonuniform_pixels": false});
     assert!(!buffered_window(&record, "window"));
     record["raster"]["nonuniform_pixels"] = true.into();
+    record["render_trace"] = serde_json::json!({
+        "top_pre_commits": 3, "top_pending_buffers": 3,
+        "top_frame_callbacks_sent": 3, "configure_acks": 1,
+    });
+    record["buffer_commits"] = 0.into();
+    assert!(
+        !buffered_window(&record, "window"),
+        "commit/callback diagnostics cannot substitute for an actual observed pixel buffer"
+    );
+    record["buffer_commits"] = 1.into();
     assert!(buffered_window(&record, "window") && loaded(&record));
     assert!(!buffered_window(&record, "another-window"));
     record["configure_acked"] = false.into();

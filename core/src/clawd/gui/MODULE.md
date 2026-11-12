@@ -244,12 +244,17 @@ window, cgroup, native provider and runtime retirement. Neither a title alone,
 SDK status nor a probe marker satisfies readiness.
 
 This is a pending clean-GHA proof, not passing product acceptance or publication.
-In particular, Editor's unconditional Unix `fork::daemon` startup currently
-conflicts with the Host's foreground-child lifetime (`Supervised::poll_exit` /
-`watch` in `supervision.rs`). The test does not suppress that exit, keep a fake
-parent alive or adopt a daemon by name. Any product lifecycle or software-renderer
-failure must be resolved separately and rerun. Save As is not exercised without
-an existing trusted UI/dialog control.
+Managed Editor foreground startup now reaches the authenticated XDG configure
+acknowledgement and its separately pending read review. First-buffer/rendering
+readiness remains a measured gate, not a missing-content-grant diagnosis.
+On a rendering deadline failure, the fixture records the original witness,
+then uses existing checked retirement before the ordinary owner CLI receives
+its normal bounded stdout/stderr outcome. Only then may a JSON-escaped 16-KiB
+launcher-log tail enter the failure diagnostic. The original 25-second readiness
+deadlines, real-buffer predicate and consent order remain unchanged; cleanup
+never turns the failed gate into success. Renderer/protocol problems require
+separate evidence, not bus/device/Home binds or forced fake parents. Save As
+is not exercised without an existing trusted UI/dialog control.
 
 Only verified committed own effects can advance matching selected resources.
 They preserve existing read consent and all original deadlines. In-place

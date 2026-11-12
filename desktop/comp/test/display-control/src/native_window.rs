@@ -7,7 +7,7 @@ use smithay::{
     utils::{Serial, Transform},
     wayland::{
         buffer::BufferHandler,
-        compositor::{BufferAssignment, SurfaceAttributes, with_states},
+        compositor::{BufferAssignment, SurfaceAttributes, add_pre_commit_hook, with_states},
         output::{OutputHandler, OutputManagerState},
         shell::xdg::{
             Configure, PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler,
@@ -25,11 +25,33 @@ use std::{
 use wayland_protocols::xdg::shell::server::xdg_toplevel;
 use wayland_server::{
     DisplayHandle, Resource,
-    protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
+    protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
 };
 
 const OBSERVER: &str = "/run/user/62050/native-editor-observer";
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Default)]
+struct FrameTrace {
+    top_pre_commits: u64,
+    top_pending_buffers: u64,
+    top_commits: u64,
+    top_current_buffers: u64,
+    other_commits: u64,
+    other_current_buffers: u64,
+    top_frame_callbacks_sent: u64,
+    other_frame_callbacks_sent: u64,
+    configure_acks: u64,
+    output_binds: u64,
+}
+
+fn buffer_kind(assignment: Option<&BufferAssignment>) -> u8 {
+    match assignment {
+        None => 0,
+        Some(BufferAssignment::NewBuffer(_)) => 1,
+        Some(BufferAssignment::Removed) => 2,
+    }
+}
 
 pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
     let marker = Path::new("/run/gui-public/native-editor-enabled");
@@ -66,6 +88,7 @@ pub struct Window {
     last: Option<serde_json::Value>,
     started: Instant,
     closed: bool,
+    trace: FrameTrace,
 }
 
 impl Window {
@@ -105,10 +128,31 @@ impl Window {
             last: None,
             started: Instant::now(),
             closed: false,
+            trace: FrameTrace::default(),
+        }
+    }
+
+    fn pre_commit(&mut self, surface: &WlSurface) {
+        if self
+            .surface
+            .as_ref()
+            .is_some_and(|top| top.wl_surface() == surface)
+        {
+            self.trace.top_pre_commits += 1;
+            with_states(surface, |states| {
+                let mut cached = states.cached_state.get::<SurfaceAttributes>();
+                if buffer_kind(cached.pending().buffer.as_ref()) == 1 {
+                    self.trace.top_pending_buffers += 1;
+                }
+            });
         }
     }
 
     pub fn commit(&mut self, surface: &WlSurface) -> Result<()> {
+        let is_top = self
+            .surface
+            .as_ref()
+            .is_some_and(|top| top.wl_surface() == surface);
         let (buffer, callbacks) = with_states(surface, |states| {
             let mut cached = states.cached_state.get::<SurfaceAttributes>();
             let current = cached.current();
@@ -118,14 +162,17 @@ impl Window {
                 std::mem::take(&mut current.frame_callbacks),
             )
         });
+        if is_top {
+            self.trace.top_commits += 1;
+            self.trace.top_current_buffers += u64::from(buffer_kind(buffer.as_ref()) == 1);
+        } else {
+            self.trace.other_commits += 1;
+            self.trace.other_current_buffers += u64::from(buffer_kind(buffer.as_ref()) == 1);
+        }
         if let Some(assignment) = buffer {
             match assignment {
                 BufferAssignment::NewBuffer(buffer) => {
-                    if self
-                        .surface
-                        .as_ref()
-                        .is_some_and(|top| top.wl_surface() == surface)
-                    {
+                    if is_top {
                         if !self.configured {
                             return Err(
                                 "native window attached pixels before configure acknowledgement"
@@ -139,15 +186,16 @@ impl Window {
                     buffer.release();
                 }
                 BufferAssignment::Removed => {
-                    if self
-                        .surface
-                        .as_ref()
-                        .is_some_and(|top| top.wl_surface() == surface)
-                    {
+                    if is_top {
                         self.raster = None;
                     }
                 }
             }
+        }
+        if is_top {
+            self.trace.top_frame_callbacks_sent += callbacks.len() as u64;
+        } else {
+            self.trace.other_frame_callbacks_sent += callbacks.len() as u64;
         }
         for callback in callbacks {
             callback.done(self.started.elapsed().as_millis() as u32);
@@ -170,6 +218,22 @@ impl Window {
                 (role.title.clone(), role.app_id.clone())
             })
         });
+        let (pending_buffer, pending_callbacks, current_buffer, current_callbacks) =
+            self.surface.as_ref().map_or((0, 0, 0, 0), |surface| {
+                with_states(surface.wl_surface(), |states| {
+                    let mut cached = states.cached_state.get::<SurfaceAttributes>();
+                    let pending = cached.pending();
+                    let pending_buffer = buffer_kind(pending.buffer.as_ref());
+                    let pending_callbacks = pending.frame_callbacks.len();
+                    let current = cached.current();
+                    (
+                        pending_buffer,
+                        pending_callbacks,
+                        buffer_kind(current.buffer.as_ref()),
+                        current.frame_callbacks.len(),
+                    )
+                })
+            });
         if title.as_ref().is_some_and(|value| value.len() > 1024)
             || app_id.as_ref().is_some_and(|value| value.len() > 1024)
         {
@@ -180,6 +244,22 @@ impl Window {
             "toplevels": usize::from(self.surface.is_some()), "configure_acked": self.configured,
             "buffer_commits": self.commits, "raster": self.raster,
             "title": title, "app_id": app_id, "closed": self.closed,
+            "render_trace": {
+                "top_pre_commits": self.trace.top_pre_commits,
+                "top_pending_buffers": self.trace.top_pending_buffers,
+                "top_commits": self.trace.top_commits,
+                "top_current_buffers": self.trace.top_current_buffers,
+                "other_commits": self.trace.other_commits,
+                "other_current_buffers": self.trace.other_current_buffers,
+                "top_frame_callbacks_sent": self.trace.top_frame_callbacks_sent,
+                "other_frame_callbacks_sent": self.trace.other_frame_callbacks_sent,
+                "configure_acks": self.trace.configure_acks,
+                "output_binds": self.trace.output_binds,
+                "pending_buffer_kind": pending_buffer,
+                "pending_frame_callbacks": pending_callbacks,
+                "current_buffer_kind": current_buffer,
+                "current_frame_callbacks": current_callbacks,
+            },
         });
         if self.last.as_ref() != Some(&record) {
             let root = Path::new(OBSERVER);
@@ -248,7 +328,13 @@ impl ShmHandler for State {
     }
 }
 
-impl OutputHandler for State {}
+impl OutputHandler for State {
+    fn output_bound(&mut self, _: Output, _: WlOutput) {
+        if let Some(window) = &mut self.native_window {
+            window.trace.output_binds += 1;
+        }
+    }
+}
 
 impl XdgShellHandler for State {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -276,6 +362,11 @@ impl XdgShellHandler for State {
             "only one actual Editor window is in scope"
         );
         window.instance = Some(instance);
+        add_pre_commit_hook::<State, _>(surface.wl_surface(), |state, _, surface| {
+            if let Some(window) = &mut state.native_window {
+                window.pre_commit(surface);
+            }
+        });
         surface.with_pending_state(|state| {
             state.size = Some((800, 600).into());
             state.states.set(xdg_toplevel::State::Activated);
@@ -295,6 +386,7 @@ impl XdgShellHandler for State {
             .is_some_and(|top| top.wl_surface() == &surface)
         {
             window.configured = true;
+            window.trace.configure_acks += 1;
         }
     }
 
