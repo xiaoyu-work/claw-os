@@ -1494,13 +1494,20 @@ impl RetainedPeer {
 
     async fn accept(&mut self, action: &str, package: &str) -> String {
         self.authorize(package);
+        let target = if action == "ensure-packages" {
+            json!({"packages": [package]})
+        } else {
+            json!({"package": package})
+        };
+        let mut params = json!({
+            "session": self.session, "action": action,
+            "invocation_id": uuid::Uuid::new_v4().simple().to_string(),
+        });
+        params.as_object_mut().unwrap().extend(target.as_object().unwrap().clone());
         let receipt = self
             .result(
                 crate::clawd::routes::Command::SystemPackageControl,
-                json!({
-                    "session": self.session, "action": action, "package": package,
-                    "invocation_id": uuid::Uuid::new_v4().simple().to_string(),
-                }),
+                params,
             )
             .await;
         assert_eq!(receipt["status"], "accepted");
@@ -2621,9 +2628,11 @@ async fn private_apt_ordinary_self_handoff_retains_receipt() {
     let mut peer = RetainedPeer::start(OWNER);
 
     // A real no-effect request must not retire either authenticated App owner.
-    let no_effect = peer.accept("install", BUNDLE).await;
+    let no_effect = peer.accept("ensure-packages", BUNDLE).await;
     let unchanged = peer.wait_phase(&no_effect, "applied").await;
     assert!(unchanged["plan"]["actions"].as_array().unwrap().is_empty());
+    assert_eq!(unchanged["plan"]["ensure"]["missing"], json!([]));
+    assert_eq!(unchanged["plan"]["ensure"]["already_present"], json!([BUNDLE]));
     assert!(unchanged["checked_retired_apps"]
         .as_array()
         .unwrap()
