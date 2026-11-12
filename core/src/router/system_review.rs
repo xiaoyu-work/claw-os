@@ -40,7 +40,7 @@ fn parse_review(value: Value) -> Result<SystemReview, String> {
     let review: SystemReview = serde_json::from_value(value)
         .map_err(|error| format!("invalid system review response: {error}"))?;
     review.validate().map_err(|error| error.to_string())?;
-    let valid_id = [("rv-", 32), ("ap-", 12)].iter().any(|(prefix, length)| {
+    let valid_id = [("rv-", 32), ("ap-", 12), ("pg-", 32)].iter().any(|(prefix, length)| {
         review.id.strip_prefix(prefix).is_some_and(|suffix| {
             suffix.len() == *length
                 && suffix
@@ -48,7 +48,9 @@ fn parse_review(value: Value) -> Result<SystemReview, String> {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
     });
-    if !valid_id || review.revision == 0 {
+    if !valid_id || review.revision == 0
+        || review.id.starts_with("pg-") != (review.kind == ReviewKind::PackageImpact)
+    {
         return Err("system review response has an invalid request identity or revision".into());
     }
     Ok(review)
