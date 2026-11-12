@@ -85,6 +85,16 @@ use crate::clawd::authority::{
 use crate::test_env::TestEnvVarGuard;
 
 fn decision(app: Option<&str>, caps: Vec<Cap>, uses: Uses, include_session: bool) -> Decision {
+    decision_for_route("system.package.control", app, caps, uses, include_session)
+}
+
+fn decision_for_route(
+    route: &'static str,
+    app: Option<&str>,
+    caps: Vec<Cap>,
+    uses: Uses,
+    include_session: bool,
+) -> Decision {
     let uid = unsafe { libc::geteuid() };
     let pid = std::process::id();
     let session = format!("package-client-{}", uuid::Uuid::new_v4().simple());
@@ -126,19 +136,107 @@ fn decision(app: Option<&str>, caps: Vec<Cap>, uses: Uses, include_session: bool
     });
     Decision::for_test(
         view,
-        "system.package.control",
+        route,
         Audience::SystemService,
         Presentation {
             uid,
             pid,
             start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
             audience: Audience::SystemService,
-            route: "system.package.control",
+            route,
             session_id: Some(session),
         },
         row,
         &Requirement::RouteDerived,
     )
+}
+
+#[test]
+fn package_queries_require_live_read_scopes_not_a_product_name_or_package_mutation_grant() {
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_CAPS_DATA_DIR", directory.path());
+    let owner = unsafe { libc::geteuid() };
+    for app in [Some("cosmic-store"), Some("independent-package-client"), None] {
+        for (body, scope) in [
+            (json!({"session": "fixture", "action": "installed"}), "packages"),
+            (json!({"session": "fixture", "action": "search", "query": "editor", "limit": 25}), "packages"),
+            (json!({"session": "fixture", "action": "show", "name": "fixture-one:amd64"}), "fixture-one:amd64"),
+        ] {
+            let request = serde_json::from_value(body).unwrap();
+            let cap = Cap::new(Verb::SYS_OBSERVE, Scope::name(scope));
+            let grant = |caps| decision_for_route(
+                "system.package.query", app, caps, Uses::Budget(1), true,
+            );
+            let allowed = grant(vec![cap.clone()]);
+            assert!(super::query::authorize(&allowed, owner + 1, &request).is_err());
+            assert_eq!(super::query::authorize(&allowed, owner, &request).unwrap().spent(), std::slice::from_ref(&cap));
+            assert!(super::query::authorize(&allowed, owner, &request).is_err());
+            for caps in [
+                Vec::new(),
+                vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware"))],
+                vec![Cap::new(Verb::SYS_PACKAGE, Scope::name(scope))],
+            ] {
+                assert!(super::query::authorize(&grant(caps), owner, &request).is_err());
+            }
+            let revoked = grant(vec![cap]);
+            authority().revoke_session(revoked.session_id().unwrap());
+            assert!(super::query::authorize(&revoked, owner, &request).is_err());
+        }
+    }
+}
+
+#[test]
+fn package_query_wire_rejects_authority_paths_mutation_actions_and_unbounded_search() {
+    let route = crate::clawd::routes::Command::SystemPackageQuery.route();
+    let body = json!({"session": "fixture", "action": "search", "query": "-oHook=id", "limit": 25});
+    let parse = |value| -> Result<Cap, String> {
+        let value = (route.decode)(value).map_err(|_| "invalid typed package query".to_string())?;
+        let request = serde_json::from_value(value).map_err(|_| "invalid package query".to_string())?;
+        super::query::required_cap(&request)
+    };
+    assert!(parse(body.clone()).is_ok());
+    for field in ["owner_uid", "path", "command", "provider", "approved", "socket", "packages", "offset"] {
+        let mut invalid = body.clone();
+        invalid[field] = json!("caller-selected");
+        assert!((route.decode)(invalid).is_err(), "{field}");
+    }
+    for (field, value) in [
+        ("action", json!("install")), ("limit", json!(0)), ("limit", json!(101)),
+        ("query", json!("")), ("query", json!("x\nid")), ("name", json!("fixture-one")),
+    ] {
+        let mut invalid = body.clone();
+        invalid[field] = value;
+        assert!(parse(invalid).is_err(), "{field}");
+    }
+    let mut too_long = body;
+    too_long["query"] = json!("x".repeat(513));
+    assert!((route.decode)(too_long).is_err());
+    for name in ["-oHook=id", "../fixture", "/local.deb", "*", "x\0y"] {
+        assert!(parse(json!({"session": "fixture", "action": "show", "name": name})).is_err());
+    }
+}
+
+#[test]
+fn package_query_projection_preserves_catalog_shapes_and_excludes_noninstalled_selections() {
+    let result = super::query::search_result("fixture", 1,
+        "fixture-one - First summary\nfixture-two - Second summary\n").unwrap();
+    assert_eq!(result["results"], json!([{"name": "fixture-one", "summary": "First summary"}]));
+    assert_eq!(result["count"], 1);
+    assert_eq!(result["truncated"], true);
+    let result = super::query::show_result("fixture-one:amd64",
+        "Package: fixture-one\nVersion: 2.0\nDescription: First summary\n Long description\nHomepage: https://example.test\n\nPackage: fixture-one\nVersion: 1.0\nDescription: Older\n").unwrap();
+    assert_eq!(result["version"], "2.0");
+    assert_eq!(result["summary"], "First summary");
+    assert_eq!(result["description"], "Long description");
+    assert!(super::query::show_result("other", "Package: fixture-one\nVersion: 2.0\n").is_err());
+    assert!(super::query::show_result("fixture-one", "").is_err());
+    let result = super::query::installed_result(
+        "fixture-one:amd64\tinstalled\t2.0\nfixture-old\tconfig-files\t1.0\nfixture-half\thalf-configured\t3.0\n",
+    ).unwrap();
+    assert_eq!(result["packages"], json!(["fixture-one:amd64"]));
+    assert_eq!(result["versions"], json!({"fixture-one:amd64": "2.0"}));
+    assert!(super::query::installed_result("malformed\n").is_err());
 }
 
 #[test]

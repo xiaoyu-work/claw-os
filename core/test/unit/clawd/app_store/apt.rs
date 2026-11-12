@@ -113,6 +113,25 @@ def run(command, args):
         return {{"fixture": True}}
     data = pathlib.Path(os.environ["COS_DATA_DIR"])
     (data / "ready.json").write_text(json.dumps({{"ready": True}}))
+    if command == "catalog":
+        queries = []
+        for args in (
+            ["search", "{BUNDLE}", "25"], ["show", "{BUNDLE}"],
+            ["installed"], ["show", "{SIDE_EFFECT}"],
+        ):
+            result = subprocess.run(
+                ["/usr/local/bin/cos", "--json", "__package_query", *args],
+                capture_output=True, text=True, timeout=25,
+            )
+            queries.append({{"args": args, "code": result.returncode,
+                            "reply": json.loads(result.stdout)}})
+        temporary = data / "queries.next"
+        temporary.write_text(json.dumps({{
+            "queries": queries,
+            "raw_dpkg_visible": pathlib.Path("/var/lib/dpkg/status").exists(),
+            "raw_apt_visible": pathlib.Path("/var/lib/apt/lists").exists(),
+        }}))
+        os.replace(temporary, data / "queries.json")
     if command == "handoff":
         while not (data / "go").exists():
             time.sleep(0.01)
@@ -194,6 +213,22 @@ for line in sys.stdin:
             "operations": {
                 "probe": {"label": {"en": "Probe"}, "needs": [], "args": []},
                 "hold": {"label": {"en": "Hold"}, "needs": [], "args": []},
+                "catalog": {
+                    "label": {"en": "Read private package metadata"},
+                    "needs": [
+                        {
+                            "verb": "sys.observe",
+                            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "packages"}},
+                            "why": {"en": "Read the private catalog and installed package list"}
+                        },
+                        {
+                            "verb": "sys.observe",
+                            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": BUNDLE}},
+                            "why": {"en": "Read only this private package's details"}
+                        }
+                    ],
+                    "args": []
+                },
                 "handoff": {
                     "label": {"en": "Remove own package"},
                     "needs": [{
@@ -1705,6 +1740,13 @@ impl OrdinaryActor {
                 crate::caps::Verb::SYS_PACKAGE,
                 crate::caps::Scope::name(BUNDLE),
             ));
+        } else if operation == "catalog" {
+            for name in ["packages", BUNDLE] {
+                caps.insert(crate::caps::Cap::new(
+                    crate::caps::Verb::SYS_OBSERVE,
+                    crate::caps::Scope::name(name),
+                ));
+            }
         }
         register_process_session(uid, child.id(), &parent, None, caps);
         child.stdin.as_mut().unwrap().write_all(&[1]).unwrap();
@@ -2453,6 +2495,71 @@ async fn private_apt_owner_withdrawal_denies_live_calls_and_retires_only_owner()
     foreign_app.assert_retired();
     owner_app.finish().await;
     foreign_app.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Root private mount/PID/network namespaces, cgroup v2, ptrace and matching COS_APP_APT_TEST_COS/RUNNER/HOOK"]
+async fn private_apt_package_queries_use_ordinary_app_custody_and_exact_read_scopes() {
+    use crate::clawd::routes::Command;
+    let _lock = crate::test_env::lock_env();
+    let fixture = Fixture::new();
+    fixture.enable_processes();
+    fixture.install_bundle().await;
+    let before = dpkg_state();
+    let mut caller = OrdinaryActor::start(OWNER, APPS[0], "catalog");
+    caller.ready(&fixture).await;
+    let path = caller.data().join("queries.json");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !path.exists() {
+        caller.assert_running();
+        assert!(std::time::Instant::now() < deadline, "ordinary read-only package queries did not complete");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let result: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(std::fs::metadata(path).unwrap().uid(), OWNER);
+    assert_eq!(result["raw_dpkg_visible"], false);
+    assert_eq!(result["raw_apt_visible"], false);
+    let queries = result["queries"].as_array().unwrap();
+    assert_eq!(queries.len(), 4);
+    for query in &queries[..3] {
+        assert_eq!(query["code"], 0, "{query}");
+        assert_eq!(query["reply"]["wire_version"], 1);
+        assert_eq!(query["reply"]["ok"], true, "{query}");
+    }
+    assert!(queries[0]["reply"]["data"]["results"].as_array().unwrap()
+        .iter().any(|entry| entry["name"] == BUNDLE));
+    assert_eq!(queries[1]["reply"]["data"]["name"], BUNDLE);
+    assert_eq!(queries[1]["reply"]["data"]["found"], true);
+    assert_eq!(queries[1]["reply"]["data"]["version"], "1.0.0");
+    let installed = queries[2]["reply"]["data"]["packages"].as_array().unwrap();
+    for package in [BUNDLE, SUPPORT] {
+        assert!(installed.iter().any(|entry| entry == package));
+        assert_eq!(queries[2]["reply"]["data"]["versions"][package], "1.0.0");
+    }
+    assert_ne!(queries[3]["code"], 0);
+    assert_eq!(queries[3]["reply"]["error"]["code"], "denied");
+    {
+        let calls = fixture.server.calls.lock().unwrap();
+        let requests = calls.iter().filter(|call| {
+            call.command == Command::AppSessionRelay
+                && call.params["command"] == Command::SystemPackageQuery.as_str()
+        }).collect::<Vec<_>>();
+        assert_eq!(requests.len(), 4);
+        assert!(requests.iter().all(|call| call.uid == OWNER));
+        assert!(!calls.iter().any(|call| {
+            call.command == Command::AppSessionRelay
+                && matches!(call.params["command"].as_str(),
+                    Some("system.package.control" | "system.package.install" | "system.package.restore"))
+        }));
+    }
+    assert_eq!(dpkg_state(), before, "metadata queries mutated installed package state");
+    let process = caller.process.as_ref().unwrap().try_clone().unwrap();
+    let group = caller.group.clone();
+    let runtime = caller.socket.parent().unwrap().to_path_buf();
+    caller.finish().await;
+    assert!(claw_display_control::identity::pidfd_exited(process.as_fd()).unwrap());
+    assert!(!group.exists() && !runtime.exists(), "read-only App custody was not retired");
+    fixture.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

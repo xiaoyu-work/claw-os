@@ -101,7 +101,7 @@ and agent tasks.
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `regional_settings/` | Closed locale/owner-language/static-hostname service; three separate exact grants, authenticated owner, root-owned D-Bus backends and confirmed/indeterminate outcomes |
-| `packages.rs` | System-wide package effects gated by the caller's Critical `sys.package` scope and owner-bound session, not a fixed client App identity; recorded inverse checks for rollback |
+| `packages.rs`, `packages/query.rs` | System-wide package effects under Critical `sys.package`; separate bounded catalog reads under exact `sys.observe` scopes, with no fixed client identity, raw bus or package-state mount |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
@@ -154,6 +154,29 @@ Unconfirmed post-dispatch effects remain indeterminate and block admission;
 read-only outcome checking cannot replay a consumed confirmation. Private APT,
 native/resource and independent CLI/trust/package-path acceptance remain
 publication prerequisites, not consequences of this source implementation.
+
+`system.package.query` is the App-session read interface for existing APT
+catalog search/details and installed dpkg state. `cos __package_query`
+uses the same ordinary Host proxy and public generic SDK call primitive.
+Search/list require `sys.observe:packages`; one package's details require
+its exact named observation scope. Critical package mutation authority
+does not substitute for read permission. Neither an authenticated App name
+nor the public human Store routes grant access.
+The fixed, noninteractive apt-cache/dpkg-query readers run as the authenticated
+owner with scrubbed environment, closed inherited descriptors, no-new-privileges,
+resource limits, bounded output and a twenty-second deadline. APT cache writes
+are disabled; errors do not export backend diagnostics or credentials. No
+caller-selected executable, owner, path, source, hook, D-Bus endpoint, refresh
+or mutation crosses this interface. This source interface does not itself
+complete native Store catalog/UI or private-APT acceptance.
+
+The ignored `private_apt_package_queries_use_ordinary_app_custody_and_exact_read_scopes`
+case crosses the real ordinary signed App/Host and private proxy into these
+fixed readers over the fixture's real signed private APT/dpkg state. It requires
+separate catalog/package observation scopes, refuses an undeclared package,
+asserts no raw APT/dpkg mount or mutation authority, and checks unchanged dpkg
+bytes plus checked process/cgroup/runtime retirement. Only the clean disposable
+`scripts/ci/test-boundaries.sh app-apt` runner executes it; local pure tests do not.
 
 App permission restores are non-execution receipts in the existing approvals store,
 bound to the exact owner/App/capability and both App and owner/session
