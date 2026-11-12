@@ -104,7 +104,8 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
             | super::routes::Command::GuiFileReadStatus
             | super::routes::Command::GuiFileWriteRequest
             | super::routes::Command::GuiFileWriteStatus
-            | super::routes::Command::GuiFileSaveReserve)
+            | super::routes::Command::GuiFileSaveReserve
+            | super::routes::Command::GuiPackageIntent)
         || command == super::routes::Command::SystemRegionalSettingsControl
         || command == super::routes::Command::SystemMailControl
         || command.as_str().starts_with("system.review.")
@@ -138,9 +139,10 @@ pub(crate) fn request_gui_resource_blocking(request: Request) -> Result<Response
     use super::routes::Command;
     if !matches!(request.command,
         Command::GuiFileReadRequest | Command::GuiFileReadStatus
-        | Command::GuiFileWriteRequest | Command::GuiFileWriteStatus | Command::GuiFileSaveReserve)
+        | Command::GuiFileWriteRequest | Command::GuiFileWriteStatus | Command::GuiFileSaveReserve
+        | Command::GuiPackageIntent)
     {
-        return Err(ClientError::before_dispatch("private GUI transport accepts only selected-file resource commands"));
+        return Err(ClientError::before_dispatch("private GUI transport accepts only typed resource commands"));
     }
     request_blocking_inner(
         Path::new(crate::worker::linux::SANDBOX_BROKER_SOCKET), request, true,

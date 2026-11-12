@@ -38,6 +38,15 @@ pub(crate) enum Operation {
     InstallPackages {
         packages: Vec<String>,
     },
+    RemovePackages {
+        packages: Vec<String>,
+    },
+    PurgePackages {
+        packages: Vec<String>,
+    },
+    UpgradePackages {
+        packages: Vec<String>,
+    },
     InstallVersion {
         package: String,
         version: String,
@@ -111,8 +120,10 @@ impl Operation {
             super::packages::validate_package_name(package)?;
         }
         match self {
-            Self::InstallPackages { packages } => {
-                if Self::install_packages(packages.clone())? != *self {
+            Self::InstallPackages { packages } | Self::RemovePackages { packages }
+            | Self::PurgePackages { packages } | Self::UpgradePackages { packages } => {
+                let canonical = Self::install_packages(packages.clone())?;
+                if canonical.packages() != self.packages() {
                     return Err("The package set is not canonical".into());
                 }
                 Ok(())
@@ -143,12 +154,14 @@ impl Operation {
             | Self::Purge { package }
             | Self::Upgrade { package }
             | Self::Restore { package, .. } => Some(package),
-            Self::InstallPackages { .. } | Self::UpgradeAll => None,
+            Self::InstallPackages { .. } | Self::RemovePackages { .. }
+            | Self::PurgePackages { .. } | Self::UpgradePackages { .. } | Self::UpgradeAll => None,
         }
     }
 
     fn required_caps(&self) -> Vec<Cap> {
-        if let Self::InstallPackages { packages } = self {
+        if let Self::InstallPackages { packages } | Self::RemovePackages { packages }
+            | Self::PurgePackages { packages } | Self::UpgradePackages { packages } = self {
             return packages
                 .iter()
                 .map(|package| Cap::new(Verb::SYS_PACKAGE, Scope::name(package)))
@@ -162,7 +175,9 @@ impl Operation {
 
     fn packages(&self) -> Vec<&str> {
         match self {
-            Self::InstallPackages { packages } => packages.iter().map(String::as_str).collect(),
+            Self::InstallPackages { packages } | Self::RemovePackages { packages }
+            | Self::PurgePackages { packages } | Self::UpgradePackages { packages } =>
+                packages.iter().map(String::as_str).collect(),
             _ => self.package().into_iter().collect(),
         }
     }

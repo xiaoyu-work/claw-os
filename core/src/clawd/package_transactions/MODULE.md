@@ -98,6 +98,21 @@ authenticated Root completion; later inverses cannot overtake it.
 
 ## Source integration and checks
 
+Native package GUIs propose exact actions through the Root-held private
+`gui.package.intent` endpoint. Public/ordinary/MCP dispatch is refused.
+Root binds the signed selected GUI, live process, owner/session, canonical
+action/targets and invocation; a manifest is eligibility, not consent.
+Protected Critical decisions are consumed as one exact set for one retained
+controller acceptance, without widening the GUI grant or borrowing App-delivery
+or global-stop reviews. Review-only resumption cannot spend decisions or replay
+effects. Read-only recovery is retained before responding so it cannot wait
+on publication while its own GUI provider blocks checked retirement.
+Per-window quotas and private review identities survive partial creation;
+all decisions carry the exact operation digest. After-death retirement fences
+creation, retires decisions outside the proposal lock and retains custody on
+unconfirmed cleanup. Exact install/remove/purge/only-upgrade batches reuse the
+existing APT plan, signature, quarantine, impact, child and outcome gates.
+
 The common retained-binding inventory, protected system-review decision
 channel and initialized custody managers are mandatory. Package impact consent
 has its own kind/action and never substitutes for App delivery confirmation.

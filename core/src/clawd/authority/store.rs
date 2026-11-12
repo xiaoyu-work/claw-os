@@ -323,6 +323,15 @@ impl Authority {
         issuance: Issuance,
         generation: u64,
     ) -> Result<(GrantHandle, GrantView), AuthorityError> {
+        self.issue_with_generation_until(issuance, generation, None)
+    }
+
+    pub(crate) fn issue_with_generation_until(
+        &self,
+        issuance: Issuance,
+        generation: u64,
+        deadline: Option<Instant>,
+    ) -> Result<(GrantHandle, GrantView), AuthorityError> {
         if issuance.principal.start_time_ticks.is_none() {
             return Err(AuthorityError::UnverifiablePrincipal);
         }
@@ -343,7 +352,9 @@ impl Authority {
         let handle = GrantHandle::generate().map_err(|_| AuthorityError::UnverifiablePrincipal)?;
         let key = handle.key();
         let now = Instant::now();
-        let expires_at = now + issuance.lifetime;
+        let expires_at = deadline.map_or(now + issuance.lifetime,
+            |deadline| deadline.min(now + issuance.lifetime));
+        if deadline.is_some() && expires_at <= now { return Err(AuthorityError::Expired); }
 
         let mut inner = self.lock();
         inner.sweep(now);

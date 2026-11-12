@@ -69,6 +69,8 @@ pub mod decision;
 pub mod grant;
 pub mod handle;
 pub mod store;
+#[cfg(target_os = "linux")]
+pub(crate) mod package_intent;
 
 use serde_json::Value;
 

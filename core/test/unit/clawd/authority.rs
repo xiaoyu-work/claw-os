@@ -106,7 +106,8 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("transaction.") => Audience::Transaction,
             name if name.starts_with("gui.file.read.")
                 || name.starts_with("gui.file.write.")
-                || name == "gui.file.save.reserve" => Audience::GuiResource,
+                || name == "gui.file.save.reserve"
+                || name == "gui.package.intent" => Audience::GuiResource,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
                 || name == "app.directory_install"

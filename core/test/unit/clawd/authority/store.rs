@@ -1,4 +1,23 @@
 use super::*;
+
+#[test]
+fn issuance_never_extends_a_fixed_operation_deadline() {
+    let store = store();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (_, view) = store.issue_with_generation_until(
+        issuance("fixed-operation-expiry", &[Audience::SystemService]), 7, Some(deadline),
+    ).unwrap();
+    {
+        let inner = store.lock();
+        let grant = inner.grants.get(inner.id_index.get(&view.id).unwrap()).unwrap();
+        assert!(grant.expires_at <= deadline);
+        assert_eq!(grant.generation, 7);
+    }
+    assert!(matches!(store.issue_with_generation_until(
+        issuance("expired-operation", &[Audience::SystemService]), 7,
+        Some(Instant::now() - Duration::from_secs(1))),
+        Err(AuthorityError::Expired)));
+}
 use crate::clawd::authority::{MAX_CHILDREN, MAX_LINEAGE_DEPTH};
 
 use crate::caps::{Cap, Scope, Verb};

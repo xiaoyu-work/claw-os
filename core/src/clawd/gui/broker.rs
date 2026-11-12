@@ -30,6 +30,7 @@ struct BoundProcess {
 
 struct State {
     registration: Arc<Registration>,
+    package_intents: Arc<crate::clawd::packages::gui::WindowIntents>,
     process: OnceLock<BoundProcess>,
     stopped: AtomicBool,
     listener_done: AtomicBool,
@@ -60,6 +61,7 @@ impl Broker {
         let listener = UnixListener::from_std(listener).map_err(|error| error.to_string())?;
         let (shutdown, mut ended) = tokio::sync::watch::channel(false);
         let state = Arc::new(State {
+            package_intents: crate::clawd::packages::gui::WindowIntents::new(registration.clone()),
             registration,
             process: OnceLock::new(),
             stopped: AtomicBool::new(false),
@@ -123,6 +125,11 @@ impl Broker {
         .map_err(|error| error.to_string())?;
         self.state
             .process
+            .get()
+            .map_or(Ok(()), |_| Err("GUI broker process was already bound".to_string()))?;
+        self.state.package_intents.bind(process.clone(), resources.gui_cgroup()?)?;
+        self.state
+            .process
             .set(BoundProcess {
                 process,
                 containment,
@@ -132,7 +139,17 @@ impl Broker {
 
     pub fn stop(&self) {
         self.state.stopped.store(true, Ordering::Release);
+        self.state.package_intents.stop();
         self.state.shutdown.send_replace(true);
+    }
+
+    pub fn retire_package_intents_after_death(
+        &self, group: std::os::fd::OwnedFd, deadline: std::time::Instant,
+    ) -> Result<(), String> {
+        if !self.state.stopped.load(Ordering::Acquire) || !self.quiescent() {
+            return Err("package-intent provider has not quiesced".into());
+        }
+        self.state.package_intents.release_after_death(group, deadline)
     }
 
     pub fn quiescent(&self) -> bool {
@@ -339,7 +356,15 @@ async fn serve(
             }
         }
         Validated::Provider(request) => {
-            if endpoint.home_metadata && matches!(request.command,
+            if request.command == Command::GuiPackageIntent {
+                let bound = endpoint.process.get().expect("authenticated bound GUI process");
+                match crate::clawd::packages::gui::request(
+                    &daemon, endpoint.package_intents.clone(), &bound.process, &client, request.params,
+                ).await {
+                    Ok(value) => Response::ok(request.id, value),
+                    Err(error) => Response::handler_error(request.id, error),
+                }
+            } else if endpoint.home_metadata && matches!(request.command,
                 Command::SystemFilesystemRead | Command::SystemFilesystemWrite | Command::SystemFileReplace)
             {
                 Response::handler_error(request.id, BrokerError::authorization(

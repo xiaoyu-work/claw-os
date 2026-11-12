@@ -1,4 +1,43 @@
 use super::*;
+
+#[test]
+fn operation_bound_grant_sets_preserve_digest_bounds_and_atomicity() {
+    let _tmp = isolated_env();
+    let digest = "a".repeat(64);
+    let other = "b".repeat(64);
+    let required = vec![
+        Cap::new(Verb::SYS_PACKAGE, Scope::name("fixture-one")),
+        Cap::new(Verb::SYS_PACKAGE, Scope::name("fixture-two")),
+    ];
+    let approve = |cap: &Cap| {
+        let id = submit_owned_with_context_for_operation(
+            cap.verb, cap.scope.clone(), LAUNCHER, "exact package intent", None,
+            Some(1000), None, Some(&digest),
+        ).unwrap();
+        approve_for_owner(&id, GrantDuration::Once, Some("uid:0".into()), None, Some(1000)).unwrap();
+        id
+    };
+    let first = approve(&required[0]);
+    assert!(!consume_grant_set_once_for_owner(LAUNCHER, &required[..1], Some(1000)).unwrap());
+    assert!(consume_grant_set_once_for_owner_operation_evidence(
+        LAUNCHER, &required[..1], Some(1000), Some(&other)).unwrap().is_none());
+    assert!(consume_grant_set_once_for_owner_operation_evidence(
+        LAUNCHER, &required, Some(1000), Some(&digest)).unwrap().is_none());
+    assert!(approved_dir().join(format!("{first}.json")).exists());
+    let second = approve(&required[1]);
+    let evidence = consume_grant_set_once_for_owner_operation_evidence(
+        LAUNCHER, &required, Some(1000), Some(&digest)).unwrap().unwrap();
+    assert_eq!(evidence.len(), 2);
+    for (proof, cap) in evidence.iter().zip(&required) {
+        assert_eq!(&proof.authorization.capability, cap);
+        assert_eq!(proof.authorization.operation_digest.as_deref(), Some(digest.as_str()));
+        assert_eq!(proof.authorization.owner_uid, Some(1000));
+        assert_eq!(proof.uses_remaining, 0);
+    }
+    for id in [first, second] { assert!(consumed_dir().join(format!("{id}.json")).exists()); }
+    assert!(consume_grant_set_once_for_owner_operation_evidence(
+        LAUNCHER, &required, Some(1000), Some(&digest)).unwrap().is_none());
+}
 use serde_json::json;
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard};
@@ -480,7 +519,17 @@ fn grant_set_consumption_retires_every_duration_once() {
         let id = approve_for(Verb::SYS_IDENTITY, Scope::name("accounts"), duration);
         let required = vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"))];
 
-        assert!(consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap());
+        let record: Resolved = serde_json::from_str(
+            &fs::read_to_string(approved_dir().join(format!("{id}.json"))).unwrap()).unwrap();
+        let expected = record.decision.grant.unwrap();
+        let evidence = consume_grant_set_once_for_owner_operation_evidence(LAUNCHER, &required, Some(1000), None)
+            .unwrap().unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].duration, duration);
+        assert_eq!(evidence[0].expires_at, expected.expires_at);
+        assert_eq!(evidence[0].generation, expected.generation.unwrap());
+        assert_eq!(&evidence[0].authorization, expected.authorization.as_ref().unwrap());
+        assert_eq!(evidence[0].uses_remaining, 0);
         assert!(
             !approved_dir().join(format!("{id}.json")).exists(),
             "{duration:?} must not stay reusable after an App launch"

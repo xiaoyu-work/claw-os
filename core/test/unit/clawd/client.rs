@@ -13,6 +13,10 @@ fn private_gui_provider_transport_cannot_be_used_for_root_control_commands() {
         assert!(!error.may_have_dispatched(), "{command}");
         assert!(requires_root_peer(command), "{command}");
     }
+    let error = request_gui_resource_blocking(Request::build(
+        super::super::routes::Command::SystemPackageControl, serde_json::json!({}),
+    )).unwrap_err();
+    assert!(!error.may_have_dispatched(), "a private package proposal must not become direct package authority");
 }
 
 #[cfg(target_os = "linux")]

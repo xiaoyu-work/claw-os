@@ -12,6 +12,10 @@ use super::client_identity::ClientIdentity;
 
 const PACKAGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
+pub(crate) mod intent;
+#[cfg(target_os = "linux")]
+pub(crate) mod gui;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageState {
     pub package: String,

@@ -409,5 +409,8 @@ pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::
         | super::Command::GuiFileSaveReserve) {
         return Ok(command.route());
     }
+    if command == super::Command::GuiPackageIntent {
+        return Ok(command.route());
+    }
     super::relayable_route(command)
 }

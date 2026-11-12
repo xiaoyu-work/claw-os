@@ -74,6 +74,19 @@ authority. The native provider spends it freshly before each canonical effect;
 read proof cannot substitute for write, and the evidence session itself holds
 no capabilities.
 
+Private GUI package intents redeem the complete exact protected decision set
+with its consumed capability/owner/session/risk, expiry, revocation generation
+and exact operation digest. A Root-held registry limits each window to 32
+intents and 128 total review targets, retains partial creation, and retires
+pending and unused decisions after checked death without holding its proposal
+lock during approval/generation/audit I/O. Failed cleanup retains custody.
+The package-only factory issues one unindexed SystemService use for the live
+GUI process/App/session, preserves Activity/Workspace boundaries and the fixed
+approval/GUI deadline, and never widens startup caps. The retained package
+controller performs the ordinary exact Critical spend; proposal receipts and
+ready flags never authorize it. Public/Host/MCP dispatch of the proposal route
+is refused. There is no App-name privilege or second package installer.
+
 Each `PeerSession` route also declares whether an App session's one-call
 transient capabilities count for it. `credential.oauth-refresh` excludes them,
 preserving what the credential broker checked before this module existed; the

@@ -11,6 +11,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "gui.file.write.request",
     "gui.file.write.status",
     "gui.file.save.reserve",
+    "gui.package.intent",
     "daemon.health",
     "daemon.status",
     "workspace.list",

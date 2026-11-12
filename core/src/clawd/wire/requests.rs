@@ -1791,6 +1791,8 @@ pub struct PackageControl {
     pub version: Option<Name>,
 }
 
+pub(crate) type PackageIntent = crate::clawd::packages::intent::Request;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageRestore {
