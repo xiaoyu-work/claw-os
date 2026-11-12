@@ -75,6 +75,67 @@ fn system_review_terminal_uses_the_shared_formatter_and_independent_choices() {
     decision.validate_for(&review).unwrap();
 }
 
+fn package_impact_response() -> Value {
+    let mut value = response();
+    value["id"] = json!("pg-0123456789abcdef0123456789abcdef");
+    value["kind"] = json!("package_impact");
+    value["subject"] = json!({
+        "app_id": null, "name": "All-App stop for a system package transaction",
+        "version": null, "publisher": null,
+    });
+    value["contract_digest"] = json!("a".repeat(64));
+    value["disclosures"] = json!([{
+        "label": "Scope", "value": "Unsaved GUI work may be lost; stop all listed Apps.",
+    }]);
+    value["actions"] = json!(["cancel", "confirm_global_app_stop"]);
+    value
+}
+
+#[test]
+fn system_review_terminal_accepts_only_the_separate_global_stop_action_for_package_impact() {
+    let review = parse_review(package_impact_response()).unwrap();
+    assert_eq!(approval_action(&review).unwrap(), ReviewAction::ConfirmGlobalAppStop);
+    assert!(format_terminal(&review).unwrap().contains("Unsaved GUI work"));
+    let mut decision = ReviewDecision {
+        id: review.id.clone(), revision: review.revision,
+        action: ReviewAction::ConfirmGlobalAppStop, choices: Vec::new(),
+    };
+    decision.encode_for(&review).unwrap();
+    decision.revision += 1;
+    assert!(decision.validate_for(&review).is_err());
+    decision.revision = review.revision;
+    decision.action = ReviewAction::ConfirmInstall;
+    assert!(decision.validate_for(&review).is_err());
+    decision.action = ReviewAction::ApplyChoices;
+    assert!(decision.validate_for(&review).is_err());
+}
+
+#[test]
+fn system_review_terminal_rejects_malformed_or_misclassified_package_impact_ids() {
+    for id in [
+        "pg-0123456789abcdef0123456789abcde",
+        "pg-0123456789abcdef0123456789abcdef0",
+        "pg-0123456789ABCDEF0123456789abcdef",
+        "pg-../0123456789abcdef0123456789abcdef",
+        "xx-0123456789abcdef0123456789abcdef",
+        "rv-0123456789abcdef0123456789abcdef",
+        "ap-0123456789ab",
+    ] {
+        let mut malformed = package_impact_response();
+        malformed["id"] = json!(id);
+        assert!(parse_review(malformed).is_err(), "{id}");
+    }
+    let mut unrevisioned = package_impact_response();
+    unrevisioned["revision"] = json!(0);
+    assert!(parse_review(unrevisioned).is_err());
+    let mut install = response();
+    install["id"] = json!("pg-0123456789abcdef0123456789abcdef");
+    assert!(parse_review(install).is_err());
+    let mut capability = serde_json::to_value(capability_response()).unwrap();
+    capability["id"] = json!("pg-0123456789abcdef0123456789abcdef");
+    assert!(parse_review(capability).is_err());
+}
+
 #[test]
 fn system_review_terminal_never_defaults_an_empty_or_unsupported_permission_choice() {
     let review = capability_response();
