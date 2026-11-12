@@ -23,6 +23,7 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
+| `ci/native_editor_payload.py` | Editor-only private acceptance input: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
 | `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
@@ -52,9 +53,20 @@ variables through `sudo --preserve-env`, not process arguments.
 bash -n scripts/*.sh scripts/lib/*.sh
 python3 -m pytest -q scripts/tests/test_app_platform.py
 python3 -m pytest -q packaging/deb/tests/test_app_sources.py
+python3 -B -m pytest -q scripts/tests/test_native_editor_payload.py
 ```
 
 Also run the narrowest consuming target/package command.
+
+The proposed `test-boundaries.sh native-editor` selection is a separate real
+product lane, not another native probe. Its preparation calls the resolved App
+snapshot's `tools/native_build.py editor build --release --app-root` as an
+ordinary build user. The complete payload inventory, source SHA, public platform
+pin and original licenses/resources remain bound to the private fixture receipt.
+Only the existing isolated PAM/display bootstrap signs and runs that payload.
+Run its Root acceptance only on a clean disposable GHA runner, never a shared
+developer host. Parser tests, compilation and ELF preparation alone are not a
+passing native window or file-open result.
 
 Production package/release/rootfs paths consume `app_packages.py`, not
 `app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,

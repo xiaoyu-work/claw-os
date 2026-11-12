@@ -273,6 +273,12 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
+    if [[ "$selection" == native-editor ]]; then
+        python3 -B scripts/ci/native_editor_payload.py \
+            --output "$GITHUB_WORKSPACE/build/native-editor-input" \
+            --target-dir "$CARGO_TARGET_DIR/native-editor"
+        cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
+    fi
     cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
     cargo build -p cos --locked --bin cos --bin claw-display-host \
@@ -309,11 +315,13 @@ display() {
     mkdir -p "$GITHUB_WORKSPACE/build"
     mkdir -m0700 "$private"
     local selectors=()
-    if [[ "$selection" == display || "$selection" == native-fs ]]; then
+    if [[ "$selection" == display || "$selection" == native-fs || "$selection" == native-editor ]]; then
         test -c /dev/fuse
     fi
     if [[ "$selection" == native-fs ]]; then
         selectors=(--native-fs-only)
+    elif [[ "$selection" == native-editor ]]; then
+        selectors=(--native-editor-only "$GITHUB_WORKSPACE/build/native-editor-input")
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
     elif [[ "$selection" == native-package ]]; then
@@ -434,9 +442,10 @@ case "${1:-}" in
     native-fs) display native-fs ;;
     file-manager) display file-manager ;;
     native-package) display native-package ;;
+    native-editor) display native-editor ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|applets}" >&2
         exit 2
         ;;
 esac

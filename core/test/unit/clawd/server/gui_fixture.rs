@@ -22,6 +22,13 @@ mod file_manager {
     ));
 }
 
+mod native_products {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/native_products.rs"
+    ));
+}
+
 fn command(channel: &OwnedFd, tag: &[u8; 4]) {
     assert_eq!(
         unsafe {
@@ -90,7 +97,7 @@ fn status(channel: &OwnedFd, pam: &Child, deadline: Instant) -> [u8; 4] {
     bytes[..4].try_into().unwrap()
 }
 
-fn install_packages(package_only: bool) {
+fn install_packages(package_only: bool, native_editor_only: bool) {
     use crate::provenance::{
         envelope::PackageKind,
         sign::{self, SignRequest, SigningKeyFile},
@@ -126,6 +133,10 @@ fn install_packages(package_only: bool) {
     let trust = TrustStore::load_roots(&roots);
     assert!(!trust.is_empty(), "{:?}", trust.diagnostics());
     crate::provenance::set_trust_store_for_roots(trust, roots);
+    if native_editor_only {
+        native_products::install(&key);
+        return;
+    }
     eprintln!(
         "private selected-read timing sourceStep=fixture_probe_elf_bytes probeElfBytes={}",
         std::fs::metadata("/usr/lib/cos/bin/claw-gui-probe").unwrap().len(),
@@ -330,14 +341,18 @@ fn install_packages(package_only: bool) {
 }
 
 fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
-    let app = if case == 0 {
+    let app = if case == 25 {
+        "cosmic-edit"
+    } else if case == 0 {
         "gui-boundary-zero"
     } else {
         "gui-boundary-test"
     };
     let mut caps = CapSet::new();
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));
-    caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/gui-public")));
+    if case != 25 {
+        caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/gui-public")));
+    }
     if [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 14, 17, 18].contains(&case) {
         caps.insert(Cap::new(Verb::CLIPBOARD_READ, Scope::name("selection")));
     }
@@ -353,7 +368,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     if case == 11 {
         caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("audio")));
     }
-    if [19, 20, 21, 23].contains(&case) {
+    if [19, 20, 21, 23, 25].contains(&case) {
         caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")));
     }
     if case == 20 {
@@ -2165,10 +2180,15 @@ fn private_native_fs_kernel() {
 }
 
 fn private_gui_fixture(session_only: bool, file_manager_only: bool) {
-    private_gui_fixture_selected(session_only, file_manager_only, false);
+    private_gui_fixture_selected(session_only, file_manager_only, false, false);
 }
 
-fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, package_only: bool) {
+fn private_gui_fixture_selected(
+    session_only: bool,
+    file_manager_only: bool,
+    package_only: bool,
+    native_editor_only: bool,
+) {
     assert_eq!(unsafe { libc::geteuid() }, 0);
     if package_only {
         package::require_namespaces();
@@ -2193,7 +2213,7 @@ fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, pac
     crate::storage::harden_clawd_runtime().unwrap();
     crate::storage::harden_clawd_state().unwrap();
     runtime_layout();
-    install_packages(package_only);
+    install_packages(package_only, native_editor_only);
     let _package_repository = package_only.then(package::Repository::start);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -2233,7 +2253,10 @@ fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, pac
         if package_only {
             package::run(&session_group(root, "22")).await;
         }
-        if !package_only && !session_only && !file_manager_only {
+        if native_editor_only {
+            native_products::run(&session_group(root, "25")).await;
+        }
+        if !package_only && !native_editor_only && !session_only && !file_manager_only {
             headless_cli(&session_group(root, "headless"));
             activation_cases(root);
             for case in (0..20).chain([23, 20, 21, 24]) {
@@ -2241,10 +2264,10 @@ fn private_gui_fixture_selected(session_only: bool, file_manager_only: bool, pac
                 run_case(case, &group).await;
             }
         }
-        if !package_only && !session_only {
+        if !package_only && !native_editor_only && !session_only {
             file_manager::run(root).await;
         }
-        if !package_only && !file_manager_only {
+        if !package_only && !native_editor_only && !file_manager_only {
             session_startup_failure(root);
         }
         server.abort();

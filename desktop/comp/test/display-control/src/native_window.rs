@@ -1,0 +1,333 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+use crate::{display_authority::ClientOrigin, state::State};
+use smithay::{
+    delegate_output, delegate_shm, delegate_xdg_shell,
+    output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
+    utils::{Serial, Transform},
+    wayland::{
+        buffer::BufferHandler,
+        compositor::{BufferAssignment, SurfaceAttributes, with_states},
+        output::{OutputHandler, OutputManagerState},
+        shell::xdg::{
+            Configure, PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler,
+            XdgShellState, XdgToplevelSurfaceData,
+        },
+        shm::{ShmHandler, ShmState, with_buffer_contents},
+    },
+};
+use std::{
+    io::Write,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::Path,
+    time::Instant,
+};
+use wayland_protocols::xdg::shell::server::xdg_toplevel;
+use wayland_server::{
+    DisplayHandle, Resource,
+    protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
+};
+
+const OBSERVER: &str = "/run/user/62050/native-editor-observer";
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
+    let marker = Path::new("/run/gui-public/native-editor-enabled");
+    match marker.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.uid() != 0
+                || metadata.mode() & 0o022 != 0
+                || std::fs::read(marker)? != b"private-native-editor-v1"
+            {
+                return Err("unprotected native Editor fixture selector".into());
+            }
+            let observer = Path::new(OBSERVER).symlink_metadata()?;
+            if !observer.is_dir() || observer.uid() != 62050 || observer.mode() & 0o077 != 0 {
+                return Err("unprotected native window observation directory".into());
+            }
+            Ok(Some(Window::new(display)))
+        }
+    }
+}
+
+pub struct Window {
+    shm: ShmState,
+    xdg: XdgShellState,
+    _outputs: OutputManagerState,
+    output: Output,
+    surface: Option<ToplevelSurface>,
+    instance: Option<String>,
+    configured: bool,
+    commits: u64,
+    raster: Option<serde_json::Value>,
+    last: Option<serde_json::Value>,
+    started: Instant,
+    closed: bool,
+}
+
+impl Window {
+    pub fn new(display: &DisplayHandle) -> Self {
+        let output = Output::new(
+            "private-native-editor".into(),
+            PhysicalProperties {
+                size: (210, 158).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Private acceptance".into(),
+                model: "Headless SHM".into(),
+                serial_number: "private-native-editor".into(),
+            },
+        );
+        output.create_global::<State>(display);
+        let mode = Mode {
+            size: (800, 600).into(),
+            refresh: 60_000,
+        };
+        output.change_current_state(
+            Some(mode),
+            Some(Transform::Normal),
+            Some(Scale::Integer(1)),
+            Some((0, 0).into()),
+        );
+        output.set_preferred(mode);
+        Self {
+            shm: ShmState::new::<State>(display, []),
+            xdg: XdgShellState::new::<State>(display),
+            _outputs: OutputManagerState::new_with_xdg_output::<State>(display),
+            output,
+            surface: None,
+            instance: None,
+            configured: false,
+            commits: 0,
+            raster: None,
+            last: None,
+            started: Instant::now(),
+            closed: false,
+        }
+    }
+
+    pub fn commit(&mut self, surface: &WlSurface) -> Result<()> {
+        let (buffer, callbacks) = with_states(surface, |states| {
+            let mut cached = states.cached_state.get::<SurfaceAttributes>();
+            let current = cached.current();
+            current.damage.clear();
+            (
+                current.buffer.take(),
+                std::mem::take(&mut current.frame_callbacks),
+            )
+        });
+        if let Some(assignment) = buffer {
+            match assignment {
+                BufferAssignment::NewBuffer(buffer) => {
+                    if self
+                        .surface
+                        .as_ref()
+                        .is_some_and(|top| top.wl_surface() == surface)
+                    {
+                        if !self.configured {
+                            return Err(
+                                "native window attached pixels before configure acknowledgement"
+                                    .into(),
+                            );
+                        }
+                        self.raster = Some(raster(&buffer)?);
+                        self.commits = self.commits.checked_add(1).ok_or("frame count overflow")?;
+                        self.output.enter(surface);
+                    }
+                    buffer.release();
+                }
+                BufferAssignment::Removed => {
+                    if self
+                        .surface
+                        .as_ref()
+                        .is_some_and(|top| top.wl_surface() == surface)
+                    {
+                        self.raster = None;
+                    }
+                }
+            }
+        }
+        for callback in callbacks {
+            callback.done(self.started.elapsed().as_millis() as u32);
+        }
+        self.publish()
+    }
+
+    pub fn publish(&mut self) -> Result<()> {
+        let Some(instance) = &self.instance else {
+            return Ok(());
+        };
+        let (title, app_id) = self.surface.as_ref().map_or((None, None), |surface| {
+            with_states(surface.wl_surface(), |states| {
+                let role = states
+                    .data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap();
+                (role.title.clone(), role.app_id.clone())
+            })
+        });
+        if title.as_ref().is_some_and(|value| value.len() > 1024)
+            || app_id.as_ref().is_some_and(|value| value.len() > 1024)
+        {
+            return Err("native window metadata exceeded the private witness bound".into());
+        }
+        let record = serde_json::json!({
+            "schema": "claw.private-native-window/v1", "instance": instance,
+            "toplevels": usize::from(self.surface.is_some()), "configure_acked": self.configured,
+            "buffer_commits": self.commits, "raster": self.raster,
+            "title": title, "app_id": app_id, "closed": self.closed,
+        });
+        if self.last.as_ref() != Some(&record) {
+            let root = Path::new(OBSERVER);
+            let candidate = root.join("window.next");
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&candidate)?;
+            file.write_all(&serde_json::to_vec(&record)?)?;
+            drop(file);
+            std::fs::rename(candidate, root.join("window.json"))?;
+            self.last = Some(record);
+        }
+        Ok(())
+    }
+}
+
+fn raster(buffer: &WlBuffer) -> Result<serde_json::Value> {
+    with_buffer_contents(buffer, |pointer, length, metadata| {
+        let width = usize::try_from(metadata.width)?;
+        let height = usize::try_from(metadata.height)?;
+        let stride = usize::try_from(metadata.stride)?;
+        let offset = usize::try_from(metadata.offset)?;
+        if width == 0 || height == 0 || width > 4096 || height > 4096 || stride < width * 4 {
+            return Err("native SHM window has invalid dimensions".into());
+        }
+        let size = stride
+            .checked_mul(height)
+            .ok_or("native SHM size overflow")?;
+        if size > 64 * 1024 * 1024 || offset.checked_add(size).is_none_or(|end| end > length) {
+            return Err("native SHM pixels exceed their actual pool".into());
+        }
+        // No Rust references may alias this client-writable mapping.
+        // The SHM helper also brackets these raw reads with SIGBUS containment.
+        let mut first = None;
+        let mut nonuniform = false;
+        let mut checksum = 0xcbf29ce484222325_u64;
+        for row in 0..height {
+            for column in 0..width {
+                let at = offset + row * stride + column * 4;
+                let pixel: [u8; 4] = std::array::from_fn(|index| unsafe {
+                    std::ptr::read_volatile(pointer.add(at + index))
+                });
+                nonuniform |= first.is_some_and(|first| first != pixel);
+                first.get_or_insert(pixel);
+                for byte in pixel {
+                    checksum = (checksum ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "width": width, "height": height, "nonuniform_pixels": nonuniform,
+            "pixel_checksum": format!("{checksum:016x}"),
+        }))
+    })?
+}
+
+impl BufferHandler for State {
+    fn buffer_destroyed(&mut self, _: &WlBuffer) {}
+}
+
+impl ShmHandler for State {
+    fn shm_state(&self) -> &ShmState {
+        &self.native_window.as_ref().unwrap().shm
+    }
+}
+
+impl OutputHandler for State {}
+
+impl XdgShellHandler for State {
+    fn xdg_shell_state(&mut self) -> &mut XdgShellState {
+        &mut self.native_window.as_mut().unwrap().xdg
+    }
+
+    fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        let client = self
+            .common
+            .display_handle
+            .get_client(surface.wl_surface().id())
+            .unwrap();
+        let origin = client
+            .get_data::<crate::state::ClientState>()
+            .unwrap()
+            .display_origin
+            .as_ref()
+            .unwrap();
+        assert!(matches!(origin, ClientOrigin::Instance(_)));
+        assert!(!origin.layer_shell() && !origin.selection_read() && !origin.selection_write());
+        let instance = claw_display_control::Epoch(origin.instance().unwrap().0).label();
+        let window = self.native_window.as_mut().unwrap();
+        assert!(
+            window.surface.is_none() && !window.closed,
+            "only one actual Editor window is in scope"
+        );
+        window.instance = Some(instance);
+        surface.with_pending_state(|state| {
+            state.size = Some((800, 600).into());
+            state.states.set(xdg_toplevel::State::Activated);
+        });
+        surface.send_configure();
+        window.surface = Some(surface);
+        window
+            .publish()
+            .expect("native window witness publication failed");
+    }
+
+    fn ack_configure(&mut self, surface: WlSurface, _: Configure) {
+        let window = self.native_window.as_mut().unwrap();
+        if window
+            .surface
+            .as_ref()
+            .is_some_and(|top| top.wl_surface() == &surface)
+        {
+            window.configured = true;
+        }
+    }
+
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        surface.with_pending_state(|state| state.geometry = positioner.get_geometry());
+        surface
+            .send_configure()
+            .expect("native popup configure failed");
+    }
+
+    fn grab(&mut self, _: PopupSurface, _: WlSeat, _: Serial) {}
+
+    fn reposition_request(
+        &mut self,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
+    ) {
+        surface.with_pending_state(|state| state.geometry = positioner.get_geometry());
+        surface.send_repositioned(token);
+    }
+
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let window = self.native_window.as_mut().unwrap();
+        assert!(window.surface.as_ref().is_some_and(|top| top == &surface));
+        window.surface = None;
+        window.closed = true;
+        window
+            .publish()
+            .expect("native window closure witness failed");
+    }
+}
+
+delegate_shm!(State);
+delegate_output!(State);
+delegate_xdg_shell!(State);
