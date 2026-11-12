@@ -1,10 +1,11 @@
 # Filtered Native Home Resources
 
 The Linux production provider defaults to a read-only Home metadata view in
-the common authenticated GUI Host. Its only production content operation is
-one separately owner-approved, pinned regular-file read. Write/watch, general
-mutations, the direct prototype selectors and mutation fault injectors remain
-`cfg(test)`. This is not a public App mount API, frozen SDK contract or
+the common authenticated GUI Host. Its bounded content operations are separately
+owner-approved regular-file reads/writes and a Root-reserved replacement of an
+already selected existing writable file. Watch, direct prototype selectors and
+mutation fault injectors remain `cfg(test)`; directory creation/delete/general
+rename are not implemented. This is not a public App mount API, frozen SDK contract or
 completed `controlled_full` filesystem. A Root controller supplies explicit
 per-window metadata consent, an owner-accessible pinned browse root and a
 bounded lease. Only that controller can bind an actual normal-UID process and
@@ -48,8 +49,9 @@ binds the raw pathname bytes, retained identity/revision, node, surface, display
 and live GUI authority. Pending, an approval ID and a proposal's display text
 are not content. Another owner, node, window, changed source or consumed/stale
 decision cannot install a read lease. The current source fingerprint is strict:
-content/mtime/ctime/link changes invalidate consent rather than following an
-external writer or replacement.
+external content/mtime/ctime/link changes invalidate consent rather than
+following an external writer or replacement. Only verified own canonical effects
+may advance the corresponding selected resource revision.
 
 Root consumes the exact decision once and issues a separate normal
 `Issuer::Approval`, process-tree-bound `GuiResource` grant in the existing store.
@@ -79,12 +81,12 @@ resource validation applies the same mount projection without treating it as
 window consent. Actual mounting still waits for the separate owner decision.
 Read/write/delete/watch/exec scopes beneath Home are suppressed only from raw
 mount derivation; the FUSE provider retains its protected-path/alias checks,
-readonly/noexec mount and closed production mutation/watch APIs. Scalar
+noexec filtered mount and closed general-mutation/watch APIs. Scalar
 filesystem read/write/replace relay is refused for this controlled GUI so it
 cannot bypass selection. Ordinary/MCP and non-metadata GUI behavior is unchanged.
-Mandatory Home write/delete/watch/exec needs remain refused while their native
-resource integration is unavailable; optional capability authority does not
-silently convert such a mandatory contract to a readonly fallback.
+Mandatory Home delete/watch/exec needs remain refused while their native
+resource integration is unavailable; write authority still needs its separate
+selected-file decision before any effect.
 
 `statfs` is metadata: after the same live peer and protected-node checks, it
 uses owner filesystem credentials and `fstatvfs` on the retained browse-root
@@ -111,8 +113,10 @@ Backing IO uses authenticated
 owner filesystem credentials, pinned directory walks, actual object identity
 and the existing protected-path/alias guard. Names remain Unix bytes.
 
-The default constructor still mounts a read-only filesystem. The writable
-constructor only enables the internal data plane: it grants no file rights.
+The test default constructor mounts a read-only filesystem. The controlled
+Home proxy is write-capable at the mount layer so a later exact write selection
+can work; metadata alone still supplies no writable file or creatable name.
+The test writable constructor only enables the internal data plane: it grants no file rights.
 Both refuse symlinks, hardlinked regular files and special nodes. No raw browse-root
 bind or backing FD reaches the App.
 The App sees only the filtered FUSE mount through the ordinary namespace
@@ -134,6 +138,16 @@ this is not a promise of instantaneous cache or memory erasure at the deadline.
 Failed checked cleanup retains the view and refuses replacement.
 
 ## Selected writes and atomic save
+
+The production coordinator reuses read's exact-owner/window review, fixed
+deadline, ordinary `Issuer::Approval` issuance and complete review retirement.
+Its `WritePermit` additionally requires an unforgeable spent `FS_WRITE` proof,
+Root controller, owner-accessible pinned target and Root-owned canonical
+mutation session. Missing optional write authority is acquired only through
+that explicit protected decision. No startup or parent cap selects content.
+The canonical evidence session starts with no capabilities and is not authority.
+Both native read and write selections keep their original approval/GUI/metadata
+ceilings; neither metadata refresh nor own saves extends a deadline.
 
 `choose_write` checks its retained Root controller, live lease, owner permissions
 and exact pinned file identity. It never grants content read to the App.
@@ -167,6 +181,24 @@ object; a retained scratch FD reads its own authored snapshot, not subsequently
 unselected external content. Existing independent read selections follow the
 provider's checked replacement; no new read selection is minted.
 
+Production file candidates retain an immutable consent anchor and a private
+current revision. Only a committed canonical effect with verified resulting
+descriptor/fingerprint can publish that next revision to matching selected
+read/write leases. In-place writes retain same-object FD semantics. Atomic save
+uses a new FUSE inode: new opens see the replacement while old read FDs/mappings
+retain the previous object. Historical pins are bounded, checked for external
+changes and released after the last corresponding native handle closes.
+Detached old write FDs refuse effects; a retained scratch FD reads its own
+authored bytes, never later target content. Pending proposals do not inherit
+these revision changes.
+
+The existing effect mutex serializes provider effects and revision publication.
+Health/metadata heartbeats defer only the source snapshot while that controlled
+operation owns the mutex; live GUI/ordinary grant/expiry checks remain. Cache
+invalidations are queued to the existing observer, never sent while holding
+the effect/dispatcher locks. Observer snapshots cannot overwrite a newer own
+revision. External conflicts still fence rather than follow or grant.
+
 As with the existing bounded `clawd/file_changes.rs` provider, the final
 identity check followed by rename is not a filesystem compare-and-swap against
 an uncooperative host writer. No wider external-writer serialization or full
@@ -179,6 +211,7 @@ Every owner-file effect uses the existing `session::record_fs_write_bytes`
 inverse store and `session::journal::MutationBracket`, with the existing
 `system.filesystem.write` or `system.file.replace` operation label and the
 inverse mutation sequence. These are evidence references, not grants.
+Production starts also name the keyed ordinary selected-write grant reference.
 There is no second journal or App-supplied session/owner override.
 
 The start must durably land before dispatch. File and required directory syncs
@@ -257,8 +290,8 @@ normal protected terminal review/Root decision, non-UTF8 binary IO/seek/mmap,
 unselected siblings and checked independent read revocation. None of those
 capability descriptions selects content before the exact file decision.
 
-Actual Linux acceptance of production selected reads, production write/watch
-integration, complete
+Actual Linux acceptance of production selected reads/writes/reserved saves,
+watch integration, complete
 directory/delete/rename semantics, non-UTF8 inverse paths, writable mmap,
 external-writer concurrency, complete external inotify behavior, real OS
 picker UI, persistent grants, SDK publication and real Files/Editor

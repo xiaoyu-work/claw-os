@@ -2247,6 +2247,45 @@ routes! {
             super::gui::file_read_status(c.params, c.client, authority).await
         },
     }
+    GuiFileWriteRequest {
+        name: "gui.file.write.request",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileWriteRequest,
+        audit: &[("session", FieldRule::Token), ("node", FieldRule::Count)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::request_file_write(c.params, c.client, authority).await
+        },
+    }
+    GuiFileWriteStatus {
+        name: "gui.file.write.status",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileWriteStatusRequest,
+        audit: &[("session", FieldRule::Token), ("node", FieldRule::Count), ("selection_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::file_write_status(c.params, c.client, authority).await
+        },
+    }
+    GuiFileSaveReserve {
+        name: "gui.file.save.reserve",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFileSaveReservationRequest,
+        audit: &[("session", FieldRule::Token), ("node", FieldRule::Count), ("selection_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::reserve_file_save(c.params, c.client, authority).await
+        },
+    }
     SystemFilesystemRead {
         name: "system.filesystem.read",
         access: Access::User,

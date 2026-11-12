@@ -162,6 +162,63 @@ export interface GuiFileReadStatusRequest {
 }
 
 /**
+ * Draft GUI reserved atomic save.
+ * One Root-reserved private scratch name for atomic replacement of an already
+ * selected existing writable file. This is not arbitrary parent-directory
+ * write or an owner-side temporary file.
+ */
+export interface GuiFileSave {
+  version: 1;
+  reservation_id: string;
+  selection_id: string;
+  node: number;
+  parent_node: number;
+  name: string;
+  expires_in_ms: number;
+}
+
+/**
+ * Draft GUI selected file write.
+ * Root-owned independent write selection for one existing regular file in this
+ * authenticated GUI instance. Pending is not permission. Write never grants
+ * read, directory mutation, deletion or execution.
+ */
+export interface GuiFileWrite {
+  version: 1;
+  selection_id: string;
+  node: number;
+  access: "write";
+  state: "pending" | "selected" | "denied" | "stale" | "expired" | "revoked";
+  approval_request_id?: string;
+  target_display?: string;
+  expires_in_ms?: number;
+  reason?: string;
+}
+
+/**
+ * GuiFileWriteRequest.
+ */
+export interface GuiFileWriteRequest {
+  node: number;
+}
+
+/**
+ * GuiFileWriteStatusRequest.
+ */
+export interface GuiFileWriteStatusRequest {
+  selection_id: string;
+  node: number;
+}
+
+/**
+ * GuiFileSaveReservationRequest.
+ */
+export interface GuiFileSaveReservationRequest {
+  selection_id: string;
+  node: number;
+}
+
+/**
  * App manifest (app.json).
  * The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
  * versioned service with tools, lifecycle, caller restrictions, capability
@@ -880,6 +937,28 @@ export function normalizeGuiFileReadIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ, _WIRE_SCHEMA_GUI_FILE_READ, value);
 }
 
+const _WIRE_SCHEMA_GUI_FILE_SAVE: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/gui_file_save.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"One Root-reserved private scratch name for atomic replacement of an already selected existing writable file. This is not arbitrary parent-directory write or an owner-side temporary file.\",\"properties\":{\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"name\":{\"pattern\":\"^\\\\.cos-save-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reservation_id\":{\"pattern\":\"^ss-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"reservation_id\",\"selection_id\",\"node\",\"parent_node\",\"name\",\"expires_in_ms\"],\"title\":\"Draft GUI reserved atomic save\",\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileSave(value: unknown): asserts value is GuiFileSave & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_SAVE, _WIRE_SCHEMA_GUI_FILE_SAVE, value, "GuiFileSave", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_SAVE, _WIRE_SCHEMA_GUI_FILE_SAVE, value);
+}
+
+export function normalizeGuiFileSaveIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_SAVE, _WIRE_SCHEMA_GUI_FILE_SAVE, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_WRITE: WireRule = decodeWireJson("{\"$defs\":{\"GuiFileSaveReservationRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"},\"GuiFileWriteRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"},\"GuiFileWriteStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_write.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned independent write selection for one existing regular file in this authenticated GUI instance. Pending is not permission. Write never grants read, directory mutation, deletion or execution.\",\"properties\":{\"access\":{\"const\":\"write\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"denied\",\"stale\",\"expired\",\"revoked\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation only. Never source identity or path authority.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"node\",\"access\",\"state\"],\"title\":\"Draft GUI selected file write\",\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileWrite(value: unknown): asserts value is GuiFileWrite & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_WRITE, _WIRE_SCHEMA_GUI_FILE_WRITE, value, "GuiFileWrite", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_WRITE, _WIRE_SCHEMA_GUI_FILE_WRITE, value);
+}
+
+export function normalizeGuiFileWriteIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_WRITE, _WIRE_SCHEMA_GUI_FILE_WRITE, value);
+}
+
 const _WIRE_SCHEMA_MCP_CALL_CONTEXT: WireRule = decodeWireJson("{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}") as WireRule;
 
 export function validateMcpCallContext(value: unknown): asserts value is McpCallContext & Record<string, unknown> {
@@ -955,5 +1034,38 @@ export function validateGuiFileReadStatusRequest(value: unknown): asserts value 
 
 export function normalizeGuiFileReadStatusRequestIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileWriteRequest(value: unknown): asserts value is GuiFileWriteRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, value, "GuiFileWriteRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, value);
+}
+
+export function normalizeGuiFileWriteRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileWriteStatusRequest(value: unknown): asserts value is GuiFileWriteStatusRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, value, "GuiFileWriteStatusRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, value);
+}
+
+export function normalizeGuiFileWriteStatusRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, _WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST: WireRule = decodeWireJson("{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}") as WireRule;
+
+export function validateGuiFileSaveReservationRequest(value: unknown): asserts value is GuiFileSaveReservationRequest & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, value, "GuiFileSaveReservationRequest", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, value);
+}
+
+export function normalizeGuiFileSaveReservationRequestIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, _WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST, value);
 }
 

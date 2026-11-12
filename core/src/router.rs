@@ -341,12 +341,20 @@ fn request_netdiag_clawd(params: Value) -> Result<Value, String> {
 
 fn request_wire_clawd(command: Command, params: Value) -> Result<Value, String> {
     let request = crate::clawd::protocol::Request::build(command, params);
-    let response =
-        (if matches!(command, Command::GuiFileReadRequest | Command::GuiFileReadStatus) {
-            crate::clawd::client::request_gui_resource_blocking(request)
-        } else {
-            crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
-        })
+    wire_clawd_response(command,
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request))
+}
+
+fn request_gui_resource(command: Command, params: Value) -> Result<Value, String> {
+    let request = crate::clawd::protocol::Request::build(command, params);
+    wire_clawd_response(command, crate::clawd::client::request_gui_resource_blocking(request))
+}
+
+fn wire_clawd_response(
+    command: Command,
+    response: Result<crate::clawd::protocol::Response, crate::clawd::client::ClientError>,
+) -> Result<Value, String> {
+    let response = response
             .map_err(|error| {
                 let code = if error.may_have_dispatched() {
                     "indeterminate"
@@ -1133,18 +1141,26 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
-    if name == "__gui-file-read" {
-        if args.len() != 3 || !matches!(args[1].as_str(), "request" | "status")
+    if matches!(name.as_str(), "__gui-file-read" | "__gui-file-write") {
+        if args.len() != 3 || !(matches!(args[1].as_str(), "request" | "status")
+                || name == "__gui-file-write" && args[1] == "reserve")
             || args[2] != "--request-stdin"
-        { return Err("GUI selected read bridge requires `request|status --request-stdin`".into()); }
-        let mut parameters = parse_internal_request_object(stdin_data.as_deref(), 4096, "GUI selected read")?;
+        { return Err("GUI selected-file bridge requires `request|status` or write `reserve` with --request-stdin".into()); }
+        let mut parameters = parse_internal_request_object(stdin_data.as_deref(), 4096, "GUI selected file")?;
         if parameters.contains_key("session") {
-            return Err("GUI selected read derives its session from the bound Host".into());
+            return Err("GUI selected file derives its session from the bound Host".into());
         }
-        let session = env::var("COS_SESSION").map_err(|_| "GUI selected read requires its bound session")?;
+        let session = env::var("COS_SESSION").map_err(|_| "GUI selected file requires its bound session")?;
         parameters.insert("session".into(), json!(session));
-        let command = if args[1] == "request" { Command::GuiFileReadRequest } else { Command::GuiFileReadStatus };
-        let value = request_wire_clawd(command, Value::Object(parameters))?;
+        let command = match (name.as_str(), args[1].as_str()) {
+            ("__gui-file-read", "request") => Command::GuiFileReadRequest,
+            ("__gui-file-read", "status") => Command::GuiFileReadStatus,
+            ("__gui-file-write", "request") => Command::GuiFileWriteRequest,
+            ("__gui-file-write", "status") => Command::GuiFileWriteStatus,
+            ("__gui-file-write", "reserve") => Command::GuiFileSaveReserve,
+            _ => unreachable!("selected-file primitive was checked"),
+        };
+        let value = request_gui_resource(command, Value::Object(parameters))?;
         return Ok(Some(value.to_string()));
     }
 

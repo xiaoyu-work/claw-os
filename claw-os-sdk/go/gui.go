@@ -53,40 +53,99 @@ func FileReadStatus(selectionID string, node uint64) (*GuiFileRead, error) {
 }
 
 func selectedReadCall(action string, request map[string]any) (*GuiFileRead, error) {
+	value, err := selectedFileCall("__gui-file-read", action, request)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSelectedRead(value)
+}
+
+// RequestFileWrite asks Root for independent protected write review, not read authority.
+func RequestFileWrite(node uint64) (*GuiFileWrite, error) {
+	request := map[string]any{"node": node}
+	if err := ValidateGuiFileWriteRequest(request); err != nil {
+		return nil, err
+	}
+	return selectedWriteCall("request", request)
+}
+
+// FileWriteStatus queries the same window and file's write selection.
+func FileWriteStatus(selectionID string, node uint64) (*GuiFileWrite, error) {
+	request := map[string]any{"selection_id": selectionID, "node": node}
+	if err := ValidateGuiFileWriteStatusRequest(request); err != nil {
+		return nil, err
+	}
+	return selectedWriteCall("status", request)
+}
+
+// ReserveFileSave reserves one private scratch name for the selected target only.
+func ReserveFileSave(selectionID string, node uint64) (*GuiFileSave, error) {
+	request := map[string]any{"selection_id": selectionID, "node": node}
+	if err := ValidateGuiFileSaveReservationRequest(request); err != nil {
+		return nil, err
+	}
+	value, err := selectedFileCall("__gui-file-write", "reserve", request)
+	if err != nil {
+		return nil, err
+	}
+	var result GuiFileSave
+	if err := decodeSelectedFile(value, ValidateGuiFileSave, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func selectedWriteCall(action string, request map[string]any) (*GuiFileWrite, error) {
+	value, err := selectedFileCall("__gui-file-write", action, request)
+	if err != nil {
+		return nil, err
+	}
+	var result GuiFileWrite
+	if err := decodeSelectedFile(value, ValidateGuiFileWrite, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func selectedFileCall(bridge, action string, request map[string]any) (any, error) {
 	input, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
-	response, err := cosCallJSON("GUI selected file read",
-		[]string{"__gui-file-read", action, "--request-stdin"}, input)
+	response, err := cosCallJSON("GUI selected file",
+		[]string{bridge, action, "--request-stdin"}, input)
 	if err != nil {
 		return nil, err
 	}
-	return decodeSelectedRead(response.Data)
+	return response.Data, nil
 }
 
 func decodeSelectedRead(value any) (*GuiFileRead, error) {
-	if err := ValidateGuiFileRead(value); err != nil {
+	var result GuiFileRead
+	if err := decodeSelectedFile(value, ValidateGuiFileRead, &result); err != nil {
 		return nil, err
+	}
+	return &result, nil
+}
+
+func decodeSelectedFile(value any, validate func(any) error, result any) error {
+	if err := validate(value); err != nil {
+		return err
 	}
 	normalized := make(map[string]any)
 	for key, field := range value.(map[string]any) {
 		normalized[key] = field
 	}
-	for _, key := range []string{"version", "node", "expires_in_ms"} {
+	for _, key := range []string{"version", "node", "parent_node", "expires_in_ms"} {
 		if field, ok := normalized[key]; ok {
 			normalized[key] = asUint64(field)
 		}
 	}
 	data, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var result GuiFileRead
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return json.Unmarshal(data, result)
 }
 
 // IsGUILaunch reports whether the bridge marked this process as an

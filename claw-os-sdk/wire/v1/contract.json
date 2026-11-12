@@ -7,6 +7,8 @@
       "envelope",
       "file_change_plan",
       "gui_file_read",
+      "gui_file_save",
+      "gui_file_write",
       "mcp_call_context",
       "object_ref",
       "owner_path_need",
@@ -15,7 +17,10 @@
     ],
     "targets": [
       { "name": "gui_file_read_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadRequest"] },
-      { "name": "gui_file_read_status_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadStatusRequest"] }
+      { "name": "gui_file_read_status_request", "schema": "gui_file_read", "path": ["$defs", "GuiFileReadStatusRequest"] },
+      { "name": "gui_file_write_request", "schema": "gui_file_write", "path": ["$defs", "GuiFileWriteRequest"] },
+      { "name": "gui_file_write_status_request", "schema": "gui_file_write", "path": ["$defs", "GuiFileWriteStatusRequest"] },
+      { "name": "gui_file_save_reservation_request", "schema": "gui_file_write", "path": ["$defs", "GuiFileSaveReservationRequest"] }
     ],
     "integer_semantics": "lossless JSON decimal-rational lexemes; finite mathematical integers have denominator 1; type validation precedes minimum/maximum checks",
     "error_codes": {

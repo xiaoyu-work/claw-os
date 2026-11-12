@@ -188,6 +188,62 @@ pub struct GuiFileReadStatusRequest {
     pub node: u64,
 }
 
+/// Draft GUI reserved atomic save
+/// One Root-reserved private scratch name for atomic replacement of an already
+/// selected existing writable file. This is not arbitrary parent-directory write
+/// or an owner-side temporary file.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileSave {
+    pub version: u8,
+    pub reservation_id: String,
+    pub selection_id: String,
+    pub node: u64,
+    pub parent_node: u64,
+    pub name: String,
+    pub expires_in_ms: u64,
+}
+
+/// Draft GUI selected file write
+/// Root-owned independent write selection for one existing regular file in this
+/// authenticated GUI instance. Pending is not permission. Write never grants
+/// read, directory mutation, deletion or execution.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileWrite {
+    pub version: u8,
+    pub selection_id: String,
+    pub node: u64,
+    pub access: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_display: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// GuiFileWriteRequest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileWriteRequest {
+    pub node: u64,
+}
+
+/// GuiFileWriteStatusRequest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileWriteStatusRequest {
+    pub selection_id: String,
+    pub node: u64,
+}
+
+/// GuiFileSaveReservationRequest
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GuiFileSaveReservationRequest {
+    pub selection_id: String,
+    pub node: u64,
+}
+
 /// App manifest (app.json)
 /// The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
 /// versioned service with tools, lifecycle, caller restrictions, capability
@@ -630,6 +686,19 @@ pub fn validate_gui_file_read_state(value: &str) -> Result<(), String> {
     }
 }
 
+/// Reject values outside the gui_file_write.state enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_gui_file_write_state(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["pending", "selected", "denied", "stale", "expired", "revoked"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid gui_file_write.state value: {value}"))
+    }
+}
+
 /// Reject values outside the manifest.runtime enum.
 ///
 /// The wire schema lists a closed set of allowed values; a kernel
@@ -1027,6 +1096,32 @@ pub fn normalize_gui_file_read_integers(value: &mut serde_json::Value) {
     normalize_wire_integers(&schema, &schema, value);
 }
 
+const _WIRE_SCHEMA_GUI_FILE_SAVE: &str = r###"{"$id":"https://claw-os.dev/wire/v1/gui_file_save.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"One Root-reserved private scratch name for atomic replacement of an already selected existing writable file. This is not arbitrary parent-directory write or an owner-side temporary file.","properties":{"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"name":{"pattern":"^\\.cos-save-[a-f0-9]{32}$","type":"string","x-full-match":true},"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"parent_node":{"maximum":4096,"minimum":1,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reservation_id":{"pattern":"^ss-[a-f0-9]{32}$","type":"string","x-full-match":true},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","reservation_id","selection_id","node","parent_node","name","expires_in_ms"],"title":"Draft GUI reserved atomic save","type":"object"}"###;
+pub fn validate_gui_file_save(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_SAVE)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileSave", "$")
+}
+
+pub fn normalize_gui_file_save_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_SAVE)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_WRITE: &str = r###"{"$defs":{"GuiFileSaveReservationRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"},"GuiFileWriteRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"},"GuiFileWriteStatusRequest":{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/gui_file_write.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Root-owned independent write selection for one existing regular file in this authenticated GUI instance. Pending is not permission. Write never grants read, directory mutation, deletion or execution.","properties":{"access":{"const":"write","type":"string"},"approval_request_id":{"maxLength":128,"type":"string"},"expires_in_ms":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"reason":{"maxLength":128,"type":"string"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true},"state":{"enum":["pending","selected","denied","stale","expired","revoked"],"type":"string"},"target_display":{"description":"Escaped inert presentation only. Never source identity or path authority.","maxLength":16384,"type":"string"},"version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["version","selection_id","node","access","state"],"title":"Draft GUI selected file write","type":"object"}"###;
+pub fn validate_gui_file_write(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_WRITE)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileWrite", "$")
+}
+
+pub fn normalize_gui_file_write_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_WRITE)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
 const _WIRE_SCHEMA_MCP_CALL_CONTEXT: &str = r###"{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","caller"],"title":"MCP call context","type":"object"}"###;
 pub fn validate_mcp_call_context(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_MCP_CALL_CONTEXT)
@@ -1114,6 +1209,45 @@ pub fn validate_gui_file_read_status_request(value: &serde_json::Value) -> Resul
 
 pub fn normalize_gui_file_read_status_request_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_READ_STATUS_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST: &str = r###"{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"}},"required":["node"],"type":"object"}"###;
+pub fn validate_gui_file_write_request(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileWriteRequest", "$")
+}
+
+pub fn normalize_gui_file_write_request_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_WRITE_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST: &str = r###"{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}"###;
+pub fn validate_gui_file_write_status_request(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileWriteStatusRequest", "$")
+}
+
+pub fn normalize_gui_file_write_status_request_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_WRITE_STATUS_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST: &str = r###"{"additionalProperties":false,"properties":{"node":{"maximum":4096,"minimum":2,"type":"integer","x-go-type":"uint64","x-rust-type":"u64"},"selection_id":{"pattern":"^sw-[a-f0-9]{32}$","type":"string","x-full-match":true}},"required":["selection_id","node"],"type":"object"}"###;
+pub fn validate_gui_file_save_reservation_request(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "GuiFileSaveReservationRequest", "$")
+}
+
+pub fn normalize_gui_file_save_reservation_request_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_GUI_FILE_SAVE_RESERVATION_REQUEST)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

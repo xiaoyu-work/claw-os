@@ -98,9 +98,50 @@ pub fn file_read_status(
     selected_read_call("status", request)
 }
 
+/// Propose this window's native inode for an independent protected write decision.
+/// A pending response never grants native write or content read.
+pub fn request_file_write(node: u64) -> Result<crate::generated::GuiFileWrite, crate::BridgeError> {
+    let request = serde_json::json!({ "node": node });
+    crate::generated::validate_gui_file_write_request(&request)
+        .map_err(|error| selected_file_decode("__gui-file-write", "request", error))?;
+    selected_write_call("request", request)
+}
+
+/// Query the same window and target's independent write selection.
+pub fn file_write_status(
+    selection_id: &str,
+    node: u64,
+) -> Result<crate::generated::GuiFileWrite, crate::BridgeError> {
+    let request = serde_json::json!({ "selection_id": selection_id, "node": node });
+    crate::generated::validate_gui_file_write_status_request(&request)
+        .map_err(|error| selected_file_decode("__gui-file-write", "status", error))?;
+    selected_write_call("status", request)
+}
+
+/// Reserve one private same-parent scratch name for the selected target only.
+/// Creation, writing, fsync and rename still use normal native filesystem IO.
+pub fn reserve_file_save(
+    selection_id: &str,
+    node: u64,
+) -> Result<crate::generated::GuiFileSave, crate::BridgeError> {
+    let request = serde_json::json!({ "selection_id": selection_id, "node": node });
+    crate::generated::validate_gui_file_save_reservation_request(&request)
+        .map_err(|error| selected_file_decode("__gui-file-write", "reserve", error))?;
+    let mut response = selected_file_call("__gui-file-write", "reserve", request)?;
+    crate::generated::validate_gui_file_save(&response)
+        .map_err(|error| selected_file_decode("__gui-file-write", "reserve", error))?;
+    crate::generated::normalize_gui_file_save_integers(&mut response);
+    serde_json::from_value(response)
+        .map_err(|error| selected_file_decode("__gui-file-write", "reserve", error))
+}
+
 fn selected_read_decode(verb: &str, error: impl std::fmt::Display) -> crate::BridgeError {
+    selected_file_decode("__gui-file-read", verb, error)
+}
+
+fn selected_file_decode(bridge: &str, verb: &str, error: impl std::fmt::Display) -> crate::BridgeError {
     crate::BridgeError::Decode {
-        app: "__gui-file-read".into(), verb: verb.into(), message: error.to_string(),
+        app: bridge.into(), verb: verb.into(), message: error.to_string(),
     }
 }
 
@@ -108,11 +149,25 @@ fn selected_read_call(
     verb: &str,
     request: serde_json::Value,
 ) -> Result<crate::generated::GuiFileRead, crate::BridgeError> {
-    let input = request.to_string();
-    let response = crate::cos_call_json_with_stdin(
-        "__gui-file-read", verb, ["__gui-file-read", verb, "--request-stdin"], input.as_bytes(),
-    )?;
+    let response = selected_file_call("__gui-file-read", verb, request)?;
     selected_read_response(verb, response)
+}
+
+fn selected_file_call(
+    bridge: &str, verb: &str, request: serde_json::Value,
+) -> Result<serde_json::Value, crate::BridgeError> {
+    crate::cos_call_json_with_stdin(bridge, verb, [bridge, verb, "--request-stdin"], request.to_string().as_bytes())
+}
+
+fn selected_write_call(
+    verb: &str, request: serde_json::Value,
+) -> Result<crate::generated::GuiFileWrite, crate::BridgeError> {
+    let mut response = selected_file_call("__gui-file-write", verb, request)?;
+    crate::generated::validate_gui_file_write(&response)
+        .map_err(|error| selected_file_decode("__gui-file-write", verb, error))?;
+    crate::generated::normalize_gui_file_write_integers(&mut response);
+    serde_json::from_value(response)
+        .map_err(|error| selected_file_decode("__gui-file-write", verb, error))
 }
 
 fn selected_read_response(

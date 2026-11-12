@@ -30,8 +30,10 @@ import { createConnection } from "node:net";
 import * as ai from "./ai";
 import * as tools from "./tools";
 import {
-  type GuiFileRead, stringifyWireJson, validateGuiFileRead,
+  type GuiFileRead, type GuiFileWrite, type GuiFileSave, stringifyWireJson, validateGuiFileRead,
   validateGuiFileReadRequest, validateGuiFileReadStatusRequest,
+  validateGuiFileWrite, validateGuiFileWriteRequest, validateGuiFileWriteStatusRequest,
+  validateGuiFileSave, validateGuiFileSaveReservationRequest,
 } from "./generated";
 import { cosCallJson } from "./transport";
 
@@ -54,10 +56,43 @@ export function fileReadStatus(selectionId: string, node: number): GuiFileRead {
 }
 
 function selectedReadCall(action: string, request: { node: number; selection_id?: string }): GuiFileRead {
-  const response = cosCallJson("GUI selected file read",
-    ["__gui-file-read", action, "--request-stdin"], 30_000, stringifyWireJson(request));
+  const response = selectedFileCall("__gui-file-read", action, request);
   validateGuiFileRead(response);
   return response;
+}
+
+/** Propose independent protected write access; no read permission is implied. */
+export function requestFileWrite(node: number): GuiFileWrite {
+  const request = { node };
+  validateGuiFileWriteRequest(request);
+  return selectedWriteCall("request", request);
+}
+
+/** Query this same authenticated window and file's write selection. */
+export function fileWriteStatus(selectionId: string, node: number): GuiFileWrite {
+  const request = { selection_id: selectionId, node };
+  validateGuiFileWriteStatusRequest(request);
+  return selectedWriteCall("status", request);
+}
+
+/** Reserve private scratch for this selected target, never arbitrary siblings. */
+export function reserveFileSave(selectionId: string, node: number): GuiFileSave {
+  const request = { selection_id: selectionId, node };
+  validateGuiFileSaveReservationRequest(request);
+  const response = selectedFileCall("__gui-file-write", "reserve", request);
+  validateGuiFileSave(response);
+  return response;
+}
+
+function selectedWriteCall(action: string, request: { node: number; selection_id?: string }): GuiFileWrite {
+  const response = selectedFileCall("__gui-file-write", action, request);
+  validateGuiFileWrite(response);
+  return response;
+}
+
+function selectedFileCall(bridge: string, action: string, request: { node: number; selection_id?: string }): unknown {
+  return cosCallJson("GUI selected file", [bridge, action, "--request-stdin"],
+    30_000, stringifyWireJson(request));
 }
 
 /**

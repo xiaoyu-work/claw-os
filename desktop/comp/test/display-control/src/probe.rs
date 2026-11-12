@@ -507,6 +507,149 @@ fn selected_read() {
     }
 }
 
+fn selected_write() {
+    use std::fs::{File, OpenOptions};
+    use std::io::{Seek, SeekFrom};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::{FileExt, MetadataExt};
+    use std::time::Instant;
+
+    fn wait_write(pending: &claw_os_sdk::generated::GuiFileWrite) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let current = claw_os_sdk::gui::file_write_status(&pending.selection_id, pending.node).unwrap();
+            if current.state == "selected" { return; }
+            assert_eq!(current.state, "pending");
+            assert!(Instant::now() < deadline, "protected write decision deadline");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    let home = PathBuf::from(std::env::var_os("COS_OWNER_HOME").unwrap());
+    let _peer = peer(Protocol::Core);
+    let shared = home.join("write-shared");
+    let write_only = home.join("write-only");
+    let sibling = home.join("write-sibling");
+    let non_utf = home.join(std::ffi::OsString::from_vec(b"write-\xff.bin".to_vec()));
+    assert!(std::fs::write(&shared, b"metadata is not write").is_err());
+    assert!(File::open(&shared).is_err());
+    let node = std::fs::metadata(&shared).unwrap().ino();
+    let pending_read = claw_os_sdk::gui::request_file_read(node).unwrap();
+    assert_eq!(pending_read.state, "pending");
+    std::fs::write(private_marker("write-read-pending.json"), serde_json::to_vec(&pending_read).unwrap()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let status = claw_os_sdk::gui::file_read_status(&pending_read.selection_id, node).unwrap();
+        if status.state == "selected" { break; }
+        assert_eq!(status.state, "pending");
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(OpenOptions::new().write(true).open(&shared).is_err(), "read selection granted write");
+    assert!(claw_os_sdk::gui::request_file_write(std::fs::metadata(&non_utf).unwrap().ino()).is_err(),
+        "non-UTF8 inverse identity must refuse, never convert lossily");
+    let pending_only = claw_os_sdk::gui::request_file_write(std::fs::metadata(&write_only).unwrap().ino()).unwrap();
+    let pending_write = claw_os_sdk::gui::request_file_write(node).unwrap();
+    assert_eq!(pending_only.state, "pending");
+    assert_eq!(pending_write.state, "pending");
+    assert!(std::fs::write(&write_only, b"pending is not write").is_err());
+    std::fs::write(private_marker("write-pending.json"), serde_json::to_vec(&serde_json::json!({
+        "write_only":pending_only, "shared":pending_write,
+    })).unwrap()).unwrap();
+    wait_write(&pending_only);
+    wait_write(&pending_write);
+    let only_bytes: Vec<u8> = (0_usize..8199).map(|index| index.wrapping_mul(31).wrapping_add(3) as u8).collect();
+    let mut only = OpenOptions::new().write(true).truncate(true).open(&write_only).unwrap();
+    only.write_all(&only_bytes).unwrap();
+    only.sync_all().unwrap();
+    assert!(File::open(&write_only).is_err(), "write-only selection exposed owner content");
+    assert!(OpenOptions::new().read(true).write(true).open(&write_only).is_err());
+
+    let mut old_read = File::open(&shared).unwrap();
+    let mut version_one = Vec::new();
+    old_read.read_to_end(&mut version_one).unwrap();
+    let size = version_one.len();
+    let mapped = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ, libc::MAP_PRIVATE, old_read.as_raw_fd(), 0) };
+    assert_ne!(mapped, libc::MAP_FAILED);
+    let writer = OpenOptions::new().read(true).write(true).open(&shared).unwrap();
+    writer.write_all_at(b"owned\0\xff", 7).unwrap();
+    writer.set_len((size + 19) as u64).unwrap();
+    writer.sync_all().unwrap();
+    version_one[7..14].copy_from_slice(b"owned\0\xff");
+    version_one.resize(size + 19, 0);
+    let deadline = Instant::now() + DEADLINE;
+    while unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(7)) } != b'o' {
+        assert!(Instant::now() < deadline, "own canonical write did not refresh the mapped read");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    old_read.seek(SeekFrom::Start(0)).unwrap();
+    let mut current = Vec::new();
+    old_read.read_to_end(&mut current).unwrap();
+    assert_eq!(current, version_one);
+
+    let reservation = claw_os_sdk::gui::reserve_file_save(&pending_write.selection_id, node).unwrap();
+    assert_eq!(reservation.parent_node, std::fs::metadata(&home).unwrap().ino());
+    let scratch = home.join(&reservation.name);
+    assert!(std::fs::write(home.join("unreserved-save-sibling"), b"no directory grant").is_err());
+    let mut temporary = OpenOptions::new().read(true).write(true).create_new(true).open(&scratch).unwrap();
+    let version_two: Vec<u8> = (0_usize..12317).map(|index| index.wrapping_mul(53).wrapping_add(9) as u8).collect();
+    temporary.write_all(&version_two).unwrap();
+    temporary.sync_all().unwrap();
+    assert!(std::fs::rename(&scratch, &sibling).is_err(), "reservation replaced another file");
+    assert!(std::fs::remove_file(&sibling).is_err(), "fs.write became fs.delete");
+    assert!(std::fs::create_dir(home.join("arbitrary-write-directory")).is_err());
+    std::fs::rename(&scratch, &shared).unwrap();
+    File::open(&home).unwrap().sync_all().unwrap();
+    assert!(!scratch.exists());
+    assert_eq!(std::fs::read(&shared).unwrap(), version_two, "own replacement lost the existing read selection");
+    old_read.seek(SeekFrom::Start(0)).unwrap();
+    current.clear();
+    old_read.read_to_end(&mut current).unwrap();
+    assert_eq!(current, version_one, "retained old FD followed the replacement");
+    assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(7)) }, b'o');
+    assert!(writer.write_all_at(b"stale", 0).is_err(), "old writable FD changed a detached inode");
+    temporary.seek(SeekFrom::Start(0)).unwrap();
+    current.clear();
+    temporary.read_to_end(&mut current).unwrap();
+    assert_eq!(current, version_two, "retained private scratch lost its authored bytes");
+    let newest = OpenOptions::new().write(true).open(&shared).unwrap();
+    newest.write_all_at(b"Z", 0).unwrap();
+    newest.sync_all().unwrap();
+    assert_eq!(std::fs::read(&shared).unwrap()[0], b'Z');
+    temporary.seek(SeekFrom::Start(0)).unwrap();
+    let mut first = [0];
+    temporary.read_exact(&mut first).unwrap();
+    assert_eq!(first[0], version_two[0], "scratch read exposed later target content");
+    assert_eq!(claw_os_sdk::gui::file_read_status(&pending_read.selection_id, node).unwrap().state, "selected");
+    assert_eq!(claw_os_sdk::gui::file_write_status(&pending_write.selection_id, node).unwrap().state, "selected");
+    let unused = claw_os_sdk::gui::request_file_write(std::fs::metadata(&sibling).unwrap().ino()).unwrap();
+    let pending = claw_os_sdk::gui::request_file_write(std::fs::metadata(home.join("write-pending-sibling")).unwrap().ino()).unwrap();
+    std::fs::write(private_marker("write-cleanup-reviews.json"), serde_json::to_vec(&serde_json::json!({
+        "unused":unused,"pending":pending,
+    })).unwrap()).unwrap();
+    let group = unsafe { libc::getpgrp() };
+    let (mut ready, mut report) = UnixStream::pair().unwrap();
+    ready.set_read_timeout(Some(DEADLINE)).unwrap();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        drop(ready);
+        own_process_group(group);
+        report.write_all(b"ready").unwrap();
+    } else {
+        drop(report);
+        let mut confirmed = [0; 5];
+        ready.read_exact(&mut confirmed).unwrap();
+        assert_eq!(&confirmed, b"ready");
+        std::fs::write(private_marker("selected-write-ready"), b"canonical write/save and retained read revisions").unwrap();
+    }
+    loop {
+        assert_eq!(unsafe { std::ptr::read_volatile(mapped.cast::<u8>().add(7)) }, b'o');
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn native_fs_kernel(view: &str) {
     use std::fs::{File, OpenOptions};
     use std::io::{Seek, SeekFrom};
@@ -823,6 +966,7 @@ fn main() {
         "aliases" => aliases(),
         "metadata" => home_metadata(),
         "selected-read" => selected_read(),
+        "selected-write" => selected_write(),
         _ => panic!("unknown private GUI probe mode"),
     }
     println!(

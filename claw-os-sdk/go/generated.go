@@ -158,6 +158,53 @@ type GuiFileReadStatusRequest struct {
 	Node uint64 `json:"node"`
 }
 
+// GuiFileSave — Draft GUI reserved atomic save.
+// One Root-reserved private scratch name for atomic replacement of an already
+// selected existing writable file. This is not arbitrary parent-directory write
+// or an owner-side temporary file.
+type GuiFileSave struct {
+	Version int `json:"version"`
+	ReservationId string `json:"reservation_id"`
+	SelectionId string `json:"selection_id"`
+	Node uint64 `json:"node"`
+	ParentNode uint64 `json:"parent_node"`
+	Name string `json:"name"`
+	ExpiresInMs uint64 `json:"expires_in_ms"`
+}
+
+// GuiFileWrite — Draft GUI selected file write.
+// Root-owned independent write selection for one existing regular file in this
+// authenticated GUI instance. Pending is not permission. Write never grants
+// read, directory mutation, deletion or execution.
+type GuiFileWrite struct {
+	Version int `json:"version"`
+	SelectionId string `json:"selection_id"`
+	Node uint64 `json:"node"`
+	Access string `json:"access"`
+	State string `json:"state"`
+	ApprovalRequestId string `json:"approval_request_id,omitempty"`
+	TargetDisplay string `json:"target_display,omitempty"`
+	ExpiresInMs uint64 `json:"expires_in_ms,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// GuiFileWriteRequest — GuiFileWriteRequest.
+type GuiFileWriteRequest struct {
+	Node uint64 `json:"node"`
+}
+
+// GuiFileWriteStatusRequest — GuiFileWriteStatusRequest.
+type GuiFileWriteStatusRequest struct {
+	SelectionId string `json:"selection_id"`
+	Node uint64 `json:"node"`
+}
+
+// GuiFileSaveReservationRequest — GuiFileSaveReservationRequest.
+type GuiFileSaveReservationRequest struct {
+	SelectionId string `json:"selection_id"`
+	Node uint64 `json:"node"`
+}
+
 // Manifest — App manifest (app.json).
 // The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
 // versioned service with tools, lifecycle, caller restrictions, capability
@@ -482,6 +529,15 @@ func ValidateGuiFileReadState(value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid gui_file_read.state value: %q", value)
+}
+
+// ValidateGuiFileWriteState reports an error if value is not in the gui_file_write.state enum.
+func ValidateGuiFileWriteState(value string) error {
+	switch value {
+	case "pending", "selected", "denied", "stale", "expired", "revoked":
+		return nil
+	}
+	return fmt.Errorf("invalid gui_file_write.state value: %q", value)
 }
 
 // ValidateManifestRuntime reports an error if value is not in the manifest.runtime enum.
@@ -846,6 +902,32 @@ func ValidateGuiFileRead(value any) error {
 	return validateWireSchema(schema, schema, value, "GuiFileRead", "$")
 }
 
+const wireSchemaGuiFileSave = "{\"$id\":\"https://claw-os.dev/wire/v1/gui_file_save.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"One Root-reserved private scratch name for atomic replacement of an already selected existing writable file. This is not arbitrary parent-directory write or an owner-side temporary file.\",\"properties\":{\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"name\":{\"pattern\":\"^\\\\.cos-save-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"parent_node\":{\"maximum\":4096,\"minimum\":1,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reservation_id\":{\"pattern\":\"^ss-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"reservation_id\",\"selection_id\",\"node\",\"parent_node\",\"name\",\"expires_in_ms\"],\"title\":\"Draft GUI reserved atomic save\",\"type\":\"object\"}"
+
+// ValidateGuiFileSave validates a value against wire/v1/gui_file_save.schema.json.
+func ValidateGuiFileSave(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileSave))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileSave", "$")
+}
+
+const wireSchemaGuiFileWrite = "{\"$defs\":{\"GuiFileSaveReservationRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"},\"GuiFileWriteRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"},\"GuiFileWriteStatusRequest\":{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/gui_file_write.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Root-owned independent write selection for one existing regular file in this authenticated GUI instance. Pending is not permission. Write never grants read, directory mutation, deletion or execution.\",\"properties\":{\"access\":{\"const\":\"write\",\"type\":\"string\"},\"approval_request_id\":{\"maxLength\":128,\"type\":\"string\"},\"expires_in_ms\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"reason\":{\"maxLength\":128,\"type\":\"string\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true},\"state\":{\"enum\":[\"pending\",\"selected\",\"denied\",\"stale\",\"expired\",\"revoked\"],\"type\":\"string\"},\"target_display\":{\"description\":\"Escaped inert presentation only. Never source identity or path authority.\",\"maxLength\":16384,\"type\":\"string\"},\"version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"version\",\"selection_id\",\"node\",\"access\",\"state\"],\"title\":\"Draft GUI selected file write\",\"type\":\"object\"}"
+
+// ValidateGuiFileWrite validates a value against wire/v1/gui_file_write.schema.json.
+func ValidateGuiFileWrite(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileWrite))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileWrite", "$")
+}
+
 const wireSchemaMcpCallContext = "{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}"
 
 // ValidateMcpCallContext validates a value against wire/v1/mcp_call_context.schema.json.
@@ -935,4 +1017,43 @@ func ValidateGuiFileReadStatusRequest(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "GuiFileReadStatusRequest", "$")
+}
+
+const wireSchemaGuiFileWriteRequest = "{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"}},\"required\":[\"node\"],\"type\":\"object\"}"
+
+// ValidateGuiFileWriteRequest validates a value against wire/v1/gui_file_write_request.schema.json.
+func ValidateGuiFileWriteRequest(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileWriteRequest))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileWriteRequest", "$")
+}
+
+const wireSchemaGuiFileWriteStatusRequest = "{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}"
+
+// ValidateGuiFileWriteStatusRequest validates a value against wire/v1/gui_file_write_status_request.schema.json.
+func ValidateGuiFileWriteStatusRequest(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileWriteStatusRequest))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileWriteStatusRequest", "$")
+}
+
+const wireSchemaGuiFileSaveReservationRequest = "{\"additionalProperties\":false,\"properties\":{\"node\":{\"maximum\":4096,\"minimum\":2,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\"},\"selection_id\":{\"pattern\":\"^sw-[a-f0-9]{32}$\",\"type\":\"string\",\"x-full-match\":true}},\"required\":[\"selection_id\",\"node\"],\"type\":\"object\"}"
+
+// ValidateGuiFileSaveReservationRequest validates a value against wire/v1/gui_file_save_reservation_request.schema.json.
+func ValidateGuiFileSaveReservationRequest(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaGuiFileSaveReservationRequest))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "GuiFileSaveReservationRequest", "$")
 }

@@ -59,6 +59,38 @@ pub struct FileReadStatusRequest {
     pub node: NativeNode,
 }
 
+pub type FileWriteRequest = FileReadRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct WriteSelectionId(String);
+
+impl WriteSelectionId {
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+impl<'de> Deserialize<'de> for WriteSelectionId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if !value.strip_prefix("sw-").is_some_and(|id| id.len() == 32
+            && id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        {
+            return Err(serde::de::Error::custom("invalid selected write status identifier"));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileWriteStatusRequest {
+    pub session: Token,
+    pub selection_id: WriteSelectionId,
+    pub node: NativeNode,
+}
+
+pub type FileSaveReservationRequest = FileWriteStatusRequest;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
 pub struct EntryName(Text<64>);

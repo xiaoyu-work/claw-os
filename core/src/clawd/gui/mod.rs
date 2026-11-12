@@ -16,7 +16,9 @@ mod supervision;
 #[cfg(target_os = "linux")]
 mod selected_read;
 #[cfg(target_os = "linux")]
-pub(crate) use selected_read::{file_read_status, request_file_read};
+pub(crate) use selected_read::{
+    file_read_status, request_file_read, request_file_write, file_write_status, reserve_file_save,
+};
 #[cfg(target_os = "linux")]
 pub(crate) use supervision::validate_optional_mounts;
 #[cfg(target_os = "linux")]
@@ -46,6 +48,12 @@ pub(crate) async fn request_file_read(
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) use request_file_read as file_read_status;
+#[cfg(not(target_os = "linux"))]
+pub(crate) use request_file_read as request_file_write;
+#[cfg(not(target_os = "linux"))]
+pub(crate) use request_file_read as file_write_status;
+#[cfg(not(target_os = "linux"))]
+pub(crate) use request_file_read as reserve_file_save;
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn validate_optional_mounts(

@@ -101,7 +101,10 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
         || matches!(command, super::routes::Command::AppGuiLaunch
             | super::routes::Command::AppGuiWait | super::routes::Command::AppGuiStop)
         || matches!(command, super::routes::Command::GuiFileReadRequest
-            | super::routes::Command::GuiFileReadStatus)
+            | super::routes::Command::GuiFileReadStatus
+            | super::routes::Command::GuiFileWriteRequest
+            | super::routes::Command::GuiFileWriteStatus
+            | super::routes::Command::GuiFileSaveReserve)
         || command == super::routes::Command::SystemRegionalSettingsControl
         || command == super::routes::Command::SystemMailControl
         || command.as_str().starts_with("system.review.")
@@ -128,13 +131,16 @@ pub fn request_blocking(
     request_blocking_inner(socket_path.as_ref(), request, false)
 }
 
-/// Root authenticates this provider hop in its mandatory GUI connect mediator.
-/// Namespace-translated peer UIDs are never accepted as approval authority.
+/// This provider hop is pinned/authenticated in the Root GUI connect mediator.
+/// Namespace-translated peer UIDs are not used as Root or approval authority.
 #[cfg(target_os = "linux")]
 pub(crate) fn request_gui_resource_blocking(request: Request) -> Result<Response, ClientError> {
     use super::routes::Command;
-    if !matches!(request.command, Command::GuiFileReadRequest | Command::GuiFileReadStatus) {
-        return Err(ClientError::before_dispatch("private GUI transport accepts only selected-file read resource commands"));
+    if !matches!(request.command,
+        Command::GuiFileReadRequest | Command::GuiFileReadStatus
+        | Command::GuiFileWriteRequest | Command::GuiFileWriteStatus | Command::GuiFileSaveReserve)
+    {
+        return Err(ClientError::before_dispatch("private GUI transport accepts only selected-file resource commands"));
     }
     request_blocking_inner(
         Path::new(crate::worker::linux::SANDBOX_BROKER_SOCKET), request, true,

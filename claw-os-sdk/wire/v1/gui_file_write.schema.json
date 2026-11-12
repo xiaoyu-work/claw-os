@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/gui_file_write.schema.json",
+  "title": "Draft GUI selected file write",
+  "description": "Root-owned independent write selection for one existing regular file in this authenticated GUI instance. Pending is not permission. Write never grants read, directory mutation, deletion or execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "selection_id", "node", "access", "state"],
+  "properties": {
+    "version": { "type": "integer", "const": 1, "minimum": 1, "maximum": 1 },
+    "selection_id": { "type": "string", "pattern": "^sw-[a-f0-9]{32}$", "x-full-match": true },
+    "node": { "type": "integer", "minimum": 2, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "access": { "type": "string", "const": "write" },
+    "state": { "type": "string", "enum": ["pending", "selected", "denied", "stale", "expired", "revoked"] },
+    "approval_request_id": { "type": "string", "maxLength": 128 },
+    "target_display": { "type": "string", "maxLength": 16384, "description": "Escaped inert presentation only. Never source identity or path authority." },
+    "expires_in_ms": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615, "x-rust-type": "u64", "x-go-type": "uint64" },
+    "reason": { "type": "string", "maxLength": 128 }
+  },
+  "$defs": {
+    "GuiFileWriteRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node"],
+      "properties": {
+        "node": { "type": "integer", "minimum": 2, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" }
+      }
+    },
+    "GuiFileWriteStatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_id", "node"],
+      "properties": {
+        "selection_id": { "type": "string", "pattern": "^sw-[a-f0-9]{32}$", "x-full-match": true },
+        "node": { "type": "integer", "minimum": 2, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" }
+      }
+    },
+    "GuiFileSaveReservationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selection_id", "node"],
+      "properties": {
+        "selection_id": { "type": "string", "pattern": "^sw-[a-f0-9]{32}$", "x-full-match": true },
+        "node": { "type": "integer", "minimum": 2, "maximum": 4096, "x-rust-type": "u64", "x-go-type": "uint64" }
+      }
+    }
+  }
+}

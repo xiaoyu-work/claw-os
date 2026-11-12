@@ -99,3 +99,30 @@ test("selected read transports native nodes and keeps pending distinct from sele
     assert.throws(() => gui.requestFileRead(7));
   } finally { primitive.mock.restore(); }
 });
+
+test("selected write and atomic save transmit only Root resource references", () => {
+  const selection = `sw-${"b".repeat(32)}`;
+  const save = { version: 1, reservation_id: `ss-${"c".repeat(32)}`,
+    selection_id: selection, node: 9, parent_node: 1,
+    name: `.cos-save-${"c".repeat(32)}`, expires_in_ms: 170000 };
+  const calls: unknown[][] = [];
+  const primitive = mock.method(transport, "cosCallJson", (...args: unknown[]) => {
+    calls.push(args);
+    if (calls.length === 3) return save;
+    return { version: 1, selection_id: selection, node: 9, access: "write",
+      state: calls.length === 1 ? "pending" : "selected" };
+  });
+  try {
+    assert.equal(gui.requestFileWrite(9).state, "pending");
+    assert.equal(gui.fileWriteStatus(selection, 9).access, "write");
+    assert.equal(gui.reserveFileSave(selection, 9).name, save.name);
+    for (const [index, action] of ["request", "status", "reserve"].entries()) {
+      assert.deepEqual(calls[index][1], ["__gui-file-write", action, "--request-stdin"]);
+    }
+    assert.deepEqual(JSON.parse(calls[0][3] as string), { node: 9 });
+    assert.deepEqual(JSON.parse(calls[2][3] as string), { selection_id: selection, node: 9 });
+    assert.throws(() => gui.reserveFileSave(`sr-${"b".repeat(32)}`, 9));
+    primitive.mock.mockImplementation(() => ({ ...save, name: "../sibling" }));
+    assert.throws(() => gui.reserveFileSave(selection, 9));
+  } finally { primitive.mock.restore(); }
+});

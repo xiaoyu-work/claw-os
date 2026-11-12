@@ -48,6 +48,28 @@ fn selected_read_pending_and_closed_reply_are_not_authority() {
 }
 
 #[test]
+fn selected_write_and_save_require_their_closed_root_dtos() {
+    let write = serde_json::json!({
+        "version":1,"selection_id":format!("sw-{}", "b".repeat(32)),
+        "node":9,"access":"write","state":"pending",
+    });
+    crate::generated::validate_gui_file_write(&write).unwrap();
+    let mut read = write.clone();
+    read["access"] = serde_json::json!("read");
+    assert!(crate::generated::validate_gui_file_write(&read).is_err());
+    let mut save = serde_json::json!({
+        "version":1,"reservation_id":format!("ss-{}", "c".repeat(32)),
+        "selection_id":format!("sw-{}", "b".repeat(32)), "node":9, "parent_node":1,
+        "name":format!(".cos-save-{}", "c".repeat(32)), "expires_in_ms":170000,
+    });
+    crate::generated::validate_gui_file_save(&save).unwrap();
+    save["name"] = serde_json::json!("../sibling");
+    assert!(crate::generated::validate_gui_file_save(&save).is_err());
+    assert!(request_file_write(0).is_err());
+    assert!(reserve_file_save(&format!("sr-{}", "b".repeat(32)), 9).is_err());
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn overlay_ignores_executable_environment_override() {
     use std::os::unix::fs::PermissionsExt;

@@ -83,14 +83,47 @@ def file_read_status(selection_id: str, node: int) -> generated.GuiFileRead:
 
 
 def _selected_read_call(action: str, request: dict[str, Any]) -> generated.GuiFileRead:
-    value = call_json_with_stdin_binary(
+    value = _selected_file_call("__gui-file-read", action, request)
+    generated.validate_gui_file_read(value)
+    return value
+
+
+def request_file_write(node: int) -> generated.GuiFileWrite:
+    """Request independent protected write review; pending never grants read/write."""
+    request = {"node": node}
+    generated.validate_gui_file_write_request(request)
+    return _selected_write_call("request", request)
+
+
+def file_write_status(selection_id: str, node: int) -> generated.GuiFileWrite:
+    """Query this same window and file's Root-owned write selection."""
+    request = {"selection_id": selection_id, "node": node}
+    generated.validate_gui_file_write_status_request(request)
+    return _selected_write_call("status", request)
+
+
+def reserve_file_save(selection_id: str, node: int) -> generated.GuiFileSave:
+    """Reserve private scratch for this selected target; not sibling write authority."""
+    request = {"selection_id": selection_id, "node": node}
+    generated.validate_gui_file_save_reservation_request(request)
+    value = _selected_file_call("__gui-file-write", "reserve", request)
+    generated.validate_gui_file_save(value)
+    return value
+
+
+def _selected_write_call(action: str, request: dict[str, Any]) -> generated.GuiFileWrite:
+    value = _selected_file_call("__gui-file-write", action, request)
+    generated.validate_gui_file_write(value)
+    return value
+
+
+def _selected_file_call(bridge: str, action: str, request: dict[str, Any]) -> Any:
+    return call_json_with_stdin_binary(
         os.environ.get("CLAW_COS_BIN", "/usr/local/bin/cos"),
-        ["__gui-file-read", action, "--request-stdin"],
+        [bridge, action, "--request-stdin"],
         generated.encode_wire_json(request).encode("utf-8"),
         deadline_unix_ms=time.time_ns() // 1_000_000 + 30_000,
     )
-    generated.validate_gui_file_read(value)
-    return value
 
 
 def is_gui_launch() -> bool:
