@@ -227,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs, file-manager]
+        mode: [display, native-fs, file-manager, native-package]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -247,6 +247,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libpam0g-dev libxkbcommon-dev libwayland-dev \
             bubblewrap python3-idna openssl dbus-daemon iproute2 acl binutils
+      - name: Install private native package fixture dependencies
+        if: matrix.mode == 'native-package'
+        run: |
+          sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
       - name: Pin Cargo cache identity before private fixtures
         id: cargo-inputs
         env:
@@ -286,6 +290,9 @@ jobs:
       - name: Test FileManager intent delivery from fresh protected state
         if: matrix.mode == 'file-manager'
         run: bash scripts/ci/test-boundaries.sh file-manager
+      - name: Test retained package self-handoff through a signed common-Host GUI probe
+        if: matrix.mode == 'native-package'
+        run: bash scripts/ci/test-boundaries.sh native-package
 
   sdk-bindings:
     runs-on: ubuntu-latest
