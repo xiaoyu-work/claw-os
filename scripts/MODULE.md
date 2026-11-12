@@ -142,6 +142,22 @@ established by compilation or pure tests. Run only on a clean disposable GHA
 runner after adopting the intended immutable App source. The App must retain
 its product-owned Layer Shell initializer; an XDG applet-runner surface refuses.
 
+The same synthetic Calendar fixture also arms an instance-bound Root-owned
+passive snapshot selector before its original click. Existing popup SHM
+observation writes only visible rows from the current authenticated role,
+atomically pairing their real bytes with geometry, format, source/stored
+stride, configure serial, commit, timestamp and checksum. The last matching
+live frame is retained through close; later buffer attachments keep replacing
+it within finite limits, without another App command or a synthetic wait.
+The isolated bootstrap validates the final closed-instance metadata and
+container checksum before copying `native-calendar-agenda.shm` to mode0600
+workflow-owner evidence. A bounded export JSON explains skipped/limited
+captures; the existing artifact upload additionally includes that one file.
+Its first 12 bytes are `CLAWCALSHM1\0`, then a little-endian u32 JSON-header
+length, the immutable UTF-8 header, and the packed visible pixel bytes.
+No new dependency/encoder is used. Parent can convert that captured evidence
+after genuine GHA; it alone proves neither SDK decode nor an exact event title.
+
 Production package/release/rootfs paths consume `app_packages.py`, not
 `app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,
 App support/named libraries have separate dpkg owners, and OS staging refuses

@@ -321,6 +321,7 @@ jobs:
             build/${{ matrix.mode }}-input/app-sources.json
             build/${{ matrix.mode }}-input/${{ matrix.mode }}.json
             build/${{ matrix.mode }}-authenticated.*/${{ matrix.mode }}*.json
+            build/${{ matrix.mode }}-authenticated.*/native-calendar-agenda.shm
           if-no-files-found: error
           retention-days: 7
 

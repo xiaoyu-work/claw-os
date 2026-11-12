@@ -293,6 +293,73 @@ BUS
         if [[ "$native_product" == calendar && -f /run/gui-fixture/native-calendar-consumer.json ]]; then
             cp /run/gui-fixture/native-calendar-consumer.json "$private/native-calendar-consumer.json"
             chmod 0644 "$private/native-calendar-consumer.json"
+            /usr/bin/python3 -I -B - "$private" <<'PY'
+import json, os, pathlib, stat, sys
+
+destination = pathlib.Path(sys.argv[1])
+owner = destination.stat()
+source = pathlib.Path("/run/user/62050/native-product-observer")
+
+def protected(path, uid, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        assert stat.S_ISREG(info.st_mode) and info.st_uid == uid and info.st_nlink == 1
+        assert info.st_mode & 0o077 == 0 and info.st_size <= limit
+        data = stream.read(limit + 1)
+        assert len(data) <= limit
+        return data
+
+def publish(name, data):
+    fd = os.open(destination / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+        stream.write(data)
+
+window = json.loads(protected(source / "window.json", 62050, 8192))
+consumer = json.loads(protected(pathlib.Path("/run/gui-fixture/native-calendar-consumer.json"), 0, 16384))
+assert window["instance"] == consumer["instance"] and window["popup"]["closed"]
+index = window["popup"].get("snapshot") or {}
+assert index == (consumer.get("passive_agenda_snapshot") or {})
+copied, reason = False, index.get("status", "no-captured-frame")
+if index.get("status") == "saved" and index.get("closed") and not index.get("mapped"):
+    if index.get("matches_current_configure") and index["snapshot_commit"] == index["latest_buffer_commit"]:
+        assert index["latest_buffer_commit"] == window["popup"]["buffer_commits"]
+        assert 1 <= index["publications"] <= 32 and index["total_bytes"] <= 32 * 1024 * 1024
+        data = protected(source / "native-calendar-agenda.shm", 62050, 4 * 1024 * 1024 + 4112)
+        assert len(data) == index["file_bytes"] and data[:12] == b"CLAWCALSHM1\0"
+        size = int.from_bytes(data[12:16], "little")
+        assert size <= 4096 and 16 + size <= len(data)
+        frame = json.loads(data[16:16 + size])
+        pixels = data[16 + size:]
+        assert frame["schema"] == "claw.private-calendar-shm-frame/v1"
+        assert frame["synthetic_fixture"] and frame["captured_live"]
+        assert frame["owner_uid"] == 62050 and frame["byte_order"] == "little-endian"
+        assert frame["instance"] == frame["parent_instance"] == window["instance"] == index["instance"]
+        assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
+        assert frame["buffer_commit"] == index["snapshot_commit"]
+        assert frame["configure_serial"] == index["configure_serial"]
+        assert frame["geometry"] == window["popup"]["geometry"]
+        width, height = frame["geometry"][2:]
+        assert 100 <= width <= 4096 and 100 <= height <= 4096
+        assert (frame["raster"]["width"], frame["raster"]["height"]) == (width, height)
+        assert frame["source_format"] in ("argb8888", "xrgb8888")
+        assert frame["stored_stride"] == width * 4 and frame["stored_offset"] == 0
+        assert len(pixels) == frame["stored_bytes"] == width * height * 4
+        checksum = 0xcbf29ce484222325
+        for byte in pixels:
+            checksum = ((checksum ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+        assert f"{checksum:016x}" == frame["pixel_checksum"] == index["pixel_checksum"] == frame["raster"]["pixel_checksum"]
+        publish("native-calendar-agenda.shm", data)
+        copied, reason = True, "latest-live-frame-retained-through-original-close"
+    else:
+        reason = "latest-frame-or-configure-not-captured"
+publish("native-calendar-agenda-export.json", (json.dumps({
+    "schema": "claw.private-calendar-shm-export/v1", "instance": window["instance"],
+    "copied": copied, "reason": reason, "snapshot": index,
+    "reply_decode_asserted": False, "event_text_asserted": False,
+}) + "\n").encode())
+PY
         fi
     fi
     for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..24} session-startup file-manager native-product; do
