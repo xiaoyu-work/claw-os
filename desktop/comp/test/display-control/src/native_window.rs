@@ -502,6 +502,12 @@ impl Window {
         ))
     }
 
+    pub fn primary_pointer_target(&self, instance: &str) -> Option<WlSurface> {
+        let surface = self.input_surface(instance, "primary")?;
+        let raster = self.raster.as_ref()?;
+        (raster["width"] == 800 && raster["height"] == 600).then_some(surface)
+    }
+
     fn panel_popup_origin(&self, surface: &WlSurface) -> Result<()> {
         let panel = self.panel.as_ref().ok_or("popup has no native panel")?;
         let parent = panel

@@ -33,7 +33,13 @@ struct Request {
     surface: String,
     expires: u64,
     strokes: VecDeque<Stroke>,
-    pointer: bool,
+    pointer: Option<PointerAction>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PointerAction {
+    Panel,
+    Primary(u16, u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,12 +54,23 @@ fn panel_click_steps(center: (f64, f64)) -> Result<[PointerStep; 4]> {
     if !(16.0..=512.0).contains(&width) || !(16.0..=128.0).contains(&height) {
         return Err("pointer gesture has no bounded acknowledged panel geometry".into());
     }
-    Ok([
-        PointerStep::Enter(center),
+    Ok(click_steps(center, width))
+}
+
+fn primary_click_steps(x: u16, y: u16) -> Result<[PointerStep; 4]> {
+    if x >= 800 || y >= 600 {
+        return Err("pointer gesture is outside the acknowledged primary geometry".into());
+    }
+    Ok(click_steps((f64::from(x), f64::from(y)), 800.0))
+}
+
+fn click_steps(location: (f64, f64), width: f64) -> [PointerStep; 4] {
+    [
+        PointerStep::Enter(location),
         PointerStep::Button(ButtonState::Pressed),
         PointerStep::Button(ButtonState::Released),
-        PointerStep::Leave((width + 1.0, center.1)),
-    ])
+        PointerStep::Leave((width + 1.0, location.1)),
+    ]
 }
 
 fn text_code(byte: u8) -> Option<u32> {
@@ -110,12 +127,24 @@ fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request>
         return Err("stale, replayed or unbound keyboard request".into());
     }
     let text = value["value"].as_str().ok_or("keyboard value")?;
-    let pointer = value["kind"] == "pointer";
-    if pointer != (surface == "panel") {
-        return Err("pointer/keyboard action does not match its bounded surface role".into());
-    }
+    let pointer = match (value["kind"].as_str(), surface, text) {
+        (Some("pointer"), "panel", "center-click") => Some(PointerAction::Panel),
+        (Some("pointer"), "primary", text) => {
+            let (x, y) = text.split_once(',').ok_or("primary pointer coordinates")?;
+            let (x, y) = (x.parse::<u16>()?, y.parse::<u16>()?);
+            primary_click_steps(x, y)?;
+            if text != format!("{x},{y}") {
+                return Err("noncanonical primary pointer coordinates".into());
+            }
+            Some(PointerAction::Primary(x, y))
+        }
+        (Some("pointer"), _, _) | (_, "panel", _) => {
+            return Err("pointer/keyboard action does not match its bounded surface role".into());
+        }
+        _ => None,
+    };
     let strokes = match value["kind"].as_str() {
-        Some("pointer") if text == "center-click" => VecDeque::new(),
+        Some("pointer") => VecDeque::new(),
         Some("text") if !text.is_empty() && text.len() <= 128 => text
             .bytes()
             .map(|byte| {
@@ -166,19 +195,32 @@ fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request>
     })
 }
 
-fn pointer_click(state: &mut State, instance: &str, now: u64) -> Result<()> {
-    let (surface, center) = state
+fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: u64) -> Result<()> {
+    let window = state
         .native_window
         .as_ref()
-        .and_then(|window| window.panel_pointer_target(instance))
-        .ok_or("pointer target is not this live configured buffered panel")?;
+        .ok_or("native window is absent")?;
+    let (surface, steps) = match action {
+        PointerAction::Panel => {
+            let (surface, center) = window
+                .panel_pointer_target(instance)
+                .ok_or("pointer target is not this live configured buffered panel")?;
+            (surface, panel_click_steps(center)?)
+        }
+        PointerAction::Primary(x, y) => (
+            window
+                .primary_pointer_target(instance)
+                .ok_or("pointer target is not this live configured 800x600 primary surface")?,
+            primary_click_steps(x, y)?,
+        ),
+    };
     let client = state.common.display_handle.get_client(surface.id())?;
     let origin = client
         .get_data::<ClientState>()
         .and_then(|data| data.display_origin.as_ref())
         .ok_or("pointer target has no authenticated display origin")?;
     if !matches!(origin, ClientOrigin::Instance(_))
-        || !origin.layer_shell()
+        || (action == PointerAction::Panel && !origin.layer_shell())
         || origin.selection_read()
         || origin.selection_write()
         || origin
@@ -187,7 +229,7 @@ fn pointer_click(state: &mut State, instance: &str, now: u64) -> Result<()> {
             .as_deref()
             != Some(instance)
     {
-        return Err("pointer target lost its live Root instance/ui.panel lease".into());
+        return Err("pointer target lost its live Root instance or required panel lease".into());
     }
     let pointer = state
         .seat
@@ -196,7 +238,7 @@ fn pointer_click(state: &mut State, instance: &str, now: u64) -> Result<()> {
     if pointer.is_grabbed() {
         return Err("private pointer already has an unrelated grab".into());
     }
-    for step in panel_click_steps(center)? {
+    for step in steps {
         match step {
             PointerStep::Enter(location) => pointer.motion(
                 state,
@@ -238,7 +280,7 @@ fn acknowledge(directory: &Path, request: &Request) -> Result<()> {
         "schema": SCHEMA, "sequence": request.sequence,
         "instance": request.instance, "surface": request.surface,
     });
-    ack[if request.pointer {
+    ack[if request.pointer.is_some() {
         "pointer_events_sent"
     } else {
         "keyboard_events_sent"
@@ -311,8 +353,8 @@ impl Control {
         if now >= request.expires {
             return Err("keyboard command expired before delivery".into());
         }
-        if request.pointer {
-            pointer_click(state, &request.instance, now)?;
+        if let Some(action) = request.pointer {
+            pointer_click(state, &request.instance, action, now)?;
             acknowledge(directory, request)?;
             self.active = None;
             return Ok(());
@@ -411,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn pointer_plan_refuses_keyboard_focus_other_roles_arbitrary_coordinates_and_replay() {
+    fn pointer_plan_refuses_wrong_roles_outside_geometry_and_replay() {
         let mut value = request();
         value["surface"] = "panel".into();
         assert!(decode(&value, 0, 1000).is_err());
@@ -420,7 +462,10 @@ mod tests {
         assert!(decode(&value, 0, 1000).is_err());
         value["kind"] = "pointer".into();
         value["value"] = "center-click".into();
-        assert!(decode(&value, 0, 1000).unwrap().pointer);
+        assert_eq!(
+            decode(&value, 0, 1000).unwrap().pointer,
+            Some(PointerAction::Panel)
+        );
         assert!(decode(&value, 1, 1000).is_err());
         assert!(decode(&value, 0, 2000).is_err());
         for surface in ["primary", "auxiliary", "foreign"] {
@@ -436,6 +481,23 @@ mod tests {
         assert!(decode(&bad, 0, 1000).is_err());
         value["value"] = "12,20".into();
         assert!(decode(&value, 0, 1000).is_err());
+        value["surface"] = "primary".into();
+        assert_eq!(
+            decode(&value, 0, 1000).unwrap().pointer,
+            Some(PointerAction::Primary(12, 20))
+        );
+        for invalid in [
+            "800,0",
+            "0,600",
+            "-1,1",
+            "1,NaN",
+            "01,1",
+            "1,1,1",
+            "center-click",
+        ] {
+            value["value"] = invalid.into();
+            assert!(decode(&value, 0, 1000).is_err(), "{invalid}");
+        }
     }
 
     #[test]
@@ -463,7 +525,10 @@ mod tests {
                     }
                 }
             }
-            assert!(!hovered && !held, "a queued tooltip must see hover cancelled");
+            assert!(
+                !hovered && !held,
+                "a queued tooltip must see hover cancelled"
+            );
         }
         for center in [(0.0, 20.0), (257.0, 20.0), (24.0, 65.0), (f64::NAN, 20.0)] {
             assert!(panel_click_steps(center).is_err());

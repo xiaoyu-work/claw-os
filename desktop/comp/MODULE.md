@@ -74,9 +74,14 @@ Ordinary XDG window bounds and generic synthetic overlay cases are unchanged.
 The panel never receives keyboard focus. The Calendar-only successor reuses
 the protected, finite input-command pattern for two ordinary seat pointer
 clicks: original panel open and close, always at the center of its actual
-already-buffered configure geometry. No caller coordinates, virtual-pointer
-global or input capability is added. Replays, expiry, keyboard actions aimed
-at a noninteractive panel and pointer actions aimed at XDG windows refuse.
+already-buffered configure geometry. The panel accepts no caller coordinates.
+Replays, expiry and keyboard actions aimed at a noninteractive panel refuse.
+The genuine Store successor additionally
+permits one finite ordinary click inside the fixture's already-buffered,
+configure-acknowledged 800x600 primary XDG surface. Canonical integer coordinates
+outside that geometry, auxiliary windows, unconfigured/unbuffered targets or a
+different authenticated instance refuse. No virtual-pointer global, production
+control hook or App input capability is added.
 Each finite click releases the button and moves one logical pixel beyond the
 acknowledged panel width, sending ordinary pointer leave before its frame.
 This clears the original toolkit tooltip's shared hover flag; otherwise its
