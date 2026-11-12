@@ -135,6 +135,62 @@ impl PinnedSources {
         use std::os::unix::io::AsRawFd;
         self.files.iter().map(|file| file.as_raw_fd()).collect()
     }
+
+    fn add_identity(
+        &mut self,
+        uid: u32,
+        gid: u32,
+        home: &Path,
+        actual_numbers: bool,
+    ) -> Result<(), String> {
+        let account = worker_account(uid)?;
+        if account.gid != gid {
+            return Err("worker identity changed during account preparation".into());
+        }
+        let home = home.to_str().ok_or("worker account home is not UTF-8")?;
+        for (target, contents) in account_records(uid, gid, &account.name, home, &account.shell)? {
+            self.add_system_data(target, contents.as_bytes(), actual_numbers)?;
+        }
+        Ok(())
+    }
+
+    fn add_system_data(
+        &mut self,
+        target: &str,
+        contents: &[u8],
+        actual_numbers: bool,
+    ) -> Result<(), String> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::PermissionsExt;
+
+        let fd = unsafe {
+            libc::memfd_create(c"claw-worker-account".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING)
+        };
+        if fd < 0 {
+            return Err(format!("create worker account view: {}", std::io::Error::last_os_error()));
+        }
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        if file.as_raw_fd() < 3 {
+            return Err("worker account descriptor overlaps a standard stream".into());
+        }
+        file.write_all(contents).map_err(|error| error.to_string())?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o444))
+            .map_err(|error| error.to_string())?;
+        let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 {
+            return Err(format!("seal worker account view: {}", std::io::Error::last_os_error()));
+        }
+        let descriptor = if actual_numbers {
+            file.as_raw_fd()
+        } else {
+            PINNED_FD_BASE + self.files.len() as libc::c_int
+        };
+        self.mounts.insert(0, super::policy::Mount::read_only(
+            format!("/proc/self/fd/{descriptor}"), target, MountClass::System,
+        ));
+        self.files.push(file);
+        Ok(())
+    }
 }
 
 /// `open(path, O_PATH | O_NOFOLLOW | O_CLOEXEC)`.
@@ -414,11 +470,13 @@ impl LinuxSandbox {
         }
 
         let actual_numbers = gui.is_some() || launch.root_custody;
-        let pinned = if actual_numbers {
+        let mut pinned = if actual_numbers {
             PinnedSources::open_with_numbers(&mounts, true)?
         } else {
             PinnedSources::open(&mounts)?
         };
+        let home = policy.env.get("HOME").map(Path::new).unwrap_or(&policy.workdir);
+        pinned.add_identity(uid, gid, home, actual_numbers)?;
         let seccomp = seccomp_descriptor(policy.seccomp)?;
         let seccomp_raw = {
             use std::os::unix::io::AsRawFd;
@@ -553,7 +611,9 @@ pub(crate) fn prepare_native_fs_fixture(
         return Err("native filesystem fixture requires the protected App runner".into());
     }
     let bwrap = which("bwrap").ok_or("native filesystem fixture requires bubblewrap")?;
-    let pinned = PinnedSources::open_with_numbers(&policy.mounts, true)?;
+    let mut pinned = PinnedSources::open_with_numbers(&policy.mounts, true)?;
+    let home = policy.env.get("HOME").map(Path::new).unwrap_or(&policy.workdir);
+    pinned.add_identity(owner, gid, home, true)?;
     let seccomp = seccomp_descriptor(policy.seccomp)?;
     let membership = group.try_clone().map_err(|error| error.to_string())?;
     let args = build_bwrap_args_with_seccomp(
@@ -974,6 +1034,16 @@ fn worker_identity() -> Result<(u32, u32), String> {
 }
 
 fn primary_gid(uid: u32) -> Result<u32, String> {
+    worker_account(uid).map(|account| account.gid)
+}
+
+struct WorkerAccount {
+    gid: u32,
+    name: String,
+    shell: String,
+}
+
+fn worker_account(uid: u32) -> Result<WorkerAccount, String> {
     const BUFFER: usize = 16 * 1024;
     let mut buffer = vec![0 as libc::c_char; BUFFER];
     let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
@@ -987,10 +1057,36 @@ fn primary_gid(uid: u32) -> Result<u32, String> {
             &mut result,
         )
     };
-    if code != 0 || result.is_null() {
+    if code != 0 || result.is_null() || passwd.pw_uid != uid
+        || passwd.pw_name.is_null() || passwd.pw_shell.is_null()
+    {
         return Err(format!("passwd lookup failed for worker uid {uid}"));
     }
-    Ok(passwd.pw_gid)
+    let name = unsafe { std::ffi::CStr::from_ptr(passwd.pw_name) }
+        .to_str().map_err(|_| "worker account name is not UTF-8")?.to_owned();
+    let shell = unsafe { std::ffi::CStr::from_ptr(passwd.pw_shell) }
+        .to_str().map_err(|_| "worker account shell is not UTF-8")?.to_owned();
+    Ok(WorkerAccount { gid: passwd.pw_gid, name, shell })
+}
+
+fn account_records(
+    uid: u32,
+    gid: u32,
+    name: &str,
+    home: &str,
+    shell: &str,
+) -> Result<[(&'static str, String); 2], String> {
+    if uid == 0 || name.is_empty() || !Path::new(home).is_absolute()
+        || !shell.is_empty() && !Path::new(shell).is_absolute()
+        || [name, home, shell].iter().any(|field|
+            field.len() > 4096 || field.contains(':') || field.chars().any(char::is_control))
+    {
+        return Err("worker account fields cannot be represented in the private NSS view".into());
+    }
+    Ok([
+        ("/etc/passwd", format!("{name}:x:{uid}:{gid}::{home}:{shell}\n")),
+        ("/etc/group", format!("worker:x:{gid}:\n")),
+    ])
 }
 
 fn which(program: &str) -> Option<PathBuf> {
