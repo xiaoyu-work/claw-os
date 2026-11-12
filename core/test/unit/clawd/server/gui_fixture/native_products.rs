@@ -519,6 +519,7 @@ pub(super) async fn run(group: &std::fs::File) {
             .find_map(|entry| entry.strip_prefix(format!("{key}=").as_bytes()))
     };
     assert_eq!(value("COS_APP_GUI"), Some(b"1".as_slice()));
+    assert_eq!(value("ICED_BACKEND"), Some(b"tiny-skia".as_slice()));
     assert_eq!(value("COS_COMMAND"), Some(b"--gui".as_slice()));
     assert_eq!(value("COS_SESSION"), Some(metadata.session.as_bytes()));
     assert_eq!(

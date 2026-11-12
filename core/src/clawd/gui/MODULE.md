@@ -87,6 +87,11 @@ argument bounds when decoding the launch request, before authorization.
 Locale categories and `LANGUAGE` remain presentation. GUI execution does not
 retain the tool worker's forced `LC_ALL` when the launcher left it unset;
 stdio workers keep their existing deterministic environment.
+The existing Iced renderer preference `ICED_BACKEND` is also closed presentation:
+only `wgpu` and `tiny-skia` are accepted from the launcher and independently
+decoded by Root. Unset retains the product's normal renderer selection.
+This hint neither grants a renderer device nor changes filesystem, display,
+content, Panel or other authority; other toolkits may ignore it.
 
 Root exposes the verified package's read-only `resources/` as
 `COS_APP_RESOURCE_DIR`. Its `usr/share` precedes standard system data roots in
@@ -247,6 +252,9 @@ This is a pending clean-GHA proof, not passing product acceptance or publication
 Managed Editor foreground startup now reaches the authenticated XDG configure
 acknowledgement and its separately pending read review. First-buffer/rendering
 readiness remains a measured gate, not a missing-content-grant diagnosis.
+The hardware-free CI explicitly selects the real binary's already compiled
+`tiny-skia` software backend; it does not replace the ELF or manufacture pixels.
+The normal WGPU path and physical-display acceptance remain separate.
 On a rendering deadline failure, the fixture records the original witness,
 then uses existing checked retirement before the ordinary owner CLI receives
 its normal bounded stdout/stderr outcome. Only then may a JSON-escaped 16-KiB

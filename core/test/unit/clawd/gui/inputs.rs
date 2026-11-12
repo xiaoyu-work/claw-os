@@ -18,6 +18,27 @@ fn every_locale_category_is_presentation_not_panel_authority() {
 }
 
 #[test]
+fn renderer_preference_is_closed_presentation_without_panel_authority() {
+    assert!(!PresentationKey::RendererBackend.is_panel());
+    for backend in ["wgpu", "tiny-skia"] {
+        let request: LaunchRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "app-fixture", "handle": "bound", "args": [],
+            "presentation": {"ICED_BACKEND": backend},
+        })).unwrap();
+        assert_eq!(
+            request.presentation[&PresentationKey::RendererBackend].as_str(),
+            backend,
+        );
+    }
+    for backend in ["", "vulkan", "wgpu,tiny-skia", "../renderer", "tiny-skia\n"] {
+        assert!(serde_json::from_value::<LaunchRequest>(serde_json::json!({
+            "session_id": "app-fixture", "handle": "bound", "args": [],
+            "presentation": {"ICED_BACKEND": backend},
+        })).is_err(), "{backend:?}");
+    }
+}
+
+#[test]
 fn display_bus_loader_and_authority_claims_are_not_presentation_keys() {
     for key in [
         "DISPLAY",
