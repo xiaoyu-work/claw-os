@@ -37,11 +37,17 @@ schemas or model-visible metadata are trusted.
 
 ## Dependencies
 
-Depends only on `crypto` (SHA-256), `ed25519-dalek`, `paths` and
+Depends on `crypto` (canonical/envelope SHA-256), the already-declared `sha2`
+backend (file-body SHA-256), `ed25519-dalek`, `paths` and
 `audit`. It must not depend on `apps`, `agent` or `clawd`: those are
 consumers. Trust roots are compiled-in absolute paths plus the passwd
 home of the effective uid — never environment-derived, so no caller can
 widen trust by setting a variable.
+
+File-body hashing uses the existing CPU-dispatched SHA-256 implementation.
+Every fresh verification still reads and hashes the entire selected package,
+checks its signature and exact inventory, and rejects permission/type changes.
+No hash/stat cache or cached authorization verdict is introduced.
 
 App rollback is a consumer-owned lifecycle operation, not local provenance
 publication. The public router uses the read-only, signature-only retained

@@ -11,6 +11,8 @@ use crate::display_session::registry::{GuiControl, Registry};
 
 use super::{authority, ClientIdentity};
 
+mod selected_source;
+
 pub(crate) struct Draft {
     launch: AppLaunch,
     gui_entry: Option<String>,
@@ -193,7 +195,23 @@ impl Registration {
             Scope::Path(path) => path.len(), _ => 0,
         }));
         let cap = candidates.into_iter().next().ok_or("selected file is outside this surface's declared read needs")?;
-        let (_, ceiling) = super::installed_app_for_session(self.owner(), &self.session_id, self.launch.app_id())?;
+        let expected = crate::provenance::runtime::package_for(self.owner(), &self.session_id)?
+            .ok_or("App session has no bound package identity")?;
+        if expected != self.launch.package_ref() {
+            return Err("selected file registration has another running package identity".into());
+        }
+        let current = selected_source::reverify(
+            self.launch.package(),
+            &crate::provenance::trust_store(),
+        )?;
+        crate::clawd::trust_withdrawal::check_package(self.owner(), &current)?;
+        crate::clawd::trust_withdrawal::check_session(self.owner(), &self.session_id)?;
+        if crate::provenance::runtime::package_for(self.owner(), &self.session_id)?.as_ref()
+            != Some(&expected)
+        {
+            return Err("selected file package identity changed during validation".into());
+        }
+        let ceiling = current.ceiling();
         let caps = CapSet::from_caps([cap.clone()]);
         if ceiling.clamp(&caps).0 != caps {
             return Err("selected read is outside the installed package's authority ceiling".into());
