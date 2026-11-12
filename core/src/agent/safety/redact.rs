@@ -156,10 +156,7 @@ impl Redactor {
                 return true;
             }
         }
-        if self.redact_emails && email_regex().is_match(s) {
-            return true;
-        }
-        false
+        self.redact_emails && email_regex().is_match(s)
     }
 
     /// Return a redacted copy of `s`. If nothing matched, the input is

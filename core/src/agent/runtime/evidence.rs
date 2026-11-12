@@ -478,10 +478,7 @@ fn tool_requires_binding(name: &str, input: &serde_json::Value) -> bool {
         "cos_model" => &["list", "status", "info"],
         _ => &[],
     };
-    if read_commands.contains(&command) {
-        return true;
-    }
-    false
+    read_commands.contains(&command)
 }
 
 fn round2(value: f64) -> f64 {
