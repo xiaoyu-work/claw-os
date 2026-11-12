@@ -227,6 +227,18 @@ fn package_query_wire_rejects_authority_paths_mutation_actions_and_unbounded_sea
     }
     assert!(parse(json!({"session": "fixture", "action": "catalog", "catalog": {"cursor": format!("{}-100", "a".repeat(64))}})).is_ok());
     assert!(parse(json!({"session": "fixture", "action": "catalog", "catalog": {"path": "/private"}})).is_err());
+    for action in ["search", "show", "installed", "available", "catalog", "updates"] {
+        let facts = crate::audit_policy::request_facts("system.package.query", &json!({
+            "session": "fixture", "action": action,
+            "catalog": {"cursor": "not-a-public-audit-field"},
+        }));
+        assert_eq!(facts.params["action"], action);
+        assert!(facts.params.get("catalog").is_none());
+    }
+    let unknown = crate::audit_policy::request_facts("system.package.query", &json!({
+        "session": "fixture", "action": "caller-selected-private-value",
+    }));
+    assert_eq!(unknown.params["action"], crate::audit_policy::OTHER);
 }
 
 #[test]
