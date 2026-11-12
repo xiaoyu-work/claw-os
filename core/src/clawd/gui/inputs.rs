@@ -231,6 +231,8 @@ pub enum PresentationKey {
     LocaleIdentification,
     #[serde(rename = "TZ")]
     Timezone,
+    #[serde(rename = "ICED_BACKEND")]
+    RendererBackend,
     #[serde(rename = "COSMIC_PANEL_NAME")]
     PanelName,
     #[serde(rename = "COSMIC_PANEL_OUTPUT")]
@@ -248,7 +250,7 @@ pub enum PresentationKey {
 }
 
 impl PresentationKey {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Lang,
         Self::Language,
         Self::LocaleAll,
@@ -265,6 +267,7 @@ impl PresentationKey {
         Self::LocaleMeasurement,
         Self::LocaleIdentification,
         Self::Timezone,
+        Self::RendererBackend,
         Self::PanelName,
         Self::PanelOutput,
         Self::PanelSpacing,
@@ -292,6 +295,7 @@ impl PresentationKey {
             Self::LocaleMeasurement => "LC_MEASUREMENT",
             Self::LocaleIdentification => "LC_IDENTIFICATION",
             Self::Timezone => "TZ",
+            Self::RendererBackend => "ICED_BACKEND",
             Self::PanelName => "COSMIC_PANEL_NAME",
             Self::PanelOutput => "COSMIC_PANEL_OUTPUT",
             Self::PanelSpacing => "COSMIC_PANEL_SPACING",
@@ -300,6 +304,13 @@ impl PresentationKey {
             Self::PanelPaddingOverlap => "COSMIC_PANEL_PADDING_OVERLAP",
             Self::PanelSize => "COSMIC_PANEL_SIZE",
         }
+    }
+
+    pub fn validate_value(self, value: &str) -> Result<(), &'static str> {
+        if self == Self::RendererBackend && !matches!(value, "wgpu" | "tiny-skia") {
+            return Err("unsupported GUI renderer preference");
+        }
+        Ok(())
     }
 
     pub fn is_panel(self) -> bool {
@@ -318,13 +329,24 @@ impl PresentationKey {
 
 pub type Presentation = BTreeMap<PresentationKey, Text<1024>>;
 
+fn deserialize_presentation<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Presentation, D::Error> {
+    let values = Presentation::deserialize(deserializer)?;
+    for (key, value) in &values {
+        key.validate_value(value.as_str())
+            .map_err(serde::de::Error::custom)?;
+    }
+    Ok(values)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LaunchRequest {
     pub session_id: Token,
     pub handle: Token,
     pub args: Arguments,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_presentation")]
     pub presentation: Presentation,
 }
 

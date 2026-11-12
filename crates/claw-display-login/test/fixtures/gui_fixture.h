@@ -209,6 +209,8 @@ static int gui_fixture(void) {
                     || setenv("CLAW_DISPLAY_CONTROL_FD", "97", 1) != 0)
                     _exit(122);
                 if (scenario == 25) {
+                    if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0)
+                        _exit(122);
                     execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                           "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
                           "app", "cosmic-edit", "--gui", "/run/display-home/native-editor-startup.txt",

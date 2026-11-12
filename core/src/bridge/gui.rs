@@ -31,6 +31,8 @@ pub(crate) fn launch(
     for key in PresentationKey::ALL {
         match std::env::var(key.as_str()) {
             Ok(value) => {
+                key.validate_value(&value)
+                    .map_err(|error| format!("invalid GUI presentation value: {error}"))?;
                 let value = crate::clawd::wire::bounded::Text::parse(&value)
                     .map_err(|error| format!("invalid GUI presentation value: {error}"))?;
                 presentation.insert(key, value);
