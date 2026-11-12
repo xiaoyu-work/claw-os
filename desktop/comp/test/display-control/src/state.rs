@@ -32,6 +32,9 @@ use wayland_server::{
     protocol::{wl_output::WlOutput, wl_surface::WlSurface},
 };
 
+#[path = "keyboard.rs"]
+mod keyboard;
+
 pub struct ClientState {
     pub compositor: CompositorClientState,
     pub advertised_drm_node: Option<()>,
@@ -65,6 +68,7 @@ pub struct State {
     dragging: bool,
     pub witness: crate::witness::Witness,
     pub native_window: Option<crate::native_window::Window>,
+    keyboard_control: keyboard::Control,
 }
 
 impl State {
@@ -133,6 +137,7 @@ impl State {
             dragging: false,
             witness: Default::default(),
             native_window,
+            keyboard_control: keyboard::Control::default(),
         })
     }
 
@@ -147,6 +152,10 @@ impl State {
 
     pub fn witness_writes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.witness.dispatch(&self.seat)?;
+        let mut keyboard = std::mem::take(&mut self.keyboard_control);
+        let delivered = keyboard.step(self);
+        self.keyboard_control = keyboard;
+        delivered?;
         if let Some(window) = &mut self.native_window {
             window.publish()?;
         }

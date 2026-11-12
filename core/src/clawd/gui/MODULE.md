@@ -263,8 +263,22 @@ its normal bounded stdout/stderr outcome. Only then may a JSON-escaped 16-KiB
 launcher-log tail enter the failure diagnostic. The original 25-second readiness
 deadlines, real-buffer predicate and consent order remain unchanged; cleanup
 never turns the failed gate into success. Renderer/protocol problems require
-separate evidence, not bus/device/Home binds or forced fake parents. Save As
-is not exercised without an existing trusted UI/dialog control.
+separate evidence, not bus/device/Home binds or forced fake parents.
+
+The Editor-only `editor_save_as.rs` UI helper follows those accepted startup
+gates: ordinary Ctrl+T creates an untitled buffer, typed keys author its text and
+Ctrl+S opens the original Git-pinned chooser. Its own rescan focuses the filename
+field, whose Enter action submits Save As. The helper requires a real auxiliary
+chooser frame, an exact independently pending Root creation review, actual
+durable authored bytes and a verified committed Missing inverse. A subsequent
+real UI save must request a new existing-file write decision; leaving it
+unapproved must preserve the created bytes and single mutation. Checked
+retirement must close that pending review and preserve the result.
+Neither keyboard delivery acks nor chooser titles/pixels alone are App outcome
+evidence. The original first-frame, read-consent and 25-second startup gates
+remain unchanged; Files does not invoke this helper. Chooser rescan/focus
+ordering and the full UI route require genuine clean-GHA execution, not a
+source-level Save As success claim.
 
 Only verified committed own effects can advance matching selected resources.
 They preserve existing read consent and all original deadlines. In-place

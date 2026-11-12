@@ -46,13 +46,23 @@ nonuniform client-authored pixel buffer, subsequent frames/title and window
 destruction outside the App sandbox. It never writes an App result or grants
 input, Layer Shell, a bus, a render device or file access. Unsupported renderer
 or protocol requirements remain a hard failure. This headless buffered-window
-check is not physical-display/pixel-perfect acceptance. It supplies no trusted
-keyboard/dialog driver, so it does not claim Editor Save As.
+check is not physical-display/pixel-perfect acceptance.
 The private `render_trace` records read-only pre-commit/pending versus committed
 buffer counts, other-surface buffers, actual frame callbacks sent and output
 bindings. Buffer kinds are 0 absent, 1 new and 2 removed; a current snapshot may
 already be empty after the normal witness consumed it. These counters and
 configure acknowledgements never substitute for a real top-level pixel buffer.
+
+The private keyboard child module accepts only one Root-owned, regular,
+bounded command at a time in this protected fixture directory. Commands bind
+the authenticated instance and an already-buffered primary or single auxiliary
+surface, expire within five seconds and use a strict sequence, closed chords
+or at most 128 supported ASCII characters. It forwards ordinary Smithay seat
+keyboard events, with modifiers released after each stroke. It exposes no
+virtual-keyboard global, production control hook or App input grant. Its ack
+means events were sent, never that an App action succeeded.
+The auxiliary slot is bounded to one normal same-instance toplevel for the
+original chooser; it is not another installed identity or permission union.
 
 From the OS repository root:
 

@@ -275,6 +275,8 @@ display() {
     local selection="${1:-display}"
     if [[ "$selection" == native-editor || "$selection" == native-files ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
+        cargo test --manifest-path desktop/comp/test/display-control/Cargo.toml \
+            --locked keyboard_plan_refuses -- --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
             --product "${selection#native-}" \
             --output "$GITHUB_WORKSPACE/build/$selection-input" \

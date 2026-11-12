@@ -6,6 +6,13 @@ const TARGET: &str = "/run/display-home/native-editor-startup.txt";
 const CONTENT: &[u8] =
     b"Actual product-owned Editor startup.\nMetadata consent is not content consent.\n";
 
+mod editor_save_as {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/editor_save_as.rs"
+    ));
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Product {
     pub(super) name: &'static str,
@@ -317,6 +324,53 @@ fn launcher_output_tail() -> std::io::Result<serde_json::Value> {
     }))
 }
 
+fn process_failure_evidence(
+    retained: &RetainedInstance,
+    process: &NativeProcess,
+) -> serde_json::Value {
+    fn read(path: &Path) -> serde_json::Value {
+        use std::io::Read;
+        let result = (|| {
+            let mut bytes = Vec::new();
+            std::fs::File::open(path)?
+                .take(4096)
+                .read_to_end(&mut bytes)?;
+            Ok::<_, std::io::Error>(String::from_utf8_lossy(&bytes).into_owned())
+        })();
+        match result {
+            Ok(text) => text.into(),
+            Err(error) => serde_json::json!({"unavailable": error.to_string()}),
+        }
+    }
+
+    if let Err(error) = process.identity.assert_current() {
+        return serde_json::json!({"identity_unavailable": error.to_string()});
+    }
+    let root = std::path::PathBuf::from(format!("/proc/{}", process.identity.pid()));
+    let tasks =
+        std::fs::read_dir(root.join("task"))
+            .map(|tasks| {
+                tasks
+        .filter_map(|task| task.ok()).take(32).map(|task| {
+            let path = task.path();
+            serde_json::json!({
+                "tid": task.file_name().to_string_lossy(), "stat": read(&path.join("stat")),
+                "status": read(&path.join("status")), "wchan": read(&path.join("wchan")),
+                "syscall": read(&path.join("syscall")),
+            })
+        }).collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    let group = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()));
+    serde_json::json!({
+        "cmdline": read(&root.join("cmdline")), "stat": read(&root.join("stat")),
+        "task_limit": 32, "tasks": tasks,
+        "cgroup_cpu": group.as_ref().map(|path| read(&path.join("cpu.stat"))).ok(),
+        "cgroup_memory": group.as_ref().map(|path| read(&path.join("memory.current"))).ok(),
+        "cgroup_cpu_limit": group.as_ref().map(|path| read(&path.join("cpu.max"))).ok(),
+    })
+}
+
 async fn renderer_failure(
     control: &OwnedFd,
     pam: &mut Child,
@@ -338,6 +392,7 @@ async fn renderer_failure(
         serde_json::json!({
             "stage": stage, "readiness_gate_failed": true, "window": window,
             "pending_read_reviews": pending, "witness": observe(),
+            "bounded_process_evidence": process_failure_evidence(retained, editor),
         })
     );
 
@@ -708,6 +763,25 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         startup_authority(&metadata.session, &parent, product),
         original
     );
+    let saved = if editor {
+        assert!(
+            read.is_some(),
+            "Editor Save As must follow its accepted startup read"
+        );
+        Some(
+            editor_save_as::run(
+                &control,
+                &mut pam,
+                &retained,
+                &process,
+                &metadata.session,
+                &parent,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
     assert!(
         std::fs::read_to_string("/proc/self/mountinfo")
             .unwrap()
@@ -792,6 +866,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         std::fs::read(home.join("native-editor-unselected.txt")).unwrap(),
         b"unselected content stays private\n"
     );
+    if let Some(saved) = &saved {
+        saved.verify_after_retirement();
+    }
     command(&control, b"WAIT");
     assert_eq!(
         status(&control, &pam, Instant::now() + Duration::from_secs(30)),
@@ -807,8 +884,10 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             .any(|line| line == "populated 0")
     );
     println!(
-        "private actual {}: real signed ELF/resources, native window{} and checked process/runtime/PAM retirement passed; additional UI mutations not exercised",
+        "private actual {}: real signed ELF/resources, native window{} and checked process/runtime/PAM retirement passed; {}",
         product.name, if editor { "/file load" } else { "/metadata-only Home" },
+        if editor { "UI Save As and separately pending overwrite verified" }
+            else { "additional UI mutations not exercised" },
     );
 }
 
