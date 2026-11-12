@@ -2637,7 +2637,10 @@ routes! {
         body: body::PackageQuery,
         audit: &[
             ("session", FieldRule::Token),
-            ("action", FieldRule::Enum(&["search", "show", "installed"])),
+            (
+                "action",
+                FieldRule::Enum(&["search", "show", "installed", "available", "catalog", "updates"]),
+            ),
             ("name", FieldRule::Identifier),
             ("query", FieldRule::Size),
             ("limit", FieldRule::Count),
