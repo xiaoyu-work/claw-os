@@ -103,6 +103,9 @@ impl QueryView {
         if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
             return Err("Calendar query runtime is not protected by Root".into());
         }
+        // The private daemon umask must not remove the dropped reader's search access.
+        fs::set_permissions(root, fs::Permissions::from_mode(0o711))
+            .map_err(|error| error.to_string())?;
         let directory = tempfile::Builder::new()
             .prefix("query-")
             .tempdir_in(root)

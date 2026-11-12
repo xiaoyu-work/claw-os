@@ -22,6 +22,11 @@ impl Fixture {
             std::fs::read("/run/gui-fixture/isolated").unwrap(),
             b"private-v1"
         );
+        assert!(
+            std::fs::read_to_string("/proc/self/status").unwrap()
+                .lines().any(|line| line.split_whitespace().eq(["Umask:", "0077"])),
+            "Calendar must exercise the normal private clawd umask"
+        );
         assert!(!Path::new("/run/cos/calendar-queries").exists());
         let context =
             crate::paths::RoutedPathContext::for_owner(OWNER, PathBuf::from("/run/display-home"));
@@ -100,6 +105,9 @@ impl Fixture {
             queries.is_dir(),
             "the real database reader view was never prepared"
         );
+        let metadata = std::fs::symlink_metadata(queries).unwrap();
+        assert_eq!(metadata.uid(), 0);
+        assert_eq!(metadata.mode() & 0o777, 0o711);
         assert!(
             queries.read_dir().unwrap().next().is_none(),
             "Calendar query view leaked"
