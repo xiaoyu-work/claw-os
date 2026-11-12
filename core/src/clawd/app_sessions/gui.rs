@@ -451,7 +451,9 @@ pub(crate) fn kernel_peer(client: &ClientIdentity) -> Result<ProcessIdentity, St
 pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::Route, String> {
     if matches!(command, super::Command::GuiFileReadRequest | super::Command::GuiFileReadStatus
         | super::Command::GuiFileWriteRequest | super::Command::GuiFileWriteStatus
-        | super::Command::GuiFileSaveReserve) {
+        | super::Command::GuiFileSaveReserve
+        | super::Command::GuiFileCreateRequest | super::Command::GuiFileCreateStatus
+        | super::Command::GuiFileCreateReserve) {
         return Ok(command.route());
     }
     if command == super::Command::GuiPackageIntent {

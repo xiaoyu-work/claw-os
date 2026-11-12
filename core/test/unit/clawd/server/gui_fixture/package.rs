@@ -9,6 +9,7 @@ use clawd_client::system_review::{
 };
 use serde_json::{Value, json};
 use std::io::{BufRead, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -142,37 +143,58 @@ pub(super) fn install_denied_app(key: &crate::provenance::sign::SigningKeyFile) 
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
     let body = r#"
-import json, os, subprocess, sys
+import json, os, pathlib, subprocess, sys, time
+
+def phase(name, code=None):
+    data = {"phase": name, "namespace_pid": os.getpid(), "mcp": os.environ.get("COS_MCP_SERVER") == "1",
+            "monotonic_ns": time.monotonic_ns(), "code": code}
+    path = pathlib.Path(os.environ["COS_DATA_DIR"]) / "package-denial-progress.json"
+    temporary = path.with_suffix(".next")
+    temporary.write_text(json.dumps(data))
+    temporary.replace(path)
 
 def refused():
+    phase("intent-send")
     result = subprocess.run(
         ["/usr/local/bin/cos", "--wire=1", "__package_intent", "--retained",
          "review", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "install",
          "claw-package-acceptance-side-effect"],
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15,
     )
+    phase("intent-reply", result.returncode)
     assert result.returncode != 0, "ordinary/MCP App reached the GUI-only intent endpoint"
+    reply = json.loads(result.stdout)
+    assert reply.get("ok") is False, "GUI intent refusal was not a wire error"
+    assert reply.get("error") == "worker broker has no admission rule for route `gui.package.intent`", \
+        "unrelated CLI failure is not GUI-only route-refusal proof"
+    phase("intent-refused", result.returncode)
     return {"intent_refused": True, "app": os.environ["COS_APP_ID"],
-            "session": os.environ["COS_SESSION"], "mcp": os.environ.get("COS_MCP_SERVER") == "1"}
+            "session": os.environ["COS_SESSION"], "mcp": os.environ.get("COS_MCP_SERVER") == "1",
+            "refusal": "worker-route-not-admitted"}
 
 def run(command, args):
     assert command == "probe" and not args
+    phase("ordinary-entry")
     return refused()
 
 if __name__ == "__main__":
+    phase("mcp-entry")
     for line in sys.stdin:
         message = json.loads(line)
         if "id" not in message:
             continue
         method = message["method"]
         if method == "initialize":
+            phase("mcp-initialize")
             result = {"protocolVersion": message["params"]["protocolVersion"],
                       "capabilities": {"tools": {}},
                       "serverInfo": {"name": "private-package-denial", "version": "1"}}
         elif method == "tools/list":
+            phase("mcp-tools-list")
             result = {"tools": [{"name": "gui-package-denied.intent-probe", "description": "Refuse GUI-only intent",
                       "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}}]}
         elif method == "tools/call":
+            phase("mcp-tools-call")
             context = message["params"]["_meta"]["claw-os.dev/call-context"]
             assert context["caller"]["kind"] == "cli"
             result = {"content": [{"type": "text", "text": json.dumps(refused())}]}
@@ -258,6 +280,9 @@ fn private_native_package_owner() {
         }
         assert!(matches!(argv.first().map(String::as_str),
             Some("package-transactions" | "review" | "app" | "__package_intent")));
+        let label = owner_command(&argv.iter().map(String::as_str).collect::<Vec<_>>());
+        let started = Instant::now();
+        eprintln!("native package helper command={label} phase=cli-start");
         let result = if argv == ["app", DENIED_APP, "intent-probe", "--args-stdin"] {
             claw_os_sdk::cos_call_json_with_stdin("native-package-fixture", "owner", argv, b"{}")
         } else {
@@ -265,6 +290,8 @@ fn private_native_package_owner() {
                 "/usr/local/bin/cos", "native-package-fixture", "owner", argv,
             )
         };
+        eprintln!("native package helper command={label} phase=cli-return ok={} elapsed_ms={}",
+            result.is_ok(), started.elapsed().as_millis());
         println!("{}", match result {
             Ok(value) => json!({"native_package_peer": true, "ok": true, "result": value}),
             Err(error) => json!({"native_package_peer": true, "ok": false, "error": error.to_string()}),
@@ -278,6 +305,66 @@ fn owner_invoke_caps() -> CapSet {
         Cap::new(Verb::AGENT_INVOKE, Scope::name(DENIED_APP)),
         crate::agent::tools::app_gateway::invoke_cap(DENIED_APP, "gui-package-denied.intent-probe").unwrap(),
     ])
+}
+
+fn owner_command(arguments: &[&str]) -> &'static str {
+    match arguments {
+        ["binding"] => "binding",
+        ["app", DENIED_APP, "probe"] => "cos --wire=1 app gui-package-denied probe",
+        ["app", DENIED_APP, "intent-probe", "--args-stdin"] =>
+            "cos --wire=1 app gui-package-denied intent-probe --args-stdin",
+        ["review", "show", _] => "cos --wire=1 review show",
+        ["package-transactions", "--invocation", _] => "cos --wire=1 package-transactions --invocation",
+        ["package-transactions", "--recover", _] => "cos --wire=1 package-transactions --recover",
+        ["package-transactions", _] => "cos --wire=1 package-transactions",
+        _ => "unclassified-command",
+    }
+}
+
+fn owner_wait_snapshot(owner_pid: Option<u32>, label: &str) {
+    let mut processes = Vec::new();
+    let entries = std::fs::read_dir("/proc");
+    let scan_available = entries.is_ok();
+    let entries = entries.into_iter().flatten();
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else { continue; };
+        let Ok(status) = std::fs::read_to_string(entry.path().join("status")) else { continue; };
+        let field = |name| status.lines().find(|line| line.starts_with(name))
+            .and_then(|line| line.split_whitespace().nth(1));
+        let uid = field("Uid:").and_then(|value| value.parse::<u32>().ok());
+        let parent = field("PPid:").and_then(|value| value.parse::<u32>().ok());
+        if uid != Some(OWNER) && !uid.is_some_and(|uid| (61000..61064).contains(&uid))
+            && parent != Some(std::process::id()) { continue; }
+        let args = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
+        let kind = if args.split(|byte| *byte == 0).any(|arg| arg == b"__package_intent") {
+            "nested-gui-intent"
+        } else if args.split(|byte| *byte == 0).any(|arg| arg == b"--host") {
+            "extension-host"
+        } else { "other-fixture-process" };
+        processes.push(json!({"pid": pid, "uid": uid, "parent": parent,
+            "state": field("State:"), "kind": kind,
+            "wait": std::fs::read_to_string(entry.path().join("wchan")).ok()}));
+        if processes.len() == 32 { break; }
+    }
+    eprintln!("native package Root command={label} phase=timeout owner_pid={owner_pid:?} process_scan_available={scan_available} sample_limited={} processes={}",
+        processes.len() == 32, json!(processes));
+    let progress = Path::new("/run/display-home/.local/share/cos/apps")
+        .join(DENIED_APP).join("package-denial-progress.json");
+    let progress = std::fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(progress).ok()
+        .filter(|file| file.metadata().is_ok_and(|metadata| metadata.is_file()))
+        .and_then(|file| serde_json::from_reader::<_, Value>(file.take(4096)).ok());
+    if let Some(progress) = progress {
+        let phase = match progress["phase"].as_str() {
+            Some(phase @ ("ordinary-entry" | "mcp-entry" | "mcp-initialize" | "mcp-tools-list"
+                | "mcp-tools-call" | "intent-send" | "intent-reply" | "intent-refused")) => phase,
+            _ => "unrecognized",
+        };
+        eprintln!("native package App last observed phase={phase} namespace_pid={:?} mcp={:?} code={:?}",
+            progress["namespace_pid"].as_u64(), progress["mcp"].as_bool(), progress["code"].as_i64());
+    } else {
+        eprintln!("native package App phase record unavailable; no execution/refusal conclusion");
+    }
 }
 
 struct OwnerPeer {
@@ -315,7 +402,7 @@ impl OwnerPeer {
         let input = child.stdin.take().unwrap();
         let output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
         let mut peer = Self { child, input, output, session: String::new() };
-        assert_eq!(peer.message().await["ready"], true);
+        assert_eq!(peer.message("owner-ready").await["ready"], true);
         let pid = peer.child.id().unwrap();
         let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
         assert!(raw >= 0);
@@ -356,10 +443,16 @@ impl OwnerPeer {
         peer
     }
 
-    async fn message(&mut self) -> Value {
+    async fn message(&mut self, label: &str) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
-            let line = tokio::time::timeout(Duration::from_secs(20), self.output.next_line())
-                .await.expect("normal-UID package frontend timed out").unwrap()
+            let line = match tokio::time::timeout_at(deadline, self.output.next_line()).await {
+                Ok(line) => line,
+                Err(error) => {
+                    owner_wait_snapshot(self.child.id(), label);
+                    panic!("normal-UID package frontend timed out: command={label}: {error}");
+                }
+            }.unwrap()
                 .expect("normal-UID package frontend exited");
             let Some(start) = line.find('{') else { continue; };
             if let Ok(value) = serde_json::from_str::<Value>(&line[start..]) {
@@ -370,9 +463,15 @@ impl OwnerPeer {
 
     async fn call(&mut self, arguments: &[&str]) -> Value {
         use tokio::io::AsyncWriteExt;
+        let label = owner_command(arguments);
+        let started = Instant::now();
+        eprintln!("native package Root command={label} phase=send");
         self.input.write_all(format!("{}\n", json!(arguments)).as_bytes()).await.unwrap();
         self.input.flush().await.unwrap();
-        self.message().await
+        let result = self.message(label).await;
+        eprintln!("native package Root command={label} phase=reply elapsed_ms={}",
+            started.elapsed().as_millis());
+        result
     }
 
     async fn result(&mut self, arguments: &[&str]) -> Value {
@@ -449,6 +548,7 @@ pub(super) async fn run(group: &std::fs::File) {
     ] {
         let denied = owner.result(&arguments).await;
         assert_eq!(denied["intent_refused"], true, "{denied}");
+        assert_eq!(denied["refusal"], "worker-route-not-admitted");
         assert_eq!(denied["mcp"], arguments.last() == Some(&"--args-stdin"));
     }
     let public = crate::clawd::client::request("/run/cos/clawd.sock", crate::clawd::wire::Request::new(
