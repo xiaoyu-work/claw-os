@@ -106,12 +106,35 @@ nonuniform real SHM bytes through the live authenticated instance's Layer Shell
 role. No XDG window, Panel label, environment, bus, Home/FUSE, selection,
 capture, input or device grant can satisfy this separate predicate.
 Checked whole-cgroup, Wayland-role, runtime and PAM retirement remain mandatory.
-This bounded lane proves the real original icon surface, not an interacted
-picker/agenda, Calendar-service consumer result, default GPU or physical display.
-The latter gates remain explicitly unaccepted; no synthetic provider, clock,
-frame, data response or product code fallback is used. It runs only in clean
-GHA. Its exact source must include the product-owned Layer Shell initializer;
-an earlier applet-runner XDG surface is intentionally refused.
+The consumer successor retains the original icon's 25-second startup gate,
+then permits one separately bounded 25-second original popup open/read/close
+phase. Its two closed pointer commands target the center of the actual
+authenticated, configured, nonuniform panel; neither keyboard focus nor global
+input authority is granted. The same-instance popup must acquire the real
+Layer parent, acknowledge its original geometry and commit real SHM pixels.
+
+Only this lane builds the existing OS `claw-calendar-reader` and stages it at
+its fixed service path inside the fresh isolated bootstrap. No provider enters
+the App payload. The Root fixture creates a synthetic canonical owner Calendar
+SQLite store (including one all-day event spanning the current real UTC day
+and its adjacent days), never calls another App and never changes the clock.
+The original App's installed SDK/Cos CLI must make `system.calendar.day`;
+existing Root audit must show exactly one successful same-owner/session day
+request and the independent exact `data.db.read:calendar` spend for
+`panel-calendar`. The real protected query directory must have been created
+and fully retired, the canonical DB remains byte-identical and no raw DB is
+visible inside the App sandbox. The ordinary original close click and checked
+whole-cgroup/Layer/popup/runtime/PAM retirement remain mandatory.
+`native-calendar-consumer.json` records that bounded evidence outside the App.
+Production audit deliberately omits response records and delivery acknowledgements;
+App reply decoding and exact returned/painted event text are explicitly
+**not asserted**. This is a Root-side service completion plus original-popup
+proof, not an instrumented claim about private App agenda state. No synthetic provider response,
+fake frame, App result hook, second identity or extra consent is introduced.
+Neither default GPU/physical display nor an actual popup/day success is
+established by compilation or pure tests. Run only on a clean disposable GHA
+runner after adopting the intended immutable App source. The App must retain
+its product-owned Layer Shell initializer; an XDG applet-runner surface refuses.
 
 Production package/release/rootfs paths consume `app_packages.py`, not
 `app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,

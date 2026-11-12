@@ -71,8 +71,21 @@ namespace and App labels remain observation, never admission authority.
 Its distinct typed panel record requires a configure acknowledgement, original
 bounded applet geometry, real nonuniform SHM pixels and role destruction.
 Ordinary XDG window bounds and generic synthetic overlay cases are unchanged.
-The panel receives no forced keyboard focus or test input. The original
-Calendar popup/SDK day consumer is not exercised by this icon/lifetime lane.
+The panel never receives keyboard focus. The Calendar-only successor reuses
+the protected, finite input-command pattern for two ordinary seat pointer
+clicks: original panel open and close, always at the center of its actual
+already-buffered configure geometry. No caller coordinates, virtual-pointer
+global or input capability is added. Replays, expiry, keyboard actions aimed
+at a noninteractive panel and pointer actions aimed at XDG windows refuse.
+The new bounded popup witness waits for the real `wlr_layer_surface.get_popup`
+parent assignment under the same live authenticated client/instance before
+configuring or accepting SHM pixels. Its own configure acknowledgement,
+nonuniform raster and destruction are separate from the unchanged XDG window
+and original panel predicates. The original Calendar UI/SDK is not modified;
+successful real owner-scoped reader audit and popup pixels are required by the
+consumer lane, but audit does not expose returned records and no exact agenda
+text rendering is asserted. Source/pure checks are not a passing actual panel
+or consumer result; both remain clean-GHA-only gates.
 
 From the OS repository root:
 

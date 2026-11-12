@@ -20,6 +20,13 @@ mod terminal_pty {
     ));
 }
 
+mod calendar_popup {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/calendar_popup.rs"
+    ));
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Product {
     pub(super) name: &'static str,
@@ -679,6 +686,7 @@ fn bound_gui_session(parent: &str, product: Product) -> Option<String> {
 
 pub(super) async fn run(group: &std::fs::File, product: Product) {
     let editor = product.name == "editor";
+    let calendar_fixture = product.panel.then(calendar_popup::Fixture::prepare);
     let home = Path::new("/run/display-home");
     {
         let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
@@ -1004,6 +1012,10 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     } else {
         None
     };
+    if let Some(fixture) = &calendar_fixture {
+        calendar_popup::run(&control, &mut pam, &retained, &process, &session, fixture).await;
+        assert_eq!(startup_authority(&session, &parent, product), original);
+    }
     assert_eq!(
         std::fs::read_to_string("/proc/self/mountinfo")
             .unwrap()
@@ -1058,6 +1070,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     if let Some(pty) = &pty {
         pty.verify_after_retirement();
     }
+    if let Some(fixture) = &calendar_fixture {
+        fixture.verify_after_retirement();
+    }
     assert!(
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()))
             .unwrap()
@@ -1082,7 +1097,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 && (!product.panel
                     || (record["schema"] == "claw.private-native-panel/v1"
                         && record["role"] == "zwlr_layer_surface_v1"
-                        && record["layer_surfaces"] == 0))
+                        && record["layer_surfaces"] == 0
+                        && record["popup"]["open"] == false
+                        && record["popup"]["closed"] == true))
         }) {
             break;
         }
@@ -1131,7 +1148,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         } else if pty.is_some() {
             "typed shell command, real PTY/shell/child identities and descendant retirement verified"
         } else if product.panel {
-            "original icon pixels only; popup interaction/Calendar-service consumer NOT exercised"
+            "original popup pixels/open/close and authenticated same-owner real SDK/Calendar reader success verified; exact returned/painted event text NOT inspected"
         } else {
             "additional UI mutations not exercised"
         },
