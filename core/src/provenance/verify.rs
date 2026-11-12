@@ -598,9 +598,8 @@ impl LaunchBinding {
 }
 
 fn digest_bytes(data: &[u8]) -> String {
-    let mut h = crate::crypto::Sha256Stream::new();
-    h.update(data);
-    format!("sha256:{}", h.finalize_hex())
+    use sha2::Digest;
+    format!("sha256:{:x}", sha2::Sha256::digest(data))
 }
 
 #[cfg(unix)]

@@ -6,6 +6,24 @@ use std::path::{Path, PathBuf};
 use crate::provenance::sign::{self, SigningKeyFile};
 use crate::provenance::trust::{TrustRootSpec, TRUST_SCHEMA_V1, USAGE_PACKAGE_SIGNING};
 
+#[test]
+fn file_digest_backend_preserves_canonical_sha256_for_binary_inputs() {
+    let data: Vec<u8> = (0_usize..262_173)
+        .map(|index| index.wrapping_mul(43).wrapping_add(17) as u8)
+        .collect();
+    for size in [0, 1, 55, 56, 63, 64, 65, 4093, 4096, 65_543, data.len()] {
+        let mut reference = crate::crypto::Sha256Stream::new();
+        for chunk in data[..size].chunks(4093) {
+            reference.update(chunk);
+        }
+        assert_eq!(
+            digest_bytes(&data[..size]),
+            format!("sha256:{}", reference.finalize_hex()),
+            "signed file digest for {size} bytes",
+        );
+    }
+}
+
 fn tmpdir(label: &str) -> PathBuf {
     let p = crate::test_env::secure_scratch_dir(&format!("verify-{label}"));
     #[cfg(unix)]
