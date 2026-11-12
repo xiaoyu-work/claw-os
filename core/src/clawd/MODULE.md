@@ -165,7 +165,9 @@ nor the public human Store routes grant access.
 The fixed, noninteractive apt-cache/dpkg-query readers run as the authenticated
 owner with scrubbed environment, closed inherited descriptors, no-new-privileges,
 resource limits, bounded output and a twenty-second deadline. APT cache writes
-are disabled; errors do not export backend diagnostics or credentials. No
+are disabled; temporary backing files share the existing finite 256-MiB
+workspace ceiling instead of a zero file-size limit that kills APT reads.
+Errors do not export backend diagnostics or credentials. No
 caller-selected executable, owner, path, source, hook, D-Bus endpoint, refresh
 or mutation crosses this interface. This source interface does not itself
 complete native Store catalog/UI or private-APT acceptance.
