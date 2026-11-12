@@ -23,7 +23,7 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
-| `ci/native_editor_payload.py` | Editor-only private acceptance input: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
+| `ci/native_editor_payload.py` | Explicit Editor/Files private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
 | `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
@@ -67,6 +67,10 @@ Only the existing isolated PAM/display bootstrap signs and runs that payload.
 Run its Root acceptance only on a clean disposable GHA runner, never a shared
 developer host. Parser tests, compilation and ELF preparation alone are not a
 passing native window or file-open result.
+`--product files` uses the same bounded preparation for both original Files
+ELFs, its exact manifest and original resources/licenses. Preparing those
+inputs alone does not establish a managed Files window, its auxiliary desktop
+surface or controlled file operations.
 
 Production package/release/rootfs paths consume `app_packages.py`, not
 `app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,

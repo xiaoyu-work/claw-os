@@ -83,8 +83,10 @@ static int gui_entry(int count, char **arguments) {
     int editor = count == 5 && strcmp(arguments[1], "app") == 0
         && strcmp(arguments[2], "cosmic-edit") == 0 && strcmp(arguments[3], "--gui") == 0
         && strcmp(arguments[4], "/run/display-home/native-editor-startup.txt") == 0;
+    int files = count == 4 && strcmp(arguments[1], "app") == 0
+        && strcmp(arguments[2], "cosmic-files") == 0 && strcmp(arguments[3], "--gui") == 0;
     if (getuid() != 62050 || geteuid() != 62050 || getgid() != 62050
-        || (count != 7 && !editor) || strcmp(arguments[0], "/usr/local/bin/cos") != 0)
+        || (count != 7 && !editor && !files) || strcmp(arguments[0], "/usr/local/bin/cos") != 0)
         return 64;
     const char *runtime = getenv("XDG_RUNTIME_DIR");
     const char *display = getenv("WAYLAND_DISPLAY");
@@ -145,7 +147,7 @@ static int gui_fixture(void) {
         "revoke", "revoke", "revoke", "revoke", "revoke", "revoke", "named",
         "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke", "metadata",
         "selected-read", "selected-write", "package", "metadata-subroot", "selected-create",
-        "native-editor"
+        "native-editor", "native-files"
     };
     pid_t child = -1;
     int gate = -1, result = -1;
@@ -208,9 +210,15 @@ static int gui_fixture(void) {
                     || setenv("COSMIC_SESSION_SOCK", "/run/forged-session", 1) != 0
                     || setenv("CLAW_DISPLAY_CONTROL_FD", "97", 1) != 0)
                     _exit(122);
-                if (scenario == 25) {
+                if (scenario == 25 || scenario == 26) {
                     if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0)
                         _exit(122);
+                    if (scenario == 26) {
+                        execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "app", "cosmic-files", "--gui", (char *)NULL);
+                        _exit(123);
+                    }
                     execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                           "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
                           "app", "cosmic-edit", "--gui", "/run/display-home/native-editor-startup.txt",

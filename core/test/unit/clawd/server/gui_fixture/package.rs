@@ -729,5 +729,5 @@ pub(super) async fn run(group: &std::fs::File) {
 #[test]
 #[ignore = "isolated native-package-only Root PAM/display/APT lane; never run on a shared host"]
 fn private_native_package_self_handoff() {
-    super::private_gui_fixture_selected(false, false, true, false);
+    super::private_gui_fixture_selected(false, false, true, None);
 }
