@@ -135,9 +135,9 @@ pub(crate) async fn query(
                 "found": false, "error": "no package found",
             }));
         }
-        return Err(BrokerError::unavailable(
-            "The system package metadata query failed",
-        ));
+        return Err(BrokerError::unavailable(format!(
+            "The system package metadata query failed ({})", output.status,
+        )));
     }
     match request.action.as_str() {
         "search" => search_result(
