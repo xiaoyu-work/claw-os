@@ -30,7 +30,7 @@ import { createConnection } from "node:net";
 import * as ai from "./ai";
 import * as tools from "./tools";
 import {
-  type GuiFileRead, type GuiFileWrite, type GuiFileSave, type WireJsonValue, stringifyWireJson, validateGuiFileRead,
+  type GuiFileRead, type GuiFileWrite, type GuiFileSave, stringifyWireJson, validateGuiFileRead,
   validateGuiFileReadRequest, validateGuiFileReadStatusRequest,
   validateGuiFileWrite, validateGuiFileWriteRequest, validateGuiFileWriteStatusRequest,
   validateGuiFileSave, validateGuiFileSaveReservationRequest,
@@ -116,13 +116,21 @@ export function reserveFileCreate(selectionId: string, parentNode: number): GuiF
   return value;
 }
 
-function selectedCreateCall(action: string, request: WireJsonValue): GuiFileCreate {
+function selectedCreateCall(
+  action: string,
+  request: { parent_node: number; name?: string; selection_id?: string },
+): GuiFileCreate {
   const value = selectedFileCall("__gui-file-create", action, request);
   validateGuiFileCreate(value);
   return value;
 }
 
-function selectedFileCall(bridge: string, action: string, request: WireJsonValue): unknown {
+function selectedFileCall(
+  bridge: string,
+  action: string,
+  request: { node: number; selection_id?: string }
+    | { parent_node: number; name?: string; selection_id?: string },
+): unknown {
   return cosCallJson("GUI selected file", [bridge, action, "--request-stdin"],
     30_000, stringifyWireJson(request));
 }
