@@ -49,6 +49,11 @@ Every fresh verification still reads and hashes the entire selected package,
 checks its signature and exact inventory, and rejects permission/type changes.
 No hash/stat cache or cached authorization verdict is introduced.
 
+The workspace development profile optimizes the existing `sha2` package, also
+inherited by test builds. This avoids unoptimized full-payload hashing without
+changing dependencies, CPU dispatch, debug checks or fresh verification.
+Release compilation remains unchanged.
+
 App rollback is a consumer-owned lifecycle operation, not local provenance
 publication. The public router uses the read-only, signature-only retained
 artifact resolver and the existing signed Root directory controller. Direct
