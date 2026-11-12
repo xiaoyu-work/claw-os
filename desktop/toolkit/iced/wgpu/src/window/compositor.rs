@@ -174,6 +174,9 @@ impl Compositor {
                             true
                         }
                     });
+            } else {
+                adapter =
+                    instance.request_adapter(&adapter_options).await.ok();
             }
         } else if let Ok(name) = std::env::var("WGPU_ADAPTER_NAME") {
             adapter = instance
