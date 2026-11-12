@@ -56,6 +56,13 @@ pub struct PinnedSources {
     mounts: Vec<super::policy::Mount>,
     /// Held open until after `exec`; dropping them releases the pins.
     files: Vec<std::fs::File>,
+    data: Vec<DataMount>,
+}
+
+#[derive(Debug)]
+struct DataMount {
+    descriptor: libc::c_int,
+    target: PathBuf,
 }
 
 impl PinnedSources {
@@ -128,6 +135,7 @@ impl PinnedSources {
         Ok(Self {
             mounts: pinned,
             files,
+            data: Vec::new(),
         })
     }
 
@@ -143,12 +151,8 @@ impl PinnedSources {
         home: &Path,
         actual_numbers: bool,
     ) -> Result<(), String> {
-        let account = worker_account(uid)?;
-        if account.gid != gid {
-            return Err("worker identity changed during account preparation".into());
-        }
         let home = home.to_str().ok_or("worker account home is not UTF-8")?;
-        for (target, contents) in account_records(uid, gid, &account.name, home, &account.shell)? {
+        for (target, contents) in view_account_records(uid, gid, home, worker_account(uid)?)? {
             self.add_system_data(target, contents.as_bytes(), actual_numbers)?;
         }
         Ok(())
@@ -162,6 +166,7 @@ impl PinnedSources {
     ) -> Result<(), String> {
         use std::os::fd::{AsRawFd, FromRawFd};
         use std::os::unix::fs::PermissionsExt;
+        use std::io::{Seek, SeekFrom};
 
         let fd = unsafe {
             libc::memfd_create(c"claw-worker-account".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING)
@@ -174,6 +179,7 @@ impl PinnedSources {
             return Err("worker account descriptor overlaps a standard stream".into());
         }
         file.write_all(contents).map_err(|error| error.to_string())?;
+        file.seek(SeekFrom::Start(0)).map_err(|error| error.to_string())?;
         file.set_permissions(std::fs::Permissions::from_mode(0o444))
             .map_err(|error| error.to_string())?;
         let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
@@ -185,9 +191,7 @@ impl PinnedSources {
         } else {
             PINNED_FD_BASE + self.files.len() as libc::c_int
         };
-        self.mounts.insert(0, super::policy::Mount::read_only(
-            format!("/proc/self/fd/{descriptor}"), target, MountClass::System,
-        ));
+        self.data.push(DataMount { descriptor, target: PathBuf::from(target) });
         self.files.push(file);
         Ok(())
     }
@@ -488,6 +492,7 @@ impl LinuxSandbox {
         let args = build_bwrap_args_with_seccomp(
             policy, &pinned.mounts, uid, gid, &host_layout(),
             if actual_numbers { seccomp_raw } else { SECCOMP_FD },
+            &pinned.data,
         );
         let mut pinned_fds = pinned.raw_fds();
         resources.seccomp = Some(seccomp);
@@ -618,6 +623,7 @@ pub(crate) fn prepare_native_fs_fixture(
     let membership = group.try_clone().map_err(|error| error.to_string())?;
     let args = build_bwrap_args_with_seccomp(
         policy, &pinned.mounts, owner, gid, &host_layout(), seccomp.as_raw_fd(),
+        &pinned.data,
     );
     let mut command = Command::new(runner);
     command.args(gate.arguments()).arg(bwrap).args(args).env_clear();
@@ -688,7 +694,7 @@ pub fn build_bwrap_args(
     gid: u32,
     layout: &HostLayout,
 ) -> Vec<String> {
-    build_bwrap_args_with_seccomp(policy, mounts, uid, gid, layout, SECCOMP_FD)
+    build_bwrap_args_with_seccomp(policy, mounts, uid, gid, layout, SECCOMP_FD, &[])
 }
 
 fn build_bwrap_args_with_seccomp(
@@ -698,6 +704,7 @@ fn build_bwrap_args_with_seccomp(
     gid: u32,
     layout: &HostLayout,
     seccomp_fd: libc::c_int,
+    data: &[DataMount],
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     macro_rules! push {
@@ -775,6 +782,10 @@ fn build_bwrap_args_with_seccomp(
     );
     push!("--dir", "/var");
     push!("--dir", "/home");
+
+    for mount in data {
+        push!("--perms", "0444", "--ro-bind-data", mount.descriptor, mount.target.display());
+    }
 
     for mount in mounts {
         push!(match (mount.class, mount.mode) {
@@ -1034,7 +1045,8 @@ fn worker_identity() -> Result<(u32, u32), String> {
 }
 
 fn primary_gid(uid: u32) -> Result<u32, String> {
-    worker_account(uid).map(|account| account.gid)
+    worker_account(uid)?.map(|account| account.gid)
+        .ok_or_else(|| format!("passwd lookup failed for worker uid {uid}"))
 }
 
 struct WorkerAccount {
@@ -1043,7 +1055,7 @@ struct WorkerAccount {
     shell: String,
 }
 
-fn worker_account(uid: u32) -> Result<WorkerAccount, String> {
+fn worker_account(uid: u32) -> Result<Option<WorkerAccount>, String> {
     const BUFFER: usize = 16 * 1024;
     let mut buffer = vec![0 as libc::c_char; BUFFER];
     let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
@@ -1057,7 +1069,13 @@ fn worker_account(uid: u32) -> Result<WorkerAccount, String> {
             &mut result,
         )
     };
-    if code != 0 || result.is_null() || passwd.pw_uid != uid
+    if code != 0 {
+        return Err(format!("passwd lookup failed for worker uid {uid}"));
+    }
+    if result.is_null() {
+        return Ok(None);
+    }
+    if passwd.pw_uid != uid
         || passwd.pw_name.is_null() || passwd.pw_shell.is_null()
     {
         return Err(format!("passwd lookup failed for worker uid {uid}"));
@@ -1066,7 +1084,21 @@ fn worker_account(uid: u32) -> Result<WorkerAccount, String> {
         .to_str().map_err(|_| "worker account name is not UTF-8")?.to_owned();
     let shell = unsafe { std::ffi::CStr::from_ptr(passwd.pw_shell) }
         .to_str().map_err(|_| "worker account shell is not UTF-8")?.to_owned();
-    Ok(WorkerAccount { gid: passwd.pw_gid, name, shell })
+    Ok(Some(WorkerAccount { gid: passwd.pw_gid, name, shell }))
+}
+
+fn view_account_records(
+    uid: u32,
+    gid: u32,
+    home: &str,
+    account: Option<WorkerAccount>,
+) -> Result<[(&'static str, String); 2], String> {
+    match account {
+        Some(account) => {
+            account_records(uid, gid, &account.name, home, &account.shell)
+        }
+        None => account_records(uid, gid, &format!("worker-{uid}"), home, "/bin/sh"),
+    }
 }
 
 fn account_records(
