@@ -275,10 +275,13 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
     Ok(())
 }
 
-fn acknowledge(directory: &Path, request: &Request) -> Result<()> {
+fn acknowledge(state: &State, directory: &Path, request: &Request) -> Result<()> {
     let mut ack = serde_json::json!({
         "schema": SCHEMA, "sequence": request.sequence,
         "instance": request.instance, "surface": request.surface,
+        "buffer_commits_at_delivery": state.native_window.as_ref()
+            .and_then(|window| window.input_buffer_commit(&request.instance, &request.surface))
+            .ok_or("input target lost its live buffer before acknowledgement")?,
     });
     ack[if request.pointer.is_some() {
         "pointer_events_sent"
@@ -355,7 +358,7 @@ impl Control {
         }
         if let Some(action) = request.pointer {
             pointer_click(state, &request.instance, action, now)?;
-            acknowledge(directory, request)?;
+            acknowledge(state, directory, request)?;
             self.active = None;
             return Ok(());
         }
@@ -415,7 +418,7 @@ impl Control {
             }
         }
         if request.strokes.is_empty() {
-            acknowledge(directory, request)?;
+            acknowledge(state, directory, request)?;
             self.active = None;
         }
         Ok(())

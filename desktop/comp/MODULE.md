@@ -60,7 +60,10 @@ surface, expire within five seconds and use a strict sequence, closed chords
 or at most 128 supported ASCII characters. It forwards ordinary Smithay seat
 keyboard events, with modifiers released after each stroke. It exposes no
 virtual-keyboard global, production control hook or App input grant. Its ack
-means events were sent, never that an App action succeeded.
+records the live target's actual buffer-commit counter at final event delivery,
+before the compositor dispatches subsequent client commits. This means events
+were sent, never that an App action succeeded. A later-frame witness must exceed
+that delivery counter; a buffer from asynchronous startup is not an input result.
 The auxiliary slot is bounded to one normal same-instance toplevel for the
 original chooser; it is not another installed identity or permission union.
 

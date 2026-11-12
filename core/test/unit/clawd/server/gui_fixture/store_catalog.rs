@@ -179,7 +179,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
         std::fs::rename(next, directory.join("keyboard-command.json")).map_err(|error| error.to_string())?;
         let deadline = Instant::now() + Duration::from_secs(25);
         let baseline = before["buffer_commits"].as_u64().unwrap();
-        let captured = loop {
+        let (captured, delivery_commit) = loop {
             check_native_process(retained, native)?;
             let ack = (|| {
                 let file = std::fs::OpenOptions::new().read(true)
@@ -194,17 +194,22 @@ Description: Private controlled Store inventory\n\n".to_vec();
                 file.take(1025).read_to_end(&mut bytes).ok()?;
                 (bytes.len() <= 1024).then(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok()).flatten()
             })();
-            if ack.is_some_and(|ack| ack["instance"] == instance && ack["sequence"] == 1
+            if let Some(ack) = ack.filter(|ack| ack["schema"] == "claw.private-keyboard/v1"
+                && ack["instance"] == instance && ack["sequence"] == 1
                 && ack["surface"] == "primary" && ack["keyboard_events_sent"] == true) {
+                let delivery_commit = ack["buffer_commits_at_delivery"].as_u64()
+                    .ok_or("ordinary keyboard acknowledgement omitted its actual delivery frame")?;
                 if let Some(record) = observe().filter(|record| {
                     buffered_window(record, &instance) && record["app_id"] == STORE.desktop_id
-                        && record["buffer_commits"].as_u64().is_some_and(|count| count > baseline)
+                        && record["buffer_commits"].as_u64().is_some_and(|count| {
+                            count > baseline && count > delivery_commit
+                        })
                         && record["snapshot"]["status"] == "saved"
                         && record["snapshot"]["snapshot_commit"] == record["buffer_commits"]
                         && record["snapshot"]["latest_buffer_commit"] == record["buffer_commits"]
                         && record["snapshot"]["matches_current_configure"] == true
                 }) {
-                    break record;
+                    break (record, delivery_commit);
                 }
             }
             if Instant::now() >= deadline {
@@ -215,6 +220,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
         let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(REPORT).unwrap()).unwrap();
         report["ordinary_search"] = "prive".into();
         report["ordinary_keyboard_events_sent"] = true.into();
+        report["buffer_commits_at_input_delivery"] = delivery_commit.into();
         report["passive_window_snapshot"] = captured["snapshot"].clone();
         report["window_after_search"] = captured;
         report["coverage"] = "Actual signed native Store reached real Root catalog/inventory/update reads and a new authenticated configured frame after ordinary search keys. Passive own-instance bytes are evidence for inspection, not an automated exact-entry text or reply-decode assertion; payload UI self-handoff remains separate.".into();
