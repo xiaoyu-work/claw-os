@@ -22,11 +22,17 @@ PRODUCTS = {
     "editor": ("cosmic-edit", "com.clawos.Edit", ()),
     "files": ("cosmic-files", "com.clawos.Files", ("bin/cosmic-files-applet",)),
     "terminal": ("cosmic-term", "com.clawos.Term", ()),
+    "calendar": ("panel-calendar", "com.clawos.PanelCalendarButton", ()),
 }
 
 
 def product_layout(product):
     app, desktop_id, auxiliary = PRODUCTS[product]
+    if product == "calendar":
+        return app, ["bin/claw-applet-calendar"], (
+            f"resources/usr/share/applications/{desktop_id}.desktop",
+            f"resources/usr/share/icons/hicolor/scalable/actions/{desktop_id}-symbolic.svg",
+        )
     return app, [f"bin/{app}", *auxiliary], (
         f"resources/usr/share/applications/{desktop_id}.desktop",
         f"resources/usr/share/metainfo/{desktop_id}.metainfo.xml",
@@ -102,7 +108,9 @@ def payload_record(source, payload, lock, product="editor"):
         manifest.get("entry") != entry
         or manifest.get("mcp", {}).get("entry") != entry
         or manifest.get("desktop", {}).get("entry", entry) != entry
-        or manifest.get("desktop", {}).get("exec") != "--gui"
+        or manifest.get("desktop", {}).get("exec") != (
+            "open" if product == "calendar" else "--gui"
+        )
     ):
         raise ValueError("Native fixture must use its normal signed GUI/MCP entry")
     declared = manifest.get("desktop", {}).get("entries", {}).values()
@@ -118,14 +126,14 @@ def payload_record(source, payload, lock, product="editor"):
         )
     ):
         raise ValueError("Native acceptance requires the published 0.2.1 platform pin")
-    if product == "terminal" and platform.get("sha256") != (
+    if product in ("terminal", "calendar") and platform.get("sha256") != (
         "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
     ):
-        raise ValueError("Terminal acceptance requires the approved published platform bytes")
-    for path, original in (
-        (payload / "LICENSE", source / "products" / product / "native/LICENSE"),
-        (payload / "licenses/claw-app-gui-argv/LICENSE", source / "LICENSE"),
-    ):
+        raise ValueError("Native acceptance requires the approved published platform bytes")
+    licenses = [(payload / "LICENSE", source / "products" / product / "native/LICENSE")]
+    if product != "calendar":
+        licenses.append((payload / "licenses/claw-app-gui-argv/LICENSE", source / "LICENSE"))
+    for path, original in licenses:
         if path.read_bytes() != original.read_bytes():
             raise ValueError("Native fixture lost an original product/support license")
     for entry in entries:

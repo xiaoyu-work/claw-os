@@ -23,7 +23,7 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
-| `ci/native_editor_payload.py` | Explicit Editor/Files/Terminal private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
+| `ci/native_editor_payload.py` | Explicit Editor/Files/Terminal/Calendar private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
 | `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
@@ -90,6 +90,25 @@ identity environment, process grant or model fallback is injected.
 This is a clean-GHA-only acceptance gate, not evidence that Terminal has passed
 or permission to publish/adopt another platform. Its public 0.2.1 ABI-1 input
 is restricted to the already approved archive digest.
+
+`--product calendar` prepares the original `claw-applet-calendar` ELF for the
+distinct `panel-calendar` identity, including its original desktop entry,
+symbolic actions icon and GPL license; it neither invents metainfo nor copies
+an unused argv-adapter license. `test-boundaries.sh native-calendar` adds case
+28 through the same PAM/common Host and sandbox. The parent starts with only
+`agent.invoke:panel-calendar`; normal exact-owner protected one-shot reviews
+settle `data.db.read:calendar` and `ui.panel:*`, without widening that parent.
+The panel must acknowledge its original applet-sized configure and submit
+nonuniform real SHM bytes through the live authenticated instance's Layer Shell
+role. No XDG window, Panel label, environment, bus, Home/FUSE, selection,
+capture, input or device grant can satisfy this separate predicate.
+Checked whole-cgroup, Wayland-role, runtime and PAM retirement remain mandatory.
+This bounded lane proves the real original icon surface, not an interacted
+picker/agenda, Calendar-service consumer result, default GPU or physical display.
+The latter gates remain explicitly unaccepted; no synthetic provider, clock,
+frame, data response or product code fallback is used. It runs only in clean
+GHA. Its exact source must include the product-owned Layer Shell initializer;
+an earlier applet-runner XDG surface is intentionally refused.
 
 Production package/release/rootfs paths consume `app_packages.py`, not
 `app_sources.py`. Saved APT evidence is signature/freshness/hash checked again,

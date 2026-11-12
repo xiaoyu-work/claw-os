@@ -5,16 +5,19 @@ selection=all
 native_product_input=
 native_product=
 native_app=
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
     elif [[ "${15}" == --native-files-only ]]; then
         native_product=files
         native_app=cosmic-files
-    else
+    elif [[ "${15}" == --native-terminal-only ]]; then
         native_product=terminal
         native_app=cosmic-term
+    else
+        native_product=calendar
+        native_app=panel-calendar
     fi
     selection="native-$native_product"
     native_product_input=$(realpath -- "${16}")
@@ -248,6 +251,7 @@ BUS
         native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
+        native-calendar) fixture_test=clawd::server::gui_fixture::native_products::private_native_calendar ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
     listing=$("$registry" --list)

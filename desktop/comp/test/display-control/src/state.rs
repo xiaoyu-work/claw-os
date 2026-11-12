@@ -22,7 +22,9 @@ use smithay::{
             primary_selection::{self, PrimarySelectionHandler, PrimarySelectionState},
             wlr_data_control,
         },
-        shell::wlr_layer::{Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState},
+        shell::wlr_layer::{
+            Layer, LayerSurface, LayerSurfaceConfigure, WlrLayerShellHandler, WlrLayerShellState,
+        },
     },
 };
 use std::{io::Write, os::fd::OwnedFd};
@@ -317,10 +319,33 @@ impl WlrLayerShellHandler for State {
             .unwrap();
         assert!(origin.layer_shell());
         assert!(!origin.os_session());
+        if let Some(window) = &mut self.native_window {
+            assert!(matches!(origin, ClientOrigin::Instance(_)));
+            assert!(!origin.selection_read() && !origin.selection_write());
+            let instance = claw_display_control::Epoch(origin.instance().unwrap().0).label();
+            window
+                .new_panel(surface, instance, layer, namespace)
+                .expect("native panel admission failed");
+            return;
+        }
         assert_eq!(layer, Layer::Overlay);
         assert_eq!(namespace, "private-authenticated-panel");
         surface.with_pending_state(|state| state.size = Some((320, 48).into()));
         surface.send_configure();
+    }
+
+    fn ack_configure(&mut self, surface: WlSurface, configure: LayerSurfaceConfigure) {
+        if let Some(window) = &mut self.native_window {
+            window.ack_panel(&surface, configure.serial);
+        }
+    }
+
+    fn layer_destroyed(&mut self, surface: LayerSurface) {
+        if let Some(window) = &mut self.native_window {
+            window
+                .close_panel(&surface)
+                .expect("native panel closure witness failed");
+        }
     }
 }
 impl PrimarySelectionHandler for State {

@@ -64,6 +64,16 @@ means events were sent, never that an App action succeeded.
 The auxiliary slot is bounded to one normal same-instance toplevel for the
 original chooser; it is not another installed identity or permission union.
 
+The actual Calendar lane also observes one real Layer Shell surface, under
+the same Root-created selector and existing production authority filter.
+Only a live `ClientOrigin::Instance` with `ui.panel` can create or commit it;
+namespace and App labels remain observation, never admission authority.
+Its distinct typed panel record requires a configure acknowledgement, original
+bounded applet geometry, real nonuniform SHM pixels and role destruction.
+Ordinary XDG window bounds and generic synthetic overlay cases are unchanged.
+The panel receives no forced keyboard focus or test input. The original
+Calendar popup/SDK day consumer is not exercised by this icon/lifetime lane.
+
 From the OS repository root:
 
 ```bash

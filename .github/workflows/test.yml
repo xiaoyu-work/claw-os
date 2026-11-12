@@ -227,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal]
+        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -252,7 +252,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
       - name: Install real native product build and software-renderer prerequisites
-        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal'
+        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar'
         run: |
           sudo apt-get install -y --no-install-recommends \
             cmake just libfontconfig-dev libfreetype-dev libglib2.0-dev libudev-dev \
@@ -309,8 +309,11 @@ jobs:
       - name: Test actual Terminal ELF empty-authority window, private PTY and checked retirement
         if: matrix.mode == 'native-terminal'
         run: bash scripts/ci/test-boundaries.sh native-terminal
+      - name: Test actual Calendar ELF Layer Shell pixels, protected owner review and checked retirement
+        if: matrix.mode == 'native-calendar'
+        run: bash scripts/ci/test-boundaries.sh native-calendar
       - name: Retain exact native product input and compositor observations
-        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal')
+        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.mode }}-acceptance-${{ github.sha }}

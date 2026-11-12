@@ -273,8 +273,11 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
+        if [[ "$selection" == native-calendar ]]; then
+            cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
+        fi
         if [[ "$selection" == native-terminal ]]; then
             cargo test -p cos --lib --locked native_terminal_session_selection -- --test-threads=1
         fi
@@ -326,7 +329,7 @@ display() {
     fi
     if [[ "$selection" == native-fs ]]; then
         selectors=(--native-fs-only)
-    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal ]]; then
+    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar ]]; then
         selectors=("--$selection-only" "$GITHUB_WORKSPACE/build/$selection-input")
     elif [[ "$selection" == file-manager ]]; then
         selectors=(--file-manager-only)
@@ -451,9 +454,10 @@ case "${1:-}" in
     native-editor) display native-editor ;;
     native-files) display native-files ;;
     native-terminal) display native-terminal ;;
+    native-calendar) display native-calendar ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|applets}" >&2
         exit 2
         ;;
 esac
