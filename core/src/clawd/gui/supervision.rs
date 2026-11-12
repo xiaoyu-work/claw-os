@@ -429,6 +429,7 @@ impl Supervised {
             if self.home.is_some() { resources.release_gui_source_pins(deadline)?; }
         }
         if let Some(home) = &mut self.home { home.retire(deadline)?; }
+        self.home.take();
         if let Some(guard) = &mut self.transport {
             guard.finish(deadline)?;
         }
