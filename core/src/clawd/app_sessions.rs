@@ -1540,6 +1540,12 @@ async fn authenticate_launcher(
         .filter(|host| host.purpose == crate::extension_host::protocol::HostPurpose::Task)
         .and_then(|host| host.authority_session_id.as_deref())
         .or(launcher.parent.as_deref());
+    if let Some(session) = authority_session {
+        // Only Root can acquire its provenance lock; check before launch authority.
+        crate::paths::with_user_override(uid, home.clone(), async {
+            crate::provenance::runtime::assert_live_now(uid, session)
+        }).await?;
+    }
     launcher.activity = authority_session
         .map(|session| crate::caps::activity_boundary::ActivityBoundary::for_session(uid, session))
         .transpose()?

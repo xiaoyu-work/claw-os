@@ -152,6 +152,63 @@ fn delegation(ceiling: CapSet) -> Delegation {
 }
 
 #[test]
+fn ordinary_root_plan_still_requires_exact_caller_invoke() {
+    let _sandbox = approval_sandbox();
+    let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name("ordinary-root-test"));
+    let absent = delegation(CapSet::from_caps([
+        Cap::new(Verb::AGENT_INVOKE, Scope::name("another-app")),
+    ]));
+    let ceiling = Ceiling::for_tier(crate::provenance::TrustTier::System);
+    let plan = |who: &Delegation| {
+        let mut plan = LaunchPlan::default();
+        plan.require(invoke.clone(), who);
+        plan
+    };
+    let error = authorize_plan(&absent, plan(&absent), &ceiling, "ordinary-root-test").unwrap_err();
+    let ids = approval_requests(&error);
+    assert_eq!(ids.len(), 1);
+    let request = crate::approvals::lookup_pending(&ids[0]).unwrap();
+    assert_eq!(request.owner_uid, Some(absent.uid));
+    assert_eq!(request.verb, "agent.invoke");
+    assert_eq!(request.scope, invoke.scope);
+    let exact = delegation(CapSet::from_caps([invoke.clone()]));
+    let granted = authorize_plan(&exact, plan(&exact), &ceiling, "ordinary-root-test").unwrap();
+    assert!(granted.covers(&invoke));
+    assert!(target_session_caps(granted, &invoke).is_empty(),
+        "caller invoke authority must not enter the target App");
+}
+
+#[cfg(unix)]
+#[test]
+fn root_launcher_authentication_keeps_requester_shutdown_denial() {
+    use crate::test_env::TestEnvVarGuard;
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path());
+    let _proc = TestEnvVarGuard::set("COS_PROC_DATA_DIR", root.path());
+    let _state = TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", root.path().join("runtime"));
+    let uid = unsafe { libc::geteuid() };
+    let pid = std::process::id();
+    let session = "ordinary-root-requester";
+    crate::proc::register_session(session_row(
+        session, pid, None,
+        CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("ordinary-root-test"))]),
+    )).unwrap();
+    let client = ClientIdentity {
+        uid: Some(uid), pid: Some(pid), gid: Some(unsafe { libc::getegid() }),
+        execution_uid: None, start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        attended_local: false, extension_host: None,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    assert_eq!(runtime.block_on(authenticate_launcher(&client, uid, root.path().to_path_buf()))
+        .unwrap().parent.as_deref(), Some(session));
+    crate::provenance::runtime::mark_for_shutdown(uid, session, "withdrawn requester");
+    let refused = runtime.block_on(authenticate_launcher(&client, uid, root.path().to_path_buf()))
+        .unwrap_err();
+    assert!(refused.contains("withdrawn requester"), "{refused}");
+}
+
+#[test]
 fn daemon_plan_skips_inactive_calendar_provider_needs() {
     let path = app_sources::app_dir("calendar").join("app.json");
     let manifest = Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
