@@ -28,8 +28,17 @@ use wayland_server::{
     protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
 };
 
-const OBSERVER: &str = "/run/user/62050/native-product-observer";
+pub(crate) const OBSERVER: &str = "/run/user/62050/native-product-observer";
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Default)]
+struct Auxiliary {
+    surface: Option<ToplevelSurface>,
+    configured: bool,
+    commits: u64,
+    raster: Option<serde_json::Value>,
+    closed: bool,
+}
 
 #[derive(Default)]
 struct FrameTrace {
@@ -89,6 +98,7 @@ pub struct Window {
     started: Instant,
     closed: bool,
     trace: FrameTrace,
+    auxiliary: Auxiliary,
 }
 
 impl Window {
@@ -129,7 +139,39 @@ impl Window {
             started: Instant::now(),
             closed: false,
             trace: FrameTrace::default(),
+            auxiliary: Auxiliary::default(),
         }
+    }
+
+    pub fn input_surface(&self, instance: &str, target: &str) -> Option<WlSurface> {
+        if self.instance.as_deref() != Some(instance) || self.closed {
+            return None;
+        }
+        let (surface, configured, commits, raster) = match target {
+            "primary" if self.auxiliary.surface.is_none() => (
+                self.surface.as_ref(),
+                self.configured,
+                self.commits,
+                self.raster.as_ref(),
+            ),
+            "auxiliary" => (
+                self.auxiliary.surface.as_ref(),
+                self.auxiliary.configured,
+                self.auxiliary.commits,
+                self.auxiliary.raster.as_ref(),
+            ),
+            _ => return None,
+        };
+        if !configured
+            || commits == 0
+            || !raster.is_some_and(|pixels| pixels["nonuniform_pixels"] == true)
+        {
+            return None;
+        }
+        surface
+            .map(ToplevelSurface::wl_surface)
+            .filter(|surface| surface.is_alive())
+            .cloned()
     }
 
     fn pre_commit(&mut self, surface: &WlSurface) {
@@ -150,6 +192,11 @@ impl Window {
 
     pub fn commit(&mut self, surface: &WlSurface) -> Result<()> {
         let is_top = self
+            .surface
+            .as_ref()
+            .is_some_and(|top| top.wl_surface() == surface);
+        let is_auxiliary = self
+            .auxiliary
             .surface
             .as_ref()
             .is_some_and(|top| top.wl_surface() == surface);
@@ -182,12 +229,27 @@ impl Window {
                         self.raster = Some(raster(&buffer)?);
                         self.commits = self.commits.checked_add(1).ok_or("frame count overflow")?;
                         self.output.enter(surface);
+                    } else if is_auxiliary {
+                        if !self.auxiliary.configured {
+                            return Err(
+                                "auxiliary attached pixels before configure acknowledgement".into(),
+                            );
+                        }
+                        self.auxiliary.raster = Some(raster(&buffer)?);
+                        self.auxiliary.commits = self
+                            .auxiliary
+                            .commits
+                            .checked_add(1)
+                            .ok_or("auxiliary frame count overflow")?;
+                        self.output.enter(surface);
                     }
                     buffer.release();
                 }
                 BufferAssignment::Removed => {
                     if is_top {
                         self.raster = None;
+                    } else if is_auxiliary {
+                        self.auxiliary.raster = None;
                     }
                 }
             }
@@ -218,6 +280,21 @@ impl Window {
                 (role.title.clone(), role.app_id.clone())
             })
         });
+        let (auxiliary_title, auxiliary_app_id) =
+            self.auxiliary
+                .surface
+                .as_ref()
+                .map_or((None, None), |surface| {
+                    with_states(surface.wl_surface(), |states| {
+                        let role = states
+                            .data_map
+                            .get::<XdgToplevelSurfaceData>()
+                            .unwrap()
+                            .lock()
+                            .unwrap();
+                        (role.title.clone(), role.app_id.clone())
+                    })
+                });
         let (pending_buffer, pending_callbacks, current_buffer, current_callbacks) =
             self.surface.as_ref().map_or((0, 0, 0, 0), |surface| {
                 with_states(surface.wl_surface(), |states| {
@@ -236,14 +313,26 @@ impl Window {
             });
         if title.as_ref().is_some_and(|value| value.len() > 1024)
             || app_id.as_ref().is_some_and(|value| value.len() > 1024)
+            || auxiliary_title
+                .as_ref()
+                .is_some_and(|value| value.len() > 1024)
+            || auxiliary_app_id
+                .as_ref()
+                .is_some_and(|value| value.len() > 1024)
         {
             return Err("native window metadata exceeded the private witness bound".into());
         }
         let record = serde_json::json!({
             "schema": "claw.private-native-window/v1", "instance": instance,
-            "toplevels": usize::from(self.surface.is_some()), "configure_acked": self.configured,
+            "toplevels": usize::from(self.surface.is_some()) + usize::from(self.auxiliary.surface.is_some()),
+            "configure_acked": self.configured,
             "buffer_commits": self.commits, "raster": self.raster,
             "title": title, "app_id": app_id, "closed": self.closed,
+            "auxiliary": {
+                "open": self.auxiliary.surface.is_some(), "closed": self.auxiliary.closed,
+                "configure_acked": self.auxiliary.configured, "buffer_commits": self.auxiliary.commits,
+                "raster": self.auxiliary.raster, "title": auxiliary_title, "app_id": auxiliary_app_id,
+            },
             "render_trace": {
                 "top_pre_commits": self.trace.top_pre_commits,
                 "top_pending_buffers": self.trace.top_pending_buffers,
@@ -357,11 +446,19 @@ impl XdgShellHandler for State {
         assert!(!origin.layer_shell() && !origin.selection_read() && !origin.selection_write());
         let instance = claw_display_control::Epoch(origin.instance().unwrap().0).label();
         let window = self.native_window.as_mut().unwrap();
-        assert!(
-            window.surface.is_none() && !window.closed,
-            "only one actual Editor window is in scope"
-        );
-        window.instance = Some(instance);
+        let primary = window.surface.is_none() && !window.closed && window.instance.is_none();
+        if primary {
+            window.instance = Some(instance);
+        } else {
+            assert!(
+                window.surface.is_some()
+                    && !window.closed
+                    && window.instance.as_deref() == Some(instance.as_str())
+                    && window.auxiliary.surface.is_none()
+                    && !window.auxiliary.closed,
+                "only one primary and one same-instance auxiliary window are in scope"
+            );
+        }
         add_pre_commit_hook::<State, _>(surface.wl_surface(), |state, _, surface| {
             if let Some(window) = &mut state.native_window {
                 window.pre_commit(surface);
@@ -372,7 +469,11 @@ impl XdgShellHandler for State {
             state.states.set(xdg_toplevel::State::Activated);
         });
         surface.send_configure();
-        window.surface = Some(surface);
+        if primary {
+            window.surface = Some(surface);
+        } else {
+            window.auxiliary.surface = Some(surface);
+        }
         window
             .publish()
             .expect("native window witness publication failed");
@@ -387,6 +488,13 @@ impl XdgShellHandler for State {
         {
             window.configured = true;
             window.trace.configure_acks += 1;
+        } else if window
+            .auxiliary
+            .surface
+            .as_ref()
+            .is_some_and(|top| top.wl_surface() == &surface)
+        {
+            window.auxiliary.configured = true;
         }
     }
 
@@ -411,9 +519,20 @@ impl XdgShellHandler for State {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let window = self.native_window.as_mut().unwrap();
-        assert!(window.surface.as_ref().is_some_and(|top| top == &surface));
-        window.surface = None;
-        window.closed = true;
+        if window.surface.as_ref().is_some_and(|top| top == &surface) {
+            window.surface = None;
+            window.closed = true;
+        } else {
+            assert!(
+                window
+                    .auxiliary
+                    .surface
+                    .as_ref()
+                    .is_some_and(|top| top == &surface)
+            );
+            window.auxiliary.surface = None;
+            window.auxiliary.closed = true;
+        }
         window
             .publish()
             .expect("native window closure witness failed");

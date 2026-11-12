@@ -1,0 +1,300 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
+use super::{ClientState, State};
+use crate::display_authority::ClientOrigin;
+use smithay::{
+    backend::input::KeyState,
+    input::keyboard::{FilterResult, Keycode},
+    utils::SERIAL_COUNTER,
+};
+use std::{
+    collections::VecDeque,
+    io::Read,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::Path,
+};
+use wayland_server::Resource;
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const SCHEMA: &str = "claw.private-keyboard/v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stroke {
+    code: u32,
+    control: bool,
+}
+
+struct Request {
+    sequence: u64,
+    instance: String,
+    surface: String,
+    expires: u64,
+    strokes: VecDeque<Stroke>,
+}
+
+fn text_code(byte: u8) -> Option<u32> {
+    const LETTERS: [u32; 26] = [
+        30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17,
+        45, 21, 44,
+    ];
+    match byte {
+        b'a'..=b'z' => Some(LETTERS[usize::from(byte - b'a')]),
+        b'1'..=b'9' => Some(u32::from(byte - b'1') + 2),
+        b'0' => Some(11),
+        b'-' => Some(12),
+        b'.' => Some(52),
+        b'/' => Some(53),
+        b' ' => Some(57),
+        b'\n' => Some(28),
+        _ => None,
+    }
+}
+
+fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request> {
+    let fields = value
+        .as_object()
+        .ok_or("keyboard request is not an object")?;
+    let names = [
+        "schema",
+        "sequence",
+        "instance",
+        "surface",
+        "expires_ms",
+        "kind",
+        "value",
+    ];
+    if fields.len() != names.len()
+        || fields.keys().any(|key| !names.contains(&key.as_str()))
+        || value["schema"] != SCHEMA
+    {
+        return Err("unsupported keyboard request shape".into());
+    }
+    let sequence = value["sequence"].as_u64().ok_or("keyboard sequence")?;
+    let expires = value["expires_ms"].as_u64().ok_or("keyboard deadline")?;
+    let instance = value["instance"].as_str().ok_or("keyboard instance")?;
+    let surface = value["surface"].as_str().ok_or("keyboard surface")?;
+    if sequence != previous + 1
+        || sequence > 32
+        || expires <= now
+        || expires > now.saturating_add(5_000)
+        || instance.len() != 32
+        || !instance
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || !matches!(surface, "primary" | "auxiliary")
+    {
+        return Err("stale, replayed or unbound keyboard request".into());
+    }
+    let text = value["value"].as_str().ok_or("keyboard value")?;
+    let strokes = match value["kind"].as_str() {
+        Some("text") if !text.is_empty() && text.len() <= 128 => text
+            .bytes()
+            .map(|byte| {
+                text_code(byte)
+                    .map(|code| Stroke {
+                        code,
+                        control: false,
+                    })
+                    .ok_or("unsupported keyboard text")
+            })
+            .collect::<std::result::Result<VecDeque<_>, _>>()?,
+        Some("key") => {
+            let stroke = match text {
+                "focus" => None,
+                "ctrl-a" => Some(Stroke {
+                    code: 30,
+                    control: true,
+                }),
+                "ctrl-t" => Some(Stroke {
+                    code: 20,
+                    control: true,
+                }),
+                "ctrl-s" => Some(Stroke {
+                    code: 31,
+                    control: true,
+                }),
+                "enter" => Some(Stroke {
+                    code: 28,
+                    control: false,
+                }),
+                "escape" => Some(Stroke {
+                    code: 1,
+                    control: false,
+                }),
+                _ => return Err("unsupported keyboard chord".into()),
+            };
+            stroke.into_iter().collect()
+        }
+        _ => return Err("unsupported keyboard action".into()),
+    };
+    Ok(Request {
+        sequence,
+        instance: instance.into(),
+        surface: surface.into(),
+        expires,
+        strokes,
+    })
+}
+
+fn read_request(path: &Path) -> Result<Option<serde_json::Value>> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o022 != 0
+        || metadata.len() > 4096
+    {
+        return Err("keyboard request is not protected fixture state".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(4097).read_to_end(&mut bytes)?;
+    if bytes.len() > 4096 {
+        return Err("keyboard request grew beyond its bound".into());
+    }
+    Ok(Some(serde_json::from_slice(&bytes)?))
+}
+
+#[derive(Default)]
+pub(super) struct Control {
+    sequence: u64,
+    active: Option<Request>,
+}
+
+impl Control {
+    pub(super) fn step(&mut self, state: &mut State) -> Result<()> {
+        if state.native_window.is_none() {
+            return Ok(());
+        }
+        let directory = Path::new(crate::native_window::OBSERVER);
+        let now = claw_display_control::wire::monotonic_ms()?;
+        if self.active.is_none() {
+            let Some(value) = read_request(&directory.join("keyboard-command.json"))? else {
+                return Ok(());
+            };
+            if self.sequence > 0 && value["sequence"].as_u64() == Some(self.sequence) {
+                return Ok(());
+            }
+            let request = decode(&value, self.sequence, now)?;
+            self.sequence = request.sequence;
+            self.active = Some(request);
+        }
+        let request = self.active.as_mut().unwrap();
+        if now >= request.expires {
+            return Err("keyboard command expired before delivery".into());
+        }
+        let surface = state
+            .native_window
+            .as_ref()
+            .unwrap()
+            .input_surface(&request.instance, &request.surface)
+            .ok_or("keyboard target is not a live buffered selected surface")?;
+        let client = state.common.display_handle.get_client(surface.id())?;
+        let origin = client
+            .get_data::<ClientState>()
+            .and_then(|data| data.display_origin.as_ref())
+            .ok_or("keyboard target has no authenticated display origin")?;
+        if !matches!(origin, ClientOrigin::Instance(_))
+            || origin
+                .instance()
+                .map(|id| claw_display_control::Epoch(id.0).label())
+                .as_deref()
+                != Some(request.instance.as_str())
+        {
+            return Err("keyboard target is not this authenticated instance".into());
+        }
+        let keyboard = state
+            .seat
+            .get_keyboard()
+            .ok_or("fixture keyboard unavailable")?;
+        if !keyboard.pressed_keys().is_empty() {
+            return Err("fixture keyboard already has held keys".into());
+        }
+        keyboard.set_focus(state, Some(surface), SERIAL_COUNTER.next_serial());
+        if let Some(stroke) = request.strokes.pop_front() {
+            let mut keys = Vec::with_capacity(2);
+            if stroke.control {
+                keys.push(29);
+            }
+            keys.push(stroke.code);
+            for code in keys.iter().copied() {
+                keyboard.input::<(), _>(
+                    state,
+                    Keycode::from(code + 8),
+                    KeyState::Pressed,
+                    SERIAL_COUNTER.next_serial(),
+                    now as u32,
+                    |_, _, _| FilterResult::Forward,
+                );
+            }
+            for code in keys.into_iter().rev() {
+                keyboard.input::<(), _>(
+                    state,
+                    Keycode::from(code + 8),
+                    KeyState::Released,
+                    SERIAL_COUNTER.next_serial(),
+                    now as u32,
+                    |_, _, _| FilterResult::Forward,
+                );
+            }
+        }
+        if request.strokes.is_empty() {
+            let ack = serde_json::json!({
+                "schema": SCHEMA, "sequence": request.sequence,
+                "instance": request.instance, "surface": request.surface,
+                "keyboard_events_sent": true
+            });
+            let temporary = directory.join("keyboard-ack.next");
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary)?;
+            use std::io::Write;
+            file.write_all(&serde_json::to_vec(&ack)?)?;
+            drop(file);
+            std::fs::rename(temporary, directory.join("keyboard-ack.json"))?;
+            self.active = None;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> serde_json::Value {
+        serde_json::json!({
+            "schema": SCHEMA, "sequence": 1, "instance": "0123456789abcdef0123456789abcdef",
+            "surface": "primary", "expires_ms": 2000, "kind": "text", "value": "a1-. \n"
+        })
+    }
+
+    #[test]
+    fn keyboard_plan_refuses_replay_expiry_unknown_fields_and_unpaired_text() {
+        let value = request();
+        assert_eq!(decode(&value, 0, 1000).unwrap().strokes.len(), 6);
+        assert!(decode(&value, 1, 1000).is_err());
+        assert!(decode(&value, 0, 2000).is_err());
+        let mut bad = value.clone();
+        bad["approved"] = true.into();
+        assert!(decode(&bad, 0, 1000).is_err());
+        let mut bad = value.clone();
+        bad["value"] = "a\tb".into();
+        assert!(decode(&bad, 0, 1000).is_err());
+        bad["value"] = "a".repeat(129).into();
+        assert!(decode(&bad, 0, 1000).is_err());
+        let mut bad = value;
+        bad["surface"] = "foreign".into();
+        assert!(decode(&bad, 0, 1000).is_err());
+    }
+}
