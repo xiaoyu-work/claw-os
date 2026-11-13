@@ -353,7 +353,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
         std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap())
             .map_err(|error| error.to_string())?;
         self.send_input(
-            retained, native, (6, "pointer", "620,570"),
+            retained, native, (6, "pointer", "620,536"),
             Instant::now() + Duration::from_secs(5),
         ).await?;
 
