@@ -348,6 +348,11 @@ confirmed both public synthetic history texts at 360 by 613, configure 9,
 commit 1, checksum `6602576b23f2b603`. This is separate from the unchanged false
 automated reply-decode/text flags and does not close live Restore, delete/clear,
 display/provider binding or publication readiness.
+The next Clipboard candidate also exercises ordinary popup delete and
+confirmed clear against the same synthetic provider. Exact history read/write
+spends and independently observed counts of two, one and zero are required;
+opening the confirmation must not mutate history. Selection rights remain
+separate, and offscreen CopyQ still does not establish live Restore.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

@@ -560,6 +560,22 @@ impl Window {
         (raster["width"] == 800 && raster["height"] == 600).then_some(surface)
     }
 
+    pub fn popup_pointer_target(&self, instance: &str) -> Option<(WlSurface, (i32, i32))> {
+        self.panel_pointer_target(instance)?;
+        let popup = &self.panel.as_ref()?.popup;
+        let surface = popup.surface.as_ref()?.wl_surface();
+        let (_, _, width, height) = popup.geometry?;
+        let raster = popup.raster.as_ref()?;
+        if popup.closed || !popup.parent_bound || !popup.configured
+            || !popup.configures.is_empty() || popup.commits == 0 || !surface.is_alive()
+            || raster["nonuniform_pixels"] != true
+            || raster["width"].as_i64() != Some(i64::from(width))
+            || raster["height"].as_i64() != Some(i64::from(height))
+        { return None; }
+        self.panel_popup_origin(surface).ok()?;
+        Some((surface.clone(), (width, height)))
+    }
+
     fn panel_popup_origin(&self, surface: &WlSurface) -> Result<()> {
         let panel = self.panel.as_ref().ok_or("popup has no native panel")?;
         let parent = panel
@@ -754,6 +770,10 @@ impl Window {
         if target == "panel" {
             self.panel_pointer_target(instance)?;
             return Some(self.panel.as_ref()?.commits);
+        }
+        if target == "popup" {
+            self.popup_pointer_target(instance)?;
+            return Some(self.panel.as_ref()?.popup.commits);
         }
         self.input_surface(instance, target)?;
         match target {
@@ -1012,6 +1032,7 @@ impl Window {
                     "parent_instance": instance, "parent_bound": panel.popup.parent_bound,
                     "open": panel.popup.surface.is_some(), "closed": panel.popup.closed,
                     "geometry": panel.popup.geometry, "configure_acked": panel.popup.configured,
+                    "pending_configures": panel.popup.configures.len(),
                     "buffer_commits": panel.popup.commits, "raster": panel.popup.raster,
                     "snapshot": panel.popup.snapshot.index,
                 },

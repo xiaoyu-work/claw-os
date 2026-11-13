@@ -40,6 +40,7 @@ struct Request {
 enum PointerAction {
     Panel,
     Primary(u16, u16),
+    Popup(u16, u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,6 +66,19 @@ fn panel_click_steps(center: (f64, f64)) -> Result<[PointerStep; 4]> {
 fn primary_click_steps(x: u16, y: u16) -> Result<[PointerStep; 3]> {
     if x >= 800 || y >= 600 {
         return Err("pointer gesture is outside the acknowledged primary geometry".into());
+    }
+    Ok([
+        PointerStep::Enter((f64::from(x), f64::from(y))),
+        PointerStep::Button(ButtonState::Pressed),
+        PointerStep::Button(ButtonState::Released),
+    ])
+}
+
+fn popup_click_steps(x: u16, y: u16, size: (i32, i32)) -> Result<[PointerStep; 3]> {
+    if !(100..=512).contains(&size.0) || !(100..=800).contains(&size.1)
+        || i32::from(x) >= size.0 || i32::from(y) >= size.1
+    {
+        return Err("pointer gesture is outside the acknowledged popup geometry".into());
     }
     Ok([
         PointerStep::Enter((f64::from(x), f64::from(y))),
@@ -122,23 +136,28 @@ fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request>
         || !instance
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || !matches!(surface, "primary" | "auxiliary" | "panel")
+        || !matches!(surface, "primary" | "auxiliary" | "panel" | "popup")
     {
         return Err("stale, replayed or unbound keyboard request".into());
     }
     let text = value["value"].as_str().ok_or("keyboard value")?;
     let pointer = match (value["kind"].as_str(), surface, text) {
         (Some("pointer"), "panel", "center-click") => Some(PointerAction::Panel),
-        (Some("pointer"), "primary", text) => {
-            let (x, y) = text.split_once(',').ok_or("primary pointer coordinates")?;
+        (Some("pointer"), "primary" | "popup", text) => {
+            let (x, y) = text.split_once(',').ok_or("surface pointer coordinates")?;
             let (x, y) = (x.parse::<u16>()?, y.parse::<u16>()?);
-            primary_click_steps(x, y)?;
             if text != format!("{x},{y}") {
-                return Err("noncanonical primary pointer coordinates".into());
+                return Err("noncanonical surface pointer coordinates".into());
             }
-            Some(PointerAction::Primary(x, y))
+            if surface == "popup" {
+                popup_click_steps(x, y, (512, 800))?;
+                Some(PointerAction::Popup(x, y))
+            } else {
+                primary_click_steps(x, y)?;
+                Some(PointerAction::Primary(x, y))
+            }
         }
-        (Some("pointer"), _, _) | (_, "panel", _) => {
+        (Some("pointer"), _, _) | (_, "panel" | "popup", _) => {
             return Err("pointer/keyboard action does not match its bounded surface role".into());
         }
         _ => None,
@@ -213,6 +232,11 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
                 .ok_or("pointer target is not this live configured 800x600 primary surface")?,
             primary_click_steps(x, y)?.to_vec(),
         ),
+        PointerAction::Popup(x, y) => {
+            let (surface, size) = window.popup_pointer_target(instance)
+                .ok_or("pointer target is not this live configured buffered Layer child popup")?;
+            (surface, popup_click_steps(x, y, size)?.to_vec())
+        }
     };
     let client = state.common.display_handle.get_client(surface.id())?;
     let origin = client
@@ -220,7 +244,7 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
         .and_then(|data| data.display_origin.as_ref())
         .ok_or("pointer target has no authenticated display origin")?;
     if !matches!(origin, ClientOrigin::Instance(_))
-        || (action == PointerAction::Panel && !origin.layer_shell())
+        || (matches!(action, PointerAction::Panel | PointerAction::Popup(..)) && !origin.layer_shell())
         || !window.selection_matches(origin)
         || origin
             .instance()
@@ -499,6 +523,24 @@ mod tests {
         ] {
             value["value"] = invalid.into();
             assert!(decode(&value, 0, 1000).is_err(), "{invalid}");
+        }
+        value["surface"] = "popup".into();
+        value["value"] = "318,155".into();
+        assert_eq!(decode(&value, 0, 1000).unwrap().pointer, Some(PointerAction::Popup(318, 155)));
+        assert!(decode(&value, 1, 1000).is_err());
+        assert!(decode(&value, 0, 2000).is_err());
+        for invalid in ["512,0", "0,800", "-1,1", "01,1", "1,1,1", "center-click"] {
+            value["value"] = invalid.into();
+            assert!(decode(&value, 0, 1000).is_err(), "{invalid}");
+        }
+        value["kind"] = "key".into();
+        value["value"] = "focus".into();
+        assert!(decode(&value, 0, 1000).is_err());
+        assert!(popup_click_steps(359, 612, (360, 613)).is_ok());
+        for (x, y, size) in [(360, 0, (360, 613)), (0, 613, (360, 613)),
+            (0, 0, (0, 613)), (0, 0, (360, 801))]
+        {
+            assert!(popup_click_steps(x, y, size).is_err());
         }
     }
 
