@@ -281,6 +281,18 @@ with IO counts and the same path/mount facts. Path samples are at most 512 bytes
 with explicit truncation; no successful readiness or performance fix is inferred.
 This is private clean-CI diagnosis, not an App memory, path or inspection grant.
 
+The same ignored native panel fixture also has an explicit Widget Rail mode,
+selected by a protected Root marker in its own disposable namespace. Its real
+signed ELF must settle independent Calendar, task, resource and `ui.panel`
+owner reviews without a model or inherited MCP rights. Existing OS readers
+must complete, with no raw Calendar database or owner/system bus in the App.
+A subsequent configured, nonuniform panel frame may use a distinct
+instance-bound passive snapshot profile under the same finite copy budgets.
+The private compositor accommodates panels up to 512 by 800 pixels; Calendar's
+original 512-by-128 readiness and pointer predicates remain unchanged.
+Actual card text, resource acceptance and whole checked retirement still need
+genuine execution; adding this candidate does not clear release readiness.
+
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
 the real immutable App-owned Editor release ELF, original installer resources

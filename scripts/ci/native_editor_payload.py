@@ -24,11 +24,16 @@ PRODUCTS = {
     "terminal": ("cosmic-term", "com.clawos.Term", ()),
     "calendar": ("panel-calendar", "com.clawos.PanelCalendarButton", ()),
     "store": ("cosmic-store", "com.clawos.Store", ()),
+    "desktop-widgets": ("widget-rail", "com.clawos.AppletWidgetRail", ()),
 }
 
 
 def product_layout(product):
     app, desktop_id, auxiliary = PRODUCTS[product]
+    if product == "desktop-widgets":
+        return app, ["bin/claw-applet-widget-rail"], (
+            f"resources/usr/share/applications/{desktop_id}.desktop",
+        )
     if product == "calendar":
         return app, ["bin/claw-applet-calendar"], (
             f"resources/usr/share/applications/{desktop_id}.desktop",
@@ -110,7 +115,7 @@ def payload_record(source, payload, lock, product="editor"):
         or manifest.get("mcp", {}).get("entry") != entry
         or manifest.get("desktop", {}).get("entry", entry) != entry
         or manifest.get("desktop", {}).get("exec") != (
-            "open" if product == "calendar" else "--gui"
+            "open" if product in ("calendar", "desktop-widgets") else "--gui"
         )
     ):
         raise ValueError("Native fixture must use its normal signed GUI/MCP entry")
@@ -127,12 +132,12 @@ def payload_record(source, payload, lock, product="editor"):
         )
     ):
         raise ValueError("Native acceptance requires the published 0.2.1 platform pin")
-    if product in ("terminal", "calendar", "store") and platform.get("sha256") != (
+    if product in ("terminal", "calendar", "store", "desktop-widgets") and platform.get("sha256") != (
         "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
     ):
         raise ValueError("Native acceptance requires the approved published platform bytes")
     licenses = [(payload / "LICENSE", source / "products" / product / "native/LICENSE")]
-    if product != "calendar":
+    if product not in ("calendar", "desktop-widgets"):
         licenses.append((payload / "licenses/claw-app-gui-argv/LICENSE", source / "LICENSE"))
     for path, original in licenses:
         if path.read_bytes() != original.read_bytes():

@@ -6,15 +6,15 @@ native_product_input=
 native_product=
 native_app=
 native_calendar_reader=
-if [[ $# == 17 && "${15}" == --native-calendar-only ]]; then
+if [[ $# == 17 && ( "${15}" == --native-calendar-only || "${15}" == --native-desktop-widgets-only ) ]]; then
     native_calendar_reader=$(realpath -- "${17}")
     [[ -f "$native_calendar_reader" && -x "$native_calendar_reader" && ! -L "$native_calendar_reader" ]] || exit 64
     set -- "${@:1:16}"
-elif [[ $# == 16 && "${15}" == --native-calendar-only ]]; then
-    printf 'actual Calendar consumer requires the existing compiled OS reader\n' >&2
+elif [[ $# == 16 && ( "${15}" == --native-calendar-only || "${15}" == --native-desktop-widgets-only ) ]]; then
+    printf 'actual Calendar consumers require the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -27,6 +27,9 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-store-only || "${15}" == --native-store-package-only ]]; then
         native_product=store
         native_app=cosmic-store
+    elif [[ "${15}" == --native-desktop-widgets-only ]]; then
+        native_product=desktop-widgets
+        native_app=widget-rail
     else
         native_product=calendar
         native_app=panel-calendar
@@ -137,7 +140,7 @@ if [[ "$gui" == 1 ]]; then
         cp -a -- "$native_product_input/$native_app" "/usr/lib/cos/apps/$native_app"
         chown -hR 0:0 "/usr/lib/cos/apps/$native_app"
     fi
-    if [[ "$native_product" == calendar ]]; then
+    if [[ "$native_product" == calendar || "$native_product" == desktop-widgets ]]; then
         [[ -n "$native_calendar_reader" ]] || exit 64
         install -m0755 "$native_calendar_reader" /usr/lib/cos/bin/claw-calendar-reader
     fi
@@ -218,6 +221,10 @@ if [[ "$gui" == 1 ]]; then
         printf 'private-native-product-v1' >/run/gui-public/native-product-enabled
         chmod 0644 /run/gui-public/native-product-enabled
     fi
+    if [[ "$native_product" == calendar || "$native_product" == desktop-widgets ]]; then
+        printf '%s' "$native_product" >/run/gui-fixture/native-panel-product
+        chmod 0600 /run/gui-fixture/native-panel-product
+    fi
     if [[ "$selection" == native-store-package ]]; then
         printf 'private-store-package-v1' >/run/gui-fixture/native-store-package
         chmod 0600 /run/gui-fixture/native-store-package
@@ -283,7 +290,7 @@ BUS
         native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
-        native-calendar) fixture_test=clawd::server::gui_fixture::native_products::private_native_calendar ;;
+        native-calendar|native-desktop-widgets) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
         native-store|native-store-package) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
@@ -310,7 +317,7 @@ BUS
             cp /run/user/62050/native-product-observer/window.json "$private/native-$native_product-window.json"
             chmod 0644 "$private/native-$native_product-window.json"
         fi
-        if [[ ( "$native_product" == calendar || "$native_product" == store ) && -f "/run/gui-fixture/native-$native_product-consumer.json" ]]; then
+        if [[ ( "$native_product" == calendar || "$native_product" == store || "$native_product" == desktop-widgets ) && -f "/run/gui-fixture/native-$native_product-consumer.json" ]]; then
             cp "/run/gui-fixture/native-$native_product-consumer.json" "$private/native-$native_product-consumer.json"
             chmod 0644 "$private/native-$native_product-consumer.json"
             /usr/bin/python3 -I -B - "$private" "$native_product" <<'PY'
@@ -320,11 +327,15 @@ destination = pathlib.Path(sys.argv[1])
 owner = destination.stat()
 source = pathlib.Path("/run/user/62050/native-product-observer")
 product = sys.argv[2]
-assert product in ("calendar", "store")
+profiles = {
+    "calendar": ("native-calendar-agenda.shm", b"CLAWCALSHM1\0", "claw.private-calendar"),
+    "store": ("native-store-window.shm", b"CLAWSTRSHM1\0", "claw.private-store"),
+    "desktop-widgets": ("native-widget-rail.shm", b"CLAWWIDSHM1\0", "claw.private-widget-rail"),
+}
+assert product in profiles
 calendar = product == "calendar"
-filename = "native-calendar-agenda.shm" if calendar else "native-store-window.shm"
-magic = b"CLAWCALSHM1\0" if calendar else b"CLAWSTRSHM1\0"
-prefix = "claw.private-calendar" if calendar else "claw.private-store"
+widgets = product == "desktop-widgets"
+filename, magic, prefix = profiles[product]
 
 def protected(path, uid, limit):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -352,8 +363,10 @@ if calendar:
     latest_commit = window["popup"]["buffer_commits"]
 else:
     assert window["closed"] and window["toplevels"] == 0
+    if widgets:
+        assert window["role"] == "zwlr_layer_surface_v1" and window["layer_surfaces"] == 0
     index = window.get("snapshot") or {}
-    observed = consumer.get("passive_window_snapshot") or {}
+    observed = consumer.get("passive_panel_snapshot" if widgets else "passive_window_snapshot") or {}
     if index.get("status") == "saved":
         assert observed["instance"] == index["instance"] == window["instance"]
         assert observed["snapshot_commit"] <= index["snapshot_commit"]
@@ -378,13 +391,15 @@ if index.get("status") == "saved" and index.get("closed") and not index.get("map
             assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
             assert frame["geometry"] == window["popup"]["geometry"]
         else:
-            assert frame["role"] == "xdg_toplevel"
+            assert frame["role"] == ("zwlr_layer_surface_v1" if widgets else "xdg_toplevel")
             assert frame["parent_role"] is None and frame["parent_instance"] is None
-            assert frame["geometry"] == [0, 0, 800, 600]
+            assert frame["geometry"] == ([0, 0, *window["configure_size"]] if widgets else [0, 0, 800, 600])
         assert frame["buffer_commit"] == index["snapshot_commit"]
         assert frame["configure_serial"] == index["configure_serial"]
         width, height = frame["geometry"][2:]
         assert 100 <= width <= 4096 and 100 <= height <= 4096
+        if widgets:
+            assert width <= 512 and height <= 800
         assert (frame["raster"]["width"], frame["raster"]["height"]) == (width, height)
         assert frame["source_format"] in ("argb8888", "xrgb8888")
         assert frame["stored_stride"] == width * 4 and frame["stored_offset"] == 0
@@ -397,7 +412,7 @@ if index.get("status") == "saved" and index.get("closed") and not index.get("map
         copied, reason = True, "latest-live-frame-retained-through-original-close"
     else:
         reason = "latest-frame-or-configure-not-captured"
-publish("native-calendar-agenda-export.json" if calendar else "native-store-window-export.json", (json.dumps({
+publish(filename.removesuffix(".shm") + "-export.json", (json.dumps({
     "schema": prefix + "-shm-export/v1", "instance": window["instance"],
     "copied": copied, "reason": reason, "snapshot": index,
     "reply_decode_asserted": False, "event_text_asserted": False,

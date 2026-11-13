@@ -108,8 +108,25 @@ pub(super) const STORE: Product = Product {
     panel: false,
     observation: Some("packages"),
 };
+pub(super) const WIDGETS: Product = Product {
+    name: "desktop-widgets",
+    app: "widget-rail",
+    case: 30,
+    desktop_id: "com.clawos.AppletWidgetRail",
+    entries: &["bin/claw-applet-widget-rail"],
+    ungranted: &[],
+    home_metadata: false,
+    selector: "open",
+    panel: true,
+    observation: None,
+};
 
 impl Product {
+    pub(super) fn for_case(case: usize) -> Option<Self> {
+        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS]
+            .into_iter().find(|product| product.case == case)
+    }
+
     fn directory(self) -> std::path::PathBuf {
         Path::new("/usr/lib/cos/apps").join(self.app)
     }
@@ -180,7 +197,9 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
         );
     }
     assert_eq!(payload.entrypoints, product.entries);
-    let required = if product.panel {
+    let required = if product.name == "desktop-widgets" {
+        vec![format!("resources/usr/share/applications/{}.desktop", product.desktop_id)]
+    } else if product.panel {
         vec![
             format!(
                 "resources/usr/share/applications/{}.desktop",
@@ -323,6 +342,17 @@ fn buffered_window(record: &serde_json::Value, instance: &str) -> bool {
 }
 
 fn buffered_panel(record: &serde_json::Value, instance: &str, namespace: &str) -> bool {
+    buffered_panel_size(record, instance, namespace, 16..=512, 16..=128)
+}
+
+fn buffered_widget_panel(record: &serde_json::Value, instance: &str) -> bool {
+    buffered_panel_size(record, instance, WIDGETS.desktop_id, 100..=512, 100..=800)
+}
+
+fn buffered_panel_size(
+    record: &serde_json::Value, instance: &str, namespace: &str,
+    width: std::ops::RangeInclusive<u64>, height: std::ops::RangeInclusive<u64>,
+) -> bool {
     record["schema"] == "claw.private-native-panel/v1"
         && record["instance"] == instance
         && record["role"] == "zwlr_layer_surface_v1"
@@ -338,10 +368,10 @@ fn buffered_panel(record: &serde_json::Value, instance: &str, namespace: &str) -
             .is_some_and(|count| count > 0)
         && record["raster"]["width"]
             .as_u64()
-            .is_some_and(|size| (16..=512).contains(&size))
+            .is_some_and(|size| width.contains(&size))
         && record["raster"]["height"]
             .as_u64()
-            .is_some_and(|size| (16..=128).contains(&size))
+            .is_some_and(|size| height.contains(&size))
         && record["configure_size"][0] == record["raster"]["width"]
         && record["configure_size"][1] == record["raster"]["height"]
         && record["raster"]["nonuniform_pixels"] == true
@@ -705,6 +735,10 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 expected_gui.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
                 expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
             }
+            if product.name == "desktop-widgets" {
+                expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("resources")));
+                expected_gui.insert(Cap::new(Verb::AGENT_OBSERVE, Scope::name("tasks")));
+            }
             if let Some(domain) = product.observation {
                 expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name(domain)));
             }
@@ -725,7 +759,14 @@ async fn approve_native_startup(
     product: Product,
     parent: &str,
 ) -> Vec<crate::approvals::Request> {
-    let needs = if product.panel {
+    let needs = if product.name == "desktop-widgets" {
+        vec![
+            ("data.db.read", Scope::name("calendar")),
+            ("sys.observe", Scope::name("resources")),
+            ("agent.observe", Scope::name("tasks")),
+            ("ui.panel", Scope::Wild),
+        ]
+    } else if product.panel {
         vec![("data.db.read", Scope::name("calendar")), ("ui.panel", Scope::Wild)]
     } else {
         product.observation.into_iter()
@@ -1030,7 +1071,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 });
         }
         if let Some(record) = observe().filter(|record| {
-            (if product.panel {
+            (if product.name == "desktop-widgets" {
+                buffered_widget_panel(record, &window)
+            } else if product.panel {
                 buffered_panel(record, &window, product.desktop_id)
             } else {
                 buffered_window(record, &window) && record["app_id"] == product.desktop_id
@@ -1146,7 +1189,13 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         None
     };
     if let Some(fixture) = &calendar_fixture {
-        calendar_popup::run(&control, &mut pam, &retained, &process, &session, fixture).await;
+        if product.name == "desktop-widgets" {
+            if let Err(error) = fixture.consume_widgets(&retained, &process, &session, deadline, &before).await {
+                renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+            }
+        } else {
+            calendar_popup::run(&control, &mut pam, &retained, &process, &session, fixture).await;
+        }
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
     let mut package_review = None;
@@ -1282,7 +1331,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                         && record["role"] == "zwlr_layer_surface_v1"
                         && record["layer_surfaces"] == 0
                         && record["popup"]["open"] == false
-                        && record["popup"]["closed"] == true))
+                        && (product.name != "calendar" || record["popup"]["closed"] == true)))
         }) {
             break;
         }
@@ -1324,7 +1373,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         } else if product.panel {
             "/Layer Shell panel with independent protected owner approvals"
         } else if package_applied.is_some() {
-            "original Store UI exact Critical consent, retained own-payload removal, actual APT child zero, checked caller retirement and outside-owner read-only recovery verified"
+            "/retained original-UI package self-handoff"
         } else if product.observation.is_some() {
             "/protected ordinary package observation"
         } else {
@@ -1334,8 +1383,12 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "UI Save As and separately pending overwrite verified"
         } else if pty.is_some() {
             "typed shell command, real PTY/shell/child identities and descendant retirement verified"
+        } else if product.name == "desktop-widgets" {
+            "real owner-scoped Calendar/task/resource reads under independent exact grants verified; reply decoding and exact painted card text NOT asserted"
         } else if product.panel {
             "original popup pixels/open/close and authenticated same-owner real SDK/Calendar reader success verified; exact returned/painted event text NOT inspected"
+        } else if package_applied.is_some() {
+            "original Store UI exact Critical consent, confirmed own-payload removal, actual APT child zero and ordinary-owner read-only recovery outside the App verified"
         } else if product.observation.is_some() {
             "real controlled catalog/inventory/update SDK requests verified without raw system state or Critical startup authority; entry pixels and package UI mutations NOT inspected"
         } else {
@@ -1390,9 +1443,18 @@ fn private_native_terminal() {
 }
 
 #[test]
-#[ignore = "clean-GHA-only: actual Calendar Layer Shell ELF, authenticated private PAM/display and cgroup v2"]
-fn private_native_calendar() {
-    private_gui_fixture_selected(false, false, false, Some(CALENDAR));
+#[ignore = "clean-GHA-only: actual panel ELF, authenticated private PAM/display and cgroup v2"]
+fn private_native_panel() {
+    let path = Path::new("/run/gui-fixture/native-panel-product");
+    let metadata = std::fs::symlink_metadata(path).unwrap();
+    assert!(metadata.is_file() && metadata.uid() == 0 && metadata.nlink() == 1
+        && metadata.mode() & 0o077 == 0 && metadata.len() <= 32);
+    let product = match std::fs::read(path).unwrap().as_slice() {
+        b"calendar" => CALENDAR,
+        b"desktop-widgets" => WIDGETS,
+        _ => panic!("unknown protected native panel fixture selection"),
+    };
+    private_gui_fixture_selected(false, false, false, Some(product));
 }
 
 #[test]
@@ -1421,6 +1483,18 @@ fn native_calendar_readiness_requires_typed_configured_panel_pixels_not_an_xdg_w
     assert!(buffered_panel(&record, "instance", CALENDAR.desktop_id));
     assert!(!buffered_window(&record, "instance"));
     assert!(!buffered_panel(&record, "foreign", CALENDAR.desktop_id));
+    let mut rail = record.clone();
+    rail["namespace"] = WIDGETS.desktop_id.into();
+    rail["configure_size"] = serde_json::json!([320, 620]);
+    rail["raster"] = serde_json::json!({"width":320,"height":620,"nonuniform_pixels":true});
+    assert!(buffered_widget_panel(&rail, "instance"));
+    assert!(!buffered_widget_panel(&rail, "foreign"));
+    let mut tall_calendar = rail.clone();
+    tall_calendar["namespace"] = CALENDAR.desktop_id.into();
+    assert!(!buffered_panel(&tall_calendar, "instance", CALENDAR.desktop_id));
+    rail["configure_size"] = serde_json::json!([40, 620]);
+    rail["raster"]["width"] = 40.into();
+    assert!(!buffered_widget_panel(&rail, "instance"));
     for (field, invalid) in [
         ("schema", serde_json::json!("claw.private-native-window/v1")),
         ("role", serde_json::json!("xdg_toplevel")),
