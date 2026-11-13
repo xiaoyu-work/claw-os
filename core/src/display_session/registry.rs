@@ -144,9 +144,10 @@ impl Registry {
             let display = self.for_process(&peer)?;
             return GuiControl::of(display.as_ref());
         }
-        let entries = self.displays.lock().map_err(|_| Error::Identity)?;
+        let entries = self.displays.lock().map_err(|_| Error::Identity)?
+            .values().cloned().collect::<Vec<_>>();
         let mut selected = None;
-        for display in entries.values() {
+        for display in entries {
             let state = display.lock().map_err(|_| Error::Identity)?;
             if state.login.owner_uid == owner && state.wayland_display.is_some() {
                 state.host.assert_current()?;
