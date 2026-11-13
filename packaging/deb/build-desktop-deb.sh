@@ -27,6 +27,10 @@ if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
     exit 1
 fi
+if [ -e "$STAGE_ROOT/usr/share/icons/Cosmic" ] || [ -L "$STAGE_ROOT/usr/share/icons/Cosmic" ]; then
+    echo "error: shared Cosmic icons belong to claw-os-agent, not Desktop" >&2
+    exit 1
+fi
 APPLET_PROVIDER="$STAGE_ROOT/usr/libexec/claw-os-applet-provider"
 if [ ! -f "$APPLET_PROVIDER" ] || [ ! -x "$APPLET_PROVIDER" ] || [ -L "$APPLET_PROVIDER" ]; then
     echo "error: required Applet service ELF missing or not a regular executable: $APPLET_PROVIDER" >&2

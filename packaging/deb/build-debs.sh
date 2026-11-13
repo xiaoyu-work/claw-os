@@ -605,6 +605,7 @@ if [ ! -d "$SDK_PY_SRC" ] || [ ! -d "$RUNTIME_PY_SRC" ]; then
 fi
 cp -a "$SDK_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/claw_os_sdk"
 cp -a "$RUNTIME_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/cos_runtime"
+python3 "$SCRIPT_DIR/native_runtime_assets.py" --root "$AGENT_STAGE"
 find "$AGENT_STAGE/usr/lib/cos/python" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
 

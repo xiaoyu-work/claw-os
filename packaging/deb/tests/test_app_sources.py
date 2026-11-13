@@ -833,9 +833,38 @@ def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
     assert "claw-apps-agent" in control["Recommends"]
     assert "claw-app-support" not in control["Depends"]
     assert "claw-apps-desktop" not in control["Depends"]
+    assert control["Replaces"] == "claw-os-desktop (<< 1:0.2.1)"
     desktop = (ROOT / "packaging/deb/claw-os-desktop/control").read_text()
     desktop = desktop.replace("__APP_RUNTIME_VERSION__", packages.platform()["version"])
     assert "claw-os-app-runtime-v1 (>= 0.2.1)" in packages.fields(desktop)["Depends"]
+
+    spec = importlib.util.spec_from_file_location(
+        "native_runtime_assets", ROOT / "packaging/deb/native_runtime_assets.py",
+    )
+    assets = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(assets)
+    theme = assets.stage(tmp_path / "agent-stage")
+    original = ROOT / "desktop/icons/freedesktop/scalable/actions/edit-paste-symbolic.svg"
+    assert (theme / "scalable/actions/edit-paste-symbolic.svg").read_bytes() == original.read_bytes()
+    assert (theme / "index.theme").read_bytes() == (ROOT / "desktop/icons/index.theme").read_bytes()
+    license_path = tmp_path / "agent-stage/usr/share/doc/claw-os-agent/cosmic-icons"
+    assert (license_path / "README.md").read_bytes() == (ROOT / "desktop/icons/README.md").read_bytes()
+    assert (license_path / "LICENSE").read_bytes() == (ROOT / "desktop/icons/LICENSE").read_bytes()
+    assert (theme.stat().st_mode & 0o777) == 0o755
+    with pytest.raises(ValueError, match="already staged"):
+        assets.stage(tmp_path / "agent-stage")
+    with pytest.raises(ValueError, match="explicit package"):
+        assets.stage(Path(tmp_path.anchor))
+    outside = tmp_path / "outside-runtime"
+    outside.mkdir()
+    aliased = tmp_path / "aliased-runtime"
+    aliased.mkdir()
+    (aliased / "usr").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="cannot be symlinks"):
+        assets.stage(aliased)
+    assert not list(outside.iterdir())
+    installer = (ROOT / "desktop/justfile").read_text()
+    assert "prefix={{prefix}} icons/install" not in installer
 
 
 def _app_payload(directory, *, source=False):
