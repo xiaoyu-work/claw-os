@@ -195,6 +195,22 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
         sign::{sign_directory, SignRequest},
         verify::{verify_package, VerifyOptions},
     };
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let needs = product.startup_needs();
+    let has_selection = |verb| needs.iter().any(|cap| {
+        cap.verb == verb && cap.scope == Scope::name("selection")
+    });
+    let mut projection = std::fs::OpenOptions::new().write(true).create_new(true)
+        .mode(0o600).custom_flags(libc::O_NOFOLLOW)
+        .open("/run/gui-public/native-product-selection.json").unwrap();
+    projection.write_all(&serde_json::to_vec(&serde_json::json!({
+        "schema":"claw.private-native-selection/v1",
+        "selection_read":has_selection(Verb::CLIPBOARD_READ),
+        "selection_write":has_selection(Verb::CLIPBOARD_WRITE),
+    })).unwrap()).unwrap();
+    drop(projection);
 
     let receipt = Path::new("/run/gui-fixture").join(format!("native-{}.json", product.name));
     let metadata = std::fs::symlink_metadata(&receipt).unwrap();
