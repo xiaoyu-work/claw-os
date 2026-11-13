@@ -107,9 +107,10 @@ icons and confirmed popup mute are retained without merging renderer graphs.
 production no longer fetches/mounts native App sources or copies manifests.
 Desktop requires runtime-v1 implementation 0.2.1 through the normal template.
 Actual Linux native builds and installed native/GUI acceptance remain
-required. Public 0.2.1 SDK/App artifacts are not adopted or published here;
-App development still pins real published platform 0.2.0 and publication gates
-remain pending.
+required. Public [SDK 0.2.1](https://github.com/xiaoyu-work/claw-os/releases/tag/sdk-v0.2.1)
+and [App platform 0.2.1](https://github.com/xiaoyu-work/claw-os/releases/tag/app-platform-v0.2.1)
+artifacts are published. Their publication alone does not establish independent
+App APT delivery or installed native/GUI acceptance.
 
 The Desktop source also installs `/usr/libexec/claw-os-applet-provider` and
 provides `claw-os-applet-services-v1 (= 1)`. Assembly refuses a missing,
