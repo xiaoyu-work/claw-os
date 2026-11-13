@@ -1068,8 +1068,12 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             Err(error) => renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await,
         };
         if package_owned {
-            if let Err(error) = fixture.input_frame(&retained, &process, &searched, (2, "pointer", "500,80")).await {
-                renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+            let mut frame = searched;
+            for input in [(2, "pointer", "500,80"), (3, "pointer", "540,230")] {
+                frame = match fixture.input_frame(&retained, &process, &frame, input).await {
+                    Ok(frame) => frame,
+                    Err(error) => renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await,
+                };
             }
         }
         assert_eq!(startup_authority(&session, &parent, product), original);
