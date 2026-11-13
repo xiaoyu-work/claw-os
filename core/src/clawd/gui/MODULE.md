@@ -260,8 +260,18 @@ one protected exact Critical decision, then ordinary scrollbar/continuation
 input must hand the actual native payload removal to Root. Any unknown-effect
 all-App stop needs its separate protected review. Only a durable applied Root
 record, one real successful APT child, checked caller/provider retirement and
-outside-owner read-only reconciliation establish this mutation gate; input
+ordinary-owner read-only reconciliation outside the App establish this mutation gate; input
 delivery, Critical approval and accepted receipts are never package success.
+The Store lane of Test run `43360457451`, at source
+`d18c4dc5cba0227662f46a88a4534b70584410c7` with immutable App source
+`8aa39c6ea15d39b3c2537610d9a7cdd6ee1c14bd`, passed both isolated rounds.
+Its exact Remove request reached confirmed applied completion with one APT
+child exiting zero, the delivery hook consumed, real Store payload removed
+and separate support retained. All retained process pidfds, instance cgroup,
+runtime/provider mount, Wayland window and PAM lifetime passed checked
+retirement. Ordinary-owner recovery and invocation lookup changed neither
+dpkg state nor the retained child list. This establishes only that actual
+Store self-handoff, not all native/resource acceptance or release readiness.
 Native failure evidence may also sample only the validated synthetic App's
 current metadata pathname argument on x86_64, discard it if the syscall changes,
 and report a fixed path-environment allowlist and bounded Home/data mount rows.
