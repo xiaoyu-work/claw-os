@@ -309,6 +309,8 @@ struct Panel {
     namespace: String,
     layer: Layer,
     configure: Option<Serial>,
+    configures: Vec<Serial>,
+    acknowledged: Option<Serial>,
     size: Option<(i32, i32)>,
     keyboard_interactivity: Option<String>,
     configured: bool,
@@ -500,6 +502,8 @@ impl Window {
             namespace,
             layer,
             configure: None,
+            configures: Vec::new(),
+            acknowledged: None,
             size: None,
             keyboard_interactivity: None,
             configured: false,
@@ -523,8 +527,15 @@ impl Window {
                 .as_ref()
                 .is_some_and(|layer| layer.wl_surface() == surface)
         );
-        assert_eq!(panel.configure, Some(serial));
-        panel.configured = true;
+        let issued = panel.configures.iter().position(|pending| *pending == serial)
+            .expect("native panel acknowledged a configure not issued to this surface");
+        panel.configures.drain(..=issued);
+        panel.acknowledged = Some(serial);
+        panel.configured = panel.configures.is_empty() && panel.configure == Some(serial);
+        if let Some(index) = &mut panel.snapshot.index {
+            index["matches_current_configure"] =
+                (panel.configured && index["configure_serial"] == u32::from(serial)).into();
+        }
     }
 
     pub fn close_panel(&mut self, surface: &LayerSurface) -> Result<()> {
@@ -862,18 +873,25 @@ impl Window {
                 return Err("native panel changed its bounded layer/input role".into());
             }
             panel.keyboard_interactivity = Some(format!("{:?}", current.keyboard_interactivity));
-            if panel.configure.is_none() {
-                let size = current.size;
-                let max_width = if self.interactive_layer { 1024 } else { 512 };
-                if size.w <= 0 || size.h <= 0 || size.w > max_width || size.h > 800 {
-                    return Err(
-                        "native panel did not request a bounded original applet size".into(),
-                    );
-                }
+            let size = current.size;
+            let max_width = if self.interactive_layer { 1024 } else { 512 };
+            if size.w <= 0 || size.h <= 0 || size.w > max_width || size.h > 800 {
+                return Err(
+                    "native panel did not request a bounded original applet size".into(),
+                );
+            }
+            if panel.size != Some((size.w, size.h)) {
                 let layer = panel.surface.as_ref().unwrap();
                 layer.with_pending_state(|state| state.size = Some(size));
                 panel.size = Some((size.w, size.h));
-                panel.configure = Some(layer.send_configure());
+                let serial = layer.send_configure();
+                panel.configure = Some(serial);
+                panel.configures.push(serial);
+                panel.configured = false;
+                panel.raster = None;
+                if let Some(index) = &mut panel.snapshot.index {
+                    index["matches_current_configure"] = false.into();
+                }
             }
         }
         let is_top = self
@@ -943,29 +961,32 @@ impl Window {
                     } else if is_panel {
                         let instance = self.instance.as_deref().unwrap();
                         let panel = self.panel.as_mut().unwrap();
-                        if !panel.configured {
+                        if panel.acknowledged.is_none() {
                             return Err(
                                 "native panel attached pixels before configure acknowledgement"
                                     .into(),
                             );
                         }
-                        let capture = panel.snapshot.enabled(instance)?;
-                        let (observed, pixels) = raster_with_pixels(
-                            &buffer,
-                            if capture { Some(panel.snapshot.allowance()) } else { None },
-                        )?;
-                        panel.raster = Some(observed);
-                        panel.commits = panel
-                            .commits
-                            .checked_add(1)
-                            .ok_or("panel frame count overflow")?;
-                        if capture {
-                            let (width, height) = panel.size.unwrap();
-                            panel.snapshot.publish(
-                                instance, panel.commits, (0, 0, width, height),
-                                panel.configure.expect("real panel configure"),
-                                panel.raster.as_ref().unwrap(), pixels,
-                            );
+                        // A resize commit may carry pixels before its new configure is acknowledged.
+                        if panel.configured {
+                            let capture = panel.snapshot.enabled(instance)?;
+                            let (observed, pixels) = raster_with_pixels(
+                                &buffer,
+                                if capture { Some(panel.snapshot.allowance()) } else { None },
+                            )?;
+                            panel.raster = Some(observed);
+                            panel.commits = panel
+                                .commits
+                                .checked_add(1)
+                                .ok_or("panel frame count overflow")?;
+                            if capture {
+                                let (width, height) = panel.size.unwrap();
+                                panel.snapshot.publish(
+                                    instance, panel.commits, (0, 0, width, height),
+                                    panel.configure.expect("real panel configure"),
+                                    panel.raster.as_ref().unwrap(), pixels,
+                                );
+                            }
                         }
                         self.output.enter(surface);
                     } else if is_popup {
@@ -1043,6 +1064,7 @@ impl Window {
                 "toplevels": usize::from(self.surface.is_some()) + usize::from(self.auxiliary.surface.is_some()),
                 "keyboard_interactivity": panel.keyboard_interactivity,
                 "configure_acked": panel.configured, "configure_size": panel.size,
+                "pending_configures": panel.configures.len(),
                 "buffer_commits": panel.commits, "raster": panel.raster, "closed": panel.closed,
                 "snapshot": panel.snapshot.index,
                 "popup": {

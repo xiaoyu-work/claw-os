@@ -451,6 +451,7 @@ fn buffered_panel_size(
         && record["toplevels"] == 0
         && record["keyboard_interactivity"] == keyboard
         && record["configure_acked"] == true
+        && record["pending_configures"] == 0
         && record["closed"] == false
         && record["buffer_commits"]
             .as_u64()
@@ -1583,6 +1584,7 @@ fn native_calendar_readiness_requires_typed_configured_panel_pixels_not_an_xdg_w
         "role": "zwlr_layer_surface_v1", "namespace": CALENDAR.desktop_id, "layer": "Top",
         "layer_surfaces": 1, "toplevels": 0, "keyboard_interactivity": "None",
         "configure_acked": true, "configure_size": [40, 40], "closed": false,
+        "pending_configures": 0,
         "buffer_commits": 1, "raster": {"width": 40, "height": 40, "nonuniform_pixels": true},
     });
     assert!(buffered_panel(&record, "instance", CALENDAR.desktop_id));
@@ -1618,6 +1620,7 @@ fn native_calendar_readiness_requires_typed_configured_panel_pixels_not_an_xdg_w
         ("toplevels", serde_json::json!(1)),
         ("layer_surfaces", serde_json::json!(0)),
         ("configure_acked", serde_json::json!(false)),
+        ("pending_configures", serde_json::json!(1)),
         ("configure_size", serde_json::json!([48, 40])),
         ("buffer_commits", serde_json::json!(0)),
         ("keyboard_interactivity", serde_json::json!("Exclusive")),
