@@ -364,10 +364,15 @@ payload to the caller's authenticated display (or the sole authenticated owner
 display for a non-login service caller). Missing or ambiguous targets refuse.
 The protected compositor installs an OS-owned selection and acknowledges the
 effect; acknowledgement loss is indeterminate, never success or replay.
-The candidate checks original UI Restore plus actual Smithay selection state
-and plain-text/HTML descriptor transfers. Physical-display acceptance remains
-separate. No App-owned collector, privileged identity or raw socket fallback is
-introduced, and completed clipboard data belongs to the display, not the GUI.
+The Clipboard lane in [run 43431495753](https://github.com/xiaoyu-work/claw-os/actions/runs/43431495753)
+verified original UI Restore, actual Smithay selection state and plain-text/HTML
+descriptor transfers. Its six successful calls separately spent history read,
+the original restore compound including selection write, history read/write,
+read, write and read; history counts were two, two, one and zero. The normal
+GUI/PAM/resource retirement and independent CopyQ lifetime still passed.
+Physical-display acceptance remains separate. No App-owned collector,
+privileged identity or raw socket fallback is introduced, and completed
+clipboard data belongs to the display, not the GUI.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
