@@ -113,6 +113,109 @@ impl Fixture {
             "Calendar query view leaked"
         );
     }
+
+    pub(super) async fn consume_widgets(
+        &self, retained: &RetainedInstance, process: &NativeProcess, session: &str,
+        deadline: Instant, first_frame: &serde_json::Value,
+    ) -> Result<(), String> {
+        let instance = claw_display_control::Epoch(retained.instance.0).label();
+        let guest = PathBuf::from(format!("/proc/{}/root", process.identity.pid()));
+        assert!(guest.join("usr/local/bin/cos").is_file());
+        for path in [
+            self.database.strip_prefix("/").unwrap(),
+            Path::new("run/user/62050/bus"),
+            Path::new("run/dbus/system_bus_socket"),
+        ] {
+            match std::fs::symlink_metadata(guest.join(path)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                result => return Err(format!("raw Calendar database or bus was not hidden from Widget Rail: {result:?}")),
+            }
+        }
+        let mut selector = std::fs::OpenOptions::new().write(true).create_new(true)
+            .mode(0o644).custom_flags(libc::O_NOFOLLOW)
+            .open("/run/gui-public/native-widget-rail-snapshot-enabled")
+            .map_err(|error| error.to_string())?;
+        selector.set_permissions(std::fs::Permissions::from_mode(0o644)).unwrap();
+        selector.write_all(&serde_json::to_vec(&serde_json::json!({
+            "schema":"claw.private-widget-rail-synthetic-shm/v1", "instance":instance,
+        })).unwrap()).unwrap();
+        drop(selector);
+        let expected = [
+            ("system.calendar.day", "day", Verb::DATA_DB_READ, "calendar"),
+            ("system.observation.query", "tasks", Verb::AGENT_OBSERVE, "tasks"),
+            ("system.observation.query", "resources", Verb::SYS_OBSERVE, "resources"),
+        ];
+        let mut floor = first_frame["buffer_commits"].as_u64().unwrap();
+        let mut readers_completed = false;
+        loop {
+            check_native_process(retained, process)?;
+            let audit = audit_since(0);
+            let mut requests = Vec::new();
+            let mut uses = Vec::new();
+            for (route, action, verb, scope) in expected {
+                let matching = audit.iter().filter(|record| record["event"] == "clawd.request"
+                    && record["command"] == route && record["params"]["session"] == session
+                    && (route == "system.calendar.day" || record["params"]["action"] == action))
+                    .collect::<Vec<_>>();
+                assert!(matching.len() <= 8, "unbounded Widget Rail startup query repetition");
+                for request in &matching {
+                    if request["ok"] != true || request["client"]["uid"] != OWNER
+                        || !request["client"]["pid"].as_u64().is_some_and(|pid| pid > 1)
+                        || (route == "system.calendar.day" && self.query_day(&request["params"]).is_none())
+                    {
+                        return Err(format!("Widget Rail {action} reader failed: {request}"));
+                    }
+                }
+                let cap = crate::clawd::authority::audit::CapFacts::of(&Cap::new(verb, Scope::name(scope)));
+                let grants = audit.iter().filter(|record| record["event"] == "clawd.grant.use"
+                    && record["route"] == route && record["app_id"] == WIDGETS.app
+                    && record["owner_uid"] == OWNER
+                    && record["session"] == serde_json::to_value(crate::audit_policy::text_digest(session)).unwrap()
+                    && record["decision"] == "allow"
+                    && record["bound_pid"].as_u64().is_some_and(|pid| pid > 1)
+                    && record["caps"] == serde_json::json!([cap]))
+                    .collect::<Vec<_>>();
+                if let (Some(request), Some(grant)) = (matching.last(), grants.last()) {
+                    requests.push((*request).clone());
+                    uses.push((*grant).clone());
+                }
+            }
+            let frame = observe().filter(|record| buffered_widget_panel(record, &instance));
+            if requests.len() == expected.len() && !readers_completed {
+                if let Some(frame) = &frame {
+                    floor = frame["buffer_commits"].as_u64().unwrap().max(floor);
+                    readers_completed = true;
+                }
+            }
+            if let Some(frame) = frame.filter(|frame| readers_completed
+                && frame["buffer_commits"].as_u64().is_some_and(|commit| commit > floor)
+                && frame["snapshot"]["status"] == "saved"
+                && frame["snapshot"]["instance"] == instance
+                && frame["snapshot"]["matches_current_configure"] == true
+                && frame["snapshot"]["snapshot_commit"] == frame["buffer_commits"])
+            {
+                let report = serde_json::json!({
+                    "schema":"claw.private-native-desktop-widgets-consumer/v1",
+                    "instance":instance, "owner_uid":OWNER, "requests":requests, "exact_scope_uses":uses,
+                    "fixture_event_id":EVENT_ID, "fixture_event_title":EVENT_TITLE,
+                    "passive_panel_snapshot":frame["snapshot"], "window":frame,
+                    "raw_calendar_database":false, "real_existing_reader_success":true,
+                    "sdk_reply_delivery_and_decode_asserted":false, "card_text_rendering_asserted":false,
+                    "coverage":"Original Widget Rail panel pixels and successful exact-owner Calendar/task/resource SDK reads; no Agent/model, raw Calendar database or owner bus. Reply decoding and exact painted card text require independent inspection.",
+                });
+                let path = "/run/gui-fixture/native-desktop-widgets-consumer.json";
+                let bytes = serde_json::to_vec_pretty(&report).unwrap();
+                assert!(bytes.len() <= 16384);
+                std::fs::write(path, bytes).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err("Widget Rail exact read completions and subsequent real panel frame deadline".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
 }
 
 fn buffered_popup(record: &serde_json::Value, instance: &str) -> bool {

@@ -69,6 +69,17 @@ const STORE_SNAPSHOT: SnapshotProfile = SnapshotProfile {
     role: "xdg_toplevel",
     parent_role: None,
 };
+const WIDGET_SNAPSHOT: SnapshotProfile = SnapshotProfile {
+    selector: "/run/gui-public/native-widget-rail-snapshot-enabled",
+    selector_schema: "claw.private-widget-rail-synthetic-shm/v1",
+    frame_schema: "claw.private-widget-rail-shm-frame/v1",
+    index_schema: "claw.private-widget-rail-shm-index/v1",
+    file: "native-widget-rail.shm",
+    next: "widget-snapshot.next",
+    magic: b"CLAWWIDSHM1\0",
+    role: "zwlr_layer_surface_v1",
+    parent_role: None,
+};
 
 struct PassiveSnapshot {
     profile: &'static SnapshotProfile,
@@ -292,6 +303,7 @@ struct Panel {
     raster: Option<serde_json::Value>,
     closed: bool,
     popup: PanelPopup,
+    snapshot: PassiveSnapshot,
 }
 
 #[derive(Default)]
@@ -445,6 +457,7 @@ impl Window {
             raster: None,
             closed: false,
             popup: PanelPopup::default(),
+            snapshot: PassiveSnapshot::new(&WIDGET_SNAPSHOT),
         });
         self.publish()
     }
@@ -474,6 +487,7 @@ impl Window {
         }
         panel.surface = None;
         panel.closed = true;
+        panel.snapshot.unmap(true);
         self.publish()
     }
 
@@ -769,7 +783,7 @@ impl Window {
             panel.keyboard_interactivity = Some(format!("{:?}", current.keyboard_interactivity));
             if panel.configure.is_none() {
                 let size = current.size;
-                if size.w <= 0 || size.h <= 0 || size.w > 512 || size.h > 128 {
+                if size.w <= 0 || size.h <= 0 || size.w > 512 || size.h > 800 {
                     return Err(
                         "native panel did not request a bounded original applet size".into(),
                     );
@@ -845,6 +859,7 @@ impl Window {
                             .ok_or("auxiliary frame count overflow")?;
                         self.output.enter(surface);
                     } else if is_panel {
+                        let instance = self.instance.as_deref().unwrap();
                         let panel = self.panel.as_mut().unwrap();
                         if !panel.configured {
                             return Err(
@@ -852,11 +867,24 @@ impl Window {
                                     .into(),
                             );
                         }
-                        panel.raster = Some(raster(&buffer)?);
+                        let capture = panel.snapshot.enabled(instance)?;
+                        let (observed, pixels) = raster_with_pixels(
+                            &buffer,
+                            if capture { Some(panel.snapshot.allowance()) } else { None },
+                        )?;
+                        panel.raster = Some(observed);
                         panel.commits = panel
                             .commits
                             .checked_add(1)
                             .ok_or("panel frame count overflow")?;
+                        if capture {
+                            let (width, height) = panel.size.unwrap();
+                            panel.snapshot.publish(
+                                instance, panel.commits, (0, 0, width, height),
+                                panel.configure.expect("real panel configure"),
+                                panel.raster.as_ref().unwrap(), pixels,
+                            );
+                        }
                         self.output.enter(surface);
                     } else if is_popup {
                         let instance = self.instance.as_deref().unwrap();
@@ -902,6 +930,7 @@ impl Window {
                         self.auxiliary.raster = None;
                     } else if is_panel {
                         self.panel.as_mut().unwrap().raster = None;
+                        self.panel.as_mut().unwrap().snapshot.unmap(false);
                     } else if is_popup {
                         self.panel.as_mut().unwrap().popup.raster = None;
                         self.panel.as_mut().unwrap().popup.snapshot.unmap(false);
@@ -933,6 +962,7 @@ impl Window {
                 "keyboard_interactivity": panel.keyboard_interactivity,
                 "configure_acked": panel.configured, "configure_size": panel.size,
                 "buffer_commits": panel.commits, "raster": panel.raster, "closed": panel.closed,
+                "snapshot": panel.snapshot.index,
                 "popup": {
                     "role": "xdg_popup", "parent_role": "zwlr_layer_surface_v1",
                     "parent_instance": instance, "parent_bound": panel.popup.parent_bound,
@@ -1181,7 +1211,7 @@ mod snapshot_tests {
     fn calendar_snapshot_container_is_one_commit_and_budget_is_finite() {
         let metadata =
             serde_json::json!({"instance":"synthetic","buffer_commit":3,"stored_bytes":4});
-        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT] {
+        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT] {
             let bytes = snapshot_container(profile, &metadata, &[1, 2, 3, 4]).unwrap();
             assert_eq!(&bytes[..12], profile.magic);
             let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
@@ -1205,19 +1235,19 @@ mod snapshot_tests {
 
     #[test]
     fn calendar_snapshot_selector_requires_exact_root_synthetic_instance() {
-        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT] {
+        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT] {
             let mut selector = serde_json::json!({
                 "schema":profile.selector_schema,"instance":"bound-instance",
             });
             assert!(check_snapshot_selector(profile, &selector, "bound-instance").is_ok());
             assert!(check_snapshot_selector(profile, &selector, "foreign-instance").is_err());
-            let mut foreign_profile = selector.clone();
-            foreign_profile["schema"] = if profile.role == "xdg_popup" {
-                STORE_SNAPSHOT.selector_schema.into()
-            } else {
-                CALENDAR_SNAPSHOT.selector_schema.into()
-            };
-            assert!(check_snapshot_selector(profile, &foreign_profile, "bound-instance").is_err());
+            for other in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT] {
+                if other.selector_schema != profile.selector_schema {
+                    let mut foreign_profile = selector.clone();
+                    foreign_profile["schema"] = other.selector_schema.into();
+                    assert!(check_snapshot_selector(profile, &foreign_profile, "bound-instance").is_err());
+                }
+            }
             selector["capture_desktop"] = true.into();
             assert!(check_snapshot_selector(profile, &selector, "bound-instance").is_err());
         }

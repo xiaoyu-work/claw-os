@@ -268,9 +268,9 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
-        if [[ "$selection" == native-calendar ]]; then
+        if [[ "$selection" == native-calendar || "$selection" == native-desktop-widgets ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
             cargo test -p cos --lib --locked native_calendar_popup -- --test-threads=1
             cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
@@ -333,8 +333,8 @@ display() {
         local selectors=()
         if [[ "$fixture_mode" == native-fs ]]; then
             selectors=(--native-fs-only)
-        elif [[ "$fixture_mode" == native-calendar ]]; then
-            selectors=("--native-calendar-only" "$GITHUB_WORKSPACE/build/native-calendar-input"
+        elif [[ "$fixture_mode" == native-calendar || "$fixture_mode" == native-desktop-widgets ]]; then
+            selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input"
                 "$CARGO_TARGET_DIR/native-calendar-service/debug/claw-calendar-reader")
         elif [[ "$fixture_mode" == native-store-package ]]; then
             selectors=(--native-store-package-only "$GITHUB_WORKSPACE/build/native-store-input")
@@ -466,9 +466,10 @@ case "${1:-}" in
     native-terminal) display native-terminal ;;
     native-calendar) display native-calendar ;;
     native-store) display native-store ;;
+    native-desktop-widgets) display native-desktop-widgets ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|applets}" >&2
         exit 2
         ;;
 esac

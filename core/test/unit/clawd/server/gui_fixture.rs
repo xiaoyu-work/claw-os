@@ -341,16 +341,9 @@ fn install_packages(package_only: bool, native: Option<native_products::Product>
 }
 
 fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
-    let app = if case == 25 {
-        "cosmic-edit"
-    } else if case == 26 {
-        "cosmic-files"
-    } else if case == 27 {
-        "cosmic-term"
-    } else if case == 28 {
-        "panel-calendar"
-    } else if case == 29 {
-        "cosmic-store"
+    let native = native_products::Product::for_case(case);
+    let app = if let Some(product) = native {
+        product.app
     } else if case == 0 {
         "gui-boundary-zero"
     } else {
@@ -358,7 +351,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     };
     let mut caps = CapSet::new();
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(app)));
-    if ![25, 26, 27, 28, 29].contains(&case) {
+    if native.is_none() {
         caps.insert(Cap::new(Verb::FS_READ, Scope::path("/run/gui-public")));
     }
     if [0, 1, 3, 4, 6, 7, 8, 9, 10, 11, 14, 17, 18].contains(&case) {
