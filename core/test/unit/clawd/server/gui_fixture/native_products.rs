@@ -484,6 +484,63 @@ fn process_failure_evidence(
         return serde_json::json!({"identity_unavailable": error.to_string()});
     }
     let root = std::path::PathBuf::from(format!("/proc/{}", process.identity.pid()));
+    #[cfg(target_arch = "x86_64")]
+    let syscall_path = (|| {
+        let before = std::fs::read_to_string(root.join("syscall")).ok()?;
+        let fields = before.split_whitespace().collect::<Vec<_>>();
+        let number = fields.first()?.parse::<i64>().ok()?;
+        let (kind, argument) = match number {
+            libc::SYS_mkdir => ("mkdir", 1),
+            libc::SYS_mkdirat => ("mkdirat", 2),
+            libc::SYS_statx => ("statx", 2),
+            libc::SYS_newfstatat => ("fstatat", 2),
+            _ => return None,
+        };
+        let address = usize::from_str_radix(fields.get(argument)?.strip_prefix("0x")?, 16).ok()?;
+        let mut bytes = [0_u8; 4096];
+        let local = libc::iovec { iov_base: bytes.as_mut_ptr().cast(), iov_len: bytes.len() };
+        let remote = libc::iovec { iov_base: address as *mut libc::c_void, iov_len: bytes.len() };
+        let count = unsafe {
+            libc::process_vm_readv(process.identity.pid(), &local, 1, &remote, 1, 0)
+        };
+        if count < 0 {
+            return Some(serde_json::json!({"unavailable": std::io::Error::last_os_error().to_string()}));
+        }
+        if std::fs::read_to_string(root.join("syscall")).ok()? != before
+            || process.identity.assert_current().is_err()
+        {
+            return Some(serde_json::json!({"unavailable": "syscall changed during pathname sampling"}));
+        }
+        let bytes = &bytes[..count as usize];
+        let end = bytes.iter().position(|byte| *byte == 0);
+        Some(serde_json::json!({
+            "kind": kind, "path": String::from_utf8_lossy(&bytes[..end.unwrap_or(bytes.len())]),
+            "unterminated": end.is_none(),
+        }))
+    })();
+    #[cfg(not(target_arch = "x86_64"))]
+    let syscall_path: Option<serde_json::Value> = None;
+    let bounded = |name: &str, limit| {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(root.join(name))?.take(limit).read_to_end(&mut bytes)?;
+        Ok::<_, std::io::Error>(bytes)
+    };
+    let environment = bounded("environ", 16 * 1024).unwrap_or_default();
+    let paths = environment.split(|byte| *byte == 0).filter_map(|entry| {
+        let split = entry.iter().position(|byte| *byte == b'=')?;
+        let key = std::str::from_utf8(&entry[..split]).ok()?;
+        ["HOME", "COS_DATA_DIR", "COS_OWNER_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"]
+            .contains(&key).then(|| (key, String::from_utf8_lossy(&entry[split + 1..]).into_owned()))
+    }).collect::<std::collections::BTreeMap<_, _>>();
+    let mountinfo = bounded("mountinfo", 256 * 1024).unwrap_or_default();
+    let data_mounts = String::from_utf8_lossy(&mountinfo)
+        .lines().filter(|line| {
+            line.split_whitespace().nth(4).is_some_and(|target| {
+                target == "/run/display-home" || target.starts_with("/run/display-home/")
+                    || paths.values().any(|path| path == target)
+            })
+        }).take(24).map(str::to_string).collect::<Vec<_>>();
     let tasks =
         std::fs::read_dir(root.join("task"))
             .map(|tasks| {
@@ -515,6 +572,8 @@ fn process_failure_evidence(
         "task_limit": 32, "tasks": tasks,
         "provider_task_limit": 16, "provider_tasks": provider_tasks,
         "native_fs_io_counters": crate::worker::native_fs::fixture_io_counters(),
+        "syscall_path": syscall_path, "path_environment": paths,
+        "data_mount_limit": 24, "data_mounts": data_mounts,
         "cgroup_cpu": group.as_ref().map(|path| read(&path.join("cpu.stat"))).ok(),
         "cgroup_memory": group.as_ref().map(|path| read(&path.join("memory.current"))).ok(),
         "cgroup_cpu_limit": group.as_ref().map(|path| read(&path.join("cpu.max"))).ok(),
