@@ -102,6 +102,12 @@ admission, independent selection rights and checked retirement are unchanged.
 This initial lane covers original palette startup/pixels and retirement only,
 not Layer keyboard delivery, catalog/search, typed application launch or
 general backend-resource admission.
+Autosized Layer requests receive real bounded resize configures, not just the
+initial bootstrap size. The witness tracks issued serials and requires the
+latest acknowledgement before crediting another buffer. Pixels accompanying
+a valid resize request are released normally but cannot satisfy that pending
+configure; pixels before the first acknowledgement still refuse. Existing
+reader geometry and keyboard checks remain strict.
 The genuine Store successor additionally
 permits one finite ordinary click inside the fixture's already-buffered,
 configure-acknowledged 800x600 primary XDG surface. Canonical integer coordinates
