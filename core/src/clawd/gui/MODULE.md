@@ -253,9 +253,12 @@ The same ignored Store test has a separate private APT round, with its own
 PID/mount/network namespaces and reserved NSS fixture. It packages and verifies
 real native Store dpkg ownership using the correct native architecture, then
 uses ordinary search, a result-card click and the installed entry's uninstall
-button. The retained confirmation-dialog bytes must be inspected; this round
-does not yet confirm that dialog, submit a package mutation or establish native
-Store payload self-handoff.
+button and confirmation. The original signed UI must create the exact
+operation-bound Critical review, visible through the ordinary owner's CLI,
+without changing package state or the startup grant. That decision remains
+pending and must retire with the checked window. The permission UI bytes still
+require inspection; this round does not approve Critical consent, submit a
+retained package effect or establish native Store payload self-handoff.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 const CATALOG: &str = "/var/lib/swcatalog/xml/private-store.xml";
 const STATUS: &str = "/var/lib/dpkg/status";
 const REPORT: &str = "/run/gui-fixture/native-store-consumer.json";
+const PACKAGE: &str = "claw-app-acceptance-bundle";
 
 pub(super) struct Fixture {
     catalog: Vec<u8>,
@@ -58,7 +59,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
             status
         };
         let packages = if package_owned {
-            ["claw-app-acceptance-bundle", "claw-package-acceptance-side-effect"]
+            [PACKAGE, "claw-package-acceptance-side-effect"]
         } else {
             ["claw-native-store-fixture", "claw-native-store-available"]
         };
@@ -155,6 +156,60 @@ Description: Private controlled Store inventory\n\n".to_vec();
         for path in ["/var/cache/swcatalog", "/var/cache/app-info"] {
             assert!(std::fs::read_dir(path).unwrap().next().is_none());
         }
+    }
+
+    pub(super) async fn package_review(
+        &self,
+        retained: &RetainedInstance,
+        native: &NativeProcess,
+        session: &str,
+    ) -> Result<crate::approvals::Request, String> {
+        use clawd_client::system_review::{ReviewKind, ReviewStatus, SystemReview};
+
+        let requester = format!("App {} / GUI {session}", STORE.app);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let pending = loop {
+            check_native_process(retained, native)?;
+            let mut matching = crate::approvals::list_pending_for_owner(Some(OWNER))
+                .into_iter().filter(|request| {
+                    request.verb == "sys.package" && request.scope == Scope::name(PACKAGE)
+                        && request.requester.as_deref() == Some(requester.as_str())
+                });
+            if let Some(request) = matching.next() {
+                if matching.next().is_some() {
+                    return Err("actual Store created duplicate exact package reviews".into());
+                }
+                break request;
+            }
+            if Instant::now() >= deadline {
+                return Err("actual Store did not request protected exact package permission".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(pending.owner_uid, Some(OWNER));
+        assert_eq!(pending.risk, Some(crate::caps::Risk::Critical));
+        let digest = pending.operation_digest.as_ref().unwrap();
+        assert_eq!(digest.len(), 64);
+        assert_eq!(pending.session, format!("package-intent:{digest}"));
+        assert!(pending.reason.starts_with(&format!("GUI {} requests Remove for ", STORE.app)));
+        let review: SystemReview = serde_json::from_value(
+            owner_native_json(&["review", "show", &pending.id]).await,
+        ).map_err(|error| error.to_string())?;
+        review.validate().map_err(|error| error.to_string())?;
+        assert_eq!(review.kind, ReviewKind::Capability);
+        assert_eq!(review.status, ReviewStatus::Pending);
+        self.verify_after_retirement();
+        let mut report: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(REPORT).unwrap(),
+        ).unwrap();
+        report["pending_package_permission"] = serde_json::json!({
+            "request": pending, "owner_review": review,
+            "critical_decision_applied": false, "dpkg_unchanged": true,
+        });
+        report["coverage"] = "The original dpkg-owned native Store submitted an exact remove permission review after ordinary confirmation. Protected Critical consent remains pending and package bytes are unchanged; this is not retained package acceptance or application.".into();
+        std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap())
+            .map_err(|error| error.to_string())?;
+        Ok(pending)
     }
 
     pub(super) async fn input_frame(

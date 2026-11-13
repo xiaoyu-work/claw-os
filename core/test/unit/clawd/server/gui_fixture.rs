@@ -1210,12 +1210,9 @@ async fn approve_native_resource(id: &str) -> crate::approvals::Request {
     approve_protected_owner_request(id).await
 }
 
-async fn approve_protected_owner_request(id: &str) -> crate::approvals::Request {
-    use clawd_client::system_review::{PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision, SystemReview};
-    let request = crate::approvals::lookup_pending(id).unwrap();
-    assert_eq!(request.owner_uid, Some(OWNER));
+async fn owner_native_json(arguments: &[&str]) -> serde_json::Value {
     let mut command = ProcessCommand::new("/usr/local/bin/cos");
-    command.args(["review", "show", id]).env_clear().env("HOME", "/run/display-home")
+    command.args(arguments).env_clear().env("HOME", "/run/display-home")
         .env("PATH", "/usr/local/bin:/usr/bin:/bin").current_dir("/run/display-home").stdin(Stdio::null());
     unsafe {
         command.pre_exec(|| {
@@ -1229,7 +1226,16 @@ async fn approve_protected_owner_request(id: &str) -> crate::approvals::Request 
     command.kill_on_drop(true);
     let shown = tokio::time::timeout(Duration::from_secs(15), command.output()).await.unwrap().unwrap();
     assert!(shown.status.success(), "{}", String::from_utf8_lossy(&shown.stderr));
-    let review: SystemReview = serde_json::from_slice(&shown.stdout).unwrap();
+    serde_json::from_slice(&shown.stdout).unwrap()
+}
+
+async fn approve_protected_owner_request(id: &str) -> crate::approvals::Request {
+    use clawd_client::system_review::{PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision, SystemReview};
+    let request = crate::approvals::lookup_pending(id).unwrap();
+    assert_eq!(request.owner_uid, Some(OWNER));
+    let review: SystemReview = serde_json::from_value(
+        owner_native_json(&["review", "show", id]).await,
+    ).unwrap();
     review.validate().unwrap();
     let decision = ReviewDecision {
         id: review.id.clone(), revision: review.revision, action: ReviewAction::ApplyChoices,
