@@ -297,8 +297,19 @@ A subsequent configured, nonuniform panel frame may use a distinct
 instance-bound passive snapshot profile under the same finite copy budgets.
 The private compositor accommodates panels up to 512 by 800 pixels; Calendar's
 original 512-by-128 readiness and pointer predicates remain unchanged.
-Actual card text, resource acceptance and whole checked retirement still need
-genuine execution; adding this candidate does not clear release readiness.
+Test run `43374891104`, at Root source
+`94ba54b410e8a601ad1c93464d52917150974483` and immutable App source
+`51a10f6c9f90332bbf4f1d07d5b816b650861ca2`, passed all fifteen gates.
+The original Widget Rail produced real 360-by-628 SHM pixels and three
+successful exact-scope Root reads, followed by checked process/cgroup,
+provider/runtime, window and PAM retirement. Manual inspection of those
+same-instance bytes confirmed the synthetic Calendar event, empty task state,
+memory/storage and deterministic suggestion cards. CPU/network warm-up
+remained unavailable first samples, not fabricated measurements.
+Automated reply-decode/text assertions remain false; manual inspection is
+separate evidence. Header contrast, hardware/default-renderer acceptance and
+other native/provider surfaces remain separate from this bounded gate, which
+does not clear full release readiness.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
