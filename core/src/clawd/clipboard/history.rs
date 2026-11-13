@@ -1,5 +1,6 @@
 //! Closed CopyQ operations. Only the broker sees the owner endpoint; the fixed
 //! CLI connects through a private, credential-checked relay to that pinned peer.
+//! CopyQ hashes are hexadecimal; public identities are base64 of the raw digest.
 
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -41,10 +42,10 @@ for (var index = 0, count = size(); index < count && result.length < 20; index++
     if (!value || !(mimeText in value)) continue;
     var data = value[mimeText], text = str(data);
     if (!text || text.indexOf('\0') >= 0) continue;
-    var digest = str(toBase64(sha256sum(data)));
+    var digest = str(sha256sum(data));
     if (digest === previous) continue;
     previous = digest;
-    var record = {identity:str(toBase64(sha256sum(pack(value)))), text:text};
+    var record = {identity:str(sha256sum(pack(value))), text:text};
     var timeType = 'application/x-copyq-user-copy-time';
     if (timeType in value) record.copied_at = str(value[timeType]);
     result.push(record);
@@ -62,7 +63,7 @@ var result = 'not-found';
 for (var index = 0, count = size(); index < count; index++) {
     checkDeadline();
     var value = getItem(index);
-    if (value && mimeText in value && str(toBase64(sha256sum(pack(value)))) === wanted) {
+    if (value && mimeText in value && str(sha256sum(pack(value))) === wanted) {
         checkDeadline(); select(index); result = 'ok'; break;
     }
 }
@@ -79,7 +80,7 @@ var result = 'not-found';
 for (var index = 0, count = size(); index < count; index++) {
     checkDeadline();
     var value = getItem(index);
-    if (value && mimeText in value && str(toBase64(sha256sum(pack(value)))) === wanted) {
+    if (value && mimeText in value && str(sha256sum(pack(value))) === wanted) {
         checkDeadline(); remove(index); result = 'ok'; break;
     }
 }
@@ -540,8 +541,13 @@ async fn execute(
                 .take()
                 .ok_or_else(|| BrokerError::execution("CopyQ stdin unavailable"))?;
             let operation = async {
+                let identity = request.identity.as_ref()
+                    .map(|value| base64::engine::general_purpose::STANDARD.decode(value.as_str()))
+                    .transpose()
+                    .map_err(|_| BrokerError::execution("invalid clipboard history identity"))?
+                    .map(hex::encode);
                 let payload = json!({
-                    "identity": request.identity.as_ref().map(Text::as_str),
+                    "identity": identity,
                     "deadline_unix_ms": request.deadline_unix_ms,
                 }).to_string();
                 input.write_all(payload.as_bytes()).await
@@ -681,14 +687,15 @@ fn parse(action: Action, raw: &[u8]) -> Result<Value, String> {
         serde_json::from_slice(raw).map_err(|_| "CopyQ returned an invalid history snapshot")?;
     let mut entries: Vec<Entry> = Vec::new();
     for value in values {
-        if !valid_identity(&value.identity) {
-            return Err("CopyQ returned an invalid history identity".into());
-        }
+        let identity = hex::decode(&value.identity).ok()
+            .filter(|digest| digest.len() == 32 && hex::encode(digest) == value.identity)
+            .map(|digest| base64::engine::general_purpose::STANDARD.encode(digest))
+            .ok_or("CopyQ returned an invalid history identity")?;
         if value.text.is_empty()
             || value.text.contains('\0')
             || entries
                 .last()
-                .is_some_and(|last| last.identity == value.identity)
+                .is_some_and(|last| last.identity == identity)
         {
             continue;
         }
@@ -699,7 +706,7 @@ fn parse(action: Action, raw: &[u8]) -> Result<Value, String> {
             preview.push('…');
         }
         entries.push(Entry {
-            identity: value.identity,
+            identity,
             preview,
             copied_at: value
                 .copied_at

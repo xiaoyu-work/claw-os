@@ -210,8 +210,8 @@ fn unavailable_history_reply_satisfies_mandatory_authority_without_a_second_spen
 
 #[test]
 fn history_results_preserve_bounded_text_previews_and_stale_identity_failures() {
-    let first = base64::engine::general_purpose::STANDARD.encode([1; 32]);
-    let second = base64::engine::general_purpose::STANDARD.encode([2; 32]);
+    let first = hex::encode([1; 32]);
+    let second = hex::encode([2; 32]);
     let mut records = vec![
         json!({"identity":first,"text":"first"}),
         json!({"identity":first,"text":"duplicate"}),
@@ -219,17 +219,26 @@ fn history_results_preserve_bounded_text_previews_and_stale_identity_failures() 
         json!({"identity":second,"text":"日 ".repeat(120),"copied_at":" 123 "}),
     ];
     for index in 3..30 {
-        records.push(json!({"identity":base64::engine::general_purpose::STANDARD.encode([index;32]),"text":"text"}));
+        records.push(json!({"identity":hex::encode([index;32]),"text":"text"}));
     }
     let value = parse(Action::List, &serde_json::to_vec(&records).unwrap()).unwrap();
     let entries = value["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 20);
+    assert_eq!(entries[0]["identity"], base64::engine::general_purpose::STANDARD.encode([1; 32]));
     assert_eq!(entries[0]["preview"], "first");
     assert_eq!(entries[1]["preview"].as_str().unwrap().chars().count(), 181);
     assert!(entries[1]["preview"].as_str().unwrap().ends_with('…'));
     assert_eq!(entries[1]["copied_at"], "123");
     assert!(parse(Action::List, &[0xff]).is_err());
     assert!(parse(Action::List, br#"[{"identity":"bad","text":"text"}]"#).is_err());
+    for identity in [
+        "01".repeat(31), "FF".repeat(32),
+        base64::engine::general_purpose::STANDARD.encode([1; 32]),
+    ] {
+        assert!(parse(Action::List, &serde_json::to_vec(&json!([
+            {"identity":identity,"text":"text"},
+        ])).unwrap()).is_err());
+    }
     assert!(parse(Action::List, &vec![b' '; MAX_OUTPUT + 1]).is_err());
     assert!(parse(Action::Remove, b"not-found")
         .unwrap_err()
@@ -318,7 +327,7 @@ fn main() {
     let ready = root.path().join("ready");
     let received = root.path().join("received");
     let response = root.path().join("response");
-    let expected = json!([{"identity":base64::engine::general_purpose::STANDARD.encode([1;32]),"text":"synthetic private preview"}]);
+    let expected = json!([{"identity":hex::encode([1;32]),"text":"synthetic private preview"}]);
     fs::write(&response, expected.to_string()).unwrap();
     struct Provider(std::process::Child);
     impl Drop for Provider {
@@ -386,10 +395,12 @@ fn main() {
         .unwrap();
     let answer = client.await.unwrap();
     assert!(answer.ok);
+    let result = answer.result.unwrap();
     assert_eq!(
-        answer.result.unwrap()["entries"][0]["preview"],
+        result["entries"][0]["preview"],
         "synthetic private preview"
     );
+    assert_eq!(result["entries"][0]["identity"], base64::engine::general_purpose::STANDARD.encode([1; 32]));
     assert!(provider.0.wait().unwrap().success());
     let mut bytes = Vec::new();
     File::open(&received)
