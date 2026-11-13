@@ -248,10 +248,11 @@ Optional named GUI entries use this same provider and signed regular-file
 admission, with their own declared needs and literal selector. Neither a
 second ELF nor a panel label creates another App identity or mount authority.
 
-Notifications is a normal hostile MCP worker. Its original `ui.notify`
-capability admits bounded native post/close or `notify` send intent; the
-separate `data.inbox.read` capability admits `notify` list. The typed OS
-provider rechecks the exact action/App/capability matrix. Neither admits
+Notifications is a normal hostile MCP worker. The existing `ui.notify`
+capability admits bounded post/close/send intent from any authenticated App;
+the separate `data.inbox.read` capability admits only that App's source list.
+The typed OS provider derives the source from the sealed App identity and
+rechecks the exact action/owner/capability matrix. Neither admits
 owner-wide notification administration, arbitrary icons/files or a raw bus.
 The existing desktop bridge alone consumes channel leases and returns genuine
 user acknowledgement/dismissal, separately from delivery receipts.
