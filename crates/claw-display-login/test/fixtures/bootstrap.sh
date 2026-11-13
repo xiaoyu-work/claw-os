@@ -360,6 +360,40 @@ def publish(name, data):
         os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
         stream.write(data)
 
+def checked_snapshot(data, index, window):
+    assert 1 <= index["publications"] <= 32 and index["total_bytes"] <= 32 * 1024 * 1024
+    assert len(data) == index["file_bytes"] and data[:12] == magic
+    size = int.from_bytes(data[12:16], "little")
+    assert size <= 4096 and 16 + size <= len(data)
+    frame = json.loads(data[16:16 + size])
+    pixels = data[16 + size:]
+    assert frame["schema"] == prefix + "-shm-frame/v1"
+    assert frame["synthetic_fixture"] and frame["captured_live"]
+    assert frame["owner_uid"] == 62050 and frame["byte_order"] == "little-endian"
+    assert frame["instance"] == window["instance"] == index["instance"]
+    if popup:
+        assert frame["parent_instance"] == window["instance"]
+        assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
+        assert frame["geometry"] == window["popup"]["geometry"]
+    else:
+        assert frame["role"] == ("zwlr_layer_surface_v1" if widgets else "xdg_toplevel")
+        assert frame["parent_role"] is None and frame["parent_instance"] is None
+        assert frame["geometry"] == ([0, 0, *window["configure_size"]] if widgets else [0, 0, 800, 600])
+    assert frame["buffer_commit"] == index["snapshot_commit"]
+    assert frame["configure_serial"] == index["configure_serial"]
+    width, height = frame["geometry"][2:]
+    assert 100 <= width <= 4096 and 100 <= height <= 4096
+    if widgets:
+        assert width <= 512 and height <= 800
+    assert (frame["raster"]["width"], frame["raster"]["height"]) == (width, height)
+    assert frame["source_format"] in ("argb8888", "xrgb8888")
+    assert frame["stored_stride"] == width * 4 and frame["stored_offset"] == 0
+    assert len(pixels) == frame["stored_bytes"] == width * height * 4
+    checksum = 0xcbf29ce484222325
+    for byte in pixels:
+        checksum = ((checksum ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    assert f"{checksum:016x}" == frame["pixel_checksum"] == index["pixel_checksum"] == frame["raster"]["pixel_checksum"]
+
 window = json.loads(protected(source / "window.json", 62050, 8192))
 consumer = json.loads(protected(pathlib.Path(f"/run/gui-fixture/native-{product}-consumer.json"), 0, 16384))
 assert window["instance"] == consumer["instance"]
@@ -382,39 +416,8 @@ copied, reason = False, index.get("status", "no-captured-frame")
 if index.get("status") == "saved" and index.get("closed") and not index.get("mapped"):
     if index.get("matches_current_configure") and index["snapshot_commit"] == index["latest_buffer_commit"]:
         assert index["latest_buffer_commit"] == latest_commit
-        assert 1 <= index["publications"] <= 32 and index["total_bytes"] <= 32 * 1024 * 1024
         data = protected(source / filename, 62050, 4 * 1024 * 1024 + 4112)
-        assert len(data) == index["file_bytes"] and data[:12] == magic
-        size = int.from_bytes(data[12:16], "little")
-        assert size <= 4096 and 16 + size <= len(data)
-        frame = json.loads(data[16:16 + size])
-        pixels = data[16 + size:]
-        assert frame["schema"] == prefix + "-shm-frame/v1"
-        assert frame["synthetic_fixture"] and frame["captured_live"]
-        assert frame["owner_uid"] == 62050 and frame["byte_order"] == "little-endian"
-        assert frame["instance"] == window["instance"] == index["instance"]
-        if popup:
-            assert frame["parent_instance"] == window["instance"]
-            assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
-            assert frame["geometry"] == window["popup"]["geometry"]
-        else:
-            assert frame["role"] == ("zwlr_layer_surface_v1" if widgets else "xdg_toplevel")
-            assert frame["parent_role"] is None and frame["parent_instance"] is None
-            assert frame["geometry"] == ([0, 0, *window["configure_size"]] if widgets else [0, 0, 800, 600])
-        assert frame["buffer_commit"] == index["snapshot_commit"]
-        assert frame["configure_serial"] == index["configure_serial"]
-        width, height = frame["geometry"][2:]
-        assert 100 <= width <= 4096 and 100 <= height <= 4096
-        if widgets:
-            assert width <= 512 and height <= 800
-        assert (frame["raster"]["width"], frame["raster"]["height"]) == (width, height)
-        assert frame["source_format"] in ("argb8888", "xrgb8888")
-        assert frame["stored_stride"] == width * 4 and frame["stored_offset"] == 0
-        assert len(pixels) == frame["stored_bytes"] == width * height * 4
-        checksum = 0xcbf29ce484222325
-        for byte in pixels:
-            checksum = ((checksum ^ byte) * 0x100000001b3) & 0xffffffffffffffff
-        assert f"{checksum:016x}" == frame["pixel_checksum"] == index["pixel_checksum"] == frame["raster"]["pixel_checksum"]
+        checked_snapshot(data, index, window)
         publish(filename, data)
         copied, reason = True, "latest-live-frame-retained-through-original-close"
     else:
@@ -424,6 +427,23 @@ publish(filename.removesuffix(".shm") + "-export.json", (json.dumps({
     "copied": copied, "reason": reason, "snapshot": index,
     "reply_decode_asserted": False, "event_text_asserted": False,
 }) + "\n").encode())
+if product == "clipboard":
+    opened = consumer["popup"]
+    index = opened["snapshot"]
+    assert consumer["open_snapshot_copied_before_close"] is True
+    assert opened["open"] and not opened["closed"] and opened["parent_bound"]
+    assert index["status"] == "saved" and index["mapped"] and not index["closed"]
+    assert index["matches_current_configure"]
+    assert index["snapshot_commit"] == index["latest_buffer_commit"] == opened["buffer_commits"]
+    data = protected(pathlib.Path("/run/gui-fixture/native-clipboard-history-open.shm"), 0,
+                     4 * 1024 * 1024 + 4112)
+    checked_snapshot(data, index, {"instance": window["instance"], "popup": opened})
+    publish("native-clipboard-history-open.shm", data)
+    publish("native-clipboard-history-open-export.json", (json.dumps({
+        "schema": "claw.private-clipboard-open-shm-export/v1", "instance": window["instance"],
+        "copied": True, "reason": "live-frame-retained-before-original-close", "snapshot": index,
+        "reply_decode_asserted": False, "event_text_asserted": False,
+    }) + "\n").encode())
 PY
         fi
     fi

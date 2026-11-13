@@ -335,6 +335,11 @@ not be credited as a nonuniform icon frame. The theme remains separately
 owned from each product's signed resources and grants nothing.
 The fixture's read-only icon overlay retains inherited system themes without
 rewriting or making the package namespace's protected `/usr/share` writable.
+Clipboard also retains one bounded, current open-popup frame before ordinary
+close, with a distinct checked export receipt. Clearing private presentation
+state during close can repaint an empty history; the final closed frame must
+not be mistaken for the open reader result. Neither capture asserts text or
+reply decoding, and the original UI's clearing behavior is unchanged.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

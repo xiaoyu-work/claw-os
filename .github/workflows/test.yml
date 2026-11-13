@@ -342,6 +342,7 @@ jobs:
             build/${{ matrix.mode }}*-authenticated.*/native-widget-rail.shm
             build/${{ matrix.mode }}*-authenticated.*/native-widget-rail-export.json
             build/${{ matrix.mode }}*-authenticated.*/native-clipboard-history.shm
+            build/${{ matrix.mode }}*-authenticated.*/native-clipboard-history-open.shm
             build/${{ matrix.mode }}*-authenticated.*/copyq-provider.log
           if-no-files-found: error
           retention-days: 7

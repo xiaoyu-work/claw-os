@@ -1,5 +1,5 @@
 use super::*;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
@@ -46,6 +46,30 @@ async fn query(arguments: &[&str]) -> Vec<u8> {
     result.stdout
 }
 
+fn open_snapshot(window: &serde_json::Value) -> Option<Vec<u8>> {
+    let file = std::fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open("/run/user/62050/native-product-observer/native-clipboard-history.shm").unwrap();
+    let info = file.metadata().unwrap();
+    let limit = 4 * 1024 * 1024 + 4112;
+    assert!(info.is_file() && info.uid() == OWNER && info.nlink() == 1
+        && info.mode() & 0o077 == 0 && info.len() <= limit);
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).unwrap();
+    assert!((16..=limit as usize).contains(&bytes.len()) && &bytes[..12] == b"CLAWCLPSHM1\0");
+    let size = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    assert!(size <= 4096 && 16 + size <= bytes.len());
+    let frame: serde_json::Value = serde_json::from_slice(&bytes[16..16 + size]).unwrap();
+    let index = &window["popup"]["snapshot"];
+    if frame["instance"] != window["instance"]
+        || frame["buffer_commit"] != index["snapshot_commit"]
+        || frame["configure_serial"] != index["configure_serial"]
+        || !observe().is_some_and(|latest| latest["instance"] == window["instance"]
+            && latest["popup"]["open"] == true && latest["popup"]["snapshot"] == *index)
+    { return None; }
+    Some(bytes)
+}
+
 impl Fixture {
     pub(super) async fn prepare() -> Self {
         assert_eq!(std::fs::read("/run/gui-fixture/isolated").unwrap(), b"private-v1");
@@ -78,7 +102,8 @@ impl Fixture {
     ) {
         let instance = claw_display_control::Epoch(retained.instance.0).label();
         let guest = PathBuf::from(format!("/proc/{}/root", process.identity.pid()));
-        for path in ["run/display-home/.config/copyq", "run/user/62050/bus", "run/dbus/system_bus_socket"] {
+        for path in ["run/display-home/.config/copyq", "run/user/62050/bus",
+            "run/dbus/system_bus_socket", "run/user/62050/native-product-observer"] {
             assert!(matches!(std::fs::symlink_metadata(guest.join(path)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound));
         }
@@ -94,7 +119,7 @@ impl Fixture {
             control, pam, retained, process, session, Instant::now() + Duration::from_secs(25),
         );
         driver.click().await;
-        let (frame, request, use_record) = loop {
+        let (frame, request, use_record, pixels) = loop {
             driver.live("Clipboard original popup and real controlled CopyQ history read").await;
             assert!(self.child.try_wait().unwrap().is_none(), "CopyQ provider exited");
             let audit = calendar_popup::audit_since(0);
@@ -123,11 +148,18 @@ impl Fixture {
                         && frame["popup"]["snapshot"]["status"] == "saved"
                         && frame["popup"]["snapshot"]["snapshot_commit"] == frame["popup"]["buffer_commits"]),
                 ) {
-                    break (frame, (*request).clone(), (*use_record).clone());
+                    if let Some(pixels) = open_snapshot(&frame) {
+                        break (frame, (*request).clone(), (*use_record).clone(), pixels);
+                    }
                 }
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
+        let mut checkpoint = std::fs::OpenOptions::new().write(true).create_new(true)
+            .mode(0o600).custom_flags(libc::O_NOFOLLOW)
+            .open("/run/gui-fixture/native-clipboard-history-open.shm").unwrap();
+        checkpoint.write_all(&pixels).unwrap();
+        drop(checkpoint);
         driver.click().await;
         let closed = loop {
             driver.live("Clipboard original popup close").await;
@@ -140,6 +172,7 @@ impl Fixture {
             "schema":"claw.private-native-clipboard-consumer/v1","instance":instance,"owner_uid":OWNER,
             "request":request,"exact_scope_use":use_record,"popup":frame["popup"],
             "passive_history_snapshot":closed["popup"]["snapshot"],
+            "open_snapshot_copied_before_close":true,
             "fixture_items":[FIRST,SECOND],"real_copyq":true,"provider_qpa":"offscreen",
             "raw_history_or_bus":false,"live_selection_restore_asserted":false,
             "sdk_reply_delivery_and_decode_asserted":false,"history_text_rendering_asserted":false,
