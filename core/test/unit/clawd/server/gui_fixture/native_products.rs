@@ -461,6 +461,51 @@ fn launcher_output_tail() -> std::io::Result<serde_json::Value> {
     }))
 }
 
+fn native_metadata_syscall_path(process: &NativeProcess) -> Option<serde_json::Value> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        process.identity.assert_current().ok()?;
+        let syscall = format!("/proc/{}/syscall", process.identity.pid());
+        let before = std::fs::read_to_string(&syscall).ok()?;
+        let fields = before.split_whitespace().collect::<Vec<_>>();
+        let number = fields.first()?.parse::<i64>().ok()?;
+        let (kind, argument) = match number {
+            libc::SYS_mkdir => ("mkdir", 1),
+            libc::SYS_mkdirat => ("mkdirat", 2),
+            libc::SYS_statx => ("statx", 2),
+            libc::SYS_newfstatat => ("fstatat", 2),
+            _ => return None,
+        };
+        let address = usize::from_str_radix(fields.get(argument)?.strip_prefix("0x")?, 16).ok()?;
+        let mut bytes = [0_u8; 4096];
+        let local = libc::iovec { iov_base: bytes.as_mut_ptr().cast(), iov_len: bytes.len() };
+        let remote = libc::iovec { iov_base: address as *mut libc::c_void, iov_len: bytes.len() };
+        let count = unsafe {
+            libc::process_vm_readv(process.identity.pid(), &local, 1, &remote, 1, 0)
+        };
+        if count < 0 {
+            return Some(serde_json::json!({"unavailable": std::io::Error::last_os_error().to_string()}));
+        }
+        if std::fs::read_to_string(&syscall).ok()? != before
+            || process.identity.assert_current().is_err()
+        {
+            return Some(serde_json::json!({"unavailable": "syscall changed during pathname sampling"}));
+        }
+        let bytes = &bytes[..count as usize];
+        let end = bytes.iter().position(|byte| *byte == 0);
+        let length = end.unwrap_or(bytes.len());
+        Some(serde_json::json!({
+            "kind": kind, "path": String::from_utf8_lossy(&bytes[..length.min(512)]),
+            "unterminated": end.is_none(), "truncated": length > 512,
+        }))
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = process;
+        None
+    }
+}
+
 fn process_failure_evidence(
     retained: &RetainedInstance,
     process: &NativeProcess,
@@ -484,42 +529,7 @@ fn process_failure_evidence(
         return serde_json::json!({"identity_unavailable": error.to_string()});
     }
     let root = std::path::PathBuf::from(format!("/proc/{}", process.identity.pid()));
-    #[cfg(target_arch = "x86_64")]
-    let syscall_path = (|| {
-        let before = std::fs::read_to_string(root.join("syscall")).ok()?;
-        let fields = before.split_whitespace().collect::<Vec<_>>();
-        let number = fields.first()?.parse::<i64>().ok()?;
-        let (kind, argument) = match number {
-            libc::SYS_mkdir => ("mkdir", 1),
-            libc::SYS_mkdirat => ("mkdirat", 2),
-            libc::SYS_statx => ("statx", 2),
-            libc::SYS_newfstatat => ("fstatat", 2),
-            _ => return None,
-        };
-        let address = usize::from_str_radix(fields.get(argument)?.strip_prefix("0x")?, 16).ok()?;
-        let mut bytes = [0_u8; 4096];
-        let local = libc::iovec { iov_base: bytes.as_mut_ptr().cast(), iov_len: bytes.len() };
-        let remote = libc::iovec { iov_base: address as *mut libc::c_void, iov_len: bytes.len() };
-        let count = unsafe {
-            libc::process_vm_readv(process.identity.pid(), &local, 1, &remote, 1, 0)
-        };
-        if count < 0 {
-            return Some(serde_json::json!({"unavailable": std::io::Error::last_os_error().to_string()}));
-        }
-        if std::fs::read_to_string(root.join("syscall")).ok()? != before
-            || process.identity.assert_current().is_err()
-        {
-            return Some(serde_json::json!({"unavailable": "syscall changed during pathname sampling"}));
-        }
-        let bytes = &bytes[..count as usize];
-        let end = bytes.iter().position(|byte| *byte == 0);
-        Some(serde_json::json!({
-            "kind": kind, "path": String::from_utf8_lossy(&bytes[..end.unwrap_or(bytes.len())]),
-            "unterminated": end.is_none(),
-        }))
-    })();
-    #[cfg(not(target_arch = "x86_64"))]
-    let syscall_path: Option<serde_json::Value> = None;
+    let syscall_path = native_metadata_syscall_path(process);
     let bounded = |name: &str, limit| {
         use std::io::Read;
         let mut bytes = Vec::new();
@@ -987,6 +997,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     assert_eq!(value("COS_ARGS_JSON"), Some(args.as_bytes()));
 
     let mut read = None;
+    let startup = Instant::now();
+    let mut startup_samples = 0;
+    let mut next_startup_sample = startup;
     let before = loop {
         if let Err(error) = check_native_process(&retained, &process) {
             renderer_failure(
@@ -998,6 +1011,15 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 &format!("actual native startup stopped before its real window: {error}"),
             )
             .await;
+        }
+        if product.name == "files" && startup_samples < 8 && Instant::now() >= next_startup_sample {
+            eprintln!("private actual Files startup sample {}", serde_json::json!({
+                "instance": window, "elapsed_ms": startup.elapsed().as_millis(),
+                "io": crate::worker::native_fs::fixture_io_counters(),
+                "syscall_path": native_metadata_syscall_path(&process),
+            }));
+            startup_samples += 1;
+            next_startup_sample = Instant::now() + Duration::from_secs(3);
         }
         if editor && read.is_none() {
             read = crate::approvals::list_pending_for_owner(Some(OWNER))
@@ -1033,6 +1055,15 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
+    if product.name == "files" {
+        let evidence = process_failure_evidence(&retained, &process);
+        eprintln!("private actual Files first-frame profile {}", serde_json::json!({
+            "instance": window, "elapsed_ms": startup.elapsed().as_millis(),
+            "startup_samples": startup_samples, "io": evidence["native_fs_io_counters"],
+            "path_environment": evidence["path_environment"],
+            "data_mounts": evidence["data_mounts"], "cgroup_cpu": evidence["cgroup_cpu"],
+        }));
+    }
     if editor {
         assert!(
             !loaded(&before),
