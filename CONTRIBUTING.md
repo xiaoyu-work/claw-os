@@ -234,6 +234,10 @@ cargo test -p cos --test app_source_fixtures -- --test-threads=1
 # Exact CI lint.
 (cd core && cargo clippy -- -D warnings)
 
+# OS capture helper with a private portal and real unprivileged clawd child.
+GITHUB_WORKSPACE="$PWD" RUNNER_TEMP="$PWD/build" \
+  bash scripts/ci/test-boundaries.sh capture
+
 # OS-owned Python tests, from the repository root. App tests live in clawos-app.
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src \

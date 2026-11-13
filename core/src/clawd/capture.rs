@@ -1,9 +1,11 @@
-//! Screen capture authority stays in the OS; the fixed native client owns
-//! portal presentation. Workers never receive the owner's session bus or a
-//! host temporary-file path.
+//! Screen capture authority and portal I/O stay in the OS. Workers receive
+//! neither the owner's session bus nor a host temporary-file path.
 
 use std::fs;
+use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -19,7 +21,9 @@ use super::filesystem::Target;
 use super::wire::requests::ScreenshotRequest;
 use crate::caps::{Cap, Scope, Verb};
 
-const NATIVE_PROGRAM: &str = "/usr/bin/cosmic-screenshot";
+mod portal;
+pub use portal::helper;
+
 const MAX_PNG_BYTES: usize = 64 * 1024 * 1024;
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -43,25 +47,32 @@ pub async fn capture(
         client.pid.ok_or("screenshot peer pid is unavailable")?,
     )?;
     validate_session_bus(authority.owner_uid())?;
-    let program = Path::new(NATIVE_PROGRAM);
-    crate::provenance::fsec::require_secure_location(program, &[0])
-        .map_err(|error| format!("native Capture is unavailable: {error}"))?;
-    if !fs::symlink_metadata(program)
-        .map_err(|e| e.to_string())?
-        .is_file()
-    {
-        return Err("native Capture must be a root-owned regular file".into());
+    let (mut gate, helper_gate) = UnixStream::pair().map_err(|error| error.to_string())?;
+    let fd = helper_gate.as_raw_fd();
+    let mut command = configured_user_command(
+        Path::new("/proc/self/exe"),
+        &helper_args(request.modal, fd),
+        &environment,
+    );
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
-    let mut command = configured_user_command(program, &native_args(request.modal), &environment);
-    // The portal client needs only its authenticated owner's session bus.
     for key in ["WAYLAND_DISPLAY", "DISPLAY", "XAUTHORITY"] {
         command.env_remove(key);
     }
-    capture_to(&directory, authority, command, CAPTURE_TIMEOUT).await
+    gate.write_all(&[1]).map_err(|error| error.to_string())?;
+    let result = capture_to(&directory, authority, command, CAPTURE_TIMEOUT).await;
+    drop(helper_gate);
+    result
 }
 
-fn native_args(modal: bool) -> Vec<String> {
-    vec!["--portal-capture-stdout".into(), format!("--modal={modal}")]
+fn helper_args(modal: bool, fd: i32) -> Vec<String> {
+    vec!["--capture-helper".into(), modal.to_string(), fd.to_string()]
 }
 
 fn requested_caps(directory: &Path) -> Vec<Cap> {

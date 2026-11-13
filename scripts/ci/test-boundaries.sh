@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
-export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
 
 cos_test_binary() {
     python3 - "$1" "${2:-cos}" "${3:-lib}" "$GITHUB_WORKSPACE/core/Cargo.toml" <<'PY'
@@ -109,6 +109,29 @@ app_apt() {
                 exit "$status"
             ' private-app-apt "$test_binary" "clawd::app_store::apt::tests::$fixture"
     done
+}
+
+capture() {
+    command -v dbus-daemon >/dev/null
+    cargo build -p cos --bin clawd --locked
+    mkdir -p "$RUNNER_TEMP"
+    cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
+        > "$RUNNER_TEMP/capture-tests.jsonl"
+    local test_binary fixture
+    test_binary="$(cos_test_binary "$RUNNER_TEMP/capture-tests.jsonl")"
+    fixture=clawd::capture::portal::tests::private_os_portal_helper_uses_root_dispatch_without_app_program
+    "$test_binary" --list | grep -Fx -- "$fixture: test" >/dev/null
+    sudo timeout --kill-after=5 45 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
+        env "COS_CAPTURE_TEST_CLAWD=$CARGO_TARGET_DIR/debug/clawd" \
+            "COS_CAPTURE_PARENT_MNT=$(readlink /proc/self/ns/mnt)" \
+            "COS_CAPTURE_PARENT_PID=$(readlink /proc/self/ns/pid)" \
+            "COS_CAPTURE_PARENT_NET=$(readlink /proc/self/ns/net)" \
+        bash --noprofile --norc -c '
+            set -euo pipefail
+            mount --make-rprivate /
+            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+            "$1" --exact "$2" --ignored --nocapture --test-threads=1
+        ' private-capture "$test_binary" "$fixture"
 }
 
 app_bind() {
@@ -463,6 +486,7 @@ PY
 case "${1:-}" in
     app-apt) app_apt ;;
     app-bind) app_bind ;;
+    capture) capture ;;
     nearby) nearby ;;
     calendar) calendar ;;
     extensions) extensions ;;
@@ -480,7 +504,7 @@ case "${1:-}" in
     native-launcher) display native-launcher ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|capture|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|applets}" >&2
         exit 2
         ;;
 esac

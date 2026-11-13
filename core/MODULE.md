@@ -35,6 +35,7 @@ persistence, and structured primitive dispatch.
 | `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
 | `src/display_session/` | Root PAM/display activation, private compositor control, kernel login identity and checked display teardown |
 | `src/clawd/gui/` | Verified native GUI argv, instance-bound transport/authority and checked resource/process retirement |
+| `src/clawd/capture.rs`, `src/clawd/capture/portal.rs` | Exact-scope screenshot service and private OS-owned portal helper in `clawd`; no legacy App-executable dependency |
 | `src/update/` | Signed release manifest, monotonic security floor, recovery authorizations, runtime gates |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |

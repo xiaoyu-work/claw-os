@@ -22,7 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
-| `ci/test-boundaries.sh` | App bind, Calendar, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
+| `ci/test-boundaries.sh` | App bind, Calendar, capture portal, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
 | `ci/native_editor_payload.py` | Explicit Editor/Files/Terminal/Calendar private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
 | `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
@@ -42,10 +42,16 @@ their logic. Scripts must be LF-only, non-interactive in CI, and safe when run
 under sudo.
 
 CI scripts run from `GITHUB_WORKSPACE` and use `RUNNER_TEMP` for private scratch
-state. Release preparation writes outputs through `GITHUB_OUTPUT`; signing-key
-import writes only paths and key identifiers through `GITHUB_ENV`, never the
+state. An explicit `CARGO_TARGET_DIR` is retained; otherwise builds use the
+workspace's `target/`. Release preparation writes outputs through `GITHUB_OUTPUT`;
+signing-key import writes only paths and key identifiers through `GITHUB_ENV`, never the
 private key or passphrase. Desktop rootfs builds inherit signing environment
 variables through `sudo --preserve-env`, not process arguments.
+
+The `capture` selection runs the real `clawd` helper as a non-Root owner inside
+private mount/PID/network namespaces. An isolated synthetic portal checks
+Root-only dispatch, PNG transfer, cancellation and refusal without an App
+executable or live display. It does not establish interactive GUI acceptance.
 
 ## Tests
 

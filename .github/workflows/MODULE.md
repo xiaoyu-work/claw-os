@@ -44,6 +44,9 @@ dispatched and reusable test/publication pipelines.
 - Exercise real staged Calendar MCP writes and public SDK reads through the
   owner-scoped broker and standalone reader, including live WAL visibility,
   wrong scopes, single-use grants and physical read-only mounts.
+- Exercise the real OS capture helper as an unprivileged owner against a private
+  portal, retaining Root dispatch authentication, bounded PNG and cancellation
+  without an App executable or live display.
 - Exercise the independent nearby transport's actual TLS loopback, private
   D-Bus lease/failed-retirement cases and Root-only temporary-file/sandbox
   boundaries without acquiring wireless hardware; see `scripts/ci/test-boundaries.sh nearby`.
