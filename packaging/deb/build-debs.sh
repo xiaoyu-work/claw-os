@@ -276,6 +276,19 @@ ensure_calendar_reader() {
     find_bin claw-calendar-reader
 }
 
+ensure_launcher_backend() {
+    local path target="${RUST_TARGET/-musl/-gnu}"
+    if path="$(find_bin pop-launcher-bin)"; then
+        echo "$path"
+        return 0
+    fi
+    ensure_cargo
+    ( cd "$PROJECT_DIR" && cargo build --release --locked --target "$target" \
+        --target-dir "$PROJECT_DIR/target" \
+        --manifest-path desktop/launcher-backend/Cargo.toml -p pop-launcher-bin ) >&2
+    find_bin pop-launcher-bin
+}
+
 ensure_nearby_bin() {
     local bin="$1" path target="${RUST_TARGET/-musl/-gnu}"
     if path="$(find_bin "$bin")"; then
@@ -477,6 +490,8 @@ DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session cos)" || {
     echo "error: claw-display-session binary not built" >&2; exit 1; }
 FILE_MANAGER_BIN="$(ensure_bin claw-file-manager cos)" || {
     echo "error: claw-file-manager binary not built" >&2; exit 1; }
+LAUNCHER_BACKEND_BIN="$(ensure_launcher_backend)" || {
+    echo "error: OS Launcher backend binary not built" >&2; exit 1; }
 APP_APT_HOOK_BIN="$(ensure_bin claw-app-apt-hook cos)" || {
     echo "error: claw-app-apt-hook binary not built" >&2; exit 1; }
 PAM_DISPLAY_MODULE="$(ensure_bin libpam_claw_display.so claw-display-login "${RUST_TARGET/-musl/-gnu}")" || {
@@ -605,7 +620,8 @@ if [ ! -d "$SDK_PY_SRC" ] || [ ! -d "$RUNTIME_PY_SRC" ]; then
 fi
 cp -a "$SDK_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/claw_os_sdk"
 cp -a "$RUNTIME_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/cos_runtime"
-python3 "$SCRIPT_DIR/native_runtime_assets.py" --root "$AGENT_STAGE"
+python3 "$SCRIPT_DIR/native_runtime_assets.py" --root "$AGENT_STAGE" \
+    --launcher-binary "$LAUNCHER_BACKEND_BIN"
 find "$AGENT_STAGE/usr/lib/cos/python" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
 

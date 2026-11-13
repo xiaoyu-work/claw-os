@@ -121,7 +121,6 @@ install-shell rootdir="" prefix="/usr/local":
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} session/install
     {{ make }} -C wallpapers install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ make }} -C workspaces install DESTDIR={{rootdir}} prefix={{prefix}}
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher-backend/install
     {{ make }} -C xdg-desktop-portal install DESTDIR={{rootdir}} prefix={{prefix}}
 
 install-source-fixtures rootdir prefix="/usr/local": build-source-fixtures
