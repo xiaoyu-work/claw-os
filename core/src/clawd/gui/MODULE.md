@@ -275,6 +275,10 @@ Store self-handoff, not all native/resource acceptance or release readiness.
 Native failure evidence may also sample only the validated synthetic App's
 current metadata pathname argument on x86_64, discard it if the syscall changes,
 and report a fixed path-environment allowlist and bounded Home/data mount rows.
+The existing Files lane also records at most eight such samples, three seconds
+apart before its unchanged first-frame deadline, and a passing-frame summary
+with IO counts and the same path/mount facts. Path samples are at most 512 bytes
+with explicit truncation; no successful readiness or performance fix is inferred.
 This is private clean-CI diagnosis, not an App memory, path or inspection grant.
 
 The separate candidate acceptance selector
