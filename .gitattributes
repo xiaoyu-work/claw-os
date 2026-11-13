@@ -43,3 +43,4 @@ desktop/comp/vendor/smithay/src/wayland/selection/data_device/device.rs whitespa
 desktop/comp/vendor/smithay/src/wayland/selection/primary_selection/device.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab
 desktop/comp/vendor/smithay/src/wayland/selection/wlr_data_control/device.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab
 desktop/comp/vendor/smithay/src/wayland/selection/ext_data_control/device.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab
+desktop/comp/vendor/smithay/src/wayland/shell/wlr_layer/handlers.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab
