@@ -372,7 +372,7 @@ async fn send(worker: &mut SpawnedWorker, frame: &BrokerFrame) {
     worker.channel.flush().await.expect("flush");
 }
 
-async fn prepare_and_commit(worker: &mut SpawnedWorker, assignment: Assignment) {
+async fn prepare_worker(worker: &mut SpawnedWorker, assignment: &Assignment) {
     send(worker, &BrokerFrame::Prepare(Box::new(assignment.clone()))).await;
     {
         let mut frames = FrameReader::new(BufReader::new(&mut worker.channel));
@@ -391,6 +391,9 @@ async fn prepare_and_commit(worker: &mut SpawnedWorker, assignment: Assignment) 
         );
         assert_eq!(prepared.commit_nonce, assignment.grant.claims.commit_nonce);
     }
+}
+
+async fn commit_worker(worker: &mut SpawnedWorker, assignment: &Assignment) {
     send(
         worker,
         &BrokerFrame::Commit(Box::new(ExecutionCommit {
@@ -406,6 +409,11 @@ async fn prepare_and_commit(worker: &mut SpawnedWorker, assignment: Assignment) 
         })),
     )
     .await;
+}
+
+async fn prepare_and_commit(worker: &mut SpawnedWorker, assignment: Assignment) {
+    prepare_worker(worker, &assignment).await;
+    commit_worker(worker, &assignment).await;
 }
 
 async fn worker_exit_diagnostic(child: &mut tokio::process::Child) -> String {
@@ -906,55 +914,17 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         worker.pid,
         worker.start_time_ticks,
     );
-    prepare_and_commit(
-        &mut worker,
-        assignment(
-            grant,
-            protocol::PROTOCOL_VERSION,
-            "task-boundary",
-            harness.identity.uid,
-            &harness.identity.home,
-        ),
-    )
-    .await;
-
-    let SpawnedWorker {
-        mut child,
-        channel,
-        pid,
-        ..
-    } = worker;
-    let (reader, _writer) = channel.into_split();
-    let mut frames = FrameReader::new(BufReader::new(reader));
-    let hello = tokio::time::timeout(Duration::from_secs(30), frames.next_frame::<WorkerFrame>())
-        .await
-        .expect("handshake timed out")
-        .expect("read handshake")
-        .expect("a handshake frame");
-    let WorkerFrame::Hello(hello) = hello else {
-        panic!("the worker must handshake before anything else");
-    };
-
-    assert_eq!(hello.protocol, protocol::PROTOCOL_VERSION);
-    assert_eq!(hello.pid, pid);
-    assert_eq!(hello.uid, harness.identity.uid);
-    assert_eq!(hello.euid, harness.identity.uid);
-    assert_eq!(hello.gid, harness.isolation.execution_gid());
-    assert_eq!(hello.egid, harness.isolation.execution_gid());
-    assert!(hello.supplementary_groups.is_empty());
-    assert!(!hello.dumpable, "agent worker remained dumpable");
-    let primary = std::fs::metadata(&harness.primary_path).expect("primary broker socket");
-    use std::os::unix::fs::MetadataExt;
-    assert_eq!(
-        primary.gid(),
-        harness.identity.gid,
-        "fixture must model an owner whose primary gid can reach clawd"
+    let assignment = assignment(
+        grant,
+        protocol::PROTOCOL_VERSION,
+        "task-boundary",
+        harness.identity.uid,
+        &harness.identity.home,
     );
-    assert_ne!(hello.gid, primary.gid());
-    assert_ne!(hello.uid, 0, "the agent runtime must never run as root");
-    assert!(hello.no_new_privs, "the worker reported no NNP");
+    prepare_worker(&mut worker, &assignment).await;
+    let pid = worker.pid;
 
-    // Kernel's own view, not the worker's self-report.
+    // Keep execution blocked while inspecting the kernel, not an already-exited task.
     assert_eq!(
         proc_field(pid, "NoNewPrivs:").as_deref(),
         Some("1"),
@@ -1007,6 +977,43 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         !same_uid_mem.success(),
         "same-uid sibling opened the non-dumpable worker memory"
     );
+
+    commit_worker(&mut worker, &assignment).await;
+    let SpawnedWorker {
+        mut child,
+        channel,
+        pid,
+        ..
+    } = worker;
+    let (reader, _writer) = channel.into_split();
+    let mut frames = FrameReader::new(BufReader::new(reader));
+    let hello = tokio::time::timeout(Duration::from_secs(30), frames.next_frame::<WorkerFrame>())
+        .await
+        .expect("handshake timed out")
+        .expect("read handshake")
+        .expect("a handshake frame");
+    let WorkerFrame::Hello(hello) = hello else {
+        panic!("the worker must handshake before anything else");
+    };
+
+    assert_eq!(hello.protocol, protocol::PROTOCOL_VERSION);
+    assert_eq!(hello.pid, pid);
+    assert_eq!(hello.uid, harness.identity.uid);
+    assert_eq!(hello.euid, harness.identity.uid);
+    assert_eq!(hello.gid, harness.isolation.execution_gid());
+    assert_eq!(hello.egid, harness.isolation.execution_gid());
+    assert!(hello.supplementary_groups.is_empty());
+    assert!(!hello.dumpable, "agent worker remained dumpable");
+    let primary = std::fs::metadata(&harness.primary_path).expect("primary broker socket");
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(
+        primary.gid(),
+        harness.identity.gid,
+        "fixture must model an owner whose primary gid can reach clawd"
+    );
+    assert_ne!(hello.gid, primary.gid());
+    assert_ne!(hello.uid, 0, "the agent runtime must never run as root");
+    assert!(hello.no_new_privs, "the worker reported no NNP");
 
     // The task still round-trips a result even with no provider
     // configured, which is what proves the queue's outcome now arrives
