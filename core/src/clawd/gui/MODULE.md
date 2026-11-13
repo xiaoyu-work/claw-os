@@ -323,7 +323,8 @@ live selection Restore, active display/provider binding or complete Clipboard
 acceptance. Its distinct Root-bound popup capture has the same finite budgets;
 no raw history, user bus or App-owned CopyQ execution is admitted.
 The private witness compares the live Root origin's independent selection
-flags to an exact Root-owned fixture projection. History read is not selection
+flags to an exact Root-owned fixture projection, including ordinary pointer
+delivery as well as panel creation and popup commits. History read is not selection
 read; Clipboard's already reviewed selection-write need must not be mistaken
 for an unexpected union or silently removed. Other native fixtures retain
 their empty-selection expectations. This projection observes existing grants,
