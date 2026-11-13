@@ -268,7 +268,7 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard || "$selection" == native-launcher ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         if [[ "$selection" == native-calendar || "$selection" == native-desktop-widgets ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
@@ -278,6 +278,12 @@ display() {
         fi
         if [[ "$selection" == native-terminal ]]; then
             cargo test -p cos --lib --locked native_terminal_session_selection -- --test-threads=1
+        fi
+        if [[ "$selection" == native-launcher ]]; then
+            cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
+            cargo build --manifest-path desktop/launcher-backend/Cargo.toml \
+                --release --locked -p pop-launcher-bin \
+                --target-dir "$CARGO_TARGET_DIR/native-launcher-service"
         fi
         cargo test --manifest-path desktop/comp/test/display-control/Cargo.toml \
             --locked -- keyboard_plan_refuses pointer_plan_refuses calendar_snapshot --test-threads=1
@@ -336,6 +342,9 @@ display() {
         elif [[ "$fixture_mode" == native-calendar || "$fixture_mode" == native-desktop-widgets ]]; then
             selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input"
                 "$CARGO_TARGET_DIR/native-calendar-service/debug/claw-calendar-reader")
+        elif [[ "$fixture_mode" == native-launcher ]]; then
+            selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input"
+                "$CARGO_TARGET_DIR/native-launcher-service/release/pop-launcher-bin")
         elif [[ "$fixture_mode" == native-store-package ]]; then
             selectors=(--native-store-package-only "$GITHUB_WORKSPACE/build/native-store-input")
         elif [[ "$fixture_mode" == native-editor || "$fixture_mode" == native-files || "$fixture_mode" == native-terminal || "$fixture_mode" == native-store || "$fixture_mode" == native-clipboard ]]; then
@@ -468,9 +477,10 @@ case "${1:-}" in
     native-store) display native-store ;;
     native-desktop-widgets) display native-desktop-widgets ;;
     native-clipboard) display native-clipboard ;;
+    native-launcher) display native-launcher ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|applets}" >&2
         exit 2
         ;;
 esac

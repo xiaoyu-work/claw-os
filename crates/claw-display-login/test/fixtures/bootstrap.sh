@@ -6,6 +6,15 @@ native_product_input=
 native_product=
 native_app=
 native_calendar_reader=
+native_launcher_backend=
+if [[ $# == 17 && "${15}" == --native-launcher-only ]]; then
+    native_launcher_backend=$(realpath -- "${17}")
+    [[ -f "$native_launcher_backend" && -x "$native_launcher_backend" && ! -L "$native_launcher_backend" ]] || exit 64
+    set -- "${@:1:16}"
+elif [[ $# == 16 && "${15}" == --native-launcher-only ]]; then
+    printf 'actual Launcher requires its compiled OS backend\n' >&2
+    exit 64
+fi
 if [[ $# == 17 && ( "${15}" == --native-calendar-only || "${15}" == --native-desktop-widgets-only ) ]]; then
     native_calendar_reader=$(realpath -- "${17}")
     [[ -f "$native_calendar_reader" && -x "$native_calendar_reader" && ! -L "$native_calendar_reader" ]] || exit 64
@@ -14,7 +23,7 @@ elif [[ $# == 16 && ( "${15}" == --native-calendar-only || "${15}" == --native-d
     printf 'actual Calendar consumers require the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only || "${15}" == --native-launcher-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -33,6 +42,9 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-clipboard-only ]]; then
         native_product=clipboard
         native_app=panel-clipboard
+    elif [[ "${15}" == --native-launcher-only ]]; then
+        native_product=launcher
+        native_app=cosmic-launcher
     else
         native_product=calendar
         native_app=panel-calendar
@@ -140,7 +152,15 @@ if [[ "$gui" == 1 ]]; then
     install -d -m0755 /usr/lib/cos/apps /usr/lib/cos/trust/publishers.d
     mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/lib/cos/apps
     if [[ -n "$native_product" ]]; then
-        /usr/bin/python3 -I -B packaging/deb/native_runtime_assets.py --root "$private/native-runtime"
+        native_runtime=(--root "$private/native-runtime")
+        if [[ "$native_product" == launcher ]]; then
+            native_runtime+=(--launcher-binary "$native_launcher_backend")
+        fi
+        /usr/bin/python3 -I -B packaging/deb/native_runtime_assets.py "${native_runtime[@]}"
+        if [[ "$native_product" == launcher ]]; then
+            install -m0755 "$private/native-runtime/usr/bin/pop-launcher" /usr/bin/pop-launcher
+            cp -a -- "$private/native-runtime/usr/lib/pop-launcher" /usr/lib/pop-launcher
+        fi
         mount -t overlay overlay \
             -o "ro,lowerdir=$private/native-runtime/usr/share/icons:/usr/share/icons" /usr/share/icons
         cp -a -- "$native_product_input/$native_app" "/usr/lib/cos/apps/$native_app"
@@ -227,7 +247,7 @@ if [[ "$gui" == 1 ]]; then
         printf 'private-native-product-v1' >/run/gui-public/native-product-enabled
         chmod 0644 /run/gui-public/native-product-enabled
     fi
-    if [[ "$native_product" == calendar || "$native_product" == desktop-widgets || "$native_product" == clipboard ]]; then
+    if [[ "$native_product" == calendar || "$native_product" == desktop-widgets || "$native_product" == clipboard || "$native_product" == launcher ]]; then
         printf '%s' "$native_product" >/run/gui-fixture/native-panel-product
         chmod 0600 /run/gui-fixture/native-panel-product
     fi
@@ -296,7 +316,7 @@ BUS
         native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
-        native-calendar|native-desktop-widgets|native-clipboard) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
+        native-calendar|native-desktop-widgets|native-clipboard|native-launcher) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
         native-store|native-store-package) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac

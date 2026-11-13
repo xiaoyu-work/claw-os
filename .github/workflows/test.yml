@@ -227,7 +227,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar, native-store, native-desktop-widgets, native-clipboard]
+        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar, native-store, native-desktop-widgets, native-clipboard, native-launcher]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -252,7 +252,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
       - name: Install real native product build and software-renderer prerequisites
-        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard'
+        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher'
         run: |
           sudo apt-get install -y --no-install-recommends \
             cmake just libfontconfig-dev libfreetype-dev libglib2.0-dev libudev-dev \
@@ -327,8 +327,11 @@ jobs:
       - name: Test actual Clipboard ELF, private OS history reader and checked panel retirement
         if: matrix.mode == 'native-clipboard'
         run: bash scripts/ci/test-boundaries.sh native-clipboard
+      - name: Test actual Launcher ELF, managed interactive Layer and checked retirement
+        if: matrix.mode == 'native-launcher'
+        run: bash scripts/ci/test-boundaries.sh native-launcher
       - name: Retain exact native product input and compositor observations
-        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard')
+        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.mode }}-acceptance-${{ github.sha }}
