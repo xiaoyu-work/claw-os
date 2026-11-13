@@ -252,9 +252,10 @@ finite visible-row copier, and confer no App capture or input authority.
 The same ignored Store test has a separate private APT round, with its own
 PID/mount/network namespaces and reserved NSS fixture. It packages and verifies
 real native Store dpkg ownership using the correct native architecture, then
-uses only ordinary search and a result-card click. The retained detail-frame
-bytes must be inspected; this round does not yet submit a package mutation or
-establish native Store payload self-handoff.
+uses ordinary search, a result-card click and the installed entry's uninstall
+button. The retained confirmation-dialog bytes must be inspected; this round
+does not yet confirm that dialog, submit a package mutation or establish native
+Store payload self-handoff.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
