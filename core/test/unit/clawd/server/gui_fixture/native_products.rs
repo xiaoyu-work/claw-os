@@ -51,6 +51,7 @@ pub(super) struct Product {
     home_metadata: bool,
     selector: &'static str,
     panel: bool,
+    interactive_panel: bool,
     observation: Option<&'static str>,
 }
 
@@ -64,6 +65,7 @@ pub(super) const EDITOR: Product = Product {
     home_metadata: true,
     selector: "--gui",
     panel: false,
+    interactive_panel: false,
     observation: None,
 };
 pub(super) const FILES: Product = Product {
@@ -76,6 +78,7 @@ pub(super) const FILES: Product = Product {
     home_metadata: true,
     selector: "--gui",
     panel: false,
+    interactive_panel: false,
     observation: None,
 };
 pub(super) const TERMINAL: Product = Product {
@@ -88,6 +91,7 @@ pub(super) const TERMINAL: Product = Product {
     home_metadata: false,
     selector: "--gui",
     panel: false,
+    interactive_panel: false,
     observation: None,
 };
 pub(super) const CALENDAR: Product = Product {
@@ -100,6 +104,7 @@ pub(super) const CALENDAR: Product = Product {
     home_metadata: false,
     selector: "open",
     panel: true,
+    interactive_panel: false,
     observation: None,
 };
 pub(super) const STORE: Product = Product {
@@ -112,6 +117,7 @@ pub(super) const STORE: Product = Product {
     home_metadata: false,
     selector: "--gui",
     panel: false,
+    interactive_panel: false,
     observation: Some("packages"),
 };
 pub(super) const WIDGETS: Product = Product {
@@ -124,6 +130,7 @@ pub(super) const WIDGETS: Product = Product {
     home_metadata: false,
     selector: "open",
     panel: true,
+    interactive_panel: false,
     observation: None,
 };
 pub(super) const CLIPBOARD: Product = Product {
@@ -136,16 +143,33 @@ pub(super) const CLIPBOARD: Product = Product {
     home_metadata: false,
     selector: "open",
     panel: true,
+    interactive_panel: false,
+    observation: None,
+};
+pub(super) const LAUNCHER: Product = Product {
+    name: "launcher",
+    app: "cosmic-launcher",
+    case: 32,
+    desktop_id: "com.clawos.Launcher",
+    entries: &["bin/cosmic-launcher"],
+    ungranted: &[],
+    home_metadata: false,
+    selector: "--gui",
+    panel: true,
+    interactive_panel: true,
     observation: None,
 };
 
 impl Product {
     pub(super) fn for_case(case: usize) -> Option<Self> {
-        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS, CLIPBOARD]
+        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS, CLIPBOARD, LAUNCHER]
             .into_iter().find(|product| product.case == case)
     }
 
     fn startup_needs(self) -> Vec<Cap> {
+        if self.interactive_panel {
+            return vec![Cap::unscoped(Verb::UI_PANEL)];
+        }
         if self.name == "clipboard" {
             return vec![
                 Cap::new(Verb::CLIPBOARD_READ, Scope::name("history")),
@@ -207,9 +231,10 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
         .open("/run/gui-public/native-product-selection.json").unwrap();
     projection.set_permissions(std::fs::Permissions::from_mode(0o644)).unwrap();
     projection.write_all(&serde_json::to_vec(&serde_json::json!({
-        "schema":"claw.private-native-selection/v1",
+        "schema":"claw.private-native-selection/v2",
         "selection_read":has_selection(Verb::CLIPBOARD_READ),
         "selection_write":has_selection(Verb::CLIPBOARD_WRITE),
+        "interactive_layer":product.interactive_panel,
     })).unwrap()).unwrap();
     drop(projection);
 
@@ -258,7 +283,7 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
     assert_eq!(payload.entrypoints, product.entries);
     let required = if matches!(product.name, "desktop-widgets" | "clipboard") {
         vec![format!("resources/usr/share/applications/{}.desktop", product.desktop_id)]
-    } else if product.panel {
+    } else if product.panel && !product.interactive_panel {
         vec![
             format!(
                 "resources/usr/share/applications/{}.desktop",
@@ -401,16 +426,21 @@ fn buffered_window(record: &serde_json::Value, instance: &str) -> bool {
 }
 
 fn buffered_panel(record: &serde_json::Value, instance: &str, namespace: &str) -> bool {
-    buffered_panel_size(record, instance, namespace, 16..=512, 16..=128)
+    buffered_panel_size(record, instance, namespace, 16..=512, 16..=128, "None")
 }
 
 fn buffered_widget_panel(record: &serde_json::Value, instance: &str) -> bool {
-    buffered_panel_size(record, instance, WIDGETS.desktop_id, 100..=512, 100..=800)
+    buffered_panel_size(record, instance, WIDGETS.desktop_id, 100..=512, 100..=800, "None")
+}
+
+fn buffered_palette(record: &serde_json::Value, instance: &str) -> bool {
+    buffered_panel_size(record, instance, "launcher", 100..=1024, 100..=800, "Exclusive")
 }
 
 fn buffered_panel_size(
     record: &serde_json::Value, instance: &str, namespace: &str,
     width: std::ops::RangeInclusive<u64>, height: std::ops::RangeInclusive<u64>,
+    keyboard: &str,
 ) -> bool {
     record["schema"] == "claw.private-native-panel/v1"
         && record["instance"] == instance
@@ -419,7 +449,7 @@ fn buffered_panel_size(
         && record["layer"] == "Top"
         && record["layer_surfaces"] == 1
         && record["toplevels"] == 0
-        && record["keyboard_interactivity"] == "None"
+        && record["keyboard_interactivity"] == keyboard
         && record["configure_acked"] == true
         && record["closed"] == false
         && record["buffer_commits"]
@@ -1130,7 +1160,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 });
         }
         if let Some(record) = observe().filter(|record| {
-            (if product.name == "desktop-widgets" {
+            (if product.interactive_panel {
+                buffered_palette(record, &window)
+            } else if product.name == "desktop-widgets" {
                 buffered_widget_panel(record, &window)
             } else if product.panel {
                 buffered_panel(record, &window, product.desktop_id)
@@ -1394,7 +1426,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                         && record["role"] == "zwlr_layer_surface_v1"
                         && record["layer_surfaces"] == 0
                         && record["popup"]["open"] == false
-                        && (product.name == "desktop-widgets" || record["popup"]["closed"] == true)))
+                        && (product.name == "desktop-widgets" || product.interactive_panel
+                            || record["popup"]["closed"] == true)))
         }) {
             break;
         }
@@ -1449,6 +1482,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "UI Save As and separately pending overwrite verified"
         } else if pty.is_some() {
             "typed shell command, real PTY/shell/child identities and descendant retirement verified"
+        } else if product.interactive_panel {
+            "original managed interactive palette pixels verified; catalog/search, typed launch and backend resource admission NOT asserted"
         } else if product.name == "desktop-widgets" {
             "real owner-scoped Calendar/task/resource reads under independent exact grants verified; reply decoding and exact painted card text NOT asserted"
         } else if product.name == "clipboard" {
@@ -1521,6 +1556,7 @@ fn private_native_panel() {
         b"calendar" => CALENDAR,
         b"desktop-widgets" => WIDGETS,
         b"clipboard" => CLIPBOARD,
+        b"launcher" => LAUNCHER,
         _ => panic!("unknown protected native panel fixture selection"),
     };
     private_gui_fixture_selected(false, false, false, Some(product));
@@ -1564,6 +1600,17 @@ fn native_calendar_readiness_requires_typed_configured_panel_pixels_not_an_xdg_w
     rail["configure_size"] = serde_json::json!([40, 620]);
     rail["raster"]["width"] = 40.into();
     assert!(!buffered_widget_panel(&rail, "instance"));
+    let mut palette = record.clone();
+    palette["namespace"] = "launcher".into();
+    palette["keyboard_interactivity"] = "Exclusive".into();
+    palette["configure_size"] = serde_json::json!([840, 480]);
+    palette["raster"] = serde_json::json!({"width":840,"height":480,"nonuniform_pixels":true});
+    assert!(buffered_palette(&palette, "instance"));
+    assert!(!buffered_palette(&palette, "foreign"));
+    assert!(!buffered_widget_panel(&palette, "instance"));
+    assert!(!buffered_panel(&palette, "instance", "launcher"));
+    palette["keyboard_interactivity"] = "None".into();
+    assert!(!buffered_palette(&palette, "instance"));
     for (field, invalid) in [
         ("schema", serde_json::json!("claw.private-native-window/v1")),
         ("role", serde_json::json!("xdg_toplevel")),

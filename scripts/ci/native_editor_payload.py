@@ -26,6 +26,7 @@ PRODUCTS = {
     "store": ("cosmic-store", "com.clawos.Store", ()),
     "desktop-widgets": ("widget-rail", "com.clawos.AppletWidgetRail", ()),
     "clipboard": ("panel-clipboard", "com.clawos.AppletClipboard", ()),
+    "launcher": ("cosmic-launcher", "com.clawos.Launcher", ()),
 }
 
 
@@ -134,7 +135,7 @@ def payload_record(source, payload, lock, product="editor"):
         )
     ):
         raise ValueError("Native acceptance requires the published 0.2.1 platform pin")
-    if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard") and platform.get("sha256") != (
+    if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher") and platform.get("sha256") != (
         "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
     ):
         raise ValueError("Native acceptance requires the approved published platform bytes")

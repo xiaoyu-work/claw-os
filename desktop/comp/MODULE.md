@@ -93,6 +93,15 @@ These exercise delete, the separate clear confirmation and the Root restore
 candidate; the latter also checks the actual server-side selection and rich
 MIME transfer independently of CopyQ's offscreen data connection.
 No popup keyboard focus or production input capability is added.
+The Launcher candidate separately records one original Top-layer palette with
+Exclusive keyboard interactivity and a 1024x800 evidence envelope on a private
+1024x768 output. Only the closed Root-owned fixture expectation selects this
+role; neither namespace nor App identity enables it. Existing buttons/readers
+retain their None keyboard role and previous bounds. Production `ui.panel`
+admission, independent selection rights and checked retirement are unchanged.
+This initial lane covers original palette startup/pixels and retirement only,
+not Layer keyboard delivery, catalog/search, typed application launch or
+general backend-resource admission.
 The genuine Store successor additionally
 permits one finite ordinary click inside the fixture's already-buffered,
 configure-acknowledged 800x600 primary XDG surface. Canonical integer coordinates

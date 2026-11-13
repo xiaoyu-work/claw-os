@@ -384,8 +384,8 @@ pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
             let mut bytes = Vec::new();
             file.take(513).read_to_end(&mut bytes)?;
             let projection: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if bytes.len() > 512 || projection.as_object().is_none_or(|fields| fields.len() != 3)
-                || projection["schema"] != "claw.private-native-selection/v1"
+            if bytes.len() > 512 || projection.as_object().is_none_or(|fields| fields.len() != 4)
+                || projection["schema"] != "claw.private-native-selection/v2"
             {
                 return Err("invalid native expected-selection projection".into());
             }
@@ -393,7 +393,15 @@ pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
                 projection["selection_read"].as_bool().ok_or("missing native selection-read expectation")?,
                 projection["selection_write"].as_bool().ok_or("missing native selection-write expectation")?,
             );
-            Ok(Some(Window::new(display, expected)))
+            let mut window = Window::new(display, expected);
+            window.interactive_layer = projection["interactive_layer"].as_bool()
+                .ok_or("missing native interactive-layer expectation")?;
+            if window.interactive_layer {
+                let mode = Mode { size: (1024, 768).into(), refresh: 60_000 };
+                window.output.change_current_state(Some(mode), None, None, None);
+                window.output.set_preferred(mode);
+            }
+            Ok(Some(window))
         }
     }
 }
@@ -417,6 +425,7 @@ pub struct Window {
     panel: Option<Panel>,
     snapshot: PassiveSnapshot,
     expected_selection: (bool, bool),
+    interactive_layer: bool,
 }
 
 impl Window {
@@ -462,6 +471,7 @@ impl Window {
             panel: None,
             snapshot: PassiveSnapshot::new(&STORE_SNAPSHOT),
             expected_selection,
+            interactive_layer: false,
         }
     }
 
@@ -841,15 +851,21 @@ impl Window {
                     .get::<LayerSurfaceCachedState>()
                     .current()
             });
+            let keyboard = if self.interactive_layer {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            };
             if current.layer != panel.layer
-                || current.keyboard_interactivity != KeyboardInteractivity::None
+                || current.keyboard_interactivity != keyboard
             {
                 return Err("native panel changed its bounded layer/input role".into());
             }
             panel.keyboard_interactivity = Some(format!("{:?}", current.keyboard_interactivity));
             if panel.configure.is_none() {
                 let size = current.size;
-                if size.w <= 0 || size.h <= 0 || size.w > 512 || size.h > 800 {
+                let max_width = if self.interactive_layer { 1024 } else { 512 };
+                if size.w <= 0 || size.h <= 0 || size.w > max_width || size.h > 800 {
                     return Err(
                         "native panel did not request a bounded original applet size".into(),
                     );
