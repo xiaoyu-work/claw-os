@@ -733,11 +733,13 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
             }
             if product.panel {
                 expected_gui.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
-                expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
             }
             if product.name == "desktop-widgets" {
                 expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("resources")));
                 expected_gui.insert(Cap::new(Verb::AGENT_OBSERVE, Scope::name("tasks")));
+            }
+            if product.panel {
+                expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
             }
             if let Some(domain) = product.observation {
                 expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name(domain)));
