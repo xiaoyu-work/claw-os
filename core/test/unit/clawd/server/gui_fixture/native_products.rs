@@ -514,6 +514,7 @@ fn process_failure_evidence(
         "cmdline": read(&root.join("cmdline")), "stat": read(&root.join("stat")),
         "task_limit": 32, "tasks": tasks,
         "provider_task_limit": 16, "provider_tasks": provider_tasks,
+        "native_fs_io_counters": crate::worker::native_fs::fixture_io_counters(),
         "cgroup_cpu": group.as_ref().map(|path| read(&path.join("cpu.stat"))).ok(),
         "cgroup_memory": group.as_ref().map(|path| read(&path.join("memory.current"))).ok(),
         "cgroup_cpu_limit": group.as_ref().map(|path| read(&path.join("cpu.max"))).ok(),

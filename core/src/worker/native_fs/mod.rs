@@ -28,6 +28,22 @@ pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadPr
 pub(crate) use selected_write::{WriteLeaseCheck, WritePermit};
 pub(crate) use selected_create::{CreateCandidate, CreatePermit, CreationState};
 
+#[cfg(test)]
+static FIXTURE_METADATA_REQUESTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FIXTURE_LIVE_CHECKS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FIXTURE_BACKING_WALKS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn fixture_io_counters() -> serde_json::Value {
+    serde_json::json!({
+        "metadata_requests": FIXTURE_METADATA_REQUESTS.load(Ordering::Relaxed),
+        "live_checks": FIXTURE_LIVE_CHECKS.load(Ordering::Relaxed),
+        "backing_walks": FIXTURE_BACKING_WALKS.load(Ordering::Relaxed),
+    })
+}
+
 struct Binding {
     process: workload::InstanceProcess,
     group: OwnedFd,
@@ -116,6 +132,8 @@ impl Shared {
     }
 
     fn live(&self) -> Result<(), i32> {
+        #[cfg(test)]
+        FIXTURE_LIVE_CHECKS.fetch_add(1, Ordering::Relaxed);
         self.lease_live()?;
         if let Some(source) = &self.metadata_root {
             if source.revalidate().is_err() {

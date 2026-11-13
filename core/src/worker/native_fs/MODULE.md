@@ -151,6 +151,10 @@ instance, and expiry, revocation or worker failure stops new backend operations
 and triggers checked cgroup retirement. Completion is not acknowledged until
 the process tree is empty, the exact mount is unmounted without lazy detach,
 and all three provider threads have joined. Already-read bytes are not erased.
+Test builds can report process-local metadata-request, live-check and backing-walk
+counts alongside bounded provider kernel waits after a native first-frame failure.
+These counters expose no names or data, do not cache checks or affect admission,
+and are absent from production providers.
 The custody monitor checks every 10 ms and retries failed process retirement;
 this is not a promise of instantaneous cache or memory erasure at the deadline.
 Failed checked cleanup retains the view and refuses replacement.

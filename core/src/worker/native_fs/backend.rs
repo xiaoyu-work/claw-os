@@ -170,6 +170,8 @@ pub(super) fn relative_parts(path: &Path) -> Result<Vec<&OsStr>, i32> {
 /// Every component is opened relative to retained descriptors under owner
 /// credentials. No caller path is continued by the kernel after inspection.
 pub(super) fn open_relative(shared: &Shared, path: &Path, readable: bool) -> Result<File, i32> {
+    #[cfg(test)]
+    super::FIXTURE_BACKING_WALKS.fetch_add(1, Ordering::Relaxed);
     if let Some(source) = &shared.metadata_root {
         // Keep authorization Home-relative; strip the prefix only for descriptor IO.
         let local = path.strip_prefix(&source.relative).map_err(|_| libc::EACCES)?;
@@ -977,6 +979,10 @@ impl Filesystem {
     }
 
     fn authorize(&self, req: &Request<'_>, metadata: bool, kernel_handle: bool) -> Result<(), i32> {
+        #[cfg(test)]
+        if metadata {
+            super::FIXTURE_METADATA_REQUESTS.fetch_add(1, Ordering::Relaxed);
+        }
         let result = self.authorize_request(req, metadata, kernel_handle);
         if let Err(error) = result {
             tracing::warn!(
