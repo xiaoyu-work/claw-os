@@ -340,6 +340,14 @@ close, with a distinct checked export receipt. Clearing private presentation
 state during close can repaint an empty history; the final closed frame must
 not be mistaken for the open reader result. Neither capture asserts text or
 reply decoding, and the original UI's clearing behavior is unchanged.
+The clean Clipboard lane in [run 43404862443](https://github.com/xiaoyu-work/claw-os/actions/runs/43404862443)
+verified the original App `92f389d6` against the published platform: one actual
+47-ms history read, independent CopyQ lifetime, popup open/close and whole
+GUI/PAM retirement. Manual inspection of the same-instance pre-close frame
+confirmed both public synthetic history texts at 360 by 613, configure 9,
+commit 1, checksum `6602576b23f2b603`. This is separate from the unchanged false
+automated reply-decode/text flags and does not close live Restore, delete/clear,
+display/provider binding or publication readiness.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
