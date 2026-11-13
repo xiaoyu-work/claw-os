@@ -54,23 +54,23 @@ fn panel_click_steps(center: (f64, f64)) -> Result<[PointerStep; 4]> {
     if !(16.0..=512.0).contains(&width) || !(16.0..=128.0).contains(&height) {
         return Err("pointer gesture has no bounded acknowledged panel geometry".into());
     }
-    Ok(click_steps(center, width))
+    Ok([
+        PointerStep::Enter(center),
+        PointerStep::Button(ButtonState::Pressed),
+        PointerStep::Button(ButtonState::Released),
+        PointerStep::Leave((width + 1.0, center.1)),
+    ])
 }
 
-fn primary_click_steps(x: u16, y: u16) -> Result<[PointerStep; 4]> {
+fn primary_click_steps(x: u16, y: u16) -> Result<[PointerStep; 3]> {
     if x >= 800 || y >= 600 {
         return Err("pointer gesture is outside the acknowledged primary geometry".into());
     }
-    Ok(click_steps((f64::from(x), f64::from(y)), 800.0))
-}
-
-fn click_steps(location: (f64, f64), width: f64) -> [PointerStep; 4] {
-    [
-        PointerStep::Enter(location),
+    Ok([
+        PointerStep::Enter((f64::from(x), f64::from(y))),
         PointerStep::Button(ButtonState::Pressed),
         PointerStep::Button(ButtonState::Released),
-        PointerStep::Leave((width + 1.0, location.1)),
-    ]
+    ])
 }
 
 fn text_code(byte: u8) -> Option<u32> {
@@ -205,13 +205,13 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
             let (surface, center) = window
                 .panel_pointer_target(instance)
                 .ok_or("pointer target is not this live configured buffered panel")?;
-            (surface, panel_click_steps(center)?)
+            (surface, panel_click_steps(center)?.to_vec())
         }
         PointerAction::Primary(x, y) => (
             window
                 .primary_pointer_target(instance)
                 .ok_or("pointer target is not this live configured 800x600 primary surface")?,
-            primary_click_steps(x, y)?,
+            primary_click_steps(x, y)?.to_vec(),
         ),
     };
     let client = state.common.display_handle.get_client(surface.id())?;
@@ -536,5 +536,24 @@ mod tests {
         for center in [(0.0, 20.0), (257.0, 20.0), (24.0, 65.0), (f64::NAN, 20.0)] {
             assert!(panel_click_steps(center).is_err());
         }
+        let (mut hovered, mut held) = (false, false);
+        for step in primary_click_steps(500, 80).unwrap() {
+            match step {
+                PointerStep::Enter(_) => hovered = true,
+                PointerStep::Button(ButtonState::Pressed) => {
+                    assert!(hovered && !held);
+                    held = true;
+                }
+                PointerStep::Button(ButtonState::Released) => {
+                    assert!(held);
+                    held = false;
+                }
+                PointerStep::Leave(_) => hovered = false,
+            }
+        }
+        assert!(
+            hovered && !held,
+            "a primary click must not batch CursorLeft with the hit"
+        );
     }
 }
