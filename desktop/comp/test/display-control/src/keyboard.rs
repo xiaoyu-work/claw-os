@@ -221,8 +221,7 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
         .ok_or("pointer target has no authenticated display origin")?;
     if !matches!(origin, ClientOrigin::Instance(_))
         || (action == PointerAction::Panel && !origin.layer_shell())
-        || origin.selection_read()
-        || origin.selection_write()
+        || !window.selection_matches(origin)
         || origin
             .instance()
             .map(|id| claw_display_control::Epoch(id.0).label())
