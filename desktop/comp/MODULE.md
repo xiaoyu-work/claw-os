@@ -131,6 +131,9 @@ Publication is capped at 32 frames, 4 MiB of pixels per frame and 32 MiB total.
 Limits/I/O/unsupported formats invalidate the optional evidence, not the
 existing acceptance gates. Final window metadata distinguishes the latest
 captured live commit from unmap/close or a later unmatched configure.
+A transient resize buffer/configure mismatch removes stale capture evidence,
+but a later matching acknowledged buffer may be captured. It never resets
+publication/byte counters or revives an I/O, format or quota failure.
 There is no new App input, capture or accessibility grant, render alteration,
 service reply hook, OCR or text claim. A snapshot can still precede App reply
 processing; Parent's later visual inspection is separate evidence.
