@@ -572,6 +572,7 @@ fn native_calendar_popup_readiness_requires_real_same_layer_parent_pixels() {
         "role": "zwlr_layer_surface_v1", "namespace": CALENDAR.desktop_id, "layer": "Top",
         "layer_surfaces": 1, "toplevels": 0, "keyboard_interactivity": "None",
         "configure_acked": true, "configure_size": [40,40], "closed": false,
+        "pending_configures": 0,
         "buffer_commits": 1, "raster": {"width":40,"height":40,"nonuniform_pixels":true},
     });
     assert!(!buffered_popup(&record, "instance"));
