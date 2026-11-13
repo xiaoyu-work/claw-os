@@ -498,10 +498,22 @@ fn process_failure_evidence(
         }).collect::<Vec<_>>()
             })
             .unwrap_or_default();
+    let provider_tasks = std::fs::read_dir("/proc/self/task")
+        .map(|tasks| tasks.filter_map(Result::ok).take(256).filter_map(|task| {
+            let path = task.path();
+            let name = std::fs::read_to_string(path.join("comm")).ok()?;
+            name.trim().starts_with("claw-native-fs").then(|| serde_json::json!({
+                "tid": task.file_name().to_string_lossy(), "name": name.trim(),
+                "stat": read(&path.join("stat")), "wchan": read(&path.join("wchan")),
+                "syscall": read(&path.join("syscall")), "stack": read(&path.join("stack")),
+            }))
+        }).take(16).collect::<Vec<_>>())
+        .unwrap_or_default();
     let group = std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()));
     serde_json::json!({
         "cmdline": read(&root.join("cmdline")), "stat": read(&root.join("stat")),
         "task_limit": 32, "tasks": tasks,
+        "provider_task_limit": 16, "provider_tasks": provider_tasks,
         "cgroup_cpu": group.as_ref().map(|path| read(&path.join("cpu.stat"))).ok(),
         "cgroup_memory": group.as_ref().map(|path| read(&path.join("memory.current"))).ok(),
         "cgroup_cpu_limit": group.as_ref().map(|path| read(&path.join("cpu.max"))).ok(),
