@@ -118,7 +118,14 @@ second admission check is fail-closed and cannot replace that retry point.
 The supervisor spends that decision once and retains its exact authorization,
 expiry and revocation generation. The original GUI capability remains in the
 live grant; only raw Home bind derivation is suppressed. The filtered mount
-precedes the nested private App-data bind. HOME and App state remain private,
+precedes private App-data binding. When that binding would otherwise sit
+under the filtered root, Root gives the same pinned private directory the
+namespace-only target `/run/cos/app-data`, updating private HOME, COS_DATA_DIR
+and beneath-data work directories together. Toolkit icon/cache/config access
+then avoids filtered Home ancestor walks. The persistent source, owner, mode,
+identity, grants and provider checks are unchanged; no data is moved or copied.
+Metadata subroots not covering private data keep their existing layout.
+HOME and App state remain private,
 and independent/broad Home content mounts still refuse rather than exposing a
 raw directory or inventing a selected-content grant.
 

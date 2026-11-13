@@ -49,6 +49,8 @@ fn generic_subroot_projection_preserves_home_relative_identity_without_raw_conte
 
 #[test]
 fn metadata_projection_keeps_full_home_and_exact_fixed_subroot_scopes() {
+    use crate::worker::policy::{Limits, NetworkPolicy, SeccompProfile, StdioPlan, TrustTier};
+
     let home = Path::new("/run/display-home");
     for relative in ["**", "Projects/review/**"] {
         let mut app = metadata_app(&[relative, relative], false);
@@ -68,6 +70,40 @@ fn metadata_projection_keeps_full_home_and_exact_fixed_subroot_scopes() {
         assert_eq!(controlled_metadata_scope(
             &app.manifest.gui_entry(None).unwrap(), home, &caps,
         ).unwrap().unwrap().1, expected);
+
+        let data = home.join(".local/share/cos/apps/generic-directory-window");
+        let mut policy = LaunchPolicy {
+            tier: TrustTier::DesktopSurface, label: "generic-private-data".into(),
+            program: "/usr/bin/true".into(), argv: Vec::new(), workdir: data.join("working"),
+            mounts: vec![Mount::read_write(&data, &data, MountClass::AppData).expecting((7, 11)),
+                Mount::read_only("/selected-input", "/selected-input", MountClass::Input)],
+            network: NetworkPolicy::Denied,
+            env: [
+                ("HOME".into(), data.to_str().unwrap().into()),
+                ("COS_DATA_DIR".into(), data.to_str().unwrap().into()),
+                ("COS_OWNER_HOME".into(), home.to_str().unwrap().into()),
+            ].into_iter().collect(),
+            limits: Limits::desktop(), seccomp: SeccompProfile::Strict,
+            stdio: StdioPlan::Captured, broker: true, umask: 0o077,
+        };
+        let original = policy.clone();
+        private_data_outside_metadata(&mut policy, &home.join(expected)).unwrap();
+        if relative == "**" {
+            let target = Path::new("/run/cos/app-data");
+            let mut projected = original.mounts[0].clone();
+            projected.target = target.into();
+            assert_eq!(policy.mounts, [projected, original.mounts[1].clone()]);
+            assert_eq!(policy.workdir, target.join("working"));
+            assert_eq!(policy.env["HOME"], target.to_str().unwrap());
+            assert_eq!(policy.env["COS_DATA_DIR"], policy.env["HOME"]);
+            assert_eq!(policy.env["COS_OWNER_HOME"], original.env["COS_OWNER_HOME"]);
+            let mut invalid = original;
+            invalid.env.insert("HOME".into(), home.to_str().unwrap().into());
+            assert!(private_data_outside_metadata(&mut invalid, home).is_err());
+            assert_eq!(invalid.mounts[0].target, data);
+        } else {
+            assert_eq!(policy.digest(), original.digest());
+        }
     }
 }
 
