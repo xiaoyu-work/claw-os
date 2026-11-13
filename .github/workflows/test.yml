@@ -334,6 +334,7 @@ jobs:
             build/${{ matrix.mode }}*-authenticated.*/native-calendar-agenda.shm
             build/${{ matrix.mode }}*-authenticated.*/native-store-window.shm
             build/${{ matrix.mode }}*-authenticated.*/native-widget-rail.shm
+            build/${{ matrix.mode }}*-authenticated.*/native-widget-rail-export.json
           if-no-files-found: error
           retention-days: 7
 
