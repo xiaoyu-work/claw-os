@@ -830,6 +830,7 @@ def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
     })
     control = packages.fields(rendered.read_text())
     assert "claw-os-app-runtime-v1 (= 0.2.1)" in control["Provides"]
+    assert "claw-os-launcher-backend-v1 (= 1)" in control["Provides"]
     assert "claw-apps-agent" in control["Recommends"]
     assert "claw-app-support" not in control["Depends"]
     assert "claw-apps-desktop" not in control["Depends"]
@@ -865,6 +866,29 @@ def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
     assert not list(outside.iterdir())
     installer = (ROOT / "desktop/justfile").read_text()
     assert "prefix={{prefix}} icons/install" not in installer
+    assert "prefix={{prefix}} launcher-backend/install" not in installer
+    # A real ELF exercises byte staging only; it is never run as a provider.
+    launcher_stage = tmp_path / "launcher-runtime"
+    assets.stage(launcher_stage, Path(sys.executable))
+    program = launcher_stage / "usr/bin/pop-launcher"
+    assert program.read_bytes() == Path(sys.executable).read_bytes()
+    assert program.stat().st_mode & 0o777 == 0o755
+    alias = launcher_stage / "usr/lib/pop-launcher/plugins/desktop_entries/desktop-entries"
+    assert alias.is_symlink() and alias.resolve() == program
+    assert not Path(os.readlink(alias)).is_absolute()
+    manifest = "plugins/src/desktop_entries/plugin.ron"
+    assert (launcher_stage / "usr/lib/pop-launcher/plugins/desktop_entries/plugin.ron").read_bytes() == (
+        ROOT / "desktop/launcher-backend" / manifest
+    ).read_bytes()
+    assert (launcher_stage / "usr/share/doc/claw-os-agent/pop-launcher/LICENSE").read_bytes() == (
+        ROOT / "desktop/launcher-backend/LICENSE"
+    ).read_bytes()
+    bad_program_parent = tmp_path / "aliased-program"
+    (bad_program_parent / "usr").mkdir(parents=True)
+    (bad_program_parent / "usr/bin").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="cannot be symlinks"):
+        assets.stage(bad_program_parent, Path(sys.executable))
+    assert not list(outside.iterdir())
 
 
 def _app_payload(directory, *, source=False):

@@ -83,6 +83,17 @@ The original paths remain unchanged, with the Agent's `Replaces` bounded to
 Desktop versions below `1:0.2.1`. This data-only ownership transfer grants no
 display, clipboard, filesystem or other App capability.
 
+The Agent also supplies the unprivileged `pop-launcher` runtime, its original
+declared plugin manifests/scripts and MPL/GPL attribution through
+`claw-os-launcher-backend-v1 (= 1)`. It builds the actual OS-owned backend;
+neither an App nor an OS package embeds a second frontend or installed App
+identity. Desktop refuses a second owner of those paths, using the same bounded
+pre-0.2.1 ownership transfer. The independently packaged upstream
+`pop-launcher` conflicts explicitly rather than having files silently
+overwritten. This is runtime availability only, not catalog/history sharing,
+launch permission, service activation or GUI acceptance. App sandboxes and
+ordinary owner reviews still control those resources.
+
 **Desktop source links are cut over:** Calendar, Clipboard and Widget Rail
 binaries, desktop entries, translations/icons and common-Host launchers are
 App-owned; the OS retains their panel layout IDs without linking product UI
