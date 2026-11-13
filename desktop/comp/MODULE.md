@@ -85,8 +85,12 @@ configure-acknowledged 800x600 primary XDG surface. Canonical integer coordinate
 outside that geometry, auxiliary windows, unconfigured/unbuffered targets or a
 different authenticated instance refuse. No virtual-pointer global, production
 control hook or App input capability is added.
-Each finite click releases the button and moves one logical pixel beyond the
-acknowledged panel width, sending ordinary pointer leave before its frame.
+Each finite primary click releases its button and keeps the ordinary pointer
+inside the selected surface. Batching `CursorLeft` with a primary click leaves
+the client's event batch with an unavailable hit-test cursor, so delivery and
+a later frame alone do not prove result-card selection.
+Each finite panel click releases the button and moves one logical pixel beyond
+the acknowledged panel width, sending ordinary pointer leave before its frame.
 This clears the original toolkit tooltip's shared hover flag; otherwise its
 already-queued 100 ms task can replace the agenda with a sibling tooltip.
 No timer, App action or frame is forged, and the one-agenda-lifetime bound is
