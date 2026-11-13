@@ -120,7 +120,11 @@ impl<W: AsyncWrite + Unpin> App<W> {
     fn new(tx: W) -> (Self, mpsc::UnboundedReceiver<Vec<ToplevelUpdate>>) {
         let (toplevels_tx, toplevel_rx) = mpsc::unbounded();
         let (calloop_tx, calloop_rx) = calloop::channel::channel();
-        let _handle = std::thread::spawn(move || toplevel_handler(toplevels_tx, calloop_rx));
+        let _handle = std::thread::spawn(move || {
+            if let Err(error) = toplevel_handler(toplevels_tx, calloop_rx) {
+                warn!("window integration unavailable: {error}");
+            }
+        });
 
         let locales = fde::get_languages_from_env();
 

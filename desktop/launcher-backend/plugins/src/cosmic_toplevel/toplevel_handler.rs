@@ -196,8 +196,10 @@ pub(crate) fn toplevel_handler(
         exit: false,
         tx,
         seat_state: SeatState::new(&globals, &qh),
-        toplevel_info_state: ToplevelInfoState::new(&registry_state, &qh),
-        toplevel_manager_state: ToplevelManagerState::new(&registry_state, &qh),
+        toplevel_info_state: ToplevelInfoState::try_new(&registry_state, &qh)
+            .ok_or_else(|| anyhow::anyhow!("toplevel observation is unavailable in this display"))?,
+        toplevel_manager_state: ToplevelManagerState::try_new(&registry_state, &qh)
+            .ok_or_else(|| anyhow::anyhow!("toplevel management is unavailable in this display"))?,
         registry_state,
         pending_update: HashSet::new(),
     };

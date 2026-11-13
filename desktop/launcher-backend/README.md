@@ -6,6 +6,12 @@ Modular IPC-based desktop launcher service, written in Rust. Desktop launchers m
 
 Using IPC enables each plugin to isolate their data from other plugin processes and frontends that are interacting with them. If a plugin crashes, the launcher will continue functioning normally, gracefully cleaning up after the crashed process. Frontends and plugins may also be written in any language. The pop-launcher will do its part to schedule the execution of these plugins in parallel, on demand.
 
+The COSMIC window plugin requires both toplevel-observation and management
+protocols from its actual display connection. If either is unavailable, including
+for an App whose display lease does not expose it, the plugin logs the refusal
+and exits instead of panicking. A launcher overlay grant does not authorize
+global window access; this check adds no protocol, bus or permission fallback.
+
 ## Installation
 
 Requires the following dependencies:
