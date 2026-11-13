@@ -16,8 +16,10 @@ separate facts.
 
 Installation is prepared in OS-owned bounded staging and disclosed through
 the shared protected App-review contract. The existing owner-bound polkit
-dialog confirms the exact displayed revision. Publication uses the same atomic
-directory installer as CLI installation and consumes one current confirmation.
+dialog confirms each App's exact displayed revision, transported losslessly
+as a decimal string for both individual and bundled reviews. Official delivery
+uses the signed APT transaction service and requires separate confirmation for
+every App in its authenticated dependency plan.
 It changes no owner/App data partition and grants no capability or AI consent.
 Pending operations remain inspectable after navigation; ambiguous publication
 is never automatically retried.
