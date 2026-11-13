@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,6 +51,25 @@ pub(crate) struct GuiControl {
 }
 
 impl GuiControl {
+    pub fn set_selection(
+        &self, payload: &claw_display_control::selection::Payload, deadline: Instant,
+    ) -> Result<bool, Error> {
+        let descriptor = payload.sealed()?;
+        let left = deadline.saturating_duration_since(Instant::now()).as_millis().min(2000) as u64;
+        if left == 0 { return Err(Error::Timeout); }
+        let instance = InstanceId::random()?;
+        match self.exchange(CompositorCommand::SetSelection {
+            epoch: self.epoch, owner_uid: self.owner_uid, instance,
+            expires_monotonic_ms: monotonic_ms()?.checked_add(left).ok_or(Error::Timeout)?,
+        }, vec![descriptor], deadline)? {
+            CompositorReply::SelectionSet { epoch, instance: received }
+                if epoch == self.epoch && received == instance => Ok(true),
+            CompositorReply::Rejected { epoch, instance: received, .. }
+                if epoch == self.epoch && received == instance => Ok(false),
+            _ => Err(Error::Protocol("invalid selection effect acknowledgement")),
+        }
+    }
+
     pub fn of(display: &Mutex<Display>) -> Result<Self, Error> {
         let display = display.lock().map_err(|_| Error::Identity)?;
         if display.wayland_display.is_none() {
@@ -115,6 +134,32 @@ pub struct Registry {
 }
 
 impl Registry {
+    pub(crate) fn selection_control(&self, owner: u32, pid: u32) -> Result<GuiControl, Error> {
+        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open,
+            i32::try_from(pid).map_err(|_| Error::Identity)?, 0_u32) };
+        if raw < 0 { return Err(std::io::Error::last_os_error().into()); }
+        let descriptor = unsafe { OwnedFd::from_raw_fd(raw as i32) };
+        let peer = ProcessIdentity::from_pidfd(descriptor.as_fd())?;
+        if peer.uid() == owner && KernelLogin::of(&peer).is_ok() {
+            let display = self.for_process(&peer)?;
+            return GuiControl::of(display.as_ref());
+        }
+        let entries = self.displays.lock().map_err(|_| Error::Identity)?;
+        let mut selected = None;
+        for display in entries.values() {
+            let state = display.lock().map_err(|_| Error::Identity)?;
+            if state.login.owner_uid == owner && state.wayland_display.is_some() {
+                state.host.assert_current()?;
+                if selected.is_some() {
+                    return Err(Error::Protocol("selection target is ambiguous across displays"));
+                }
+                selected = Some(display.clone());
+            }
+        }
+        let display = selected.ok_or(Error::Protocol("owner has no authenticated display"))?;
+        GuiControl::of(display.as_ref())
+    }
+
     pub fn get() -> Result<&'static Arc<Self>, Error> {
         REGISTRY.get().ok_or(Error::Protocol(
             "authenticated display service is unavailable",
@@ -372,7 +417,7 @@ fn monitor(
             })
             .collect();
         for instance in expired {
-            let (_, call) = pending.remove(&instance).ok_or(Error::Identity)?;
+            let (kind, call) = pending.remove(&instance).ok_or(Error::Identity)?;
             if call.reply.send(Err(Error::Timeout)).is_err() {
                 tracing::debug!("expired GUI control requester already ended");
             }
@@ -382,13 +427,13 @@ fn monitor(
                     "GUI control retirement correlation limit reached",
                 ));
             }
-            channel.send(
+            if kind != 6 { channel.send(
                 &AuthorityCommand::Gui {
                     command: CompositorCommand::Retire { epoch, instance },
                 },
                 &[],
                 Instant::now() + Duration::from_millis(250),
-            )?;
+            )?; }
         }
         match channel.receive::<AuthorityReply>(host, Instant::now() + Duration::from_millis(100)) {
             Ok(mut packet) => match packet.message {
@@ -466,7 +511,7 @@ fn monitor(
                     if expected != kind && kind != 4 && kind != 3 {
                         return Err(Error::Protocol("GUI control response changed transition"));
                     }
-                    if call.reply.send(Ok(reply)).is_err() {
+                    if call.reply.send(Ok(reply)).is_err() && expected != 6 {
                         tracing::warn!("GUI control requester disappeared; retiring its instance");
                         channel.send(
                             &AuthorityCommand::Gui {
@@ -494,6 +539,7 @@ fn control_target(command: &CompositorCommand, expected: Epoch) -> Result<(Insta
             epoch, instance, ..
         } => (*epoch, *instance, 2),
         CompositorCommand::Retire { epoch, instance } => (*epoch, *instance, 3),
+        CompositorCommand::SetSelection { epoch, instance, .. } => (*epoch, *instance, 6),
         _ => return Err(Error::Protocol("invalid GUI control transition")),
     };
     if epoch != expected {
@@ -508,6 +554,7 @@ fn reply_target(reply: &CompositorReply, expected: Epoch) -> Result<(InstanceId,
         CompositorReply::Refreshed { epoch, instance } => (*epoch, *instance, 2),
         CompositorReply::Retired { epoch, instance } => (*epoch, *instance, 3),
         CompositorReply::InstanceEnded { epoch, instance } => (*epoch, *instance, 5),
+        CompositorReply::SelectionSet { epoch, instance } => (*epoch, *instance, 6),
         CompositorReply::Rejected {
             epoch, instance, ..
         } => (*epoch, *instance, 4),

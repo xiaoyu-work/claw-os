@@ -246,10 +246,15 @@ fn history_results_preserve_bounded_text_previews_and_stale_identity_failures() 
     assert!(parse(Action::List, br#"{"error":"no-clipboard-tab"}"#)
         .unwrap_err()
         .contains("configured"));
-    assert_eq!(
-        parse(Action::Restore, b"ok\n").unwrap(),
-        json!({"restored":true})
-    );
+    assert!(parse(Action::Restore, b"ok\n").is_err());
+    let restored = json!({"selection":[
+        {"mime":"text/plain;charset=utf-8","data":"cHVibGlj"},
+        {"mime":"text/html","data":"PGI+cHVibGljPC9iPg=="},
+    ]});
+    let parsed = parse(Action::Restore, &serde_json::to_vec(&restored).unwrap()).unwrap();
+    let payload = restore_payload(parsed).unwrap();
+    assert_eq!(payload.entries[0].data, b"public");
+    assert_eq!(payload.entries[1].data, b"<b>public</b>");
     assert_eq!(
         parse(Action::Remove, b"ok\n").unwrap(),
         json!({"removed":true})
@@ -379,12 +384,12 @@ fn main() {
     let request = validate(&params).unwrap();
     let result = execute(
         &request,
-        0,
-        unsafe { libc::getegid() },
+        (0, unsafe { libc::getegid() }),
         &allowed,
         &executable,
         &directory,
         root.path(),
+        None,
     )
     .await
     .unwrap();
@@ -430,12 +435,12 @@ fn main() {
     assert_eq!(
         execute(
             &missing,
-            0,
-            0,
+            (0, 0),
             &unavailable,
             &executable,
             &directory,
-            root.path()
+            root.path(),
+            None,
         )
         .await
         .unwrap_err()

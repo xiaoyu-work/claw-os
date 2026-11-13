@@ -59,15 +59,20 @@ checkDeadline();
 var wanted = request.identity, name = str(config('clipboard_tab'));
 if (!name) { print('no-clipboard-tab'); abort(); }
 tab(name);
-var result = 'not-found';
+var result = null;
 for (var index = 0, count = size(); index < count; index++) {
     checkDeadline();
     var value = getItem(index);
     if (value && mimeText in value && str(sha256sum(pack(value))) === wanted) {
-        checkDeadline(); select(index); result = 'ok'; break;
+        var entries = [];
+        for (var mime in value) {
+            if (mime.indexOf('application/x-copyq-') === 0) continue;
+            entries.push({mime:mime, data:str(toBase64(value[mime]))});
+        }
+        result = {selection:entries}; break;
     }
 }
-print(result);
+print(result === null ? 'not-found' : JSON.stringify(result));
 "#;
 const REMOVE: &str = r#"
 var request = JSON.parse(str(input()));
@@ -213,14 +218,21 @@ pub(super) async fn control(
             .0;
         let executable = Executable::open(Path::new(COPYQ)).map_err(BrokerError::unavailable)?;
         let endpoint = endpoint(&home, owner).map_err(BrokerError::unavailable)?;
+        let target = if request.action == Action::Restore {
+            let registry = crate::display_session::registry::Registry::get()
+                .map_err(|_| BrokerError::unavailable("authenticated display service is unavailable"))?;
+            Some(registry.selection_control(owner, client.pid.ok_or_else(||
+                BrokerError::unavailable("clipboard caller PID is unavailable"))?)
+                .map_err(|_| BrokerError::unavailable("clipboard restore has no unique authenticated display target"))?)
+        } else { None };
         execute(
             &request,
-            owner,
-            gid,
+            (owner, gid),
             authority,
             &executable,
             &endpoint,
             Path::new("/run/cos"),
+            target.as_ref(),
         )
         .await
     }
@@ -439,13 +451,14 @@ async fn relay(
 
 async fn execute(
     request: &Request,
-    owner: u32,
-    gid: u32,
+    identity: (u32, u32),
     authority: &Decision,
     executable: &Executable,
     directory: &File,
     runtime: &Path,
+    target: Option<&crate::display_session::registry::GuiControl>,
 ) -> Result<Value, BrokerError> {
+    let (owner, gid) = identity;
     check_owner(authority, owner, request)?;
     let timeout = remaining(request.deadline_unix_ms).map_err(BrokerError::execution)?;
     let lock = super::CLIPBOARD_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
@@ -591,9 +604,10 @@ async fn execute(
                     dispatched = true;
                     relay(&proof, local, remote)
                         .await
-                        .map_err(BrokerError::execution)
+                        .map_err(BrokerError::execution)?;
+                    Ok::<_, BrokerError>(proof)
                 };
-                let (stdout, _, _) = tokio::try_join!(
+                let (stdout, _, _proof) = tokio::try_join!(
                     async {
                         bounded(output, MAX_OUTPUT)
                             .await
@@ -620,7 +634,19 @@ async fn execute(
                         BrokerError::indeterminate("CopyQ service did not confirm the action; inspect state before retrying")
                     });
                 }
-                parse(request.action, &stdout).map_err(BrokerError::execution)
+                let value = parse(request.action, &stdout).map_err(BrokerError::execution)?;
+                if request.action != Action::Restore { return Ok(value); }
+                let payload = restore_payload(value).map_err(BrokerError::execution)?;
+                // The compound proof covers this operation; its last use may retire the grant.
+                let left = remaining(request.deadline_unix_ms).map_err(BrokerError::execution)?;
+                match target.ok_or_else(|| BrokerError::unavailable("authenticated clipboard target is unavailable"))?
+                    .set_selection(&payload, std::time::Instant::now() + left)
+                {
+                    Ok(true) => Ok(json!({"restored":true})),
+                    Ok(false) => Err(BrokerError::unavailable("authenticated display refused clipboard restore")),
+                    Err(_) => Err(BrokerError::indeterminate(
+                        "clipboard restore outcome is unknown; inspect the target before retrying")),
+                }
             }
             .await;
             if operation.is_err() {
@@ -651,6 +677,35 @@ struct RawEntry {
     copied_at: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreEntry {
+    mime: String,
+    data: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreSnapshot {
+    selection: Vec<RestoreEntry>,
+}
+
+fn restore_payload(value: Value) -> Result<claw_display_control::selection::Payload, String> {
+    let snapshot: RestoreSnapshot = serde_json::from_value(value)
+        .map_err(|_| "CopyQ returned invalid restore data")?;
+    let entries = snapshot.selection.into_iter().map(|entry| {
+        let data = base64::engine::general_purpose::STANDARD.decode(&entry.data)
+            .map_err(|_| "CopyQ returned invalid MIME bytes")?;
+        if base64::engine::general_purpose::STANDARD.encode(&data) != entry.data {
+            return Err("CopyQ returned noncanonical MIME bytes");
+        }
+        Ok(claw_display_control::selection::Entry { mime: entry.mime, data })
+    }).collect::<Result<Vec<_>, _>>()?;
+    let payload = claw_display_control::selection::Payload { entries };
+    payload.validate().map_err(|_| "CopyQ restore data exceeds its bounds")?;
+    Ok(payload)
+}
+
 #[derive(Serialize)]
 struct Entry {
     identity: String,
@@ -663,9 +718,14 @@ fn parse(action: Action, raw: &[u8]) -> Result<Value, String> {
         return Err("CopyQ response exceeds its byte limit".into());
     }
     if action != Action::List {
+        if action == Action::Restore && raw.first() == Some(&b'{') {
+            let value: Value = serde_json::from_slice(raw).map_err(|_| "invalid restore snapshot")?;
+            restore_payload(value.clone())?;
+            return Ok(value);
+        }
         return match std::str::from_utf8(raw).map(str::trim) {
-            Ok("ok") => Ok(match action {
-                Action::Restore => json!({"restored":true}),
+            Ok("ok") if action != Action::Restore => Ok(match action {
+                Action::Restore => unreachable!(),
                 Action::Remove => json!({"removed":true}),
                 Action::Clear => json!({"cleared":true}),
                 Action::List => unreachable!(),

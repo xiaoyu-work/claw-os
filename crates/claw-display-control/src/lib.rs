@@ -7,6 +7,7 @@ pub mod identity;
 pub mod install;
 pub mod listener;
 pub mod locale;
+pub mod selection;
 pub mod session;
 pub mod transport;
 pub mod wire;

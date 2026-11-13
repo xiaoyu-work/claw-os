@@ -341,6 +341,7 @@ impl Supervisor {
                     packet.message,
                     CompositorReply::CreatorReady { .. }
                         | CompositorReply::Refreshed { .. }
+                        | CompositorReply::SelectionSet { .. }
                         | CompositorReply::Retired { .. }
                         | CompositorReply::InstanceEnded { .. }
                         | CompositorReply::Rejected { .. }

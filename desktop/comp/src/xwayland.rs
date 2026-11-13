@@ -1189,6 +1189,16 @@ impl XwmHandler for State {
         let seat = self.common.shell.read().seats.last_active().clone();
         match selection {
             SelectionTarget::Clipboard => {
+                let root = smithay::wayland::selection::data_device::
+                    current_data_device_selection_userdata::<State>(&seat)
+                    .and_then(|data| match &*data {
+                        crate::wayland::handlers::selection::SelectionData::Root(payload) => Some(payload.clone()),
+                        _ => None,
+                    });
+                if let Some(payload) = root {
+                    payload.send(&mime_type, fd);
+                    return;
+                }
                 if let Err(err) = request_data_device_client_selection(&seat, mime_type, fd) {
                     error!(
                         ?err,
@@ -1217,10 +1227,12 @@ impl XwmHandler for State {
         let seat = self.common.shell.read().seats.last_active().clone();
         match selection {
             SelectionTarget::Clipboard => {
-                set_data_device_selection(&self.common.display_handle, &seat, mime_types, xwm)
+                set_data_device_selection(&self.common.display_handle, &seat, mime_types,
+                    crate::wayland::handlers::selection::SelectionData::X11(xwm))
             }
             SelectionTarget::Primary => {
-                set_primary_selection(&self.common.display_handle, &seat, mime_types, xwm)
+                set_primary_selection(&self.common.display_handle, &seat, mime_types,
+                    crate::wayland::handlers::selection::SelectionData::X11(xwm))
             }
         }
     }
@@ -1230,12 +1242,16 @@ impl XwmHandler for State {
         for seat in shell.seats.iter() {
             match selection {
                 SelectionTarget::Clipboard => {
-                    if current_data_device_selection_userdata(seat).as_deref() == Some(&xwm) {
+                    if matches!(current_data_device_selection_userdata(seat).as_deref(),
+                        Some(crate::wayland::handlers::selection::SelectionData::X11(source)) if *source == xwm)
+                    {
                         clear_data_device_selection(&self.common.display_handle, seat)
                     }
                 }
                 SelectionTarget::Primary => {
-                    if current_primary_selection_userdata(seat).as_deref() == Some(&xwm) {
+                    if matches!(current_primary_selection_userdata(seat).as_deref(),
+                        Some(crate::wayland::handlers::selection::SelectionData::X11(source)) if *source == xwm)
+                    {
                         clear_primary_selection(&self.common.display_handle, seat)
                     }
                 }

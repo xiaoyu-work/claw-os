@@ -89,9 +89,9 @@
   "format": "claw.release-security-policy/v1",
   "manifest_validity_days": 400,
   "minimum_compatible": {
-    "claw-os-agent": "1:0.2.0",
+    "claw-os-agent": "1:0.2.1",
     "claw-os-base": "1:0.2.0",
-    "claw-os-desktop": "1:0.2.0"
+    "claw-os-desktop": "1:0.2.1"
   },
   "packages": [
     "claw-os-agent",

@@ -82,6 +82,12 @@ calling a process-local GUI manager from standalone `cos` is not a checked
 retirement of the Root broker's instances.
 See the installed update contract in [updating](../../../docs/updating.md).
 
+The coordinated 0.2.1 Agent/Desktop compatibility floor also covers the private
+Root selection command and sealed MIME descriptor. An old compositor must not
+be paired with a broker issuing that command; Base remains compatible from
+0.2.0. This changes neither the public App SDK pin nor the security epoch and
+does not publish either OS package.
+
 ## Validation and limits
 
 The private process fixture is
