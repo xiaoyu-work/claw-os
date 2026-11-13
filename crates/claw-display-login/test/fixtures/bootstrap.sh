@@ -140,6 +140,9 @@ if [[ "$gui" == 1 ]]; then
     install -d -m0755 /usr/lib/cos/apps /usr/lib/cos/trust/publishers.d
     mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /usr/lib/cos/apps
     if [[ -n "$native_product" ]]; then
+        /usr/bin/python3 -I -B packaging/deb/native_runtime_assets.py --root "$private/native-runtime"
+        install -d -m0755 /usr/share/icons
+        cp -a -- "$private/native-runtime/usr/share/icons/Cosmic" /usr/share/icons/
         cp -a -- "$native_product_input/$native_app" "/usr/lib/cos/apps/$native_app"
         chown -hR 0:0 "/usr/lib/cos/apps/$native_app"
     fi

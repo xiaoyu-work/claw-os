@@ -328,6 +328,10 @@ read; Clipboard's already reviewed selection-write need must not be mistaken
 for an unexpected union or silently removed. Other native fixtures retain
 their empty-selection expectations. This projection observes existing grants,
 never supplies them, and no product name selects production authority.
+Native fixtures stage the same OS-owned shared icon data as Agent packaging,
+not an App-local icon or a replacement renderer. A missing shared theme must
+not be credited as a nonuniform icon frame. The theme remains separately
+owned from each product's signed resources and grants nothing.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

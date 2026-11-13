@@ -111,7 +111,6 @@ install-shell rootdir="" prefix="/usr/local":
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} bg/install
     {{ make }} -C comp install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} greeter/install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons-tela-pkg/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} idle/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} initial-setup/install

@@ -74,6 +74,15 @@ the public key. An existing minimal `--no-install-recommends` Agent can run
 `apt update` and explicitly select `claw-apps-agent`, native App packages or
 the protected Store later. Maintainer scripts do not run nested APT installs.
 
+Agent also owns the shared `Cosmic` icon theme used by the public toolkit.
+Native Apps installed on standalone Ubuntu/WSL must not require the Desktop
+package just to draw standard controls. `deb/native_runtime_assets.py` stages
+the original theme and its CC-BY-SA attribution/licenses; Desktop retains
+its additional Tela theme but cannot package another copy of `Cosmic`.
+The original paths remain unchanged, with the Agent's `Replaces` bounded to
+Desktop versions below `1:0.2.1`. This data-only ownership transfer grants no
+display, clipboard, filesystem or other App capability.
+
 **Desktop source links are cut over:** Calendar, Clipboard and Widget Rail
 binaries, desktop entries, translations/icons and common-Host launchers are
 App-owned; the OS retains their panel layout IDs without linking product UI
