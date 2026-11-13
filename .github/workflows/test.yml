@@ -327,6 +327,7 @@ jobs:
             build/${{ matrix.mode }}-input/app-sources.json
             build/${{ matrix.mode }}-input/${{ matrix.mode }}.json
             build/${{ matrix.mode }}-authenticated.*/${{ matrix.mode }}*.json
+            build/${{ matrix.mode }}-authenticated.*/pam-native-product.log
             build/${{ matrix.mode }}-authenticated.*/native-calendar-agenda.shm
             build/${{ matrix.mode }}-authenticated.*/native-store-window.shm
           if-no-files-found: error
