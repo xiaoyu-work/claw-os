@@ -445,13 +445,17 @@ fn open_descriptor_targets(pid: u32) -> Vec<PathBuf> {
     targets
 }
 
-fn descriptor_flags(pid: u32, fd: i32) -> Option<u32> {
-    let info = std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")).ok()?;
+fn descriptor_flags(pid: u32, fd: i32) -> Result<u32, String> {
+    let path = format!("/proc/{pid}/fdinfo/{fd}");
+    let info = std::fs::read_to_string(&path)
+        .map_err(|error| format!("{path}: {error}; worker state: {:?}", proc_field(pid, "State:")))?;
     let encoded = info
         .lines()
-        .find_map(|line| line.strip_prefix("flags:"))?
+        .find_map(|line| line.strip_prefix("flags:"))
+        .ok_or_else(|| format!("{path}: kernel descriptor flags are missing"))?
         .trim();
-    u32::from_str_radix(encoded, 8).ok()
+    u32::from_str_radix(encoded, 8)
+        .map_err(|error| format!("{path}: invalid kernel descriptor flags {encoded:?}: {error}"))
 }
 
 fn status_ids(pid: u32, key: &str) -> Vec<u32> {
