@@ -370,7 +370,28 @@ pub fn enable(display: &DisplayHandle) -> Result<Option<Window>> {
             if !observer.is_dir() || observer.uid() != 62050 || observer.mode() & 0o077 != 0 {
                 return Err("unprotected native window observation directory".into());
             }
-            Ok(Some(Window::new(display)))
+            let file = std::fs::OpenOptions::new().read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open("/run/gui-public/native-product-selection.json")?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.uid() != 0 || metadata.nlink() != 1
+                || metadata.mode() & 0o022 != 0 || metadata.len() > 512
+            {
+                return Err("unprotected native expected-selection projection".into());
+            }
+            let mut bytes = Vec::new();
+            file.take(513).read_to_end(&mut bytes)?;
+            let projection: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if bytes.len() > 512 || projection.as_object().is_none_or(|fields| fields.len() != 3)
+                || projection["schema"] != "claw.private-native-selection/v1"
+            {
+                return Err("invalid native expected-selection projection".into());
+            }
+            let expected = (
+                projection["selection_read"].as_bool().ok_or("missing native selection-read expectation")?,
+                projection["selection_write"].as_bool().ok_or("missing native selection-write expectation")?,
+            );
+            Ok(Some(Window::new(display, expected)))
         }
     }
 }
@@ -393,10 +414,11 @@ pub struct Window {
     auxiliary: Auxiliary,
     panel: Option<Panel>,
     snapshot: PassiveSnapshot,
+    expected_selection: (bool, bool),
 }
 
 impl Window {
-    pub fn new(display: &DisplayHandle) -> Self {
+    pub fn new(display: &DisplayHandle, expected_selection: (bool, bool)) -> Self {
         let output = Output::new(
             "private-native-product".into(),
             PhysicalProperties {
@@ -437,7 +459,12 @@ impl Window {
             auxiliary: Auxiliary::default(),
             panel: None,
             snapshot: PassiveSnapshot::new(&STORE_SNAPSHOT),
+            expected_selection,
         }
+    }
+
+    pub fn selection_matches(&self, origin: &ClientOrigin) -> bool {
+        (origin.selection_read(), origin.selection_write()) == self.expected_selection
     }
 
     pub fn new_panel(
@@ -547,8 +574,7 @@ impl Window {
             .ok_or("popup has no authenticated display origin")?;
         if !matches!(origin, ClientOrigin::Instance(_))
             || !origin.layer_shell()
-            || origin.selection_read()
-            || origin.selection_write()
+            || !self.selection_matches(origin)
             || origin
                 .instance()
                 .map(|id| claw_display_control::Epoch(id.0).label())
@@ -778,8 +804,7 @@ impl Window {
                 .ok_or("native panel has no authenticated origin")?;
             if !matches!(origin, ClientOrigin::Instance(_))
                 || !origin.layer_shell()
-                || origin.selection_read()
-                || origin.selection_write()
+                || !self.selection_matches(origin)
                 || origin
                     .instance()
                     .map(|id| claw_display_control::Epoch(id.0).label())

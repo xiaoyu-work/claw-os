@@ -322,7 +322,7 @@ impl WlrLayerShellHandler for State {
         assert!(!origin.os_session());
         if let Some(window) = &mut self.native_window {
             assert!(matches!(origin, ClientOrigin::Instance(_)));
-            assert!(!origin.selection_read() && !origin.selection_write());
+            assert!(window.selection_matches(origin), "native selection projection differs from Root expectations");
             let instance = claw_display_control::Epoch(origin.instance().unwrap().0).label();
             window
                 .new_panel(surface, instance, layer, namespace)
