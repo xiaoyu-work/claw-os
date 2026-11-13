@@ -255,10 +255,13 @@ real native Store dpkg ownership using the correct native architecture, then
 uses ordinary search, a result-card click and the installed entry's uninstall
 button and confirmation. The original signed UI must create the exact
 operation-bound Critical review, visible through the ordinary owner's CLI,
-without changing package state or the startup grant. That decision remains
-pending and must retire with the checked window. The permission UI bytes still
-require inspection; this round does not approve Critical consent, submit a
-retained package effect or establish native Store payload self-handoff.
+without changing package state or the startup grant. The controller supplies
+one protected exact Critical decision, then ordinary scrollbar/continuation
+input must hand the actual native payload removal to Root. Any unknown-effect
+all-App stop needs its separate protected review. Only a durable applied Root
+record, one real successful APT child, checked caller/provider retirement and
+outside-owner read-only reconciliation establish this mutation gate; input
+delivery, Critical approval and accepted receipts are never package success.
 Native failure evidence may also sample only the validated synthetic App's
 current metadata pathname argument on x86_64, discard it if the syscall changes,
 and report a fixed path-environment allowlist and bounded Home/data mount rows.
