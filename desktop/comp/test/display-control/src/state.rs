@@ -28,7 +28,9 @@ use smithay::{
         shell::xdg::PopupSurface,
     },
 };
-use std::{io::Write, os::fd::OwnedFd};
+use std::{io::{Read, Write}, os::fd::OwnedFd};
+use std::sync::Arc;
+use std::os::unix::fs::OpenOptionsExt;
 use wayland_server::{
     Client, DisplayHandle, Resource,
     backend::{ClientData, ClientId, DisconnectReason},
@@ -37,6 +39,12 @@ use wayland_server::{
 
 #[path = "keyboard.rs"]
 mod keyboard;
+
+#[derive(Clone)]
+pub enum SelectionData {
+    Synthetic(Vec<u8>),
+    Root(Arc<claw_display_control::selection::Payload>),
+}
 
 pub struct ClientState {
     pub compositor: CompositorClientState,
@@ -113,13 +121,13 @@ impl State {
             &dh,
             &seat,
             vec!["text/plain;charset=utf-8".to_string()],
-            b"private-clipboard-fixture".to_vec(),
+            SelectionData::Synthetic(b"private-clipboard-fixture".to_vec()),
         );
         primary_selection::set_primary_selection(
             &dh,
             &seat,
             vec!["text/plain;charset=utf-8".to_string()],
-            b"private-primary-fixture".to_vec(),
+            SelectionData::Synthetic(b"private-primary-fixture".to_vec()),
         );
         let native_window = crate::native_window::enable(&dh)?;
         Ok(Self {
@@ -239,7 +247,7 @@ impl CompositorHandler for State {
 }
 
 impl SelectionHandler for State {
-    type SelectionUserData = Vec<u8>;
+    type SelectionUserData = SelectionData;
     fn new_selection(
         &mut self,
         target: SelectionTarget,
@@ -263,15 +271,55 @@ impl SelectionHandler for State {
     fn send_selection(
         &mut self,
         _: SelectionTarget,
-        _: String,
+        mime: String,
         fd: OwnedFd,
         _: Seat<Self>,
-        bytes: &Vec<u8>,
+        data: &SelectionData,
     ) {
+        let bytes = match data {
+            SelectionData::Synthetic(bytes) => bytes,
+            SelectionData::Root(payload) => {
+                payload.send(&mime, fd);
+                return;
+            }
+        };
         std::fs::File::from(fd)
             .write_all(bytes)
             .expect("private fixture payload write failed");
     }
+}
+impl State {
+        pub fn set_root_selection(&mut self, payload: claw_display_control::selection::Payload) {
+            let payload = Arc::new(payload);
+            data_device::set_data_device_selection(
+                &self.common.display_handle, &self.seat, payload.mime_types(),
+                SelectionData::Root(payload.clone()),
+            );
+            let current = data_device::current_data_device_selection_userdata::<Self>(&self.seat).unwrap();
+            let SelectionData::Root(current) = &*current else { panic!("Root selection was not installed"); };
+            assert!(Arc::ptr_eq(current, &payload));
+            if self.native_window.is_some() {
+                for entry in &payload.entries {
+                    let (reader, writer) = std::os::unix::net::UnixStream::pair().unwrap();
+                    reader.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+                    payload.send(&entry.mime, writer.into());
+                    let mut bytes = Vec::new();
+                    reader.take(claw_display_control::selection::MAX_BYTES as u64 + 1)
+                        .read_to_end(&mut bytes).unwrap();
+                    assert_eq!(bytes, entry.data, "Root selection MIME transfer changed data");
+                }
+                let record = serde_json::json!({
+                    "schema":"claw.private-root-selection/v1",
+                    "entries":payload.entries,
+                    "installed_in_smithay":true,
+                    "mime_transfers_confirmed":true,
+                });
+                let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+                    .mode(0o600).custom_flags(libc::O_NOFOLLOW)
+                    .open("/run/user/62050/native-product-observer/root-selection.json").unwrap();
+                file.write_all(&serde_json::to_vec(&record).unwrap()).unwrap();
+            }
+        }
 }
 impl DataDeviceHandler for State {
     fn data_device_state(&mut self) -> &mut DataDeviceState {

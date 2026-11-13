@@ -81,6 +81,12 @@ pub enum CompositorCommand {
         epoch: Epoch,
         instance: InstanceId,
     },
+    SetSelection {
+        epoch: Epoch,
+        owner_uid: u32,
+        instance: InstanceId,
+        expires_monotonic_ms: u64,
+    },
     Shutdown {
         epoch: Epoch,
     },
@@ -88,10 +94,10 @@ pub enum CompositorCommand {
 
 impl Packet for CompositorCommand {
     fn descriptor_count(&self) -> usize {
-        if matches!(self, Self::Creator { .. }) {
-            3
-        } else {
-            0
+        match self {
+            Self::Creator { .. } => 3,
+            Self::SetSelection { .. } => 1,
+            _ => 0,
         }
     }
 }
@@ -112,6 +118,10 @@ pub enum CompositorReply {
         instance: InstanceId,
     },
     Retired {
+        epoch: Epoch,
+        instance: InstanceId,
+    },
+    SelectionSet {
         epoch: Epoch,
         instance: InstanceId,
     },
@@ -265,6 +275,7 @@ impl Packet for AuthorityCommand {
                 CompositorCommand::Creator { .. }
                     | CompositorCommand::Refresh { .. }
                     | CompositorCommand::Retire { .. }
+                    | CompositorCommand::SetSelection { .. }
             ) {
                 return Err(Error::Protocol("invalid GUI control command"));
             }
@@ -303,6 +314,7 @@ impl Packet for AuthorityReply {
                 reply,
                 CompositorReply::CreatorReady { .. }
                     | CompositorReply::Refreshed { .. }
+                    | CompositorReply::SelectionSet { .. }
                     | CompositorReply::Retired { .. }
                     | CompositorReply::InstanceEnded { .. }
                     | CompositorReply::Rejected { .. }

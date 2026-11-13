@@ -15,6 +15,14 @@ only bounded PAM locale values, never loader variables or authority metadata.
 display/runtime/user-bus projection.
 Owner, session and epoch fields in compositor messages are Root projections;
 no user registration message may supply them.
+`selection.rs` transports bounded standard MIME bytes in one Root-owned sealed
+descriptor. `SetSelection` is an OS service effect on a live owner/display
+epoch, not an App creator or a new installed identity. The compositor only
+acknowledges after installing its own selection source. This source belongs to
+the display, so completed clipboard writes do not depend on the caller's GUI
+or an AI task remaining alive. Existing independent read checks still guard
+offers and transfers. Root-origin effect correlation never retires an App
+instance on acknowledgement loss.
 
 Production consumers must bind an expected process using their Root-owned
 child/parent or kernel peer, not a PID parsed from App JSON. Inherited socket

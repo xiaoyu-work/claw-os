@@ -356,6 +356,18 @@ one correct remaining item and zero; opening confirmation did not mutate
 history. The provider retained zero items past GUI retirement, then stopped.
 Selection rights remained separate, and offscreen CopyQ still does not
 establish live Restore or display/provider binding.
+The Root restore successor uses offscreen CopyQ only as the pinned history
+data source. Its closed script extracts the matched standard MIME data without
+calling CopyQ selection APIs. The broker spends the original compound history
+read/write and independent selection-write grant once, then submits a sealed
+payload to the caller's authenticated display (or the sole authenticated owner
+display for a non-login service caller). Missing or ambiguous targets refuse.
+The protected compositor installs an OS-owned selection and acknowledges the
+effect; acknowledgement loss is indeterminate, never success or replay.
+The candidate checks original UI Restore plus actual Smithay selection state
+and plain-text/HTML descriptor transfers. Physical-display acceptance remains
+separate. No App-owned collector, privileged identity or raw socket fallback is
+introduced, and completed clipboard data belongs to the display, not the GUI.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

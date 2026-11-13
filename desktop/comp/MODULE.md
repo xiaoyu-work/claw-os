@@ -24,6 +24,12 @@ desktop-management or other global protocols.
 rights to the [pinned Smithay hooks](vendor/README.md). Unbound, retired or
 expired instances fail before offers, MIME disclosure, payload forwarding or
 selection mutation. All four selection protocols are covered; DnD is separate.
+The internal Root selection command accepts only an epoch/owner-bound,
+unexpired, sealed and bounded MIME payload over the protected supervisor
+channel. Its server-side source is separate from Xwayland source identities
+and ordinary App clients; Xwayland clearing cannot clear an unrelated Root
+source. Transfers retain existing read authorization and use bounded
+nonblocking workers. This does not grant a login client selection authority.
 Retirement removes listeners and all accepted clients, while Root confirms
 the actual instance and descendant teardown.
 
@@ -79,11 +85,13 @@ the protected, finite input-command pattern for two ordinary seat pointer
 clicks: original panel open and close, always at the center of its actual
 already-buffered configure geometry. The panel accepts no caller coordinates.
 Replays, expiry and keyboard actions aimed at a noninteractive panel refuse.
-The Clipboard successor additionally permits three finite ordinary clicks in
+The Clipboard successor additionally permits four finite ordinary clicks in
 that same instance's single Layer-parented popup. Its current configure must
 be acknowledged with no pending configure, matching real pixels and coordinates
 inside the bounded popup; the panel still permits only open and close.
-These exercise delete and the separate clear confirmation, not live Restore.
+These exercise delete, the separate clear confirmation and the Root restore
+candidate; the latter also checks the actual server-side selection and rich
+MIME transfer independently of CopyQ's offscreen data connection.
 No popup keyboard focus or production input capability is added.
 The genuine Store successor additionally
 permits one finite ordinary click inside the fixture's already-buffered,

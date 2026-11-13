@@ -90,7 +90,7 @@ impl Fixture {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let script = format!(
-            "config('clipboard_tab','Clipboard'); tab('Clipboard'); add('{FIRST}'); add('{SECOND}'); print(size());"
+            "config('clipboard_tab','Clipboard'); tab('Clipboard'); add('{FIRST}'); add({{'text/plain':'{SECOND}','text/html':'<b>{SECOND}</b>'}}); print(size());"
         );
         assert_eq!(String::from_utf8(query(&["eval", &script]).await).unwrap().trim(), "2");
         Self { child }
@@ -177,8 +177,9 @@ impl Fixture {
             "history_mutations":mutations,
             "fixture_items":[FIRST,SECOND],"real_copyq":true,"provider_qpa":"offscreen",
             "raw_history_or_bus":false,"live_selection_restore_asserted":false,
+            "authenticated_headless_selection_restore_asserted":true,
             "sdk_reply_delivery_and_decode_asserted":false,"history_text_rendering_asserted":false,
-            "coverage":"Original Clipboard popup, real history read, ordinary delete and confirmed clear under exact independent rights; offscreen provider is not live selection/Restore acceptance. Exact painted text remains a separate inspection.",
+            "coverage":"Original history UI, Root-owned authenticated headless clipboard restore with MIME transfers, delete and confirmed clear under independent rights; physical display/hardware remains separate. Exact painted text remains a separate inspection.",
         });
         let bytes = serde_json::to_vec_pretty(&report).unwrap();
         assert!(bytes.len() <= 16384);
@@ -187,9 +188,9 @@ impl Fixture {
 
     async fn queries(
         &mut self, driver: &mut calendar_popup::Driver<'_>, session: &str,
-        instance: &str, count: usize, floor: u64, height: Option<i64>,
+        instance: &str, count: usize, floor: u64, heights: std::ops::RangeInclusive<i64>,
     ) -> serde_json::Value {
-        let actions = ["history-list", "history-remove", "history-list", "history-clear", "history-list"];
+        let actions = ["history-list", "history-restore", "history-remove", "history-list", "history-clear", "history-list"];
         loop {
             driver.live("Clipboard original delete/confirmed-clear and broker refresh").await;
             assert!(self.child.try_wait().unwrap().is_none(), "CopyQ provider exited");
@@ -215,8 +216,11 @@ impl Fixture {
                 if action != "history-clear" {
                     caps.push(Cap::new(Verb::CLIPBOARD_READ, Scope::name("history")));
                 }
-                if matches!(action, "history-remove" | "history-clear") {
+                if matches!(action, "history-restore" | "history-remove" | "history-clear") {
                     caps.push(Cap::new(Verb::CLIPBOARD_WRITE, Scope::name("history")));
+                }
+                if action == "history-restore" {
+                    caps.push(Cap::new(Verb::CLIPBOARD_WRITE, Scope::name("selection")));
                 }
                 let facts = caps.iter().map(crate::clawd::authority::audit::CapFacts::of).collect::<Vec<_>>();
                 assert_eq!(record["caps"], serde_json::to_value(facts).unwrap());
@@ -230,7 +234,7 @@ impl Fixture {
                         && popup["pending_configures"] == 0
                         && popup["buffer_commits"].as_u64().is_some_and(|value| value > floor)
                         && popup["geometry"][3].as_i64().is_some_and(|value|
-                            height.map_or(value < 300, |expected| value == expected))
+                            heights.contains(&value))
                 }) {
                     return serde_json::json!({"window":window,"requests":requests,"exact_scope_uses":uses});
                 }
@@ -244,8 +248,26 @@ impl Fixture {
         instance: &str, opened: &serde_json::Value,
     ) -> serde_json::Value {
         let height = opened["popup"]["geometry"][3].as_i64().unwrap();
+        let floor = driver.popup_click(140, 155).await;
+        self.queries(driver, session, instance, 2, floor, height + 1..=800).await;
+        let selection = Path::new("/run/user/62050/native-product-observer/root-selection.json");
+        let info = selection.symlink_metadata().unwrap();
+        assert!(info.is_file() && info.uid() == OWNER && info.nlink() == 1
+            && info.mode() & 0o077 == 0 && info.len() <= 16384);
+        let selection: serde_json::Value = serde_json::from_slice(&std::fs::read(selection).unwrap()).unwrap();
+        assert_eq!(selection["installed_in_smithay"], true);
+        assert_eq!(selection["mime_transfers_confirmed"], true);
+        let entries = selection["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        for (mime, expected) in [("text/plain", SECOND.to_string()), ("text/html", format!("<b>{SECOND}</b>"))] {
+            let entry = entries.iter().find(|entry| entry["mime"] == mime).unwrap();
+            let bytes: Vec<u8> = serde_json::from_value(entry["data"].clone()).unwrap();
+            assert_eq!(bytes, expected.as_bytes());
+        }
+        assert_eq!(String::from_utf8(query(&["eval", "tab('Clipboard'); print(size());"]).await)
+            .unwrap().trim(), "2");
         let floor = driver.popup_click(318, 155).await;
-        self.queries(driver, session, instance, 3, floor, Some(height)).await;
+        self.queries(driver, session, instance, 4, floor, height..=height).await;
         let remaining: serde_json::Value = serde_json::from_slice(&query(&["eval",
             "tab('Clipboard'); print(JSON.stringify({size:size(),text:str(read(0))}));"]).await).unwrap();
         assert_eq!(remaining, serde_json::json!({"size":1,"text":FIRST}));
@@ -263,17 +285,18 @@ impl Fixture {
         };
         assert_eq!(calendar_popup::audit_since(0).iter().filter(|record|
             record["event"] == "clawd.request" && record["command"] == "system.clipboard.control"
-                && record["params"]["session"] == session).count(), 3,
+                && record["params"]["session"] == session).count(), 4,
             "opening confirmation must not clear history");
         let popup = &confirmation["popup"]["geometry"];
         let floor = driver.popup_click(u16::try_from(popup[2].as_i64().unwrap() - 60).unwrap(),
             u16::try_from(popup[3].as_i64().unwrap() - 48).unwrap()).await;
-        let result = self.queries(driver, session, instance, 5, floor, None).await;
+        let result = self.queries(driver, session, instance, 6, floor, 100..=300).await;
         assert_eq!(String::from_utf8(query(&["eval", "tab('Clipboard'); print(size());"]).await)
             .unwrap().trim(), "0");
         serde_json::json!({"requests":result["requests"],"exact_scope_uses":result["exact_scope_uses"],
-            "clear_confirmation":confirmation["popup"],"provider_counts":[2,1,0],
-            "remaining_after_delete":remaining,"ordinary_popup_clicks":3})
+            "clear_confirmation":confirmation["popup"],"provider_counts":[2,2,1,0],
+            "root_selection":selection,
+            "remaining_after_delete":remaining,"ordinary_popup_clicks":4})
     }
 
     pub(super) async fn stop(mut self) {

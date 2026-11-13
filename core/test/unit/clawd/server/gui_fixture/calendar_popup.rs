@@ -376,7 +376,7 @@ impl<'a> Driver<'a> {
 
     pub(super) async fn popup_click(&mut self, x: u16, y: u16) -> u64 {
         self.popup_clicks += 1;
-        assert!(self.popup_clicks <= 3, "one delete and one confirmed clear only");
+        assert!(self.popup_clicks <= 4, "one restore, one delete and one confirmed clear only");
         self.pointer("popup", format!("{x},{y}")).await
     }
 

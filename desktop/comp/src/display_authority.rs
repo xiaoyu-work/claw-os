@@ -451,7 +451,8 @@ pub fn dispatch(state: &mut crate::state::State) -> Result<(), Error> {
             };
             let instance = match &packet.message {
                 CompositorCommand::Creator { instance, .. } | CompositorCommand::Refresh { instance, .. }
-                    | CompositorCommand::Retire { instance, .. } => Some(*instance),
+                    | CompositorCommand::Retire { instance, .. }
+                    | CompositorCommand::SetSelection { instance, .. } => Some(*instance),
                 _ => None,
             };
             let transition = match packet.message {
@@ -465,6 +466,25 @@ pub fn dispatch(state: &mut crate::state::State) -> Result<(), Error> {
                 CompositorCommand::Refresh { .. } => authority.refresh(packet.message),
                 CompositorCommand::Retire { epoch, instance } => {
                     authority.retire(&dh, epoch, instance, |token| handle.remove(token))
+                }
+                CompositorCommand::SetSelection { epoch, owner_uid, instance, expires_monotonic_ms } => {
+                    (|| {
+                    if epoch != authority.epoch() || owner_uid != authority.link.binding().owner_uid()
+                        || !authority.link.binding().active()?
+                    {
+                        Err(Error::Identity)
+                    } else if monotonic_ms()? >= expires_monotonic_ms
+                        || expires_monotonic_ms > monotonic_ms()?.saturating_add(2000)
+                    {
+                        Err(Error::Timeout)
+                    } else {
+                        let fd = packet.descriptors.into_iter().next().ok_or(Error::Identity)?;
+                        let payload = claw_display_control::selection::Payload::receive(fd)?;
+                        if monotonic_ms()? >= expires_monotonic_ms { return Err(Error::Timeout); }
+                        state.set_root_selection(payload);
+                        authority.link.reply(&CompositorReply::SelectionSet { epoch, instance })
+                    }
+                    })()
                 }
                 CompositorCommand::Shutdown { epoch } if epoch == authority.epoch() => {
                     authority.stop(&dh, |token| handle.remove(token))?;

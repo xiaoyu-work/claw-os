@@ -195,8 +195,8 @@ previous_dir() {
 
 export GPG_KEY_ID="$KEY_ID"
 
-V1="1:0.2.0+git100.gaaaaaaaaaaaa"
-V2="1:0.2.0+git200.gbbbbbbbbbbbb"
+V1="1:0.2.1+git100.gaaaaaaaaaaaa"
+V2="1:0.2.1+git200.gbbbbbbbbbbbb"
 
 # ---------------------------------------------------------------------------
 # 1. A coherent signed set verifies and publishes its metadata.
@@ -416,7 +416,7 @@ COS_RELEASE_SECURITY_BOOTSTRAP=1 \
 ok "compatible Agent and Base versions remain independently publishable"
 
 REPO="$(fresh_repo repo-protocol-regression)"
-V3="1:0.2.0+git300.gcccccccccccc"
+V3="1:0.2.1+git300.gcccccccccccc"
 POLICY="$WORK/protocol-14.json" make_deb "$REPO" claw-os-agent "$V3" amd64 alpha
 POLICY="$WORK/protocol-14.json" make_deb "$REPO" claw-os-base "$V3" all alpha
 if "$VERIFY" "$REPO" "$SUITE" "$COMPONENT" "$KEYRING" "$PREVIOUS" \

@@ -84,6 +84,27 @@ fn socket_and_received_descriptors_are_close_on_exec() {
             0
         );
     }
+    let command = crate::wire::AuthorityCommand::Gui {
+        command: crate::CompositorCommand::SetSelection {
+            epoch: crate::Epoch([1;16]), owner_uid: owner.uid(),
+            instance: crate::InstanceId([2;16]), expires_monotonic_ms: 10,
+        },
+    };
+    assert!(sender.send(&command, &[], deadline()).is_err());
+    sender.send(&command, &[file.as_fd()], deadline()).unwrap();
+    let received = receiver.receive::<crate::wire::AuthorityCommand>(&owner, deadline()).unwrap();
+    assert_eq!(received.descriptors.len(), 1);
+    assert!(crate::selection::Payload::receive(received.descriptors.into_iter().next().unwrap()).is_err(),
+        "an ordinary unsealed file is not Root selection data");
+    let reply = crate::wire::AuthorityReply::Gui {
+        reply: crate::CompositorReply::SelectionSet {
+            epoch: crate::Epoch([1;16]), instance: crate::InstanceId([2;16]),
+        },
+    };
+    sender.send(&reply, &[], deadline()).unwrap();
+    receiver.receive::<crate::wire::AuthorityReply>(&owner, deadline()).unwrap();
+    let entry = crate::selection::Entry { mime:"text/plain".into(), data:b"public".to_vec() };
+    assert!(crate::selection::Payload { entries:vec![entry.clone(),entry] }.validate().is_err());
 }
 
 #[test]

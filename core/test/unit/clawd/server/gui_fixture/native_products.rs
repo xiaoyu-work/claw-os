@@ -1452,7 +1452,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         } else if product.name == "desktop-widgets" {
             "real owner-scoped Calendar/task/resource reads under independent exact grants verified; reply decoding and exact painted card text NOT asserted"
         } else if product.name == "clipboard" {
-            "real private OS CopyQ history read/delete/confirmed-clear and original popup open/close verified; live selection Restore and exact painted history text NOT asserted"
+            "real private OS CopyQ history read/delete/confirmed-clear, authenticated Root headless selection Restore with plain-text/HTML transfers and original popup open/close verified; physical display and exact painted history text NOT asserted"
         } else if product.panel {
             "original popup pixels/open/close and authenticated same-owner real SDK/Calendar reader success verified; exact returned/painted event text NOT inspected"
         } else if package_applied.is_some() {
