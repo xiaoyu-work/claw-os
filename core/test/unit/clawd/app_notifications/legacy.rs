@@ -161,17 +161,17 @@ fn notification_action_app_and_capability_matrix_is_exact() {
             let authority = decision_with_caps(app, vec![Cap::new(verb, Scope::Wild)]);
             assert_eq!(
                 apply(&service, send("Test", false), uid, &authority, until()).is_ok(),
-                app == NOTIFY_APP && verb == Verb::UI_NOTIFY,
+                verb == Verb::UI_NOTIFY,
                 "{app} {verb}"
             );
             assert_eq!(
                 apply(&service, list(), uid, &authority, until()).is_ok(),
-                app == NOTIFY_APP && verb == Verb::DATA_INBOX_READ,
+                verb == Verb::DATA_INBOX_READ,
                 "{app} {verb}"
             );
             assert_eq!(
                 apply(&service, intent(request()), uid, &authority, until()).is_ok(),
-                app == APP && verb == Verb::UI_NOTIFY,
+                verb == Verb::UI_NOTIFY,
                 "{app} {verb}"
             );
         }
@@ -182,6 +182,8 @@ fn notification_action_app_and_capability_matrix_is_exact() {
         vec![Cap::new(Verb::DATA_INBOX_READ, Scope::name("unrelated"))],
     );
     assert!(apply(&service, list(), uid, &named, until()).is_err());
+    let unbound = decision_for_app(None, vec![Cap::unscoped(Verb::UI_NOTIFY)]);
+    assert!(apply(&service, intent(request()), uid, &unbound, until()).is_err());
 }
 
 #[test]

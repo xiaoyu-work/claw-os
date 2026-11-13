@@ -18,6 +18,7 @@ pub use sqlite::SqliteNotificationService;
 pub(crate) use visibility::{conversation_is_viewed, set_conversation_view};
 
 pub const SCHEMA_VERSION: u32 = 1;
+pub const MAX_SOURCE_BYTES: usize = 128;
 pub const MAX_TITLE_CHARS: usize = 240;
 pub const MAX_BODY_CHARS: usize = 4_000;
 pub const MAX_ACTIONS: usize = 4;
@@ -295,7 +296,7 @@ impl NotificationDraft {
     }
 
     pub fn validate(&self) -> Result<(), NotificationError> {
-        validate_identifier("source", &self.source, 128)?;
+        validate_identifier("source", &self.source, MAX_SOURCE_BYTES)?;
         validate_identifier("kind", &self.kind, 128)?;
         validate_text("title", &self.title, MAX_TITLE_CHARS, false)?;
         if !self.body.is_empty() {

@@ -87,7 +87,7 @@ and agent tasks.
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Owner-scoped notification RPC and atomic read-all, non-authoritative conversation-view hints, due-nudge fanout, and external delivery dispatcher |
 | `nearby/` | Owner/window-bound AirDrop sharing, exact human offer decisions, private uploads/snapshots, isolated transport and checked radio retirement; see `nearby/MODULE.md` |
-| `app_notifications.rs` | Closed native post/close and legacy-facade send/list, exact App/action/owner/source grants, and durable Notification Service publication/query |
+| `app_notifications.rs` | Capability-gated App post/close/send and own-source list, sealed App/owner attribution, no business-name entitlement or user-bus access |
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `mail.rs`, `../mail_native.rs` | Account-scoped Thunderbird mail service and OS-owned Native Messaging multiplexer; independent read/draft/sender grants, owner service startup, stable message references and no mailbox authority for AI App stdout |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
@@ -298,10 +298,11 @@ authority/audit data. It must never point at the live system bus.
 Native Settings still requires declared/admitted GUI needs; these fixtures
 do not accept its broad polkit payload or prove Wayland/GUI bootstrap.
 
-`system.notification.control` has an exact App/action matrix:
-`cosmic-notifications` post/close require `ui.notify` Wild; `notify` send
-requires `ui.notify` Wild and list requires `data.inbox.read` Wild.
-Neither App can use the other's actions, and read does not imply send.
+`system.notification.control` uses the same explicit capabilities for every
+authenticated App: post/close/send require `ui.notify` Wild and list requires
+`data.inbox.read` Wild. Read does not imply send. Source ownership comes from
+the sealed grant, not a business-name allowlist; one App cannot access another's
+records even when both hold the same capability.
 It derives owner, source and session/task correlation from broker authority,
 not MCP metadata or a display label.
 Post validates bounded plain text, theme-only icon names, signed popup timeout
@@ -314,7 +315,8 @@ service, never owner-wide notification administration or a session bus.
 Notify send accepts 1..4000 plain-text characters and a strict urgency boolean.
 Urgent is warning severity, not critical, and both modes use the normal
 Immediate policy subject to DND/channel preferences. List accepts 1..100 and
-projects only the owner's `app:notify` source (not native/task/other-App rows).
+projects only the authenticated App's own source (`app:notify` for the retained
+Notify facade), never native/task/other-App rows.
 It returns durable IDs, full message, urgency, UTC creation timestamp without
 a suffix, coarse `read` (state is not unread), explicit state and the complete
 retained, unexpired source total. Reads do not reorder publication history.

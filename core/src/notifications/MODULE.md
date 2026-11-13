@@ -20,8 +20,14 @@ user interfaces consume them without relying on model behavior.
   Per-record read changes remain observable; acknowledgement, dismissal,
   delivery state, Jobs and approval authority are unchanged.
 
-Native `cosmic-notifications` submits bounded intent through
-`clawd/app_notifications.rs`. The service stores display-only sender, theme
+Authenticated Apps submit capability-gated intent through
+`clawd/app_notifications.rs`. Post/close/send require `ui.notify`; source-scoped
+list independently requires `data.inbox.read`. Every publication, close and list
+binds to the App ID in the sealed grant, not a caller-supplied source or display
+name. Ordinary IDs retain `app:<id>`; IDs too long for the existing 128-byte
+source bound use a deterministic `app:sha256:<digest>` encoding.
+Existing `app:notify` and `app:cosmic-notifications` records are unchanged.
+The service stores display-only sender, theme
 icon, popup timeout and transient metadata, never caller-provided authority.
 The additive SQLite v1 → v2 upgrade preserves every existing record and
 preference; the wire notification schema remains backwards-compatible v1.

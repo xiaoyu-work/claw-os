@@ -9,6 +9,11 @@ use crate::notifications::{
 };
 use std::time::Duration;
 
+const APP: &str = "cosmic-notifications";
+const SOURCE: &str = "app:cosmic-notifications";
+const NOTIFY_APP: &str = "notify";
+const NOTIFY_SOURCE: &str = "app:notify";
+
 mod worker {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -32,6 +37,10 @@ fn decision(app: &str, allowed: bool) -> Decision {
 }
 
 fn decision_with_caps(app: &str, caps: Vec<Cap>) -> Decision {
+    decision_for_app(Some(app), caps)
+}
+
+fn decision_for_app(app: Option<&str>, caps: Vec<Cap>) -> Decision {
     let uid = unsafe { libc::geteuid() };
     let session = format!("notify-{}", uuid::Uuid::new_v4().simple());
     let (_, view) = authority()
@@ -39,7 +48,7 @@ fn decision_with_caps(app: &str, caps: Vec<Cap>) -> Decision {
             issuer: Issuer::AppSessionAuthority,
             principal: Principal::of_process(uid, std::process::id()).unwrap(),
             binding: Binding::ProcessTree,
-            subject: Subject::session(&session).with_app(Some(app.into())),
+            subject: Subject::session(&session).with_app(app.map(ToOwned::to_owned)),
             audience: AudienceSet::one(Audience::SystemService),
             caps: crate::caps::CapSet::from_caps(caps),
             lifetime: Duration::from_secs(60),
@@ -180,6 +189,26 @@ fn app_notifications_are_durable_source_owner_bound_and_not_acknowledged_on_deli
         reopened.get(uid, &other.id).unwrap().state,
         NotificationState::Unread
     );
+    let mut sources = std::collections::BTreeSet::new();
+    for app in ["independent-client".to_string(), "a".repeat(128), "b".repeat(128)] {
+        let caller = decision(&app, true);
+        let posted = apply(&reopened, intent(request()), uid, &caller, until()).unwrap();
+        let id = posted["id"].as_str().unwrap();
+        let record = reopened.get(uid, id).unwrap();
+        assert_eq!(record.source, app_source(&caller).unwrap());
+        assert!(record.source.len() <= notifications::MAX_SOURCE_BYTES);
+        assert_ne!(record.source, SOURCE);
+        assert!(sources.insert(record.source.clone()));
+        assert!(apply(
+            &reopened, intent(json!({"action":"close","id":id})),
+            uid, &authority, until(),
+        ).is_err());
+        assert_eq!(reopened.get(uid, id).unwrap().state, NotificationState::Unread);
+        apply(
+            &reopened, intent(json!({"action":"close","id":id})),
+            uid, &caller, until(),
+        ).unwrap();
+    }
 }
 
 #[test]

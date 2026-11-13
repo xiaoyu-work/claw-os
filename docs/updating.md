@@ -90,6 +90,13 @@ grants. List is deliberately limited to the authenticated owner's
 `app:notify` producer, not native, task or other-App notifications.
 The native App cannot close notify-produced records by guessing their IDs.
 
+The same OS service now accepts other authenticated Apps holding the same
+explicit capabilities. Publication, close and list remain bound to the App
+identity in the grant, not its display name. Existing producer IDs/history
+are unchanged, and no App gains another App's records or default permission.
+Valid long App IDs use a bounded source encoding without changing the wire
+schema or migrating stored data.
+
 **Historical JSON is preserved, not imported.** Neither new operation reads,
 rewrites, deletes, changes ownership/mode, dual-writes, backfills or replays
 `notifications.json`, even if it contains malformed or obsolete data. It is

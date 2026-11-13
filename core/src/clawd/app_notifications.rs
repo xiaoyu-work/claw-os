@@ -12,10 +12,7 @@ use crate::notifications::{
     NotificationPresentation, NotificationService, NotificationState, Severity,
 };
 
-const APP: &str = "cosmic-notifications";
-const SOURCE: &str = "app:cosmic-notifications";
-const NOTIFY_APP: &str = "notify";
-const NOTIFY_SOURCE: &str = "app:notify";
+const SOURCE_NAMESPACE: &str = "app";
 
 enum Intent {
     Post(NotificationDraft),
@@ -25,11 +22,10 @@ enum Intent {
 }
 
 impl Intent {
-    fn requirement(&self) -> (&'static str, Cap) {
+    fn requirement(&self) -> Cap {
         match self {
-            Self::Post(_) | Self::Close(_) => (APP, Cap::unscoped(Verb::UI_NOTIFY)),
-            Self::Send(_) => (NOTIFY_APP, Cap::unscoped(Verb::UI_NOTIFY)),
-            Self::List(_) => (NOTIFY_APP, Cap::new(Verb::DATA_INBOX_READ, Scope::Wild)),
+            Self::Post(_) | Self::Close(_) | Self::Send(_) => Cap::unscoped(Verb::UI_NOTIFY),
+            Self::List(_) => Cap::new(Verb::DATA_INBOX_READ, Scope::Wild),
         }
     }
 }
@@ -46,7 +42,7 @@ fn validate(request: AppNotificationRequest) -> Result<Intent, BrokerError> {
             dedupe_key,
         } => {
             let mut draft = NotificationDraft::new(
-                SOURCE,
+                SOURCE_NAMESPACE,
                 "app.notification",
                 Severity::Info,
                 summary.as_str(),
@@ -82,7 +78,7 @@ fn validate(request: AppNotificationRequest) -> Result<Intent, BrokerError> {
                 return Err(BrokerError::execution("message must be non-empty"));
             }
             let mut draft = NotificationDraft::new(
-                NOTIFY_SOURCE,
+                SOURCE_NAMESPACE,
                 "app.notification",
                 if urgent {
                     Severity::Warning
@@ -114,16 +110,28 @@ fn validate(request: AppNotificationRequest) -> Result<Intent, BrokerError> {
     }
 }
 
+fn app_source(authority: &Decision) -> Result<String, BrokerError> {
+    let app = authority
+        .app_id()
+        .ok_or_else(|| BrokerError::authorization("notifications require an authenticated App"))?;
+    let source = format!("{SOURCE_NAMESPACE}:{app}");
+    if source.len() <= notifications::MAX_SOURCE_BYTES {
+        Ok(source)
+    } else {
+        Ok(format!(
+            "{SOURCE_NAMESPACE}:sha256:{}",
+            crate::crypto::sha256_hex(app.as_bytes())
+        ))
+    }
+}
+
 fn authorize(authority: &Decision, owner: u32, intent: &Intent) -> Result<(), BrokerError> {
-    let (app, capability) = intent.requirement();
-    authority
-        .require_app(app)
-        .map_err(BrokerError::authorization)?;
+    app_source(authority)?;
     if authority.owner_uid() != owner {
         return Err(BrokerError::authorization("notification owner mismatch"));
     }
     let _authorized = authority
-        .require(capability)
+        .require(intent.requirement())
         .map_err(BrokerError::authorization)?;
     Ok(())
 }
@@ -151,6 +159,8 @@ fn publish(
     owner: u32,
     authority: &Decision,
 ) -> Result<Notification, BrokerError> {
+    // Attribute every publication to the authenticated grant, not presentation data.
+    draft.source = app_source(authority)?;
     draft.session_id = authority.session_id().map(ToOwned::to_owned);
     draft.task_id = authority.task_id().map(ToOwned::to_owned);
     let record = service.publish(owner, draft).map_err(service_error)?;
@@ -192,8 +202,9 @@ fn apply(
             Ok(json!({"id": record.id}))
         }
         Intent::Close(id) => {
+            let source = app_source(authority)?;
             let record = service
-                .mutate_source(owner, SOURCE, &id, NotificationMutation::Dismiss)
+                .mutate_source(owner, &source, &id, NotificationMutation::Dismiss)
                 .map_err(service_error)?;
             super::system_journal::record_notification_event("notification.state-changed", &record);
             Ok(json!({"ok": true, "id": record.id, "state": record.state}))
@@ -203,8 +214,9 @@ fn apply(
             notify_projection(&record, false)
         }
         Intent::List(limit) => {
+            let source = app_source(authority)?;
             let page = service
-                .list_source(owner, NOTIFY_SOURCE, limit)
+                .list_source(owner, &source, limit)
                 .map_err(service_error)?;
             let rows = page
                 .notifications
