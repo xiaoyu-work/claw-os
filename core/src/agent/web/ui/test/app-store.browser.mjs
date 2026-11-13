@@ -267,6 +267,9 @@ async function installedProduct() {
   let spawnError;
   chrome.on("error", (error) => { spawnError = error; });
   const exited = once(chrome, "close").catch(() => {});
+  const startupStarted = performance.now();
+  // Browser boot is fixture infrastructure, before any App navigation or call.
+  const startupBudgetMs = 30_000;
   const startupFailure = async () => {
     const read = async (filename) => {
       try { return (await readFile(filename)).subarray(0, 4096).toString("utf8"); }
@@ -285,6 +288,7 @@ async function installedProduct() {
       .filter((pid) => /^[1-9][0-9]*$/.test(pid)).slice(0, 16) : [];
     return JSON.stringify({
       message: "Installed-App Chromium did not become ready",
+      startup_budget_ms: startupBudgetMs, elapsed_ms: Math.round(performance.now() - startupStarted),
       spawn_error: spawnError?.code, exit_code: chrome.exitCode, signal: chrome.signalCode,
       untrusted_browser_stderr_tail: browserStderr.toString("utf8"),
       process: pid ? await processState(pid) : null,
@@ -296,7 +300,7 @@ async function installedProduct() {
   const issues = [];
   try {
     let port;
-    for (let attempt = 0; attempt < 100; attempt++) {
+    while (performance.now() - startupStarted < startupBudgetMs) {
       if (spawnError || chrome.exitCode !== null || chrome.signalCode !== null) {
         throw new Error(await startupFailure());
       }

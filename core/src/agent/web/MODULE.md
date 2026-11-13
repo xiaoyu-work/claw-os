@@ -148,6 +148,14 @@ Root helper's protected review validation. `pkexec`'s internal terminal agent
 is disabled. Failed, cancelled and uncertain outcomes require a broker refresh,
 never automatic grant replay. Auth sessions are process-local and expire; no
 new daemon, portable authority or desktop runtime dependency is introduced.
+
+The installed-App browser fixture separately bounds one cold hosted-Chromium
+boot at 30 monotonic seconds, before any App navigation or tool dispatch.
+It retains bounded process/page-fault diagnostics on failure and never
+restarts or prewarms the browser. App/CDP action, service, authority, native
+first-frame and package-effect deadlines are unchanged; browser boot is not
+an App outcome or a performance claim.
+
 Conversation list/detail/history/update/fork routes adapt the shared broker
 contract used by terminal and native presentations. Canonical session identity,
 owner-memory access, idle-session mutation locking, archive state and branch
