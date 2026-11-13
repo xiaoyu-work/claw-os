@@ -219,8 +219,14 @@ impl Fixture {
 }
 
 fn buffered_popup(record: &serde_json::Value, instance: &str) -> bool {
+    buffered_popup_for(record, instance, CALENDAR.desktop_id)
+}
+
+pub(super) fn buffered_popup_for(
+    record: &serde_json::Value, instance: &str, namespace: &str,
+) -> bool {
     let popup = &record["popup"];
-    buffered_panel(record, instance, CALENDAR.desktop_id)
+    buffered_panel(record, instance, namespace)
         && popup["role"] == "xdg_popup"
         && popup["parent_role"] == "zwlr_layer_surface_v1"
         && popup["parent_instance"] == instance
@@ -316,7 +322,7 @@ fn calendar_request(record: &serde_json::Value, session: &str, fixture: &Fixture
         && fixture.query_day(&record["params"]).is_some()
 }
 
-struct Driver<'a> {
+pub(super) struct Driver<'a> {
     control: &'a OwnedFd,
     pam: &'a mut Child,
     retained: &'a RetainedInstance,
@@ -327,8 +333,18 @@ struct Driver<'a> {
     deadline: Instant,
 }
 
-impl Driver<'_> {
-    async fn live(&mut self, stage: &str) {
+impl<'a> Driver<'a> {
+    pub(super) fn new(
+        control: &'a OwnedFd, pam: &'a mut Child, retained: &'a RetainedInstance,
+        process: &'a NativeProcess, session: &'a str, deadline: Instant,
+    ) -> Self {
+        Self {
+            control, pam, retained, process, session, deadline, sequence: 0,
+            instance: claw_display_control::Epoch(retained.instance.0).label(),
+        }
+    }
+
+    pub(super) async fn live(&mut self, stage: &str) {
         if let Err(error) = check_native_process(self.retained, self.process) {
             self.fail(&format!("{stage}: {error}")).await;
         }
@@ -337,7 +353,7 @@ impl Driver<'_> {
         }
     }
 
-    async fn fail(&mut self, stage: &str) -> ! {
+    pub(super) async fn fail(&mut self, stage: &str) -> ! {
         renderer_failure(
             self.control,
             self.pam,
@@ -349,7 +365,7 @@ impl Driver<'_> {
         .await
     }
 
-    async fn click(&mut self) {
+    pub(super) async fn click(&mut self) {
         self.sequence += 1;
         assert!(self.sequence <= 2, "one open and one close only");
         let directory = Path::new(OBSERVER).parent().unwrap();
@@ -375,7 +391,7 @@ impl Driver<'_> {
         std::fs::rename(next, directory.join("keyboard-command.json")).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            self.live("Calendar ordinary pointer delivery").await;
+            self.live("native panel ordinary pointer delivery").await;
             let ack = directory.join("keyboard-ack.json");
             if let Ok(metadata) = std::fs::symlink_metadata(&ack) {
                 assert!(
@@ -396,7 +412,7 @@ impl Driver<'_> {
                 }
             }
             if Instant::now() >= deadline {
-                self.fail("Calendar pointer acknowledgement deadline").await;
+                self.fail("native panel pointer acknowledgement deadline").await;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

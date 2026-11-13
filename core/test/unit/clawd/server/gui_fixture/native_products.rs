@@ -33,6 +33,12 @@ mod store_catalog {
         "/test/unit/clawd/server/gui_fixture/store_catalog.rs"
     ));
 }
+mod clipboard_history {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/clipboard_history.rs"
+    ));
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct Product {
@@ -120,11 +126,47 @@ pub(super) const WIDGETS: Product = Product {
     panel: true,
     observation: None,
 };
+pub(super) const CLIPBOARD: Product = Product {
+    name: "clipboard",
+    app: "panel-clipboard",
+    case: 31,
+    desktop_id: "com.clawos.AppletClipboard",
+    entries: &["bin/claw-applet-clipboard"],
+    ungranted: &[],
+    home_metadata: false,
+    selector: "open",
+    panel: true,
+    observation: None,
+};
 
 impl Product {
     pub(super) fn for_case(case: usize) -> Option<Self> {
-        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS]
+        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS, CLIPBOARD]
             .into_iter().find(|product| product.case == case)
+    }
+
+    fn startup_needs(self) -> Vec<Cap> {
+        if self.name == "clipboard" {
+            return vec![
+                Cap::new(Verb::CLIPBOARD_READ, Scope::name("history")),
+                Cap::new(Verb::CLIPBOARD_WRITE, Scope::name("history")),
+                Cap::new(Verb::CLIPBOARD_WRITE, Scope::name("selection")),
+                Cap::unscoped(Verb::UI_PANEL),
+            ];
+        }
+        let mut needs = Vec::new();
+        if self.panel {
+            needs.push(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
+            if self.name == "desktop-widgets" {
+                needs.push(Cap::new(Verb::SYS_OBSERVE, Scope::name("resources")));
+                needs.push(Cap::new(Verb::AGENT_OBSERVE, Scope::name("tasks")));
+            }
+            needs.push(Cap::unscoped(Verb::UI_PANEL));
+        }
+        if let Some(domain) = self.observation {
+            needs.push(Cap::new(Verb::SYS_OBSERVE, Scope::name(domain)));
+        }
+        needs
     }
 
     fn directory(self) -> std::path::PathBuf {
@@ -197,7 +239,7 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
         );
     }
     assert_eq!(payload.entrypoints, product.entries);
-    let required = if product.name == "desktop-widgets" {
+    let required = if matches!(product.name, "desktop-widgets" | "clipboard") {
         vec![format!("resources/usr/share/applications/{}.desktop", product.desktop_id)]
     } else if product.panel {
         vec![
@@ -723,26 +765,13 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 .unwrap()
                 .caps
                 .unwrap();
-            let mut expected_gui = CapSet::new();
+            let mut expected_gui = CapSet::from_caps(product.startup_needs());
             let mut expected_parent =
                 CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name(product.app))]);
             if product.home_metadata {
                 let metadata = Cap::new(Verb::FS_META, Scope::path("/run/display-home/**"));
                 expected_gui.insert(metadata.clone());
                 expected_parent.insert(metadata);
-            }
-            if product.panel {
-                expected_gui.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
-            }
-            if product.name == "desktop-widgets" {
-                expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("resources")));
-                expected_gui.insert(Cap::new(Verb::AGENT_OBSERVE, Scope::name("tasks")));
-            }
-            if product.panel {
-                expected_gui.insert(Cap::unscoped(Verb::UI_PANEL));
-            }
-            if let Some(domain) = product.observation {
-                expected_gui.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name(domain)));
             }
             assert_eq!(
                 gui, expected_gui,
@@ -761,27 +790,14 @@ async fn approve_native_startup(
     product: Product,
     parent: &str,
 ) -> Vec<crate::approvals::Request> {
-    let needs = if product.name == "desktop-widgets" {
-        vec![
-            ("data.db.read", Scope::name("calendar")),
-            ("sys.observe", Scope::name("resources")),
-            ("agent.observe", Scope::name("tasks")),
-            ("ui.panel", Scope::Wild),
-        ]
-    } else if product.panel {
-        vec![("data.db.read", Scope::name("calendar")), ("ui.panel", Scope::Wild)]
-    } else {
-        product.observation.into_iter()
-            .map(|domain| ("sys.observe", Scope::name(domain))).collect()
-    };
     let mut approved: Vec<crate::approvals::Request> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(20);
-    for (verb, scope) in needs {
+    for Cap { verb, scope } in product.startup_needs() {
         let request = loop {
             if let Some(request) = crate::approvals::list_pending_for_owner(Some(OWNER))
                 .into_iter()
                 .find(|request| {
-                    request.session == parent && request.verb == verb && request.scope == scope
+                    request.session == parent && request.verb == verb.as_str() && request.scope == scope
                 })
             {
                 break request;
@@ -840,7 +856,14 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     let editor = product.name == "editor";
     let package_owned = Path::new("/run/gui-fixture/native-store-package").exists();
     assert!(!package_owned || product.name == "store");
-    let calendar_fixture = product.panel.then(calendar_popup::Fixture::prepare);
+    let calendar_fixture = product.startup_needs().iter().any(|cap| {
+        cap.verb == Verb::DATA_DB_READ && cap.scope == Scope::name("calendar")
+    }).then(calendar_popup::Fixture::prepare);
+    let mut clipboard_fixture = if product.name == "clipboard" {
+        Some(clipboard_history::Fixture::prepare().await)
+    } else {
+        None
+    };
     let store_fixture = product.observation.is_some().then(|| store_catalog::Fixture::prepare(package_owned));
     let home = Path::new("/run/display-home");
     {
@@ -1217,6 +1240,10 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         }
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
+    if let Some(fixture) = &mut clipboard_fixture {
+        fixture.consume(&control, &mut pam, &retained, &process, &session).await;
+        assert_eq!(startup_authority(&session, &parent, product), original);
+    }
     let mut package_review = None;
     if let Some(fixture) = &store_fixture {
         if let Err(error) = fixture.consume(&retained, &process, &session, deadline, &before).await {
@@ -1350,7 +1377,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                         && record["role"] == "zwlr_layer_surface_v1"
                         && record["layer_surfaces"] == 0
                         && record["popup"]["open"] == false
-                        && (product.name != "calendar" || record["popup"]["closed"] == true)))
+                        && (product.name == "desktop-widgets" || record["popup"]["closed"] == true)))
         }) {
             break;
         }
@@ -1382,6 +1409,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             .lines()
             .any(|line| line == "populated 0")
     );
+    if let Some(fixture) = clipboard_fixture {
+        fixture.stop().await;
+    }
     println!(
         "private actual {}: real signed ELF/resources, native window{} and checked process/runtime/PAM retirement passed; {}",
         product.name,
@@ -1404,6 +1434,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "typed shell command, real PTY/shell/child identities and descendant retirement verified"
         } else if product.name == "desktop-widgets" {
             "real owner-scoped Calendar/task/resource reads under independent exact grants verified; reply decoding and exact painted card text NOT asserted"
+        } else if product.name == "clipboard" {
+            "real private OS CopyQ history read and original popup open/close verified; live selection Restore and exact painted history text NOT asserted"
         } else if product.panel {
             "original popup pixels/open/close and authenticated same-owner real SDK/Calendar reader success verified; exact returned/painted event text NOT inspected"
         } else if package_applied.is_some() {
@@ -1471,6 +1503,7 @@ fn private_native_panel() {
     let product = match std::fs::read(path).unwrap().as_slice() {
         b"calendar" => CALENDAR,
         b"desktop-widgets" => WIDGETS,
+        b"clipboard" => CLIPBOARD,
         _ => panic!("unknown protected native panel fixture selection"),
     };
     private_gui_fixture_selected(false, false, false, Some(product));

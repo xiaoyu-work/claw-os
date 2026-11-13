@@ -80,6 +80,17 @@ const WIDGET_SNAPSHOT: SnapshotProfile = SnapshotProfile {
     role: "zwlr_layer_surface_v1",
     parent_role: None,
 };
+const CLIPBOARD_SNAPSHOT: SnapshotProfile = SnapshotProfile {
+    selector: "/run/gui-public/native-clipboard-snapshot-enabled",
+    selector_schema: "claw.private-clipboard-synthetic-shm/v1",
+    frame_schema: "claw.private-clipboard-shm-frame/v1",
+    index_schema: "claw.private-clipboard-shm-index/v1",
+    file: "native-clipboard-history.shm",
+    next: "clipboard-snapshot.next",
+    magic: b"CLAWCLPSHM1\0",
+    role: "xdg_popup",
+    parent_role: Some("zwlr_layer_surface_v1"),
+};
 
 struct PassiveSnapshot {
     profile: &'static SnapshotProfile,
@@ -561,9 +572,17 @@ impl Window {
         {
             return Err("popup preceded the real configured panel pixels".into());
         }
+        let instance = self.instance.as_deref().unwrap();
+        let clipboard = synthetic_snapshot_enabled(&CLIPBOARD_SNAPSHOT, instance)?;
+        if clipboard && synthetic_snapshot_enabled(&CALENDAR_SNAPSHOT, instance)? {
+            return Err("multiple synthetic popup snapshot profiles were selected".into());
+        }
         let popup = &mut self.panel.as_mut().unwrap().popup;
         if popup.surface.is_some() || popup.closed {
-            return Err("only one real Calendar popup lifetime is in scope".into());
+            return Err("only one real native panel popup lifetime is in scope".into());
+        }
+        if clipboard {
+            popup.snapshot = PassiveSnapshot::new(&CLIPBOARD_SNAPSHOT);
         }
         let geometry = positioner.get_geometry();
         if geometry.size.w <= 0
@@ -1211,7 +1230,7 @@ mod snapshot_tests {
     fn calendar_snapshot_container_is_one_commit_and_budget_is_finite() {
         let metadata =
             serde_json::json!({"instance":"synthetic","buffer_commit":3,"stored_bytes":4});
-        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT] {
+        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT, &CLIPBOARD_SNAPSHOT] {
             let bytes = snapshot_container(profile, &metadata, &[1, 2, 3, 4]).unwrap();
             assert_eq!(&bytes[..12], profile.magic);
             let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
@@ -1235,13 +1254,13 @@ mod snapshot_tests {
 
     #[test]
     fn calendar_snapshot_selector_requires_exact_root_synthetic_instance() {
-        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT] {
+        for profile in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT, &CLIPBOARD_SNAPSHOT] {
             let mut selector = serde_json::json!({
                 "schema":profile.selector_schema,"instance":"bound-instance",
             });
             assert!(check_snapshot_selector(profile, &selector, "bound-instance").is_ok());
             assert!(check_snapshot_selector(profile, &selector, "foreign-instance").is_err());
-            for other in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT] {
+            for other in [&CALENDAR_SNAPSHOT, &STORE_SNAPSHOT, &WIDGET_SNAPSHOT, &CLIPBOARD_SNAPSHOT] {
                 if other.selector_schema != profile.selector_schema {
                     let mut foreign_profile = selector.clone();
                     foreign_profile["schema"] = other.selector_schema.into();

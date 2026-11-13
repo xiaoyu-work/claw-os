@@ -14,7 +14,7 @@ elif [[ $# == 16 && ( "${15}" == --native-calendar-only || "${15}" == --native-d
     printf 'actual Calendar consumers require the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -30,6 +30,9 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-desktop-widgets-only ]]; then
         native_product=desktop-widgets
         native_app=widget-rail
+    elif [[ "${15}" == --native-clipboard-only ]]; then
+        native_product=clipboard
+        native_app=panel-clipboard
     else
         native_product=calendar
         native_app=panel-calendar
@@ -221,7 +224,7 @@ if [[ "$gui" == 1 ]]; then
         printf 'private-native-product-v1' >/run/gui-public/native-product-enabled
         chmod 0644 /run/gui-public/native-product-enabled
     fi
-    if [[ "$native_product" == calendar || "$native_product" == desktop-widgets ]]; then
+    if [[ "$native_product" == calendar || "$native_product" == desktop-widgets || "$native_product" == clipboard ]]; then
         printf '%s' "$native_product" >/run/gui-fixture/native-panel-product
         chmod 0600 /run/gui-fixture/native-panel-product
     fi
@@ -290,7 +293,7 @@ BUS
         native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
-        native-calendar|native-desktop-widgets) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
+        native-calendar|native-desktop-widgets|native-clipboard) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
         native-store|native-store-package) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
@@ -317,7 +320,7 @@ BUS
             cp /run/user/62050/native-product-observer/window.json "$private/native-$native_product-window.json"
             chmod 0644 "$private/native-$native_product-window.json"
         fi
-        if [[ ( "$native_product" == calendar || "$native_product" == store || "$native_product" == desktop-widgets ) && -f "/run/gui-fixture/native-$native_product-consumer.json" ]]; then
+        if [[ ( "$native_product" == calendar || "$native_product" == store || "$native_product" == desktop-widgets || "$native_product" == clipboard ) && -f "/run/gui-fixture/native-$native_product-consumer.json" ]]; then
             cp "/run/gui-fixture/native-$native_product-consumer.json" "$private/native-$native_product-consumer.json"
             chmod 0644 "$private/native-$native_product-consumer.json"
             /usr/bin/python3 -I -B - "$private" "$native_product" <<'PY'
@@ -331,9 +334,10 @@ profiles = {
     "calendar": ("native-calendar-agenda.shm", b"CLAWCALSHM1\0", "claw.private-calendar"),
     "store": ("native-store-window.shm", b"CLAWSTRSHM1\0", "claw.private-store"),
     "desktop-widgets": ("native-widget-rail.shm", b"CLAWWIDSHM1\0", "claw.private-widget-rail"),
+    "clipboard": ("native-clipboard-history.shm", b"CLAWCLPSHM1\0", "claw.private-clipboard"),
 }
 assert product in profiles
-calendar = product == "calendar"
+popup = product in ("calendar", "clipboard")
 widgets = product == "desktop-widgets"
 filename, magic, prefix = profiles[product]
 
@@ -356,10 +360,10 @@ def publish(name, data):
 window = json.loads(protected(source / "window.json", 62050, 8192))
 consumer = json.loads(protected(pathlib.Path(f"/run/gui-fixture/native-{product}-consumer.json"), 0, 16384))
 assert window["instance"] == consumer["instance"]
-if calendar:
+if popup:
     assert window["popup"]["closed"]
     index = window["popup"].get("snapshot") or {}
-    assert index == (consumer.get("passive_agenda_snapshot") or {})
+    assert index == (consumer.get("passive_agenda_snapshot" if product == "calendar" else "passive_history_snapshot") or {})
     latest_commit = window["popup"]["buffer_commits"]
 else:
     assert window["closed"] and window["toplevels"] == 0
@@ -386,7 +390,7 @@ if index.get("status") == "saved" and index.get("closed") and not index.get("map
         assert frame["synthetic_fixture"] and frame["captured_live"]
         assert frame["owner_uid"] == 62050 and frame["byte_order"] == "little-endian"
         assert frame["instance"] == window["instance"] == index["instance"]
-        if calendar:
+        if popup:
             assert frame["parent_instance"] == window["instance"]
             assert frame["role"] == "xdg_popup" and frame["parent_role"] == "zwlr_layer_surface_v1"
             assert frame["geometry"] == window["popup"]["geometry"]
@@ -419,6 +423,10 @@ publish(filename.removesuffix(".shm") + "-export.json", (json.dumps({
 }) + "\n").encode())
 PY
         fi
+    fi
+    if [[ "$native_product" == clipboard && -f /run/gui-fixture/copyq-provider.log ]]; then
+        cp /run/gui-fixture/copyq-provider.log "$private/copyq-provider.log"
+        chmod 0644 "$private/copyq-provider.log"
     fi
     for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..24} session-startup file-manager native-product; do
         if [[ -f "/run/gui-fixture/pam-$case.log" ]]; then

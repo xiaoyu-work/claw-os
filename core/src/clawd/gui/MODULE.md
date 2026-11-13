@@ -311,6 +311,18 @@ separate evidence. Header contrast, hardware/default-renderer acceptance and
 other native/provider surfaces remain separate from this bounded gate, which
 does not clear full release readiness.
 
+The Clipboard candidate reuses that ignored panel fixture in a separate
+private mode. Its startup snapshot and ordinary owner reviews share one
+ordered expected-needs definition: history read/write, independent selection
+write and `ui.panel`, never Calendar, Agent or MCP rights. A real protected
+system CopyQ process owns only seeded synthetic history outside the App
+sandbox; the original popup must read it through Root and close normally.
+The provider must survive App retirement and then stop explicitly.
+This fixture deliberately uses an offscreen provider. It does not establish
+live selection Restore, active display/provider binding or complete Clipboard
+acceptance. Its distinct Root-bound popup capture has the same finite budgets;
+no raw history, user bus or App-owned CopyQ execution is admitted.
+
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
 the real immutable App-owned Editor release ELF, original installer resources
