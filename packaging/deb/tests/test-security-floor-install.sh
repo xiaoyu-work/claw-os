@@ -226,8 +226,8 @@ print(cursor)
 ' "$1" "$2"
 }
 
-V1="1:0.2.0+git100.gaaaaaaaaaaaa"
-V2="1:0.2.0+git200.gbbbbbbbbbbbb"
+V1="1:0.2.1+git100.gaaaaaaaaaaaa"
+V2="1:0.2.1+git200.gbbbbbbbbbbbb"
 V0="1:0.2.0+git50.gccccccccccc0"
 
 DEBS="$WORK/debs"
