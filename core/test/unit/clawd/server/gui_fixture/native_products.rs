@@ -1021,6 +1021,23 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         .unwrap()
         .starts_with(format!("{}/resources/usr/share:", product.directory().display()).as_bytes()));
     assert_ne!(value("HOME"), Some(b"/run/display-home".as_slice()));
+    let data_source = home.join(".local/share/cos/apps").join(product.app);
+    let data_target = if product.home_metadata {
+        Path::new("/run/cos/app-data")
+    } else {
+        data_source.as_path()
+    };
+    assert_eq!(value("COS_DATA_DIR"), Some(data_target.as_os_str().as_encoded_bytes()));
+    assert_eq!(value("HOME"), value("COS_DATA_DIR"));
+    let source = std::fs::metadata(&data_source).unwrap();
+    let exposed = std::fs::metadata(
+        PathBuf::from(format!("/proc/{}/root", process.identity.pid()))
+            .join(data_target.strip_prefix("/").unwrap()),
+    ).unwrap();
+    assert_eq!((exposed.dev(), exposed.ino()), (source.dev(), source.ino()),
+        "namespace-only private data projection changed its persistent backing");
+    assert_eq!(exposed.uid(), OWNER);
+    assert_eq!(exposed.mode() & 0o077, 0);
     assert_ne!(value("COS_MCP_SERVER"), Some(b"1".as_slice()));
     if product.ungranted.is_empty() {
         assert!(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").is_none());

@@ -384,6 +384,30 @@ pub(super) fn refuse_raw_home(
     Ok(())
 }
 
+fn private_data_outside_metadata(policy: &mut LaunchPolicy, root: &Path) -> Result<(), String> {
+    let index = policy.mounts.iter().position(|mount| mount.class == MountClass::AppData)
+        .ok_or("GUI policy has no private App data mount")?;
+    let original = policy.mounts[index].target.clone();
+    if !original.starts_with(root) {
+        return Ok(());
+    }
+    if ["HOME", "COS_DATA_DIR"].iter().any(|key| {
+        policy.env.get(*key).map(Path::new) != Some(original.as_path())
+    }) {
+        return Err("GUI private data environment differs from its App data mount".into());
+    }
+    // Private state must not repeatedly traverse the filtered Home's ancestors.
+    let target = PathBuf::from("/run/cos/app-data");
+    for key in ["HOME", "COS_DATA_DIR"] {
+        policy.env.insert(key.into(), target.to_str().unwrap().into());
+    }
+    if let Ok(relative) = policy.workdir.strip_prefix(&original) {
+        policy.workdir = target.join(relative);
+    }
+    policy.mounts[index].target = target;
+    Ok(())
+}
+
 pub(super) struct HomeMetadata {
     consent: Consent,
     path: PathBuf,
@@ -446,7 +470,8 @@ impl HomeMetadata {
             return Err("GUI Home metadata provider is not mounted".into());
         }
         refuse_raw_home(policy, &registration.home, true)?;
-        // The filtered root must precede any already-private nested App data bind.
+        private_data_outside_metadata(policy, self.consent.declaration.source.path())?;
+        // Keep the filtered root before package and transport bindings.
         policy.mounts.insert(
             0,
             Mount::read_write(&self.path, self.consent.declaration.source.path(), MountClass::Output),
