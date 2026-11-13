@@ -259,6 +259,10 @@ without changing package state or the startup grant. That decision remains
 pending and must retire with the checked window. The permission UI bytes still
 require inspection; this round does not approve Critical consent, submit a
 retained package effect or establish native Store payload self-handoff.
+Native failure evidence may also sample only the validated synthetic App's
+current metadata pathname argument on x86_64, discard it if the syscall changes,
+and report a fixed path-environment allowlist and bounded Home/data mount rows.
+This is private clean-CI diagnosis, not an App memory, path or inspection grant.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires
