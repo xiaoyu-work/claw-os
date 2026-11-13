@@ -9,7 +9,7 @@ other projects vendored here. The upstream workspace manifest is unchanged
 and excluded from the compositor workspace.
 
 Upstream trailing whitespace is preserved for byte-identical provenance.
-Repository whitespace checks remain enabled for the seven locally modified
+Repository whitespace checks remain enabled for the eight locally modified
 files; only trailing-space checks on the imported snapshot are exempted.
 
 The local production patch changes only these upstream files:
@@ -27,6 +27,10 @@ The local production patch changes only these upstream files:
   `primary_selection/device.rs`, `wlr_data_control/device.rs` and
   `ext_data_control/device.rs`: veto writes before selection/source mutation
   or callbacks. Core `StartDrag` is not a selection write.
+- `src/wayland/shell/wlr_layer/handlers.rs`: reject unsigned dimensions outside
+  the signed coordinate range with the existing `invalid_size` protocol error,
+  before geometry construction. Untrusted overflow cannot panic the compositor;
+  valid dimensions and zero-size anchor semantics are unchanged.
 
 Both defaults return `true`, preserving other Smithay consumers. The dependency
 hooks do not grant authority or enforce an OS policy by themselves. This
@@ -40,6 +44,11 @@ Revoking already-delivered transfer FDs requires the actual instance/descendant
 retirement barrier. Disclosed bytes cannot be recalled. This boundary does not
 provide CopyQ-history authority, unmediated X11 or a producer's missing grant
 acquisition path.
+
+The existing authenticated panel probe sends oversized width and height on
+separate clients, requiring the exact `invalid_size` protocol error for each.
+A subsequent ordinary panel on the same display must still configure, so
+compositor exit, a generic disconnect or a timeout cannot satisfy the check.
 
 The [private dispatch fixture](../test/selection-read/Cargo.toml) is a separate
 test-only workspace. It consumes this same source with only the Wayland
@@ -82,5 +91,5 @@ libraries, including `libpixman-1-dev`; those dependencies are not vendored.
 
 Keep dependency updates explicit: replace this snapshot only with a verified
 real upstream revision, preserve its workspace/license, reapply and review the
-seven-file logical patch, update the compositor lock, and repeat both commands.
+eight-file logical patch, update the compositor lock, and repeat both commands.
 Never edit Cargo's shared Git cache or substitute a fabricated revision.

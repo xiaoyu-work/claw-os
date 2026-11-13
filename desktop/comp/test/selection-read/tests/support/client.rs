@@ -269,7 +269,7 @@ impl Peer {
     }
 
     #[allow(dead_code)]
-    pub fn create_layer_surface(&mut self) {
+    pub fn create_layer_surface(&mut self, width: u32, height: u32) {
         let qh = self.queue.handle();
         let registry = self.connection.display().get_registry(&qh, ());
         let (id, version) = self.events.globals["wl_compositor"];
@@ -287,11 +287,19 @@ impl Peer {
             &qh,
             (),
         );
-        layer.set_size(320, 48);
+        layer.set_size(width, height);
         layer.set_keyboard_interactivity(layer_surface::KeyboardInteractivity::Exclusive);
         self.events.keyboard_serial = None;
         let configured = self.events.layer_configures;
         surface.commit();
+        if width > i32::MAX as u32 || height > i32::MAX as u32 {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.roundtrip()));
+            assert!(result.is_err(), "overflowing layer size was accepted");
+            let error = self.connection.protocol_error().expect("expected an invalid_size protocol error");
+            assert_eq!(error.object_id, layer.id().protocol_id());
+            assert_eq!(error.code, layer_surface::Error::InvalidSize as u32);
+            return;
+        }
         self.roundtrip();
         assert!(self.events.layer_configures > configured);
         assert!(self.events.keyboard_serial.is_some());

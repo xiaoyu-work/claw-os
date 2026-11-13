@@ -189,8 +189,15 @@ where
     ) {
         match request {
             zwlr_layer_surface_v1::Request::SetSize { width, height } => {
+                let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height)) else {
+                    layer_surface.post_error(
+                        zwlr_layer_surface_v1::Error::InvalidSize,
+                        "Layer surface dimensions exceed the supported coordinate range",
+                    );
+                    return;
+                };
                 let _ = with_surface_pending_state(layer_surface, |data| {
-                    data.size = (width as i32, height as i32).into();
+                    data.size = (width, height).into();
                 });
             }
             zwlr_layer_surface_v1::Request::SetAnchor { anchor } => {

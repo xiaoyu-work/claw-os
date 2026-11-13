@@ -49,8 +49,12 @@ fn peer(protocol: Protocol) -> Peer {
 }
 
 fn panel() -> Peer {
+    for (width, height) in [(u32::MAX, 48), (320, u32::MAX)] {
+        let mut invalid = peer(Protocol::Core);
+        invalid.create_layer_surface(width, height);
+    }
     let mut peer = peer(Protocol::Core);
-    peer.create_layer_surface();
+    peer.create_layer_surface(320, 48);
     peer
 }
 
