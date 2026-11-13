@@ -316,9 +316,11 @@ The Agent package provides `claw-os-capture-v1`, the typed screenshot service
 required by the Desktop package. Non-interactive App capture requires an explicit
 `desktop.capture:screen` approval in addition to the existing exact
 output-directory write permission; clipboard and interactive destination
-selection are not part of this broker route. The service launches only the
-matching root-owned native Capture client and refuses an older binary without
-its pipe mode. Screenshot MCP no longer receives the owner session bus.
+selection are not part of this broker route. The service uses its own
+Root-parent-authenticated `clawd` portal helper, not the App's legacy
+`/usr/bin/cosmic-screenshot` compatibility command or private pipe mode.
+Updating Agent updates this helper with the broker; no App identity, data or
+permission migration is introduced. Screenshot MCP receives no owner session bus.
 Direct human CLI requests preserve an already-connected stderr terminal for
 the existing OS bootstrap; headless requests need an authenticated session.
 No old permission or App identity is silently transferred, and no runtime

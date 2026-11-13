@@ -141,6 +141,8 @@ jobs:
 
       - name: Test owner-scoped Calendar reads
         run: bash scripts/ci/test-boundaries.sh calendar
+      - name: Test the OS-owned capture portal helper without an App executable
+        run: bash scripts/ci/test-boundaries.sh capture
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real

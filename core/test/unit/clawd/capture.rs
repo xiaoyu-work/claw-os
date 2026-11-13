@@ -122,12 +122,12 @@ async fn capture_requires_screen_and_exact_output_before_execution() {
         assert!(!marker.exists());
     }
     assert_eq!(
-        native_args(false),
-        ["--portal-capture-stdout", "--modal=false"]
+        helper_args(false, 7),
+        ["--capture-helper", "false", "7"]
     );
     assert_eq!(
-        native_args(true),
-        ["--portal-capture-stdout", "--modal=true"]
+        helper_args(true, 7),
+        ["--capture-helper", "true", "7"]
     );
     assert_eq!(valid[0].scope, Scope::name("screen"));
     assert_ne!(valid[1].scope, Scope::Wild);

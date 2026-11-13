@@ -174,6 +174,10 @@ cargo test -p cos <test-filter> -- --test-threads=1
 # Exact CI clippy command
 (cd core && cargo clippy -- -D warnings)
 
+# OS capture helper: private Root namespaces and a synthetic portal, no desktop.
+GITHUB_WORKSPACE="$PWD" RUNNER_TEMP="$PWD/build" \
+  bash scripts/ci/test-boundaries.sh capture
+
 # Browser crate
 cargo test -p cos-browser
 

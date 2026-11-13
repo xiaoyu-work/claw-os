@@ -92,7 +92,7 @@ and agent tasks.
 | `mail.rs`, `../mail_native.rs` | Account-scoped Thunderbird mail service and OS-owned Native Messaging multiplexer; independent read/draft/sender grants, owner service startup, stable message references and no mailbox authority for AI App stdout |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
-| `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
+| `capture.rs`, `capture/portal.rs` | Non-interactive screenshot service and Root-parent-authenticated OS portal helper; owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence; no App program outside the Host |
 | `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
 | `clipboard.rs`, `clipboard/history.rs` | Independent selection/history capabilities; owner/session-bound legacy selection and private CopyQ data relay, with no App-name entitlement. History Restore extracts the matched standard MIME data and writes through the authenticated Root display, not CopyQ's unverified clipboard target |
 | `calendar.rs`, `calendar/files.rs` | Owner-scoped Calendar read service; exact named grant, pinned live database view and bounded unprivileged reader, with no App data mount delivered to callers |
@@ -911,7 +911,13 @@ cargo test -p cos clawd:: -- --test-threads=1
 cargo test -p cos clawd::authority -- --test-threads=1
 cargo test -p cos --test clawd_broker_socket -- --test-threads=1
 cargo test -p cos --lib -- clawd::app_services extension_host::identity --test-threads=1
+cargo test -p cos --lib clawd::capture:: -- --test-threads=1
 ```
+
+`scripts/ci/test-boundaries.sh capture` additionally runs the actual `clawd`
+portal helper with an unprivileged owner inside private Root namespaces.
+Its synthetic portal covers dispatch refusal, PNG, cancellation and backend
+failure; it neither runs an App outside the Host nor claims interactive UI acceptance.
 
 The ignored
 `clawd::app_services::retirement::tests::process::service_retirement_keeps_custody_until_cleanup_succeeds`

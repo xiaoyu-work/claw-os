@@ -389,18 +389,21 @@ unchanged. Source relocation is not an identity, data or visual cutover.
 
 The OS provides `system.screenshot.capture` for Capture's shared
 non-interactive native CLI/MCP implementation.
-It accepts only authenticated `cosmic-screenshot` or non-App human sessions, an explicit
+It requires an authenticated owner/session, an explicit
 `desktop.capture:screen` grant and an exact output-directory write grant.
-The provider starts only the root-owned native portal client's
-`--portal-capture-stdout` mode in the authenticated owner's session, with a
-closed environment and bounded execution/output. PNG bytes stay inside the
+The provider starts its own `clawd --capture-helper` in the authenticated
+owner's session, with a closed environment and bounded execution/output.
+A private inherited socket authenticates the Root parent and its dispatch;
+no App executable or compatibility launcher runs outside the common Host.
+The helper subscribes before sending the correlated portal request and reads
+only bounded, single-link, owner-owned PNG data. PNG bytes stay inside the
 provider; only a cancellation or saved path returns to the App worker.
 Pinned, non-overwriting `0600` output uses the filesystem provider's durable
 task snapshots. No arbitrary program, source path, clipboard action or
 interactive destination is admitted. Screen permission uses Settings' existing
 owner/App deny gate; no capture-specific permission store is added.
-The service fails explicitly until a
-matching native Capture binary is installed; it never falls back to App calls.
+The service needs an available owner-bound screenshot portal, not an installed
+Capture App. It never falls back to App calls.
 Desktop depends on Agent's `claw-os-capture-v1` service. Screenshot MCP loses
 its direct session-bus transport; direct human CLI requests may preserve an
 already-connected terminal, but headless callers need an authenticated session.
