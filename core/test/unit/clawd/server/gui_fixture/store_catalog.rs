@@ -24,13 +24,13 @@ fn file(path: &str, data: &[u8]) {
 }
 
 impl Fixture {
-    pub(super) fn prepare() -> Self {
+    pub(super) fn prepare(package_owned: bool) -> Self {
         assert_eq!(unsafe { libc::geteuid() }, 0);
         assert_eq!(std::fs::read("/run/gui-fixture/isolated").unwrap(), b"private-v1");
         for prefix in ["/usr/share", "/var/lib", "/var/cache"] {
             for name in ["swcatalog", "app-info"] {
                 let path = format!("{prefix}/{name}");
-                directory(&path);
+                std::fs::create_dir_all(&path).unwrap();
                 let target = std::ffi::CString::new(path).unwrap();
                 assert_eq!(unsafe {
                     libc::mount(c"tmpfs".as_ptr(), target.as_ptr(), c"tmpfs".as_ptr(),
@@ -47,12 +47,22 @@ impl Fixture {
         ] {
             directory(path);
         }
-        let status = b"Package: claw-native-store-fixture\nStatus: install ok installed\n\
+        let status = if package_owned {
+            std::fs::read(STATUS).unwrap()
+        } else {
+            let status = b"Package: claw-native-store-fixture\nStatus: install ok installed\n\
 Priority: optional\nSection: misc\nArchitecture: all\nVersion: 1.0.0\n\
 Maintainer: Private Acceptance <noreply@fixture.invalid>\n\
 Description: Private controlled Store inventory\n\n".to_vec();
-        file(STATUS, &status);
-        let components = ["claw-native-store-fixture", "claw-native-store-available"]
+            file(STATUS, &status);
+            status
+        };
+        let packages = if package_owned {
+            ["claw-app-acceptance-bundle", "claw-package-acceptance-side-effect"]
+        } else {
+            ["claw-native-store-fixture", "claw-native-store-available"]
+        };
+        let components = packages
             .iter().enumerate().map(|(index, package)| format!(
                 "<component type=\"desktop-application\"><id>org.claw.fixture.Store{index}</id>\
                  <pkgname>{package}</pkgname><name>Controlled Store fixture {index}</name>\
@@ -147,28 +157,32 @@ Description: Private controlled Store inventory\n\n".to_vec();
         }
     }
 
-    pub(super) async fn search_frame(
+    pub(super) async fn input_frame(
         &self,
         retained: &RetainedInstance,
         native: &NativeProcess,
         before: &serde_json::Value,
-    ) -> Result<(), String> {
+        input: (u64, &str, &str),
+    ) -> Result<serde_json::Value, String> {
+        let (sequence, kind, value) = input;
         let instance = claw_display_control::Epoch(retained.instance.0).label();
-        let selector = serde_json::json!({
-            "schema": "claw.private-store-synthetic-shm/v1", "instance": instance,
-        });
-        let mut selected = std::fs::OpenOptions::new().write(true).create_new(true)
-            .mode(0o644).custom_flags(libc::O_NOFOLLOW)
-            .open("/run/gui-public/native-store-snapshot-enabled").map_err(|error| error.to_string())?;
-        selected.set_permissions(std::fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())?;
-        selected.write_all(&serde_json::to_vec(&selector).unwrap()).map_err(|error| error.to_string())?;
-        drop(selected);
+        if sequence == 1 {
+            let selector = serde_json::json!({
+                "schema": "claw.private-store-synthetic-shm/v1", "instance": instance,
+            });
+            let mut selected = std::fs::OpenOptions::new().write(true).create_new(true)
+                .mode(0o644).custom_flags(libc::O_NOFOLLOW)
+                .open("/run/gui-public/native-store-snapshot-enabled").map_err(|error| error.to_string())?;
+            selected.set_permissions(std::fs::Permissions::from_mode(0o644)).map_err(|error| error.to_string())?;
+            selected.write_all(&serde_json::to_vec(&selector).unwrap()).map_err(|error| error.to_string())?;
+            drop(selected);
+        }
         let directory = Path::new(OBSERVER).parent().unwrap();
         let next = directory.join("keyboard-command.next");
         let request = serde_json::json!({
-            "schema": "claw.private-keyboard/v1", "sequence": 1, "instance": instance,
+            "schema": "claw.private-keyboard/v1", "sequence": sequence, "instance": instance,
             "surface": "primary", "expires_ms": claw_display_control::wire::monotonic_ms().unwrap() + 5_000,
-            "kind": "text", "value": "prive",
+            "kind": kind, "value": value,
         });
         let mut command = std::fs::OpenOptions::new().write(true).create_new(true)
             .mode(0o644).custom_flags(libc::O_NOFOLLOW)
@@ -195,10 +209,11 @@ Description: Private controlled Store inventory\n\n".to_vec();
                 (bytes.len() <= 1024).then(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok()).flatten()
             })();
             if let Some(ack) = ack.filter(|ack| ack["schema"] == "claw.private-keyboard/v1"
-                && ack["instance"] == instance && ack["sequence"] == 1
-                && ack["surface"] == "primary" && ack["keyboard_events_sent"] == true) {
+                && ack["instance"] == instance && ack["sequence"] == sequence
+                && ack["surface"] == "primary"
+                && ack[if kind == "pointer" { "pointer_events_sent" } else { "keyboard_events_sent" }] == true) {
                 let delivery_commit = ack["buffer_commits_at_delivery"].as_u64()
-                    .ok_or("ordinary keyboard acknowledgement omitted its actual delivery frame")?;
+                    .ok_or("ordinary input acknowledgement omitted its actual delivery frame")?;
                 if let Some(record) = observe().filter(|record| {
                     buffered_window(record, &instance) && record["app_id"] == STORE.desktop_id
                         && record["buffer_commits"].as_u64().is_some_and(|count| {
@@ -213,18 +228,25 @@ Description: Private controlled Store inventory\n\n".to_vec();
                 }
             }
             if Instant::now() >= deadline {
-                return Err("actual Store ordinary search/passive frame observation deadline".into());
+                return Err(format!("actual Store ordinary input {sequence}/passive frame observation deadline"));
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
         let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(REPORT).unwrap()).unwrap();
-        report["ordinary_search"] = "prive".into();
-        report["ordinary_keyboard_events_sent"] = true.into();
+        if kind == "text" {
+            report["ordinary_search"] = value.into();
+            report["ordinary_keyboard_events_sent"] = true.into();
+            report["window_after_search"] = captured.clone();
+        } else {
+            report["ordinary_selection"] = serde_json::json!({
+                "kind": kind, "value": value, "sequence": sequence, "events_sent": true,
+                "window": captured,
+            });
+        }
         report["buffer_commits_at_input_delivery"] = delivery_commit.into();
         report["passive_window_snapshot"] = captured["snapshot"].clone();
-        report["window_after_search"] = captured;
         report["coverage"] = "Actual signed native Store reached real Root catalog/inventory/update reads and a new authenticated configured frame after ordinary search keys. Passive own-instance bytes are evidence for inspection, not an automated exact-entry text or reply-decode assertion; payload UI self-handoff remains separate.".into();
         std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap()).map_err(|error| error.to_string())?;
-        Ok(())
+        Ok(captured)
     }
 }

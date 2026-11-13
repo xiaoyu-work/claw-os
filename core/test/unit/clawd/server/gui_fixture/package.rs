@@ -55,7 +55,7 @@ pub(super) fn require_namespaces() {
 }
 
 impl Repository {
-    pub(super) fn start() -> Self {
+    pub(super) fn start(native_store: bool) -> Self {
         require_namespaces();
         std::fs::create_dir_all("/run/lock").unwrap();
         std::fs::set_permissions("/run/lock", std::fs::Permissions::from_mode(0o1777)).unwrap();
@@ -65,7 +65,7 @@ impl Repository {
         let support = Path::new(BASE).join("payloads/support/usr/lib/cos/python");
         std::fs::create_dir_all(&support).unwrap();
         std::fs::write(support.join("native_package_support.py"), b"VALUE = 'real separately dpkg-owned support'\n").unwrap();
-        plumbing("repository-native-package");
+        plumbing(if native_store { "repository-native-store" } else { "repository-native-package" });
         let log = std::fs::File::create(Path::new(BASE).join("native-package-http.log")).unwrap();
         let mut command = ProcessCommand::new("/usr/bin/python3");
         command.args(["-I", "-B", PLUMBING, "serve"]).env_clear()

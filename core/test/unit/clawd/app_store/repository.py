@@ -9,6 +9,7 @@ import gzip
 import http.server
 import os
 from pathlib import Path
+import shutil
 import socket
 import struct
 import subprocess
@@ -155,8 +156,19 @@ def run(*arguments, cwd=BASE, input=None):
     return result.stdout
 
 
-def repository(*, native_package=False):
+def repository(*, native_package=False, native_store=False):
     require_private_mounts()
+    if native_store:
+        for payload in ("bundle", "support"):
+            for name in ("usr", "usr/lib", "usr/lib/cos", "usr/lib/cos/apps"):
+                directory = BASE / "payloads" / payload / name
+                directory.mkdir(parents=True, exist_ok=True)
+                directory.chmod(0o755)
+        shutil.copytree(
+            "/usr/lib/cos/apps/cosmic-store",
+            BASE / "payloads/bundle/usr/lib/cos/apps/cosmic-store",
+            symlinks=True,
+        )
     for directory in (
         "/var/lib/dpkg/info", "/var/lib/dpkg/updates", "/var/lib/dpkg/triggers",
         "/var/lib/apt/lists/partial", "/var/cache/apt/archives/partial",
@@ -186,6 +198,7 @@ def repository(*, native_package=False):
     marker = effect / "usr/lib/cos/fixture-side-effect"
     marker.parent.mkdir(parents=True)
     marker.write_text("A normal, successful private package install\n")
+    architecture = run("/usr/bin/dpkg", "--print-architecture").decode().strip()
     for payload, package, dependency in (
         ("bundle", BUNDLE, f"Depends: {SUPPORT} (= {VERSION})\n"),
         ("support", SUPPORT, ""),
@@ -195,8 +208,9 @@ def repository(*, native_package=False):
         control = root / "DEBIAN"
         control.mkdir(mode=0o755)
         control.chmod(0o755)
+        payload_arch = architecture if native_store and package == BUNDLE else "all"
         (control / "control").write_text(
-            f"Package: {package}\nVersion: {VERSION}\nArchitecture: all\n"
+            f"Package: {package}\nVersion: {VERSION}\nArchitecture: {payload_arch}\n"
             "Section: misc\nPriority: optional\n"
             "Maintainer: Private Acceptance <noreply@fixture.invalid>\n"
             f"{dependency}Description: Isolated signed App delivery acceptance fixture\n"
@@ -222,9 +236,8 @@ def repository(*, native_package=False):
             postinst.chmod(0o755)
         run(
             "/usr/bin/dpkg-deb", "--root-owner-group", "-Znone", "--build",
-            str(root), str(pool / f"{package}_{VERSION}_all.deb"),
+            str(root), str(pool / f"{package}_{VERSION}_{payload_arch}.deb"),
         )
-    architecture = run("/usr/bin/dpkg", "--print-architecture").decode().strip()
     suite = repo / "dists/stable"
     index = suite / f"main/binary-{architecture}"
     index.mkdir(parents=True)
@@ -268,6 +281,18 @@ def repository(*, native_package=False):
         f"URIs: http://127.0.0.1:{PORT}\nSuites: stable\nComponents: main\n"
         f"Architectures: {architecture}\nSigned-By: /etc/apt/keyrings/fixture.gpg\n"
     )
+    if native_store:
+        run(
+            "/usr/bin/dpkg", "--install",
+            str(pool / f"{SUPPORT}_{VERSION}_all.deb"),
+            str(pool / f"{BUNDLE}_{VERSION}_{architecture}.deb"),
+        )
+        owner = run(
+            "/usr/bin/dpkg-query", "--search",
+            "/usr/lib/cos/apps/cosmic-store/bin/cosmic-store",
+        ).decode().strip()
+        if owner != f"{BUNDLE}: /usr/lib/cos/apps/cosmic-store/bin/cosmic-store":
+            raise RuntimeError("actual Store payload has no exact private dpkg owner")
 
 
 def serve():
@@ -318,6 +343,8 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["repository-native-package"]:
         # Preserve the original SIDE_EFFECT postinst/quarantine acceptance.
         repository(native_package=True)
+    elif sys.argv[1:] == ["repository-native-store"]:
+        repository(native_package=True, native_store=True)
     elif sys.argv[1:] == ["serve"]:
         serve()
     elif sys.argv[1:] == ["update"]:
@@ -325,4 +352,4 @@ if __name__ == "__main__":
     elif sys.argv[1:] == ["catalog"]:
         catalog()
     else:
-        raise SystemExit("usage: repository.py {isolate|repository|repository-native-package|serve|update|catalog}")
+        raise SystemExit("usage: repository.py {isolate|repository|repository-native-package|repository-native-store|serve|update|catalog}")

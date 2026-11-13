@@ -291,7 +291,7 @@ display() {
     cargo build -p cos --locked --bin cos --bin claw-display-host \
         --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
         --bin claw-file-manager
-    if [[ "$selection" == native-package ]]; then
+    if [[ "$selection" == native-package || "$selection" == native-store ]]; then
         local program
         for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare bwrap setfacl; do
             command -v "$program" >/dev/null
@@ -318,49 +318,58 @@ display() {
     cc -std=c11 -Wall -Wextra -Werror \
         crates/claw-display-login/test/fixtures/pam_login.c \
         -lpam -ldl -o "$CARGO_TARGET_DIR/pam-login-fixture"
-    private="$GITHUB_WORKSPACE/build/$selection-authenticated.$BASHPID"
     mkdir -p "$GITHUB_WORKSPACE/build"
-    mkdir -m0700 "$private"
-    local selectors=()
     if [[ "$selection" == display || "$selection" == native-fs || "$selection" == native-editor || "$selection" == native-files ]]; then
         test -c /dev/fuse
     fi
-    if [[ "$selection" == native-fs ]]; then
-        selectors=(--native-fs-only)
-    elif [[ "$selection" == native-calendar ]]; then
-        selectors=("--native-calendar-only" "$GITHUB_WORKSPACE/build/native-calendar-input"
-            "$CARGO_TARGET_DIR/native-calendar-service/debug/claw-calendar-reader")
-    elif [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-store ]]; then
-        selectors=("--$selection-only" "$GITHUB_WORKSPACE/build/$selection-input")
-    elif [[ "$selection" == file-manager ]]; then
-        selectors=(--file-manager-only)
-    elif [[ "$selection" == native-package ]]; then
-        selectors=(--native-package-only)
+    local rounds=("$selection")
+    if [[ "$selection" == native-store ]]; then
+        rounds+=(native-store-package)
     fi
-    local fixture_timeout=240
-    if [[ "$selection" == display ]]; then
-        # The full lane includes separate protected metadata and content cases.
-        fixture_timeout=360
-    fi
-    local isolated=(sudo timeout "$fixture_timeout" unshare --mount --net --ipc --uts --fork)
-    if [[ "$selection" == native-package ]]; then
-        isolated=(sudo timeout --kill-after=5 "$fixture_timeout" unshare --mount --pid --net --ipc --uts --fork --mount-proc --kill-child=KILL
-            env "COS_APP_APT_PARENT_MNT=$(readlink /proc/self/ns/mnt)"
-                "COS_APP_APT_PARENT_PID=$(readlink /proc/self/ns/pid)"
-                "COS_APP_APT_PARENT_NET=$(readlink /proc/self/ns/net)"
-                "COS_APP_APT_TEST_HOOK=$CARGO_TARGET_DIR/debug/claw-app-apt-hook"
-                "COS_APP_APT_TEST_HOST=$CARGO_TARGET_DIR/debug/claw-extension-host")
-    fi
-    "${isolated[@]}" bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
-        "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
-        "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
-        "$CARGO_TARGET_DIR/debug/libpam_claw_display.so" \
-        "$CARGO_TARGET_DIR/pam-login-fixture" "$private" \
-        "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
-        "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
-        "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session" \
-        "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop \
-        "${selectors[@]}"
+    local fixture_mode
+    for fixture_mode in "${rounds[@]}"; do
+        private="$GITHUB_WORKSPACE/build/$fixture_mode-authenticated.$BASHPID"
+        mkdir -m0700 "$private"
+        local selectors=()
+        if [[ "$fixture_mode" == native-fs ]]; then
+            selectors=(--native-fs-only)
+        elif [[ "$fixture_mode" == native-calendar ]]; then
+            selectors=("--native-calendar-only" "$GITHUB_WORKSPACE/build/native-calendar-input"
+                "$CARGO_TARGET_DIR/native-calendar-service/debug/claw-calendar-reader")
+        elif [[ "$fixture_mode" == native-store-package ]]; then
+            selectors=(--native-store-package-only "$GITHUB_WORKSPACE/build/native-store-input")
+        elif [[ "$fixture_mode" == native-editor || "$fixture_mode" == native-files || "$fixture_mode" == native-terminal || "$fixture_mode" == native-store ]]; then
+            selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input")
+        elif [[ "$fixture_mode" == file-manager ]]; then
+            selectors=(--file-manager-only)
+        elif [[ "$fixture_mode" == native-package ]]; then
+            selectors=(--native-package-only)
+        fi
+        local fixture_timeout=240
+        if [[ "$fixture_mode" == display ]]; then
+            # The full lane includes separate protected metadata and content cases.
+            fixture_timeout=360
+        fi
+        local isolated=(sudo timeout "$fixture_timeout" unshare --mount --net --ipc --uts --fork)
+        if [[ "$fixture_mode" == native-package || "$fixture_mode" == native-store-package ]]; then
+            isolated=(sudo timeout --kill-after=5 "$fixture_timeout" unshare --mount --pid --net --ipc --uts --fork --mount-proc --kill-child=KILL
+                env "COS_APP_APT_PARENT_MNT=$(readlink /proc/self/ns/mnt)"
+                    "COS_APP_APT_PARENT_PID=$(readlink /proc/self/ns/pid)"
+                    "COS_APP_APT_PARENT_NET=$(readlink /proc/self/ns/net)"
+                    "COS_APP_APT_TEST_HOOK=$CARGO_TARGET_DIR/debug/claw-app-apt-hook"
+                    "COS_APP_APT_TEST_HOST=$CARGO_TARGET_DIR/debug/claw-extension-host")
+        fi
+        "${isolated[@]}" bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
+            "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
+            "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
+            "$CARGO_TARGET_DIR/debug/libpam_claw_display.so" \
+            "$CARGO_TARGET_DIR/pam-login-fixture" "$private" \
+            "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
+            "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
+            "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session" \
+            "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop \
+            "${selectors[@]}"
+    done
     if [[ "$selection" != display ]]; then
         return
     fi

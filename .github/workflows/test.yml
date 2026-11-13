@@ -248,7 +248,7 @@ jobs:
             build-essential pkg-config libpam0g-dev libxkbcommon-dev libwayland-dev \
             bubblewrap python3-idna openssl dbus-daemon iproute2 acl binutils
       - name: Install private native package fixture dependencies
-        if: matrix.mode == 'native-package'
+        if: matrix.mode == 'native-package' || matrix.mode == 'native-store'
         run: |
           sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
       - name: Install real native product build and software-renderer prerequisites
@@ -315,7 +315,7 @@ jobs:
       - name: Test actual Calendar ELF Layer Shell pixels, protected owner review and checked retirement
         if: matrix.mode == 'native-calendar'
         run: bash scripts/ci/test-boundaries.sh native-calendar
-      - name: Test actual Store ELF ordinary catalog review, controlled SDK reads and checked retirement
+      - name: Test actual Store catalog pixels, isolated dpkg-owned UI and checked retirement
         if: matrix.mode == 'native-store'
         run: bash scripts/ci/test-boundaries.sh native-store
       - name: Retain exact native product input and compositor observations
@@ -326,10 +326,10 @@ jobs:
           path: |
             build/${{ matrix.mode }}-input/app-sources.json
             build/${{ matrix.mode }}-input/${{ matrix.mode }}.json
-            build/${{ matrix.mode }}-authenticated.*/${{ matrix.mode }}*.json
-            build/${{ matrix.mode }}-authenticated.*/pam-native-product.log
-            build/${{ matrix.mode }}-authenticated.*/native-calendar-agenda.shm
-            build/${{ matrix.mode }}-authenticated.*/native-store-window.shm
+            build/${{ matrix.mode }}*-authenticated.*/${{ matrix.mode }}*.json
+            build/${{ matrix.mode }}*-authenticated.*/pam-native-product.log
+            build/${{ matrix.mode }}*-authenticated.*/native-calendar-agenda.shm
+            build/${{ matrix.mode }}*-authenticated.*/native-store-window.shm
           if-no-files-found: error
           retention-days: 7
 

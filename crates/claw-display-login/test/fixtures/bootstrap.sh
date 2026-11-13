@@ -14,7 +14,7 @@ elif [[ $# == 16 && "${15}" == --native-calendar-only ]]; then
     printf 'actual Calendar consumer requires the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -24,7 +24,7 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-terminal-only ]]; then
         native_product=terminal
         native_app=cosmic-term
-    elif [[ "${15}" == --native-store-only ]]; then
+    elif [[ "${15}" == --native-store-only || "${15}" == --native-store-package-only ]]; then
         native_product=store
         native_app=cosmic-store
     else
@@ -32,9 +32,12 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
         native_app=panel-calendar
     fi
     selection="native-$native_product"
+    if [[ "${15}" == --native-store-package-only ]]; then
+        selection=native-store-package
+    fi
     native_product_input=$(realpath -- "${16}")
     [[ -d "$native_product_input/$native_app" && ! -L "$native_product_input/$native_app" \
-        && -f "$native_product_input/$selection.json" && ! -L "$native_product_input/$selection.json" ]] || exit 64
+        && -f "$native_product_input/native-$native_product.json" && ! -L "$native_product_input/native-$native_product.json" ]] || exit 64
     set -- "${@:1:14}"
 elif [[ $# == 15 ]]; then
     case "${15}" in
@@ -46,8 +49,12 @@ elif [[ $# == 15 ]]; then
     esac
     set -- "${@:1:14}"
 fi
+package_fixture=0
+if [[ "$selection" == native-package || "$selection" == native-store-package ]]; then
+    package_fixture=1
+fi
 [[ "$EUID" == 0 && ( $# == 6 || $# == 14 ) ]] || exit 64
-if [[ "$selection" != native-package ]]; then
+if [[ "$package_fixture" == 0 ]]; then
     [[ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)" ]] || exit 64
 fi
 registry=$(realpath -- "$1")
@@ -59,7 +66,7 @@ private=$(realpath -- "$6")
 gui=0
 if [[ $# == 14 ]]; then
     gui=1
-    if [[ "$selection" != native-package ]]; then
+    if [[ "$package_fixture" == 0 ]]; then
         [[ "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)" ]] || exit 64
     fi
     cos=$(realpath -- "$7")
@@ -77,7 +84,7 @@ fi
 [[ -x "$registry" && -x "$host" && -x "$compositor" && -f "$pam_module" ]] || exit 64
 [[ -x "$pam_fixture" && -d "$private" && "$private" != / ]] || exit 64
 mount --make-rprivate /
-if [[ "$selection" == native-package ]]; then
+if [[ "$package_fixture" == 1 ]]; then
     package_setup=$(realpath -- core/test/unit/clawd/server/gui_fixture/package_setup.py)
     /usr/bin/python3 -I -B "$package_setup" isolate
 else
@@ -87,7 +94,7 @@ else
     mount -t overlay overlay \
         -o "lowerdir=/usr,upperdir=$private/usr-upper,workdir=$private/usr-work" /usr
 fi
-if [[ "$gui" == 1 && "$selection" != native-package ]]; then
+if [[ "$gui" == 1 && "$package_fixture" == 0 ]]; then
     mkdir "$private/etc-upper" "$private/etc-work"
     mount -t overlay overlay \
         -o "lowerdir=/etc,upperdir=$private/etc-upper,workdir=$private/etc-work" /etc
@@ -113,7 +120,7 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$gui_runner" /usr/local/bin/claw-gui-runner
     install -m0755 "$app_runner" /usr/local/bin/claw-app-runner
     install -m0755 "$session" /usr/local/bin/claw-display-session
-    if [[ "$selection" != native-package ]]; then
+    if [[ "$package_fixture" == 0 ]]; then
         install -m0755 "$cosmic_session" /usr/bin/cosmic-session
         install -m0755 "$file_manager" /usr/lib/cos/bin/claw-file-manager
         install -Dm0644 "$file_manager_autostart" /etc/xdg/autostart/claw-file-manager.desktop
@@ -145,7 +152,7 @@ hash=$(printf '%s\n' 'private-disposable-display-fixture-password' | openssl pas
 printf 'root:!:20000:0:99999:7:::\nclaw-display-test:%s:20000:0:99999:7:::\nclaw-display-other:!:20000:0:99999:7:::\n' "$hash" \
     >"$private/shadow"
 chmod 0600 "$private/shadow"
-if [[ "$selection" == native-package ]]; then
+if [[ "$package_fixture" == 1 ]]; then
     /usr/bin/python3 -I -B "$package_setup" accounts "$private"
 fi
 mount --bind "$private/passwd" /etc/passwd
@@ -206,10 +213,14 @@ if [[ "$gui" == 1 ]]; then
     install -d -m0700 /run/gui-fixture
     install -d -m0755 /run/gui-public
     if [[ -n "$native_product" ]]; then
-        install -m0644 "$native_product_input/$selection.json" "/run/gui-fixture/$selection.json"
+        install -m0644 "$native_product_input/native-$native_product.json" "/run/gui-fixture/native-$native_product.json"
         install -d -m0700 -o62050 -g62050 /run/user/62050/native-product-observer
         printf 'private-native-product-v1' >/run/gui-public/native-product-enabled
         chmod 0644 /run/gui-public/native-product-enabled
+    fi
+    if [[ "$selection" == native-store-package ]]; then
+        printf 'private-store-package-v1' >/run/gui-fixture/native-store-package
+        chmod 0600 /run/gui-fixture/native-store-package
     fi
     printf 'private-v1' >/run/gui-public/isolated
     chmod 0644 /run/gui-public/isolated
@@ -273,17 +284,17 @@ BUS
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
         native-calendar) fixture_test=clawd::server::gui_fixture::native_products::private_native_calendar ;;
-        native-store) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
+        native-store|native-store-package) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
     esac
     listing=$("$registry" --list)
     grep -Fx "$fixture_test: test" <<< "$listing" >/dev/null
-    if [[ "$selection" == native-package ]]; then
+    if [[ "$package_fixture" == 1 ]]; then
         grep -Fx 'clawd::server::gui_fixture::package::private_native_package_owner: test' <<< "$listing" >/dev/null
     fi
     grep -Fx 'clawd::server::gui_fixture::file_manager::private_file_manager_client: test' \
         <<< "$listing" >/dev/null
-    if [[ "$selection" == native-package ]]; then
+    if [[ "$package_fixture" == 1 ]]; then
         # PID 1 supervises; authenticated Root providers require pid > 1.
         "$registry" --exact "$fixture_test" --ignored --nocapture --test-threads=1 &
         registry_pid=$!
@@ -293,11 +304,11 @@ BUS
         "$registry" --exact "$fixture_test" --ignored --nocapture --test-threads=1 || result=$?
     fi
     if [[ -n "$native_product" ]]; then
-        cp "/run/gui-fixture/$selection.json" "$private/$selection.json"
-        chmod 0644 "$private/$selection.json"
+        cp "/run/gui-fixture/native-$native_product.json" "$private/native-$native_product.json"
+        chmod 0644 "$private/native-$native_product.json"
         if [[ -f /run/user/62050/native-product-observer/window.json ]]; then
-            cp /run/user/62050/native-product-observer/window.json "$private/$selection-window.json"
-            chmod 0644 "$private/$selection-window.json"
+            cp /run/user/62050/native-product-observer/window.json "$private/native-$native_product-window.json"
+            chmod 0644 "$private/native-$native_product-window.json"
         fi
         if [[ ( "$native_product" == calendar || "$native_product" == store ) && -f "/run/gui-fixture/native-$native_product-consumer.json" ]]; then
             cp "/run/gui-fixture/native-$native_product-consumer.json" "$private/native-$native_product-consumer.json"
