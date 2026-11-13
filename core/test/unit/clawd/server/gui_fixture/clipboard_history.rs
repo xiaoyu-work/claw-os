@@ -103,7 +103,9 @@ impl Fixture {
                 && record["params"]["session"] == session).collect::<Vec<_>>();
             assert!(requests.len() <= 1, "unexpected Clipboard history query repetition");
             if let Some(request) = requests.first() {
-                assert_eq!(request["ok"], true);
+                if request["ok"] != true {
+                    driver.fail(&format!("Clipboard real history request failed: {request}")).await;
+                }
                 assert_eq!(request["client"]["uid"], OWNER);
                 assert_eq!(request["params"]["action"], "history-list");
                 let cap = crate::clawd::authority::audit::CapFacts::of(
