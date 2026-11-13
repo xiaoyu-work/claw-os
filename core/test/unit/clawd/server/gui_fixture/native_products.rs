@@ -1059,6 +1059,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         calendar_popup::run(&control, &mut pam, &retained, &process, &session, fixture).await;
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
+    let mut package_review = None;
     if let Some(fixture) = &store_fixture {
         if let Err(error) = fixture.consume(&retained, &process, &session, deadline, &before).await {
             renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
@@ -1069,12 +1070,19 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         };
         if package_owned {
             let mut frame = searched;
-            for input in [(2, "pointer", "500,80"), (3, "pointer", "540,230")] {
+            for input in [
+                (2, "pointer", "500,80"), (3, "pointer", "540,230"),
+                (4, "pointer", "600,350"),
+            ] {
                 frame = match fixture.input_frame(&retained, &process, &frame, input).await {
                     Ok(frame) => frame,
                     Err(error) => renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await,
                 };
             }
+            package_review = Some(match fixture.package_review(&retained, &process, &session).await {
+                Ok(review) => review,
+                Err(error) => renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await,
+            });
         }
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
@@ -1137,6 +1145,12 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     }
     if let Some(fixture) = &store_fixture {
         fixture.verify_after_retirement();
+    }
+    if let Some(review) = &package_review {
+        assert!(matches!(
+            crate::approvals::status_for_owner(&review.id, Some(OWNER)),
+            crate::approvals::RequestStatus::Denied
+        ));
     }
     assert!(
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()))
