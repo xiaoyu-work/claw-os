@@ -134,7 +134,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
                 _ => return Err(format!("actual Store received raw system state or bus: {path}")),
             }
         }
-        self.verify_after_retirement();
+        self.verify_after_retirement(false);
         let report = serde_json::json!({
             "schema": "claw.private-native-store-consumer/v1",
             "instance": claw_display_control::Epoch(retained.instance.0).label(),
@@ -150,9 +150,11 @@ Description: Private controlled Store inventory\n\n".to_vec();
         Ok(())
     }
 
-    pub(super) fn verify_after_retirement(&self) {
+    pub(super) fn verify_after_retirement(&self, package_removed: bool) {
         assert_eq!(std::fs::read(CATALOG).unwrap(), self.catalog);
-        assert_eq!(std::fs::read(STATUS).unwrap(), self.status);
+        if !package_removed {
+            assert_eq!(std::fs::read(STATUS).unwrap(), self.status);
+        }
         for path in ["/var/cache/swcatalog", "/var/cache/app-info"] {
             assert!(std::fs::read_dir(path).unwrap().next().is_none());
         }
@@ -198,7 +200,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
         review.validate().map_err(|error| error.to_string())?;
         assert_eq!(review.kind, ReviewKind::Capability);
         assert_eq!(review.status, ReviewStatus::Pending);
-        self.verify_after_retirement();
+        self.verify_after_retirement(false);
         let mut report: serde_json::Value = serde_json::from_slice(
             &std::fs::read(REPORT).unwrap(),
         ).unwrap();
@@ -212,13 +214,14 @@ Description: Private controlled Store inventory\n\n".to_vec();
         Ok(pending)
     }
 
-    pub(super) async fn input_frame(
+    async fn send_input(
         &self,
         retained: &RetainedInstance,
         native: &NativeProcess,
-        before: &serde_json::Value,
         input: (u64, &str, &str),
-    ) -> Result<serde_json::Value, String> {
+        deadline: Instant,
+    ) -> Result<u64, String> {
+        check_native_process(retained, native)?;
         let (sequence, kind, value) = input;
         let instance = claw_display_control::Epoch(retained.instance.0).label();
         if sequence == 1 {
@@ -246,10 +249,7 @@ Description: Private controlled Store inventory\n\n".to_vec();
         command.write_all(&serde_json::to_vec(&request).unwrap()).map_err(|error| error.to_string())?;
         drop(command);
         std::fs::rename(next, directory.join("keyboard-command.json")).map_err(|error| error.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(25);
-        let baseline = before["buffer_commits"].as_u64().unwrap();
-        let (captured, delivery_commit) = loop {
-            check_native_process(retained, native)?;
+        loop {
             let ack = (|| {
                 let file = std::fs::OpenOptions::new().read(true)
                     .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -267,20 +267,42 @@ Description: Private controlled Store inventory\n\n".to_vec();
                 && ack["instance"] == instance && ack["sequence"] == sequence
                 && ack["surface"] == "primary"
                 && ack[if kind == "pointer" { "pointer_events_sent" } else { "keyboard_events_sent" }] == true) {
-                let delivery_commit = ack["buffer_commits_at_delivery"].as_u64()
-                    .ok_or("ordinary input acknowledgement omitted its actual delivery frame")?;
-                if let Some(record) = observe().filter(|record| {
-                    buffered_window(record, &instance) && record["app_id"] == STORE.desktop_id
-                        && record["buffer_commits"].as_u64().is_some_and(|count| {
-                            count > baseline && count > delivery_commit
-                        })
-                        && record["snapshot"]["status"] == "saved"
-                        && record["snapshot"]["snapshot_commit"] == record["buffer_commits"]
-                        && record["snapshot"]["latest_buffer_commit"] == record["buffer_commits"]
-                        && record["snapshot"]["matches_current_configure"] == true
-                }) {
-                    break (record, delivery_commit);
-                }
+                return ack["buffer_commits_at_delivery"].as_u64()
+                    .ok_or_else(|| "ordinary input acknowledgement omitted its actual delivery frame".into());
+            }
+            check_native_process(retained, native)?;
+            if Instant::now() >= deadline {
+                return Err(format!("actual Store ordinary input {sequence} delivery deadline"));
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    pub(super) async fn input_frame(
+        &self,
+        retained: &RetainedInstance,
+        native: &NativeProcess,
+        before: &serde_json::Value,
+        input: (u64, &str, &str),
+    ) -> Result<serde_json::Value, String> {
+        let deadline = Instant::now() + Duration::from_secs(25);
+        let delivery_commit = self.send_input(retained, native, input, deadline).await?;
+        let (sequence, kind, value) = input;
+        let instance = claw_display_control::Epoch(retained.instance.0).label();
+        let baseline = before["buffer_commits"].as_u64().unwrap();
+        let captured = loop {
+            check_native_process(retained, native)?;
+            if let Some(record) = observe().filter(|record| {
+                buffered_window(record, &instance) && record["app_id"] == STORE.desktop_id
+                    && record["buffer_commits"].as_u64().is_some_and(|count| {
+                        count > baseline && count > delivery_commit
+                    })
+                    && record["snapshot"]["status"] == "saved"
+                    && record["snapshot"]["snapshot_commit"] == record["buffer_commits"]
+                    && record["snapshot"]["latest_buffer_commit"] == record["buffer_commits"]
+                    && record["snapshot"]["matches_current_configure"] == true
+            }) {
+                break record;
             }
             if Instant::now() >= deadline {
                 return Err(format!("actual Store ordinary input {sequence}/passive frame observation deadline"));
@@ -303,5 +325,125 @@ Description: Private controlled Store inventory\n\n".to_vec();
         report["coverage"] = "Actual signed native Store reached real Root catalog/inventory/update reads and a new authenticated configured frame after ordinary search keys. Passive own-instance bytes are evidence for inspection, not an automated exact-entry text or reply-decode assertion; payload UI self-handoff remains separate.".into();
         std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap()).map_err(|error| error.to_string())?;
         Ok(captured)
+    }
+
+    pub(super) async fn self_handoff(
+        &self,
+        retained: &RetainedInstance,
+        native: &NativeProcess,
+        session: &str,
+    ) -> Result<serde_json::Value, String> {
+        use clawd_client::system_review::{
+            ReviewAction, ReviewDecision, ReviewKind, ReviewStatus, SystemReview,
+        };
+
+        let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(REPORT).unwrap()).unwrap();
+        report["permission_before_continuation"] = report["pending_package_permission"].take();
+        report["critical_decision_applied"] = true.into();
+        report["package_effect_outcome"] = "unconfirmed".into();
+        std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap())
+            .map_err(|error| error.to_string())?;
+        assert!(owner_native_json(&["package-transactions"]).await["transactions"]
+            .as_array().unwrap().is_empty(), "Critical approval alone accepted a package effect");
+        self.verify_after_retirement(false);
+        let before = observe().ok_or("actual Store permission UI is unavailable")?;
+        self.input_frame(retained, native, &before, (5, "pointer", "788,580")).await?;
+        let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(REPORT).unwrap()).unwrap();
+        report["package_effect_outcome"] = "unconfirmed".into();
+        std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap())
+            .map_err(|error| error.to_string())?;
+        self.send_input(
+            retained, native, (6, "pointer", "620,570"),
+            Instant::now() + Duration::from_secs(5),
+        ).await?;
+
+        let deadline = Instant::now() + Duration::from_secs(45);
+        let mut global_stop = None;
+        let applied = loop {
+            let records = owner_native_json(&["package-transactions"]).await;
+            let records = records["transactions"].as_array().unwrap();
+            if let Some(record) = records.first() {
+                assert_eq!(records.len(), 1, "one UI continuation created multiple transactions");
+                assert_eq!(record["app_id"], STORE.app);
+                assert_eq!(record["session"], session);
+                assert_eq!(record["operation"], serde_json::json!({"action": "remove", "package": PACKAGE}));
+                if record["phase"] == "applied" {
+                    break record.clone();
+                }
+                if matches!(record["phase"].as_str(), Some("not_applied" | "indeterminate" | "cleanup_pending")) {
+                    return Err(format!("actual Store Root handoff did not apply: {record}"));
+                }
+                if record["phase"] == "awaiting_impact_confirmation" {
+                    let id = record["global_stop_review_id"].as_str().unwrap();
+                    if let Some(previous) = global_stop.as_deref() {
+                        assert_eq!(previous, id, "the concrete impact review identity changed");
+                    } else {
+                        let review: SystemReview = serde_json::from_value(
+                            owner_native_json(&["review", "show", id]).await,
+                        ).unwrap();
+                        review.validate().unwrap();
+                        assert_eq!(review.kind, ReviewKind::PackageImpact);
+                        assert_eq!(review.status, ReviewStatus::Pending);
+                        assert!(review.disclosures.iter().any(|item| item.value.contains("Unsaved")));
+                        let decision = ReviewDecision {
+                            id: review.id, revision: review.revision,
+                            action: ReviewAction::ConfirmGlobalAppStop, choices: Vec::new(),
+                        };
+                        let response = crate::clawd::client::request(
+                            "/run/cos/clawd.sock", crate::clawd::wire::Request::new(
+                                crate::clawd::routes::Command::SystemReviewDecide,
+                                serde_json::json!({"owner_uid": OWNER, "review": decision}),
+                            ),
+                        ).await.map_err(|error| error.to_string())?;
+                        assert!(response.ok, "independent protected impact review was refused");
+                        global_stop = Some(id.to_string());
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err("actual Store retained Root handoff completion deadline".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(applied["completion"]["confirmed"], true);
+        assert_eq!(applied["completion"]["status"], "applied");
+        assert!(applied["checked_retired_apps"].as_array().unwrap().iter().any(|id| id == STORE.app));
+        assert!(!crate::clawd::packages::query_package_state(PACKAGE).await.unwrap().installed);
+        assert!(crate::clawd::packages::query_package_state("claw-app-acceptance-support").await.unwrap().installed);
+        assert!(!STORE.directory().exists(), "actual native payload survived its applied removal");
+        let id = applied["request_id"].as_str().unwrap();
+        let invocation = applied["invocation_id"].as_str().unwrap();
+        let path = Path::new("/var/lib/cos/package-transactions/requests").join(format!("{id}.json"));
+        let evidence: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(evidence["cleanup_confirmed"], true);
+        assert_eq!(evidence["plan"]["delivery"]["hook_consumed"], true);
+        let children = evidence["children"].as_array().unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0]["ended"], true);
+        assert_eq!(children[0]["exit_code"], 0);
+        let status = std::fs::read(STATUS).unwrap();
+        let recovered = owner_native_json(&["package-transactions", "--recover", id]).await;
+        assert_eq!(recovered["phase"], "applied");
+        let correlated = owner_native_json(&["package-transactions", "--invocation", invocation]).await;
+        assert_eq!(correlated["transactions"].as_array().unwrap().len(), 1);
+        assert_eq!(correlated["transactions"][0]["request_id"], id);
+        assert_eq!(std::fs::read(STATUS).unwrap(), status, "read-only recovery changed dpkg state");
+        let after: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(after["children"], evidence["children"], "read-only recovery replayed APT");
+        let mut report: serde_json::Value = serde_json::from_slice(&std::fs::read(REPORT).unwrap()).unwrap();
+        report["package_effect_outcome"] = "applied".into();
+        report["retained_package_effect"] = serde_json::json!({
+            "request_id": id, "invocation_id": invocation, "app_id": applied["app_id"],
+            "session": applied["session"], "operation": applied["operation"],
+            "phase": applied["phase"], "completion": applied["completion"],
+            "checked_retired_apps": applied["checked_retired_apps"],
+            "global_stop_review_id": global_stop,
+            "apt_children": 1, "apt_exit_code": 0, "cleanup_confirmed": true,
+            "read_only_recovery": true, "native_payload_removed": true,
+        });
+        report["coverage"] = "The original native Store requested exact protected Critical consent, continued by ordinary UI input and handed its own real dpkg payload removal to Root. Actual APT child zero, checked caller retirement, durable applied outcome and outside-owner read-only recovery were verified; acceptance was not treated as application.".into();
+        std::fs::write(REPORT, serde_json::to_vec_pretty(&report).unwrap())
+            .map_err(|error| error.to_string())?;
+        Ok(applied)
     }
 }

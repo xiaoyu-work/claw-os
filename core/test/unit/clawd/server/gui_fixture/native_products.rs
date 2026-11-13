@@ -1167,29 +1167,41 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         .collect::<Vec<_>>();
     assert!(!processes.is_empty());
     let generation = crate::approvals::generations::current(Some(OWNER), &session).unwrap();
-    let revoked = crate::clawd::client::request(
-        "/run/cos/clawd.sock",
-        crate::clawd::wire::Request::new(
-            crate::clawd::routes::Command::PermissionRevoke,
-            serde_json::json!({
-                "owner_uid": OWNER,
-                "session": read.as_ref().map(|request| request.session.as_str())
-                    .unwrap_or(&session),
-            }),
-        ),
-    )
-    .await
-    .unwrap();
-    assert!(
-        revoked.ok,
-        "actual native resource retirement failed: {:?}",
-        revoked.error
-    );
-    let after = crate::approvals::generations::current(Some(OWNER), &session).unwrap();
-    if editor {
-        assert_eq!(after, generation);
-    } else {
-        assert!(after > generation);
+    let mut package_applied = None;
+    if let (Some(fixture), Some(review)) = (&store_fixture, &package_review) {
+        let approved = approve_protected_owner_request(&review.id).await;
+        assert_eq!(approved.operation_digest, review.operation_digest);
+        assert_eq!(startup_authority(&session, &parent, product), original);
+        package_applied = Some(match fixture.self_handoff(&retained, &process, &session).await {
+            Ok(record) => record,
+            Err(error) => renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await,
+        });
+    }
+    if package_applied.is_none() {
+        let revoked = crate::clawd::client::request(
+            "/run/cos/clawd.sock",
+            crate::clawd::wire::Request::new(
+                crate::clawd::routes::Command::PermissionRevoke,
+                serde_json::json!({
+                    "owner_uid": OWNER,
+                    "session": read.as_ref().map(|request| request.session.as_str())
+                        .unwrap_or(&session),
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            revoked.ok,
+            "actual native resource retirement failed: {:?}",
+            revoked.error
+        );
+        let after = crate::approvals::generations::current(Some(OWNER), &session).unwrap();
+        if editor {
+            assert_eq!(after, generation);
+        } else {
+            assert!(after > generation);
+        }
     }
     assert!(claw_display_control::identity::pidfd_exited(retained.process.as_fd()).unwrap());
     assert!(claw_display_control::identity::pidfd_exited(process.pidfd.as_fd()).unwrap());
@@ -1203,13 +1215,15 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         fixture.verify_after_retirement();
     }
     if let Some(fixture) = &store_fixture {
-        fixture.verify_after_retirement();
+        fixture.verify_after_retirement(package_applied.is_some());
     }
     if let Some(review) = &package_review {
-        assert!(matches!(
-            crate::approvals::status_for_owner(&review.id, Some(OWNER)),
-            crate::approvals::RequestStatus::Denied
-        ));
+        let status = crate::approvals::status_for_owner(&review.id, Some(OWNER));
+        if package_applied.is_some() {
+            assert!(matches!(status, crate::approvals::RequestStatus::Consumed));
+        } else {
+            assert!(matches!(status, crate::approvals::RequestStatus::Denied));
+        }
     }
     assert!(
         std::fs::read_link(format!("/proc/self/fd/{}", retained.group.as_raw_fd()))
@@ -1278,6 +1292,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "/metadata-only Home"
         } else if product.panel {
             "/Layer Shell panel with independent protected owner approvals"
+        } else if package_applied.is_some() {
+            "original Store UI exact Critical consent, retained own-payload removal, actual APT child zero, checked caller retirement and outside-owner read-only recovery verified"
         } else if product.observation.is_some() {
             "/protected ordinary package observation"
         } else {
