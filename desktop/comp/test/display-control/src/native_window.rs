@@ -212,6 +212,8 @@ impl PassiveSnapshot {
             || raster["height"].as_i64() != Some(i64::from(geometry.3))
         {
             self.unavailable(instance, commit, "buffer-configure-mismatch");
+            // Resize acknowledgement can precede the client's matching buffer.
+            self.stopped = false;
             return;
         }
         let observed_ms = std::time::SystemTime::now()
