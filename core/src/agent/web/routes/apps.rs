@@ -27,18 +27,31 @@ fn failure(message: impl Into<String>) -> ApiError {
     )
 }
 
+fn project_app_review(review: &mut Value) -> Result<(), ApiError> {
+    if review.get("kind").and_then(Value::as_str) == Some("package_impact") {
+        return Err(failure(
+            "Package-impact confirmation belongs in OS Approvals, not App installation",
+        ));
+    }
+    let revision = review
+        .get("revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| failure("The OS App review has an invalid displayed revision"))?;
+    review["revision"] = json!(revision.to_string());
+    Ok(())
+}
+
 fn project_review(mut value: Value) -> Result<Value, ApiError> {
     if let Some(review) = value.get_mut("review") {
-        if review.get("kind").and_then(Value::as_str) == Some("package_impact") {
-            return Err(failure(
-                "Package-impact confirmation belongs in OS Approvals, not App installation",
-            ));
+        project_app_review(review)?;
+    }
+    if let Some(reviews) = value.get_mut("reviews") {
+        for review in reviews
+            .as_array_mut()
+            .ok_or_else(|| failure("The OS App review bundle is invalid"))?
+        {
+            project_app_review(review)?;
         }
-        let revision = review
-            .get("revision")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| failure("The OS App review has an invalid displayed revision"))?;
-        review["revision"] = json!(revision.to_string());
     }
     Ok(value)
 }

@@ -90,6 +90,8 @@ web UI.
   snapshots come only from `xiaoyu-work/clawos-app`; `clawd` verifies freshness,
   digests and publisher provenance and publishes only after protected owner
   confirmation.
+  Individual and bundled APT App reviews retain full-width display revisions
+  as decimal strings; package-impact decisions remain in OS Approvals.
 - Host each product's signed `claw.web-app/v1` resources in a script-enabled
   sandbox without same-origin access. View-bound nonces relay only the owning
   App's declared MCP tools through the existing CLI App-service path, including
