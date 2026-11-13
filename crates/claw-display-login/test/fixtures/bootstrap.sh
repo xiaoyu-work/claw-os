@@ -408,6 +408,7 @@ PY
     for case in password non-root locale host-parent compositor-mode duplicate inherited subscribers {0..24} session-startup file-manager native-product; do
         if [[ -f "/run/gui-fixture/pam-$case.log" ]]; then
             cp "/run/gui-fixture/pam-$case.log" "$private/pam-$case.log"
+            chmod 0644 "$private/pam-$case.log"
             if [[ "$result" != 0 ]]; then cat "$private/pam-$case.log" >&2; fi
         fi
     done
