@@ -79,6 +79,12 @@ the protected, finite input-command pattern for two ordinary seat pointer
 clicks: original panel open and close, always at the center of its actual
 already-buffered configure geometry. The panel accepts no caller coordinates.
 Replays, expiry and keyboard actions aimed at a noninteractive panel refuse.
+The Clipboard successor additionally permits three finite ordinary clicks in
+that same instance's single Layer-parented popup. Its current configure must
+be acknowledged with no pending configure, matching real pixels and coordinates
+inside the bounded popup; the panel still permits only open and close.
+These exercise delete and the separate clear confirmation, not live Restore.
+No popup keyboard focus or production input capability is added.
 The genuine Store successor additionally
 permits one finite ordinary click inside the fixture's already-buffered,
 configure-acknowledged 800x600 primary XDG surface. Canonical integer coordinates

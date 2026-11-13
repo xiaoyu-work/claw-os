@@ -330,6 +330,8 @@ pub(super) struct Driver<'a> {
     session: &'a str,
     instance: String,
     sequence: u64,
+    panel_clicks: u8,
+    popup_clicks: u8,
     deadline: Instant,
 }
 
@@ -340,6 +342,7 @@ impl<'a> Driver<'a> {
     ) -> Self {
         Self {
             control, pam, retained, process, session, deadline, sequence: 0,
+            panel_clicks: 0, popup_clicks: 0,
             instance: claw_display_control::Epoch(retained.instance.0).label(),
         }
     }
@@ -366,14 +369,25 @@ impl<'a> Driver<'a> {
     }
 
     pub(super) async fn click(&mut self) {
+        self.panel_clicks += 1;
+        assert!(self.panel_clicks <= 2, "one open and one close only");
+        self.pointer("panel", "center-click".to_string()).await;
+    }
+
+    pub(super) async fn popup_click(&mut self, x: u16, y: u16) -> u64 {
+        self.popup_clicks += 1;
+        assert!(self.popup_clicks <= 3, "one delete and one confirmed clear only");
+        self.pointer("popup", format!("{x},{y}")).await
+    }
+
+    async fn pointer(&mut self, surface: &str, value: String) -> u64 {
         self.sequence += 1;
-        assert!(self.sequence <= 2, "one open and one close only");
         let directory = Path::new(OBSERVER).parent().unwrap();
         let request = serde_json::json!({
             "schema": "claw.private-keyboard/v1", "sequence": self.sequence,
-            "instance": self.instance, "surface": "panel",
+            "instance": self.instance, "surface": surface,
             "expires_ms": claw_display_control::wire::monotonic_ms().unwrap() + 5_000,
-            "kind": "pointer", "value": "center-click",
+            "kind": "pointer", "value": value,
         });
         let next = directory.join("keyboard-command.next");
         let mut file = std::fs::OpenOptions::new()
@@ -405,10 +419,10 @@ impl<'a> Driver<'a> {
                     serde_json::from_slice(&std::fs::read(ack).unwrap()).unwrap();
                 if record["sequence"] == self.sequence {
                     assert_eq!(record["instance"], self.instance);
-                    assert_eq!(record["surface"], "panel");
+                    assert_eq!(record["surface"], surface);
                     assert_eq!(record["pointer_events_sent"], true);
                     assert!(record.get("keyboard_events_sent").is_none());
-                    return;
+                    return record["buffer_commits_at_delivery"].as_u64().unwrap();
                 }
             }
             if Instant::now() >= deadline {
@@ -433,16 +447,9 @@ pub(super) async fn run(
         &instance,
         CALENDAR.desktop_id
     ) && record["popup"]["open"] == false));
-    let mut driver = Driver {
-        control,
-        pam,
-        retained,
-        process,
-        session,
-        instance,
-        sequence: 0,
-        deadline: Instant::now() + Duration::from_secs(25),
-    };
+    let mut driver = Driver::new(
+        control, pam, retained, process, session, Instant::now() + Duration::from_secs(25),
+    );
     let guest_root = PathBuf::from(format!("/proc/{}/root", process.identity.pid()));
     match std::fs::metadata(guest_root.join("usr/local/bin/cos")) {
         Ok(metadata) if metadata.is_file() && metadata.mode() & 0o111 != 0 => {}
