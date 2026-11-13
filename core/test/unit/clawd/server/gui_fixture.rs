@@ -2226,7 +2226,7 @@ fn private_gui_fixture_selected(
     crate::storage::harden_clawd_state().unwrap();
     runtime_layout();
     install_packages(package_only, native);
-    let _package_repository = package_only.then(package::Repository::start);
+    let _package_repository = package_only.then(|| package::Repository::start(native.is_some()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -2262,7 +2262,7 @@ fn private_gui_fixture_selected(
         assert!(path.starts_with("/sys/fs/cgroup/claw-display-fixture."));
         let root = Path::new(path);
         std::fs::write(root.join("cgroup.subtree_control"), b"+cpu +memory +pids").unwrap();
-        if package_only {
+        if package_only && native.is_none() {
             package::run(&session_group(root, "22")).await;
         }
         if let Some(product) = native {

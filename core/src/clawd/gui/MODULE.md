@@ -249,6 +249,12 @@ Its separate bounded ordinary-key search phase may retain the current
 authenticated own-instance top-level SHM bytes for inspection. The fixed Store
 and Calendar snapshot selectors/roles remain distinct, share only the existing
 finite visible-row copier, and confer no App capture or input authority.
+The same ignored Store test has a separate private APT round, with its own
+PID/mount/network namespaces and reserved NSS fixture. It packages and verifies
+real native Store dpkg ownership using the correct native architecture, then
+uses only ordinary search and a result-card click. The retained detail-frame
+bytes must be inspected; this round does not yet submit a package mutation or
+establish native Store payload self-handoff.
 
 The separate candidate acceptance selector
 `clawd::server::gui_fixture::native_products::private_native_editor` requires

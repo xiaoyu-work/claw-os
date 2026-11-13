@@ -725,8 +725,10 @@ fn bound_gui_session(parent: &str, product: Product) -> Option<String> {
 
 pub(super) async fn run(group: &std::fs::File, product: Product) {
     let editor = product.name == "editor";
+    let package_owned = Path::new("/run/gui-fixture/native-store-package").exists();
+    assert!(!package_owned || product.name == "store");
     let calendar_fixture = product.panel.then(calendar_popup::Fixture::prepare);
-    let store_fixture = product.observation.is_some().then(store_catalog::Fixture::prepare);
+    let store_fixture = product.observation.is_some().then(|| store_catalog::Fixture::prepare(package_owned));
     let home = Path::new("/run/display-home");
     {
         let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(OWNER).unwrap();
@@ -1060,8 +1062,14 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         if let Err(error) = fixture.consume(&retained, &process, &session, deadline, &before).await {
             renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
         }
-        if let Err(error) = fixture.search_frame(&retained, &process, &before).await {
-            renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+        let searched = match fixture.input_frame(&retained, &process, &before, (1, "text", "prive")).await {
+            Ok(frame) => frame,
+            Err(error) => renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await,
+        };
+        if package_owned {
+            if let Err(error) = fixture.input_frame(&retained, &process, &searched, (2, "pointer", "500,80")).await {
+                renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+            }
         }
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
@@ -1265,7 +1273,15 @@ fn private_native_calendar() {
 #[test]
 #[ignore = "clean-GHA-only: actual Store ELF, authenticated private PAM/display/catalog and cgroup v2"]
 fn private_native_store() {
-    private_gui_fixture_selected(false, false, false, Some(STORE));
+    let package_owned = match std::fs::read("/run/gui-fixture/native-store-package") {
+        Ok(value) => {
+            assert_eq!(value, b"private-store-package-v1");
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => panic!("read private Store package selector: {error}"),
+    };
+    private_gui_fixture_selected(false, false, package_owned, Some(STORE));
 }
 
 #[test]
