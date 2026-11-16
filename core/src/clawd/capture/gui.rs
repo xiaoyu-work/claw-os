@@ -140,8 +140,12 @@ tokio::task_local! { static WINDOW: Arc<Window>; }
 
 /// Only the Root GUI broker installs this context, after its per-message
 /// process/cgroup checks. Ordinary dispatch and App/MCP relays have none.
-pub(crate) async fn within<F: std::future::Future>(window: Arc<Window>, future: F) -> F::Output {
-    WINDOW.scope(window, future).await
+/// Return the scope directly so nested resources do not duplicate dispatch storage.
+pub(crate) fn within<F: std::future::Future>(
+    window: Arc<Window>,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    WINDOW.scope(window, future)
 }
 
 impl Window {

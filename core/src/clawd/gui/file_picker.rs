@@ -154,8 +154,11 @@ pub(crate) struct Window {
 
 tokio::task_local! { static WINDOW: Arc<Window>; }
 
-pub(crate) async fn within<F: std::future::Future>(window: Arc<Window>, future: F) -> F::Output {
-    WINDOW.scope(window, future).await
+pub(crate) fn within<F: std::future::Future>(
+    window: Arc<Window>,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    WINDOW.scope(window, future)
 }
 
 impl Window {

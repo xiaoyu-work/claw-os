@@ -32,6 +32,48 @@ fn admission() -> Arc<Admission> {
     Admission::new(Limits::default())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn gui_resource_scopes_do_not_multiply_dispatch_storage() {
+    fn future_size<A, F: std::future::Future>(_: impl FnOnce(A) -> F) -> usize {
+        std::mem::size_of::<F>()
+    }
+
+    let dispatch = future_size(|(request, client, state, admission)| {
+        dispatch_verified_request(request, client, state, admission)
+    });
+    let capture = future_size(|(window, request, client, state, admission)| {
+        crate::clawd::capture::gui::within(
+            window,
+            dispatch_verified_request(request, client, state, admission),
+        )
+    });
+    let scoped = future_size(
+        |(notifications, picker, audio, capture, request, client, state, admission)| {
+            crate::clawd::notifications::gui::within(
+                notifications,
+                crate::clawd::gui::file_picker::within(
+                    picker,
+                    crate::clawd::gui::audio::within(
+                        audio,
+                        crate::clawd::capture::gui::within(
+                            capture,
+                            dispatch_verified_request(request, client, state, admission),
+                        ),
+                    ),
+                ),
+            )
+        },
+    );
+    eprintln!(
+        "GUI dispatch future bytes: unscoped={dispatch}, capture={capture}, all_resources={scoped}"
+    );
+    assert!(
+        scoped <= dispatch + 1024,
+        "task-local resource scopes multiply request future storage: {scoped} vs {dispatch}"
+    );
+}
+
 struct TaskAdmissionFixture {
     peer: ClientIdentity,
     _proc: crate::test_env::TestEnvVarGuard,
