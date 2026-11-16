@@ -2422,7 +2422,7 @@ routes! {
         budget: Budget::mutation(),
         authority: peer(Audience::Notification),
         body: body::NotificationPresentationControl,
-        audit: &[("action", FieldRule::Token), ("generation", FieldRule::Token), ("handle", FieldRule::Count)],
+        audit: &[("action", FieldRule::Token), ("generation", FieldRule::Token)],
         run: |c| super::notifications::gui::panel_control(c.params, c.client).await,
     }
     SystemDesktopPreferencesControl {
