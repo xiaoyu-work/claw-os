@@ -481,6 +481,17 @@ impl Window {
         (origin.selection_read(), origin.selection_write()) == self.expected_selection
     }
 
+    fn can_reopen_panel(&self, instance: &str, layer: Layer, namespace: &str) -> bool {
+        self.instance.as_deref() == Some(instance)
+            && self.panel.as_ref().is_some_and(|panel| {
+                panel.closed
+                    && panel.surface.is_none()
+                    && panel.popup.surface.is_none()
+                    && panel.namespace == namespace
+                    && panel.layer == layer
+            })
+    }
+
     pub fn new_panel(
         &mut self,
         surface: LayerSurface,
@@ -488,10 +499,10 @@ impl Window {
         layer: Layer,
         namespace: String,
     ) -> Result<()> {
-        if self.instance.is_some()
+        if ((self.instance.is_some() || self.panel.is_some())
+            && !self.can_reopen_panel(&instance, layer, &namespace))
             || self.surface.is_some()
             || self.auxiliary.surface.is_some()
-            || self.panel.is_some()
             || namespace.len() > 1024
         {
             return Err("only one real same-instance native panel is in scope".into());
@@ -1274,6 +1285,37 @@ fn raster_with_pixels(
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
+
+    #[test]
+    fn native_panel_reopen_requires_confirmed_same_instance_role_retirement() {
+        let display = wayland_server::Display::<State>::new().unwrap();
+        let mut window = Window::new(&display.handle(), (false, false));
+        window.instance = Some("instance".into());
+        window.panel = Some(Panel {
+            surface: None,
+            namespace: "notifications".into(),
+            layer: Layer::Top,
+            configure: Some(Serial::from(1)),
+            configures: Vec::new(),
+            acknowledged: Some(Serial::from(1)),
+            size: Some((300, 198)),
+            keyboard_interactivity: Some("None".into()),
+            configured: true,
+            commits: 9,
+            raster: Some(serde_json::json!({"nonuniform_pixels":true})),
+            closed: true,
+            popup: PanelPopup::default(),
+            snapshot: PassiveSnapshot::new(&WIDGET_SNAPSHOT),
+        });
+        assert!(window.can_reopen_panel("instance", Layer::Top, "notifications"));
+        assert!(!window.can_reopen_panel("other-instance", Layer::Top, "notifications"));
+        assert!(!window.can_reopen_panel("instance", Layer::Overlay, "notifications"));
+        assert!(!window.can_reopen_panel("instance", Layer::Top, "other-namespace"));
+        window.panel.as_mut().unwrap().closed = false;
+        assert!(!window.can_reopen_panel("instance", Layer::Top, "notifications"));
+        window.panel = None;
+        assert!(!window.can_reopen_panel("instance", Layer::Top, "notifications"));
+    }
 
     #[test]
     fn calendar_snapshot_copies_visible_rows_once_without_padding_or_pool_bytes() {
