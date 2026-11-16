@@ -23,7 +23,7 @@ elif [[ $# == 16 && ( "${15}" == --native-calendar-only || "${15}" == --native-d
     printf 'actual Calendar consumers require the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only || "${15}" == --native-launcher-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only || "${15}" == --native-launcher-only || "${15}" == --native-settings-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -45,6 +45,9 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-launcher-only ]]; then
         native_product=launcher
         native_app=cosmic-launcher
+    elif [[ "${15}" == --native-settings-only ]]; then
+        native_product=settings
+        native_app=cosmic-settings
     else
         native_product=calendar
         native_app=panel-calendar
@@ -316,6 +319,7 @@ BUS
         native-editor) fixture_test=clawd::server::gui_fixture::native_products::private_native_editor ;;
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
+        native-settings) fixture_test=clawd::server::gui_fixture::native_products::private_native_settings ;;
         native-calendar|native-desktop-widgets|native-clipboard|native-launcher) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
         native-store|native-store-package) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;

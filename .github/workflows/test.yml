@@ -229,7 +229,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar, native-store, native-desktop-widgets, native-clipboard, native-launcher]
+        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar, native-store, native-desktop-widgets, native-clipboard, native-launcher, native-settings]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -254,7 +254,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
       - name: Install real native product build and software-renderer prerequisites
-        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher'
+        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher' || matrix.mode == 'native-settings'
         run: |
           sudo apt-get install -y --no-install-recommends \
             cmake just libfontconfig-dev libfreetype-dev libglib2.0-dev libudev-dev \
@@ -266,6 +266,9 @@ jobs:
       - name: Install real private clipboard history provider
         if: matrix.mode == 'native-clipboard'
         run: sudo apt-get install -y --no-install-recommends copyq
+      - name: Install original Settings native dependencies and public keyboard data
+        if: matrix.mode == 'native-settings'
+        run: sudo apt-get install -y --no-install-recommends libpipewire-0.3-dev libpulse-dev libxkbregistry-dev libclang-dev gettext xkb-data
       - name: Pin Cargo cache identity before private fixtures
         id: cargo-inputs
         env:
@@ -332,8 +335,11 @@ jobs:
       - name: Test actual Launcher ELF, managed interactive Layer and checked retirement
         if: matrix.mode == 'native-launcher'
         run: bash scripts/ci/test-boundaries.sh native-launcher
+      - name: Test actual Settings ELF with ungranted optional rights and checked retirement
+        if: matrix.mode == 'native-settings'
+        run: bash scripts/ci/test-boundaries.sh native-settings
       - name: Retain exact native product input and compositor observations
-        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher')
+        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher' || matrix.mode == 'native-settings')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.mode }}-acceptance-${{ github.sha }}

@@ -23,7 +23,7 @@ shared build helpers.
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `ci/check-provisioning.sh` | Shell syntax and LF checks shared with the test workflow |
 | `ci/test-boundaries.sh` | App bind, Calendar, capture portal, extension/owner-memory isolation, authenticated display and Applet kernel checks; invoked as separate visible CI steps |
-| `ci/native_editor_payload.py` | Explicit Editor/Files/Terminal/Calendar private acceptance inputs: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
+| `ci/native_editor_payload.py` | Private native product acceptance inputs, including Settings: resolve one immutable App snapshot and invoke its public-pin, original-installer native build; no local platform, signing, installation or publication |
 | `ci/prepare-release.sh` | Freeze package version and authenticated App APT inputs; only `all` separately freezes an immutable test-only source fixture |
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
@@ -63,6 +63,13 @@ python3 -B -m pytest -q scripts/tests/test_native_editor_payload.py
 ```
 
 Also run the narrowest consuming target/package command.
+
+`test-boundaries.sh native-settings` prepares the original Settings ELF,
+manifest, licenses and installer resources using the same immutable/public-pin
+path. It requires a real managed window and checked retirement with empty
+mandatory GUI capabilities and all three optional rights ungranted. Public XKB
+data comes from the existing read-only `/usr` runtime, not an owner-file grant.
+Startup acceptance does not prove system-wide Settings writes or hardware.
 
 The proposed `test-boundaries.sh native-editor` selection is a separate real
 product lane, not another native probe. Its preparation calls the resolved App

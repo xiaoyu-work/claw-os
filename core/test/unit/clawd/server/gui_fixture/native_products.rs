@@ -159,10 +159,23 @@ pub(super) const LAUNCHER: Product = Product {
     interactive_panel: true,
     observation: None,
 };
+pub(super) const SETTINGS: Product = Product {
+    name: "settings",
+    app: "cosmic-settings",
+    case: 33,
+    desktop_id: "com.clawos.Settings",
+    entries: &["bin/cosmic-settings"],
+    ungranted: &[0, 1, 2],
+    home_metadata: false,
+    selector: "--gui",
+    panel: false,
+    interactive_panel: false,
+    observation: None,
+};
 
 impl Product {
     pub(super) fn for_case(case: usize) -> Option<Self> {
-        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS, CLIPBOARD, LAUNCHER]
+        [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS, CLIPBOARD, LAUNCHER, SETTINGS]
             .into_iter().find(|product| product.case == case)
     }
 
@@ -274,7 +287,7 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
-    if product.name == "terminal" || product.panel || product.observation.is_some() {
+    if matches!(product.name, "terminal" | "settings") || product.panel || product.observation.is_some() {
         assert_eq!(
             platform_digest,
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
@@ -1544,6 +1557,12 @@ fn private_native_files() {
 #[ignore = "clean-GHA-only: actual Terminal ELF/PTY, authenticated private PAM/display and cgroup v2"]
 fn private_native_terminal() {
     private_gui_fixture_selected(false, false, false, Some(TERMINAL));
+}
+
+#[test]
+#[ignore = "clean-GHA-only: actual Settings ELF, authenticated private PAM/display and cgroup v2"]
+fn private_native_settings() {
+    private_gui_fixture_selected(false, false, false, Some(SETTINGS));
 }
 
 #[test]

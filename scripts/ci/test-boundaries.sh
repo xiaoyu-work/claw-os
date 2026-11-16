@@ -291,7 +291,7 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard || "$selection" == native-launcher ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard || "$selection" == native-launcher || "$selection" == native-settings ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         if [[ "$selection" == native-calendar || "$selection" == native-desktop-widgets ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
@@ -370,7 +370,7 @@ display() {
                 "$CARGO_TARGET_DIR/native-launcher-service/release/pop-launcher-bin")
         elif [[ "$fixture_mode" == native-store-package ]]; then
             selectors=(--native-store-package-only "$GITHUB_WORKSPACE/build/native-store-input")
-        elif [[ "$fixture_mode" == native-editor || "$fixture_mode" == native-files || "$fixture_mode" == native-terminal || "$fixture_mode" == native-store || "$fixture_mode" == native-clipboard ]]; then
+        elif [[ "$fixture_mode" == native-editor || "$fixture_mode" == native-files || "$fixture_mode" == native-terminal || "$fixture_mode" == native-store || "$fixture_mode" == native-clipboard || "$fixture_mode" == native-settings ]]; then
             selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input")
         elif [[ "$fixture_mode" == file-manager ]]; then
             selectors=(--file-manager-only)
@@ -502,9 +502,10 @@ case "${1:-}" in
     native-desktop-widgets) display native-desktop-widgets ;;
     native-clipboard) display native-clipboard ;;
     native-launcher) display native-launcher ;;
+    native-settings) display native-settings ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|capture|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|capture|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|native-settings|applets}" >&2
         exit 2
         ;;
 esac

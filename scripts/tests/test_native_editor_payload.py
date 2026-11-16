@@ -98,7 +98,7 @@ def payload(tmp_path, request):
         "version": "0.2.1", "runtime_abi": 1,
         "sha256": (
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
-            if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher") else "a" * 64
+            if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings") else "a" * 64
         ),
         "url": "https://github.com/xiaoyu-work/claw-os/releases/download/"
                "app-platform-v0.2.1/claw-os-app-platform-0.2.1.tar.gz",
@@ -159,7 +159,7 @@ def test_header_only_elf_and_missing_installer_resources_cannot_enter_lane(paylo
         editor.payload_record(source, prepared, {}, product)
 
 
-@pytest.mark.parametrize("payload", ["terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher"], indirect=True)
+@pytest.mark.parametrize("payload", ["terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings"], indirect=True)
 def test_native_product_refuses_an_unapproved_platform_digest(payload):
     source, prepared, product = payload
     path = source / "platform.lock.json"

@@ -75,6 +75,12 @@ sudo unshare --mount --net --ipc --uts --fork \
   desktop/session/data/claw-file-manager.desktop
 ```
 
+The `scripts/ci/test-boundaries.sh native-settings` lane prepares the actual
+Settings product, then selects `--native-settings-only <prepared-input>` through
+this same authenticated fixture. It requires configured, nonuniform window
+pixels and checked instance retirement with no mandatory or optional GUI
+capabilities. It does not claim system-setting changes or hardware acceptance.
+
 The C fixture uses real PAM authentication and kernel login identities with
 private NSS/password files. Its replay/inheritance cases call the actual
 installed PAM module against that authenticated handle. Every simulated login

@@ -27,6 +27,10 @@ dispatched and reusable test/publication pipelines.
   display-matrix modes. Terminal uses the original published-platform build,
   empty GUI authority and the common Host's existing private PTY/sandbox;
   unsupported default-shell resources are failures, not injected privileges.
+- Keep Settings startup visible as its own native display-matrix mode, using
+  original resources and public XKB data with empty mandatory capabilities
+  and every optional right ungranted. This is not system-settings mutation or
+  hardware acceptance.
 - Run egress retirement cases against private listener queues and stalled DNS,
   with synthetic NSS configuration confined to a private mount/network namespace.
   Real lookup children must be reaped before the retirement acknowledgement.
