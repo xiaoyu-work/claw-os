@@ -316,9 +316,7 @@ fn wait_for_scheduler_approvals(ids: &[String]) -> Result<(), String> {
 }
 
 fn request_clawd(command: Command, params: Value) -> Result<Value, String> {
-    let request = crate::clawd::protocol::Request::build(command, params);
-    let response =
-        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+    let response = send_clawd(command, params)?;
     if response.ok {
         response
             .result
@@ -339,17 +337,23 @@ fn request_netdiag_clawd(params: Value) -> Result<Value, String> {
     request_wire_clawd(Command::SystemNetworkDiagnose, params)
 }
 
-fn request_wire_clawd(command: Command, params: Value) -> Result<Value, String> {
+fn send_clawd(
+    command: Command,
+    params: Value,
+) -> Result<crate::clawd::protocol::Response, crate::clawd::client::ClientError> {
     let request = crate::clawd::protocol::Request::build(command, params);
-    let response = if env::var("COS_APP_GUI").as_deref()==Ok("1")
+    if env::var("COS_APP_GUI").as_deref() == Ok("1")
         && crate::clawd::app_sessions::gui::provider_route(command).is_ok()
-        && command.route().authority.audience==crate::clawd::authority::Audience::SystemService
+        && command.route().authority.audience == crate::clawd::authority::Audience::SystemService
     {
         crate::clawd::client::request_gui_provider_blocking(request)
     } else {
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
-    };
-    wire_clawd_response(command,response)
+    }
+}
+
+fn request_wire_clawd(command: Command, params: Value) -> Result<Value, String> {
+    wire_clawd_response(command, send_clawd(command, params))
 }
 
 fn request_gui_resource(command: Command, params: Value) -> Result<Value, String> {

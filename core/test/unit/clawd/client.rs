@@ -45,14 +45,19 @@ fn system_review_refuses_a_user_owned_broker_before_sending_any_data() {
             serde_json::json!({"session":"window","event":null})),
         Request::build(super::super::routes::Command::NotificationPresentationControl,
             serde_json::json!({"action":"snapshot"})),
-        Request::build(super::super::routes::Command::SystemDesktopPreferencesControl,
-            serde_json::json!({"session":"window","action":"read","namespace":"compositor","version":1})),
+        Request::build(super::super::routes::Command::AppSessionRelay,
+            serde_json::json!({
+                "session_id":"ordinary-app","handle":"launcher-only",
+                "command":"system.desktop-preferences.control",
+                "params":{"session":"ordinary-app","action":"read","namespace":"compositor","version":1}
+            })),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("fake-review.sock");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
             let mut bytes = Vec::new();
             stream.read_to_end(&mut bytes).unwrap();
             bytes

@@ -116,7 +116,6 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
             | super::routes::Command::GuiNotificationExchange
             | super::routes::Command::NotificationPresentationControl)
         || command == super::routes::Command::SystemRegionalSettingsControl
-        || command == super::routes::Command::SystemDesktopPreferencesControl
         || command == super::routes::Command::SystemMailControl
         || command.as_str().starts_with("system.review.")
 }
@@ -125,12 +124,13 @@ fn requires_root_exchange(request: &Request) -> bool {
     use super::routes::Command;
 
     // Ordinary Apps reach a user-owned Host proxy first; authenticate Root
-    // when that proxy relays package work, not on the local provider hop.
+    // when that proxy relays protected provider work, not on the local hop.
     requires_root_peer(request.command)
         || (request.command == Command::AppSessionRelay
             && matches!(
                 request.params.get("command").and_then(serde_json::Value::as_str),
-                Some("system.package.install" | "system.package.control" | "system.package.restore")
+                Some("system.package.install" | "system.package.control" | "system.package.restore"
+                    | "system.desktop-preferences.control")
             ))
 }
 
