@@ -248,10 +248,10 @@ static int gui_fixture(void) {
                     || setenv("COSMIC_SESSION_SOCK", "/run/forged-session", 1) != 0
                     || setenv("CLAW_DISPLAY_CONTROL_FD", "97", 1) != 0)
                     _exit(122);
-                if (scenario >= 25 && scenario <= 39) {
+                if (scenario >= 25) {
                     if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0)
                         _exit(122);
-                    if (scenario >= 34) {
+                    if (scenario >= 34 && scenario <= 39) {
                         if (scenario == 34)
                             execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                                   "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
