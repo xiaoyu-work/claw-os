@@ -133,6 +133,13 @@ if [[ $# == 14 ]]; then
     [[ -x "$cos" && -x "$gui_runner" && -x "$app_runner" && -x "$probe" \
         && -x "$session" && -x "$cosmic_session" && -x "$file_manager" \
         && -f "$file_manager_autostart" ]] || exit 64
+    if [[ "$package_fixture" == 0 ]]; then
+        if [[ -z "$native_notification_helper" ]]; then
+            native_notification_helper=$(realpath -e -- "$(dirname -- "$cos")/claw-notification-panel")
+        fi
+        [[ -f "$native_notification_helper" && -x "$native_notification_helper" \
+            && ! -L "$native_notification_helper" ]] || exit 64
+    fi
 fi
 [[ -x "$registry" && -x "$host" && -x "$compositor" && -f "$pam_module" ]] || exit 64
 [[ -x "$pam_fixture" && -d "$private" && "$private" != / ]] || exit 64
@@ -174,7 +181,6 @@ if [[ "$gui" == 1 ]]; then
         install -m0755 "$native_capture_helper" /usr/local/bin/clawd
     fi
     if [[ "$native_product" == notifications ]]; then
-        install -m0755 "$native_notification_helper" /usr/lib/cos/bin/claw-notification-panel
         install -m0755 "$native_notification_probe" /usr/lib/cos/bin/claw-notification-panel-fixture
     fi
     install -m0755 "$gui_runner" /usr/local/bin/claw-gui-runner
@@ -182,6 +188,7 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$session" /usr/local/bin/claw-display-session
     if [[ "$package_fixture" == 0 ]]; then
         install -m0755 "$cosmic_session" /usr/bin/cosmic-session
+        install -m0755 "$native_notification_helper" /usr/lib/cos/bin/claw-notification-panel
         install -m0755 "$file_manager" /usr/lib/cos/bin/claw-file-manager
         install -Dm0644 "$file_manager_autostart" /etc/xdg/autostart/claw-file-manager.desktop
     else

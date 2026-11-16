@@ -47,7 +47,8 @@ runtime_target="$PWD/build/gui-runtime-target"
 fixture_target="$PWD/build/gui-fixture-target"
 CARGO_TARGET_DIR="$runtime_target" cargo build -p cos \
   --bin cos --bin claw-display-host --bin claw-display-session \
-  --bin claw-gui-runner --bin claw-app-runner --bin claw-file-manager --locked
+  --bin claw-gui-runner --bin claw-app-runner --bin claw-file-manager \
+  --bin claw-notification-panel --locked
 CARGO_TARGET_DIR="$runtime_target" cargo build -p claw-display-login --locked
 CARGO_TARGET_DIR="$runtime_target" cargo test -p cos --lib --locked \
   --no-run --message-format=json > "$runtime_target/gui-tests.json"
@@ -90,7 +91,8 @@ and private overlay files for inspection.
 
 The full runner has fourteen positional inputs; inputs twelve through fourteen
 are the actual `cosmic-session`, actual `claw-file-manager`, and the session's
-unmodified autostart source resource. It also tests a missing settings daemon through an
+unmodified autostart source resource. The real OS notification panel helper must
+be built beside `cos` and is staged with the session. It also tests a missing settings daemon through an
 empty private `PATH`, without a production test switch. A separate authenticated
 display observer and private session bus stay alive while the real session must
 exit with its original startup panic within five seconds. PAM must then complete

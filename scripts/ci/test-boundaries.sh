@@ -324,12 +324,12 @@ display() {
     cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
     cargo build -p cos --locked --bin cos --bin claw-display-host \
         --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
-        --bin claw-file-manager
+        --bin claw-file-manager --bin claw-notification-panel
     if [[ "$selection" == native-capture ]]; then
         cargo build -p cos --locked --bin clawd
     fi
     if [[ "$selection" == native-notifications ]]; then
-        cargo build -p cos --locked --bin claw-notification-panel --example notification-panel-fixture
+        cargo build -p cos --locked --example notification-panel-fixture
     fi
     if [[ "$selection" == native-package || "$selection" == native-store ]]; then
         local program
