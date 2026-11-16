@@ -398,17 +398,31 @@ async fn run_case(group: &std::fs::File, case: usize, collision: bool) -> serde_
         !guest.join("run/user/62050/bus").exists(),
         "raw owner bus reached the App"
     );
-    assert!(!guest
-        .join("run/display-home/native capture saved.png")
-        .exists());
+    let runtime =
+        Path::new("/run/cos/gui").join(claw_display_control::Epoch(retained.instance.0).label());
+    assert!(runtime.is_dir());
+    let metadata_root = std::fs::metadata(runtime.join("home-metadata")).unwrap();
+    let exposed_home = std::fs::metadata(guest.join("run/display-home")).unwrap();
+    assert_eq!(
+        (exposed_home.dev(), exposed_home.ino()),
+        (metadata_root.dev(), metadata_root.ino()),
+        "the App must see this window's controlled metadata projection"
+    );
+    assert_ne!(
+        exposed_home.dev(),
+        std::fs::metadata("/run/display-home").unwrap().dev(),
+        "raw owner Home reached the App"
+    );
+    // Earlier rounds' saved names are metadata, never a selected content read.
+    if Path::new(SAVED).exists() {
+        let error = std::fs::File::open(guest.join("run/display-home/native capture saved.png"))
+            .expect_err("metadata alone exposed the portal-owned saved bytes");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
     let environment = std::fs::read(format!("/proc/{}/environ", native.identity.pid())).unwrap();
     assert!(!environment
         .split(|byte| *byte == 0)
         .any(|entry| entry.starts_with(b"DBUS_SESSION_BUS_ADDRESS=")));
-    let runtime =
-        Path::new("/run/cos/gui").join(claw_display_control::Epoch(retained.instance.0).label());
-    assert!(runtime.is_dir());
-    assert!(runtime.join("home-metadata").exists());
     let mut created_target = None;
     if case == 39 {
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -696,6 +710,7 @@ async fn run_case(group: &std::fs::File, case: usize, collision: bool) -> serde_
         "request_id": event["request_id"], "actual_helper_pid": helper_pid,
         "actual_helper_elf": "/usr/local/bin/clawd", "owner_uid": OWNER,
         "protected_startup_decisions": approvals.len(), "raw_app_bus": false,
+        "controlled_home_metadata": true,
         "portal_calls": 1, "portal_close_acknowledged": matches!(case, 37 | 38),
         "one_shot_created":created_target,
         "helper_exited": true, "native_exited": true, "cgroup_removed": true,
@@ -720,6 +735,9 @@ pub(super) async fn run(first_group: &std::fs::File) {
             session_group(root, &case.to_string())
         };
         cases.push(run_case(&group, case, false).await);
+        println!(
+            "private actual Capture case {case}: correlated outcome and checked retirement passed"
+        );
         if case == 39 {
             // The product's original screenshot names have one-second precision.
             tokio::time::sleep(Duration::from_secs(1)).await;
