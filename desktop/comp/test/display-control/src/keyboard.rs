@@ -39,6 +39,7 @@ struct Request {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PointerAction {
     Panel,
+    Toast,
     Primary(u16, u16),
     Popup(u16, u16),
 }
@@ -60,6 +61,18 @@ fn panel_click_steps(center: (f64, f64)) -> Result<[PointerStep; 4]> {
         PointerStep::Button(ButtonState::Pressed),
         PointerStep::Button(ButtonState::Released),
         PointerStep::Leave((width + 1.0, center.1)),
+    ])
+}
+
+fn toast_click_steps(center: (f64, f64)) -> Result<[PointerStep; 3]> {
+    let (width, height) = (center.0 * 2.0, center.1 * 2.0);
+    if width != 300.0 || !(80.0..=1920.0).contains(&height) {
+        return Err("pointer gesture has no bounded acknowledged toast geometry".into());
+    }
+    Ok([
+        PointerStep::Enter(center),
+        PointerStep::Button(ButtonState::Pressed),
+        PointerStep::Button(ButtonState::Released),
     ])
 }
 
@@ -143,6 +156,7 @@ fn decode(value: &serde_json::Value, previous: u64, now: u64) -> Result<Request>
     let text = value["value"].as_str().ok_or("keyboard value")?;
     let pointer = match (value["kind"].as_str(), surface, text) {
         (Some("pointer"), "panel", "center-click") => Some(PointerAction::Panel),
+        (Some("pointer"), "panel", "toast-center-click") => Some(PointerAction::Toast),
         (Some("pointer"), "primary" | "popup", text) => {
             let (x, y) = text.split_once(',').ok_or("surface pointer coordinates")?;
             let (x, y) = (x.parse::<u16>()?, y.parse::<u16>()?);
@@ -220,11 +234,16 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
         .as_ref()
         .ok_or("native window is absent")?;
     let (surface, steps) = match action {
-        PointerAction::Panel => {
+        PointerAction::Panel | PointerAction::Toast => {
             let (surface, center) = window
                 .panel_pointer_target(instance)
                 .ok_or("pointer target is not this live configured buffered panel")?;
-            (surface, panel_click_steps(center)?.to_vec())
+            let steps = if action == PointerAction::Toast {
+                toast_click_steps(center)?.to_vec()
+            } else {
+                panel_click_steps(center)?.to_vec()
+            };
+            (surface, steps)
         }
         PointerAction::Primary(x, y) => (
             window
@@ -244,7 +263,7 @@ fn pointer_click(state: &mut State, instance: &str, action: PointerAction, now: 
         .and_then(|data| data.display_origin.as_ref())
         .ok_or("pointer target has no authenticated display origin")?;
     if !matches!(origin, ClientOrigin::Instance(_))
-        || (matches!(action, PointerAction::Panel | PointerAction::Popup(..)) && !origin.layer_shell())
+        || (matches!(action, PointerAction::Panel | PointerAction::Toast | PointerAction::Popup(..)) && !origin.layer_shell())
         || !window.selection_matches(origin)
         || origin
             .instance()
@@ -545,6 +564,29 @@ mod tests {
     }
 
     #[test]
+    fn pointer_plan_refuses_toast_outside_its_distinct_geometry_or_panel_role() {
+        let mut value = request();
+        value["surface"] = "panel".into();
+        value["kind"] = "pointer".into();
+        value["value"] = "toast-center-click".into();
+        assert_eq!(decode(&value, 0, 1000).unwrap().pointer, Some(PointerAction::Toast));
+        assert!(decode(&value, 1, 1000).is_err());
+        assert!(decode(&value, 0, 2000).is_err());
+        for surface in ["primary", "auxiliary", "popup", "foreign"] {
+            let mut bad = value.clone();
+            bad["surface"] = surface.into();
+            assert!(decode(&bad, 0, 1000).is_err());
+        }
+        assert!(toast_click_steps((150.0, 99.0)).is_ok());
+        assert!(panel_click_steps((150.0, 99.0)).is_err());
+        for center in [(149.5, 99.0), (150.5, 99.0), (150.0, 39.5),
+            (150.0, 960.5), (f64::NAN, 99.0), (150.0, f64::INFINITY)]
+        {
+            assert!(toast_click_steps(center).is_err());
+        }
+    }
+
+    #[test]
     fn pointer_plan_refuses_lingering_hover_or_held_button_at_delivery_end() {
         for center in [(24.0, 20.0), (8.0, 8.0), (256.0, 64.0)] {
             let (mut hovered, mut held) = (false, false);
@@ -596,5 +638,21 @@ mod tests {
             hovered && !held,
             "a primary click must not batch CursorLeft with the hit"
         );
+        let (mut hovered, mut held) = (false, false);
+        for step in toast_click_steps((150.0, 99.0)).unwrap() {
+            match step {
+                PointerStep::Enter(_) => hovered = true,
+                PointerStep::Button(ButtonState::Pressed) => {
+                    assert!(hovered && !held);
+                    held = true;
+                }
+                PointerStep::Button(ButtonState::Released) => {
+                    assert!(held);
+                    held = false;
+                }
+                PointerStep::Leave(_) => hovered = false,
+            }
+        }
+        assert!(hovered && !held, "a toast card click must retain its hit-test cursor");
     }
 }

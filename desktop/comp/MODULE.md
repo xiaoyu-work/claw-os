@@ -124,6 +124,13 @@ This clears the original toolkit tooltip's shared hover flag; otherwise its
 already-queued 100 ms task can replace the agenda with a sibling tooltip.
 No timer, App action or frame is forged, and the one-agenda-lifetime bound is
 retained rather than crediting a destroyed agenda's pixels to its replacement.
+The separate Root-owned `toast-center-click` intent retains the same live,
+acknowledged, buffered Layer surface and origin checks, but requires the
+original toast's exact 300-pixel width and bounded 80–1920-pixel height.
+Ordinary applet clicks retain their 512-by-128 bound; no production input
+authority or arbitrary toast coordinates are added. Toast card clicks release
+the button but retain the hit-test cursor, as primary card/button clicks do;
+they do not reuse the applet tooltip-cancellation gesture.
 The new bounded popup witness waits for the real `wlr_layer_surface.get_popup`
 parent assignment under the same live authenticated client/instance before
 configuring or accepting SHM pixels. Its own configure acknowledgement,

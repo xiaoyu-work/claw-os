@@ -326,7 +326,7 @@ impl Fixture {
             }
             let mut pointer =
                 calendar_popup::Driver::new(control, pam, retained, process, session, deadline);
-            pointer.click().await;
+            pointer.toast_click().await;
             wait_state(&self.service, &second.id, NotificationState::Acknowledged).await;
             self.second = Some(second);
         }

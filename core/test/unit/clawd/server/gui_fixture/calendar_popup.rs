@@ -374,6 +374,12 @@ impl<'a> Driver<'a> {
         self.pointer("panel", "center-click".to_string()).await;
     }
 
+    pub(super) async fn toast_click(&mut self) {
+        self.panel_clicks += 1;
+        assert_eq!(self.panel_clicks, 1, "one original toast acknowledgement only");
+        self.pointer("panel", "toast-center-click".to_string()).await;
+    }
+
     pub(super) async fn popup_click(&mut self, x: u16, y: u16) -> u64 {
         self.popup_clicks += 1;
         assert!(self.popup_clicks <= 4, "one restore, one delete and one confirmed clear only");
