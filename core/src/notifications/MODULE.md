@@ -72,7 +72,11 @@ and relays the public bounded rendering/preferences contract. It owns neither
 App configuration nor a user bus. The native App keeps its original popup UI,
 private preference file and image preparation. Popup mute is distinct from
 Root DND. Late preference acknowledgements are observable after a timeout,
-without replaying the write. The Agent bridge no longer claims desktop leases.
+without replaying the write. An authenticated descriptor peer's EOF retires
+the helper normally and stops its child connections; failed authentication,
+protocol errors and unrelated I/O errors remain failures. This is separate
+from checked GUI/lease retirement and never acknowledges notification data.
+The Agent bridge no longer claims desktop leases.
 The distinct `notify` send/list service intents use source `app:notify`, not
 the native producer's authority. `list_source` returns one transactional
 owner/source snapshot with newest-publication-first rows and a full retained,

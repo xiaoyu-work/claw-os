@@ -1,5 +1,46 @@
 use super::*;
 
+#[tokio::test]
+async fn parent_descriptor_orderly_close_retires_the_actual_private_transport() {
+    let (server, client) = tokio::net::UnixStream::pair().unwrap();
+    let task = tokio::spawn(parent_socket(server));
+    let client = Builder::socket(client).p2p().build().await.unwrap();
+    let peer = zbus::fdo::PeerProxy::builder(&client)
+        .destination("com.clawos.NotificationsSocket")
+        .unwrap()
+        .path(SOCKET_PATH)
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    peer.ping().await.unwrap();
+    drop(peer);
+    client.close().await.unwrap();
+    let result = tokio::time::timeout(CALL_TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.is_ok(),
+        "an orderly parent close failed transport retirement: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn parent_descriptor_failed_handshake_is_not_successful_retirement() {
+    let (server, client) = tokio::net::UnixStream::pair().unwrap();
+    let task = tokio::spawn(parent_socket(server));
+    drop(client);
+    let result = tokio::time::timeout(CALL_TIMEOUT, task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.is_err(),
+        "a peer lost before authentication cannot acknowledge retirement"
+    );
+}
+
 fn snapshot(generation: &str, title: &str) -> View {
     let card = Card {
         version: 1,

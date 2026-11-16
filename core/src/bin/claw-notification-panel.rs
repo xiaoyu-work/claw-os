@@ -83,6 +83,11 @@ mod panel {
         zbus::fdo::Error::Failed(error.to_string())
     }
 
+    fn peer_closed(error: &zbus::Error) -> bool {
+        // zbus reports an authenticated Unix peer's EOF as BrokenPipe.
+        matches!(error, zbus::Error::InputOutput(error) if error.kind() == std::io::ErrorKind::BrokenPipe)
+    }
+
     #[derive(Clone)]
     struct Presentation {
         view: Arc<Mutex<View>>,
@@ -387,6 +392,7 @@ mod panel {
                 message = messages.next() => {
                     match message {
                         Some(Ok(_)) => continue,
+                        Some(Err(error)) if peer_closed(&error) => return Ok(()),
                         Some(Err(error)) => return Err(error.to_string()),
                         None => return Ok(()),
                     }
@@ -452,35 +458,43 @@ mod panel {
         tokio::net::UnixStream::from_std(stream).map_err(|error| error.to_string())
     }
 
+    async fn parent_socket(stream: tokio::net::UnixStream) -> zbus::Result<()> {
+        let (stop, _) = tokio::sync::watch::channel(false);
+        let connection = Builder::socket(stream)
+            .p2p()
+            .server(Guid::generate())?
+            .serve_at(
+                SOCKET_PATH,
+                Socket {
+                    slots: Arc::new(Semaphore::new(8)),
+                    stop: stop.clone(),
+                },
+            )?
+            .build()
+            .await?;
+        let mut messages = zbus::MessageStream::from(&connection);
+        use futures_util::StreamExt;
+        let result = loop {
+            match messages.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) if peer_closed(&error) => break Ok(()),
+                Some(Err(error)) => break Err(error),
+                None => break Ok(()),
+            }
+        };
+        stop.send_replace(true);
+        result
+    }
+
     pub(super) fn run() -> Result<(), String> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| error.to_string())?
             .block_on(async {
-                let (stop, _) = tokio::sync::watch::channel(false);
-                let connection = Builder::socket(descriptor()?)
-                    .p2p()
-                    .server(Guid::generate())
-                    .map_err(|error| error.to_string())?
-                    .serve_at(
-                        SOCKET_PATH,
-                        Socket {
-                            slots: Arc::new(Semaphore::new(8)),
-                            stop: stop.clone(),
-                        },
-                    )
-                    .map_err(|error| error.to_string())?
-                    .build()
+                parent_socket(descriptor()?)
                     .await
-                    .map_err(|error| error.to_string())?;
-                let mut messages = zbus::MessageStream::from(&connection);
-                use futures_util::StreamExt;
-                while let Some(message) = messages.next().await {
-                    message.map_err(|error| error.to_string())?;
-                }
-                stop.send_replace(true);
-                Ok(())
+                    .map_err(|error| error.to_string())
             })
     }
 
