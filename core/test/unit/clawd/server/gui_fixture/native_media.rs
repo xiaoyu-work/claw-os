@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::HashSet;
+use std::os::unix::fs::FileTypeExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -84,19 +85,36 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn prepare() -> Self {
-        let directory = Path::new("/run/gui-fixture/native-media");
+        let directory = Path::new("/run/gui-public/native-media");
         std::fs::create_dir(directory).unwrap();
         std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
         let config = directory.join("pipewire.conf");
         std::fs::write(&config, CONFIG).unwrap();
         std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let server = OwnedChild(
+        let mut server = OwnedChild(
             owner_command("/usr/bin/pipewire")
                 .arg("-c")
                 .arg(config)
                 .spawn()
                 .unwrap(),
         );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                server.0.try_wait().unwrap().is_none(),
+                "private null-output server exited before its owner socket was ready"
+            );
+            if std::fs::symlink_metadata("/run/user/62050/pipewire-0")
+                .is_ok_and(|metadata| metadata.file_type().is_socket() && metadata.uid() == OWNER)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "private null-output server did not create its owner socket"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(!Path::new(INPUT).exists());
         let generated = owner_command("/usr/bin/gst-launch-1.0")
             .args([
