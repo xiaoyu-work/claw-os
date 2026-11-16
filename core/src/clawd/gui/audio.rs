@@ -273,6 +273,8 @@ impl Window {
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
+            #[cfg(test)]
+            command.stderr(Stdio::inherit());
             let mut command = tokio::process::Command::from(command);
             command.kill_on_drop(true);
             let mut child = command.spawn().map_err(|error| {
@@ -388,6 +390,14 @@ impl Window {
                 }
             }
         }
+        #[cfg(test)]
+        eprintln!(
+            "private GUI audio relay ended producer_current={} grant_current={} helper_status={:?}",
+            binding.producer.assert_current().is_ok(),
+            self.live().is_ok_and(|view|
+                view.id.audit_ref() == binding.grant && view.generation == binding.generation),
+            child.try_wait(),
+        );
         drop(input);
         if tokio::time::timeout(Duration::from_secs(2), child.wait())
             .await
