@@ -103,6 +103,8 @@ and agent tasks.
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `regional_settings/` | Closed locale, owner language, hostname, system-keyboard and time service; separate exact grants, authenticated owner, root-owned backends and confirmed/indeterminate outcomes |
+| `network.rs`, `network/native.rs` | Existing category-scoped network control plus bounded native metadata/profile/import operations; authenticated system bus and pinned NetworkManager owner, revision-checked closed edits and reference-only credential use |
+| `power.rs`, `power/profiles.rs` | Aggregate UPower observation, existing critical power operations and separately named desktop profile control; pinned Root backends and confirmed readback |
 | `desktop_preferences/` | Bounded existing-owner desktop config and read-only custom XKB catalog resources; exact named IPC read/write scopes, pinned owner files and no owner-tree mount or permission store |
 | `packages.rs`, `packages/query.rs` | System-wide package effects under Critical `sys.package`; separate bounded catalog/installed-state/update and named package/command availability reads under exact `sys.observe` scopes, with no fixed client identity, raw bus, package-state mount or requested-command execution |
 | `packages/catalog_reader.py` | Bounded, revision-paged standard system AppStream metadata under `sys.observe:packages`; unprivileged Metadata parsing preserves XML/YAML/localization for product-owned UI conversion, without Pool refresh, persistent cache writes, caller paths or authority-bearing cursors |
@@ -164,6 +166,26 @@ owner compositor configuration. Timezone/NTP changes retain `sys.time`;
 queries do not grant mutations. The OS Settings Daemon no longer relays an
 owner keyboard preference into localed privilege. First-boot policy and
 account/home transaction ownership remain in OS Initial Setup.
+
+Native network consumers use the same `system.network.control` service as
+other authenticated clients, not the management App's grants or a raw bus.
+Ethernet, Wi-Fi, VPN and airplane remain independent `net.manage` scopes;
+observations require `sys.observe:network`. Closed profile edits preserve
+unmodified settings and reject stale displayed revisions. Credential-assisted
+connection changes authorize their complete category/secret set at Root before
+any profile write. Vault passwords travel only through Root memory/stdin.
+Exporting one saved Wi-Fi password additionally requires its exact
+`secret.read:network.profile/<uuid>` resource; observation/control alone cannot
+export it. Bounded OpenVPN/WireGuard import accepts data, not executable hooks,
+includes or ungranted file references. Clients obtain input bytes through the
+separate exact filesystem boundary. Network effects with unconfirmed outcomes
+remain indeterminate, never silently replayed.
+
+Desktop power-profile control uses `ipc.invoke:desktop.power.profile`.
+Observation and critical `sys.power` do not substitute for this right. The
+Root-owned system76 or freedesktop profile service is pinned, and changes are
+read back before being reported as applied. Native Power UI reads the existing
+UPower aggregate, not a fabricated missing battery on provider failure.
 
 Official Store v2 binds each App to a final signed Debian package inventory.
 Preparation verifies the actual App bytes and discloses the concrete APT

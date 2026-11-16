@@ -5,7 +5,7 @@ use crate::clawd::authority::{
 };
 use crate::test_env::TestEnvVarGuard;
 
-fn decision(app: &str, caps: Vec<Cap>, include_session: bool) -> Decision {
+pub(super) fn decision(app: &str, caps: Vec<Cap>, include_session: bool) -> Decision {
     let uid = unsafe { libc::geteuid() };
     let pid = std::process::id();
     let session = format!("network-fixture-{}", uuid::Uuid::new_v4().simple());

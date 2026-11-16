@@ -10,10 +10,29 @@ use crate::proc::SessionInfo;
 use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
+mod native;
+pub use native::{cli_request, Request, MAX_INPUT};
+
 const NMCLI_TIMEOUT: Duration = Duration::from_secs(120);
 static NETWORK_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, super::protocol::BrokerError> {
+    control_inner(params, client, authority)
+        .await
+        .map_err(|error| {
+            if error.starts_with("indeterminate:") {
+                super::protocol::BrokerError::indeterminate(error)
+            } else {
+                super::protocol::BrokerError::from(error)
+            }
+        })
+}
+
+async fn control_inner(
     params: Value,
     client: &ClientIdentity,
     authority: &Decision,
@@ -32,6 +51,15 @@ pub async fn control(
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
         let action = required_string(&params, "action")?;
+        if native::handles(&action) {
+            return Box::pin(native::control(params, client, authority)).await;
+        }
+        if ["profile", "config", "interface"]
+            .iter()
+            .any(|key| params.get(key).is_some_and(|value| !value.is_null()))
+        {
+            return Err("native network fields require their matching closed action".into());
+        }
         let target = optional_string(&params, "target")?;
         let state = optional_string(&params, "state")?;
         let credential = optional_string(&params, "credential")?;
@@ -282,6 +310,7 @@ async fn resolve_connection_uuid(name: &str, category: &str) -> Result<String, S
 fn connection_type_matches(connection_type: &str, category: &str) -> bool {
     match category {
         "wifi" => is_wifi_type(connection_type),
+        "ethernet" => matches!(connection_type, "ethernet" | "802-3-ethernet"),
         "vpn" => matches!(connection_type, "vpn" | "wireguard"),
         _ => false,
     }

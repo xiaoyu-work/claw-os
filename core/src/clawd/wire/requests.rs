@@ -1742,18 +1742,7 @@ pub struct LocationQuery {
     pub accuracy: Option<Token>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NetworkControl {
-    pub session: Token,
-    pub action: Token,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<Text<LABEL_BYTES>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub state: Option<Token>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<Name>,
-}
+pub type NetworkControl = super::super::network::Request;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

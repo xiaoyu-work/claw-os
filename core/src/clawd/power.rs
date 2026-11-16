@@ -12,6 +12,8 @@ use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 
+mod profiles;
+
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 1024 * 1024;
@@ -44,6 +46,17 @@ pub async fn control(
             .get("confirm")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        if profiles::accepts(&action) {
+            if uid != authority.owner_uid() {
+                return Err(BrokerError::authorization("power profile owner mismatch"));
+            }
+            if confirm {
+                return Err(BrokerError::execution(
+                    "power profile actions do not accept --confirm",
+                ));
+            }
+            return profiles::control(&action, authority).await;
+        }
         let requested = if action == "status" {
             Cap::new(Verb::SYS_OBSERVE, Scope::name("power"))
         } else {
@@ -92,6 +105,24 @@ fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized,
 
 async fn power_status() -> Result<Value, String> {
     let devices = upower_devices().await;
+    let display = match upower_path() {
+        Ok(program) => run_checked(
+            program,
+            &[
+                "--show-info",
+                "/org/freedesktop/UPower/devices/DisplayDevice",
+            ],
+            TOOL_TIMEOUT,
+        )
+        .await
+        .map(|output| {
+            parse_upower_device(
+                "/org/freedesktop/UPower/devices/DisplayDevice",
+                &output.stdout,
+            )
+        }),
+        Err(error) => Err(error),
+    };
     let capabilities = logind_capabilities().await;
     Ok(json!({
         "providers": {
@@ -99,6 +130,7 @@ async fn power_status() -> Result<Value, String> {
             "logind": busctl_path().is_ok(),
         },
         "devices": devices.unwrap_or_else(|error| vec![json!({"error": error})]),
+        "display_device": display.unwrap_or_else(|error| json!({"error":error})),
         "capabilities": capabilities.unwrap_or_else(|error| json!({"error": error})),
     }))
 }

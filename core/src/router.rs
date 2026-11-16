@@ -935,6 +935,23 @@ fn dispatch_with_stdin_impl(
             .ok_or_else(|| "internal network command required".to_string())?;
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal network command requires COS_SESSION".to_string())?;
+        if args.get(2).map(String::as_str) == Some("--request-stdin") {
+            if args.len() != 3 {
+                return Err("network request-stdin does not accept additional arguments".into());
+            }
+            let input = parse_internal_request_object(
+                stdin_data.as_deref(),
+                crate::clawd::network::MAX_INPUT,
+                "network",
+            )?;
+            let params = crate::clawd::network::cli_request(
+                &session,
+                action,
+                &Value::Object(input).to_string(),
+            )?;
+            let value = request_wire_clawd(Command::SystemNetworkControl, params)?;
+            return Ok(Some(value.to_string()));
+        }
         let mut target = None;
         let mut state = None;
         let mut credential = None;

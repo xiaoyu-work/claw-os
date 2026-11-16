@@ -2689,7 +2689,7 @@ routes! {
         ],
         run: |c| {
             let authority = c.authority()?;
-    network::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+    network::control(c.params, c.client, authority).await
         },
     }
     SystemNetworkDiagnose {
