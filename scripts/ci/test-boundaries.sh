@@ -117,21 +117,26 @@ capture() {
     mkdir -p "$RUNNER_TEMP"
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/capture-tests.jsonl"
-    local test_binary fixture
+    local test_binary fixture listing
     test_binary="$(cos_test_binary "$RUNNER_TEMP/capture-tests.jsonl")"
-    fixture=clawd::capture::portal::tests::private_os_portal_helper_uses_root_dispatch_without_app_program
-    "$test_binary" --list | grep -Fx -- "$fixture: test" >/dev/null
-    sudo timeout --kill-after=5 45 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
-        env "COS_CAPTURE_TEST_CLAWD=$CARGO_TARGET_DIR/debug/clawd" \
-            "COS_CAPTURE_PARENT_MNT=$(readlink /proc/self/ns/mnt)" \
-            "COS_CAPTURE_PARENT_PID=$(readlink /proc/self/ns/pid)" \
-            "COS_CAPTURE_PARENT_NET=$(readlink /proc/self/ns/net)" \
-        bash --noprofile --norc -c '
-            set -euo pipefail
-            mount --make-rprivate /
-            mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
-            "$1" --exact "$2" --ignored --nocapture --test-threads=1
-        ' private-capture "$test_binary" "$fixture"
+    listing="$("$test_binary" --list)"
+    for fixture in \
+        clawd::capture::portal::tests::private_os_portal_helper_uses_root_dispatch_without_app_program \
+        clawd::capture::portal::interactive::tests::private_interactive_helper_reports_only_after_os_portal_close
+    do
+        grep -Fx -- "$fixture: test" <<< "$listing" >/dev/null
+        sudo timeout --kill-after=5 45 unshare --mount --pid --net --fork --mount-proc --kill-child=KILL \
+            env "COS_CAPTURE_TEST_CLAWD=$CARGO_TARGET_DIR/debug/clawd" \
+                "COS_CAPTURE_PARENT_MNT=$(readlink /proc/self/ns/mnt)" \
+                "COS_CAPTURE_PARENT_PID=$(readlink /proc/self/ns/pid)" \
+                "COS_CAPTURE_PARENT_NET=$(readlink /proc/self/ns/net)" \
+            bash --noprofile --norc -c '
+                set -euo pipefail
+                mount --make-rprivate /
+                mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+                "$1" --exact "$2" --ignored --nocapture --test-threads=1
+            ' private-capture "$test_binary" "$fixture"
+    done
 }
 
 app_bind() {

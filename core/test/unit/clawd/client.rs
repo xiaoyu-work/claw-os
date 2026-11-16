@@ -28,22 +28,26 @@ fn system_review_refuses_a_user_owned_broker_before_sending_any_data() {
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
-    let directory = tempfile::tempdir().unwrap();
-    let socket = directory.path().join("fake-review.sock");
-    let listener = UnixListener::bind(&socket).unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).unwrap();
-        bytes
-    });
-    let error = request_blocking(&socket, Request::build(
-        super::super::routes::Command::SystemReviewPending,
-        serde_json::json!({"limit": 100}),
-    )).unwrap_err();
-    assert!(!error.may_have_dispatched());
-    assert!(error.to_string().contains("root OS broker"));
-    assert!(server.join().unwrap().is_empty());
+    for request in [
+        Request::build(super::super::routes::Command::SystemReviewPending,
+            serde_json::json!({"limit": 100})),
+        Request::build(super::super::routes::Command::GuiCaptureControl,
+            serde_json::json!({"session":"window","action":"status","request_id":"a".repeat(32)})),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("fake-review.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let error = request_blocking(&socket, request).unwrap_err();
+        assert!(!error.may_have_dispatched());
+        assert!(error.to_string().contains("root OS broker"));
+        assert!(server.join().unwrap().is_empty());
+    }
 }
 
 #[cfg(target_os = "linux")]

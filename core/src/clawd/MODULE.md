@@ -92,7 +92,7 @@ and agent tasks.
 | `mail.rs`, `../mail_native.rs` | Account-scoped Thunderbird mail service and OS-owned Native Messaging multiplexer; independent read/draft/sender grants, owner service startup, stable message references and no mailbox authority for AI App stdout |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
-| `capture.rs`, `capture/portal.rs` | Non-interactive screenshot service and Root-parent-authenticated OS portal helper; owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence; no App program outside the Host |
+| `capture.rs`, `capture/` | Exact-output non-interactive screenshots and Root-held per-GUI interactive portal custody; authenticated OS helpers, live screen spend, metadata-only GUI results and checked portal/helper retirement; no App program or raw App bus |
 | `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
 | `clipboard.rs`, `clipboard/history.rs` | Independent selection/history capabilities; owner/session-bound legacy selection and private CopyQ data relay, with no App-name entitlement. History Restore extracts the matched standard MIME data and writes through the authenticated Root display, not CopyQ's unverified clipboard target |
 | `calendar.rs`, `calendar/files.rs` | Owner-scoped Calendar read service; exact named grant, pinned live database view and bounded unprivileged reader, with no App data mount delivered to callers |
@@ -469,6 +469,14 @@ business content up to 1008 KiB, leaving envelope headroom inside the unchanged
 1 MiB request frame. General metadata retains `Structured`'s 64 KiB string
 limit; argument depth, node, array and object limits remain enforced.
 ## Capability Authority
+
+The additive `gui.capture.control` route retains the existing envelope version.
+Only the Root private GUI endpoint supplies its per-window context; typed
+request/status/cancel data contains no owner, executable, source path or
+authority selector. It uses ordinary `GuiResource` session authorization and
+the current held screen capability, not a peer-only shortcut or an MCP relay.
+See [interactive Capture custody](gui/MODULE.md#interactive-capture) for
+correlation, human-response lifetime and checked Close/helper retirement.
 
 `authority/` holds the one thing that decides what a request may do. A **grant**
 is the daemon's own record of authority it handed out, and it is never parsed

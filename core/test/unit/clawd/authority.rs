@@ -108,7 +108,8 @@ fn route_audiences_match_their_families() {
                 || name.starts_with("gui.file.write.")
                 || name.starts_with("gui.file.create.")
                 || name == "gui.file.save.reserve"
-                || name == "gui.package.intent" => Audience::GuiResource,
+                || name == "gui.package.intent"
+                || name == "gui.capture.control" => Audience::GuiResource,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
                 || name == "app.directory_install"
@@ -159,7 +160,8 @@ fn privileged_provider_routes_resolve_a_session_grant() {
     // under the App session grant issued at bind.
     for route in ROUTES {
         if !(route.name.starts_with("system.") || route.name.starts_with("gui.file.read.")
-            || route.name.starts_with("gui.file.write.") || route.name == "gui.file.save.reserve")
+            || route.name.starts_with("gui.file.write.") || route.name == "gui.file.save.reserve"
+            || route.name == "gui.capture.control")
             || route.name == "system.operations"
             || route.name.starts_with("system.review.")
             || matches!(route.name, "system.package.status" | "system.package.recover")

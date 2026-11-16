@@ -15,6 +15,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "gui.file.create.status",
     "gui.file.create.reserve",
     "gui.package.intent",
+    "gui.capture.control",
     "daemon.health",
     "daemon.status",
     "workspace.list",

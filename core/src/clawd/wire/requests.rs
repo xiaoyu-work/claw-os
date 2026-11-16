@@ -34,6 +34,7 @@ const NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
 const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
+pub(crate) use crate::clawd::capture::gui::Request as GuiCaptureControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{
     FileWriteRequest as GuiFileWriteRequest, FileWriteStatusRequest as GuiFileWriteStatusRequest,

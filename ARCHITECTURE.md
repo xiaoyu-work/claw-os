@@ -410,6 +410,22 @@ Desktop depends on Agent's `claw-os-capture-v1` service. Screenshot MCP loses
 its direct session-bus transport; direct human CLI requests may preserve an
 already-connected terminal, but headless callers need an authenticated session.
 
+Interactive Capture now uses the common GUI Host's private per-instance
+`gui.capture.control` request/status/cancel route through the ordinary broker
+authority middleware. The selected signed GUI explicitly declares
+`desktop.capture:screen` and independently requests `ui.notify`; it never
+inherits an MCP permission union or a raw owner bus. Root retains one immutable
+correlation per window and starts its own non-root, authenticated
+`clawd --capture-gui-helper`. Region, destination and clipboard decisions remain
+human-only in the OS portal. Returned paths are bounded metadata, not content
+authority. The human response is bounded by the original live GUI lease, not
+the non-interactive 20-second deadline. Checked GUI retirement also requires a
+terminal correlated portal response or acknowledged Close and actual helper
+exit; uncertain cleanup remains pending. App notifications use the generic
+sealed owner/App source. See [GUI custody](core/src/clawd/gui/MODULE.md#interactive-capture).
+Private portal/process tests do not establish physical display or complete
+installed-native acceptance; publication gates and platform pins are unchanged.
+
 Products migrate individually from this repository to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
 Mail's native source, `mail-ai`, Thunderbird-backed `email` and extension UI

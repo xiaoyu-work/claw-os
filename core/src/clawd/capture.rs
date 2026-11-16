@@ -23,6 +23,8 @@ use crate::caps::{Cap, Scope, Verb};
 
 mod portal;
 pub use portal::helper;
+pub use portal::interactive_helper;
+pub(crate) mod gui;
 
 const MAX_PNG_BYTES: usize = 64 * 1024 * 1024;
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);

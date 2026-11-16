@@ -100,6 +100,46 @@ resource activation. `COS_OWNER_HOME` supplies the authenticated owner path
 for UI choices; `HOME` and App state remain private. Neither environment path
 grants filesystem access, defeats protected-store checks or supplies a user bus.
 
+### Interactive Capture
+
+`capture::gui` retains at most one correlated request per private GUI endpoint
+and eight outstanding requests across the broker. The closed
+`gui.capture.control` request/status/cancel route uses ordinary typed admission,
+capability-authority middleware and audit; public dispatch and MCP/Host relays
+cannot install its Root-only endpoint context. Every call proves the actual
+instance process/cgroup and current GUI grant. The selected signed surface must
+explicitly declare screen capture, and Root spends the held
+`desktop.capture:screen` capability; neither parent rights nor MCP needs select
+this feature.
+
+The fixed `clawd --capture-gui-helper` authenticates its private pre-fork Root
+parent and dispatch byte, then contacts only the authenticated owner's portal
+as that non-root owner with `no_new_privs`. No App receives the user bus.
+The helper pins the portal's unique bus owner, subscribes before Screenshot and
+checks the exact generated handle. A replacement bus-name owner cannot
+acknowledge the old request's Close.
+Human region, destination and clipboard decisions remain in the OS portal.
+Saved paths are bounded metadata only, never App filesystem grants or mounts;
+clipboard success and user cancellation remain distinct.
+
+Start/status calls return promptly; retries keep the same data-only correlation
+and immutable modal choice without replaying the portal. The human Response has
+no 20-second screenshot timeout. Root clips it to the original live GUI lease
+and checks grant/package/display lifetime through ordinary instance supervision.
+Stop, revocation, logout and explicit cancel request bounded portal Close.
+Quiescence requires the real Close acknowledgement (or a terminal correlated
+portal Response) **and** checked helper exit. A killed helper, missing report,
+unavailable Close or uncertain dispatch cannot acknowledge retirement: the GUI
+remains pending under Root custody. Cleanup may outlive a controller's bounded
+wait; retries do not turn an absent process into portal-retirement proof.
+
+The non-interactive `system.screenshot.capture` path remains separate: no
+interactive/clipboard requests, exact output-directory write authority and the
+existing non-overwriting durable filesystem journal. Capture notifications use
+the generic owner/source-bound Notification Service under independent
+`ui.notify`, not a business-name entitlement. These source/fixture contracts do
+not establish physical-display or installed-image acceptance.
+
 ### Filtered Home metadata
 
 A signed surface's explicit unconditional mandatory `fs.meta` need for the
@@ -463,6 +503,7 @@ applies; no permanent GUI grant or Admin bootstrap is created.
 | `resources.rs` | Exact owner/window Home metadata consent, filtered mount, bounded lease and checked provider retirement |
 | `selected_read.rs` | Exact file/window proposals and protected decisions, independent read/write/create authority and checked source/lease custody |
 | `broker.rs` | Instance-local authenticated provider relay into ordinary broker authorization |
+| `../capture/gui.rs`, `../capture/portal/interactive.rs` | One correlated interactive request, live screen spend and checked OS portal/helper retirement |
 | `transport.rs` | Kernel syscall notification handling and the fixed connection targets |
 | `proxy.rs` | Per-segment kernel writer/cgroup checks, bounded bytes/connections/descriptors |
 | `output.rs` | Bounded output draining after actual process retirement |
@@ -528,6 +569,7 @@ From the OS repository root on Linux:
 ```bash
 cargo test -p cos --lib -- --test-threads=1 \
   caps::manifest apps::permission_review clawd::app_sessions \
+  clawd::capture \
   clawd::system_review::presentation clawd::wire::requests \
   bridge::gui_args clawd::gui::inputs clawd::gui::output clawd::gui::proxy \
   clawd::gui::retirement clawd::app_permissions clawd::authority::store::tests::approval \

@@ -48,10 +48,11 @@ signing-key import writes only paths and key identifiers through `GITHUB_ENV`, n
 private key or passphrase. Desktop rootfs builds inherit signing environment
 variables through `sudo --preserve-env`, not process arguments.
 
-The `capture` selection runs the real `clawd` helper as a non-Root owner inside
-private mount/PID/network namespaces. An isolated synthetic portal checks
-Root-only dispatch, PNG transfer, cancellation and refusal without an App
-executable or live display. It does not establish interactive GUI acceptance.
+The `capture` selection runs both real `clawd` helpers as a non-Root owner inside
+separate private mount/PID/network namespaces. Isolated synthetic portals check
+Root-only dispatch, PNG transfer, cancellation and refusal, plus interactive
+clipboard results, deferred human responses and checked Close. No App executable
+or live display is used; this does not establish full GUI acceptance.
 
 ## Tests
 

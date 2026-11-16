@@ -13,7 +13,43 @@ use zbus::{Connection, Proxy};
 
 use super::{CAPTURE_TIMEOUT, MAX_PNG_BYTES};
 
+mod interactive;
+pub use interactive::helper as interactive_helper;
+#[cfg(test)]
+pub(super) use interactive::Outcome;
+pub(super) use interactive::{Report, REPORT_BYTES};
+
 pub fn helper(args: &[String]) -> Result<(), String> {
+    let (modal, gate) = authenticated_gate(args)?;
+    let png = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(async {
+            tokio::time::timeout(CAPTURE_TIMEOUT, async {
+                let mut gate =
+                    tokio::net::UnixStream::from_std(gate).map_err(|error| error.to_string())?;
+                if gate.read_u8().await.map_err(|error| error.to_string())? != 1 {
+                    return Err("Capture dispatch was not authorized by root clawd".into());
+                }
+                let connection = Connection::session()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                match portal_path(&connection, modal).await? {
+                    Some(path) => consume_png(&path),
+                    None => Ok(Vec::new()),
+                }
+            })
+            .await
+            .map_err(|_| "Capture adapter timed out".to_string())?
+        })?;
+    std::io::stdout()
+        .lock()
+        .write_all(&png)
+        .map_err(|error| error.to_string())
+}
+
+fn authenticated_gate(args: &[String]) -> Result<(bool, UnixStream), String> {
     if args.len() != 2 {
         return Err("Capture adapter requires modal state and a broker fd".into());
     }
@@ -53,32 +89,7 @@ pub fn helper(args: &[String]) -> Result<(), String> {
     let gate = unsafe { UnixStream::from_raw_fd(fd) };
     gate.set_nonblocking(true)
         .map_err(|error| error.to_string())?;
-    let png = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| error.to_string())?
-        .block_on(async {
-            tokio::time::timeout(CAPTURE_TIMEOUT, async {
-                let mut gate =
-                    tokio::net::UnixStream::from_std(gate).map_err(|error| error.to_string())?;
-                if gate.read_u8().await.map_err(|error| error.to_string())? != 1 {
-                    return Err("Capture dispatch was not authorized by root clawd".into());
-                }
-                let connection = Connection::session()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                match portal_path(&connection, modal).await? {
-                    Some(path) => consume_png(&path),
-                    None => Ok(Vec::new()),
-                }
-            })
-            .await
-            .map_err(|_| "Capture adapter timed out".to_string())?
-        })?;
-    std::io::stdout()
-        .lock()
-        .write_all(&png)
-        .map_err(|error| error.to_string())
+    Ok((modal, gate))
 }
 
 async fn portal_path(connection: &Connection, modal: bool) -> Result<Option<PathBuf>, String> {

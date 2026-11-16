@@ -31,6 +31,7 @@ struct BoundProcess {
 struct State {
     registration: Arc<Registration>,
     package_intents: Arc<crate::clawd::packages::gui::WindowIntents>,
+    capture: Arc<crate::clawd::capture::gui::Window>,
     process: OnceLock<BoundProcess>,
     stopped: AtomicBool,
     listener_done: AtomicBool,
@@ -62,6 +63,7 @@ impl Broker {
         let (shutdown, mut ended) = tokio::sync::watch::channel(false);
         let state = Arc::new(State {
             package_intents: crate::clawd::packages::gui::WindowIntents::new(registration.clone()),
+            capture: crate::clawd::capture::gui::Window::new(registration.clone()),
             registration,
             process: OnceLock::new(),
             stopped: AtomicBool::new(false),
@@ -128,6 +130,7 @@ impl Broker {
             .get()
             .map_or(Ok(()), |_| Err("GUI broker process was already bound".to_string()))?;
         self.state.package_intents.bind(process.clone(), resources.gui_cgroup()?)?;
+        self.state.capture.bind(process.clone())?;
         self.state
             .process
             .set(BoundProcess {
@@ -140,6 +143,7 @@ impl Broker {
     pub fn stop(&self) {
         self.state.stopped.store(true, Ordering::Release);
         self.state.package_intents.stop();
+        self.state.capture.stop();
         self.state.shutdown.send_replace(true);
     }
 
@@ -155,9 +159,11 @@ impl Broker {
     pub fn quiescent(&self) -> bool {
         self.state.listener_done.load(Ordering::Acquire)
             && self.state.inflight.load(Ordering::Acquire) == 0
+            && self.state.capture.quiescent()
     }
 
     pub fn health(&self) -> Result<(), String> {
+        self.state.capture.health()?;
         let failure = self
             .state
             .failure
@@ -370,7 +376,8 @@ async fn serve(
                 Response::handler_error(request.id, BrokerError::authorization(
                     "this GUI's native resources require exact selected-file consent; scalar filesystem providers cannot bypass it"))
             } else {
-                crate::clawd::server::dispatch_verified_request(request, &client, &daemon, &admission).await
+                crate::clawd::capture::gui::within(endpoint.capture.clone(),
+                    crate::clawd::server::dispatch_verified_request(request, &client, &daemon, &admission)).await
             }
         }
     };

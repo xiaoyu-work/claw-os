@@ -2351,6 +2351,19 @@ routes! {
             super::filesystem::access(c.params, authority, true).await.map_err(BrokerError::from)
         },
     }
+    GuiCaptureControl {
+        name: "gui.capture.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiCaptureControl,
+        audit: &[("session", FieldRule::Token), ("request_id", FieldRule::Token), ("action", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::capture::gui::control(c.params, c.client, authority).await
+        },
+    }
     SystemScreenshotCapture {
         name: "system.screenshot.capture",
         access: Access::User,

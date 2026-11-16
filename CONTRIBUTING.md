@@ -234,7 +234,7 @@ cargo test -p cos --test app_source_fixtures -- --test-threads=1
 # Exact CI lint.
 (cd core && cargo clippy -- -D warnings)
 
-# OS capture helper with a private portal and real unprivileged clawd child.
+# OS Capture helpers: private PNG/interactive portal, real clawd children and checked Close.
 GITHUB_WORKSPACE="$PWD" RUNNER_TEMP="$PWD/build" \
   bash scripts/ci/test-boundaries.sh capture
 

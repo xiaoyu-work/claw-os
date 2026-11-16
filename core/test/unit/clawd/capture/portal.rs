@@ -5,18 +5,18 @@ use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-struct Bus {
+pub(super) struct Bus {
     child: Child,
-    address: String,
+    pub(super) address: String,
     _directory: tempfile::TempDir,
 }
 
 impl Bus {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::start(tempfile::tempdir().unwrap(), None)
     }
 
-    fn start(directory: tempfile::TempDir, owner: Option<u32>) -> Self {
+    pub(super) fn start(directory: tempfile::TempDir, owner: Option<u32>) -> Self {
         use std::os::unix::process::CommandExt;
         let address = format!("unix:path={}/bus", directory.path().display());
         let mut command = std::process::Command::new("dbus-daemon");

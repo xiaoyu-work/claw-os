@@ -12,6 +12,18 @@ fn main() {
     let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
     if raw_args
         .first()
+        .is_some_and(|arg| arg == "--capture-gui-helper")
+    {
+        match cos::clawd::capture::interactive_helper(&raw_args[1..]) {
+            Ok(()) => return,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if raw_args
+        .first()
         .is_some_and(|arg| arg == "--capture-helper")
     {
         match cos::clawd::capture::helper(&raw_args[1..]) {

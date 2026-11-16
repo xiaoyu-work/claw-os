@@ -1138,6 +1138,15 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__gui-capture" {
+        if args.len() != 3 || args[2] != "--request-stdin" {
+            return Err("GUI Capture bridge requires `request|status|cancel --request-stdin`".into());
+        }
+        let params = parse_internal_request_object(stdin_data.as_deref(), 4096, "GUI Capture")?;
+        let value = crate::clawd::capture::gui::cli(&args[1], params)?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__capture" {
         if args.len() != 3 || args[1] != "screenshot" || args[2] != "--request-stdin" {
             return Err("internal capture bridge requires `screenshot --request-stdin`".into());
