@@ -1489,8 +1489,10 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "/retained original-UI package self-handoff"
         } else if product.observation.is_some() {
             "/protected ordinary package observation"
-        } else {
+        } else if pty.is_some() {
             "/empty-authority private PTY"
+        } else {
+            ""
         },
         if editor {
             "UI Save As and separately pending overwrite verified"
