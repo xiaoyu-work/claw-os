@@ -514,6 +514,12 @@ pub struct DeliveryClaim {
     pub attempts: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DeliveryRevision {
+    pub occurrences: u32,
+    pub attempts: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryResult {
     Delivered,
@@ -599,7 +605,19 @@ pub trait NotificationService: Send + Sync {
         owner_uid: u32,
         id: &str,
         mutation: NotificationMutation,
-    ) -> Result<Notification, NotificationError>;
+    ) -> Result<Notification, NotificationError> {
+        self.mutate_at(owner_uid, id, None, mutation)?
+            .ok_or(NotificationError::NotFound)
+    }
+
+    /// With a displayed occurrence, change only that still-active publication.
+    fn mutate_at(
+        &self,
+        owner_uid: u32,
+        id: &str,
+        occurrences: Option<u32>,
+        mutation: NotificationMutation,
+    ) -> Result<Option<Notification>, NotificationError>;
 
     /// Atomically mark all retained, unexpired unread records for this owner.
     /// This is presentation state only, not acknowledgement or consent.
@@ -627,7 +645,20 @@ pub trait NotificationService: Send + Sync {
         id: &str,
         channel: DeliveryChannel,
         result: DeliveryResult,
-    ) -> Result<Notification, NotificationError>;
+    ) -> Result<Notification, NotificationError> {
+        self.complete_delivery_at(owner_uid, id, channel, None, result)?
+            .ok_or(NotificationError::NotFound)
+    }
+
+    /// A bound receipt cannot settle another publication or retry attempt.
+    fn complete_delivery_at(
+        &self,
+        owner_uid: u32,
+        id: &str,
+        channel: DeliveryChannel,
+        revision: Option<DeliveryRevision>,
+        result: DeliveryResult,
+    ) -> Result<Option<Notification>, NotificationError>;
 
     fn known_owner_uids(&self) -> Result<Vec<u32>, NotificationError>;
 }

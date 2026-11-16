@@ -14,6 +14,8 @@ fn gui_capture_correlation_is_single_window_immutable_and_closed() {
     let id = "a".repeat(32);
     let entry = Entry {
         id: id.clone(),
+        image: false,
+        bytes: None,
         modal: true,
         active: true,
         retired: false,
@@ -51,6 +53,8 @@ fn gui_capture_correlation_is_single_window_immutable_and_closed() {
 fn gui_capture_never_reports_outcome_before_portal_and_helper_retirement() {
     let mut entry = Entry {
         id: "a".repeat(32),
+        image: false,
+        bytes: None,
         modal: false,
         active: true,
         retired: false,

@@ -141,6 +141,11 @@ Wire schemas and `wire/v1/contract.json` are the source of truth. Core, MCP,
 and every language SDK consume them.
 Serialization changes stay backwards compatible unless introduced under a new
 wire version.
+The existing notification-presentation companion is a root workspace member.
+Its optional D-Bus client accepts the common zbus 5.5 API range, preserving
+Core's exact established pin and independent desktop consumers. This changes
+neither the presentation wire contract nor the verified published 0.2.1 App
+artifact/pin; Apps continue to build against that artifact's own graph.
 JSON Schema integers use mathematical semantics: finite values with no
 fractional component, including `1.0` and exponent notation. Type validation
 runs before schema minimum/maximum checks in every generated decoder. Wire

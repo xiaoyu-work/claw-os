@@ -15,6 +15,9 @@ use crate::notifications::{
 
 use super::client_identity::ClientIdentity;
 
+#[cfg(target_os = "linux")]
+pub(crate) mod gui;
+
 const DEFAULT_SUBSCRIBE_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_DELIVERY_LEASE_MS: i64 = 30_000;
 const EXTERNAL_BATCH_SIZE: usize = 16;
@@ -265,6 +268,10 @@ pub fn claim_deliveries(params: Value, client: &ClientIdentity) -> Result<Value,
     if channel == DeliveryChannel::Ntfy {
         return Err("ntfy delivery is owned by the daemon dispatcher".to_string());
     }
+    #[cfg(target_os = "linux")]
+    if channel == DeliveryChannel::Desktop && gui::retains_desktop(owner_uid)? {
+        return Err("desktop delivery is in the custody of the authorized native presenter".into());
+    }
     let limit = optional_limit(&params)?;
     let lease_ms = params
         .get("lease_ms")
@@ -286,6 +293,10 @@ pub fn complete_delivery(params: Value, client: &ClientIdentity) -> Result<Value
         .map_err(|error| error.to_string())?;
     if channel == DeliveryChannel::Ntfy {
         return Err("ntfy delivery is owned by the daemon dispatcher".to_string());
+    }
+    #[cfg(target_os = "linux")]
+    if channel == DeliveryChannel::Desktop && gui::retains_desktop(owner_uid)? {
+        return Err("desktop delivery is in the custody of the authorized native presenter".into());
     }
     let result = match required_string(&params, "status")?.as_str() {
         "delivered" => DeliveryResult::Delivered,

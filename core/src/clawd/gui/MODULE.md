@@ -140,6 +140,113 @@ the generic owner/source-bound Notification Service under independent
 `ui.notify`, not a business-name entitlement. These source/fixture contracts do
 not establish physical-display or installed-image acceptance.
 
+The original human `--interactive=false --save-dir` GUI path uses the existing
+controlled Home metadata and selected-create SDK contract, not an inherited MCP
+directory grant. Its signed surface additionally declares mandatory Home
+`fs.meta` and optional Home `fs.write` eligibility. Root separately reviews the
+window's metadata and the exact absent output filename. The App reserves one
+ordinary creation scratch, requests Screen-authorized PNG data through the same
+private Capture endpoint, writes the selected scratch and requires the provider's
+canonical `created` result after no-replace finalization. Startup/parent caps
+never widen, and an existing/racing target refuses rather than being adopted.
+The existing selected-file limit is 8 MiB; ordinary MCP's separate bounded
+directory output contract is unchanged.
+
+PNG data uses closed `image`/`read_image` actions: one bounded image per window,
+at most 64 MiB retained, 128-KiB byte chunks and the same eight-request custody
+ceiling. Every chunk rechecks the live exact GUI authority. The image attempt has
+the non-interactive deadline; human interactive decisions still do not.
+Stop/revocation clears retained bytes and the original checked portal/helper
+barrier remains mandatory. Interactive saved-path results continue to grant
+neither content nor output access.
+
+### Managed playback
+
+The private `gui.media.exchange` endpoint carries commands and replies for this
+one authenticated GUI. Publishing an App's own playback state creates no
+capability and cannot name another App, owner, session or executable. It is not
+an owner-bus proxy. Normal public dispatch refuses the exchange; only the
+common Host's checked per-message process/cgroup endpoint can enter it.
+
+The owner registry selects one running target under the existing exact
+`desktop.media.observe:cosmic-player` or `desktop.media.control:cosmic-player`
+caller grant. Multiple targets remain ambiguous. Root keeps at most eight
+pending requests per window, obtains fresh caller authorization before releasing
+a command, and rechecks it before returning a result. The native UI itself
+handles each command and samples status; there is no independent MCP state
+cache. Expired, cancelled or retired requests cannot become new playback
+commands, and an unconfirmed outcome must not be replayed automatically.
+Window retirement closes the exchange and fails retained requests. Media file
+and output access remain independent native filesystem selections, not effects
+of playback permission or returned metadata.
+
+### Notification presentation
+
+The selected signed GUI must explicitly declare the fixed named resource
+`ipc.subscribe:notifications.presentation` before receiving another source's
+leased display projection. Exact presentation actions and popup preferences
+independently require `ipc.invoke` for that same resource. The ordinary
+catalog, protected review and live authority decisions apply; neither an App
+identity nor the separate `ui.panel` surface permission supplies these rights.
+Own-source `data.inbox.read` and publication `ui.notify` remain unchanged.
+The resource also requires this same surface's explicit fixed `ui.panel`
+declaration and spends that high-risk right on every exchange; a low-risk
+topic subscription cannot become a standalone all-source inbox.
+
+`gui.notification.exchange` runs only inside this instance's authenticated
+private broker context. Root keeps one presenter per owner, the existing
+desktop delivery leases/DND/retry policy, and bounded connection-local handles
+with fresh per-delivery tickets. It exports no owner/source selector, database,
+global inbox, bus endpoint or capability. Renderer acceptance is not user
+acknowledgement. Only exact active handles admit dismiss/default-ack actions;
+ordinary expiry, eviction and checked retirement never acknowledge.
+
+The existing shell descriptor terminates in the Agent-owned
+`claw-notification-panel`, which proxies public cards and App-owned popup mute,
+not private product libraries or owner configuration. The actual original
+Layer Shell App remains under the common Host. Retirement fences exchanges,
+checks process/cgroup and compositor teardown, then releases presenter custody;
+failed cleanup cannot silently admit a replacement. No Agent task/UI is needed.
+Private native cases 42–43 exercise real signed popup pixels, the descriptor,
+durable delivery/actions and checked retirement; they run only in the
+disposable authenticated-display fixture, not on a shared live desktop.
+
+### Output-only audio
+
+`gui.audio.control` accepts only bounded stereo S16LE PCM at 48 kHz through
+this window's private broker. The selected GUI must explicitly declare
+`device.audio:output`, and normal authority middleware spends the held grant.
+There is no caller-selected device, rate, program, bus, PipeWire graph handle or
+recording mode. The App receives no owner sound-server or microphone descriptor.
+
+The fixed `cos __gui-audio --pcm-stdin` transport uses ordinary correlated,
+one-request broker calls, not extra frames on an answered connection. Root
+retains at most eight output helpers and a bounded queue per stream. Its fixed
+unprivileged `pw-cat --playback` child consumes only PCM stdin in the
+authenticated owner's sound session. Sequence checks reject replayed blocks.
+The original GUI grant and producer pidfd stay live throughout playback;
+pause does not become an arbitrary short tool timeout. Stop, producer death,
+revocation and logout close the relay, and GUI quiescence waits for observed
+helper exit. A silent thumbnail decoder disables its audio sink instead.
+
+### Human file picker
+
+`gui.file.picker` presents the original OS FileChooser portal for one live
+authenticated GUI and returns one human-selected local URI as metadata. It
+does not open the file, copy its content, issue a grant or authorize a later
+operation. The selected GUI must explicitly declare and hold `ui.prompt`;
+ordinary live authority checks spend that existing presentation capability,
+not a filesystem permission. Public and MCP callers cannot install its
+private instance context. A filename or picker response is never permission.
+
+Open/status/cancel retain immutable options and correlation, the original
+GUI lease, eight bounded portal slots and the shared protected installed
+`clawd` helper. Completion requires correlated portal completion or checked
+Close plus observed helper exit; uncertain cleanup remains under Root custody.
+Media subsequently requests its independent selected file read. Settings
+and other consumers retain their own exact operation/secret/file capabilities.
+No App receives an owner-bus connection.
+
 ### Filtered Home metadata
 
 A signed surface's explicit unconditional mandatory `fs.meta` need for the

@@ -90,7 +90,7 @@ def payload(tmp_path, request):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
-    if product not in ("calendar", "desktop-widgets", "clipboard"):
+    if product not in ("calendar", "desktop-widgets", "clipboard", "notifications"):
         support = prepared / "licenses/claw-app-gui-argv/LICENSE"
         support.parent.mkdir(parents=True)
         support.write_text("synthetic support license\n")
@@ -98,7 +98,7 @@ def payload(tmp_path, request):
         "version": "0.2.1", "runtime_abi": 1,
         "sha256": (
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
-            if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings") else "a" * 64
+            if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings", "capture", "notifications", "media-player") else "a" * 64
         ),
         "url": "https://github.com/xiaoyu-work/claw-os/releases/download/"
                "app-platform-v0.2.1/claw-os-app-platform-0.2.1.tar.gz",
@@ -120,7 +120,7 @@ def test_inventory_binds_every_payload_byte_and_entry_mode(payload):
     assert record["entrypoints"] == entries
     assert record["resources"] == sorted(resources)
     before = record["payload_inventory"]
-    resource = prepared / resources[0]
+    resource = prepared / (resources[0] if resources else "LICENSE")
     resource.write_text(resource.read_text() + "changed")
     assert editor.inventory(prepared) != before
     for entry in entries:
@@ -154,12 +154,13 @@ def test_header_only_elf_and_missing_installer_resources_cannot_enter_lane(paylo
         with pytest.raises(ValueError, match="loadable amd64 ELF"):
             editor.payload_record(source, prepared, {}, product)
         executable.write_bytes(original)
-    (prepared / resources[-1]).unlink()
-    with pytest.raises(ValueError, match="original native installer resource"):
-        editor.payload_record(source, prepared, {}, product)
+    if resources:
+        (prepared / resources[-1]).unlink()
+        with pytest.raises(ValueError, match="original native installer resource"):
+            editor.payload_record(source, prepared, {}, product)
 
 
-@pytest.mark.parametrize("payload", ["terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings"], indirect=True)
+@pytest.mark.parametrize("payload", ["terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings", "capture", "notifications", "media-player"], indirect=True)
 def test_native_product_refuses_an_unapproved_platform_digest(payload):
     source, prepared, product = payload
     path = source / "platform.lock.json"

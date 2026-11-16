@@ -28,11 +28,23 @@ PRODUCTS = {
     "clipboard": ("panel-clipboard", "com.clawos.AppletClipboard", ()),
     "launcher": ("cosmic-launcher", "com.clawos.Launcher", ()),
     "settings": ("cosmic-settings", "com.clawos.Settings", ()),
+    "capture": ("cosmic-screenshot", "com.clawos.Screenshot", ()),
+    "notifications": ("cosmic-notifications", "com.clawos.Notifications", ()),
+    "media-player": ("cosmic-player", "com.clawos.Player", ()),
 }
 
 
 def product_layout(product):
     app, desktop_id, auxiliary = PRODUCTS[product]
+    if product == "notifications":
+        return app, [f"bin/{app}"], ()
+    if product == "capture":
+        return app, [f"bin/{app}"], (
+            f"resources/usr/share/applications/{desktop_id}.desktop",
+            f"resources/usr/share/icons/hicolor/scalable/apps/{desktop_id}.svg",
+            *(f"resources/usr/share/icons/hicolor/{size}x{size}/apps/{desktop_id}.png"
+              for size in (16, 24, 32, 48, 64, 128, 256)),
+        )
     if product in ("desktop-widgets", "clipboard"):
         program = "claw-applet-widget-rail" if product == "desktop-widgets" else "claw-applet-clipboard"
         return app, [f"bin/{program}"], (
@@ -43,11 +55,14 @@ def product_layout(product):
             f"resources/usr/share/applications/{desktop_id}.desktop",
             f"resources/usr/share/icons/hicolor/scalable/actions/{desktop_id}-symbolic.svg",
         )
-    return app, [f"bin/{app}", *auxiliary], (
+    resources = (
         f"resources/usr/share/applications/{desktop_id}.desktop",
         f"resources/usr/share/metainfo/{desktop_id}.metainfo.xml",
         f"resources/usr/share/icons/hicolor/scalable/apps/{desktop_id}.svg",
     )
+    if product == "media-player":
+        resources += (f"resources/usr/share/thumbnailers/{desktop_id}.thumbnailer",)
+    return app, [f"bin/{app}", *auxiliary], resources
 
 
 def digest(path):
@@ -136,12 +151,12 @@ def payload_record(source, payload, lock, product="editor"):
         )
     ):
         raise ValueError("Native acceptance requires the published 0.2.1 platform pin")
-    if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings") and platform.get("sha256") != (
+    if product in ("terminal", "calendar", "store", "desktop-widgets", "clipboard", "launcher", "settings", "capture", "notifications", "media-player") and platform.get("sha256") != (
         "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
     ):
         raise ValueError("Native acceptance requires the approved published platform bytes")
     licenses = [(payload / "LICENSE", source / "products" / product / "native/LICENSE")]
-    if product not in ("calendar", "desktop-widgets", "clipboard"):
+    if product not in ("calendar", "desktop-widgets", "clipboard", "notifications"):
         licenses.append((payload / "licenses/claw-app-gui-argv/LICENSE", source / "LICENSE"))
     for path, original in licenses:
         if path.read_bytes() != original.read_bytes():

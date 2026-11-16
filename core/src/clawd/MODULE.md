@@ -88,19 +88,22 @@ and agent tasks.
 | `notifications.rs` | Owner-scoped notification RPC and atomic read-all, non-authoritative conversation-view hints, due-nudge fanout, and external delivery dispatcher |
 | `nearby/` | Owner/window-bound AirDrop sharing, exact human offer decisions, private uploads/snapshots, isolated transport and checked radio retirement; see `nearby/MODULE.md` |
 | `app_notifications.rs` | Capability-gated App post/close/send and own-source list, sealed App/owner attribution, no business-name entitlement or user-bus access |
+| `notifications/gui.rs` | Exact signed-GUI presentation resource, single owner desktop consumer, publication/attempt-bound receipts and private shell descriptor projection; never an App inbox or name entitlement |
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `mail.rs`, `../mail_native.rs` | Account-scoped Thunderbird mail service and OS-owned Native Messaging multiplexer; independent read/draft/sender grants, owner service startup, stable message references and no mailbox authority for AI App stdout |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs`, `capture/` | Exact-output non-interactive screenshots and Root-held per-GUI interactive portal custody; authenticated OS helpers, live screen spend, metadata-only GUI results and checked portal/helper retirement; no App program or raw App bus |
-| `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
+| `media_player.rs`, `media_player/gui.rs` | Capability-gated media clients and the exact managed native GUI exchange; separate caller grants, current package/instance binding, live UI commands/status and deadlines, without owner-bus or compatibility-executable discovery |
 | `clipboard.rs`, `clipboard/history.rs` | Independent selection/history capabilities; owner/session-bound legacy selection and private CopyQ data relay, with no App-name entitlement. History Restore extracts the matched standard MIME data and writes through the authenticated Root display, not CopyQ's unverified clipboard target |
 | `calendar.rs`, `calendar/files.rs` | Owner-scoped Calendar read service; exact named grant, pinned live database view and bounded unprivileged reader, with no App data mount delivered to callers |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
+| `desktop/helper.rs` | Descriptor-pinned protected installed `clawd` launcher and authenticated pre-fork Root-parent helper socket, shared by owner portal adapters; no caller executable or runtime test override |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
-| `regional_settings/` | Closed locale/owner-language/static-hostname service; three separate exact grants, authenticated owner, root-owned D-Bus backends and confirmed/indeterminate outcomes |
+| `regional_settings/` | Closed locale, owner language, hostname, system-keyboard and time service; separate exact grants, authenticated owner, root-owned backends and confirmed/indeterminate outcomes |
+| `desktop_preferences/` | Bounded existing-owner desktop config and read-only custom XKB catalog resources; exact named IPC read/write scopes, pinned owner files and no owner-tree mount or permission store |
 | `packages.rs`, `packages/query.rs` | System-wide package effects under Critical `sys.package`; separate bounded catalog/installed-state/update and named package/command availability reads under exact `sys.observe` scopes, with no fixed client identity, raw bus, package-state mount or requested-command execution |
 | `packages/catalog_reader.py` | Bounded, revision-paged standard system AppStream metadata under `sys.observe:packages`; unprivileged Metadata parsing preserves XML/YAML/localization for product-owned UI conversion, without Pool refresh, persistent cache writes, caller paths or authority-bearing cursors |
 | `system_caps.rs` | System capability derivation |
@@ -144,6 +147,23 @@ cannot invoke the human `permission.apps` or privileged approval routes.
 The service does not execute another App or grant its requested capabilities.
 Target manifests, trust ceilings, supported scopes and checked GUI retirement
 remain enforced; restoration is only a request to the trusted OS presenter.
+
+Desktop preference resources likewise have no fixed consumer identity.
+`system.desktop-preferences.control` selects a closed OS namespace/version,
+never an owner, home, arbitrary path or bus. Reads and writes require separate
+exact `desktop.preferences.*` IPC scopes; mono-output configuration additionally
+spends the output-device right. The existing owner files are read through
+pinned no-symlink descriptors and atomically replaced per key; partial multi-key
+or post-write failures stay indeterminate. Custom XKB catalogs disclose only
+the owner's two standard metadata files, with no executable or image contents
+and no filesystem grant. Public `/usr` catalogs need no new mount.
+
+Regional settings add exact observation, system-keyboard and time actions.
+System keyboard defaults require `sys.locale:keyboard`, independently of
+owner compositor configuration. Timezone/NTP changes retain `sys.time`;
+queries do not grant mutations. The OS Settings Daemon no longer relays an
+owner keyboard preference into localed privilege. First-boot policy and
+account/home transaction ownership remain in OS Initial Setup.
 
 Official Store v2 binds each App to a final signed Debian package inventory.
 Preparation verifies the actual App bytes and discloses the concrete APT

@@ -56,6 +56,7 @@ case "$component" in
             usr/share/keyrings/claw-apps-archive-key.asc
             etc/apt/sources.list.d/claw-apps.sources
             usr/lib/cos/bin/claw-app-apt-hook
+            usr/lib/cos/bin/claw-notification-panel
             usr/lib/cos/app-apt-metadata.py
             usr/lib/cos/skills/claw-os/SKILL.md
             usr/lib/cos/skills/claw-os/diagnostics.md

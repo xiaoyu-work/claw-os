@@ -2298,14 +2298,22 @@ fn authorize_optional_gui_needs(
         Err(_) => return result,
     };
     for (index, need) in selected.optional_needs.iter().enumerate() {
+        let owner_scope = match &need.scope {
+            ScopeBinding::OwnerPath { path } if selected.optional_need_is_bound(need) =>
+                crate::caps::manifest::resolve_owner_path(need.verb, path, &delegation.paths).ok(),
+            _ => None,
+        };
         let requested = if !selected.optional_need_is_bound(need) {
             None
         } else {
             match &need.scope {
                 ScopeBinding::Fixed { scope } => Some(vec![Cap::new(need.verb, scope.clone())]),
-                ScopeBinding::OwnerPath { path } => crate::caps::manifest::resolve_owner_path(
-                    need.verb, path, &delegation.paths,
-                ).ok().map(|scope| vec![Cap::new(need.verb, scope)]),
+                ScopeBinding::OwnerPath { .. } => owner_scope.clone().map(|scope| {
+                    let mut requested = vec![Cap::new(need.verb, scope.clone())];
+                    requested.extend(delegation.ceiling.iter().filter(|held|
+                        held.verb==need.verb && held.scope!=scope && scope.covers(&held.scope)).cloned());
+                    requested
+                }),
                 ScopeBinding::Wild if ceiling.allows_wild_binding(need.verb) => {
                     inherited_wild_caps(need.verb, delegation).ok()
                 }
@@ -2322,6 +2330,10 @@ fn authorize_optional_gui_needs(
                 Ok((cap, _)) => cap,
                 Err(_) => { complete = false; continue; }
             };
+            if owner_scope.as_ref().is_some_and(|scope| !scope.covers(&cap.scope)) {
+                complete = false;
+                continue;
+            }
             if granted.covers(&cap) {
                 continue;
             }
@@ -2341,6 +2353,10 @@ fn authorize_optional_gui_needs(
             }
             if delegation.ceiling.covers(&cap) {
                 granted.insert(cap);
+                continue;
+            }
+            if owner_scope.as_ref().is_some_and(|scope| *scope!=cap.scope) {
+                complete = false;
                 continue;
             }
             match crate::approvals::redeem_reusable_gui_grant_for_owner(

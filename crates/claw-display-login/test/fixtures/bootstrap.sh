@@ -7,6 +7,29 @@ native_product=
 native_app=
 native_calendar_reader=
 native_launcher_backend=
+native_capture_helper=
+native_notification_helper=
+native_notification_probe=
+notification_case=42
+if [[ $# == 18 && ( "${15}" == --native-notifications-only || "${15}" == --native-notifications-revoke-only ) ]]; then
+    [[ "${15}" != --native-notifications-revoke-only ]] || notification_case=43
+    native_notification_helper=$(realpath -- "${17}")
+    native_notification_probe=$(realpath -- "${18}")
+    [[ -f "$native_notification_helper" && -x "$native_notification_helper" && ! -L "$native_notification_helper" \
+        && -f "$native_notification_probe" && -x "$native_notification_probe" && ! -L "$native_notification_probe" ]] || exit 64
+    set -- "${@:1:14}" --native-notifications-only "${16}"
+elif [[ $# == 16 && "${15}" == --native-notifications-only ]]; then
+    printf 'actual Notifications requires its OS panel helper and owner descriptor probe\n' >&2
+    exit 64
+fi
+if [[ $# == 17 && "${15}" == --native-capture-only ]]; then
+    native_capture_helper=$(realpath -- "${17}")
+    [[ -f "$native_capture_helper" && -x "$native_capture_helper" && ! -L "$native_capture_helper" ]] || exit 64
+    set -- "${@:1:16}"
+elif [[ $# == 16 && "${15}" == --native-capture-only ]]; then
+    printf 'actual Capture requires its matching compiled OS clawd helper\n' >&2
+    exit 64
+fi
 if [[ $# == 17 && "${15}" == --native-launcher-only ]]; then
     native_launcher_backend=$(realpath -- "${17}")
     [[ -f "$native_launcher_backend" && -x "$native_launcher_backend" && ! -L "$native_launcher_backend" ]] || exit 64
@@ -23,7 +46,7 @@ elif [[ $# == 16 && ( "${15}" == --native-calendar-only || "${15}" == --native-d
     printf 'actual Calendar consumers require the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only || "${15}" == --native-launcher-only || "${15}" == --native-settings-only ) ]]; then
+if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only || "${15}" == --native-launcher-only || "${15}" == --native-settings-only || "${15}" == --native-capture-only || "${15}" == --native-notifications-only || "${15}" == --native-media-player-only ) ]]; then
     if [[ "${15}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
@@ -48,6 +71,15 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
     elif [[ "${15}" == --native-settings-only ]]; then
         native_product=settings
         native_app=cosmic-settings
+    elif [[ "${15}" == --native-capture-only ]]; then
+        native_product=capture
+        native_app=cosmic-screenshot
+    elif [[ "${15}" == --native-notifications-only ]]; then
+        native_product=notifications
+        native_app=cosmic-notifications
+    elif [[ "${15}" == --native-media-player-only ]]; then
+        native_product=media-player
+        native_app=cosmic-player
     else
         native_product=calendar
         native_app=panel-calendar
@@ -138,6 +170,13 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$registry" /usr/local/bin/claw-gui-broker-fixture
     registry=/usr/local/bin/claw-gui-broker-fixture
     install -m0755 "$cos" /usr/local/bin/cos
+    if [[ "$native_product" == capture ]]; then
+        install -m0755 "$native_capture_helper" /usr/local/bin/clawd
+    fi
+    if [[ "$native_product" == notifications ]]; then
+        install -m0755 "$native_notification_helper" /usr/lib/cos/bin/claw-notification-panel
+        install -m0755 "$native_notification_probe" /usr/lib/cos/bin/claw-notification-panel-fixture
+    fi
     install -m0755 "$gui_runner" /usr/local/bin/claw-gui-runner
     install -m0755 "$app_runner" /usr/local/bin/claw-app-runner
     install -m0755 "$session" /usr/local/bin/claw-display-session
@@ -250,6 +289,10 @@ if [[ "$gui" == 1 ]]; then
         printf 'private-native-product-v1' >/run/gui-public/native-product-enabled
         chmod 0644 /run/gui-public/native-product-enabled
     fi
+    if [[ "$native_product" == notifications ]]; then
+        printf '%s' "$notification_case" >/run/gui-fixture/native-notification-case
+        chmod 0600 /run/gui-fixture/native-notification-case
+    fi
     if [[ "$native_product" == calendar || "$native_product" == desktop-widgets || "$native_product" == clipboard || "$native_product" == launcher ]]; then
         printf '%s' "$native_product" >/run/gui-fixture/native-panel-product
         chmod 0600 /run/gui-fixture/native-panel-product
@@ -320,6 +363,9 @@ BUS
         native-files) fixture_test=clawd::server::gui_fixture::native_products::private_native_files ;;
         native-terminal) fixture_test=clawd::server::gui_fixture::native_products::private_native_terminal ;;
         native-settings) fixture_test=clawd::server::gui_fixture::native_products::private_native_settings ;;
+        native-capture) fixture_test=clawd::server::gui_fixture::native_products::private_native_capture ;;
+        native-notifications) fixture_test=clawd::server::gui_fixture::native_products::private_native_notifications ;;
+        native-media-player) fixture_test=clawd::server::gui_fixture::native_products::private_native_media_player ;;
         native-calendar|native-desktop-widgets|native-clipboard|native-launcher) fixture_test=clawd::server::gui_fixture::native_products::private_native_panel ;;
         native-store|native-store-package) fixture_test=clawd::server::gui_fixture::native_products::private_native_store ;;
         native-package) fixture_test=clawd::server::gui_fixture::package::private_native_package_self_handoff ;;
@@ -343,6 +389,18 @@ BUS
     if [[ -n "$native_product" ]]; then
         cp "/run/gui-fixture/native-$native_product.json" "$private/native-$native_product.json"
         chmod 0644 "$private/native-$native_product.json"
+        if [[ "$native_product" == capture && -f /run/gui-fixture/native-capture-consumer.json ]]; then
+            cp /run/gui-fixture/native-capture-consumer.json "$private/native-capture-consumer.json"
+            chmod 0644 "$private/native-capture-consumer.json"
+        fi
+        if [[ "$native_product" == notifications && -f /run/gui-fixture/native-notifications-consumer.json ]]; then
+            cp /run/gui-fixture/native-notifications-consumer.json "$private/native-notifications-consumer.json"
+            chmod 0644 "$private/native-notifications-consumer.json"
+        fi
+        if [[ "$native_product" == media-player && -f /run/gui-fixture/native-media-player-consumer.json ]]; then
+            cp /run/gui-fixture/native-media-player-consumer.json "$private/native-media-player-consumer.json"
+            chmod 0644 "$private/native-media-player-consumer.json"
+        fi
         if [[ -f /run/user/62050/native-product-observer/window.json ]]; then
             cp /run/user/62050/native-product-observer/window.json "$private/native-$native_product-window.json"
             chmod 0644 "$private/native-$native_product-window.json"

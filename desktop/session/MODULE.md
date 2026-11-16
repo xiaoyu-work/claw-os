@@ -27,6 +27,22 @@ watcher, so a downstream component startup panic cannot leave Tokio runtime
 shutdown waiting on a live display subscription. Normal exits still cancel
 and check the watcher join; startup failures retain their original diagnostic.
 
+## Notification presentation descriptors
+
+The existing paired panel descriptor now terminates in the Agent-owned
+`/usr/lib/cos/bin/claw-notification-panel`, not an App with a raw owner bus.
+The session independently starts the normal `cosmic-notifications` common-Host
+launcher; its signed GUI needs and Root lifetime still apply. The helper and
+panel retain their existing descriptor/restart coupling without restarting the
+App or supplying its grants. Native popup delivery does not require the Agent
+UI or an Agent task.
+
+The helper serves the public rendering/preferences contract and standard
+private close signals. It relays the Root-owned presentation resource; App UI,
+images and private popup preferences remain App-owned. It cannot grant
+capabilities, read App configuration or claim desktop deliveries. Display loss
+still retires the normal App instance through the shared Root supervisor.
+
 ## File-manager desktop intents
 
 The optional `data/claw-file-manager.desktop` resource installs in

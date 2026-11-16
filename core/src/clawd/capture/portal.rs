@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::FromRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -15,9 +14,8 @@ use super::{CAPTURE_TIMEOUT, MAX_PNG_BYTES};
 
 mod interactive;
 pub use interactive::helper as interactive_helper;
-#[cfg(test)]
-pub(super) use interactive::Outcome;
-pub(super) use interactive::{Report, REPORT_BYTES};
+pub use interactive::image_helper;
+pub(super) use interactive::{Outcome, Report, REPORT_BYTES};
 
 pub fn helper(args: &[String]) -> Result<(), String> {
     let (modal, gate) = authenticated_gate(args)?;
@@ -59,36 +57,7 @@ fn authenticated_gate(args: &[String]) -> Result<(bool, UnixStream), String> {
     let fd = args[1]
         .parse::<i32>()
         .map_err(|_| "invalid capture broker fd")?;
-    if fd < 3 || unsafe { libc::getuid() } != unsafe { libc::geteuid() } {
-        return Err("Capture adapter requires the authenticated owner identity".into());
-    }
-    let mut peer: libc::ucred = unsafe { std::mem::zeroed() };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // This private pre-fork channel is bound to the Root parent, not an App sender.
-    if unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            std::ptr::addr_of_mut!(peer).cast(),
-            &mut length,
-        )
-    } != 0
-        || length as usize != std::mem::size_of::<libc::ucred>()
-        || peer.uid != 0
-        || peer.pid != unsafe { libc::getppid() }
-    {
-        return Err("Capture adapter was not started by root clawd".into());
-    }
-    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
-        return Err(format!(
-            "harden capture adapter: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let gate = unsafe { UnixStream::from_raw_fd(fd) };
-    gate.set_nonblocking(true)
-        .map_err(|error| error.to_string())?;
+    let gate = crate::clawd::desktop::authenticated_helper_gate(fd)?;
     Ok((modal, gate))
 }
 
@@ -196,7 +165,7 @@ fn consume_png(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/test/unit/clawd/capture/portal.rs"

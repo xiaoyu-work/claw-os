@@ -77,7 +77,7 @@ route.
 | Staged file changes | App-owned bounded proposals and review fingerprints, applied through exact-capability broker replacement without expanding target mounts for rename | External Files App, `core/src/clawd/file_changes.rs`, `docs/file-change-plans.md` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
-| Notification service | Durable owner/source-scoped user-attention records, bounded native intent, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs` |
+| Notification service | Durable owner/source-scoped records, DND/retries/channel leases, capability-bound single native presenter and OS shell descriptor | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs`, `core/src/clawd/notifications/gui.rs`, `core/src/bin/claw-notification-panel.rs` |
 | Nearby sharing | Owner-scoped file sharing independent of Agent tasks, one bounded radio window, exact per-offer consent, private staging and owner inbox; non-root AirDrop parser and dedicated checked radio lease service | `core/src/clawd/nearby/`, `crates/clawd-client/src/nearby.rs`, `crates/claw-nearby/`, `docs/nearby-sharing.md` |
 | Notification presentation definition | Renderer-independent private presentation contract with bounded text/pixels; no grants, product configuration or durable notification state | `claw-os-sdk/rust/notification-presentation/`, `claw-os-sdk/wire/v1/notification-presentation.md` |
 | App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
@@ -353,6 +353,20 @@ not a direct privileged setter or App-owned approval. System defaults and
 owner preferences are independent, non-atomic effects. No broad polkit policy,
 GUI authority bootstrap or account-administration permission is inherited.
 
+Owner desktop preferences follow the same definition/provider/consumer seam:
+`clawd::desktop_preferences` selects closed versioned compositor/theme/input
+resources, the pinned owner-file provider preserves existing configuration
+ownership, and native Settings consumes bounded snapshots and confirmed
+per-key writes through the published generic SDK transport. Private App HOME
+contains presentation caches only; it is neither an owner `.config` mount nor
+a second settings/permission authority. Named IPC reads/writes are independent;
+mono-output configuration additionally spends output-device control. Public
+XKB files remain system resources; the two owner custom catalogs are a separate
+read-only resource. System/login keyboard changes require the explicit
+`sys.locale:keyboard` Root operation: Settings Daemon no longer elevates an owner
+compositor write into localed mutation. OS Initial Setup retains its pre-login
+account/home transaction and policy ownership.
+
 The OS exposes `system.media-player.control` to independently authorized
 sessions, without a fixed caller App identity. The seven closed actions still
 address only `cosmic-player`, with independent exact `desktop.media.observe`
@@ -372,8 +386,11 @@ The complete 110-file native Player fork, descriptor, 72 locales, thumbnailer,
 desktop/metainfo files, icons and independent locked renderer now live in
 `clawos-app/products/media-player`. `just player-build` consumes immutable
 inputs at `build/native-apps/cosmic-player`; no production source remains at
-`desktop/player`. The native UI publishes its live playback state through its
-own MPRIS backend, and all seven MCP calls address that same state. Stop and
+`desktop/player`. The managed native UI receives typed playback requests through its exact
+private GUI broker and all seven MCP calls address that same UI state. Root
+selects the live signed package/instance, not a compatibility executable or an
+owner-bus name. The original MPRIS backend remains separate from the managed
+transport; a failed managed call never falls back to it. Stop and
 empty/ended playback status are corrected without replacing the original UI.
 The worker has no session bus, media files, GUI transport or second playback
 cache. The cancellable explicit-binary SDK uses `/usr/local/bin/cos`.

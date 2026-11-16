@@ -3,13 +3,12 @@ use std::time::Duration;
 use anyhow::Context;
 use cosmic_comp_config::XkbConfig;
 use cosmic_config::{ConfigGet, ConfigSet};
-use tokio::sync::mpsc::Receiver;
 use tokio_stream::StreamExt;
 
 pub const COSMIC_COMP_ID: &'static str = "com.clawos.Comp";
 pub const COSMIC_COMP_XDG_KEY: &'static str = "xkb_config";
 
-pub async fn sync_locale1(mut rx: Receiver<()>) -> anyhow::Result<()> {
+pub async fn sync_locale1() -> anyhow::Result<()> {
     let conn = zbus::Connection::system().await?;
     let proxy = locale1::locale1Proxy::new(&conn).await?;
     let config = cosmic_config::Config::new(COSMIC_COMP_ID, 1)
@@ -36,19 +35,10 @@ pub async fn sync_locale1(mut rx: Receiver<()>) -> anyhow::Result<()> {
     // Sync on startup only if the xkb config is not set.
     if config.get::<XkbConfig>(COSMIC_COMP_XDG_KEY).is_err() {
         _ = sync_locale1_to_cosmic(&config, &proxy).await;
-    } else {
-        _ = sync_cosmic_to_locale1(&config, &proxy).await;
     }
 
     loop {
         if let Err(err) = tokio::select! {
-            received = rx.recv() => {
-                if received.is_some() {
-                    sync_cosmic_to_locale1(&config, &proxy).await
-                } else {
-                    Ok(())
-                }
-            },
             _ = model_stream.next() => sync_locale1_to_cosmic(&config, &proxy).await,
             _ = layout_stream.next() => sync_locale1_to_cosmic(&config, &proxy).await,
             _ = variant_stream.next() => sync_locale1_to_cosmic(&config, &proxy).await,
@@ -57,28 +47,6 @@ pub async fn sync_locale1(mut rx: Receiver<()>) -> anyhow::Result<()> {
             log::error!("Failed to sync xkb_config with systemd-localed: {}", err);
         };
     }
-}
-
-async fn sync_cosmic_to_locale1(
-    config: &cosmic_config::Config,
-    proxy: &locale1::locale1Proxy<'_>,
-) -> anyhow::Result<()> {
-    let xkb_config = config
-        .get::<XkbConfig>(COSMIC_COMP_XDG_KEY)
-        .context("xkb-config not set")?;
-
-    proxy
-        .set_x11keyboard(
-            &xkb_config.layout,
-            &xkb_config.model,
-            &xkb_config.variant,
-            xkb_config.options.as_deref().unwrap_or(""),
-            true,
-            false,
-        )
-        .await
-        .context("Failed to update systemd-locale1 from xkb_config")?;
-    Ok(())
 }
 
 async fn sync_locale1_to_cosmic(

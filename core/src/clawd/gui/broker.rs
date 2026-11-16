@@ -32,6 +32,10 @@ struct State {
     registration: Arc<Registration>,
     package_intents: Arc<crate::clawd::packages::gui::WindowIntents>,
     capture: Arc<crate::clawd::capture::gui::Window>,
+    media: Arc<crate::clawd::media_player::gui::Window>,
+    audio: Arc<super::audio::Window>,
+    picker: Arc<super::file_picker::Window>,
+    notifications: Arc<crate::clawd::notifications::gui::Window>,
     process: OnceLock<BoundProcess>,
     stopped: AtomicBool,
     listener_done: AtomicBool,
@@ -53,6 +57,7 @@ impl Broker {
         admission: Arc<Admission>,
         executor: &tokio::runtime::Handle,
         home_metadata: bool,
+        media: Arc<crate::clawd::media_player::gui::Window>,
     ) -> Result<Self, String> {
         listener
             .set_nonblocking(true)
@@ -64,6 +69,10 @@ impl Broker {
         let state = Arc::new(State {
             package_intents: crate::clawd::packages::gui::WindowIntents::new(registration.clone()),
             capture: crate::clawd::capture::gui::Window::new(registration.clone()),
+            media,
+            audio: super::audio::Window::new(registration.clone()),
+            picker: super::file_picker::Window::new(registration.clone()),
+            notifications: crate::clawd::notifications::gui::Window::new(registration.clone()),
             registration,
             process: OnceLock::new(),
             stopped: AtomicBool::new(false),
@@ -131,6 +140,10 @@ impl Broker {
             .map_or(Ok(()), |_| Err("GUI broker process was already bound".to_string()))?;
         self.state.package_intents.bind(process.clone(), resources.gui_cgroup()?)?;
         self.state.capture.bind(process.clone())?;
+        self.state.media.bind(process.clone())?;
+        self.state.audio.bind(process.clone())?;
+        self.state.picker.bind(process.clone())?;
+        self.state.notifications.bind(process.clone())?;
         self.state
             .process
             .set(BoundProcess {
@@ -144,6 +157,10 @@ impl Broker {
         self.state.stopped.store(true, Ordering::Release);
         self.state.package_intents.stop();
         self.state.capture.stop();
+        self.state.media.stop();
+        self.state.audio.stop();
+        self.state.picker.stop();
+        self.state.notifications.stop();
         self.state.shutdown.send_replace(true);
     }
 
@@ -153,13 +170,16 @@ impl Broker {
         if !self.state.stopped.load(Ordering::Acquire) || !self.quiescent() {
             return Err("package-intent provider has not quiesced".into());
         }
-        self.state.package_intents.release_after_death(group, deadline)
+        self.state.package_intents.release_after_death(group, deadline)?;
+        self.state.notifications.release_after_death()
     }
 
     pub fn quiescent(&self) -> bool {
         self.state.listener_done.load(Ordering::Acquire)
             && self.state.inflight.load(Ordering::Acquire) == 0
             && self.state.capture.quiescent()
+            && self.state.audio.quiescent()
+            && self.state.picker.quiescent()
     }
 
     pub fn health(&self) -> Result<(), String> {
@@ -370,14 +390,22 @@ async fn serve(
                     Ok(value) => Response::ok(request.id, value),
                     Err(error) => Response::handler_error(request.id, error),
                 }
+            } else if request.command == Command::GuiMediaExchange {
+                match endpoint.media.exchange(request.params, &client).await {
+                    Ok(value) => Response::ok(request.id, value),
+                    Err(error) => Response::handler_error(request.id, error),
+                }
             } else if endpoint.home_metadata && matches!(request.command,
                 Command::SystemFilesystemRead | Command::SystemFilesystemWrite | Command::SystemFileReplace)
             {
                 Response::handler_error(request.id, BrokerError::authorization(
                     "this GUI's native resources require exact selected-file consent; scalar filesystem providers cannot bypass it"))
             } else {
-                crate::clawd::capture::gui::within(endpoint.capture.clone(),
-                    crate::clawd::server::dispatch_verified_request(request, &client, &daemon, &admission)).await
+                crate::clawd::notifications::gui::within(endpoint.notifications.clone(),
+                    super::file_picker::within(endpoint.picker.clone(),
+                        super::audio::within(endpoint.audio.clone(),
+                            crate::clawd::capture::gui::within(endpoint.capture.clone(),
+                                crate::clawd::server::dispatch_verified_request(request, &client, &daemon, &admission))))).await
             }
         }
     };

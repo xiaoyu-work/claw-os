@@ -456,7 +456,9 @@ pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::
         | super::Command::GuiFileCreateReserve) {
         return Ok(command.route());
     }
-    if matches!(command, super::Command::GuiPackageIntent | super::Command::GuiCaptureControl) {
+    if matches!(command, super::Command::GuiPackageIntent | super::Command::GuiCaptureControl
+        | super::Command::GuiMediaExchange | super::Command::GuiAudioControl
+        | super::Command::GuiFilePicker | super::Command::GuiNotificationExchange) {
         return Ok(command.route());
     }
     super::relayable_route(command)

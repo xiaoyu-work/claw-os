@@ -18,7 +18,6 @@ desktop/agent/
 │   └── src/
 │       ├── main.rs         # 127.0.0.1 Axum server (/api only)
 │       ├── state.rs        # port discovery + shared clawd client
-│       ├── notifications.rs # clawd delivery lease → session D-Bus popup
 │       └── routes/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
 │           ├── activities.rs # shared Activity service + durable work admission
@@ -93,8 +92,7 @@ are not verified effects, and goal completion remains explicit.
            ┌──────────────────────────┐
            │  cos-agent-bridge        │
            │  127.0.0.1:$PORT         │
-           │  /api/* + notification   │
-           │  delivery subscriber     │
+           │  /api/*                  │
            └────────────┬─────────────┘
                         │
                         ▼  Unix socket
@@ -104,11 +102,11 @@ are not verified effects, and goal completion remains explicit.
            └──────────────────────────┘
 ```
 
-The bridge also claims pending desktop deliveries from the owner-scoped
-Notification Service, posts them to the graphical session's
-`org.freedesktop.Notifications` D-Bus service, and reports delivery success or
-retryable failure to `clawd`. This reverse bridge keeps the system daemon out
-of the user's session bus.
+Native desktop delivery is independent of this bridge. The
+[Root GUI resource](../../core/src/clawd/gui/MODULE.md#notification-presentation)
+owns the single automatic desktop consumer and the original App popup
+lifetime. The OS shell descriptor carries public cards and exact presentation
+actions, not a raw App bus or a model/UI prerequisite.
 
 The bridge and approval applet share `crates/clawd-client` for canonical
 `CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),
@@ -127,10 +125,8 @@ The shared client inventory also retains mainline's protected
 [`system.review.*` contract](../../crates/clawd-client/MODULE.md), including
 root-peer checks, and the notification acknowledge/dismiss routes. Activity
 constraints do not replace the existing review presenter or create consent.
-The bridge keeps the mainline notification consumer: it binds presentations
-to the installed executable and unique D-Bus sender, reflects durable
-acknowledgement/dismissal, and retires timed-out/disconnected handles without
-acknowledging their records. Activities add no second delivery loop.
+The bridge owns no desktop delivery loop. The retained explicit private-bus
+example is historical compatibility coverage only, never a production fallback.
 
 The UI and bridge both compile against `protocol/` (`cos-agent-protocol`).
 That crate exclusively owns the desktop presentation contract: endpoint DTOs,

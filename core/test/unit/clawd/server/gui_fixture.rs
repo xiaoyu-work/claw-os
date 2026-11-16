@@ -369,7 +369,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     if case == 11 {
         caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::name("audio")));
     }
-    if [19, 20, 21, 23, 25, 26].contains(&case) {
+    if [19, 20, 21, 23, 25, 26, 40, 41].contains(&case) {
         caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")));
     }
     if case == 20 {
@@ -378,7 +378,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     if case == 24 {
         caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/Projects/**")));
     }
-    let session = if case == 20 || case == 23 || case == 24 {
+    let session = if case == 20 || case == 23 || case == 24 || case == 39 {
         format!("gui-fixture-parent-{case}-{}", process.pid())
     } else {
         format!("gui-fixture-parent-{case}")

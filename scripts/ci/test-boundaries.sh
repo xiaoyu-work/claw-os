@@ -296,7 +296,7 @@ extensions() {
 
 display() {
     local selection="${1:-display}"
-    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard || "$selection" == native-launcher || "$selection" == native-settings ]]; then
+    if [[ "$selection" == native-editor || "$selection" == native-files || "$selection" == native-terminal || "$selection" == native-calendar || "$selection" == native-store || "$selection" == native-desktop-widgets || "$selection" == native-clipboard || "$selection" == native-launcher || "$selection" == native-settings || "$selection" == native-capture || "$selection" == native-notifications || "$selection" == native-media-player ]]; then
         cargo test -p cos --lib --locked native_editor_readiness -- --test-threads=1
         if [[ "$selection" == native-calendar || "$selection" == native-desktop-widgets ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
@@ -325,6 +325,12 @@ display() {
     cargo build -p cos --locked --bin cos --bin claw-display-host \
         --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner \
         --bin claw-file-manager
+    if [[ "$selection" == native-capture ]]; then
+        cargo build -p cos --locked --bin clawd
+    fi
+    if [[ "$selection" == native-notifications ]]; then
+        cargo build -p cos --locked --bin claw-notification-panel --example notification-panel-fixture
+    fi
     if [[ "$selection" == native-package || "$selection" == native-store ]]; then
         local program
         for program in apt-get dpkg dpkg-deb dpkg-query apt-ftparchive gpg gpgconf python3 unshare bwrap setfacl; do
@@ -353,12 +359,15 @@ display() {
         crates/claw-display-login/test/fixtures/pam_login.c \
         -lpam -ldl -o "$CARGO_TARGET_DIR/pam-login-fixture"
     mkdir -p "$GITHUB_WORKSPACE/build"
-    if [[ "$selection" == display || "$selection" == native-fs || "$selection" == native-editor || "$selection" == native-files ]]; then
+    if [[ "$selection" == display || "$selection" == native-fs || "$selection" == native-editor || "$selection" == native-files || "$selection" == native-capture || "$selection" == native-media-player ]]; then
         test -c /dev/fuse
     fi
     local rounds=("$selection")
     if [[ "$selection" == native-store ]]; then
         rounds+=(native-store-package)
+    fi
+    if [[ "$selection" == native-notifications ]]; then
+        rounds+=(native-notifications-revoke)
     fi
     local fixture_mode
     for fixture_mode in "${rounds[@]}"; do
@@ -373,9 +382,16 @@ display() {
         elif [[ "$fixture_mode" == native-launcher ]]; then
             selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input"
                 "$CARGO_TARGET_DIR/native-launcher-service/release/pop-launcher-bin")
+        elif [[ "$fixture_mode" == native-capture ]]; then
+            selectors=("--native-capture-only" "$GITHUB_WORKSPACE/build/native-capture-input"
+                "$CARGO_TARGET_DIR/debug/clawd")
+        elif [[ "$fixture_mode" == native-notifications || "$fixture_mode" == native-notifications-revoke ]]; then
+            selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/native-notifications-input"
+                "$CARGO_TARGET_DIR/debug/claw-notification-panel"
+                "$CARGO_TARGET_DIR/debug/examples/notification-panel-fixture")
         elif [[ "$fixture_mode" == native-store-package ]]; then
             selectors=(--native-store-package-only "$GITHUB_WORKSPACE/build/native-store-input")
-        elif [[ "$fixture_mode" == native-editor || "$fixture_mode" == native-files || "$fixture_mode" == native-terminal || "$fixture_mode" == native-store || "$fixture_mode" == native-clipboard || "$fixture_mode" == native-settings ]]; then
+        elif [[ "$fixture_mode" == native-editor || "$fixture_mode" == native-files || "$fixture_mode" == native-terminal || "$fixture_mode" == native-store || "$fixture_mode" == native-clipboard || "$fixture_mode" == native-settings || "$fixture_mode" == native-media-player ]]; then
             selectors=("--$fixture_mode-only" "$GITHUB_WORKSPACE/build/$fixture_mode-input")
         elif [[ "$fixture_mode" == file-manager ]]; then
             selectors=(--file-manager-only)
@@ -508,9 +524,12 @@ case "${1:-}" in
     native-clipboard) display native-clipboard ;;
     native-launcher) display native-launcher ;;
     native-settings) display native-settings ;;
+    native-capture) display native-capture ;;
+    native-notifications) display native-notifications ;;
+    native-media-player) display native-media-player ;;
     applets) applets ;;
     *)
-        echo "usage: $0 {app-apt|app-bind|capture|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|native-settings|applets}" >&2
+        echo "usage: $0 {app-apt|app-bind|capture|nearby|calendar|extensions|display|native-fs|file-manager|native-package|native-editor|native-files|native-terminal|native-calendar|native-store|native-desktop-widgets|native-clipboard|native-launcher|native-settings|native-capture|native-notifications|native-media-player|applets}" >&2
         exit 2
         ;;
 esac

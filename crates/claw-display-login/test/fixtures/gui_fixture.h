@@ -99,8 +99,26 @@ static int gui_entry(int count, char **arguments) {
         && strcmp(arguments[2], "cosmic-launcher") == 0 && strcmp(arguments[3], "--gui") == 0;
     int settings = count == 4 && strcmp(arguments[1], "app") == 0
         && strcmp(arguments[2], "cosmic-settings") == 0 && strcmp(arguments[3], "--gui") == 0;
+    int notifications = count == 4 && strcmp(arguments[1], "app") == 0
+        && strcmp(arguments[2], "cosmic-notifications") == 0 && strcmp(arguments[3], "--gui") == 0;
+    int player = count >= 5 && strcmp(arguments[1], "app") == 0
+        && strcmp(arguments[2], "cosmic-player") == 0 && strcmp(arguments[3], "--gui") == 0
+        && ((count == 5 && strcmp(arguments[4], "/run/display-home/native-player.webm") == 0)
+            || (count == 9 && strcmp(arguments[4], "--thumbnail") == 0
+                && strcmp(arguments[5], "/run/display-home/native-player-thumbnail.png") == 0
+                && strcmp(arguments[6], "--size") == 0 && strcmp(arguments[7], "160x90") == 0
+                && strcmp(arguments[8], "/run/display-home/native-player.webm") == 0));
+    int capture = count >= 4 && count <= 8 && strcmp(arguments[1], "app") == 0
+        && strcmp(arguments[2], "cosmic-screenshot") == 0 && strcmp(arguments[3], "--gui") == 0
+        && (count == 4 || (count == 5 && (strcmp(arguments[4], "--modal=false") == 0
+            || strcmp(arguments[4], "--notify=false") == 0))
+            || (count == 6 && strcmp(arguments[4], "--modal=false") == 0
+                && strcmp(arguments[5], "--notify=false") == 0)
+            || (count == 8 && strcmp(arguments[4], "--interactive=false") == 0
+                && strcmp(arguments[5], "--notify=false") == 0 && strcmp(arguments[6], "--save-dir") == 0
+                && strcmp(arguments[7], "/run/display-home/Pictures") == 0));
     if (getuid() != 62050 || geteuid() != 62050 || getgid() != 62050
-        || (count != 7 && !editor && !files && !terminal && !calendar && !store && !widgets && !clipboard && !launcher && !settings)
+        || (count != 7 && !editor && !files && !terminal && !calendar && !store && !widgets && !clipboard && !launcher && !settings && !capture && !notifications && !player)
         || strcmp(arguments[0], "/usr/local/bin/cos") != 0)
         return 64;
     const char *runtime = getenv("XDG_RUNTIME_DIR");
@@ -163,10 +181,13 @@ static int gui_fixture(void) {
         "panel", "panel-read", "panel-write", "window", "panel-revoke", "panel-revoke", "metadata",
         "selected-read", "selected-write", "package", "metadata-subroot", "selected-create",
         "native-editor", "native-files", "native-terminal", "native-calendar", "native-store",
-        "native-desktop-widgets", "native-clipboard", "native-launcher", "native-settings"
+        "native-desktop-widgets", "native-clipboard", "native-launcher", "native-settings",
+        "native-capture-file", "native-capture-clipboard", "native-capture-cancel",
+        "native-capture-revoke", "native-capture-logout", "native-capture-file-output",
+        "native-media-player", "native-media-thumbnail", "native-notifications-deliver", "native-notifications-revoke"
     };
     pid_t child = -1;
-    int gate = -1, result = -1;
+    int gate = -1, result = -1, capture_logout = 0;
     if (gui_reply("AUTH", -1) != 0)
         return -1;
     fprintf(stderr, "private PAM GUI controller ready\n");
@@ -187,6 +208,7 @@ static int gui_fixture(void) {
                 + (unsigned)(selected[1] - '0');
             if (scenario >= sizeof(modes) / sizeof(modes[0]))
                 break;
+            capture_logout = scenario == 38;
             int descriptors[2];
             if (pipe2(descriptors, O_CLOEXEC) != 0)
                 break;
@@ -202,7 +224,7 @@ static int gui_fixture(void) {
                     _exit(121);
                 close(descriptors[0]);
                 char session[64];
-                int length = scenario == 20 || scenario == 23 || scenario == 24
+                int length = scenario == 20 || scenario == 23 || scenario == 24 || scenario == 39
                     ? snprintf(session, sizeof(session), "gui-fixture-parent-%u-%ld", scenario, (long)getpid())
                     : snprintf(session, sizeof(session), "gui-fixture-parent-%u", scenario);
                 if (length < 0 || (size_t)length >= sizeof(session))
@@ -226,9 +248,55 @@ static int gui_fixture(void) {
                     || setenv("COSMIC_SESSION_SOCK", "/run/forged-session", 1) != 0
                     || setenv("CLAW_DISPLAY_CONTROL_FD", "97", 1) != 0)
                     _exit(122);
-                if (scenario >= 25 && scenario <= 33) {
+                if (scenario >= 25 && scenario <= 39) {
                     if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0)
                         _exit(122);
+                    if (scenario >= 34) {
+                        if (scenario == 34)
+                            execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "app", "cosmic-screenshot", "--gui", (char *)NULL);
+                        else if (scenario == 35)
+                            execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "app", "cosmic-screenshot", "--gui", "--modal=false", (char *)NULL);
+                        else if (scenario == 39)
+                            execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "app", "cosmic-screenshot", "--gui", "--interactive=false",
+                                  "--notify=false", "--save-dir", "/run/display-home/Pictures", (char *)NULL);
+                        else if (scenario == 37)
+                            execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "app", "cosmic-screenshot", "--gui", "--modal=false", "--notify=false", (char *)NULL);
+                        else
+                            execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                                  "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                                  "app", "cosmic-screenshot", "--gui", "--notify=false", (char *)NULL);
+                        _exit(123);
+                    }
+                    if (scenario == 40) {
+                        if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0) _exit(122);
+                        execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "app", "cosmic-player", "--gui", "/run/display-home/native-player.webm", (char *)NULL);
+                        _exit(123);
+                    }
+                    if (scenario == 41) {
+                        execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "app", "cosmic-player", "--gui", "--thumbnail",
+                              "/run/display-home/native-player-thumbnail.png", "--size", "160x90",
+                              "/run/display-home/native-player.webm", (char *)NULL);
+                        _exit(123);
+                    }
+                    if (scenario == 42 || scenario == 43) {
+                        if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0) _exit(122);
+                        execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
+                              "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
+                              "app", "cosmic-notifications", "--gui", (char *)NULL);
+                        _exit(123);
+                    }
                     if (scenario >= 26) {
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                               "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
@@ -296,6 +364,9 @@ static int gui_fixture(void) {
             child = -1;
             if (gui_reply(WIFEXITED(status) && WEXITSTATUS(status) == 0 ? "PASS" : "FAIL", -1) != 0)
                 break;
+        } else if (memcmp(command, "LOGO", 4) == 0 && capture_logout && child > 0 && gate < 0) {
+            result = 0;
+            break;
         } else if (memcmp(command, "CLSE", 4) == 0 && child < 0) {
             result = 0;
             break;

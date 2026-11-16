@@ -60,6 +60,10 @@ path = "src/bin/claw-file-manager.rs"
 name = "claw-app-apt-hook"
 path = "src/bin/claw-app-apt-hook.rs"
 
+[[bin]]
+name = "claw-notification-panel"
+path = "src/bin/claw-notification-panel.rs"
+
 [features]
 default = []
 
@@ -92,7 +96,7 @@ goblin = "0.10"
 bytes = "1"
 crc32fast = "1"
 cosmic-client-toolkit = { path = "../desktop/protocols/client-toolkit", default-features = false }
-zbus = { version = "=5.5.0", default-features = false, features = ["blocking-api", "tokio"] }
+zbus = { version = "=5.5.0", default-features = false, features = ["blocking-api", "tokio", "p2p"] }
 
 # Phase 7 (skill bundle signatures): ed25519 verification for skill
 # manifests so a `Vendor`/`Hub` install can be authenticated against a
@@ -135,6 +139,7 @@ semver = "1"
 # future consumer.
 claw-embed = { path = "../crates/claw-embed" }
 claw-os-sdk = { path = "../claw-os-sdk/rust" }
+claw-notification-presentation = { path = "../claw-os-sdk/rust/notification-presentation" }
 
 # `cos agent serve` — built-in web UI for headless / WSL setups. axum +
 # tower-http give us SSE streaming and a minimal HTTP surface without

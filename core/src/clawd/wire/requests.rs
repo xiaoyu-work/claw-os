@@ -35,6 +35,11 @@ const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
 pub(crate) use crate::clawd::capture::gui::Request as GuiCaptureControl;
+pub(crate) use crate::clawd::media_player::gui::Exchange as GuiMediaExchange;
+pub(crate) use crate::clawd::gui::audio::Request as GuiAudioControl;
+pub(crate) use crate::clawd::gui::file_picker::Request as GuiFilePicker;
+pub(crate) use crate::clawd::notifications::gui::{Exchange as GuiNotificationExchange, PanelRequest as NotificationPresentationControl};
+pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{
     FileWriteRequest as GuiFileWriteRequest, FileWriteStatusRequest as GuiFileWriteStatusRequest,

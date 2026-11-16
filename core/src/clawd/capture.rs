@@ -16,15 +16,18 @@ use tokio::io::AsyncReadExt;
 
 use super::authority::Decision;
 use super::client_identity::{ClientIdentity, FsIdentityGuard};
-use super::desktop::{configured_user_command, DesktopEnvironment};
+use super::desktop::{protected_helper_command as helper_command, DesktopEnvironment};
 use super::filesystem::Target;
 use super::wire::requests::ScreenshotRequest;
 use crate::caps::{Cap, Scope, Verb};
 
 mod portal;
 pub use portal::helper;
+pub use portal::image_helper;
 pub use portal::interactive_helper;
 pub(crate) mod gui;
+#[cfg(test)]
+pub(crate) use portal::tests::Bus as TestPortalBus;
 
 const MAX_PNG_BYTES: usize = 64 * 1024 * 1024;
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -51,11 +54,7 @@ pub async fn capture(
     validate_session_bus(authority.owner_uid())?;
     let (mut gate, helper_gate) = UnixStream::pair().map_err(|error| error.to_string())?;
     let fd = helper_gate.as_raw_fd();
-    let mut command = configured_user_command(
-        Path::new("/proc/self/exe"),
-        &helper_args(request.modal, fd),
-        &environment,
-    );
+    let mut command = helper_command(&helper_args(request.modal, fd), &environment)?;
     unsafe {
         command.pre_exec(move || {
             if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {

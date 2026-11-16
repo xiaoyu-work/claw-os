@@ -42,6 +42,7 @@ pub(super) struct Job {
     pub stopped: AtomicBool,
     pub state: Mutex<JobState>,
     pub selected_reads: OnceLock<Arc<super::selected_read::SelectedReads>>,
+    pub media: Arc<crate::clawd::media_player::gui::Window>,
 }
 
 impl Job {
@@ -151,13 +152,16 @@ impl Manager {
         }
         let session = registration.session_id.clone();
         let instance = InstanceId::random().map_err(|error| error.to_string())?;
+        let registration = Arc::new(registration);
+        let media = crate::clawd::media_player::gui::Window::new(registration.clone());
         jobs.insert(
             session,
             Arc::new(Job {
-                registration: Arc::new(registration),
+                registration,
                 instance,
                 stopped: AtomicBool::new(false),
                 selected_reads: OnceLock::new(),
+                media,
                 state: Mutex::new(JobState {
                     phase: Phase::Reserved,
                     layer_shell: false,
@@ -178,6 +182,27 @@ impl Manager {
                 .map_err(|_| "GUI registry lock poisoned")?
                 .contains_key(session)),
             None => Ok(false),
+        }
+    }
+
+    pub(crate) fn media_window(
+        &self, owner: u32, app: &str,
+    ) -> Result<Arc<crate::clawd::media_player::gui::Window>, String> {
+        let jobs = self.jobs.lock().map_err(|_| "GUI registry lock poisoned")?
+            .values().cloned().collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        for job in jobs {
+            if job.registration.owner() == owner && job.registration.launch.app_id() == app
+                && !job.stopping() && job.media.ready()
+                && job.state.lock().map_err(|_| "GUI status lock poisoned")?.phase == Phase::Running
+            {
+                matches.push(job.media.clone());
+            }
+        }
+        match matches.as_slice() {
+            [window] => Ok(window.clone()),
+            [] => Err("no managed native Media Player is running for this owner".into()),
+            _ => Err("multiple native Media Player instances are running; selection is ambiguous".into()),
         }
     }
 

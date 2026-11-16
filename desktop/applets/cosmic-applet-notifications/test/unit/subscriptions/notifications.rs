@@ -12,6 +12,14 @@ struct Presenter {
     calls: Arc<Mutex<Vec<String>>>,
 }
 
+struct Closures;
+
+#[zbus::interface(name = "org.freedesktop.Notifications")]
+impl Closures {
+    #[zbus(signal)]
+    async fn notification_closed(emitter: &SignalEmitter<'_>, id: u32, reason: u32) -> zbus::Result<()>;
+}
+
 #[zbus::interface(name = "com.clawos.NotificationPresentation1")]
 impl Presenter {
     fn version(&self) -> u32 {
@@ -61,6 +69,8 @@ async fn proxy(presenter: Presenter) -> (zbus::Connection, NotificationPresentat
         .unwrap()
         .serve_at(claw_notification_presentation::OBJECT_PATH, presenter)
         .unwrap()
+        .serve_at("/org/freedesktop/Notifications", Closures)
+        .unwrap()
         .build();
     let client = Builder::socket(client).p2p().build();
     let (server, client) = tokio::try_join!(server, client).unwrap();
@@ -73,7 +83,7 @@ async fn actual_public_client_requires_negotiation_and_confirmed_preferences_and
     let muted = Arc::new(AtomicBool::new(false));
     let fail_write = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let (_server, proxy) = proxy(Presenter {
+    let (server, proxy) = proxy(Presenter {
         version: VERSION,
         muted: Arc::clone(&muted),
         fail_write: Arc::clone(&fail_write),
@@ -123,6 +133,11 @@ async fn actual_public_client_requires_negotiation_and_confirmed_preferences_and
     .await
     .unwrap();
     assert_eq!(*calls.lock().unwrap(), ["dismiss:7", "action:7:default"]);
+    let closures = server.object_server()
+        .interface::<_, Closures>("/org/freedesktop/Notifications").await.unwrap();
+    Closures::notification_closed(closures.signal_emitter(), 7, 3).await.unwrap();
+    assert!(matches!(tokio::time::timeout(CALL_TIMEOUT, events.next()).await.unwrap(),
+        Some(Output::Dismissed(7))));
     task.abort();
     let _ = task.await;
 }

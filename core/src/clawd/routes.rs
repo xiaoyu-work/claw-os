@@ -2364,6 +2364,81 @@ routes! {
             super::capture::gui::control(c.params, c.client, authority).await
         },
     }
+    GuiMediaExchange {
+        name: "gui.media.exchange",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::GuiResource),
+        body: body::GuiMediaExchange,
+        audit: &[("session", FieldRule::Token)],
+        run: |_c| Err(BrokerError::authorization(
+            "playback exchange requires the exact Root-held private GUI endpoint")),
+    }
+    GuiAudioControl {
+        name: "gui.audio.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiAudioControl,
+        audit: &[("session", FieldRule::Token), ("stream_id", FieldRule::Token),
+            ("action", FieldRule::Token), ("sequence", FieldRule::Count)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::audio::control(c.params, c.client, authority).await
+        },
+    }
+    GuiFilePicker {
+        name: "gui.file.picker",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiFilePicker,
+        audit: &[("session", FieldRule::Token), ("request_id", FieldRule::Token), ("action", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::gui::file_picker::control(c.params, c.client, authority).await
+        },
+    }
+    GuiNotificationExchange {
+        name: "gui.notification.exchange",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::GuiResource),
+        body: body::GuiNotificationExchange,
+        audit: &[("session", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::notifications::gui::control(c.params, c.client, authority).await
+        },
+    }
+    NotificationPresentationControl {
+        name: "notification.presentation.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationPresentationControl,
+        audit: &[("action", FieldRule::Token), ("generation", FieldRule::Token), ("handle", FieldRule::Count)],
+        run: |c| super::notifications::gui::panel_control(c.params, c.client).await,
+    }
+    SystemDesktopPreferencesControl {
+        name: "system.desktop-preferences.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::DesktopPreferencesControl,
+        audit: &[("session", FieldRule::Token), ("action", FieldRule::Token),
+            ("namespace", FieldRule::Token), ("version", FieldRule::Count)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::desktop_preferences::control(c.params, c.client, authority).await
+        },
+    }
     SystemScreenshotCapture {
         name: "system.screenshot.capture",
         access: Access::User,
@@ -2916,6 +2991,12 @@ routes! {
             ("region", FieldRule::Identifier),
             ("languages", FieldRule::Identifier),
             ("hostname", FieldRule::Identifier),
+            ("timezone", FieldRule::Identifier),
+            ("enabled", FieldRule::Flag),
+            ("layout", FieldRule::Identifier),
+            ("model", FieldRule::Identifier),
+            ("variant", FieldRule::Identifier),
+            ("options", FieldRule::Size),
         ],
         run: |c| {
             let authority = c.authority()?;

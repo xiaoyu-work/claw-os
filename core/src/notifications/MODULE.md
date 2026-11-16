@@ -50,8 +50,29 @@ seconds. Revisions prevent late updates from restoring an abandoned view, and
 multiple viewers remain independent. These are notification hints only, never
 the kernel-attended `SessionPresence` proof or permission/consent authority.
 
-The existing Agent desktop bridge remains the sole desktop delivery consumer.
-Its connection-local numeric handles are not durable IDs or an alias store.
+The Root-held `clawd/notifications/gui.rs` resource is the sole automatic
+desktop delivery consumer. An explicitly declared and granted
+`ipc.subscribe:notifications.presentation` admits bounded leased display data;
+the independent `ipc.invoke` right admits exact presentation controls.
+Neither `ui.notify`, `data.inbox.read`, `ui.panel`, a signature nor an App name
+selects an all-source presenter. Only the authenticated private GUI endpoint
+can install this resource's process/session binding. A second presenter or
+public desktop claimant cannot take custody before checked retirement.
+Its numeric handles and random per-delivery tickets are not durable IDs or
+an inbox/authority store. Renderer acceptance marks delivery, never user
+acknowledgement; expiry, eviction and retirement leave unread records unread.
+Display receipts additionally compare the retained publication occurrence and
+delivery attempt transactionally. A late acceptance/action cannot deliver or
+acknowledge a newer deduplicated publication, change a terminal record or
+settle another retry. Replacements receive fresh handles while the original
+UI swaps the displayed card without a transient duplicate or blank surface.
+
+The OS-owned `claw-notification-panel` terminates the existing shell descriptor
+and relays the public bounded rendering/preferences contract. It owns neither
+App configuration nor a user bus. The native App keeps its original popup UI,
+private preference file and image preparation. Popup mute is distinct from
+Root DND. Late preference acknowledgements are observable after a timeout,
+without replaying the write. The Agent bridge no longer claims desktop leases.
 The distinct `notify` send/list service intents use source `app:notify`, not
 the native producer's authority. `list_source` returns one transactional
 owner/source snapshot with newest-publication-first rows and a full retained,
@@ -68,6 +89,8 @@ the worker's automatic legacy-state move no longer selects it.
 | `sqlite.rs` | Durable SQLite provider |
 | `ntfy.rs` | Opt-in ntfy delivery adapter |
 | `visibility.rs` | Bounded, expiring, owner-scoped conversation-view hints; no durable state or authority |
+| `../clawd/notifications/gui.rs` | Exact signed-GUI resource, one owner presenter, leased display tickets and checked lifetime |
+| `../bin/claw-notification-panel.rs` | OS shell descriptor and public rendering/preferences proxy; no App code/configuration |
 | `../../test/unit/notifications/` | Unit and adapter tests |
 
 ## Dependencies

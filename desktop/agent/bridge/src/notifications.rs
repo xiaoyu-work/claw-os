@@ -1,5 +1,4 @@
-//! The single desktop delivery consumer. Durable state stays in `clawd`;
-//! numeric D-Bus ids are connection-local presentation handles, never App ids.
+//! Historical private-bus fixture adapter, not a production delivery consumer.
 
 use std::collections::HashMap;
 use std::fs::Metadata;
@@ -12,8 +11,6 @@ use serde::Deserialize;
 use serde_json::json;
 use zbus::zvariant::Value as ZValue;
 use zbus::{Connection, fdo::DBusProxy, names::BusName};
-
-use crate::state::AppState;
 
 const CLAIM_LIMIT: u64 = 16;
 const LEASE_MS: u64 = 30_000;
@@ -80,27 +77,6 @@ struct Changes {
 #[derive(Deserialize)]
 struct Change {
     notification: Notification,
-}
-
-pub fn spawn(state: AppState) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            if let Err(error) = run_session(&state).await {
-                tracing::warn!(%error, "desktop notification delivery disconnected");
-            }
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-    })
-}
-
-async fn run_session(state: &AppState) -> anyhow::Result<()> {
-    let installed = std::fs::symlink_metadata("/usr/bin/cosmic-notifications")?;
-    anyhow::ensure!(
-        installed.is_file() && installed.uid() == 0 && installed.mode() & 0o022 == 0,
-        "notification presenter is not an immutable installed binary"
-    );
-    let connection = Connection::session().await?;
-    run_connection(&state.clawd, &connection, &installed).await
 }
 
 async fn presenter(connection: &Connection, expected: &Metadata) -> anyhow::Result<String> {

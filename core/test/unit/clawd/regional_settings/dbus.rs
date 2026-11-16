@@ -68,6 +68,8 @@ struct State {
     locale: Vec<String>,
     language: String,
     hostname: String,
+    keyboard: [String; 4],
+    converted: Vec<bool>,
     resolved_uid: u32,
     looked_up: Vec<i64>,
     calls: Vec<&'static str>,
@@ -102,6 +104,40 @@ impl State {
 struct Locale(Arc<Mutex<State>>);
 #[zbus::interface(name = "org.freedesktop.locale1")]
 impl Locale {
+    fn set_x11_keyboard(
+        &self,
+        layout: &str,
+        model: &str,
+        variant: &str,
+        options: &str,
+        convert: bool,
+        interactive: bool,
+    ) -> zbus::fdo::Result<()> {
+        let mut state = self.0.lock().unwrap();
+        state.before("keyboard")?;
+        state.interactive.push(interactive);
+        state.converted.push(convert);
+        state.keyboard = [layout.into(), model.into(), variant.into(), options.into()];
+        state.after()
+    }
+
+    #[zbus(property, name = "X11Layout")]
+    fn x11_layout(&self) -> String {
+        self.0.lock().unwrap().keyboard[0].clone()
+    }
+    #[zbus(property, name = "X11Model")]
+    fn x11_model(&self) -> String {
+        self.0.lock().unwrap().keyboard[1].clone()
+    }
+    #[zbus(property, name = "X11Variant")]
+    fn x11_variant(&self) -> String {
+        self.0.lock().unwrap().keyboard[2].clone()
+    }
+    #[zbus(property, name = "X11Options")]
+    fn x11_options(&self) -> String {
+        self.0.lock().unwrap().keyboard[3].clone()
+    }
+
     fn set_locale(&self, values: Vec<String>, interactive: bool) -> zbus::fdo::Result<()> {
         let mut state = self.0.lock().unwrap();
         state.before("locale")?;
@@ -311,6 +347,46 @@ fn root_private_bus_exact_effects_refusals_and_ambiguous_results() {
             assert_eq!(state.hostname, "fixture-host");
             assert_eq!(state.looked_up, [0]);
             assert_eq!(state.interactive, [false, false]);
+        }
+        {
+            let keyboard = request(json!({
+                "action":"system_keyboard","layout":"de,us","model":"pc105",
+                "variant":"nodeadkeys,","options":"compose:ralt"
+            }));
+            let wrong = decision(
+                &keyboard,
+                vec![crate::caps::Cap::new(
+                    crate::caps::Verb::SYS_LOCALE,
+                    crate::caps::Scope::name("system"),
+                )],
+                "any-app",
+                Uses::Budget(1),
+            );
+            assert!(preflight(&keyboard, &client(), &wrong).is_err());
+            let grant = decision(
+                &keyboard,
+                vec![keyboard.required_cap()],
+                "any-app",
+                Uses::Budget(1),
+            );
+            let owner = preflight(&keyboard, &client(), &grant).unwrap();
+            let result = backend.apply(&keyboard, owner, &grant).await.unwrap();
+            assert_eq!(result["keyboard"]["layout"], "de,us");
+            assert_eq!(state.lock().unwrap().converted, [true]);
+            assert!(!state.lock().unwrap().interactive.last().unwrap());
+            let status = request(json!({"action":"status"}));
+            let grant = decision(
+                &status,
+                vec![status.required_cap()],
+                "any-app",
+                Uses::Budget(1),
+            );
+            let owner = preflight(&status, &client(), &grant).unwrap();
+            let writes = state.lock().unwrap().calls.len();
+            let observed = backend.apply(&status, owner, &grant).await.unwrap();
+            assert_eq!(observed["keyboard"], result["keyboard"]);
+            assert_eq!(observed["hostname"], "fixture-host");
+            assert_eq!(state.lock().unwrap().calls.len(), writes);
         }
         state.lock().unwrap().simplify_locale = true;
         let same_locale =

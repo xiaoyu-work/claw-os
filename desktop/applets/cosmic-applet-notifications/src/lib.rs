@@ -96,7 +96,6 @@ enum Message {
     CloseRequested(window::Id),
     DoNotDisturb(bool),
     NotificationEvent(notifications::Output),
-    DbusEvent(subscriptions::dbus::Output),
     Dismissed(u32),
     ActivateNotification(u32),
     ClearAll(Option<String>),
@@ -140,7 +139,6 @@ impl cosmic::Application for Notifications {
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            subscriptions::dbus::proxy().map(Message::DbusEvent),
             subscriptions::notifications::notifications().map(Message::NotificationEvent),
             activation_token_subscription(0).map(Message::Token),
         ])
@@ -231,9 +229,6 @@ impl cosmic::Application for Notifications {
             Message::Dismissed(id) => {
                 return self.request(notifications::Input::Dismiss(id));
             }
-            Message::DbusEvent(e) => match e {
-                subscriptions::dbus::Output::CloseEvent(id) => self.remove_card(id),
-            },
             Message::ClearAll(label) => {
                 let ids = self
                     .cards

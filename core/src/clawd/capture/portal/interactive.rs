@@ -1,24 +1,21 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
-use zbus::{Connection, Proxy};
+use zbus::zvariant::Value;
 
 use crate::clawd::wire::bounded::Text;
 
 const SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub(in crate::clawd::capture) const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(in crate::clawd::capture) const REPORT_BYTES: usize = 16 * 1024;
-const DESTINATION: &str = "org.freedesktop.portal.Desktop";
-const REQUEST_INTERFACE: &str = "org.freedesktop.portal.Request";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(in crate::clawd::capture) enum Outcome {
     Saved { path: Text<4096> },
+    Image { length: u64 },
     Clipboard,
     Cancelled,
     Failed { error: Text<2048> },
@@ -28,6 +25,7 @@ impl Outcome {
     pub(in crate::clawd::capture) fn label(&self) -> &'static str {
         match self {
             Self::Saved { .. } => "saved",
+            Self::Image { .. } => "image",
             Self::Clipboard => "clipboard",
             Self::Cancelled => "cancelled",
             Self::Failed { .. } => "failed",
@@ -56,16 +54,17 @@ impl Report {
             portal_retired,
         }
     }
-
-    fn cancelled() -> Self {
-        Self {
-            outcome: Outcome::Cancelled,
-            portal_retired: true,
-        }
-    }
 }
 
 pub fn helper(args: &[String]) -> Result<(), String> {
+    run_helper(args, false)
+}
+
+pub fn image_helper(args: &[String]) -> Result<(), String> {
+    run_helper(args, true)
+}
+
+fn run_helper(args: &[String], image: bool) -> Result<(), String> {
     let (modal, gate) = super::authenticated_gate(args)?;
     if unsafe { libc::geteuid() } == 0
         || unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) } != 1
@@ -88,194 +87,98 @@ pub fn helper(args: &[String]) -> Result<(), String> {
                 return Err("Capture dispatch was not authorized by root clawd".into());
             }
             let (mut control, mut output) = gate.into_split();
-            let report = interact(modal, &mut control).await;
+            let mut report = interact_mode(modal, &mut control, !image).await;
+            let mut png = Vec::new();
+            if image {
+                report = match &report.outcome {
+                    Outcome::Saved { path } => {
+                        match super::consume_png(std::path::Path::new(path.as_str())) {
+                            Ok(bytes) => {
+                                png = bytes;
+                                Report {
+                                    outcome: Outcome::Image {
+                                        length: png.len() as u64,
+                                    },
+                                    portal_retired: report.portal_retired,
+                                }
+                            }
+                            Err(error) => Report::failed(&error, report.portal_retired),
+                        }
+                    }
+                    Outcome::Clipboard => Report::failed(
+                        "non-interactive capture cannot use the clipboard",
+                        report.portal_retired,
+                    ),
+                    _ => report,
+                };
+            }
             let bytes = serde_json::to_vec(&report).map_err(|error| error.to_string())?;
             if bytes.len() > REPORT_BYTES {
                 return Err("Capture report exceeds its bound".into());
             }
-            tokio::time::timeout(CLOSE_TIMEOUT, async {
-                output.write_u32(bytes.len() as u32).await?;
-                output.write_all(&bytes).await?;
-                output.shutdown().await
-            })
+            tokio::time::timeout(
+                if image {
+                    super::super::CAPTURE_TIMEOUT
+                } else {
+                    CLOSE_TIMEOUT
+                },
+                async {
+                    output.write_u32(bytes.len() as u32).await?;
+                    output.write_all(&bytes).await?;
+                    output.write_all(&png).await?;
+                    output.shutdown().await
+                },
+            )
             .await
             .map_err(|_| "Capture report timed out")?
             .map_err(|error| error.to_string())
         })
 }
 
-struct Prepared {
-    portal: Proxy<'static>,
-    request: Proxy<'static>,
-    responses: zbus::proxy::SignalStream<'static>,
-    expected: OwnedObjectPath,
-    token: String,
-}
-
-impl Prepared {
-    async fn new() -> Result<Self, String> {
-        let connection = Connection::session()
-            .await
-            .map_err(|error| error.to_string())?;
-        let portal = Proxy::new(
-            &connection,
-            DESTINATION,
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.Screenshot",
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        let version = portal
-            .get_property::<u32>("version")
-            .await
-            .map_err(|error| error.to_string())?;
-        if version < 2 {
-            return Err("Capture portal does not support human interactive selection".into());
-        }
-        let destination = zbus::fdo::DBusProxy::new(&connection)
-            .await
-            .map_err(|error| error.to_string())?
-            .get_name_owner(DESTINATION.try_into().expect("fixed portal bus name"))
-            .await
-            .map_err(|error| error.to_string())?;
-        let portal = Proxy::new(
-            &connection,
-            destination.clone(),
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.Screenshot",
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        let sender = connection
-            .unique_name()
-            .ok_or("Capture portal has no unique name")?
-            .as_str()
-            .trim_start_matches(':')
-            .replace('.', "_");
-        let token = format!("claw_capture_{}", uuid::Uuid::new_v4().simple());
-        let expected = OwnedObjectPath::try_from(format!(
-            "/org/freedesktop/portal/desktop/request/{sender}/{token}",
-        ))
-        .map_err(|error| error.to_string())?;
-        let request = Proxy::new(
-            &connection,
-            destination,
-            expected.clone(),
-            REQUEST_INTERFACE,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        let responses = request
-            .receive_signal("Response")
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(Self {
-            portal,
-            request,
-            responses,
-            expected,
-            token,
-        })
-    }
-
-    async fn dispatch(&self, modal: bool) -> Result<OwnedObjectPath, String> {
-        let options = HashMap::from([
-            ("handle_token", Value::from(self.token.as_str())),
-            ("interactive", Value::Bool(true)),
-            ("modal", Value::Bool(modal)),
-        ]);
-        self.portal
-            .call("Screenshot", &("", options))
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    async fn close(&self, outcome: Outcome) -> Report {
-        match tokio::time::timeout(CLOSE_TIMEOUT, self.request.call::<_, _, ()>("Close", &())).await
-        {
-            Ok(Ok(())) => Report {
-                outcome,
-                portal_retired: true,
-            },
-            Ok(Err(_)) => Report::failed(
-                "Capture portal did not acknowledge Close; cleanup is pending",
-                false,
-            ),
-            Err(_) => Report::failed("Capture portal Close timed out; cleanup is pending", false),
-        }
-    }
-}
-
+#[cfg(test)]
 async fn interact(modal: bool, control: &mut tokio::net::unix::OwnedReadHalf) -> Report {
-    // EOF and malformed control also request retirement; neither is consent.
-    let cancellation = async {
-        let _ = control.read_u8().await;
-    };
-    tokio::pin!(cancellation);
-    let mut request = tokio::select! {
-        biased;
-        _ = &mut cancellation => return Report::cancelled(),
-        prepared = tokio::time::timeout(SETUP_TIMEOUT, Prepared::new()) => match prepared {
-            Ok(Ok(request)) => request,
-            Ok(Err(error)) => return Report::failed(&error, true),
-            Err(_) => return Report::failed("Capture portal setup timed out", true),
+    interact_mode(modal, control, true).await
+}
+
+async fn interact_mode(
+    modal: bool,
+    control: &mut tokio::net::unix::OwnedReadHalf,
+    interactive: bool,
+) -> Report {
+    use crate::clawd::desktop::{owner_portal_request, PortalReply, PortalResult};
+    let response: PortalReply = owner_portal_request(
+        control,
+        "org.freedesktop.portal.Screenshot",
+        if interactive { 2 } else { 1 },
+        "Screenshot",
+        move |token| {
+            (
+                String::new(),
+                HashMap::from([
+                    ("handle_token", Value::from(token)),
+                    ("interactive", Value::Bool(interactive)),
+                    ("modal", Value::Bool(modal)),
+                ]),
+            )
         },
-    };
-    // Neither Screenshot nor Response gets a short tool timeout: portals can
-    // defer the method reply while showing human UI. Root owns the live lease.
-    let dispatched = {
-        let dispatch = request.dispatch(modal);
-        tokio::pin!(dispatch);
-        tokio::select! {
-            biased;
-            result = &mut dispatch => result,
-            _ = &mut cancellation => return request.close(Outcome::Cancelled).await,
-        }
-    };
-    match dispatched {
-        Ok(actual) if actual == request.expected => {}
-        Ok(_) => {
-            let _ = request.close(Outcome::Cancelled).await;
-            return Report::failed(
-                "Capture portal returned an unrelated handle; cleanup is pending",
-                false,
-            );
-        }
-        Err(error) => {
-            return request.close(Report::failed(&error, false).outcome).await;
-        }
-    }
-    let response = tokio::select! {
-        biased;
-        response = request.responses.next() => response,
-        _ = &mut cancellation => return request.close(Outcome::Cancelled).await,
-    };
-    let Some(response) = response else {
-        return request
-            .close(Report::failed("Capture portal ended without a response", false).outcome)
-            .await;
-    };
-    let response: Result<(u32, HashMap<String, OwnedValue>), _> = response.body().deserialize();
-    match response {
-        Ok((0, mut values)) => Report {
-            outcome: match values
-                .remove("uri")
-                .and_then(|value| String::try_from(value).ok())
-                .ok_or("Capture portal omitted its destination")
-                .and_then(|uri| destination(&uri))
-            {
-                Ok(outcome) => outcome,
-                Err(error) => Report::failed(error, true).outcome,
-            },
-            portal_retired: true,
+    )
+    .await;
+    let outcome = match response.result {
+        PortalResult::Success(mut values) => match values
+            .remove("uri")
+            .and_then(|value| String::try_from(value).ok())
+            .ok_or("Capture portal omitted its destination")
+            .and_then(|uri| destination(&uri))
+        {
+            Ok(outcome) => outcome,
+            Err(error) => Report::failed(error, response.portal_retired).outcome,
         },
-        Ok((1, _)) => Report::cancelled(),
-        Ok((2, _)) => Report::failed("Capture portal refused the request", true),
-        _ => {
-            request
-                .close(Report::failed("Capture portal returned an invalid response", false).outcome)
-                .await
-        }
+        PortalResult::Cancelled => Outcome::Cancelled,
+        PortalResult::Failed(error) => Report::failed(&error, response.portal_retired).outcome,
+    };
+    Report {
+        outcome,
+        portal_retired: response.portal_retired,
     }
 }
 

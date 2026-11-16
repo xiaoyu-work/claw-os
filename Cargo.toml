@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "core",
     "claw-os-sdk/rust",
+    "claw-os-sdk/rust/notification-presentation",
     "cos-runtime/rust",
     "crates/clawd-client",
     "crates/claw-display-control",

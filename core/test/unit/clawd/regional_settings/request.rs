@@ -127,6 +127,7 @@ fn hostname_labels_and_total_size_are_bounded_without_normalizing_input() {
         input["hostname"] = json!(bad);
         assert!(Request::decode(input).is_err(), "{bad:?}");
     }
+
     for (value, valid) in [
         ("a".repeat(63), true),
         ("a".repeat(64), false),
@@ -136,5 +137,48 @@ fn hostname_labels_and_total_size_are_bounded_without_normalizing_input() {
         let mut input = examples()[2].clone();
         input["hostname"] = json!(value);
         assert_eq!(Request::decode(input).is_ok(), valid);
+    }
+}
+
+#[test]
+fn keyboard_defaults_have_their_own_capability_and_reject_paths_and_commands() {
+    let value = json!({
+        "session":"keyboard-test","action":"system_keyboard",
+        "layout":"us,de","model":"pc105","variant":",nodeadkeys",
+        "options":"compose:ralt,grp:alt_shift_toggle"
+    });
+    let request = Request::decode(value.clone()).unwrap();
+    assert_eq!(
+        request.required_cap(),
+        Cap::new(Verb::SYS_LOCALE, Scope::name("keyboard"))
+    );
+    for (field, bad) in [
+        ("layout", "../us"),
+        ("layout", "us;id"),
+        ("layout", ""),
+        ("model", "/usr/share/xkb"),
+        ("options", "x\n"),
+        ("variant", ",,extra"),
+    ] {
+        let mut malformed = value.clone();
+        malformed[field] = json!(bad);
+        assert!(Request::decode(malformed).is_err(), "{field}={bad:?}");
+    }
+    let timezone = |name| json!({"session":"time-test","action":"timezone","timezone":name});
+    assert_eq!(
+        Request::decode(timezone("Europe/Berlin"))
+            .unwrap()
+            .required_cap(),
+        Cap::new(Verb::SYS_TIME, Scope::Wild)
+    );
+    for bad in [
+        "",
+        "/etc/localtime",
+        "../UTC",
+        "Europe/../UTC",
+        "UTC;id",
+        "UTC\n",
+    ] {
+        assert!(Request::decode(timezone(bad)).is_err(), "{bad:?}");
     }
 }

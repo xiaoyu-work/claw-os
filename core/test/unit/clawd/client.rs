@@ -11,6 +11,8 @@ fn private_gui_provider_transport_cannot_be_used_for_root_control_commands() {
     ] {
         let error = request_gui_resource_blocking(Request::build(command, serde_json::json!({}))).unwrap_err();
         assert!(!error.may_have_dispatched(), "{command}");
+        let error = request_gui_provider_blocking(Request::build(command, serde_json::json!({}))).unwrap_err();
+        assert!(!error.may_have_dispatched(), "{command}");
         assert!(requires_root_peer(command), "{command}");
     }
     let error = request_gui_resource_blocking(Request::build(
@@ -33,6 +35,18 @@ fn system_review_refuses_a_user_owned_broker_before_sending_any_data() {
             serde_json::json!({"limit": 100})),
         Request::build(super::super::routes::Command::GuiCaptureControl,
             serde_json::json!({"session":"window","action":"status","request_id":"a".repeat(32)})),
+        Request::build(super::super::routes::Command::GuiMediaExchange,
+            serde_json::json!({"session":"window","reply":null})),
+        Request::build(super::super::routes::Command::GuiAudioControl,
+            serde_json::json!({"session":"window","action":"open","stream_id":"a".repeat(32)})),
+        Request::build(super::super::routes::Command::GuiFilePicker,
+            serde_json::json!({"session":"window","action":"status","request_id":"a".repeat(32)})),
+        Request::build(super::super::routes::Command::GuiNotificationExchange,
+            serde_json::json!({"session":"window","event":null})),
+        Request::build(super::super::routes::Command::NotificationPresentationControl,
+            serde_json::json!({"action":"snapshot"})),
+        Request::build(super::super::routes::Command::SystemDesktopPreferencesControl,
+            serde_json::json!({"session":"window","action":"read","namespace":"compositor","version":1})),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("fake-review.sock");

@@ -14,6 +14,10 @@ use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 mod settings;
+mod helper;
+pub(super) use helper::{authenticated_helper_gate, protected_helper_command};
+mod portal;
+pub(super) use portal::{owner_portal_request, PortalReply, PortalResult};
 
 pub(super) async fn start_thunderbird(client: &ClientIdentity) -> Result<(), String> {
     let uid = client.require_uid()?;

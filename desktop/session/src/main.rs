@@ -270,7 +270,7 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 	let panel_key = Arc::new(Mutex::new(None));
 	let notif_key = Arc::new(Mutex::new(None));
 
-	let notifications_span = info_span!(parent: None, "cosmic-notifications");
+	let notifications_span = info_span!(parent: None, "claw-notification-panel");
 	let panel_span = info_span!(parent: None, "cosmic-panel");
 
 	let mut guard = notif_key.lock().await;
@@ -278,7 +278,7 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 		process_manager
 			.start(notifications_process(
 				notifications_span.clone(),
-				"cosmic-notifications",
+				"/usr/lib/cos/bin/claw-notification-panel",
 				notif_key.clone(),
 				daemon_env_vars.clone(),
 				daemon_notifications_fd,
@@ -302,7 +302,7 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 				panel_env_vars,
 				panel_notifications_fd,
 				notifications_span,
-				"cosmic-notifications",
+				"/usr/lib/cos/bin/claw-notification-panel",
 				notif_key,
 				daemon_env_vars,
 			))
@@ -310,6 +310,9 @@ async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 			.expect("failed to start panel"),
 	);
 	drop(guard);
+
+	let span = info_span!(parent: None, "cosmic-notifications");
+	start_component("cosmic-notifications", span, &process_manager, &env_vars).await;
 
 	let span = info_span!(parent: None, "cosmic-app-library");
 	start_component("cosmic-app-library", span, &process_manager, &env_vars).await;

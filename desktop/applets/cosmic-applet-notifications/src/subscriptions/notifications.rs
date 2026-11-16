@@ -79,8 +79,18 @@ async fn client(
     let mut cards = bounded(proxy.receive_card()).await?;
     let mut preferences = bounded(proxy.receive_preferences_changed()).await?;
     let mut failures = bounded(proxy.receive_failure()).await?;
-    let initial = Preferences::from_json(&bounded(proxy.preferences()).await?)
-        .map_err(|error| error.to_string())?;
+    let closed = super::freedesktop_proxy::NotificationsProxy::new(proxy.inner().connection())
+        .await.map_err(|error| error.to_string())?;
+    let mut closures = bounded(closed.receive_notification_closed()).await?;
+    let initial = loop {
+        match bounded(proxy.preferences()).await {
+            Ok(payload) => break Preferences::from_json(&payload).map_err(|error| error.to_string())?,
+            Err(error) => {
+                send(output, Output::RequestFailed(error)).await?;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
     let (sender, mut input) = mpsc::channel(10);
     send(output, Output::Preferences(initial)).await?;
     send(output, Output::Ready(sender)).await?;
@@ -102,6 +112,11 @@ async fn client(
                 let message = message.ok_or("Notification presentation connection closed.")?;
                 let args = message.args().map_err(|error| error.to_string())?;
                 send(output, Output::RequestFailed(args.message.chars().take(4096).collect())).await?;
+            }
+            message = closures.next() => {
+                let message = message.ok_or("Notification presentation connection closed.")?;
+                let args = message.args().map_err(|error| error.to_string())?;
+                send(output, Output::Dismissed(args.id)).await?;
             }
             message = input.recv() => {
                 match message.ok_or("Notification presentation controls closed.")? {

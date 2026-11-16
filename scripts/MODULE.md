@@ -54,6 +54,18 @@ Root-only dispatch, PNG transfer, cancellation and refusal, plus interactive
 clipboard results, deferred human responses and checked Close. No App executable
 or live display is used; this does not establish full GUI acceptance.
 
+The separate `native-capture` selection prepares the real App-owned Capture
+ELF and all original icons/licenses with the public pin. Cases34-39 enter actual
+PAM/common Host/private broker, settle the independent screen/notification/Home
+metadata and exact creation reviews, and require the actual protected
+`/usr/local/bin/clawd` helper at the private portal. File metadata, clipboard,
+user cancellation, delayed-Close revocation/logout, original non-interactive
+selected output and no-clobber refusal have separate observations. Capture has
+no App-owned pixel surface; a synthetic frame/title cannot satisfy this gate.
+The backend portal and PNG input remain synthetic and do not establish physical
+screen capture or hardware UI acceptance. This lane neither publishes nor
+changes the SDK/platform selection.
+
 ## Tests
 
 ```bash
@@ -68,7 +80,7 @@ Also run the narrowest consuming target/package command.
 `test-boundaries.sh native-settings` prepares the original Settings ELF,
 manifest, licenses and installer resources using the same immutable/public-pin
 path. It requires a real managed window and checked retirement with empty
-mandatory GUI capabilities and all three optional rights ungranted. Public XKB
+mandatory GUI capabilities and every declared optional right ungranted. Public XKB
 data comes from the existing read-only `/usr` runtime, not an owner-file grant.
 Startup acceptance does not prove system-wide Settings writes or hardware.
 

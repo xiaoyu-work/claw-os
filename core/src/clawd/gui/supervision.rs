@@ -118,6 +118,7 @@ impl Supervised {
             manager.admission.clone(),
             &manager.executor,
             consent.is_some(),
+            job.media.clone(),
         )?;
         let home = consent.map(|consent| resources::HomeMetadata::reserve(consent, &runtime)).transpose()?;
         Ok(Self {

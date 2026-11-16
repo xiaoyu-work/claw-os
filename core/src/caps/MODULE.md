@@ -77,6 +77,14 @@ deny it; developer/unsigned content cannot hold it. An explicit authorized
 delegation or exact protected owner approval may grant it to a signed App's
 GUI. App names, origins and Panel presentation metadata never grant it.
 
+The fixed named IPC resource `notifications.presentation` separates
+cross-source notification display (`ipc.subscribe`) from exact presentation
+actions/private popup mute (`ipc.invoke`). Only an explicit selected signed
+GUI declaration and live grant bind it. The provider exports leased display
+projections, never a global inbox or raw bus. `ui.panel` only permits the
+surface; `ui.notify` and `data.inbox.read` retain their existing producer and
+own-source meanings. See the [GUI resource contract](../clawd/gui/MODULE.md#notification-presentation).
+
 ## Tests
 
 ```bash

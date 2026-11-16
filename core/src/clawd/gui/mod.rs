@@ -2,6 +2,12 @@
 
 #[cfg(target_os = "linux")]
 mod broker;
+#[cfg(target_os = "linux")]
+pub(crate) mod audio;
+#[cfg(target_os = "linux")]
+pub(crate) mod file_picker;
+#[cfg(target_os = "linux")]
+pub use file_picker::helper as file_picker_helper;
 pub mod inputs;
 #[cfg(target_os = "linux")]
 mod manager;

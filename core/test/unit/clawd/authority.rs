@@ -109,7 +109,11 @@ fn route_audiences_match_their_families() {
                 || name.starts_with("gui.file.create.")
                 || name == "gui.file.save.reserve"
                 || name == "gui.package.intent"
-                || name == "gui.capture.control" => Audience::GuiResource,
+                || name == "gui.capture.control"
+                || name == "gui.media.exchange"
+                || name == "gui.audio.control"
+                || name == "gui.file.picker"
+                || name == "gui.notification.exchange" => Audience::GuiResource,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
                 || name == "app.directory_install"

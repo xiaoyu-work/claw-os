@@ -14,6 +14,8 @@ use crate::caps::{Cap, Scope, Verb};
 use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
+mod channel_volumes;
+
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 4 * 1024 * 1024;
@@ -66,7 +68,7 @@ pub async fn control(
 fn requested_caps(action: &str) -> Vec<Cap> {
     match action {
         "status" => vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("audio"))],
-        "output-volume" | "output-mute" => {
+        "output-volume" | "output-mute" | "output-channel-volumes" => {
             vec![Cap::new(Verb::DEVICE_AUDIO, Scope::name("output"))]
         }
         "input-volume" | "input-mute" => {
@@ -147,16 +149,36 @@ async fn mutate(
     value: Option<&str>,
     environment: &AudioEnvironment,
 ) -> Result<Value, String> {
+    if action == "output-channel-volumes" {
+        return channel_volumes::apply(environment, target.unwrap(), value.unwrap()).await;
+    }
     let mut guard = None;
+    let target_node = match (action, target) {
+        ("output-volume" | "output-mute" | "input-volume" | "input-mute", Some(target)) => {
+            let id = parse_id(target)?;
+            let direction = if action.starts_with("output") {
+                Direction::Output
+            } else {
+                Direction::Input
+            };
+            let object = require_media_class(environment, id, direction.media_class()).await?;
+            guard = Some(ObjectGuard::from_object(&object)?);
+            Some(id.to_string())
+        }
+        _ => None,
+    };
     let (before, args) = match action {
         "output-volume" => {
-            let before = volume_state(environment, Direction::Output).await?;
+            let node = target_node
+                .as_deref()
+                .unwrap_or(Direction::Output.special());
+            let before = volume_state_at(environment, node).await?;
             let percent = value.unwrap();
             (
                 before,
                 vec![
                     "set-volume".to_string(),
-                    Direction::Output.special().to_string(),
+                    node.to_string(),
                     format!("{percent}%"),
                     "--limit".to_string(),
                     "1.5".to_string(),
@@ -164,13 +186,14 @@ async fn mutate(
             )
         }
         "input-volume" => {
-            let before = volume_state(environment, Direction::Input).await?;
+            let node = target_node.as_deref().unwrap_or(Direction::Input.special());
+            let before = volume_state_at(environment, node).await?;
             let percent = value.unwrap();
             (
                 before,
                 vec![
                     "set-volume".to_string(),
-                    Direction::Input.special().to_string(),
+                    node.to_string(),
                     format!("{percent}%"),
                     "--limit".to_string(),
                     "1.0".to_string(),
@@ -183,7 +206,8 @@ async fn mutate(
             } else {
                 Direction::Input
             };
-            let before = volume_state(environment, direction).await?;
+            let node = target_node.as_deref().unwrap_or(direction.special());
+            let before = volume_state_at(environment, node).await?;
             let state = match value.unwrap() {
                 "on" => "1",
                 "off" => "0",
@@ -192,11 +216,7 @@ async fn mutate(
             };
             (
                 before,
-                vec![
-                    "set-mute".to_string(),
-                    direction.special().to_string(),
-                    state.to_string(),
-                ],
+                vec!["set-mute".to_string(), node.to_string(), state.to_string()],
             )
         }
         "output-default" | "input-default" => {
@@ -220,11 +240,20 @@ async fn mutate(
             let id = parse_id(target.unwrap())?;
             let object = require_media_class(environment, id, direction.media_class()).await?;
             guard = Some(ObjectGuard::from_object(&object)?);
+            let device = object["properties"]["device_id"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or("audio node has no hardware routing device")?;
+            require_audio_device(environment, device).await?;
             let route = parse_index(value.unwrap(), "route")?;
             let before = inspect_state(environment, id).await?;
             (
                 before,
-                vec!["set-route".to_string(), id.to_string(), route.to_string()],
+                vec![
+                    "set-route".to_string(),
+                    device.to_string(),
+                    route.to_string(),
+                ],
             )
         }
         "profile" => {
@@ -250,8 +279,22 @@ async fn mutate(
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     let output = run_wpctl(environment, &refs, ChildPolicy).await?;
     let after = match action {
-        "output-volume" | "output-mute" => volume_state(environment, Direction::Output).await,
-        "input-volume" | "input-mute" => volume_state(environment, Direction::Input).await,
+        "output-volume" | "output-mute" => {
+            volume_state_at(
+                environment,
+                target_node
+                    .as_deref()
+                    .unwrap_or(Direction::Output.special()),
+            )
+            .await
+        }
+        "input-volume" | "input-mute" => {
+            volume_state_at(
+                environment,
+                target_node.as_deref().unwrap_or(Direction::Input.special()),
+            )
+            .await
+        }
         "output-default" => default_state(environment, Direction::Output).await,
         "input-default" => default_state(environment, Direction::Input).await,
         "output-route" | "input-route" | "profile" => {
@@ -331,12 +374,11 @@ async fn volume_state(
     environment: &AudioEnvironment,
     direction: Direction,
 ) -> Result<Value, String> {
-    let output = run_wpctl(
-        environment,
-        &["get-volume", direction.special()],
-        ChildPolicy,
-    )
-    .await?;
+    volume_state_at(environment, direction.special()).await
+}
+
+async fn volume_state_at(environment: &AudioEnvironment, node: &str) -> Result<Value, String> {
+    let output = run_wpctl(environment, &["get-volume", node], ChildPolicy).await?;
     parse_volume(&output.stdout)
 }
 
@@ -511,6 +553,22 @@ async fn pipewire_objects(environment: &AudioEnvironment) -> Result<Vec<Value>, 
             "application_name": prop_string(props, "application.name"),
             "application_process_id": prop_u64(props, "application.process.id"),
             "state": object["info"]["state"],
+            "properties": {
+                "device_id": prop_u64(props, "device.id"),
+                "card_profile_device": prop_u64(props, "card.profile.device"),
+                "audio_channels": prop_u64(props, "audio.channels"),
+                "audio_position": prop_string(props, "audio.position"),
+                "profile_description": prop_string(props, "device.profile.description"),
+                "profile_pro": prop_string(props, "device.profile.pro"),
+                "icon_name": prop_string(props, "device.icon_name"),
+            },
+            "parameters": {
+                "EnumProfile": object["info"]["params"]["EnumProfile"],
+                "Profile": object["info"]["params"]["Profile"],
+                "EnumRoute": object["info"]["params"]["EnumRoute"],
+                "Route": object["info"]["params"]["Route"],
+                "Props": object["info"]["params"]["Props"],
+            },
         }));
     }
     Ok(objects)
@@ -536,7 +594,10 @@ fn prop_u64(props: &Value, key: &str) -> Option<u64> {
 fn validate_action(action: &str, target: Option<&str>, value: Option<&str>) -> Result<(), String> {
     match action {
         "status" if target.is_none() && value.is_none() => Ok(()),
-        "output-volume" | "input-volume" if target.is_none() => {
+        "output-volume" | "input-volume" => {
+            if let Some(target) = target {
+                parse_id(target)?;
+            }
             let percent = value
                 .ok_or_else(|| format!("{action} requires a percentage"))?
                 .parse::<u16>()
@@ -547,10 +608,15 @@ fn validate_action(action: &str, target: Option<&str>, value: Option<&str>) -> R
             }
             Ok(())
         }
-        "output-mute" | "input-mute"
-            if target.is_none() && matches!(value, Some("on" | "off" | "toggle")) =>
-        {
+        "output-mute" | "input-mute" if matches!(value, Some("on" | "off" | "toggle")) => {
+            if let Some(target) = target {
+                parse_id(target)?;
+            }
             Ok(())
+        }
+        "output-channel-volumes" => {
+            parse_id(target.unwrap_or_default())?;
+            channel_volumes::parse(value.unwrap_or_default()).map(|_| ())
         }
         "output-default" | "input-default" if value.is_none() => {
             parse_id(target.unwrap_or_default()).map(|_| ())
@@ -560,9 +626,6 @@ fn validate_action(action: &str, target: Option<&str>, value: Option<&str>) -> R
             parse_index(value.unwrap_or_default(), "index").map(|_| ())
         }
         "status" => Err("status does not accept target or value".to_string()),
-        "output-volume" | "input-volume" => {
-            Err(format!("{action} accepts only a percentage value"))
-        }
         "output-mute" | "input-mute" => Err(format!("{action} requires on|off|toggle")),
         "output-default" | "input-default" => Err(format!("{action} requires one node id")),
         "output-route" | "input-route" => {

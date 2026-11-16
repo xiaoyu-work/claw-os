@@ -44,6 +44,13 @@ component crates plus Claw-specific agent bridges and applets.
 
 ## Dependencies
 
+Settings Daemon's locale synchronization imports localed changes into owner
+compositor preferences and initializes only an unset keyboard preference.
+It does not publish owner `xkb_config` writes to localed. The explicit Root
+regional service owns system/login keyboard changes under the independent
+`sys.locale:keyboard` capability. Initial Setup retains its existing OS-owned
+pre-login policies and account/home transaction; Apps receive neither.
+
 Production `just build`/`install` build only OS shell/services and are guarded
 against App source links. Native product binaries/manifests/resources belong
 to independent App APT packages, recommended through `claw-apps-desktop`.

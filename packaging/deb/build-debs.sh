@@ -490,6 +490,8 @@ DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session cos)" || {
     echo "error: claw-display-session binary not built" >&2; exit 1; }
 FILE_MANAGER_BIN="$(ensure_bin claw-file-manager cos)" || {
     echo "error: claw-file-manager binary not built" >&2; exit 1; }
+NOTIFICATION_PANEL_BIN="$(ensure_bin claw-notification-panel cos)" || {
+    echo "error: claw-notification-panel binary not built" >&2; exit 1; }
 LAUNCHER_BACKEND_BIN="$(ensure_launcher_backend)" || {
     echo "error: OS Launcher backend binary not built" >&2; exit 1; }
 APP_APT_HOOK_BIN="$(ensure_bin claw-app-apt-hook cos)" || {
@@ -514,6 +516,7 @@ echo "  :: claw-gui-runner        <- $GUI_RUNNER_BIN"
 echo "  :: claw-display-host      <- $DISPLAY_HOST_BIN"
 echo "  :: claw-display-session   <- $DISPLAY_SESSION_BIN"
 echo "  :: claw-file-manager      <- $FILE_MANAGER_BIN"
+echo "  :: claw-notification-panel <- $NOTIFICATION_PANEL_BIN"
 echo "  :: claw-app-apt-hook      <- $APP_APT_HOOK_BIN"
 echo "  :: pam_claw_display.so    <- $PAM_DISPLAY_MODULE"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
@@ -541,6 +544,7 @@ install -m 755 "$GUI_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-gui-runner"
 install -m 755 "$DISPLAY_SESSION_BIN" "$AGENT_STAGE/usr/local/bin/claw-display-session"
 install -m 755 "$DISPLAY_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-display-host"
 install -m 755 "$FILE_MANAGER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-file-manager"
+install -m 755 "$NOTIFICATION_PANEL_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-notification-panel"
 install -m 755 "$APP_APT_HOOK_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-app-apt-hook"
 install -Dm0644 "$PROJECT_DIR/tools/app_apt_metadata.py" \
     "$AGENT_STAGE/usr/lib/cos/app-apt-metadata.py"

@@ -438,6 +438,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.network.diagnose" => &[Verb::SYS_OBSERVE, Verb::NET_RESOLVE, Verb::NET_PROBE],
         "system.firewall.control" => &[Verb::NET_FIREWALL],
         "system.audio.control" => &[Verb::DEVICE_AUDIO, Verb::DEVICE_MEDIA_ROUTE],
+        "system.desktop-preferences.control" => &[Verb::IPC_SUBSCRIBE, Verb::IPC_INVOKE, Verb::DEVICE_AUDIO],
         "system.bluetooth.control" => &[Verb::DEVICE_BLUETOOTH],
         "system.camera.control" => &[Verb::DEVICE_CAMERA],
         "system.clipboard.control" => &[Verb::CLIPBOARD_READ, Verb::CLIPBOARD_WRITE],

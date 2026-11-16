@@ -65,7 +65,7 @@ assert_contains "$CARGO_TOML" 'path = "src/bin/claw-extension-host.rs"' \
     "the extension host binary must have an entry point"
 [ -f "$PROJECT_DIR/core/src/bin/claw-extension-host.rs" ] ||
     fail "core/src/bin/claw-extension-host.rs is missing"
-for helper in claw-gui-runner claw-display-host claw-display-session claw-file-manager; do
+for helper in claw-gui-runner claw-display-host claw-display-session claw-file-manager claw-notification-panel; do
     assert_contains "$CARGO_TOML" "name = \"$helper\"" \
         "the GUI helper must be a first-class cargo binary"
     assert_contains "$BUILD_DEBS" "ensure_bin $helper cos" \

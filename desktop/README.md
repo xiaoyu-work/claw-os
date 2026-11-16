@@ -74,18 +74,19 @@ is built with `just notifications-build` from the immutable App pin at
 `build/native-apps/cosmic-notifications`. All 40 original native files, both
 configuration/util crates, GPL license, original git toolkit/panel and optional
 systemd graph move together; this fork has no standalone icon or locale tree.
-The OS applet and panel retain their existing links to private config/util
-crates from the same generated component inputs, not another App's handlers
-or a second vendored copy. These are no longer declared `native_libraries`
-exports; source preparation preserves the private files without inventing
-public metadata.
-The desktop package retains the native binary/descriptor and depends on
-Agent's `claw-os-notifications-v1`. MCP has no session bus and uses durable
-owner/source-scoped OS records; one desktop delivery consumer renders them,
-reflects close/ack state, and binds numeric presentation handles to senders.
-Eviction/disconnect retires presentations without acknowledging durable data.
-Native settings and legacy `notify` JSON history remain unchanged; private-bus
-and UI-model tests are not interactive Wayland/full-image acceptance.
+The OS applet and panel consume the public presentation contract, never private
+config/util libraries. The independent App package supplies the real native
+ELF, manifest and original license. The common Host admits its separately
+declared popup surface and exact `notifications.presentation` IPC rights;
+neither identity nor publication confers these grants.
+The Root-held resource is the single automatic desktop delivery consumer.
+Agent's `claw-notification-panel` terminates the shell descriptor, with no App
+bus or configuration mount. The original App owns popup rendering, image
+preparation and private popup mute; Root owns durable state, DND, retries,
+acknowledgement and checked retirement. Neither normal popup expiry nor
+eviction/retirement acknowledges unread data, and no Agent UI/task is needed.
+Legacy `notify` history is untouched. Private native display cases remain
+separate from physical-display/full-image acceptance.
 
 The complete [Media Player product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player)
 is built with `just player-build` from the immutable App pin at

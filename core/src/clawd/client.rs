@@ -109,8 +109,14 @@ fn requires_root_peer(command: super::routes::Command) -> bool {
             | super::routes::Command::GuiFileCreateStatus
             | super::routes::Command::GuiFileCreateReserve
             | super::routes::Command::GuiPackageIntent
-            | super::routes::Command::GuiCaptureControl)
+            | super::routes::Command::GuiCaptureControl
+            | super::routes::Command::GuiMediaExchange
+            | super::routes::Command::GuiAudioControl
+            | super::routes::Command::GuiFilePicker
+            | super::routes::Command::GuiNotificationExchange
+            | super::routes::Command::NotificationPresentationControl)
         || command == super::routes::Command::SystemRegionalSettingsControl
+        || command == super::routes::Command::SystemDesktopPreferencesControl
         || command == super::routes::Command::SystemMailControl
         || command.as_str().starts_with("system.review.")
 }
@@ -145,7 +151,8 @@ pub(crate) fn request_gui_resource_blocking(request: Request) -> Result<Response
         Command::GuiFileReadRequest | Command::GuiFileReadStatus
         | Command::GuiFileWriteRequest | Command::GuiFileWriteStatus | Command::GuiFileSaveReserve
         | Command::GuiFileCreateRequest | Command::GuiFileCreateStatus | Command::GuiFileCreateReserve
-        | Command::GuiPackageIntent | Command::GuiCaptureControl)
+        | Command::GuiPackageIntent | Command::GuiCaptureControl | Command::GuiMediaExchange
+        | Command::GuiAudioControl | Command::GuiFilePicker | Command::GuiNotificationExchange)
     {
         return Err(ClientError::before_dispatch("private GUI transport accepts only typed resource commands"));
     }
@@ -157,6 +164,21 @@ pub(crate) fn request_gui_resource_blocking(request: Request) -> Result<Response
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn request_gui_resource_blocking(_request: Request) -> Result<Response, ClientError> {
     Err(ClientError::before_dispatch("private GUI resource transport requires Linux"))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn request_gui_provider_blocking(request: Request) -> Result<Response, ClientError> {
+    super::app_sessions::gui::provider_route(request.command)
+        .map_err(ClientError::before_dispatch)?;
+    if request.command.route().authority.audience != super::authority::Audience::SystemService {
+        return Err(ClientError::before_dispatch("private GUI provider transport requires a session system service"));
+    }
+    request_blocking_inner(Path::new(crate::worker::linux::SANDBOX_BROKER_SOCKET), request, true)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn request_gui_provider_blocking(_request: Request) -> Result<Response, ClientError> {
+    Err(ClientError::before_dispatch("private GUI provider transport requires Linux"))
 }
 
 #[cfg(unix)]

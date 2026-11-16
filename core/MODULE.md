@@ -32,6 +32,7 @@ persistence, and structured primitive dispatch.
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/bin/claw-mail-ai-host.rs` | Trusted Thunderbird launcher for the canonical `/usr/lib/cos/apps/mail-ai` implementation |
 | `src/bin/claw-file-manager.rs` | Unprivileged, same-owner FileManager1 URI intents through the ordinary authenticated `cos app --gui` path |
+| `src/bin/claw-notification-panel.rs` | Unprivileged OS shell descriptor/public presentation proxy; native App and durable delivery remain Root-supervised |
 | `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
 | `src/display_session/` | Root PAM/display activation, private compositor control, kernel login identity and checked display teardown |
 | `src/clawd/gui/` | Verified native GUI argv, instance-bound transport/authority and checked resource/process retirement |

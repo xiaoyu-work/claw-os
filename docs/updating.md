@@ -909,6 +909,26 @@ errors, not permission to use an unconfined fallback. See the
 [display lifecycle](../core/src/display_session/MODULE.md) and
 [transport requirements](../core/src/worker/gui_transport/MODULE.md).
 
+### Native notification presentation
+
+The matching Agent/Desktop source uses the existing notification interface for
+an OS-owned panel descriptor helper and one Root-held desktop delivery
+consumer. The App package retains the original native popup UI and license.
+Deploy the helper/session/applet changes and matching signed App manifest
+together; the old Agent-UI bridge is not a fallback consumer.
+The GUI's explicit `ipc.subscribe` / `ipc.invoke` requests for
+`notifications.presentation` require their normal owner decisions, separately
+from `ui.panel` and the MCP producer's `ui.notify`. Installation, package trust
+and an existing own-source inbox grant do not authorize all-source display.
+
+The common Host keeps native popup preferences in private App HOME using the
+original schema. No owner-wide configuration mount, automatic legacy preference
+import, notification replay or historical JSON migration is performed.
+Renderer acceptance, timeout, eviction and checked App/update retirement do not
+acknowledge unread durable records. A replacement presenter waits for checked
+old process/compositor retirement. This source contract does not waive the
+native authenticated-display or signed installed-package publication gates.
+
 ## Extension packages across an update
 
 Apps, Skills and MCP/adapter packages are authenticated before use, and

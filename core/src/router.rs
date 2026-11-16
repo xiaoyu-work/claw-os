@@ -341,8 +341,15 @@ fn request_netdiag_clawd(params: Value) -> Result<Value, String> {
 
 fn request_wire_clawd(command: Command, params: Value) -> Result<Value, String> {
     let request = crate::clawd::protocol::Request::build(command, params);
-    wire_clawd_response(command,
-        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request))
+    let response = if env::var("COS_APP_GUI").as_deref()==Ok("1")
+        && crate::clawd::app_sessions::gui::provider_route(command).is_ok()
+        && command.route().authority.audience==crate::clawd::authority::Audience::SystemService
+    {
+        crate::clawd::client::request_gui_provider_blocking(request)
+    } else {
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
+    };
+    wire_clawd_response(command,response)
 }
 
 fn request_gui_resource(command: Command, params: Value) -> Result<Value, String> {
@@ -1138,6 +1145,41 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__gui_notifications" {
+        if args.len()!=2 || args[1]!="--request-stdin" {
+            return Err("GUI notifications bridge requires --request-stdin".into());
+        }
+        let params = parse_internal_request_object(stdin_data.as_deref(), 768 * 1024, "GUI notifications")?;
+        let value = crate::clawd::notifications::gui::cli(params)?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__gui-file-picker" {
+        if args.len()!=3 || args[2]!="--request-stdin" {
+            return Err("GUI file picker requires open|status|cancel --request-stdin".into());
+        }
+        let params = parse_internal_request_object(stdin_data.as_deref(), 4096, "GUI file picker")?;
+        let value = crate::clawd::gui::file_picker::cli(&args[1], params)?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__gui-audio" {
+        if args.len() != 2 || args[1] != "--pcm-stdin" {
+            return Err("GUI audio bridge requires --pcm-stdin".into());
+        }
+        crate::clawd::gui::audio::cli()?;
+        return Ok(None);
+    }
+
+    if name == "__gui-media" {
+        if args.len() != 2 || args[1] != "--request-stdin" {
+            return Err("GUI playback bridge requires --request-stdin".into());
+        }
+        let params = parse_internal_request_object(stdin_data.as_deref(), 128 * 1024, "GUI playback")?;
+        let value = crate::clawd::media_player::gui::cli(params)?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__gui-capture" {
         if args.len() != 3 || args[2] != "--request-stdin" {
             return Err("GUI Capture bridge requires `request|status|cancel --request-stdin`".into());
@@ -1224,6 +1266,17 @@ fn dispatch_with_stdin_impl(
                 "uris": desktop.uris,
             }),
         )?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__desktop-preferences" {
+        let body = if args.get(1).map(String::as_str)==Some("--request-stdin") && args.len()==2 {
+            let body=parse_internal_request_object(stdin_data.as_deref(),256*1024,"desktop preferences")?;
+            vec![Value::Object(body).to_string()]
+        } else { args[1..].to_vec() };
+        let params=crate::clawd::desktop_preferences::cli_request(&body)
+            .map_err(|error|system_wire_failure(error.kind.code(),&error.message))?;
+        let value=request_wire_clawd(Command::SystemDesktopPreferencesControl,params)?;
         return Ok(Some(value.to_string()));
     }
 

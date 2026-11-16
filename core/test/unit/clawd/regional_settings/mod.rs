@@ -115,9 +115,11 @@ fn authority_requires_authenticated_owner_session_and_exact_live_cap_not_an_app_
     let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path().join("data"));
     for body in [
+        json!({"action":"status"}),
         json!({"action":"system_locale","lang":"en_US.UTF-8","region":"de_DE.UTF-8"}),
         json!({"action":"owner_language","languages":"de_DE:de:en"}),
         json!({"action":"static_hostname","hostname":"fixture-host"}),
+        json!({"action":"system_keyboard","layout":"de","model":"pc105","variant":"","options":""}),
     ] {
         let request = request(body);
         let cap = request.required_cap();

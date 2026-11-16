@@ -467,12 +467,13 @@ impl NotificationService for SqliteNotificationService {
         Ok(value.max(0) as u64)
     }
 
-    fn mutate(
+    fn mutate_at(
         &self,
         owner_uid: u32,
         id: &str,
+        occurrences: Option<u32>,
         mutation: NotificationMutation,
-    ) -> Result<Notification, NotificationError> {
+    ) -> Result<Option<Notification>, NotificationError> {
         let now = super::now_ms();
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -500,7 +501,9 @@ impl NotificationService for SqliteNotificationService {
                  acknowledged_at_ms = COALESCE(?3, acknowledged_at_ms),
                  dismissed_at_ms = COALESCE(?4, dismissed_at_ms),
                  updated_at_ms = ?5
-             WHERE id = ?6 AND owner_uid = ?7",
+             WHERE id = ?6 AND owner_uid = ?7
+               AND (?8 IS NULL OR (occurrences = ?8 AND state IN (?9, ?10)
+                   AND (expires_at_ms IS NULL OR expires_at_ms > ?5)))",
             params![
                 notification_state_code(state),
                 read_at,
@@ -508,11 +511,14 @@ impl NotificationService for SqliteNotificationService {
                 dismissed_at,
                 now,
                 id,
-                owner_uid
+                owner_uid,
+                occurrences,
+                notification_state_code(NotificationState::Unread),
+                notification_state_code(NotificationState::Read),
             ],
         )?;
         if changed == 0 {
-            return Err(NotificationError::NotFound);
+            return Ok(None);
         }
         if matches!(
             mutation,
@@ -533,7 +539,7 @@ impl NotificationService for SqliteNotificationService {
         }
         insert_change_tx(&tx, owner_uid, id, change, now)?;
         tx.commit()?;
-        load_notification(&conn, owner_uid, id)
+        load_notification(&conn, owner_uid, id).map(Some)
     }
 
     fn mark_all_read(&self, owner_uid: u32) -> Result<usize, NotificationError> {
@@ -753,13 +759,14 @@ impl NotificationService for SqliteNotificationService {
         Ok(claims)
     }
 
-    fn complete_delivery(
+    fn complete_delivery_at(
         &self,
         owner_uid: u32,
         id: &str,
         channel: DeliveryChannel,
+        revision: Option<super::DeliveryRevision>,
         result: DeliveryResult,
-    ) -> Result<Notification, NotificationError> {
+    ) -> Result<Option<Notification>, NotificationError> {
         let now = super::now_ms();
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -807,8 +814,12 @@ impl NotificationService for SqliteNotificationService {
                    SELECT 1 FROM notifications n
                    WHERE n.id = ?5 AND n.owner_uid = ?7
                      AND n.state NOT IN (?9, ?10)
+                     AND (?11 IS NULL OR (n.occurrences = ?11
+                         AND (n.expires_at_ms IS NULL OR n.expires_at_ms > ?15)))
                )
-               AND NOT (state = ?1 AND ?8 = 1)",
+               AND NOT (state = ?1 AND ?8 = 1)
+               AND (?12 IS NULL OR (state = ?13 AND attempts = ?12
+                   AND (?1 != ?14 OR next_attempt_at_ms > ?15)))",
             params![
                 delivery_state_code(state),
                 next_attempt,
@@ -819,10 +830,18 @@ impl NotificationService for SqliteNotificationService {
                 owner_uid,
                 terminal as i64,
                 notification_state_code(NotificationState::Dismissed),
-                notification_state_code(NotificationState::Acknowledged)
+                notification_state_code(NotificationState::Acknowledged),
+                revision.map(|value| value.occurrences),
+                revision.map(|value| value.attempts),
+                delivery_state_code(DeliveryState::Delivering),
+                delivery_state_code(DeliveryState::Delivered),
+                now,
             ],
         )?;
         if changed == 0 {
+            if revision.is_some() {
+                return Ok(None);
+            }
             let exists = tx
                 .query_row(
                     "SELECT 1
@@ -840,11 +859,11 @@ impl NotificationService for SqliteNotificationService {
             }
             let notification = load_notification(&tx, owner_uid, id)?;
             tx.commit()?;
-            return Ok(notification);
+            return Ok(Some(notification));
         }
         insert_change_tx(&tx, owner_uid, id, change, now)?;
         tx.commit()?;
-        load_notification(&conn, owner_uid, id)
+        load_notification(&conn, owner_uid, id).map(Some)
     }
 
     fn known_owner_uids(&self) -> Result<Vec<u32>, NotificationError> {

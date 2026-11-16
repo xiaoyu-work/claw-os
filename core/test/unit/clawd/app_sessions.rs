@@ -16,6 +16,10 @@ mod activity_policy {
     ));
 }
 
+mod settings_resources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/clawd/app_sessions/settings_resources.rs"));
+}
+
 const FS_MANIFEST: &str = r#"{
   "id": "fs",
   "version": "0.1.0",

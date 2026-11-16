@@ -12,6 +12,12 @@ mod editor_save_as {
         "/test/unit/clawd/server/gui_fixture/editor_save_as.rs"
     ));
 }
+mod notifications {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/clawd/server/gui_fixture/notifications.rs"));
+}
+mod media_player_fixture {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/clawd/server/gui_fixture/native_media.rs"));
+}
 
 mod terminal_pty {
     include!(concat!(
@@ -37,6 +43,12 @@ mod clipboard_history {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/test/unit/clawd/server/gui_fixture/clipboard_history.rs"
+    ));
+}
+mod capture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture/capture.rs"
     ));
 }
 
@@ -67,6 +79,18 @@ pub(super) const EDITOR: Product = Product {
     panel: false,
     interactive_panel: false,
     observation: None,
+};
+pub(super) const NOTIFICATIONS: Product = Product {
+    name: "notifications", app: "cosmic-notifications", case: 42,
+    desktop_id: "com.clawos.Notifications", entries: &["bin/cosmic-notifications"],
+    ungranted: &[], home_metadata: false, selector: "--gui", panel: true,
+    interactive_panel: false, observation: None,
+};
+pub(super) const MEDIA: Product = Product {
+    name: "media-player", app: "cosmic-player", case: 40,
+    desktop_id: "com.clawos.Player", entries: &["bin/cosmic-player"],
+    ungranted: &[0, 1], home_metadata: true, selector: "--gui", panel: false,
+    interactive_panel: false, observation: None,
 };
 pub(super) const FILES: Product = Product {
     name: "files",
@@ -165,8 +189,21 @@ pub(super) const SETTINGS: Product = Product {
     case: 33,
     desktop_id: "com.clawos.Settings",
     entries: &["bin/cosmic-settings"],
-    ungranted: &[0, 1, 2],
+    ungranted: &[],
     home_metadata: false,
+    selector: "--gui",
+    panel: false,
+    interactive_panel: false,
+    observation: None,
+};
+pub(super) const CAPTURE: Product = Product {
+    name: "capture",
+    app: "cosmic-screenshot",
+    case: 34,
+    desktop_id: "com.clawos.Screenshot",
+    entries: &["bin/cosmic-screenshot"],
+    ungranted: &[0],
+    home_metadata: true,
     selector: "--gui",
     panel: false,
     interactive_panel: false,
@@ -175,11 +212,31 @@ pub(super) const SETTINGS: Product = Product {
 
 impl Product {
     pub(super) fn for_case(case: usize) -> Option<Self> {
+        if (34..=39).contains(&case) { return Some(Self { case, ..CAPTURE }); }
+        if (42..=43).contains(&case) { return Some(Self { case, ..NOTIFICATIONS }); }
+        if (40..=41).contains(&case) { return Some(Self { case, ..MEDIA }); }
         [EDITOR, FILES, TERMINAL, CALENDAR, STORE, WIDGETS, CLIPBOARD, LAUNCHER, SETTINGS]
             .into_iter().find(|product| product.case == case)
     }
 
     fn startup_needs(self) -> Vec<Cap> {
+        if self.name == "media-player" {
+            return vec![Cap::new(Verb::DEVICE_AUDIO, Scope::name("output")), Cap::unscoped(Verb::UI_PROMPT)];
+        }
+        if self.name == "notifications" {
+            return vec![
+                Cap::unscoped(Verb::UI_PANEL),
+                Cap::new(Verb::IPC_SUBSCRIBE, Scope::name("notifications.presentation")),
+                Cap::new(Verb::IPC_INVOKE, Scope::name("notifications.presentation")),
+            ];
+        }
+        if self.name == "capture" {
+            return vec![
+                Cap::new(Verb::DESKTOP_CAPTURE, Scope::name("screen")),
+                Cap::unscoped(Verb::UI_NOTIFY),
+                Cap::new(Verb::FS_META, Scope::path("/run/display-home/**")),
+            ];
+        }
         if self.interactive_panel {
             return vec![Cap::unscoped(Verb::UI_PANEL)];
         }
@@ -287,14 +344,21 @@ pub(super) fn install(key: &crate::provenance::sign::SigningKeyFile, product: Pr
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     );
-    if matches!(product.name, "terminal" | "settings") || product.panel || product.observation.is_some() {
+    if matches!(product.name, "terminal" | "settings" | "capture") || product.panel || product.observation.is_some() {
         assert_eq!(
             platform_digest,
             "0412f750add06a32c81312c9405338687471249a01dcbf0c9688e66885dde8d8"
         );
     }
     assert_eq!(payload.entrypoints, product.entries);
-    let required = if matches!(product.name, "desktop-widgets" | "clipboard") {
+    let required = if product.name == "notifications" {
+        Vec::new()
+    } else if product.name == "capture" {
+        vec![
+            format!("resources/usr/share/applications/{}.desktop", product.desktop_id),
+            format!("resources/usr/share/icons/hicolor/scalable/apps/{}.svg", product.desktop_id),
+        ]
+    } else if matches!(product.name, "desktop-widgets" | "clipboard") {
         vec![format!("resources/usr/share/applications/{}.desktop", product.desktop_id)]
     } else if product.panel && !product.interactive_panel {
         vec![
@@ -832,7 +896,7 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
             if product.home_metadata {
                 let metadata = Cap::new(Verb::FS_META, Scope::path("/run/display-home/**"));
                 expected_gui.insert(metadata.clone());
-                expected_parent.insert(metadata);
+                if product.name != "capture" { expected_parent.insert(metadata); }
             }
             assert_eq!(
                 gui, expected_gui,
@@ -914,6 +978,10 @@ fn bound_gui_session(parent: &str, product: Product) -> Option<String> {
 }
 
 pub(super) async fn run(group: &std::fs::File, product: Product) {
+    if product.name == "capture" {
+        capture::run(group).await;
+        return;
+    }
     let editor = product.name == "editor";
     let package_owned = Path::new("/run/gui-fixture/native-store-package").exists();
     assert!(!package_owned || product.name == "store");
@@ -925,6 +993,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     } else {
         None
     };
+    let mut notification_fixture = (product.name == "notifications")
+        .then(|| notifications::Fixture::prepare(product.case));
+    let media_fixture = (product.name == "media-player").then(media_player_fixture::Fixture::prepare);
     let store_fixture = product.observation.is_some().then(|| store_catalog::Fixture::prepare(package_owned));
     let home = Path::new("/run/display-home");
     {
@@ -1093,6 +1164,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         value("COS_OWNER_HOME"),
         Some(b"/run/display-home".as_slice())
     );
+    if product.name != "notifications" {
     assert_eq!(
         value("COS_APP_RESOURCE_DIR"),
         Some(
@@ -1106,6 +1178,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     assert!(value("XDG_DATA_DIRS")
         .unwrap()
         .starts_with(format!("{}/resources/usr/share:", product.directory().display()).as_bytes()));
+    }
     assert_ne!(value("HOME"), Some(b"/run/display-home".as_slice()));
     let data_source = home.join(".local/share/cos/apps").join(product.app);
     let data_target = if product.home_metadata {
@@ -1125,15 +1198,28 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     assert_eq!(exposed.uid(), OWNER);
     assert_eq!(exposed.mode() & 0o077, 0);
     assert_ne!(value("COS_MCP_SERVER"), Some(b"1".as_slice()));
-    if product.ungranted.is_empty() {
+    let expected_ungranted = if product.name == "settings" {
+        let package = crate::provenance::verify::verify_package(
+            &product.directory(),
+            &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App).expect_id(product.app),
+            &crate::provenance::trust_store(),
+        ).unwrap();
+        let manifest = crate::apps::AppManifest::from_json(&package.manifest_text().unwrap()).unwrap();
+        (0..manifest.gui_entry(None).unwrap().optional_needs.len()).collect::<Vec<_>>()
+    } else {
+        product.ungranted.to_vec()
+    };
+    if expected_ungranted.is_empty() {
         assert!(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").is_none());
     } else {
         let ungranted: Vec<usize> =
             serde_json::from_slice(value("COS_APP_OPTIONAL_NEEDS_UNGRANTED_JSON").unwrap())
                 .unwrap();
-        assert_eq!(ungranted, product.ungranted);
+        assert_eq!(ungranted, expected_ungranted);
     }
-    let args = if editor {
+    let args = if product.name == "media-player" {
+        "[\"/run/display-home/native-player.webm\"]".into()
+    } else if editor {
         format!("[\"{TARGET}\"]")
     } else {
         "[]".into()
@@ -1174,7 +1260,9 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                 });
         }
         if let Some(record) = observe().filter(|record| {
-            (if product.interactive_panel {
+            (if product.name == "notifications" {
+                notifications::buffered(record, &window)
+            } else if product.interactive_panel {
                 buffered_palette(record, &window)
             } else if product.name == "desktop-widgets" {
                 buffered_widget_panel(record, &window)
@@ -1203,6 +1291,13 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
+    if let Some(fixture) = &media_fixture {
+        if let Err(error) = fixture.consume(&window, &session, &launcher,
+            || check_native_process(&retained, &process)).await
+        {
+            renderer_failure(&control, &mut pam, &retained, &process, &session, &error).await;
+        }
+    }
     if product.name == "files" {
         let evidence = process_failure_evidence(&retained, &process);
         eprintln!("private actual Files first-frame profile {}", serde_json::json!({
@@ -1305,6 +1400,10 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     }
     if let Some(fixture) = &mut clipboard_fixture {
         fixture.consume(&control, &mut pam, &retained, &process, &session).await;
+        assert_eq!(startup_authority(&session, &parent, product), original);
+    }
+    if let Some(fixture) = &mut notification_fixture {
+        fixture.consume(&control, &mut pam, &retained, &process, &session, &before).await;
         assert_eq!(startup_authority(&session, &parent, product), original);
     }
     let mut package_review = None;
@@ -1440,7 +1539,7 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
                         && record["role"] == "zwlr_layer_surface_v1"
                         && record["layer_surfaces"] == 0
                         && record["popup"]["open"] == false
-                        && (product.name == "desktop-widgets" || product.interactive_panel
+                        && (matches!(product.name, "desktop-widgets" | "notifications") || product.interactive_panel
                             || record["popup"]["closed"] == true)))
         }) {
             break;
@@ -1476,6 +1575,13 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     if let Some(fixture) = clipboard_fixture {
         fixture.stop().await;
     }
+    if let Some(fixture) = notification_fixture {
+        fixture.verify_after_retirement().await;
+    }
+    if let Some(fixture) = &media_fixture {
+        fixture.verify_after_retirement();
+        media_player_fixture::thumbnails(group).await;
+    }
     println!(
         "private actual {}: real signed ELF/resources, native window{} and checked process/runtime/PAM retirement passed; {}",
         product.name,
@@ -1504,6 +1610,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             "real owner-scoped Calendar/task/resource reads under independent exact grants verified; reply decoding and exact painted card text NOT asserted"
         } else if product.name == "clipboard" {
             "real private OS CopyQ history read/delete/confirmed-clear, authenticated Root headless selection Restore with plain-text/HTML transfers and original popup open/close verified; physical display and exact painted history text NOT asserted"
+        } else if product.name == "notifications" {
+            "actual original toast, protected Root presentation exchange and checked presenter retirement; see dedicated delivery/descriptor consumer evidence"
         } else if product.panel {
             "original popup pixels/open/close and authenticated same-owner real SDK/Calendar reader success verified; exact returned/painted event text NOT inspected"
         } else if package_applied.is_some() {
@@ -1565,6 +1673,31 @@ fn private_native_terminal() {
 #[ignore = "clean-GHA-only: actual Settings ELF, authenticated private PAM/display and cgroup v2"]
 fn private_native_settings() {
     private_gui_fixture_selected(false, false, false, Some(SETTINGS));
+}
+
+#[test]
+#[ignore = "actual signed Capture ELF, authenticated private PAM/display/broker, real clawd helper and cgroup v2"]
+fn private_native_capture() {
+    private_gui_fixture_selected(false, false, false, Some(CAPTURE));
+}
+
+#[test]
+#[ignore = "actual signed Notifications ELF, private PAM/display/presentation helper and cgroup v2"]
+fn private_native_notifications() {
+    let path = Path::new("/run/gui-fixture/native-notification-case");
+    let metadata = std::fs::symlink_metadata(path).unwrap();
+    assert!(metadata.is_file() && metadata.uid() == 0 && metadata.nlink() == 1
+        && metadata.mode() & 0o077 == 0 && metadata.len() == 2);
+    let case = match std::fs::read(path).unwrap().as_slice() {
+        b"42" => 42, b"43" => 43, _ => panic!("unknown private Notifications case"),
+    };
+    private_gui_fixture_selected(false, false, false, Some(Product { case, ..NOTIFICATIONS }));
+}
+
+#[test]
+#[ignore = "actual signed Player ELF, private PAM/display/audio/provider and cgroup v2"]
+fn private_native_media_player() {
+    private_gui_fixture_selected(false, false, false, Some(MEDIA));
 }
 
 #[test]

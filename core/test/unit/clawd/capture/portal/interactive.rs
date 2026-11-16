@@ -1,5 +1,9 @@
-use super::super::tests::Bus;
+use crate::clawd::capture::TestPortalBus as Bus;
 use super::*;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::Connection;
+const DESTINATION: &str = "org.freedesktop.portal.Desktop";
+const REQUEST_INTERFACE: &str = "org.freedesktop.portal.Request";
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicUsize, Ordering};

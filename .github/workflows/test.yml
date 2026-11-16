@@ -229,7 +229,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar, native-store, native-desktop-widgets, native-clipboard, native-launcher, native-settings]
+        mode: [display, native-fs, file-manager, native-package, native-editor, native-files, native-terminal, native-calendar, native-store, native-desktop-widgets, native-clipboard, native-launcher, native-settings, native-capture, native-notifications, native-media-player]
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -254,7 +254,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends apt-utils python3-apt gnupg
       - name: Install real native product build and software-renderer prerequisites
-        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher' || matrix.mode == 'native-settings'
+        if: matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher' || matrix.mode == 'native-settings' || matrix.mode == 'native-capture' || matrix.mode == 'native-notifications' || matrix.mode == 'native-media-player'
         run: |
           sudo apt-get install -y --no-install-recommends \
             cmake just libfontconfig-dev libfreetype-dev libglib2.0-dev libudev-dev \
@@ -269,6 +269,9 @@ jobs:
       - name: Install original Settings native dependencies and public keyboard data
         if: matrix.mode == 'native-settings'
         run: sudo apt-get install -y --no-install-recommends libpipewire-0.3-dev libpulse-dev libxkbregistry-dev libclang-dev gettext xkb-data
+      - name: Install actual Media decoder and isolated output prerequisites
+        if: matrix.mode == 'native-media-player'
+        run: sudo apt-get install -y --no-install-recommends libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good pipewire-bin
       - name: Pin Cargo cache identity before private fixtures
         id: cargo-inputs
         env:
@@ -338,8 +341,17 @@ jobs:
       - name: Test actual Settings ELF with ungranted optional rights and checked retirement
         if: matrix.mode == 'native-settings'
         run: bash scripts/ci/test-boundaries.sh native-settings
+      - name: Test signed Capture through PAM, private broker and actual OS helper with checked cancellation
+        if: matrix.mode == 'native-capture'
+        run: bash scripts/ci/test-boundaries.sh native-capture
+      - name: Test signed Notifications presentation, actual panel descriptor and checked presenter retirement
+        if: matrix.mode == 'native-notifications'
+        run: bash scripts/ci/test-boundaries.sh native-notifications
+      - name: Test signed native Player, protected read and isolated real audio/video controls
+        if: matrix.mode == 'native-media-player'
+        run: bash scripts/ci/test-boundaries.sh native-media-player
       - name: Retain exact native product input and compositor observations
-        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher' || matrix.mode == 'native-settings')
+        if: always() && (matrix.mode == 'native-editor' || matrix.mode == 'native-files' || matrix.mode == 'native-terminal' || matrix.mode == 'native-calendar' || matrix.mode == 'native-store' || matrix.mode == 'native-desktop-widgets' || matrix.mode == 'native-clipboard' || matrix.mode == 'native-launcher' || matrix.mode == 'native-settings' || matrix.mode == 'native-capture' || matrix.mode == 'native-notifications' || matrix.mode == 'native-media-player')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.mode }}-acceptance-${{ github.sha }}

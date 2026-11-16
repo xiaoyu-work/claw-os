@@ -1,6 +1,7 @@
 //! Capability-gated regional settings, without App identity or polkit exemptions.
 
 mod dbus;
+mod locales;
 mod request;
 
 pub use request::Request;

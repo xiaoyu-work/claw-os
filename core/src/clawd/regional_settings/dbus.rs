@@ -17,6 +17,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCALE: &str = "org.freedesktop.locale1";
 const HOSTNAME: &str = "org.freedesktop.hostname1";
 const ACCOUNTS: &str = "org.freedesktop.Accounts";
+const TIMEDATE: &str = "org.freedesktop.timedate1";
 
 pub(super) struct Backend {
     connection: Connection,
@@ -101,6 +102,208 @@ impl Backend {
         authority: &Decision,
     ) -> Result<Value, BrokerError> {
         match &request.0 {
+            Body::TimeStatus { .. } => {
+                let proxy = self
+                    .proxy(TIMEDATE, "/org/freedesktop/timedate1", TIMEDATE)
+                    .await?;
+                self.require_current(TIMEDATE, &proxy).await?;
+                let _authorized = authority
+                    .require(request.required_cap())
+                    .map_err(BrokerError::authorization)?;
+                let timezone: String =
+                    before("read timezone", proxy.get_property("Timezone")).await?;
+                let ntp: bool = before("read automatic time", proxy.get_property("NTP")).await?;
+                let can_ntp: bool = before(
+                    "read automatic time availability",
+                    proxy.get_property("CanNTP"),
+                )
+                .await?;
+                let timezones: Vec<String> =
+                    before("list timezones", proxy.call("ListTimezones", &())).await?;
+                if timezone.len() > 128
+                    || timezones.len() > 4096
+                    || timezones
+                        .iter()
+                        .any(|name| name.len() > 128 || name.chars().any(char::is_control))
+                {
+                    return Err(BrokerError::unavailable(
+                        "timezone observation exceeds its contract bounds",
+                    ));
+                }
+                Ok(
+                    json!({"action":"time_status","timezone":timezone,"ntp":ntp,"can_ntp":can_ntp,"timezones":timezones}),
+                )
+            }
+            Body::Timezone { timezone, .. } => {
+                let proxy = self
+                    .proxy(TIMEDATE, "/org/freedesktop/timedate1", TIMEDATE)
+                    .await?;
+                self.require_current(TIMEDATE, &proxy).await?;
+                let authorized = authority
+                    .require(request.required_cap())
+                    .map_err(BrokerError::authorization)?;
+                mutate(
+                    &authorized,
+                    "set timezone",
+                    proxy.call::<_, _, ()>("SetTimezone", &(timezone.as_str(), false)),
+                )
+                .await?;
+                let observed: String =
+                    after("confirm timezone", proxy.get_property("Timezone")).await?;
+                if observed != timezone.as_str() {
+                    return Err(BrokerError::indeterminate(
+                        "timezone readback differs after mutation; refresh before retrying",
+                    ));
+                }
+                Ok(json!({"action":"timezone","status":"applied","timezone":observed}))
+            }
+            Body::Ntp { enabled, .. } => {
+                let proxy = self
+                    .proxy(TIMEDATE, "/org/freedesktop/timedate1", TIMEDATE)
+                    .await?;
+                self.require_current(TIMEDATE, &proxy).await?;
+                let authorized = authority
+                    .require(request.required_cap())
+                    .map_err(BrokerError::authorization)?;
+                mutate(
+                    &authorized,
+                    "set automatic time",
+                    proxy.call::<_, _, ()>("SetNTP", &(*enabled, false)),
+                )
+                .await?;
+                let observed: bool =
+                    after("confirm automatic time", proxy.get_property("NTP")).await?;
+                if observed != *enabled {
+                    return Err(BrokerError::indeterminate(
+                        "automatic time readback differs after mutation; refresh before retrying",
+                    ));
+                }
+                Ok(json!({"action":"ntp","status":"applied","enabled":observed}))
+            }
+            Body::Status { .. } => {
+                let locale = self
+                    .proxy(LOCALE, "/org/freedesktop/locale1", LOCALE)
+                    .await?;
+                let hostname = self
+                    .proxy(HOSTNAME, "/org/freedesktop/hostname1", HOSTNAME)
+                    .await?;
+                let accounts = self
+                    .proxy(ACCOUNTS, "/org/freedesktop/Accounts", ACCOUNTS)
+                    .await?;
+                let path: zbus::zvariant::OwnedObjectPath = before(
+                    "resolve owner account",
+                    accounts.call("FindUserById", &(i64::from(owner),)),
+                )
+                .await?;
+                let user = zbus::proxy::Builder::<Proxy<'static>>::new(&self.connection)
+                    .destination(accounts.destination().to_owned())
+                    .map_err(unavailable)?
+                    .path(path)
+                    .map_err(unavailable)?
+                    .interface("org.freedesktop.Accounts.User")
+                    .map_err(unavailable)?
+                    .cache_properties(zbus::proxy::CacheProperties::No)
+                    .build()
+                    .await
+                    .map_err(unavailable)?;
+                let resolved: u64 =
+                    before("verify owner account", user.get_property("Uid")).await?;
+                if resolved != u64::from(owner) {
+                    return Err(BrokerError::authorization(
+                        "AccountsService returned a different owner",
+                    ));
+                }
+                self.require_current(LOCALE, &locale).await?;
+                self.require_current(HOSTNAME, &hostname).await?;
+                self.require_current(ACCOUNTS, &accounts).await?;
+                let _authorized = authority
+                    .require(request.required_cap())
+                    .map_err(BrokerError::authorization)?;
+                let values: Vec<String> =
+                    before("read system locale", locale.get_property("Locale")).await?;
+                let language: String =
+                    before("read owner language", user.get_property("Language")).await?;
+                let name: String = before(
+                    "read static hostname",
+                    hostname.get_property("StaticHostname"),
+                )
+                .await?;
+                let layout: String =
+                    before("read keyboard layout", locale.get_property("X11Layout")).await?;
+                let model: String =
+                    before("read keyboard model", locale.get_property("X11Model")).await?;
+                let variant: String =
+                    before("read keyboard variant", locale.get_property("X11Variant")).await?;
+                let options: String =
+                    before("read keyboard options", locale.get_property("X11Options")).await?;
+                if values.len() > 32
+                    || values.iter().any(|value| value.len() > 256)
+                    || language.len() > 4096
+                    || name.len() > 64
+                    || layout.len() > 256
+                    || model.len() > 128
+                    || variant.len() > 256
+                    || options.len() > 2048
+                {
+                    return Err(BrokerError::unavailable(
+                        "regional observation exceeds its contract bounds",
+                    ));
+                }
+                Ok(json!({
+                    "action":"status","locale":values,"language":language,"hostname":name,
+                    "keyboard":{"layout":layout,"model":model,"variant":variant,"options":options},
+                    "available_locales":super::locales::installed(owner).await?,
+                }))
+            }
+            Body::SystemKeyboard {
+                layout,
+                model,
+                variant,
+                options,
+                ..
+            } => {
+                let proxy = self
+                    .proxy(LOCALE, "/org/freedesktop/locale1", LOCALE)
+                    .await?;
+                self.require_current(LOCALE, &proxy).await?;
+                let authorized = authority
+                    .require(request.required_cap())
+                    .map_err(BrokerError::authorization)?;
+                mutate(
+                    &authorized,
+                    "set system keyboard defaults",
+                    proxy.call::<_, _, ()>(
+                        "SetX11Keyboard",
+                        &(
+                            layout.as_str(),
+                            model.as_str(),
+                            variant.as_str(),
+                            options.as_str(),
+                            true,
+                            false,
+                        ),
+                    ),
+                )
+                .await?;
+                for (property, expected) in [
+                    ("X11Layout", layout.as_str()),
+                    ("X11Model", model.as_str()),
+                    ("X11Variant", variant.as_str()),
+                    ("X11Options", options.as_str()),
+                ] {
+                    let observed: String =
+                        after("confirm keyboard defaults", proxy.get_property(property)).await?;
+                    if observed != expected {
+                        return Err(BrokerError::indeterminate(
+                            "system keyboard readback differs after mutation; refresh before retrying",
+                        ));
+                    }
+                }
+                Ok(json!({
+                    "action":request.action(),"status":"applied",
+                    "keyboard":{"layout":layout,"model":model,"variant":variant,"options":options}
+                }))
+            }
             Body::SystemLocale { lang, region, .. } => {
                 let values = locale_values(lang.as_str(), region.as_str());
                 let proxy = self

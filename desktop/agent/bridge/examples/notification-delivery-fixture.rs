@@ -1,8 +1,6 @@
-//! Explicit private-bus fixture using the actual desktop delivery consumer.
+//! Explicit historical private-bus adapter fixture; production uses the GUI Host.
 #[path = "../src/notifications.rs"]
 mod notifications;
-#[path = "../src/state.rs"]
-mod state;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
