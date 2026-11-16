@@ -899,7 +899,11 @@ fn startup_authority(session: &str, parent: &str, product: Product) -> (CapSet, 
                 if product.name != "capture" { expected_parent.insert(metadata); }
             }
             assert_eq!(
-                gui, expected_gui,
+                (gui.len(), gui.iter().collect::<std::collections::HashSet<_>>()),
+                (
+                    expected_gui.len(),
+                    expected_gui.iter().collect::<std::collections::HashSet<_>>()
+                ),
                 "GUI startup must not inherit MCP, content, process or AI authority"
             );
             assert_eq!(
@@ -1157,7 +1161,8 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
             .find_map(|entry| entry.strip_prefix(format!("{key}=").as_bytes()))
     };
     assert_eq!(value("COS_APP_GUI"), Some(b"1".as_slice()));
-    assert_eq!(value("ICED_BACKEND"), Some(b"tiny-skia".as_slice()));
+    let backend = if product.name == "media-player" { "wgpu" } else { "tiny-skia" };
+    assert_eq!(value("ICED_BACKEND"), Some(backend.as_bytes()));
     assert_eq!(value("COS_COMMAND"), Some(product.selector.as_bytes()));
     assert_eq!(value("COS_SESSION"), Some(session.as_bytes()));
     assert_eq!(

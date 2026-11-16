@@ -276,7 +276,8 @@ static int gui_fixture(void) {
                         _exit(123);
                     }
                     if (scenario == 40) {
-                        if (setenv("ICED_BACKEND", "tiny-skia", 1) != 0) _exit(122);
+                        /* The original video widget requires its WGPU primitive. */
+                        if (setenv("ICED_BACKEND", "wgpu", 1) != 0) _exit(122);
                         execl("/usr/local/bin/claw-display-session", "claw-display-session", "--exec",
                               "/usr/lib/cos/bin/pam-login-fixture", "--entry", "/usr/local/bin/cos",
                               "app", "cosmic-player", "--gui", "/run/display-home/native-player.webm", (char *)NULL);
