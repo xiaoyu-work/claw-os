@@ -1606,7 +1606,8 @@ impl Filesystem {
     fn save_creation(&mut self, inode: u64, parent: u64, from: &Path, target: &Path,
         selection: &str, bytes: &[u8]) -> Result<(), i32>
     {
-        let parent_pin = self.node_file(parent, false)?;
+        // Child metadata pins are O_PATH; publication and cleanup must fsync this directory.
+        let parent_pin = self.node_file(parent, true)?;
         super::selected_create::check_slot(&self.shared, selection, &parent_pin, target)?;
         let shared = self.shared.clone();
         let _serial = shared.effects.lock().map_err(|_| libc::EIO)?;
