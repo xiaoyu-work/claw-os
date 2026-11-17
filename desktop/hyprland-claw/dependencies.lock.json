@@ -1,0 +1,76 @@
+{
+  "sources": [
+    {
+      "name": "wayland",
+      "repository": "https://github.com/wayland-mirror/wayland.git",
+      "revision": "3e673a438b0a9749e3bdf5cac4befac86333024c",
+      "version": "1.25.0",
+      "build": "meson",
+      "pkg_config": "wayland-server",
+      "meson_args": ["-Ddocumentation=false"]
+    },
+    {
+      "name": "wayland-protocols",
+      "repository": "https://github.com/wayland-mirror/wayland-protocols.git",
+      "revision": "ee78491a237eaff9389a0ccf8680521d074407d3",
+      "version": "1.49",
+      "build": "meson",
+      "pkg_config": "wayland-protocols"
+    },
+    {
+      "name": "hyprutils",
+      "repository": "https://github.com/hyprwm/hyprutils.git",
+      "revision": "0d13d5a624eb093b600d1b2cbe448fb613c86424",
+      "version": "0.14.3",
+      "build": "cmake",
+      "pkg_config": "hyprutils"
+    },
+    {
+      "name": "hyprlang",
+      "repository": "https://github.com/hyprwm/hyprlang.git",
+      "revision": "0d00dc118981531aa731150b6ea551ef037acddd",
+      "version": "0.6.7",
+      "build": "cmake",
+      "pkg_config": "hyprlang"
+    },
+    {
+      "name": "hyprgraphics",
+      "repository": "https://github.com/hyprwm/hyprgraphics.git",
+      "revision": "482d4b7ec36ffdaf3573086aa586b178fd5404be",
+      "version": "0.5.1",
+      "build": "cmake",
+      "pkg_config": "hyprgraphics"
+    },
+    {
+      "name": "hyprcursor",
+      "repository": "https://github.com/hyprwm/hyprcursor.git",
+      "revision": "44e91d467bdad8dcf8bbd2ac7cf49972540980a5",
+      "version": "0.1.13",
+      "build": "cmake",
+      "pkg_config": "hyprcursor"
+    },
+    {
+      "name": "aquamarine",
+      "repository": "https://github.com/hyprwm/aquamarine.git",
+      "revision": "783bfd9ae441d1d0519b979ac68b73ddd6e81df0",
+      "version": "0.15.0",
+      "build": "cmake",
+      "pkg_config": "aquamarine"
+    },
+    {
+      "name": "hyprland-protocols",
+      "repository": "https://github.com/hyprwm/hyprland-protocols.git",
+      "revision": "044a434ec371f985655389bcef09286b1af3d77c",
+      "version": "0.8.0",
+      "build": "cmake",
+      "pkg_config": "hyprland-protocols"
+    },
+    {
+      "name": "glaze",
+      "repository": "https://github.com/stephenberry/glaze.git",
+      "revision": "b518eec7a22e56ffa238b072c07f47efa7cea97f",
+      "version": "7.2.0",
+      "build": "cmake"
+    }
+  ]
+}

@@ -74,3 +74,27 @@ Windows Git subtree exports must explicitly preserve Linux line endings:
 its own attributes rather than inheriting the repository root's `eol=lf`;
 an implicit Windows checkout conversion makes the upstream shell generators
 unexecutable on Linux.
+
+## Pinned native dependencies
+
+The compositor requires newer Hypr libraries and Wayland protocol XML than
+the distribution baseline. `dependencies.lock.json` records exact source
+commits in build order. `build-dependencies.py` builds only those commits
+into an explicitly selected external Linux cache; it never installs into the
+host system or chooses an older dependency.
+
+From the OS repository root, after installing the declared development tools
+and libraries:
+
+```bash
+python3 desktop/hyprland-claw/build-dependencies.py \
+  --cache "$HOME/.cache/claw-desktop-native"
+```
+
+The build requires Git, CMake, Ninja, Meson, pkg-config, a C++26 compiler and
+the development libraries declared by the upstream manifests. Distribution
+packages include glslang tools/development files, Wayland, DRM/GBM, libinput,
+libseat, libdisplay-info, Cairo/Pango, libeis, Lua 5.5, librsvg, libzip and
+tomlplusplus. Source caches retain licenses and refuse changed tracked files.
+The output is a development dependency prefix, not an installed or signed
+OS payload; release builds must still use the target Debian ABI.
