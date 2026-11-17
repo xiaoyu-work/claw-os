@@ -1,6 +1,6 @@
 //! The compositor's authenticated parent connection, independent of Wayland policy.
 
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
@@ -180,8 +180,16 @@ impl CompositorLink {
     }
 
     pub fn reply(&self, reply: &CompositorReply) -> Result<(), Error> {
+        self.reply_with_descriptors(reply, &[])
+    }
+
+    pub fn reply_with_descriptors(
+        &self,
+        reply: &CompositorReply,
+        descriptors: &[BorrowedFd<'_>],
+    ) -> Result<(), Error> {
         self.connection
-            .send(reply, &[], Instant::now() + Duration::from_secs(1))
+            .send(reply, descriptors, Instant::now() + Duration::from_secs(1))
     }
 
     pub fn close(&mut self) -> Result<(), Error> {

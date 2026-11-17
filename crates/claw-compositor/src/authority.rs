@@ -5,6 +5,7 @@ use std::os::fd::{AsFd, BorrowedFd, IntoRawFd, OwnedFd};
 use std::sync::Arc;
 
 use claw_display_control::compositor::{CompositorLink, DisplayBinding};
+use claw_display_control::desktop::{self, Command as DesktopCommand};
 use claw_display_control::selection::Payload;
 use claw_display_control::wire::{monotonic_ms, GuiRefusal};
 use claw_display_control::workload::InstanceProcess;
@@ -160,6 +161,7 @@ pub(crate) enum CommandKind {
     Selection = 3,
     Stop = 4,
     Ended = 5,
+    Desktop = 6,
 }
 
 #[derive(Clone, Copy)]
@@ -174,6 +176,13 @@ struct Pending {
     instance: Option<InstanceId>,
     descriptor: Option<OwnedFd>,
     selection: Option<PendingSelection>,
+    desktop: Option<PendingDesktop>,
+}
+
+struct PendingDesktop {
+    command: Option<DesktopCommand>,
+    expires_ms: u64,
+    response: Option<OwnedFd>,
 }
 
 struct PendingSelection {
@@ -325,6 +334,7 @@ impl Authority {
                 | CompositorCommand::Refresh { instance, .. }
                 | CompositorCommand::Retire { instance, .. }
                 | CompositorCommand::SetSelection { instance, .. } => Some(instance),
+                CompositorCommand::Desktop { instance, .. } => Some(instance),
                 _ => None,
             };
             match self.prepare(packet) {
@@ -500,6 +510,30 @@ impl Authority {
                 )
                 .map(Some)
             }
+            CompositorCommand::Desktop {
+                epoch,
+                owner_uid,
+                instance,
+                expires_monotonic_ms,
+                command,
+            } => {
+                if epoch != binding.epoch()
+                    || owner_uid != binding.owner_uid()
+                    || instance.0 == [0; 16]
+                    || !binding.active()?
+                {
+                    return Err(Error::Identity);
+                }
+                command.validate()?;
+                validate_expiry(expires_monotonic_ms, monotonic_ms()?, 2000)?;
+                let native = self.pending(CommandKind::Desktop, 0, Some(instance), None, None)?;
+                self.pending.as_mut().ok_or(Error::Identity)?.desktop = Some(PendingDesktop {
+                    command: Some(command),
+                    expires_ms: expires_monotonic_ms,
+                    response: None,
+                });
+                Ok(Some(native))
+            }
             CompositorCommand::Shutdown { epoch } if epoch == binding.epoch() => {
                 for lease in self.leases.values_mut() {
                     lease.state.retired = true;
@@ -544,6 +578,45 @@ impl Authority {
         ))?;
         selection.validate(active, monotonic_ms()?)?;
         Ok(pending.selection.take().ok_or(Error::Identity)?.payload)
+    }
+
+    pub fn take_desktop(&mut self, serial: u64) -> Result<DesktopCommand, Error> {
+        let active = self.link.binding().active()?;
+        let pending = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.command.serial == serial)
+            .and_then(|pending| pending.desktop.as_mut())
+            .ok_or(Error::Identity)?;
+        if !active {
+            return Err(Error::Closed);
+        }
+        validate_expiry(pending.expires_ms, monotonic_ms()?, 2000)?;
+        pending
+            .command
+            .take()
+            .ok_or(Error::Protocol("desktop command was already dispatched"))
+    }
+
+    pub fn desktop_response(&mut self, serial: u64, bytes: &[u8]) -> Result<(), Error> {
+        let active = self.link.binding().active()?;
+        let pending = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.command.serial == serial)
+            .and_then(|pending| pending.desktop.as_mut())
+            .ok_or(Error::Identity)?;
+        if !active {
+            return Err(Error::Closed);
+        }
+        validate_expiry(pending.expires_ms, monotonic_ms()?, 2000)?;
+        if pending.command.is_some() || pending.response.is_some() {
+            return Err(Error::Protocol(
+                "desktop response has no dispatched command",
+            ));
+        }
+        pending.response = Some(desktop::seal_response(bytes)?);
+        Ok(())
     }
 
     pub fn acknowledge(&mut self, serial: u64, accepted: bool) -> Result<(), Error> {
@@ -596,6 +669,24 @@ impl Authority {
                     )
                 }
             }
+            CommandKind::Desktop => {
+                let instance = instance.ok_or(Error::Identity)?;
+                let response = pending
+                    .desktop
+                    .filter(|desktop| desktop.command.is_none())
+                    .and_then(|desktop| desktop.response);
+                if let Some(response) = response.filter(|_| accepted) {
+                    self.link.reply_with_descriptors(
+                        &CompositorReply::DesktopResult { epoch, instance },
+                        &[response.as_fd()],
+                    )
+                } else {
+                    self.reject(
+                        instance,
+                        Error::Protocol("native desktop effect was not confirmed"),
+                    )
+                }
+            }
             CommandKind::Stop => {
                 if !accepted || self.leases.values().any(|lease| !lease.state.empty()) {
                     return Err(Error::Protocol(
@@ -627,6 +718,7 @@ impl Authority {
             instance,
             descriptor,
             selection,
+            desktop: None,
         });
         Ok(command)
     }

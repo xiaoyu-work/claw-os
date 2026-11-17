@@ -4,6 +4,8 @@
 #include "include/claw_compositor.h"
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <string>
 #include <string_view>
 
 struct wl_client;
@@ -20,7 +22,8 @@ namespace Claw {
         std::function<void()>         stop;
         std::function<void(uint64_t)> retireContexts;
         // Ownership transfers only when installation succeeds.
-        std::function<bool(ClawSelection*)> installSelection;
+        std::function<bool(ClawSelection*)>                                  installSelection;
+        std::function<std::optional<std::string>(const ClawDesktopRequest&)> desktop;
     };
 
     bool initialize();

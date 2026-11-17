@@ -300,6 +300,20 @@ fn spontaneous_instance_end_cannot_consume_a_retirement_or_refresh_reply() {
         reply_target(&CompositorReply::Refreshed { epoch, instance }, epoch).unwrap(),
         (instance, 2),
     );
+    assert_eq!(
+        control_target(&CompositorCommand::Desktop {
+            epoch,
+            owner_uid: 62050,
+            instance,
+            expires_monotonic_ms: 1,
+            command: claw_display_control::desktop::Command::List,
+        }, epoch).unwrap(),
+        (instance, 7),
+    );
+    assert_eq!(
+        reply_target(&CompositorReply::DesktopResult { epoch, instance }, epoch).unwrap(),
+        (instance, 7),
+    );
     assert!(reply_target(
         &CompositorReply::InstanceEnded { epoch, instance },
         Epoch([0x22; 16]),

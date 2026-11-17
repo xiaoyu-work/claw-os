@@ -3,6 +3,7 @@
 #![cfg(target_os = "linux")]
 
 pub mod compositor;
+pub mod desktop;
 pub mod identity;
 pub mod install;
 pub mod listener;

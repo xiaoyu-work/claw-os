@@ -87,6 +87,13 @@ pub enum CompositorCommand {
         instance: InstanceId,
         expires_monotonic_ms: u64,
     },
+    Desktop {
+        epoch: Epoch,
+        owner_uid: u32,
+        instance: InstanceId,
+        expires_monotonic_ms: u64,
+        command: crate::desktop::Command,
+    },
     Shutdown {
         epoch: Epoch,
     },
@@ -99,6 +106,13 @@ impl Packet for CompositorCommand {
             Self::SetSelection { .. } => 1,
             _ => 0,
         }
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        if let Self::Desktop { command, .. } = self {
+            command.validate()?;
+        }
+        Ok(())
     }
 }
 
@@ -122,6 +136,10 @@ pub enum CompositorReply {
         instance: InstanceId,
     },
     SelectionSet {
+        epoch: Epoch,
+        instance: InstanceId,
+    },
+    DesktopResult {
         epoch: Epoch,
         instance: InstanceId,
     },
@@ -149,7 +167,7 @@ pub enum GuiRefusal {
 
 impl Packet for CompositorReply {
     fn descriptor_count(&self) -> usize {
-        0
+        usize::from(matches!(self, Self::DesktopResult { .. }))
     }
 
     fn validate(&self) -> Result<(), Error> {
@@ -276,6 +294,7 @@ impl Packet for AuthorityCommand {
                     | CompositorCommand::Refresh { .. }
                     | CompositorCommand::Retire { .. }
                     | CompositorCommand::SetSelection { .. }
+                    | CompositorCommand::Desktop { .. }
             ) {
                 return Err(Error::Protocol("invalid GUI control command"));
             }
@@ -305,7 +324,11 @@ pub enum AuthorityReply {
 
 impl Packet for AuthorityReply {
     fn descriptor_count(&self) -> usize {
-        usize::from(matches!(self, Self::Prepared { .. }))
+        match self {
+            Self::Prepared { .. } => 1,
+            Self::Gui { reply } => reply.descriptor_count(),
+            _ => 0,
+        }
     }
 
     fn validate(&self) -> Result<(), Error> {
@@ -315,6 +338,7 @@ impl Packet for AuthorityReply {
                 CompositorReply::CreatorReady { .. }
                     | CompositorReply::Refreshed { .. }
                     | CompositorReply::SelectionSet { .. }
+                    | CompositorReply::DesktopResult { .. }
                     | CompositorReply::Retired { .. }
                     | CompositorReply::InstanceEnded { .. }
                     | CompositorReply::Rejected { .. }

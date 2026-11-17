@@ -19,7 +19,7 @@ nor that bus authorizes a GUI instance.
 
 | File | Responsibility |
 | --- | --- |
-| `registry.rs` | Root activation admission, epochs, heartbeat and correlated creator/retirement requests |
+| `registry.rs` | Root activation admission, epochs, heartbeat and correlated GUI/desktop exchanges |
 | `host.rs` | Owned compositor process, private control, read-only login subscriptions and display teardown |
 | `containment.rs` | Exact Root login/workload cgroups, pre-exec membership and checked cleanup |
 | `creator.rs` | One Root security-context creator per GUI instance, refresh and retirement |
@@ -30,6 +30,14 @@ The shared closed protocol is
 [`claw-display-control`](../../../crates/claw-display-control/MODULE.md), an
 unpublished OS dependency, not public SDK 1.0.0. GUI rights and supervised App
 execution belong to [`clawd/gui`](../clawd/gui/MODULE.md).
+
+Closed native desktop requests use the same live epoch/owner channel, not an
+owner-selected compositor socket. The supervisor retains actual per-message
+credentials and forwards the sealed response descriptor; the broker reads it
+only after checking its exact correlation and compositor-owner binding.
+These Root service effects never acquire a GUI instance lifetime from their
+correlation IDs. Public provider and installed compositor cutover remain
+separate from this transport foundation.
 
 Locale projection currently preserves only the bounded PAM environment.
 There is no AccountsService `Language` or locale1 startup resolver here.

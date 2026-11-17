@@ -14,7 +14,7 @@ use claw_display_control::wire::{
 };
 use claw_display_control::workload::{SessionGroup, Workload};
 use claw_display_control::{
-    Connection, Epoch, Error, InstanceId, KernelLogin, Listener, ProcessIdentity,
+    Connection, Epoch, Error, InstanceId, KernelLogin, Listener, ProcessIdentity, Received,
 };
 
 const MAX_DISPLAYS: usize = 16;
@@ -37,7 +37,7 @@ pub struct Display {
 struct GuiCall {
     command: CompositorCommand,
     descriptors: Vec<OwnedFd>,
-    reply: SyncSender<Result<CompositorReply, Error>>,
+    reply: SyncSender<Result<Received<CompositorReply>, Error>>,
     deadline: Instant,
 }
 
@@ -51,6 +51,41 @@ pub(crate) struct GuiControl {
 }
 
 impl GuiControl {
+    pub fn desktop(
+        &self,
+        command: claw_display_control::desktop::Command,
+        deadline: Instant,
+    ) -> Result<serde_json::Value, Error> {
+        command.validate()?;
+        let left = deadline.saturating_duration_since(Instant::now()).as_millis().min(2000) as u64;
+        if left == 0 { return Err(Error::Timeout); }
+        let instance = InstanceId::random()?;
+        let mut packet = self.exchange_packet(
+            CompositorCommand::Desktop {
+                epoch: self.epoch,
+                owner_uid: self.owner_uid,
+                instance,
+                expires_monotonic_ms: monotonic_ms()?.checked_add(left).ok_or(Error::Timeout)?,
+                command,
+            },
+            Vec::new(),
+            deadline,
+        )?;
+        match packet.message {
+            CompositorReply::DesktopResult { epoch, instance: received }
+                if epoch == self.epoch && received == instance =>
+            {
+                claw_display_control::desktop::receive_response(
+                    packet.descriptors.pop().ok_or(Error::Identity)?, self.owner_uid,
+                )
+            }
+            CompositorReply::Rejected { epoch, instance: received, .. }
+                if epoch == self.epoch && received == instance =>
+                Err(Error::Protocol("native desktop effect was refused")),
+            _ => Err(Error::Protocol("invalid native desktop effect acknowledgement")),
+        }
+    }
+
     pub fn set_selection(
         &self, payload: &claw_display_control::selection::Payload, deadline: Instant,
     ) -> Result<bool, Error> {
@@ -90,6 +125,15 @@ impl GuiControl {
         descriptors: Vec<OwnedFd>,
         deadline: Instant,
     ) -> Result<CompositorReply, Error> {
+        Ok(self.exchange_packet(command, descriptors, deadline)?.message)
+    }
+
+    fn exchange_packet(
+        &self,
+        command: CompositorCommand,
+        descriptors: Vec<OwnedFd>,
+        deadline: Instant,
+    ) -> Result<Received<CompositorReply>, Error> {
         let (reply, result) = mpsc::sync_channel(1);
         self.sender
             .try_send(GuiCall {
@@ -428,7 +472,7 @@ fn monitor(
                     "GUI control retirement correlation limit reached",
                 ));
             }
-            if kind != 6 { channel.send(
+            if !matches!(kind, 6 | 7) { channel.send(
                 &AuthorityCommand::Gui {
                     command: CompositorCommand::Retire { epoch, instance },
                 },
@@ -512,7 +556,11 @@ fn monitor(
                     if expected != kind && kind != 4 && kind != 3 {
                         return Err(Error::Protocol("GUI control response changed transition"));
                     }
-                    if call.reply.send(Ok(reply)).is_err() && expected != 6 {
+                    if call.reply.send(Ok(Received {
+                        message: reply,
+                        descriptors: packet.descriptors,
+                        sender: packet.sender,
+                    })).is_err() && !matches!(expected, 6 | 7) {
                         tracing::warn!("GUI control requester disappeared; retiring its instance");
                         channel.send(
                             &AuthorityCommand::Gui {
@@ -541,6 +589,7 @@ fn control_target(command: &CompositorCommand, expected: Epoch) -> Result<(Insta
         } => (*epoch, *instance, 2),
         CompositorCommand::Retire { epoch, instance } => (*epoch, *instance, 3),
         CompositorCommand::SetSelection { epoch, instance, .. } => (*epoch, *instance, 6),
+        CompositorCommand::Desktop { epoch, instance, .. } => (*epoch, *instance, 7),
         _ => return Err(Error::Protocol("invalid GUI control transition")),
     };
     if epoch != expected {
@@ -556,6 +605,7 @@ fn reply_target(reply: &CompositorReply, expected: Epoch) -> Result<(InstanceId,
         CompositorReply::Retired { epoch, instance } => (*epoch, *instance, 3),
         CompositorReply::InstanceEnded { epoch, instance } => (*epoch, *instance, 5),
         CompositorReply::SelectionSet { epoch, instance } => (*epoch, *instance, 6),
+        CompositorReply::DesktopResult { epoch, instance } => (*epoch, *instance, 7),
         CompositorReply::Rejected {
             epoch, instance, ..
         } => (*epoch, *instance, 4),

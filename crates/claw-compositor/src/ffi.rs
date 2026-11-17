@@ -9,6 +9,7 @@ use std::ptr;
 use std::sync::Arc;
 use std::thread::ThreadId;
 
+use claw_display_control::desktop::{self, Command as DesktopCommand};
 use claw_display_control::selection::Payload;
 use claw_display_control::Error;
 
@@ -30,6 +31,23 @@ struct ClawCommand {
     serial: u64,
     token: u64,
     kind: u32,
+}
+
+#[repr(C)]
+struct ClawDesktopRequest {
+    kind: u32,
+    identifier: u64,
+    app_id: [u8; 256],
+}
+
+impl Default for ClawDesktopRequest {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            identifier: 0,
+            app_id: [0; 256],
+        }
+    }
 }
 
 fn boundary<T>(failure: T, operation: impl FnOnce() -> Result<T, Error>) -> T {
@@ -154,6 +172,54 @@ unsafe extern "C" fn claw_compositor_take_descriptor(
 ) -> i32 {
     boundary(-1, || unsafe {
         with_authority(handle, |authority| authority.take_descriptor(serial))
+    })
+}
+
+#[no_mangle]
+unsafe extern "C" fn claw_compositor_take_desktop(
+    handle: *mut ClawCompositor,
+    serial: u64,
+    request: *mut ClawDesktopRequest,
+) -> bool {
+    boundary(false, || unsafe {
+        let output = request.as_mut().ok_or(Error::Identity)?;
+        *output = ClawDesktopRequest::default();
+        with_authority(handle, |authority| {
+            match authority.take_desktop(serial)? {
+                DesktopCommand::List => output.kind = 1,
+                DesktopCommand::Focus { identifier } => {
+                    output.kind = 2;
+                    output.identifier = identifier;
+                }
+                DesktopCommand::Close { identifier } => {
+                    output.kind = 3;
+                    output.identifier = identifier;
+                }
+                DesktopCommand::CloseApp { identifier, app_id } => {
+                    output.kind = 4;
+                    output.identifier = identifier;
+                    output.app_id[..app_id.len()].copy_from_slice(app_id.as_bytes());
+                }
+            }
+            Ok(())
+        })?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
+unsafe extern "C" fn claw_compositor_desktop_response(
+    handle: *mut ClawCompositor,
+    serial: u64,
+    bytes: *const u8,
+    length: usize,
+) -> bool {
+    boundary(false, || unsafe {
+        let value = text(bytes, length, desktop::MAX_RESPONSE_BYTES)?;
+        with_authority(handle, |authority| {
+            authority.desktop_response(serial, value.as_bytes())
+        })?;
+        Ok(true)
     })
 }
 

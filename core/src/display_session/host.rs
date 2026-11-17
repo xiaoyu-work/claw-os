@@ -342,17 +342,19 @@ impl Supervisor {
                     CompositorReply::CreatorReady { .. }
                         | CompositorReply::Refreshed { .. }
                         | CompositorReply::SelectionSet { .. }
+                        | CompositorReply::DesktopResult { .. }
                         | CompositorReply::Retired { .. }
                         | CompositorReply::InstanceEnded { .. }
                         | CompositorReply::Rejected { .. }
                 ) {
                     return Err(Error::Protocol("unexpected running compositor response"));
                 }
+                let descriptors: Vec<_> = packet.descriptors.iter().map(AsFd::as_fd).collect();
                 self.controllers.authority.send(
                     &AuthorityReply::Gui {
                         reply: packet.message,
                     },
-                    &[],
+                    &descriptors,
                     Instant::now() + TICK,
                 )?;
             }

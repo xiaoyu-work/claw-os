@@ -299,6 +299,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
                                       PROTO::securityContext->retireClaw(token);
                               },
                           .installSelection = Claw::installSelection,
+                          .desktop          = Claw::desktop,
                       }))
         throwError("Claw display authority could not attach to Wayland");
 

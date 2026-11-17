@@ -32,6 +32,11 @@ int main() {
     Claw::SOrigin origin{};
     if (Claw::contextOrigin(nullptr, origin))
         return 12;
+    ClawDesktopRequest desktop{};
+    if (claw_compositor_take_desktop(nullptr, 1, &desktop))
+        return 13;
+    if (claw_compositor_desktop_response(nullptr, 1, nullptr, 0))
+        return 14;
     Claw::shutdown();
     std::cout << "Native compositor ABI rejects unauthenticated startup and invalid handles\n";
     return 0;

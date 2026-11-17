@@ -86,7 +86,7 @@ namespace Claw {
     }
 
     bool CController::attach(wl_display* display, SBackend backend) {
-        if (!m_handle || !display || m_display || !backend.stop || !backend.retireContexts || !backend.installSelection)
+        if (!m_handle || !display || m_display || !backend.stop || !backend.retireContexts || !backend.installSelection || !backend.desktop)
             return false;
         m_display              = display;
         m_backend              = std::move(backend);
@@ -281,6 +281,14 @@ namespace Claw {
                     accepted        = selection && m_backend.installSelection(selection);
                     if (selection && !accepted)
                         claw_selection_close(selection);
+                    break;
+                }
+                case CLAW_DESKTOP: {
+                    ClawDesktopRequest request{};
+                    if (claw_compositor_take_desktop(m_handle, command.serial, &request)) {
+                        const auto response = m_backend.desktop(request);
+                        accepted = response && claw_compositor_desktop_response(m_handle, command.serial, reinterpret_cast<const uint8_t*>(response->data()), response->size());
+                    }
                     break;
                 }
                 case CLAW_STOP:

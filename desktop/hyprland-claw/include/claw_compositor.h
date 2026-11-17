@@ -32,7 +32,21 @@ enum ClawCommandKind {
     CLAW_SET_SELECTION  = 3,
     CLAW_STOP           = 4,
     CLAW_INSTANCE_ENDED = 5,
+    CLAW_DESKTOP        = 6,
 };
+
+enum ClawDesktopKind {
+    CLAW_DESKTOP_LIST      = 1,
+    CLAW_DESKTOP_FOCUS     = 2,
+    CLAW_DESKTOP_CLOSE     = 3,
+    CLAW_DESKTOP_CLOSE_APP = 4,
+};
+
+typedef struct ClawDesktopRequest {
+    uint32_t kind;
+    uint64_t identifier;
+    uint8_t  app_id[256];
+} ClawDesktopRequest;
 
 typedef struct ClawCommand {
     uint64_t serial;
@@ -54,6 +68,8 @@ bool            claw_compositor_ready(ClawCompositor* handle, const uint8_t* dis
 int32_t         claw_compositor_next(ClawCompositor* handle, ClawCommand* command);
 bool            claw_compositor_acknowledge(ClawCompositor* handle, uint64_t serial, bool accepted);
 int32_t         claw_compositor_take_descriptor(ClawCompositor* handle, uint64_t serial);
+bool            claw_compositor_take_desktop(ClawCompositor* handle, uint64_t serial, ClawDesktopRequest* request);
+bool            claw_compositor_desktop_response(ClawCompositor* handle, uint64_t serial, const uint8_t* bytes, size_t length);
 uint32_t        claw_compositor_rights(ClawCompositor* handle, uint32_t origin, uint64_t token);
 bool            claw_compositor_accepts_login(ClawCompositor* handle, int32_t descriptor);
 bool            claw_compositor_client_added(ClawCompositor* handle, uint32_t origin, uint64_t token, int32_t descriptor);

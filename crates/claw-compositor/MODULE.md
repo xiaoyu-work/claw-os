@@ -22,6 +22,7 @@ shared Apache-2.0 protocol crate and the Agent remain separate.
 | `test/unit/authority.rs` | Grant separation, one-shot context, retirement and expiry regressions |
 | `../../desktop/hyprland-claw/include/claw_compositor.h` | Native declaration and ownership contract |
 | `../../desktop/hyprland-claw/Claw.cpp` | Native Wayland connection admission, origin tracking, timed control dispatch and checked resource callbacks |
+| `../../desktop/hyprland-claw/Desktop.cpp` | Closed Root window queries/effects over the native compositor model |
 | `../../desktop/hyprland-claw/test/abi.cpp` | Real C++ linkage and unauthenticated-startup refusal |
 
 Only the protected compositor receives its Root activation descriptor.
@@ -36,9 +37,16 @@ payloads retain sealed, bounded MIME transfer semantics and do not inherit an
 App lifetime. The native adapter must still enforce read checks on offers and
 transfers; owning a payload does not authorize its disclosure.
 
-The bridge is not yet linked into the production desktop. Native hooks,
-actual authenticated-display acceptance and package activation remain
-separate implementation requirements.
+The bridge is mandatory in the native Hyprland build. Installed desktop
+activation has not switched; actual authenticated-display acceptance and
+package activation remain separate gates.
+
+Root desktop commands carry an exact display epoch, owner, correlation and
+finite deadline. Native handoff and result acceptance both recheck that
+binding. Stable native window IDs are metadata, not permission; broker clients
+must bind any public identifier to the display epoch before requesting an
+effect. Results return through a sealed bounded descriptor. A timeout or lost
+requester never becomes GUI-instance retirement or an automatic mutation retry.
 
 ## Validation
 
