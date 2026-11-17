@@ -60,8 +60,8 @@
     {
       "name": "aquamarine",
       "repository": "https://github.com/hyprwm/aquamarine.git",
-      "revision": "783bfd9ae441d1d0519b979ac68b73ddd6e81df0",
-      "version": "0.15.0",
+      "revision": "7c1c55b2a76ddb9f6602f8c0886ecf1b899529f9",
+      "version": "0.16.0",
       "build": "cmake",
       "pkg_config": "aquamarine"
     },

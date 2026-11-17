@@ -85,6 +85,8 @@ host system or chooses an older dependency.
 The scanner is pinned with Wayland 1.25.0 because the selected protocol XML
 requires its DTD support. Hyprwire uses the revision selected by the
 compositor's own `flake.lock`, including its native protocol scanner.
+Aquamarine uses that same compositor lock's 0.16.0 revision: the older 0.15.0
+release lacks the output bit-depth API used by this compositor.
 
 From the OS repository root, after installing the declared development tools
 and libraries:
