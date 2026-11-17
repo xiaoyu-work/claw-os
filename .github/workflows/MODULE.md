@@ -67,7 +67,7 @@ dispatched and reusable test/publication pipelines.
 | `release.yml` | Manual `agent`, `base`, `core`, `desktop`, `images`, `website` or `all` release; shared package builds, one website/APT composition and Pages deployment |
 | `publish-sdk-release.yml` | GitHub SDK artifacts and synchronized language tags |
 | `publish-app-platform.yml` | Manually published versioned SDK/runtime/toolkit development artifact for independent App builds |
-| `../actionlint.yaml` | Dedicated runner labels and compatibility with GitHub's queued concurrency |
+| `../actionlint.yaml` | Compatibility with GitHub's queued concurrency |
 | `../../scripts/ci/` | Release planning, signing-key import, package checks and installed Agent/privileged test scripts |
 
 There are four workflow entry points. `release.yml` freezes one commit-derived
@@ -78,6 +78,10 @@ Agent/Base packages are built once and downloaded by the image matrix; image
 jobs never compile the shared Rust binaries. Docker and WSL consume the same
 stamped rootfs per architecture. Desktop retains its dedicated full-rootfs
 build and native source graph.
+Its package jobs use native GitHub-hosted amd64/arm64 runners and remove only
+unused Android, .NET and GHC toolchains from those disposable machines before
+the existing disk-space preflight. Package-only publication does not select
+the image targets.
 
 `core` publishes Agent and Base together without building Desktop or images.
 Its Agent matrix installs and reinstalls that exact pair in one APT transaction

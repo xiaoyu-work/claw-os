@@ -228,15 +228,26 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: claw-os-desktop-amd64
+            runner: ubuntu-24.04
           - arch: arm64
-            runner: claw-os-desktop-arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     env:
       ARCH: ${{ matrix.arch }}
       COS_PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
       CLAW_APP_PACKAGE_ROOT: ${{ github.workspace }}/build/release/app-packages
     steps:
+      - name: Prepare disposable hosted-runner build space
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          for directory in /usr/local/lib/android /usr/share/dotnet /opt/ghc; do
+            if [ -d "$directory" ]; then
+              sudo du -sh -- "$directory"
+            fi
+          done
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h "$GITHUB_WORKSPACE"
+
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
