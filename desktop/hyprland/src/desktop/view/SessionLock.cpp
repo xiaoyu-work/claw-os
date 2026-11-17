@@ -1,0 +1,99 @@
+#include "SessionLock.hpp"
+
+#include "../../protocols/SessionLock.hpp"
+#include "../../protocols/core/Compositor.hpp"
+#include "../../output/Monitor.hpp"
+
+using namespace Desktop;
+using namespace Desktop::View;
+
+SP<View::CSessionLock> View::CSessionLock::create(SP<CSessionLockSurface> resource) {
+    auto lock       = SP<CSessionLock>(new CSessionLock());
+    lock->m_surface = resource;
+    lock->m_self    = lock;
+
+    lock->init();
+    lock->initView(lock, VIEW_TYPE_LOCK_SCREEN);
+
+    return lock;
+}
+
+View::CSessionLock::CSessionLock() : IView(CWLSurface::create()) {
+    ;
+}
+
+View::CSessionLock::~CSessionLock() {
+    m_wlSurface->unassign();
+}
+
+void View::CSessionLock::init() {
+    m_wlSurface->assign(m_surface->surface(), m_self.lock());
+}
+
+SP<View::CSessionLock> View::CSessionLock::fromView(SP<IView> v) {
+    if (!v || v->type() != VIEW_TYPE_LOCK_SCREEN)
+        return nullptr;
+    return dynamicPointerCast<View::CSessionLock>(v);
+}
+
+eViewType View::CSessionLock::type() const {
+    return VIEW_TYPE_LOCK_SCREEN;
+}
+
+bool View::CSessionLock::mapped() const {
+    return m_wlSurface && m_wlSurface->resource() && m_wlSurface->resource()->m_mapped;
+}
+
+bool View::CSessionLock::focusAvailable() const {
+    return true;
+}
+
+std::optional<CBox> View::CSessionLock::logicalBox() const {
+    return surfaceLogicalBox();
+}
+
+std::optional<CBox> View::CSessionLock::surfaceLogicalBox() const {
+    if (!mapped() || !acceptsInput())
+        return std::nullopt;
+
+    const auto BOX = geometricBox(GEOMETRIC_CURRENT);
+
+    if (BOX.empty())
+        return std::nullopt;
+
+    return BOX;
+}
+
+Vector2D View::CSessionLock::position(eGeometricValueType) const {
+    return geometricBox(GEOMETRIC_CURRENT).pos();
+}
+
+Vector2D View::CSessionLock::size(eGeometricValueType) const {
+    return geometricBox(GEOMETRIC_CURRENT).size();
+}
+
+CBox View::CSessionLock::geometricBox(eGeometricValueType) const {
+    if (!m_surface)
+        return {};
+
+    const auto MON = m_surface->monitor();
+
+    if (!MON)
+        return {};
+
+    return MON->logicalBox();
+}
+
+bool View::CSessionLock::desktopComponent() const {
+    return true;
+}
+
+PHLMONITOR View::CSessionLock::monitor() const {
+    if (m_surface)
+        return m_surface->monitor();
+    return nullptr;
+}
+
+bool View::CSessionLock::cantLockCursor() const {
+    return false;
+}

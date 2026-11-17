@@ -1,0 +1,89 @@
+#include "WindowGroupTarget.hpp"
+
+#include "../space/Space.hpp"
+#include "../algorithm/Algorithm.hpp"
+#include "WindowTarget.hpp"
+#include "Target.hpp"
+
+#include "../../render/Renderer.hpp"
+
+using namespace Layout;
+
+SP<CWindowGroupTarget> CWindowGroupTarget::create(SP<Desktop::View::CGroup> g) {
+    auto target    = SP<CWindowGroupTarget>(new CWindowGroupTarget(g));
+    target->m_self = target;
+    return target;
+}
+
+CWindowGroupTarget::CWindowGroupTarget(SP<Desktop::View::CGroup> g) : m_group(g) {
+    ;
+}
+
+eTargetType CWindowGroupTarget::type() {
+    return TARGET_TYPE_GROUP;
+}
+
+void CWindowGroupTarget::setPositionGlobal(const STargetBox& box, uint8_t flags) {
+    ITarget::setPositionGlobal(box, flags);
+
+    updatePos(flags);
+}
+
+void CWindowGroupTarget::updatePos(uint8_t flags) {
+    for (const auto& w : m_group->windows()) {
+        w->windowTarget()->setPositionGlobal(m_box, flags);
+    }
+}
+
+void CWindowGroupTarget::assignToSpace(const SP<CSpace>& space, std::optional<Vector2D> focalPoint) {
+    ITarget::assignToSpace(space, focalPoint);
+
+    if (space)
+        m_group->updateWorkspace(space->workspace());
+}
+
+bool CWindowGroupTarget::floating() {
+    return m_group->current()->isFloating();
+}
+
+void CWindowGroupTarget::setFloating(bool x) {
+    for (const auto& w : m_group->windows()) {
+        w->windowTarget()->setFloating(x);
+    }
+}
+
+std::expected<SGeometryRequested, eGeometryFailure> CWindowGroupTarget::desiredGeometry() {
+    return m_group->current()->windowTarget()->desiredGeometry();
+}
+
+PHLWINDOW CWindowGroupTarget::window() const {
+    return m_group->current();
+}
+
+std::optional<Vector2D> CWindowGroupTarget::minSize() {
+    return m_group->current()->minSize();
+}
+
+std::optional<Vector2D> CWindowGroupTarget::maxSize() {
+    return m_group->current()->maxSize();
+}
+
+void CWindowGroupTarget::damageEntire() {
+    g_pHyprRenderer->damageWindow(m_group->current());
+}
+
+void CWindowGroupTarget::warpPositionSize() {
+    for (const auto& w : m_group->windows()) {
+        w->windowTarget()->warpPositionSize();
+    }
+}
+
+void CWindowGroupTarget::onUpdateSpace() {
+    for (const auto& w : m_group->windows()) {
+        w->windowTarget()->onUpdateSpace();
+    }
+}
+
+SP<Desktop::View::CGroup> CWindowGroupTarget::getGroup() {
+    return m_group.lock();
+}

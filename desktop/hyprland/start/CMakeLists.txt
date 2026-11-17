@@ -1,0 +1,59 @@
+cmake_minimum_required(VERSION 3.19)
+
+project(start-hyprland DESCRIPTION "Hyprland watchdog binary")
+
+include(GNUInstallDirs)
+
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
+
+find_package(PkgConfig REQUIRED)
+
+pkg_check_modules(starthyprland_deps REQUIRED IMPORTED_TARGET hyprutils>=0.10.3)
+
+if (NOT TARGET glaze::glaze)
+    find_package(glaze 7...<8 QUIET)
+endif()
+if (NOT CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
+    if (NOT glaze_FOUND AND NOT TARGET glaze::glaze)
+        set(GLAZE_VERSION v7.2.0)
+        message(STATUS "start: glaze dependency not found, retrieving ${GLAZE_VERSION} with FetchContent")
+        include(FetchContent)
+        FetchContent_Declare(
+            glaze
+            GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+            GIT_TAG ${GLAZE_VERSION}
+            GIT_SHALLOW TRUE
+            EXCLUDE_FROM_ALL
+        )
+        FetchContent_MakeAvailable(glaze)
+    endif()
+endif()
+
+file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
+
+add_executable(start-hyprland ${SRCFILES})
+
+target_link_libraries(start-hyprland PUBLIC PkgConfig::starthyprland_deps)
+target_link_libraries(start-hyprland PUBLIC glaze::glaze)
+
+install(TARGETS start-hyprland)
+
+if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
+  set(CMAKE_EXECUTABLE_ENABLE_EXPORTS TRUE)
+endif()
+
+if(BUILD_TESTING)
+  enable_testing()
+  if(NOT Python3_Interpreter_FOUND)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  endif()
+
+  foreach(termination IN ITEMS exit-0 exit-23 sigterm sigkill)
+    add_test(
+      NAME start-hyprland-${termination}
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/termination.py"
+              "$<TARGET_FILE:start-hyprland>" "${termination}")
+    set_tests_properties(start-hyprland-${termination} PROPERTIES TIMEOUT 20)
+  endforeach()
+endif()

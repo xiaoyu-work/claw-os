@@ -1,0 +1,4010 @@
+#include "../shared.hpp"
+#include "../../shared.hpp"
+#include "../../hyprctlCompat.hpp"
+#include "tests.hpp"
+
+#include <format>
+
+#include <hyprutils/utils/ScopeGuard.hpp>
+
+using namespace Hyprutils::Utils;
+
+// get the block from hyprctl clients where a class is located
+static std::string getClientBlock(const std::string& clients, const std::string& cls) {
+
+    // lambda for finding the next block with `Window * ->`
+    const auto findNextBlockHeader = [&](const std::string& s, size_t pos) -> size_t {
+        const auto NPOS = std::string::npos;
+        while (pos != NPOS) {
+            pos = s.find("Window ", pos);
+            if (pos == NPOS)
+                return NPOS;
+            size_t lineEnd  = s.find('\n', pos);
+            size_t arrowPos = s.find(" ->", pos);
+            if (arrowPos != NPOS && arrowPos < lineEnd)
+                return pos;
+            pos = (lineEnd != NPOS) ? lineEnd + 1 : NPOS;
+        }
+        return NPOS;
+    };
+
+    const std::string CLASS_TARGET = std::format("class: {}\n", cls);
+
+    // block by block till you find the class within a block
+    size_t blockStart = findNextBlockHeader(clients, 0);
+    while (blockStart != std::string::npos) {
+        size_t      blockEnd = findNextBlockHeader(clients, blockStart + 1);
+        std::string block    = clients.substr(blockStart, blockEnd == std::string::npos ? std::string::npos : blockEnd - blockStart);
+
+        if (block.contains(CLASS_TARGET))
+            return block;
+
+        blockStart = blockEnd;
+    }
+
+    return "";
+}
+
+// Taken from layers tests
+static bool spawnLayer(const std::string& namespace_, const std::vector<std::string>& args = {}) {
+    NLog::log("{}Spawning kitty layer {}", Colors::YELLOW, namespace_);
+    if (!Tests::spawnLayerKitty(namespace_, args)) {
+        NLog::log("{}Error: {} layer did not spawn", Colors::RED, namespace_);
+        return false;
+    }
+    return true;
+}
+
+// Taken from layers tests
+static std::string getLayerLine(const std::string& layers, const std::string& target) {
+
+    auto pos = layers.find(std::format("namespace: {}", target));
+    if (pos == std::string::npos)
+        return "";
+
+    auto start = layers.rfind('\n', pos);
+    start      = (start == std::string::npos) ? 0 : start + 1;
+
+    auto end = layers.find('\n', pos);
+
+    return layers.substr(start, end - start);
+}
+
+TEST_CASE(scrollFocusCycling) {
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    for (auto const& win : {"a", "b", "c", "d"}) {
+        SPAWN_KITTY(win);
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: b");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: c");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: d");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ direction = 'left' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: d");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'up' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: c");
+    }
+}
+
+TEST_CASE(scrollFocusWrapping) {
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    for (auto const& win : {"a", "b", "c", "d"}) {
+        SPAWN_KITTY(win);
+    }
+
+    // set wrap_focus to true
+    OK(getFromSocket("/eval hl.config({ scrolling = { wrap_focus = true } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: d");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: a");
+    }
+
+    // set wrap_focus to false
+    OK(getFromSocket("/eval hl.config({ scrolling = { wrap_focus = false } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: a");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:d' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: d");
+    }
+}
+
+TEST_CASE(scrollSwapcolWrapping) {
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    for (auto const& win : {"a", "b", "c", "d"}) {
+        SPAWN_KITTY(win);
+    }
+
+    // set wrap_swapcol to true
+    OK(getFromSocket("/eval hl.config({ scrolling = { wrap_swapcol = true } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('swapcol l')"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: c");
+    }
+
+    // clean up
+    NLog::yellow("Killing all windows");
+    Tests::killAllWindows();
+
+    for (auto const& win : {"a", "b", "c", "d"}) {
+        SPAWN_KITTY(win);
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:d' })"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('swapcol r')"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: b");
+    }
+
+    // clean up
+    NLog::yellow("Killing all windows");
+    Tests::killAllWindows();
+
+    for (auto const& win : {"a", "b", "c", "d"}) {
+        SPAWN_KITTY(win);
+    }
+
+    // set wrap_swapcol to false
+    OK(getFromSocket("/eval hl.config({ scrolling = { wrap_swapcol = false } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('swapcol l')"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: b");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:d' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('swapcol r')"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: c");
+    }
+}
+
+TEST_CASE(scrollWindowRule) {
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    NLog::green("Testing Scrolling Width");
+
+    // inject a new rule.
+    OK(getFromSocket("/eval hl.window_rule({ name = 'scrolling-width', match = { class = 'kitty_scroll' } })"));
+    OK(getFromSocket("/eval hl.window_rule({ name = 'scrolling-width', scrolling_width = 0.1 })"));
+
+    SPAWN_KITTY("kitty_scroll");
+    SPAWN_KITTY("kitty_scroll");
+
+    ASSERT(Tests::windowCount(), 2);
+
+    // not the greatest test, but as long as res and gaps don't change, we good.
+    // if this test breaks, it's likely you broke equal sizing
+    ASSERT_CONTAINS(getFromSocket("/activewindow"), "size: 174,1036");
+}
+
+/*
+    Fullscreen Tests
+
+    Tests with `Shared test among all default handled FS` comment are duplicated among all layouts to test each layout individually
+
+    Scroll has layout handled fullscreen so it will have scrolling-specific FS tests in addition to shared Default Handled Tests
+
+*/
+
+TEST_CASE(scroll_LAYOUT_HANDLED_fullscreen) {
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    NLog::green("Testing Scrolling FS");
+
+    SPAWN_KITTY("kitty_scroll_A");
+    SPAWN_KITTY("kitty_scroll_B");
+    SPAWN_KITTY("kitty_scroll_C");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = \"class:kitty_scroll_B\" })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen()"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "size: 1920,1080");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_B");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_A");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_C");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "size: 1920,1080");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_B");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_maximized) {
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    NLog::green("Testing Scrolling Maximize");
+
+    SPAWN_KITTY("kitty_scroll_A");
+    SPAWN_KITTY("kitty_scroll_B");
+    SPAWN_KITTY("kitty_scroll_C");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = \"class:kitty_scroll_B\" })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({mode = 'maximized'})"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "size: 1866,1036");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_B");
+        ASSERT_CONTAINS(str, "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_A");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_C");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(str, "size: 1866,1036");
+        ASSERT_CONTAINS(str, "class: kitty_scroll_B");
+        ASSERT_CONTAINS(str, "fullscreen: 1");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_TestFsingGroupedWindows) {
+
+    /*
+      When a group of windows are FSed, all the windows in the group are expected to have the same size
+
+      In scrolling's layout FS handling, this is expected to hold true even when we scroll away from the window
+
+    */
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    OK(getFromSocket("/eval hl.config({ group = { auto_group = true } })"));
+
+    OK(getFromSocket("/eval hl.config({ scrolling = { follow_focus = false } })"));
+    OK(getFromSocket("/eval hl.config({ scrolling = { wrap_swapcol = false } })"));
+
+    // Config opt for adding gaps_out and border_size and a workspace rule that removes them from maximised windows to make sure maximise works properly
+
+    OK(getFromSocket("r/eval hl.config({ general = { gaps_out = 10, border_size = 10 } })"));
+    OK(getFromSocket("/eval hl.workspace_rule({ workspace = 'f[1]', gaps_out = 0, border_size = 0 })"));
+
+    // 2 grouped windows, 1 ungrouped window
+    ASSERT(Tests::windowCount(), 0);
+    auto kitten1 = Tests::spawnKitty("kitten1");
+    if (!kitten1) {
+        FAIL_TEST("Could not spawn kitty");
+    }
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle()"));
+
+    auto kitten2 = Tests::spawnKitty("kitten2");
+    if (!kitten2) {
+        FAIL_TEST("Could not spawn kitty");
+    }
+
+    OK(getFromSocket("/eval hl.config({ group = { auto_group = false } })"));
+
+    auto kitten3 = Tests::spawnKitty("kitten3");
+    if (!kitten3) {
+        FAIL_TEST("Could not spawn kitty");
+    }
+
+    ASSERT(Tests::windowCount(), 3);
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:kitten2'})"));
+
+    // Fullscreen
+    {
+        auto checkHiddenGroupMember = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "size: 1920,1080");
+                EXPECT_CONTAINS(windowEntry, "at: 0,0");
+            }
+        };
+
+        auto checkHiddenGroupMember_notCovering = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "at: -960,0");
+                // fullscreen windows are MONBOX sized so they disregard borders and gaps_out even when not covering
+                EXPECT_CONTAINS(windowEntry, "size: 1920,1080");
+                EXPECT_CONTAINS(windowEntry, "fullscreen: 0");
+            }
+        };
+
+        // Tiled
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', layout_aware = true })"));
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+
+        // Try scrolling away
+        OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+        // not scrolling onto it because follow_focus = false
+        OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:kitten2'})"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: -960,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember_notCovering("kitten1");
+
+        // atm the viewport moves if you switch to next window in group, this it to compensate
+        OK(getFromSocket("/dispatch hl.dsp.layout('inhibit_scroll 1')"));
+        // try switching to next window in group when you have scrolled away
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+        OK(getFromSocket("/dispatch hl.dsp.layout('inhibit_scroll 0')"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: -960,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember_notCovering("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+        // re-establish  covering status of FS group for the next test
+        OK(getFromSocket("/eval hl.config({ scrolling = { follow_focus = 1 } })"));
+        OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:kitten2'})"));
+        OK(getFromSocket("/eval hl.config({ scrolling = { follow_focus = false } })"));
+        // unset FS for next test
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', layout_aware = true })"));
+
+        // floating
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'set' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', layout_aware = true })"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+
+        // prep for next test
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'unset' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', layout_aware = true })"));
+        // The window may have been dropped from floating to tiling in the wrong place. make sure it is the leftmost
+        OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:kitten2'})"));
+        OK(getFromSocket("/dispatch hl.dsp.layout('swapcol l')"));
+    }
+
+    // Maximized
+    {
+        auto checkHiddenGroupMember_tiled = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "size: 1910,1059");
+                EXPECT_CONTAINS(windowEntry, "at: 5,21");
+            }
+        };
+
+        auto checkHiddenGroupMember_floating = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "size: 1920,1059");
+                EXPECT_CONTAINS(windowEntry, "at: 0,21");
+            }
+        };
+
+        auto checkHiddenGroupMember_notCovering = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "at: -935,41");
+                // cuz the gaps and borders workspace rule now applies as it is no longer covering
+                EXPECT_CONTAINS(windowEntry, "size: 1870,1019");
+                EXPECT_CONTAINS(windowEntry, "fullscreen: 0");
+            }
+        };
+
+        // Tiled
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', layout_aware = true })"));
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 5,21");
+            EXPECT_CONTAINS(str, "size: 1910,1059");
+        }
+        checkHiddenGroupMember_tiled("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 5,21");
+            EXPECT_CONTAINS(str, "size: 1910,1059");
+        }
+        checkHiddenGroupMember_tiled("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+
+        // Try scrolling away
+        OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+
+        // not scrolling onto it because follow_focus = false
+        OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:kitten2'})"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: -935,41");
+            EXPECT_CONTAINS(str, "size: 1870,1019");
+            EXPECT_CONTAINS(str, "fullscreen: 1");
+        }
+        checkHiddenGroupMember_notCovering("kitten1");
+
+        // atm the viewport moves if you switch to next window in group, this it to compensate
+        OK(getFromSocket("/dispatch hl.dsp.layout('inhibit_scroll 1')"));
+        // try switching to next window in group when you have scrolled away
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+        OK(getFromSocket("/dispatch hl.dsp.layout('inhibit_scroll 0')"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: -935,41");
+            EXPECT_CONTAINS(str, "size: 1870,1019");
+            EXPECT_CONTAINS(str, "fullscreen: 1");
+        }
+        checkHiddenGroupMember_notCovering("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+        // re-establish  covering status of FS group for the next test
+        OK(getFromSocket("/eval hl.config({ scrolling = { follow_focus = 1 } })"));
+        OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:kitten2'})"));
+        OK(getFromSocket("/eval hl.config({ scrolling = { follow_focus = false } })"));
+        // unset FS for next test
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', layout_aware = true })"));
+
+        // floating
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'set' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', layout_aware = true })"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,21");
+            EXPECT_CONTAINS(str, "size: 1920,1059");
+        }
+        checkHiddenGroupMember_floating("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,21");
+            EXPECT_CONTAINS(str, "size: 1920,1059");
+        }
+        checkHiddenGroupMember_floating("kitten2");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_fullscreenRetainsGeometryWhileScrolling) {
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("kitty_scroll_A");
+    SPAWN_KITTY("kitty_scroll_B");
+    SPAWN_KITTY("kitty_scroll_C");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_scroll_B' })"));
+
+    const auto REGULAR_SIZE = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 0, action = 'set' })"));
+
+    const auto FULLSCREEN_POS = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_scroll_A' })"));
+
+    {
+        const auto WINDOW = getClientBlock(getFromSocket("/clients"), "kitty_scroll_B");
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 2");
+        ASSERT_CONTAINS(WINDOW, "fullscreenClient: 0");
+        ASSERT_CONTAINS(WINDOW, "fullscreenHandler: scrolling");
+        ASSERT_CONTAINS(WINDOW, "size: 1920,1080");
+        ASSERT_NOT(Tests::getAttribute(WINDOW, "at"), FULLSCREEN_POS);
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 0, client = 0, action = 'set', window = 'class:kitty_scroll_B' })"));
+
+    {
+        const auto WINDOW = getClientBlock(getFromSocket("/clients"), "kitty_scroll_B");
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 0");
+        ASSERT(Tests::getAttribute(WINDOW, "size"), REGULAR_SIZE);
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_scroll_B' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 1, client = 0, action = 'set' })"));
+
+    const auto MAXIMIZED_POS  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const auto MAXIMIZED_SIZE = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_scroll_C' })"));
+
+    {
+        const auto WINDOW = getClientBlock(getFromSocket("/clients"), "kitty_scroll_B");
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 1");
+        ASSERT_CONTAINS(WINDOW, "fullscreenClient: 0");
+        ASSERT_CONTAINS(WINDOW, "fullscreenHandler: scrolling");
+        ASSERT(Tests::getAttribute(WINDOW, "size"), MAXIMIZED_SIZE);
+        ASSERT_NOT(Tests::getAttribute(WINDOW, "at"), MAXIMIZED_POS);
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_scroll_B' })"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('consume')"));
+
+    {
+        const auto WINDOW = getClientBlock(getFromSocket("/clients"), "kitty_scroll_B");
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 0");
+        ASSERT_CONTAINS(WINDOW, "fullscreenClient: 0");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_clientFullscreenLayoutSwitch) {
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+    OK(getFromSocket("/eval hl.window_rule({ match = { class = '^scroll_layout_switch_.*$' }, sync_fullscreen = false })"));
+
+    SPAWN_KITTY("scroll_layout_switch_a");
+    SPAWN_KITTY("scroll_layout_switch_b");
+
+    // Client-only entries survive removeTarget(), leaving multiple entries for the handler destructor to clean up.
+    for (const auto& cls : {"scroll_layout_switch_a", "scroll_layout_switch_b"}) {
+        OK(getFromSocket(std::format("/dispatch hl.dsp.window.fullscreen_state({{ internal = 0, client = 2, action = 'set', window = 'class:{}' }})", cls)));
+    }
+
+    for (const auto& cls : {"scroll_layout_switch_a", "scroll_layout_switch_b"}) {
+        const auto WINDOW = getClientBlock(getFromSocket("/clients"), cls);
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 0");
+        ASSERT_CONTAINS(WINDOW, "fullscreenClient: 2");
+        ASSERT_CONTAINS(WINDOW, "fullscreenHandler: scrolling");
+    }
+
+    OK(getFromSocket("/eval hl.workspace_rule({ workspace = tostring(hl.get_active_workspace().id), layout = 'master' })"));
+    Tests::sync();
+
+    ASSERT_CONTAINS(getFromSocket("/activeworkspace"), "tiledLayout: master");
+    ASSERT(Tests::windowCount(), 2);
+    for (const auto& cls : {"scroll_layout_switch_a", "scroll_layout_switch_b"}) {
+        const auto WINDOW = getClientBlock(getFromSocket("/clients"), cls);
+        ASSERT_CONTAINS(WINDOW, "mapped: 1");
+        ASSERT_CONTAINS(WINDOW, "hidden: 0");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_floatingWindowHiding) {
+
+    /*
+
+        Scrolling layout allows floating FS windows to 'layer over' tiled FS window.
+
+        If a floating window was open before a tiled window was FSed, hide it
+        If a floating window was opened after a tiled window was FSed, show it
+
+        If a floating window was FSed ontop of the tiled window, hide all floating windows that were visible over the tiled FS window
+        If this floating window is unFSed, all floating windows that were ontop of the tiled FS window as well as the floating window that was just FS-unFSed must still show ontop of the tiled FS window
+        If we scroll onto another tiled FS window, hide them all. Scrolling back onto the prev tiled FS window doesn't cause them to reappear
+
+
+        Considerations for the test:
+            allowedOverFullscreen is used for floating windows' visibility. It's not always set for tiled ones, and don't implact their visibility.
+
+            `visible` combines the mapped, input, and alpha state.
+
+
+    */
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // Spawn a window, float it
+    SPAWN_KITTY("under");
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:under'})"));
+
+    // FS 2 tiled windows - one fullscreen and one maximised
+    SPAWN_KITTY("tiledOne");
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({mode = 'fullscreen'})"));
+
+    // under should be hidden by now
+    {
+        auto clients = getFromSocket("/clients");
+        auto under   = getClientBlock(clients, "under");
+        ASSERT_CONTAINS(under, "class: under");
+        ASSERT_CONTAINS(under, "floating: 1");
+
+        ASSERT_CONTAINS(under, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(under, "visible: 0");
+        ASSERT_CONTAINS(under, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(under, "fullscreen: 0");
+        ASSERT_CONTAINS(under, "fullscreenClient: 0");
+    }
+
+    SPAWN_KITTY("tiledTwo");
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({mode = 'maximized'})"));
+
+    // move view to tiledOne
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:tiledOne' })"));
+
+    // Check that tiledOne is visible - focus move is also tested here
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledOne = getClientBlock(clients, "tiledOne");
+        ASSERT_CONTAINS(tiledOne, "class: tiledOne");
+        ASSERT_CONTAINS(tiledOne, "floating: 0");
+
+        ASSERT_CONTAINS(tiledOne, "visible: 1");
+        ASSERT_CONTAINS(tiledOne, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(tiledOne, "fullscreen: 2");
+        ASSERT_CONTAINS(tiledOne, "fullscreenClient: 2");
+    }
+
+    // Check that under is still hidden
+    {
+        auto clients = getFromSocket("/clients");
+        auto under   = getClientBlock(clients, "under");
+        ASSERT_CONTAINS(under, "class: under");
+        ASSERT_CONTAINS(under, "floating: 1");
+
+        ASSERT_CONTAINS(under, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(under, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(under, "fullscreen: 0");
+        ASSERT_CONTAINS(under, "fullscreenClient: 0");
+    }
+
+    // Window rule for spawing kittens as floating as we need it from now on
+    OK(getFromSocket("/eval hl.window_rule({ name = 'kittens float with certain size', match = {class = 'floating.*',}, float = true, size = {950, 500},})"));
+
+    // Spawn 2 floating windows
+    SPAWN_KITTY("floatingOne");
+    SPAWN_KITTY("floatingTwo");
+
+    // Check that both are visible
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingOne = getClientBlock(clients, "floatingOne");
+        ASSERT_CONTAINS(floatingOne, "class: floatingOne");
+        ASSERT_CONTAINS(floatingOne, "floating: 1");
+
+        ASSERT_CONTAINS(floatingOne, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingOne, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingOne, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingOne, "fullscreenClient: 0");
+    }
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingTwo = getClientBlock(clients, "floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "class: floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "floating: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingTwo, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "fullscreenClient: 0");
+    }
+
+    // FS one floating window
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:floatingOne' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({mode = 'maximized'})"));
+
+    // floatingTwo should now be hidden, as well as all others save for floatingOne
+
+    // floatingOne - visible
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingOne = getClientBlock(clients, "floatingOne");
+        ASSERT_CONTAINS(floatingOne, "class: floatingOne");
+        ASSERT_CONTAINS(floatingOne, "floating: 1");
+
+        ASSERT_CONTAINS(floatingOne, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingOne, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingOne, "fullscreen: 1");
+        ASSERT_CONTAINS(floatingOne, "fullscreenClient: 1");
+    }
+
+    // floatingTwo - hidden
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingTwo = getClientBlock(clients, "floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "class: floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "floating: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingTwo, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "fullscreenClient: 0");
+    }
+    // tiledOne - hidden
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledOne = getClientBlock(clients, "tiledOne");
+        ASSERT_CONTAINS(tiledOne, "class: tiledOne");
+        ASSERT_CONTAINS(tiledOne, "floating: 0");
+
+        ASSERT_CONTAINS(tiledOne, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(tiledOne, "fullscreen: 2");
+        ASSERT_CONTAINS(tiledOne, "fullscreenClient: 2");
+    }
+    // tiledTwo - hidden
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledTwo = getClientBlock(clients, "tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "class: tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "floating: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "fullscreen: 1");
+        ASSERT_CONTAINS(tiledTwo, "fullscreenClient: 1");
+    }
+    // under - hidden
+    {
+        auto clients = getFromSocket("/clients");
+        auto under   = getClientBlock(clients, "under");
+        ASSERT_CONTAINS(under, "class: under");
+        ASSERT_CONTAINS(under, "floating: 1");
+
+        ASSERT_CONTAINS(under, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(under, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(under, "fullscreen: 0");
+        ASSERT_CONTAINS(under, "fullscreenClient: 0");
+    }
+
+    // Spawn a floating window - this should be ontop of floatingOne
+    SPAWN_KITTY("floatingThree");
+
+    // floatingThree - visible and allowedOverFullscreen (spawned while floatingOne FS is active)
+    {
+        auto clients       = getFromSocket("/clients");
+        auto floatingThree = getClientBlock(clients, "floatingThree");
+        ASSERT_CONTAINS(floatingThree, "class: floatingThree");
+        ASSERT_CONTAINS(floatingThree, "floating: 1");
+
+        ASSERT_CONTAINS(floatingThree, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingThree, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingThree, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingThree, "fullscreenClient: 0");
+    }
+
+    // unFs floatingOne - floatingOne,Two,Three should be ontop of tiledOne and tiledTwo should still be hidden
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:floatingOne' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 0, client = 0, action = 'set', window = 'activewindow' })"));
+
+    // floatingOne - visible (unFSed)
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingOne = getClientBlock(clients, "floatingOne");
+        ASSERT_CONTAINS(floatingOne, "class: floatingOne");
+        ASSERT_CONTAINS(floatingOne, "floating: 1");
+
+        ASSERT_CONTAINS(floatingOne, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingOne, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingOne, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingOne, "fullscreenClient: 0");
+    }
+    // floatingTwo - visible
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingTwo = getClientBlock(clients, "floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "class: floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "floating: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingTwo, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "fullscreenClient: 0");
+    }
+    // floatingThree - visible
+    {
+        auto clients       = getFromSocket("/clients");
+        auto floatingThree = getClientBlock(clients, "floatingThree");
+        ASSERT_CONTAINS(floatingThree, "class: floatingThree");
+        ASSERT_CONTAINS(floatingThree, "floating: 1");
+
+        ASSERT_CONTAINS(floatingThree, "allowedOverFullscreen: 1");
+        ASSERT_CONTAINS(floatingThree, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(floatingThree, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingThree, "fullscreenClient: 0");
+    }
+    // tiledOne - Visisble
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledOne = getClientBlock(clients, "tiledOne");
+        ASSERT_CONTAINS(tiledOne, "class: tiledOne");
+        ASSERT_CONTAINS(tiledOne, "floating: 0");
+
+        ASSERT_CONTAINS(tiledOne, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(tiledOne, "fullscreen: 2");
+        ASSERT_CONTAINS(tiledOne, "fullscreenClient: 2");
+    }
+    // tiledTwo - still hidden
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledTwo = getClientBlock(clients, "tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "class: tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "floating: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "fullscreen: 1");
+        ASSERT_CONTAINS(tiledTwo, "fullscreenClient: 1");
+    }
+    // under - still hidden
+    {
+        auto clients = getFromSocket("/clients");
+        auto under   = getClientBlock(clients, "under");
+        ASSERT_CONTAINS(under, "class: under");
+        ASSERT_CONTAINS(under, "floating: 1");
+
+        ASSERT_CONTAINS(under, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(under, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(under, "fullscreen: 0");
+        ASSERT_CONTAINS(under, "fullscreenClient: 0");
+    }
+
+    // Scroll onto tiledTwo - all but tiledTwo should be hidden
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:tiledTwo' })"));
+
+    // tiledTwo - now visible
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledTwo = getClientBlock(clients, "tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "class: tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "floating: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(tiledTwo, "fullscreen: 1");
+        ASSERT_CONTAINS(tiledTwo, "fullscreenClient: 1");
+    }
+    // floatingOne - hidden
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingOne = getClientBlock(clients, "floatingOne");
+        ASSERT_CONTAINS(floatingOne, "class: floatingOne");
+        ASSERT_CONTAINS(floatingOne, "floating: 1");
+
+        ASSERT_CONTAINS(floatingOne, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingOne, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingOne, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingOne, "fullscreenClient: 0");
+    }
+    // floatingTwo - hidden
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingTwo = getClientBlock(clients, "floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "class: floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "floating: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingTwo, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "fullscreenClient: 0");
+    }
+    // floatingThree - hidden
+    {
+        auto clients       = getFromSocket("/clients");
+        auto floatingThree = getClientBlock(clients, "floatingThree");
+        ASSERT_CONTAINS(floatingThree, "class: floatingThree");
+        ASSERT_CONTAINS(floatingThree, "floating: 1");
+
+        ASSERT_CONTAINS(floatingThree, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingThree, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingThree, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingThree, "fullscreenClient: 0");
+    }
+    // tiledOne - hidden
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledOne = getClientBlock(clients, "tiledOne");
+        ASSERT_CONTAINS(tiledOne, "class: tiledOne");
+        ASSERT_CONTAINS(tiledOne, "floating: 0");
+
+        ASSERT_CONTAINS(tiledOne, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(tiledOne, "fullscreen: 2");
+        ASSERT_CONTAINS(tiledOne, "fullscreenClient: 2");
+    }
+    // under - hidden
+    {
+        auto clients = getFromSocket("/clients");
+        auto under   = getClientBlock(clients, "under");
+        ASSERT_CONTAINS(under, "class: under");
+        ASSERT_CONTAINS(under, "floating: 1");
+
+        ASSERT_CONTAINS(under, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(under, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(under, "fullscreen: 0");
+        ASSERT_CONTAINS(under, "fullscreenClient: 0");
+    }
+
+    // Scroll onto tiledOne - all but tiledOne should be hidden, floatings do not reappear
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:tiledOne' })"));
+
+    // tiledOne - visible
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledOne = getClientBlock(clients, "tiledOne");
+        ASSERT_CONTAINS(tiledOne, "class: tiledOne");
+        ASSERT_CONTAINS(tiledOne, "floating: 0");
+
+        ASSERT_CONTAINS(tiledOne, "acceptsInput: 1");
+
+        ASSERT_CONTAINS(tiledOne, "fullscreen: 2");
+        ASSERT_CONTAINS(tiledOne, "fullscreenClient: 2");
+    }
+    // floatingOne - hidden (scrolling back does not cause reappearance)
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingOne = getClientBlock(clients, "floatingOne");
+        ASSERT_CONTAINS(floatingOne, "class: floatingOne");
+        ASSERT_CONTAINS(floatingOne, "floating: 1");
+
+        ASSERT_CONTAINS(floatingOne, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingOne, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingOne, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingOne, "fullscreenClient: 0");
+    }
+    // floatingTwo - hidden
+    {
+        auto clients     = getFromSocket("/clients");
+        auto floatingTwo = getClientBlock(clients, "floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "class: floatingTwo");
+        ASSERT_CONTAINS(floatingTwo, "floating: 1");
+
+        ASSERT_CONTAINS(floatingTwo, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingTwo, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingTwo, "fullscreenClient: 0");
+    }
+    // floatingThree - hidden
+    {
+        auto clients       = getFromSocket("/clients");
+        auto floatingThree = getClientBlock(clients, "floatingThree");
+        ASSERT_CONTAINS(floatingThree, "class: floatingThree");
+        ASSERT_CONTAINS(floatingThree, "floating: 1");
+
+        ASSERT_CONTAINS(floatingThree, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(floatingThree, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(floatingThree, "fullscreen: 0");
+        ASSERT_CONTAINS(floatingThree, "fullscreenClient: 0");
+    }
+    // tiledTwo - hidden
+    {
+        auto clients  = getFromSocket("/clients");
+        auto tiledTwo = getClientBlock(clients, "tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "class: tiledTwo");
+        ASSERT_CONTAINS(tiledTwo, "floating: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(tiledTwo, "fullscreen: 1");
+        ASSERT_CONTAINS(tiledTwo, "fullscreenClient: 1");
+    }
+    // under - hidden
+    {
+        auto clients = getFromSocket("/clients");
+        auto under   = getClientBlock(clients, "under");
+        ASSERT_CONTAINS(under, "class: under");
+        ASSERT_CONTAINS(under, "floating: 1");
+
+        ASSERT_CONTAINS(under, "allowedOverFullscreen: 0");
+        ASSERT_CONTAINS(under, "acceptsInput: 0");
+
+        ASSERT_CONTAINS(under, "fullscreen: 0");
+        ASSERT_CONTAINS(under, "fullscreenClient: 0");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_layerVisibilityOnFs) {
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    static constexpr const char* LAYER_NAMESPACE = "bar-like-layer";
+
+    const auto                   spawnLayerAndWaitTillSuccess_TOP = [&]() {
+        ASSERT(spawnLayer(LAYER_NAMESPACE, {"--edge=top", "--layer=top", "--lines=48px", "--focus-policy=not-allowed"}), true);
+        Tests::waitUntilLayersN(1);
+    };
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("cat");
+    spawnLayerAndWaitTillSuccess_TOP();
+    // same as default handled test but with layout_aware = false -- just testing with top layer for brevity
+
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat' })"));
+    {
+
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    // Scrolling onto FS windows
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    SPAWN_KITTY("cat2");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat2' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus r')"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    // floating windows layered ontop of tiled windows
+
+    // window rule for spawning floating kittens
+    OK(getFromSocket("/eval hl.window_rule({ name = 'kittens float with certain size', match = {class = 'floating.*',}, float = true, size = {950, 500},})"));
+
+    SPAWN_KITTY("floating_cat");
+
+    // still ontop of maximised widnow
+
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    // maximise the floating kitty
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:floating_cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    // fullscreen the floating kitty
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:floating_cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    // dispel the FS of floating kitty
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:floating_cat' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    // move to the fullscreen window on the left, maximise and fullscreen the kitty window ontop of that too - the old floating kitten is now hidden so we can't use that
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:cat' })"));
+
+    SPAWN_KITTY("floating_cat2");
+
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:floating_cat2' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:floating_cat2' })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:floating_cat2' })"));
+    // the fullscreen tiled window is now in effect
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_focusInDirectionFocusFollowFocusTrue) {
+
+    /*
+        Scrolling quasi-equivalent of `defaultHandledFsfocusInDirection`
+    */
+
+    // if movefocus_cycles_fullscreen = false, all focus({direction}) is disallowed from moving focus from FS window
+
+    // if movefocus_cycles_fullscreen = true, standard behaviour of the config option won't be followed but focus will move in the direction specified as if window was not FS
+    // if on_focus_under_fullscreen = 0 focus({direction}) is disallowed from moving focus from FS window
+    // if on_focus_under_fullscreen = 1/2, standard behaviour of the config option won't be followed but focus will move in the direction specified as if window was not FS
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    /*
+            This test serves as a test for all layouts that use deafult FS behaviour
+    */
+
+    SPAWN_KITTY("normal1");
+    SPAWN_KITTY("fs");
+    SPAWN_KITTY("normal2");
+
+    // if movefocus_cycles_fullscreen = false, all focus({direction}) is disallowed from moving focus from FS window
+    OK(getFromSocket("r/eval hl.config({ binds = { movefocus_cycles_fullscreen = false } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:fs' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:fs' })"));
+
+    // on_focus_under_fullscreen = 0
+    OK(getFromSocket("r/eval hl.config({ misc = { on_focus_under_fullscreen = 0 } })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'up' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'down' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    // on_focus_under_fullscreen = 1
+    OK(getFromSocket("r/eval hl.config({ misc = { on_focus_under_fullscreen = 1 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    // on_focus_under_fullscreen = 2
+    OK(getFromSocket("r/eval hl.config({ misc = { on_focus_under_fullscreen = 2 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    // if movefocus_cycles_fullscreen = true, standard behaviour of the config option won't be followed but focus will move in the direction specified as if window was not FS
+
+    OK(getFromSocket("r/eval hl.config({ binds = { movefocus_cycles_fullscreen = true } })"));
+
+    // on_focus_under_fullscreen = 0
+    OK(getFromSocket("r/eval hl.config({ misc = { on_focus_under_fullscreen = 0 } })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'up' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'down' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    // on_focus_under_fullscreen = 1 - Won't cycle, but will simply switch to that window (viewport moves if follow_focus = 1)
+    OK(getFromSocket("r/eval hl.config({ misc = { on_focus_under_fullscreen = 1 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: normal1");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(Tests::getAttribute(str, "at"), "27,22");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(Tests::getAttribute(str, "at"), "0,0");
+    }
+
+    // on_focus_under_fullscreen = 2 - Won't dispel FS, but will simply switch to that window (viewport moves if follow_focus = 1)
+    OK(getFromSocket("r/eval hl.config({ misc = { on_focus_under_fullscreen = 2 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: normal1");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(Tests::getAttribute(str, "at"), "27,22");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: fs");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(Tests::getAttribute(str, "at"), "0,0");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_respectFocusFitMethodOnUnFs) {
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("kitty_A");
+    SPAWN_KITTY("kitty_B");
+
+    // focus_fit_method = 0 (fullscreen)
+    OK(getFromSocket("/eval hl.config({ scrolling = { focus_fit_method = 0 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 497,22")
+    }
+
+    // focus_fit_method = 1 (fullscreen)
+    OK(getFromSocket("/eval hl.config({ scrolling = { focus_fit_method = 1 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 27,22");
+    }
+
+    // focus_fit_method = 2 (fullscreen)
+    OK(getFromSocket("/eval hl.config({ scrolling = { focus_fit_method = 2 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 967,22");
+    }
+
+    // focus_fit_method = 0 (maximised)
+    OK(getFromSocket("/eval hl.config({ scrolling = { focus_fit_method = 0 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 497,22")
+    }
+
+    // focus_fit_method = 1 (maximised)
+    OK(getFromSocket("/eval hl.config({ scrolling = { focus_fit_method = 1 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 27,22");
+    }
+
+    // focus_fit_method = 2 (maximised)
+    OK(getFromSocket("/eval hl.config({ scrolling = { focus_fit_method = 2 } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 967,22");
+    }
+
+    // With kitty_C added, clamped_center should behave like method 0 (centered)
+    SPAWN_KITTY("kitty_C");
+
+    // focus_fit_method = 2 (maximised, middle column)
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_B' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 497,22");
+    }
+
+    // focus_fit_method = 2 (fullscreen, middle column)
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_B' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'activewindow', layout_aware = true })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'activewindow', layout_aware = true })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kitty_B");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "at: 497,22");
+    }
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_FloatingOntopFullscreenWorkspaceFocusRetention) {
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+
+    OK(getFromSocket("/eval hl.window_rule({ match = { class = 'kitty_floated' }, float = true })"));
+
+    const auto test_default_layout_handled_behaviour = [&](bool fullscreen, bool layoutAware) -> void {
+        SPAWN_KITTY("kitty_tiled");
+
+        OK(getFromSocket(std::format("/dispatch hl.dsp.window.fullscreen({{ mode = '{}', action = 'set', layout_aware = {}, window = 'class:kitty_tiled' }})",
+                                     (fullscreen ? "fullscreen" : "maximized"), (layoutAware ? "true" : "false"))));
+        {
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitty_tiled");
+            EXPECT_CONTAINS(str, "floating: 0")
+            EXPECT_CONTAINS(str, std::format("fullscreen: {}", (fullscreen ? "2" : "1")));
+            EXPECT_CONTAINS(str, std::format("fullscreenClient: {}", (fullscreen ? "2" : "1")));
+        }
+
+        SPAWN_KITTY("kitty_floated");
+        {
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitty_floated");
+            EXPECT_CONTAINS(str, "floating: 1")
+            EXPECT_CONTAINS(str, "fullscreen: 0");
+            EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '2' })"));
+        OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+
+        // Expect the focus to be on the floating window ontop of the covering FS still
+        {
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitty_floated");
+            EXPECT_CONTAINS(str, "floating: 1")
+            EXPECT_CONTAINS(str, "fullscreen: 0");
+            EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        }
+    };
+
+    // Fullscreen First
+
+    test_default_layout_handled_behaviour(true, true);
+
+    Tests::killAllWindows();
+    Tests::waitUntilWindowsN(0);
+
+    // Then Maximise
+
+    test_default_layout_handled_behaviour(false, true);
+}
+
+TEST_CASE(scroll_LAYOUT_HANDLED_onlyInternalUnFsRestoresColWidth) {
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("kitty_scroll_A");
+    SPAWN_KITTY("kitty_scroll_B");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_scroll_A' })"));
+
+    // A is focused, so this gives A's column 0.8 width
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    const auto REGULAR_POS  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const auto REGULAR_SIZE = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+    // FS (2,2)
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 2, action = 'set' })"));
+
+    {
+        const auto WINDOW = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(WINDOW, "class: kitty_scroll_A");
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 2");
+        ASSERT_CONTAINS(WINDOW, "fullscreenClient: 2");
+        ASSERT_CONTAINS(WINDOW, "size: 1920,1080");
+    }
+
+    // un-FS internal only, keep client: (0,2)
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 0, client = -1, action = 'set' })"));
+
+    {
+        const auto WINDOW = getFromSocket("/activewindow");
+        ASSERT_CONTAINS(WINDOW, "class: kitty_scroll_A");
+        ASSERT_CONTAINS(WINDOW, "fullscreen: 0");
+        ASSERT_CONTAINS(WINDOW, "fullscreenClient: 2");
+        ASSERT(Tests::getAttribute(WINDOW, "at"), REGULAR_POS);
+        ASSERT(Tests::getAttribute(WINDOW, "size"), REGULAR_SIZE);
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_fullscreenMaximiseDispatchers) {
+
+    // Shared test among all default handled FS
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("kitty_A");
+    SPAWN_KITTY("kitty_B");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_A' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'toggle' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+        EXPECT_CONTAINS(str, "fullscreenClient: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'toggle' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 2, action = 'set' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 2, action = 'set' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 2, action = 'toggle' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 2, action = 'toggle' })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_TestFsingGroupedWindows) {
+
+    // Shared test among all default handled FS
+
+    /*
+      When a group of windows are FSed, all the windows in the group are expected to have the same size
+    */
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    OK(getFromSocket("/eval hl.config({ group = { auto_group = true } })"));
+
+    // Config opt for adding gaps_out and border_size and a workspace rule that removes them from maximised windows to make sure maximise works properly
+
+    OK(getFromSocket("r/eval hl.config({ general = { gaps_out = 10, border_size = 10 } })"));
+    OK(getFromSocket("/eval hl.workspace_rule({ workspace = 'f[1]', gaps_out = 0, border_size = 0 })"));
+
+    ASSERT(Tests::windowCount(), 0);
+    auto kitten1 = Tests::spawnKitty("kitten1");
+    if (!kitten1) {
+        FAIL_TEST("Could not spawn kitty");
+    }
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle()"));
+
+    auto kitten2 = Tests::spawnKitty("kitten2");
+    if (!kitten2) {
+        FAIL_TEST("Could not spawn kitty");
+    }
+    ASSERT(Tests::windowCount(), 2);
+
+    // Fullscreen
+    {
+        auto checkHiddenGroupMember = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "size: 1920,1080");
+                EXPECT_CONTAINS(windowEntry, "at: 0,0");
+            }
+        };
+
+        // Tiled
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', layout_aware = false })"));
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+        // unset FS for next test
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', layout_aware = false })"));
+
+        // floating
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'set' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', layout_aware = false })"));
+
+        {
+            // check position and size for the focused group member.
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member.
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,0");
+            EXPECT_CONTAINS(str, "size: 1920,1080");
+        }
+        checkHiddenGroupMember("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+
+        // prep for next test
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'unset' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', layout_aware = false })"));
+    }
+
+    // Maximized
+    {
+        auto checkHiddenGroupMember = [&](const std::string& targetKitten) {
+            auto clients  = getFromSocket("/clients");
+            auto classPos = clients.find("class: " + targetKitten);
+            if (classPos == std::string::npos) {
+                FAIL_TEST("Could not find specific kitten in clients output");
+            } else {
+                auto entryStart  = clients.rfind("Window ", classPos);
+                auto entryEnd    = clients.find("\n\n", classPos);
+                auto windowEntry = clients.substr(entryStart, entryEnd - entryStart);
+                EXPECT_CONTAINS(windowEntry, "size: 1920,1059");
+                EXPECT_CONTAINS(windowEntry, "at: 0,21");
+            }
+        };
+
+        // Tiled
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', layout_aware = false })"));
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,21");
+            EXPECT_CONTAINS(str, "size: 1920,1059");
+        }
+        checkHiddenGroupMember("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member.
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,21");
+            EXPECT_CONTAINS(str, "size: 1920,1059");
+        }
+        checkHiddenGroupMember("kitten2");
+
+        // go back for next test
+        OK(getFromSocket("/dispatch hl.dsp.group.prev()"));
+        // unset FS for next test
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', layout_aware = false })"));
+
+        // floating
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'set' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', layout_aware = false })"));
+
+        {
+            // check position and size for the focused group member (kitten2).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten2");
+            EXPECT_CONTAINS(str, "at: 0,21");
+            EXPECT_CONTAINS(str, "size: 1920,1059");
+        }
+        checkHiddenGroupMember("kitten1");
+
+        // try switching to next window in group
+        OK(getFromSocket("/dispatch hl.dsp.group.next()"));
+
+        {
+            // check position and size for the focused group member (kitten1).
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitten1");
+            EXPECT_CONTAINS(str, "at: 0,21");
+            EXPECT_CONTAINS(str, "size: 1920,1059");
+        }
+        checkHiddenGroupMember("kitten2");
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_testFsFocusUnderFSWindow) {
+
+    // Shared test among all default handled FS
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    for (auto const& win : {"one", "two", "three"})
+        SPAWN_KITTY(win);
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:one' })"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false, })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "at: 22,22");
+        EXPECT_CONTAINS(str, "size: 1876,1036");
+        EXPECT_CONTAINS(str, "class: one");
+    }
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 1 } })"));
+
+    SPAWN_KITTY("four");
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "at: 22,22");
+        EXPECT_CONTAINS(str, "size: 1876,1036");
+        EXPECT_CONTAINS(str, "class: four");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 0 } })"));
+
+    SPAWN_KITTY("ignored");
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "at: 22,22");
+        EXPECT_CONTAINS(str, "size: 1876,1036");
+        EXPECT_CONTAINS(str, "class: four");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 2 } })"));
+
+    SPAWN_KITTY("erstarrwashere");
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: erstarrwashere");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_newWindowTakesOverFullscreen) {
+
+    // Shared test among all default handled FS
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 0 } })"));
+
+    SPAWN_KITTY("kitty_A");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', layout_aware = false, })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "kitty_A");
+    }
+
+    SPAWN_KITTY("kitty_B");
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "kitty_A");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:kitty_B' })"));
+
+    {
+        // should be ignored as per focus_under_fullscreen 0
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "kitty_A");
+    }
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 1 } })"));
+
+    SPAWN_KITTY("kitty_C");
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "kitty_C");
+    }
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 2 } })"));
+
+    SPAWN_KITTY("kitty_D");
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "kitty_D");
+    }
+
+    OK(getFromSocket("/eval hl.config({ misc = { on_focus_under_fullscreen = 0 } })"));
+
+    Tests::killAllWindows();
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_exitWindowRetainsFullscreen) {
+
+    // Shared test among all default handled FS
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    OK(getFromSocket("/eval hl.config({ misc = { exit_window_retains_fullscreen = false } })"));
+
+    SPAWN_KITTY("kitty_A");
+    SPAWN_KITTY("kitty_B");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', layout_aware = false, })"));
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.kill({ window = 'activewindow' })"));
+    Tests::waitUntilWindowsN(1);
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+    }
+
+    SPAWN_KITTY("kitty_B");
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', layout_aware = false, })"));
+    OK(getFromSocket("/eval hl.config({ misc = { exit_window_retains_fullscreen = true } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.window.kill({ window = 'activewindow' })"));
+    Tests::waitUntilWindowsN(1);
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+    }
+
+    Tests::killAllWindows();
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_FullscreenPinnedWindows) {
+
+    // Shared test among all default handled FS
+
+    /*
+
+    allow_pin_fullscreen -> Allow internal FSing a pinned window at all?
+
+    if true: FSed pinned window doesn't behave as pinned while it is FS but continues to behave as pinned when it's unFS
+    if false: doesn't allow FSing it at all (client can be set if de-syncing internal and client)
+
+    */
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("cake");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:cake'})"));
+
+    // resize to expected floating value: 200 x 200
+    OK(getFromSocket("/dispatch hl.dsp.window.resize({x = 200, y = 200, relative = false, window = 'class:cake'})"));
+
+    // Workspace we are testing on: 1
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+
+    // Pin the window
+    OK(getFromSocket("r/dispatch hl.dsp.window.pin({ window = 'class:cake' })"));
+
+    // set to false, try to FS; expect the cake to be a lie
+    OK(getFromSocket("r/eval hl.config({ binds = { allow_pin_fullscreen = false } })"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:cake'})"));
+
+    // Try with fullscreen
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', layout_aware = false })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 1");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "size: 200,200");
+    }
+
+    // Try with maximised
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 1");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "size: 200,200");
+    }
+
+    // Move to another workspace, expect it to follow
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '2' })"));
+    {
+        auto str = getFromSocket("/clients");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 1");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "size: 200,200");
+        EXPECT_CONTAINS(str, "workspace: 2");
+    }
+
+    // Move back to primary testing workspace, assumed it'll follow since the last test passed
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+
+    // While syncing FS state, is not supposed to set either mode. If internal and client are decoupled, client is expected to go through
+    // Try with fullscreen
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 2, client = 2, action = 'set', layout_aware = false, window = 'activewindow' })"));
+    {
+        auto str = getFromSocket("/clients");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 1");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "size: 200,200");
+        EXPECT_CONTAINS(str, "workspace: 1");
+    }
+
+    // Try with maximised
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 1, client = 1, action = 'set', layout_aware = false, window = 'activewindow' })"));
+    {
+        auto str = getFromSocket("/clients");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 1");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 1");
+        EXPECT_CONTAINS(str, "size: 200,200");
+        EXPECT_CONTAINS(str, "workspace: 1");
+    }
+
+    // re-set its FS values for the next test
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 0, client = 0, action = 'set', layout_aware = false, window = 'activewindow' })"));
+
+    // set to true, try to FS; expect the cake to be real
+    OK(getFromSocket("r/eval hl.config({ binds = { allow_pin_fullscreen = true } })"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:cake'})"));
+
+    // Try with fullscreen
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', layout_aware = false })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 0");
+        EXPECT_CONTAINS(str, "pinFullscreened: 1");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "at: 0,0");
+        EXPECT_CONTAINS(str, "size: 1920,1080");
+    }
+
+    // Try with maximised
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 0");
+        EXPECT_CONTAINS(str, "pinFullscreened: 1");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+        EXPECT_CONTAINS(str, "fullscreenClient: 1");
+        EXPECT_CONTAINS(str, "at: 2,2");
+        EXPECT_CONTAINS(str, "size: 1916,1076");
+    }
+
+    // unFs it, move to another workspace - expect it to follow
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen_state({ internal = 0, client = 0, action = 'set', layout_aware = false, window = 'activewindow' })"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '2' })"));
+    {
+        auto str = getFromSocket("/clients");
+        EXPECT_CONTAINS(str, "class: cake");
+        // After the FSed pinned window is unFSed, expect its pinned value to come back
+        EXPECT_CONTAINS(str, "pinned: 1");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 0");
+        EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        EXPECT_CONTAINS(str, "size: 200,200");
+        EXPECT_CONTAINS(str, "workspace: 2");
+    }
+
+    // set the variable to false, unpin it and expect it to be FS-able
+    OK(getFromSocket("r/eval hl.config({ binds = { allow_pin_fullscreen = false } })"));
+    OK(getFromSocket("r/dispatch hl.dsp.window.pin({ window = 'class:cake' })"));
+
+    // Try with fullscreen
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', layout_aware = false })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 0");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 2");
+        EXPECT_CONTAINS(str, "fullscreenClient: 2");
+        EXPECT_CONTAINS(str, "at: 0,0");
+        EXPECT_CONTAINS(str, "size: 1920,1080");
+    }
+
+    // Try with maximised
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: cake");
+        EXPECT_CONTAINS(str, "pinned: 0");
+        EXPECT_CONTAINS(str, "pinFullscreened: 0");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+        EXPECT_CONTAINS(str, "fullscreenClient: 1");
+        EXPECT_CONTAINS(str, "at: 2,2");
+        EXPECT_CONTAINS(str, "size: 1916,1076");
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_FullscreenNonInterference) {
+
+    // Shared test among all default handled FS
+
+    /*
+
+    When a tiled/floating window is default handled FSed, it must not cause the windows under it to have moved/resized after it is unFSed
+
+    also tests if floating pos/size is properly restored after fS-unfs
+
+    */
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("red");
+    SPAWN_KITTY("crimson");
+    SPAWN_KITTY("blue");
+    SPAWN_KITTY("cyan");
+    SPAWN_KITTY("azure");
+    SPAWN_KITTY("green");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+
+    // Testing tiled first
+    {
+
+        // save all pos/size inc red
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+        auto redPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto redSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:crimson' })"));
+        auto crimsonPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto crimsonSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:blue' })"));
+        auto bluePos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto blueSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:cyan' })"));
+        auto cyanPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto cyanSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:azure' })"));
+        auto azurePos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto azureSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:green' })"));
+        auto greenPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto greenSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        // FS and unFS red, then check all positions are unchanged
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false, })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false, })"));
+
+        // red
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), redPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), redSize);
+
+        // crimson
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:crimson' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), crimsonPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), crimsonSize);
+
+        // blue
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:blue' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), bluePos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), blueSize);
+
+        // cyan
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:cyan' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), cyanPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), cyanSize);
+
+        // azure
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:azure' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), azurePos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), azureSize);
+
+        // green
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:green' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), greenPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), greenSize);
+    }
+
+    // test floating
+
+    {
+
+        // float red
+        OK(getFromSocket("/dispatch hl.dsp.window.float({ action = 'set', window = 'class:red' })"));
+
+        // save all pos/size (red's size will be its floating size)
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+        auto redPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto redSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:crimson' })"));
+        auto crimsonPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto crimsonSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:blue' })"));
+        auto bluePos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto blueSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:cyan' })"));
+        auto cyanPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto cyanSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:azure' })"));
+        auto azurePos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto azureSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:green' })"));
+        auto greenPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        auto greenSize = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+
+        // FS and unFS red, then check all positions are unchanged
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false, })"));
+        OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', layout_aware = false, })"));
+
+        // red
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:red' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), redPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), redSize);
+
+        // crimson
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:crimson' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), crimsonPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), crimsonSize);
+
+        // blue
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:blue' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), bluePos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), blueSize);
+
+        // cyan
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:cyan' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), cyanPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), cyanSize);
+
+        // azure
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:azure' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), azurePos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), azureSize);
+
+        // green
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:green' })"));
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "at"), greenPos);
+        EXPECT(Tests::getAttribute(getFromSocket("/activewindow"), "size"), greenSize);
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_FloatingOntopFullscreenWorkspaceFocusRetention) {
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+
+    OK(getFromSocket("/eval hl.window_rule({ match = { class = 'kitty_floated' }, float = true })"));
+
+    const auto test_default_layout_handled_behaviour = [&](bool fullscreen, bool layoutAware) -> void {
+        SPAWN_KITTY("kitty_tiled");
+
+        OK(getFromSocket(std::format("/dispatch hl.dsp.window.fullscreen({{ mode = '{}', action = 'set', layout_aware = {}, window = 'class:kitty_tiled' }})",
+                                     (fullscreen ? "fullscreen" : "maximized"), (layoutAware ? "true" : "false"))));
+        {
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitty_tiled");
+            EXPECT_CONTAINS(str, "floating: 0")
+            EXPECT_CONTAINS(str, std::format("fullscreen: {}", (fullscreen ? "2" : "1")));
+            EXPECT_CONTAINS(str, std::format("fullscreenClient: {}", (fullscreen ? "2" : "1")));
+        }
+
+        SPAWN_KITTY("kitty_floated");
+        {
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitty_floated");
+            EXPECT_CONTAINS(str, "floating: 1")
+            EXPECT_CONTAINS(str, "fullscreen: 0");
+            EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '2' })"));
+        OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+
+        // Expect the focus to be on the floating window ontop of the covering FS still
+        {
+            auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: kitty_floated");
+            EXPECT_CONTAINS(str, "floating: 1")
+            EXPECT_CONTAINS(str, "fullscreen: 0");
+            EXPECT_CONTAINS(str, "fullscreenClient: 0");
+        }
+    };
+
+    // Fullscreen First
+
+    test_default_layout_handled_behaviour(true, false);
+
+    Tests::killAllWindows();
+    Tests::waitUntilWindowsN(0);
+
+    // Then Maximise
+
+    test_default_layout_handled_behaviour(false, false);
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_posAndSizeSyncWhileFS) {
+    /*
+        This is a scrolling default FS specific test - not relevant for other layouts
+    */
+
+    // When a window is maximised, add or remove an overlay top bar. Its pos/size is meant to change (since work area changed).
+
+    SPAWN_KITTY("kot");
+
+    ASSERT(spawnLayer("top-bar", {"--edge=top", "--layer=overlay", "--lines=48px", "--focus-policy=not-allowed"}), true);
+    Tests::waitUntilLayersN(1);
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', window = 'class:kot', layout_aware = false, })"));
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kot");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+        EXPECT_CONTAINS(str, "fullscreenClient: 1");
+        ASSERT_CONTAINS(str, "size: 1876,987");
+    }
+
+    Tests::killAllLayers();
+    Tests::waitUntilLayersN(0);
+
+    {
+        auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: kot");
+        EXPECT_CONTAINS(str, "fullscreen: 1");
+        EXPECT_CONTAINS(str, "fullscreenClient: 1");
+        ASSERT_CONTAINS(str, "size: 1876,1036");
+    }
+}
+
+TEST_CASE(scroll_DEFAULT_HANDLED_layerVisibilityOnFs) {
+
+    /*
+
+        A copy of the test from other, deafult handled FS only, layouts - tested in scrolling default handled FS
+
+    */
+
+    OK(getFromSocket("/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    const auto doMassacre = [&]() -> void {
+        Tests::killAllLayers();
+        Tests::waitUntilLayersN(0);
+        Tests::killAllWindows();
+        Tests::waitUntilWindowsN(0);
+    };
+
+    static constexpr const char* LAYER_NAMESPACE = "bar-like-layer";
+
+    const auto                   spawnLayerAndWaitTillSuccess_TOP = [&]() {
+        ASSERT(spawnLayer(LAYER_NAMESPACE, {"--edge=top", "--layer=top", "--lines=48px", "--focus-policy=not-allowed"}), true);
+        Tests::waitUntilLayersN(1);
+    };
+
+    const auto spawnLayerAndWaitTillSuccess_OVERLAY = [&]() {
+        ASSERT(spawnLayer(LAYER_NAMESPACE, {"--edge=top", "--layer=overlay", "--lines=48px", "--focus-policy=not-allowed"}), true);
+        Tests::waitUntilLayersN(1);
+    };
+
+    // For default handled fullscreen
+
+    // FS after a layer has been created
+    spawnLayerAndWaitTillSuccess_TOP();
+
+    SPAWN_KITTY("cat");
+
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1")
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat', layout_aware = false })"));
+    {
+
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    // TOP Layer spawn after FS
+
+    doMassacre();
+
+    // allow_new_top_layers_over_existing_fullscreen = true
+    OK(getFromSocket("/eval hl.config({ layers = { allow_new_top_layers_over_existing_fullscreen = true } })"));
+
+    SPAWN_KITTY("cat");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat', layout_aware = false })"));
+    spawnLayerAndWaitTillSuccess_TOP();
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    doMassacre();
+    SPAWN_KITTY("cat");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat', layout_aware = false })"));
+    spawnLayerAndWaitTillSuccess_TOP();
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    // allow_new_top_layers_over_existing_fullscreen = false
+
+    doMassacre();
+
+    OK(getFromSocket("/eval hl.config({ layers = { allow_new_top_layers_over_existing_fullscreen = false },})"));
+
+    SPAWN_KITTY("cat");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat', layout_aware = false })"));
+    spawnLayerAndWaitTillSuccess_TOP();
+    {
+
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    doMassacre();
+    SPAWN_KITTY("cat");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat', layout_aware = false })"));
+    spawnLayerAndWaitTillSuccess_TOP();
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 0");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    doMassacre();
+
+    // Overlay is always ontop, spawn later or before FS
+
+    // we need not test with the allow_new_top_layers_over_existing_fullscreen config opt as it's only relevant to TOP layer.
+
+    // FS after a layer has been created
+    spawnLayerAndWaitTillSuccess_OVERLAY();
+
+    SPAWN_KITTY("cat");
+
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat', layout_aware = false })"));
+    {
+
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    // overlay Layer spawn after FS
+
+    doMassacre();
+    SPAWN_KITTY("cat");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'set', window = 'class:cat', layout_aware = false })"));
+    spawnLayerAndWaitTillSuccess_OVERLAY();
+    {
+
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 1");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'maximized', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+
+    doMassacre();
+    SPAWN_KITTY("cat");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'set', window = 'class:cat', layout_aware = false })"));
+    spawnLayerAndWaitTillSuccess_OVERLAY();
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 2");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen({ mode = 'fullscreen', action = 'unset', window = 'class:cat', layout_aware = false })"));
+    {
+        auto str = getLayerLine(getFromSocket("/layers"), LAYER_NAMESPACE);
+        EXPECT_CONTAINS(str, "a: 1");
+        EXPECT_CONTAINS(getFromSocket("/activewindow"), "fullscreen: 0");
+    }
+}
+
+/* Scroll viewport tests */
+
+TEST_CASE(scrollNegativeScaleGesture) {
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+    OK(getFromSocket("/eval hl.config({ scrolling = { follow_focus = false }, gestures = { scrolling = { move_snap_to_grid = false, move_snap_cursor = false } } })"));
+
+    // Move away from the tape boundary before testing the negative scale.
+    OK(getFromSocket("/eval hl.gesture({ fingers = 6, direction = 'left', action = 'scroll_move', scale = -2 })"));
+    OK(getFromSocket("/eval hl.gesture({ fingers = 7, direction = 'left', action = 'scroll_move', scale = 2 })"));
+    OK(getFromSocket("/eval hl.gesture({ fingers = 8, direction = 'left', action = 'scroll_move', scale = -1 })"));
+    OK(getFromSocket("/eval hl.gesture({ fingers = 9, direction = 'left', action = 'scroll_move', scale = 1 })"));
+
+    for (const auto& win : {"negative_scale_a", "negative_scale_b", "negative_scale_c", "negative_scale_d"})
+        SPAWN_KITTY(win);
+
+    const auto xCoordinate = [&](const std::string& window) {
+        const auto at = Tests::getAttribute(getClientBlock(getFromSocket("/clients"), window), "at");
+        return std::stoi(at.substr(0, at.find(',')));
+    };
+
+    const int pos = xCoordinate("negative_scale_a");
+
+    OK(getFromSocket("/eval hl.plugin.test.gesture('left', 7)"));
+    const int posPlus2 = xCoordinate("negative_scale_a");
+
+    // Test negative delta when moving the viewport in scrolling via a gesture.
+    OK(getFromSocket("/eval hl.plugin.test.gesture('left', 8)"));
+    const int posPlus1 = xCoordinate("negative_scale_a");
+
+    if (posPlus1 <= posPlus2)
+        FAIL_TEST("Expected a negative gesture scale to move the scrolling view right, from x={} to x={}", posPlus2, posPlus1);
+
+    // Return to the same tape position before comparing scale -2.
+    OK(getFromSocket("/eval hl.plugin.test.gesture('left', 9)"));
+    const int posPlus2Again = xCoordinate("negative_scale_a");
+
+    if (posPlus2Again != posPlus2)
+        FAIL_TEST("Expected scale 1 to reset the scrolling view from x={} to x={}, got x={}", posPlus1, posPlus2, posPlus2Again);
+
+    OK(getFromSocket("/eval hl.plugin.test.gesture('left', 6)"));
+    const int posAgain = xCoordinate("negative_scale_a");
+
+    if (posAgain != pos)
+        FAIL_TEST("Expected scale -2 to return the scrolling view from x={} to x={}, got x={}", posPlus2, pos, posAgain);
+}
+
+TEST_CASE(testScrollingViewBehaviourDispatchFocusWindowFollowFocusFalse) {
+
+    /*
+     focuswindow DOES NOT move the scrolling view when follow_focus = false
+     ---------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: focuswindow dispatch SHOULD NOT move scrolling view when follow_focus = false");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // if the view does not move, we expect the x coordinate of the window of class "a" to be negative, as it would be to the left of the viewport
+    const std::string posA  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const int         posAx = std::stoi(posA.substr(0, posA.find(',')));
+
+    if (posAx >= 0)
+        FAIL_TEST("Expected the x coordinate of window of class \"a\" to be < 0, got {}.", posAx);
+}
+
+TEST_CASE(testScrollingViewBehaviourDispatchFocusWindowFollowFocustrue) {
+
+    /*
+     focuswindow DOES move the view when follow_focus = 1
+     --------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: focuswindow dispatch SHOULD move scrolling view when follow_focus = 1");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // If the view does not move, we expect the x coordinate of the window of class "a" to be negative, as it would be to the left of the viewport.
+    // If it is not, the view moved, which is what we expect to happen.
+    const std::string posA  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const int         posAx = std::stoi(posA.substr(0, posA.find(',')));
+
+    if (posAx < 0)
+        FAIL_TEST("Expected the x coordinate of window of class \"a\" to be >= 0, got {}.", posAx);
+}
+
+TEST_CASE(testScrollingViewBehaviourFocusFallback) {
+
+    /*
+     Focus fallback from killing a floating window onto a tiled window must NOT move scrolling view, regardless of follow_focus
+     --------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: focus fallback from floating window to a tiled window should not move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+    SPAWN_KITTY("c");
+
+    // make it (window of class:c) float - the view now mush have shifted to fit window class:b
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:c'})"));
+
+    // establish focus history
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:c'})"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:c'})"));
+
+    // kill the floating window
+    // Expect the focus to fall back to the left tiled window
+    OK(getFromSocket("/dispatch hl.dsp.window.kill({window = 'class:c'})"));
+    Tests::waitUntilWindowsN(2);
+
+    // The focus now must have fallen back to tiled window of class "a".
+
+    // If the view did not move, we expect currently focused window's (class:a) to have "at: " x coordinat value <0 (must be left of the viewport)
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) >= 0)
+        FAIL_TEST("Expected the x coordinate of window of class \"a\" to be < 0, got {}.", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourFocusFallbackWithGroups) {
+
+    // same idea as testScrollingViewBehaviourFocusFallback, but with window of class "a" being grouped.
+
+    NLog::green("Testing scrolling view behaviour: focus fallback from floating window to a grouped tiled should not move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+
+    // to correctly set up windows for the test
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+    // only one tiled window will be grouped for the test
+    OK(getFromSocket("/eval hl.config({group = {auto_group = false}})"));
+
+    SPAWN_KITTY("a");
+
+    // make it a grouped. There need not be any other windows in the group for this test
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle({window = 'class:a'})"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+    SPAWN_KITTY("c");
+
+    // make it float - the view now mush have shifted to fit window class:b
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:c'})"));
+
+    // establish focus history
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:c'})"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:c'})"));
+
+    // kill the floating window
+    OK(getFromSocket("/dispatch hl.dsp.window.kill({window = 'class:c'})"));
+    Tests::waitUntilWindowsN(2);
+
+    // The focus now must have fallen back to tiled window of class "a".
+
+    // If the view did not move, we expect currently focused window's (class:a) to have "at: " x coordinat value <0 (must be left of the viewport)
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) >= 0)
+        FAIL_TEST("Expected the x coordinate of window of class \"a\" to be < 0, got {}.", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourWorkspaceChange) {
+
+    /*
+     When you change to a scrolling workspace, the focused window in that workspace must not be pulled into view, regardless of follow_focus
+     ---------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: changing to a scrolling workspace should not move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test - this is to avoid unwanted view shifts when setting up the windows
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    // switch to workspace 1 for this test
+    OK(getFromSocket("/dispatch hl.dsp.focus({workspace = '1'})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // does not move view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // change to workspace 2, then back to workspace 1 again
+    OK(getFromSocket("/dispatch hl.dsp.focus({workspace = '2'})"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({workspace = '1'})"));
+
+    // If the scrolling view did not move, the x value for `at:` of the currently focused window, class:a, must be <0 (must be left of the viewport)
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourSpecialWorkspaceChange) {
+
+    /*
+     When you change to a special scrolling workspace from a normal workspace, the focused window in that workspace must not be pulled into view, regardless of follow_focus
+     -----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: changing to a special scrolling workspace from a normal workspace should not move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test - this is to avoid unwanted view shifts when setting up the windows
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    // We'll test in this special workspace
+    OK(getFromSocket("/dispatch hl.dsp.workspace.toggle_special('name:scroll_S')"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // does not move view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // change to workspace 2, then back to special "scroll_S" workspace again
+    OK(getFromSocket("/dispatch hl.dsp.focus({workspace = '2'})"));
+    OK(getFromSocket("/dispatch hl.dsp.workspace.toggle_special('name:scroll_S')"));
+
+    // Reestablish focus since it is finnicky in hyprtester - Harmless and does not move view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // If the scrolling view did not move, the x value for `at:` of the currently focused windows, class:c, must be <0 (must be left of the viewport)
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourSpecialToSpecialWorkspaceChange) {
+
+    /*
+    We also test switching between 2 special workspaces
+    This follows the same idea and dependencies as the test testScrollingViewBehaviourSpecialWorkspaceChange()
+    */
+
+    NLog::green("Testing scrolling view behaviour: changing to a special scrolling workspace from another special workspace should not move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test - this is to avoid unwanted view shifts when setting up the windows
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    // We'll test in this special workspace
+    OK(getFromSocket("/dispatch hl.dsp.workspace.toggle_special('name:scroll_S')"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // does not move view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // change to special workspace "scroll_F", then back to special "scroll_S" workspace again
+    OK(getFromSocket("/dispatch hl.dsp.workspace.toggle_special('name:scroll_F')"));
+    OK(getFromSocket("/dispatch hl.dsp.workspace.toggle_special('name:scroll_S')"));
+
+    // Reestablish focus since it is finnicky in hyprtester - Harmless and does not move view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    // If the scrolling view did not move, the x value for `at:` of the currently focused windows, class:c, must be <0 (must be left of the viewport)
+
+    const std::string currentWindowPosSPECIAL  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosSPECIALX = currentWindowPosSPECIAL.substr(0, currentWindowPosSPECIAL.find(','));
+
+    if (std::stoi(currentWindowPosSPECIALX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosSPECIALX);
+}
+
+TEST_CASE(testScrollingViewBehaviourCloseWindowInGroup) {
+
+    /*
+     When you change close a window inside a group (NOT destroying the group!), it should not cause scrolling view to shift to pull that group into view, regardless of follow_focus
+     -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: closing a window in a group (> 1 window in group) should not move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+
+    // this is to avoid unwanted view shifts when setting up the windows
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+    // We need 2 windows to be grouped, the third one not.
+    OK(getFromSocket("/eval hl.config({group = {auto_group = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle({window = 'class:a'})"));
+
+    SPAWN_KITTY("b");
+
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ into_group = 'left' })"));
+
+    SPAWN_KITTY("c");
+
+    // switch focus to group. This will not move view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})"));
+
+    // kill window class:b. we expect that this should cause not difference in the position of the group
+    OK(getFromSocket("/dispatch hl.dsp.window.kill({window = 'class:b'})"));
+    Tests::waitUntilWindowsN(2);
+
+    // If the scrolling view did not move, the x value for `at:` of the currently focused windows, class:a, must be <0 (must be left of the viewport)
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourMoveWindowIntoGroupFollowFocusFalse) {
+
+    /*
+     when a window is moved inside a group, scrolling view should not move to fit that group when follow_focus = false
+     -----------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: moving a window into a group SHOULD NOT move scrolling view if follow_focus = 0");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+    OK(getFromSocket("/eval hl.config({group = {auto_group = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle({window = 'class:a'})"));
+
+    SPAWN_KITTY("b");
+    SPAWN_KITTY("c");
+
+    // focus class:b
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})"));
+
+    // move it into the group where class:a is
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ into_group = 'left' })"));
+
+    // the focus now should still be on class:b window. If the view did not move, its x coordinate for its `at:` value should be <0
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'b' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourMoveWindowInGroupFollowFocusTrue) {
+
+    /*
+    when a window is moved inside a group, scrolling view should move to fit that group when follow_focus = 1
+    ------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: moving a window in a group SHOULD move scrolling view if follow_focus = 1");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+    OK(getFromSocket("/eval hl.config({group = {auto_group = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle({window = 'class:a'})"));
+
+    SPAWN_KITTY("b");
+    SPAWN_KITTY("c");
+
+    // focus class:b
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})"));
+
+    // move it into the group where class:a is
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ into_group = 'left' })"));
+
+    // the focus now should still be on class:b window. If the scrolling view did move, its x coordinate for its `at:` value should be >= 0
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) < 0)
+        FAIL_TEST("window of class 'b' does not have x coordinates >= 0 for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourNewLayer) {
+
+    /*
+     Starting a program on a different layer shouldn't cause scrolling view to move to fit the window that was focused when this program was started, regardless of follow_focus
+     ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: new program occupying another layer shouldn't move scrolling view");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test - this is to avoid unwanted view shifts when setting up the windows
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // focus class:a - this does not move scrolling view when follow_focus = 0
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})"));
+
+    NLog::yellow("Spawning kitty layer");
+    SPAWN_LAYER_KITTY("myLayer");
+
+    // If the scrolling view did not move, class:a window's x coordinate for its `at:` value should be <0
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourMoveFocusFollowFocusFalse) {
+
+    /*
+     dispatching movefocus when follow_focus = false should not cause scrolling view to move
+     ---------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: movefocus does not cause scrolling view to move if follow_focus = false");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // we expect that after dispatching this, scrolling view must not have moved
+    OK(getFromSocket("/dispatch hl.dsp.focus({direction = 'left'})"));
+
+    // If the scrolling view did not move, class:a window's x coordinate for its `at:` value should be < 0.
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourMoveFocusFollowFocusTrue) {
+
+    /*
+     dispatching movefocus when follow_focus = 1 should cause scrolling view to move
+     ----------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: movefocus does cause scrolling view to move if follow_focus = 1");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // we expect that after dispatching this, scrolling view must have moved since follow_focus = 1
+    OK(getFromSocket("/dispatch hl.dsp.focus({direction = 'left'})"));
+
+    // If the scrolling view moved, class:a window's x coordinate for its `at:` value should be >= 0
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) < 0)
+        FAIL_TEST("window of class 'a' does not have x coordinates >= 0 for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourMoveFocusInGroupFollowFocusFalse) {
+
+    /*
+     When movefocus is dispatched within groups to move focus from one group member to another, scrolling view must not move if follow_focus = false
+     -----------------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: movefocus within groups does not cause scrolling view to move if follow_focus = false");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+
+    // necessary to make sure movefocus first cycles through tabs in a group
+    OK(getFromSocket("/eval hl.config({ binds = {movefocus_cycles_groupfirst = true}})"));
+    OK(getFromSocket("/eval hl.config({group = {auto_group = false}})"));
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle({window = 'class:a'})"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+    SPAWN_KITTY("c");
+
+    // focus class:b. This does not cause scrolling view to move when follow_focus = false
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})"));
+
+    // move it into the group where class:a is. This does not cause scrolling view to move when follow_focus = false
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ into_group = 'left' })"));
+
+    // we move from one window of a group to another (from class:b to class:a) via movefocus
+    OK(getFromSocket("/dispatch hl.dsp.focus({direction = 'left'})"));
+
+    // the focus now should still be on class:a window. If the scrolling view did not move, its x coordinate for its `at:` value should be < 0
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourMoveFocusInGroupFollowFocusTrue) {
+
+    /*
+     When movefocus is dispatched within groups to move focus from one group member to another, scrolling view must move if follow_focus = 1
+     ------------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    NLog::green("Testing scrolling view behaviour: movefocus within groups does causes scrolling view to move if follow_focus = 1");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+
+    // necessary to make sure movefocus first cycles through tabs in a group
+    OK(getFromSocket("/eval hl.config({ binds = {movefocus_cycles_groupfirst = true}})"));
+    OK(getFromSocket("/eval hl.config({group = {auto_group = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.group.toggle({window = 'class:a'})"));
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+    SPAWN_KITTY("c");
+
+    // focus class:b. This does not cause scrolling view to move when follow_focus = false
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})"));
+
+    // move it into the group where class:a is. This does not cause scrolling view to move when follow_focus = false
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ into_group = 'left' })"));
+
+    // we move from one window of a group to another (from class:b to class:a) via movefocus
+    OK(getFromSocket("/dispatch hl.dsp.focus({direction = 'left'})"));
+
+    // the focus now should still be on class:a window. If the scrolling view moved, its x coordinate for its `at:` value should be >= 0
+
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) < 0)
+        FAIL_TEST("window of class 'a' does not have x coordinates >= 0 for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollingViewBehaviourScheduledPropRefresh) {
+
+    /*
+    Test that hl.exec_scheduled_prop_refresh_immediately() should immediately execute prop refresh. This is tested via inhibiting scrollin during helper functs dispatch; if it works, the viewport
+    should not move when a new workspace rule is created. If it doesn't, dispatch will miss because the refresh will be executed as another event
+    --------------------------------------------------------------------------------------------------------------------------------------
+    */
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // since follow_focus = false, viewport does not move
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    // setting a workspace rule queues a doLater() call in the Event Loop Manager
+    OK(getFromSocket("/eval hl.dispatch(hl.dsp.layout('inhibit_scroll true')); hl.workspace_rule({workspace = hl.get_active_workspace().addressable_name,gaps_in = 0}); "
+                     "hl.exec_scheduled_prop_refresh_immediately(); hl.dispatch(hl.dsp.layout('inhibit_scroll false'));"));
+
+    // Check that the workspace rule is set
+    ASSERT_CONTAINS(getFromSocket("/workspacerules"), "gapsIn: 0 0 0 0");
+
+    // The viewport must not have moved: left corner cords of window should be < 0
+    const std::string currentWindowPos  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const std::string currentWindowPosX = currentWindowPos.substr(0, currentWindowPos.find(','));
+
+    if (std::stoi(currentWindowPosX) > 0)
+        FAIL_TEST("window of class 'a' does not have negative x coordinates for its position: {}", currentWindowPosX);
+}
+
+TEST_CASE(testScrollInhibitor) {
+
+    /*
+        scroll inhibitor prevent the scrolling view from moving
+        ---------------------------------------------------------------------------------
+    */
+
+    // set current layout to scrolling
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    NLog::green("Testing inhibit_scroll");
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+    // Currently, we are focused on window class:b
+
+    // enable scroll inhibitor
+    OK(getFromSocket("/dispatch hl.dsp.layout('inhibit_scroll 1')"));
+
+    // dispatching `layoutmsg focus l` will move scrolling view regardless of follow_focus if inhibitor is not working
+    OK(getFromSocket("/dispatch hl.dsp.layout('focus l')"));
+
+    // the focus must have moved regardless of the state of the inhibitor (it only prevents the scrolling view from moving). We are now focused on window class:a
+
+    // if the view does not move, we expect the x coordinate of the window of class "a" to be negative, as it would be to the left of the viewport
+    const std::string posA  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+    const int         posAx = std::stoi(posA.substr(0, posA.find(',')));
+
+    if (posAx >= 0)
+        FAIL_TEST("Expected the x coordinate of window of class \"a\" to be < 0, got {}.", posAx);
+}
+
+TEST_CASE(layoutmsg_fit_into_view) {
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // ensure variables are correctly set for the test
+    OK(getFromSocket("/eval hl.config({scrolling = {follow_focus = false}})"));
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("b");
+
+    // class:a column is now off screen to the left
+
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:a' })"));
+
+    // fit class:a window into view
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('fit_into_view')"));
+
+    // If it worked, class:a window must now have at: ~= 0,0 -- 0,0 + gaps, border = 27,22.
+
+    ASSERT_CONTAINS(Tests::getAttribute(getFromSocket("/activewindow"), "at"), "27,22");
+}
+
+TEST_CASE(layoutRuleExpand) {
+    // set current layout to scrolling
+    OK(getFromSocket(
+        "r/eval hl.config({ general = { layout = 'scrolling', gaps_in = 0, border_size = 0, gaps_out = 0 }, scrolling = {column_width = 0.5, fullscreen_on_one_column = true} })"));
+
+    SPAWN_KITTY("a");
+
+    const std::string sizeSingle  = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+    const int         sizeSingleX = std::stoi(sizeSingle.substr(0, sizeSingle.find(',')));
+
+    for (auto const& win : {"b", "c"}) {
+        SPAWN_KITTY(win);
+    }
+
+    OK(getFromSocket("dispatch hl.dsp.window.resize({x = 100, y = 500, window = 'class:a'})"));
+    OK(getFromSocket("dispatch hl.dsp.window.resize({x = 100, y = 500, window = 'class:c'})"));
+
+    OK(getFromSocket("dispatch hl.dsp.focus({window = 'class:b'})"));
+
+    // const std::string sizeBefore  = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+    // const int         sizeBeforeX = std::stoi(sizeBefore.substr(0, sizeBefore.find(',')));
+
+    OK(getFromSocket("/dispatch hl.dsp.layout('fit expand')"));
+
+    const std::string sizeAfter  = Tests::getAttribute(getFromSocket("/activewindow"), "size");
+    const int         sizeAfterX = std::stoi(sizeAfter.substr(0, sizeAfter.find(',')));
+
+    if (sizeAfterX < sizeSingleX - 200)
+        FAIL_TEST("Expected the width of window of class \"b\" to take up all remaining space {}, got {}.", sizeSingleX - 200, sizeAfterX);
+}
+TEST_CASE(scrollTapeOnClickOutOfWindow) {
+    /*
+     * Do not move tape on click in the direction, but out of the window
+     */
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+    OK(getFromSocket("r/eval hl.config({ general = { gaps_out = 100 } })"));
+    OK(getFromSocket("r/eval hl.config({ scrolling = { follow_min_visible = 1.0, column_width = 0.6 } })"));
+    OK(getFromSocket("r/eval hl.config({ input = { follow_mouse = 1 } })"));
+
+    SPAWN_KITTY("A"); // A should be at x negative
+    SPAWN_KITTY("B");
+
+    OK(getFromSocket("/eval hl.plugin.test.window_soft_focus('A')"));     // soft focus A
+    OK(getFromSocket("/dispatch hl.dsp.cursor.move({ x = 0, y = 20 })")); // move cursor to the gap zone
+
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 1)"));
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 0)"));
+
+    const auto active = getFromSocket("/activewindow");
+    ASSERT_CONTAINS(active, "class: A");
+
+    const auto posA  = Tests::getAttribute(active, "at");
+    const auto posAx = std::stoi(posA.substr(0, posA.find(',')));
+
+    if (posAx >= 0)
+        FAIL_TEST("Expected the x coordinate of window of class \"A\" to be < 0, got {}.", posAx);
+}
+
+TEST_CASE(scrollTapeWithMouseClick) {
+
+    // follow_focus = 1 vs 2 - 1: click is special. 2: click is not special
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // expect that click moves
+    OK(getFromSocket("r/eval hl.config({ scrolling = { follow_focus = 1 } })"));
+
+    const auto setupEnvironment = [&]() {
+        SPAWN_KITTY("A");
+        OK(getFromSocket("r/dispatch hl.dsp.layout('colresize 0.8')"));
+        SPAWN_KITTY("B");
+        OK(getFromSocket("r/dispatch hl.dsp.layout('focus l')"));
+        // [A (0.8) | (0.2) ] B (0.3)
+    };
+
+    setupEnvironment();
+
+    {
+        const auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: A");
+        EXPECT_CONTAINS(str, "at: 27,22");
+    }
+
+    // Focus moved, viewport didn't
+    OK(getFromSocket("r/dispatch hl.dsp.cursor.move({ x = 1600, y = 540 })"));
+    // cuz github CI is slow
+    OK(getFromSocket("/eval hl.plugin.test.window_soft_focus('B')"));
+    {
+        const auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: B");
+        EXPECT_CONTAINS(str, "at: 1531,22");
+    }
+
+    // full click
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 1)"));
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 0)"));
+    // expect that viewport moved
+    {
+        const auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: B");
+        EXPECT_CONTAINS(str, "at: 967,22");
+    }
+
+    Tests::killAllWindows();
+    Tests::waitUntilWindowsN(0);
+
+    // expect that click moves
+    OK(getFromSocket("r/eval hl.config({ scrolling = { follow_focus = 2 } })"));
+    setupEnvironment();
+
+    {
+        const auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: A");
+        EXPECT_CONTAINS(str, "at: 27,22");
+    }
+
+    // Focus moved, viewport didn't
+    OK(getFromSocket("r/dispatch hl.dsp.cursor.move({ x = 1600, y = 540 })"));
+    // cuz github CI is slow
+    OK(getFromSocket("/eval hl.plugin.test.window_soft_focus('B')"));
+    {
+        const auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: B");
+        EXPECT_CONTAINS(str, "at: 1531,22");
+    }
+
+    // full click
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 1)"));
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 0)"));
+    // expect that viewport didn't move
+    {
+        const auto str = getFromSocket("/activewindow");
+        EXPECT_CONTAINS(str, "class: B");
+        EXPECT_CONTAINS(str, "at: 1531,22");
+    }
+}
+
+TEST_CASE(followFocusBoolToIntConfChangeRegressionTest) {
+
+    // With #16641, follow_focus has changed from bool to int. This isn't a breaking change because = true is interpreted as = 1 which keeps the same behaviour. This test is to confirm that.
+
+    // follow_focus = 1
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    // expect that click moves
+    OK(getFromSocket("r/eval hl.config({ scrolling = { follow_focus = 1 } })"));
+
+    const auto setupEnvironment = [&]() {
+        SPAWN_KITTY("A");
+        OK(getFromSocket("r/dispatch hl.dsp.layout('colresize 0.8')"));
+        SPAWN_KITTY("B");
+        OK(getFromSocket("r/dispatch hl.dsp.layout('focus l')"));
+        // [A (0.8) | (0.2) ] B (0.3)
+    };
+
+    const auto testSuite = [&]() {
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: A");
+            EXPECT_CONTAINS(str, "at: 27,22");
+        }
+
+        // Focus moved, viewport didn't
+        OK(getFromSocket("r/dispatch hl.dsp.cursor.move({ x = 1600, y = 540 })"));
+        // cuz github CI is slow
+        OK(getFromSocket("/eval hl.plugin.test.window_soft_focus('B')"));
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: B");
+            EXPECT_CONTAINS(str, "at: 1531,22");
+        }
+
+        // full click
+        OK(getFromSocket("/eval hl.plugin.test.click(272, 1)"));
+        OK(getFromSocket("/eval hl.plugin.test.click(272, 0)"));
+        // expect that viewport moved
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: B");
+            EXPECT_CONTAINS(str, "at: 967,22");
+        }
+    };
+
+    setupEnvironment();
+    testSuite();
+
+    Tests::killAllWindows();
+    Tests::waitUntilWindowsN(0);
+
+    // Expect the exact same behaviour with follow_focus = true
+    OK(getFromSocket("r/eval hl.config({ scrolling = { follow_focus = true } })"));
+    setupEnvironment();
+    testSuite();
+}
+
+TEST_CASE(scrollTapeWithMouseClickUpDown) {
+
+    // follow_focus = 1, follow_mouse = 2 --> test that mouse-down moves the view but does NOT move the viewport. mouse-up moves the viewport (only full click moves the viewport)
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+    OK(getFromSocket("r/eval hl.config({ scrolling = { follow_focus = 1 } })"));
+    OK(getFromSocket("r/eval hl.config({ input = { follow_mouse = 2 } })"));
+
+    const auto ExpectViewportMoved = [&](bool moved) {
+        // if the view does not move, we expect the x coordinate of the window of class "a" to be negative, as it would be to the left of the viewport
+        const std::string posA  = Tests::getAttribute(getFromSocket("/activewindow"), "at");
+        const int         posAx = std::stoi(posA.substr(0, posA.find(',')));
+
+        if (moved ? (posAx < 0) : (posAx >= 0))
+            FAIL_TEST("Expected the x coordinate of window of class \"a\" to be {} 0, got {}.", moved ? ">=" : "<", posAx);
+    };
+
+    SPAWN_KITTY("wee");
+    OK(getFromSocket("r/dispatch hl.dsp.layout('colresize 0.8')"));
+
+    SPAWN_KITTY("woo");
+
+    // move it over wee
+    OK(getFromSocket("r/dispatch hl.dsp.cursor.move({ x = 100, y = 100 })"));
+
+    {
+        // expect focus to not to have moved
+        ASSERT_CONTAINS(getFromSocket("/activewindow"), "class: woo");
+
+        // expect viewport to not have moved
+        // still focused onver woo, so this should be >=0
+        ExpectViewportMoved(true);
+    }
+    OK(getFromSocket("r/dispatch hl.dsp.cursor.move({ x = 100, y = 100 })"));
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 1)"));
+
+    {
+        // expect focus to be moved
+        ASSERT_CONTAINS(getFromSocket("/activewindow"), "class: wee");
+
+        // expect viewport to not have moved
+        // focused over wee now and it should be hidden in the left still
+        ExpectViewportMoved(false);
+    }
+
+    OK(getFromSocket("r/dispatch hl.dsp.cursor.move({ x = 100, y = 100 })"));
+    OK(getFromSocket("/eval hl.plugin.test.click(272, 0)"));
+
+    {
+        // expect focus to be moved
+        ASSERT_CONTAINS(getFromSocket("/activewindow"), "class: wee");
+
+        // expect viewport to have moved
+        // focused over wee now and since wee is now supposed to have moved into view, it should no longer be hidden on the left. Combined with prev test block, this proves it moved
+        ExpectViewportMoved(true);
+    }
+}
+
+TEST_CASE(properFocusBehvaior) {
+    // test that focus history does not fuck with proper workspace preference
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    if (getFromSocket("/monitors all").contains("HEADLESS-3"))
+        OK(getFromSocket("/output remove HEADLESS-3"));
+
+    OK(getFromSocket("/output create headless HEADLESS-3"));
+    CScopeGuard x([&] {
+        if (getFromSocket("/monitors all").contains("HEADLESS-3"))
+            OK(getFromSocket("/output remove HEADLESS-3"));
+    });
+
+    auto        test = [&] {
+        OK(getFromSocket("/dispatch hl.dsp.focus({ monitor = 'HEADLESS-2' })"));
+
+        SPAWN_KITTY("a");
+        Tests::waitUntilWindowsN(1);
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ monitor = 'HEADLESS-3' })"));
+
+        SPAWN_KITTY("b");
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:b' })"));
+        SPAWN_KITTY("c");
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:c' })"));
+        SPAWN_KITTY("d");
+        OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:d' })"));
+
+        Tests::waitUntilWindowsN(4);
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: d");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: c");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: b");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: a");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: b");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: c");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'right' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: d");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: c");
+        }
+
+        // now we have a situation of:
+        // HEADLESS-2: a
+        // HEADLESS-3: b | c d | -> b is offscreen
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ monitor = 'HEADLESS-2' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: a");
+        }
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ monitor = 'HEADLESS-3' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: c");
+        }
+
+        // now we have a history of a being more recent than b, but if we move left, we should still focus b.
+
+        OK(getFromSocket("/dispatch hl.dsp.focus({ direction = 'left' })"));
+
+        {
+            const auto str = getFromSocket("/activewindow");
+            EXPECT_CONTAINS(str, "class: b");
+        }
+
+        Tests::killAllWindows();
+        Tests::waitUntilWindowsN(0);
+    };
+
+    OK(getFromSocket("/eval hl.config({ binds = { focus_preferred_method = 0 } })")); // set history mode, default
+    test();
+
+    OK(getFromSocket("/eval hl.config({ binds = { focus_preferred_method = 1 } })")); // set length mode
+    test();
+}
+
+TEST_CASE(getSetOffsetLuaHelpers) {
+
+    ASSERT_CONTAINS(getFromSocket("/repl hl.set_scrolling_offset(200.0)"), "false");
+    ASSERT_CONTAINS(getFromSocket("/repl hl.get_scrolling_offset()"), "nil");
+
+    OK(getFromSocket("r/eval hl.config({ general = { layout = 'scrolling' } })"));
+
+    ASSERT_CONTAINS(getFromSocket("/repl hl.set_scrolling_offset(200.0)"), "true");
+    ASSERT_CONTAINS(getFromSocket("/repl hl.get_scrolling_offset()"), "200.0");
+}
+
+TEST_CASE(scrollMoveWindowToOtherMonitorRetilesSource) {
+    /*
+     Moving a window from monitor A to monitor B with a directional move (window_direction_monitor_fallback)
+     must re-tile the scrolling workspace it left on A.
+
+     The assertions are on the window that STAYS on A: once its neighbour is gone, its geometry must be the
+     same as it had as the first of two columns (viewport at the start of the tape).
+
+     The reference geometry is deliberately taken while TWO columns are open. A lone column is placed by the
+     same viewport code this test exercises (CScrollTapeController::calculateCameraOffset), so a reference
+     taken from a lone column would shift together with it.
+
+     A = HEADLESS-2 (left), B = HEADLESS-3 (created here, placed to the right of A by `auto-right`)
+    */
+
+    static constexpr const char* MON_A = "HEADLESS-2";
+    static constexpr const char* MON_B = "HEADLESS-3";
+
+    OK(getFromSocket(
+        "r/eval hl.config({ general = { layout = 'scrolling' }, scrolling = { fullscreen_on_one_column = false }, binds = { window_direction_monitor_fallback = true } })"));
+
+    if (getFromSocket("/monitors all").contains(MON_B))
+        OK(getFromSocket(std::format("/output remove {}", MON_B)));
+
+    OK(getFromSocket(std::format("/output create headless {}", MON_B)));
+    CScopeGuard guard([&] {
+        if (getFromSocket("/monitors all").contains(MON_B))
+            OK(getFromSocket(std::format("/output remove {}", MON_B)));
+    });
+
+    const auto  clientAttr = [&](const std::string& cls, const std::string& attr) { return Tests::getAttribute(getClientBlock(getFromSocket("/clients"), cls), attr); };
+
+    // a window is on a monitor if its `monitor:` ID in /clients is the ID /monitors lists for that monitor ("Monitor <name> (ID <id>):")
+    const auto isOnMonitor = [&](const std::string& cls, const std::string& monitor) -> bool {
+        return getFromSocket("/monitors").contains(std::format("Monitor {} (ID {}):", monitor, clientAttr(cls, "monitor")));
+    };
+
+    OK(getFromSocket(std::format("/dispatch hl.dsp.focus({{ monitor = '{}' }})", MON_A)));
+
+    // two columns on A
+    SPAWN_KITTY("col_moved");
+    ASSERT(isOnMonitor("col_moved", MON_A), true);
+
+    SPAWN_KITTY("col_stays");
+    ASSERT(isOnMonitor("col_stays", MON_A), true);
+
+    // the first column is the leftmost one on A
+    OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:col_moved' })"));
+
+    const auto REF_AT   = clientAttr("col_moved", "at");
+    const auto REF_SIZE = clientAttr("col_moved", "size");
+
+    // 1: into the column of the second window
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ direction = 'right' })"));
+    // 2: out of that column, into a new one on its right
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ direction = 'right' })"));
+    // 3: nothing further right on A, so the monitor fallback moves it to B
+    OK(getFromSocket("/dispatch hl.dsp.window.move({ direction = 'right' })"));
+
+    ASSERT(isOnMonitor("col_moved", MON_B), true);
+
+    // A must have re-tiled around the remaining window
+    ASSERT(isOnMonitor("col_stays", MON_A), true);
+    ASSERT(clientAttr("col_stays", "at"), REF_AT);
+    ASSERT(clientAttr("col_stays", "size"), REF_SIZE);
+}

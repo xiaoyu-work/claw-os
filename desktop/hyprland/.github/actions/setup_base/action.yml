@@ -1,0 +1,127 @@
+name: "Setup base"
+
+inputs:
+  INSTALL_XORG_PKGS:
+    description: 'Install xorg dependencies'
+    required: false
+    default: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get required pacman pkgs
+      shell: bash
+      run: |
+        sed -i 's/SigLevel    = Required DatabaseOptional/SigLevel    = Optional TrustAll/' /etc/pacman.conf
+        pacman --noconfirm --noprogressbar -Syyu
+        pacman --noconfirm --noprogressbar -Sy \
+          base-devel \
+          cairo \
+          clang \
+          cmake \
+          git \
+          glaze \
+          glm \
+          glslang \
+          go \
+          gtest \
+          hyprcursor \
+          hyprland-protocols \
+          jq \
+          libc++ \
+          libcanberra \
+          libdisplay-info \
+          libdrm \
+          libei \
+          libepoxy \
+          libfontenc \
+          libglvnd \
+          libheif \
+          libinput \
+          libjxl \
+          libliftoff \
+          libspng \
+          libwebp \
+          libxcursor \
+          libxcvt \
+          libxfont2 \
+          libxkbcommon \
+          libxkbfile \
+          lld \
+          lua \
+          meson \
+          muparser \
+          ninja \
+          pango \
+          pixman \
+          pkgconf \
+          pugixml \
+          scdoc \
+          seatd \
+          systemd \
+          tomlplusplus \
+          wayland \
+          wayland-protocols \
+          xcb-util-errors \
+          xcb-util-renderutil \
+          xcb-util-wm \
+          xcb-util \
+          xcb-util-image \
+          libzip \
+          librsvg \
+          re2
+
+    - name: Get hyprwayland-scanner-git
+      shell: bash
+      run: |
+        git clone https://github.com/hyprwm/hyprwayland-scanner --recursive
+        cd hyprwayland-scanner
+        cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -S . -B ./build
+        cmake --build ./build --config Release --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
+        cmake --install build
+
+    - name: Get hyprwire-git
+      shell: bash
+      run: |
+        git clone https://github.com/hyprwm/hyprwire --recursive
+        cd hyprwire
+        cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -S . -B ./build
+        cmake --build ./build --config Release --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
+        cmake --install build
+
+    - name: Get hyprutils-git
+      shell: bash
+      run: |
+        git clone https://github.com/hyprwm/hyprutils && cd hyprutils && cmake -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -B build && cmake --build build --target hyprutils && cmake --install build
+
+    - name: Get hyprgraphics-git
+      shell: bash
+      run: |
+        git clone https://github.com/hyprwm/hyprgraphics && cd hyprgraphics && cmake -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -B build && cmake --build build --target hyprgraphics && cmake --install build
+
+    - name: Get aquamarine-git
+      shell: bash
+      run: |
+        git clone https://github.com/hyprwm/aquamarine && cd aquamarine && cmake -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -B build && cmake --build build --target aquamarine && cmake --install build
+
+    - name: Get Xorg pacman pkgs
+      shell: bash
+      if: inputs.INSTALL_XORG_PKGS == 'true'
+      run: |
+        pacman --noconfirm --noprogressbar -Sy \
+          xorg-fonts-encodings \
+          xorg-server-common \
+          xorg-setxkbmap \
+          xorg-xkbcomp \
+          xorg-xwayland
+
+    - name: Checkout Hyprland
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    # Fix an issue with actions/checkout where the checkout repo is not mark as safe
+    - name: Mark directory as safe for git
+      shell: bash
+      run: |
+        git config --global --add safe.directory /__w/Hyprland/Hyprland

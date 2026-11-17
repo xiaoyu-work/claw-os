@@ -1,5 +1,12 @@
 # claw-os desktop
 
+The replacement desktop source baseline is
+[Hyprland](hyprland-claw/MODULE.md) with a Quickshell/Caelestia frontend owned
+by `clawos-app`. The complete compositor and its pinned subproject sources
+are present under `hyprland/`. Source import does not switch the installed
+session: the existing packaged COSMIC stack below remains active until the
+Root display/GUI authority and native integration are migrated and verified.
+
 The claw-os desktop environment. Source code is **vendored** (forked from
 upstream COSMIC by System76), with directory names normalized to remove the
 upstream `cosmic-` prefix. Each component still ships its original `LICENSE`

@@ -1,0 +1,49 @@
+#include "TexPassElement.hpp"
+#include "../../helpers/MotionBlur.hpp"
+#include "../Renderer.hpp"
+
+CBox SMotionBlurData::extents() const {
+    if (!enabled)
+        return current;
+
+    return MotionBlur::extents(previous, current);
+}
+
+CTexPassElement::CTexPassElement(const SRenderData& data) : m_data(data) {
+    ;
+}
+
+CTexPassElement::CTexPassElement(CTexPassElement::SRenderData&& data) : m_data(std::move(data)) {
+    ;
+}
+
+bool CTexPassElement::needsLiveBlur(Render::CRenderContext& ctx) {
+    return usesLiveBlur(ctx);
+}
+
+bool CTexPassElement::needsPrecomputeBlur(Render::CRenderContext& ctx) {
+    return m_data.blur && !usesLiveBlur(ctx);
+}
+
+bool CTexPassElement::usesLiveBlur(Render::CRenderContext& ctx) {
+    // Pass planning caches its results; an element may be queried with a different context.
+    if (m_data.liveBlurOverride.has_value())
+        return m_data.blur && *m_data.liveBlurOverride;
+
+    return m_data.blur && (m_data.blockBlurOptimization.value_or(false) || !g_pHyprRenderer->shouldUseNewBlurOptimizations(ctx, m_data.currentLS.lock(), m_data.blurOwner.lock()));
+}
+
+std::optional<CBox> CTexPassElement::boundingBox(Render::CRenderContext& ctx) {
+    if (m_data.motionBlur.enabled)
+        return m_data.motionBlur.extents().copy().scale(1.F / ctx.m_data.pMonitor->m_scale).round();
+
+    return m_data.box.copy().scale(1.F / ctx.m_data.pMonitor->m_scale).round();
+}
+
+CRegion CTexPassElement::opaqueRegion(Render::CRenderContext& ctx) {
+    return {}; // TODO:
+}
+
+void CTexPassElement::discard(Render::CRenderContext& ctx) {
+    ;
+}

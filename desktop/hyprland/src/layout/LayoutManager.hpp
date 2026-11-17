@@ -1,0 +1,111 @@
+#pragma once
+
+#include "../helpers/memory/Memory.hpp"
+#include "../helpers/math/Math.hpp"
+#include "../managers/input/InputManager.hpp"
+#include "../config/shared/ConfigErrors.hpp"
+
+#include "supplementary/DragController.hpp"
+
+#include <optional>
+#include <expected>
+
+namespace Layout {
+    class ITarget;
+    class CSpace;
+
+    enum eRectCorner : uint8_t {
+        CORNER_NONE        = 0,
+        CORNER_TOP         = (1 << 0),
+        CORNER_BOTTOM      = (1 << 1),
+        CORNER_LEFT        = (1 << 2),
+        CORNER_RIGHT       = (1 << 3),
+        CORNER_TOPLEFT     = CORNER_TOP | CORNER_LEFT,
+        CORNER_TOPRIGHT    = CORNER_TOP | CORNER_RIGHT,
+        CORNER_BOTTOMRIGHT = CORNER_BOTTOM | CORNER_RIGHT,
+        CORNER_BOTTOMLEFT  = CORNER_BOTTOM | CORNER_LEFT,
+    };
+
+    inline bool edgeTop(int corner) {
+        return corner & CORNER_TOP;
+    }
+
+    inline bool edgeBottom(int corner) {
+        return corner & CORNER_BOTTOM;
+    }
+
+    inline bool edgeLeft(int corner) {
+        return corner & CORNER_LEFT;
+    }
+
+    inline bool edgeRight(int corner) {
+        return corner & CORNER_RIGHT;
+    }
+
+    inline eRectCorner cornerFromBox(const CBox& box, const Vector2D& pos) {
+        const auto CENTER = box.middle();
+
+        if (pos.x < CENTER.x)
+            return pos.y < CENTER.y ? CORNER_TOPLEFT : CORNER_BOTTOMLEFT;
+        return pos.y < CENTER.y ? CORNER_TOPRIGHT : CORNER_BOTTOMRIGHT;
+    }
+
+    enum eSnapEdge : uint8_t {
+        SNAP_INVALID = 0,
+        SNAP_UP      = (1 << 0),
+        SNAP_DOWN    = (1 << 1),
+        SNAP_LEFT    = (1 << 2),
+        SNAP_RIGHT   = (1 << 3),
+    };
+
+    class CLayoutManager {
+      public:
+        CLayoutManager();
+        ~CLayoutManager() = default;
+
+        enum eRecalculateMonitorReason : uint8_t {
+            RECALCULATE_MONITOR_REASON_UNKNOWN, // when the recalculate monitor reason is unknown or not important to preserve
+            RECALCULATE_MONITOR_REASON_WORKSPACE_CHANGE,
+            RECALCULATE_MONITOR_REASON_TOGGLE_SPECIAL_WORKSPACE,
+            RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN,
+        };
+
+        void                    newTarget(SP<ITarget> target, SP<CSpace> space);
+        void                    removeTarget(SP<ITarget> target);
+
+        void                    changeFloatingMode(SP<ITarget> target);
+
+        void                    beginDragTarget(SP<ITarget> target, eMouseBindMode mode, std::optional<eRectCorner> forcedEdge = std::nullopt, bool exclusiveDeviceGrab = false);
+        void                    moveMouse(const Vector2D& mousePos);
+        void                    resizeTarget(const Vector2D& Δ, SP<ITarget> target, eRectCorner corner = CORNER_NONE);
+        void                    moveTarget(const Vector2D& Δ, SP<ITarget> target);
+        void                    setTargetGeom(const CBox& box, SP<ITarget> target); // floats only
+        bool                    endDragTarget();
+
+        Config::ErrorResult     layoutMsg(const std::string_view& sv);
+
+        void                    switchTargets(SP<ITarget> a, SP<ITarget> b, bool preserveFocus = true);
+
+        void                    moveInDirection(SP<ITarget> target, const std::string& direction, bool silent = false);
+
+        SP<ITarget>             getNextCandidate(SP<CSpace> space, SP<ITarget> from);
+
+        bool                    isReachable(SP<ITarget> target);
+
+        void                    bringTargetToTop(SP<ITarget> target);
+
+        std::optional<Vector2D> predictSizeForNewTiledTarget();
+
+        void                    performSnap(Vector2D& sourcePos, Vector2D& sourceSize, SP<ITarget> target, eMouseBindMode mode, int corner, const Vector2D& beginSize);
+
+        void                    invalidateMonitorGeometries(PHLMONITOR);
+        void                    recalculateMonitor(PHLMONITOR, eRecalculateMonitorReason reason = RECALCULATE_MONITOR_REASON_UNKNOWN);
+
+        const UP<Supplementary::CDragStateController>& dragController();
+
+      private:
+        UP<Supplementary::CDragStateController> m_dragStateController = makeUnique<Supplementary::CDragStateController>();
+    };
+}
+
+inline UP<Layout::CLayoutManager> g_layoutManager;

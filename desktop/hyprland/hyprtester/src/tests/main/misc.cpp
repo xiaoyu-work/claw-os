@@ -1,0 +1,166 @@
+#include "tests.hpp"
+#include "../../shared.hpp"
+#include "../../hyprctlCompat.hpp"
+#include <hyprutils/os/Process.hpp>
+#include <hyprutils/memory/WeakPtr.hpp>
+#include "../shared.hpp"
+
+using namespace Hyprutils::OS;
+using namespace Hyprutils::Memory;
+
+#define UP CUniquePointer
+#define SP CSharedPointer
+
+// Uncomment once test vm can run hyprland-dialog
+// static void testAnrDialogs() {
+//     NLog::log("{}Testing ANR dialogs", Colors::YELLOW);
+//
+//     OK(getFromSocket("/eval hl.config({ misc = { enable_anr_dialog = true } })"));
+//     OK(getFromSocket("/eval hl.config({ misc = { anr_missed_pings = 1 } })"));
+//
+//     NLog::log("{}ANR dialog: regular workspaces", Colors::YELLOW);
+//     {
+//         OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '2' })"));
+//
+//         auto kitty = Tests::spawnKitty("bad_kitty");
+//
+//         if (!kitty) {
+//             ret = 1;
+//             return;
+//         }
+//
+//         {
+//             auto str = getFromSocket("/activewindow");
+//             ASSERT_CONTAINS(str, "workspace: 2");
+//         }
+//
+//         OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+//
+//         ::kill(kitty->pid(), SIGSTOP);
+//         Tests::waitUntilWindowsN(2);
+//
+//         {
+//             auto str = getFromSocket("/activeworkspace");
+//             ASSERT_CONTAINS(str, "windows: 0");
+//         }
+//
+//         {
+//             OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:hyprland-dialog' })"))
+//             auto str = getFromSocket("/activewindow");
+//             ASSERT_CONTAINS(str, "workspace: 2");
+//         }
+//     }
+//
+//     Tests::killAllWindows();
+//
+//     NLog::log("{}ANR dialog: named workspaces", Colors::YELLOW);
+//     {
+//         OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = 'name:yummy' })"));
+//
+//         auto kitty = Tests::spawnKitty("bad_kitty");
+//
+//         if (!kitty) {
+//             ret = 1;
+//             return;
+//         }
+//
+//         {
+//             auto str = getFromSocket("/activewindow");
+//             ASSERT_CONTAINS(str, "yummy");
+//         }
+//
+//         OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+//
+//         ::kill(kitty->pid(), SIGSTOP);
+//         Tests::waitUntilWindowsN(2);
+//
+//         {
+//             auto str = getFromSocket("/activeworkspace");
+//             ASSERT_CONTAINS(str, "windows: 0");
+//         }
+//
+//         {
+//             OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:hyprland-dialog' })"))
+//             auto str = getFromSocket("/activewindow");
+//             ASSERT_CONTAINS(str, "yummy");
+//         }
+//     }
+//
+//     Tests::killAllWindows();
+//
+//     NLog::log("{}ANR dialog: special workspaces", Colors::YELLOW);
+//     {
+//         OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = 'special:apple' })"));
+//
+//         auto kitty = Tests::spawnKitty("bad_kitty");
+//
+//         if (!kitty) {
+//             ret = 1;
+//             return;
+//         }
+//
+//         {
+//             auto str = getFromSocket("/activewindow");
+//             ASSERT_CONTAINS(str, "special:apple");
+//         }
+//
+//         OK(getFromSocket("/dispatch hl.dsp.workspace.toggle_special('apple')"));
+//         OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '1' })"));
+//
+//         ::kill(kitty->pid(), SIGSTOP);
+//         Tests::waitUntilWindowsN(2);
+//
+//         {
+//             auto str = getFromSocket("/activeworkspace");
+//             ASSERT_CONTAINS(str, "windows: 0");
+//         }
+//
+//         {
+//             OK(getFromSocket("/dispatch hl.dsp.focus({ window = 'class:hyprland-dialog' })"))
+//             auto str = getFromSocket("/activewindow");
+//             ASSERT_CONTAINS(str, "special:apple");
+//         }
+//     }
+//
+//     OK(getFromSocket("/reload"));
+//     Tests::killAllWindows();
+// }
+
+// TODO: decompose this into multiple test cases
+TEST_CASE(misc) {
+    NLog::log("{}Testing close_special_on_empty", Colors::YELLOW);
+
+    OK(getFromSocket("/eval hl.config({ misc = { close_special_on_empty = false } })"));
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = 'special:test' })"));
+
+    SPAWN_KITTY("a");
+
+    {
+        auto str = getFromSocket("/monitors");
+        ASSERT_CONTAINS(str, "special workspace: special:test (special:test)");
+    }
+
+    Tests::killAllWindows();
+
+    {
+        auto str = getFromSocket("/monitors");
+        ASSERT_CONTAINS(str, "special workspace: special:test (special:test)");
+    }
+
+    SPAWN_KITTY("a");
+
+    OK(getFromSocket("/eval hl.config({ misc = { close_special_on_empty = true } })"));
+
+    Tests::killAllWindows();
+
+    {
+        auto str = getFromSocket("/monitors");
+        ASSERT_NOT_CONTAINS(str, "special workspace: special:test (special:test)");
+    }
+}
+
+TEST_CASE(processesThatDieEarlyAreReaped) {
+    // Ensure that the process autostarted in the config does not
+    // become a zombie even if it terminates very quickly.
+    ASSERT(Tests::execAndGet("pgrep -f 'sleep 0'").empty(), true);
+}

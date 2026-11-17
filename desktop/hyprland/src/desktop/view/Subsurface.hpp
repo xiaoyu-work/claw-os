@@ -1,0 +1,94 @@
+#pragma once
+
+#include "../../defines.hpp"
+#include <cstddef>
+#include <vector>
+#include "WLSurface.hpp"
+#include "View.hpp"
+#include "types/Geometric.hpp"
+
+class CWLSubsurfaceResource;
+
+namespace Desktop::View {
+    class CPopup;
+    class CSubsurface : public virtual IView, public virtual IGeometric {
+      public:
+        // root dummy nodes
+        static SP<CSubsurface> create(PHLWINDOW pOwner);
+        static SP<CSubsurface> create(WP<Desktop::View::CPopup> pOwner);
+        static SP<CSubsurface> create(PHLLS pOwner);
+
+        // real nodes
+        static SP<CSubsurface> create(SP<CWLSubsurfaceResource> pSubsurface, PHLWINDOW pOwner);
+        static SP<CSubsurface> create(SP<CWLSubsurfaceResource> pSubsurface, WP<Desktop::View::CPopup> pOwner);
+        static SP<CSubsurface> create(SP<CWLSubsurfaceResource> pSubsurface, PHLLS pOwner);
+
+        static SP<CSubsurface> fromView(SP<IView>);
+
+        virtual ~CSubsurface() = default;
+
+        virtual eViewType              type() const override;
+        virtual bool                   mapped() const override;
+        virtual bool                   focusAvailable() const override;
+        virtual std::optional<CBox>    logicalBox() const override;
+        virtual bool                   desktopComponent() const override;
+        virtual std::optional<CBox>    surfaceLogicalBox() const override;
+        virtual Vector2D               position(eGeometricValueType) const override;
+        virtual Vector2D               size(eGeometricValueType) const override;
+        virtual CBox                   geometricBox(eGeometricValueType) const override;
+        virtual bool                   cantLockCursor() const override;
+
+        Vector2D                       coordsRelativeToParent() const;
+        Vector2D                       coordsGlobal() const;
+        size_t                         allChildrenCount() const;
+        size_t                         allMappedChildrenCount() const;
+
+        Vector2D                       size();
+
+        void                           onCommit();
+        void                           onDestroy();
+        void                           onNewSubsurface(SP<CWLSubsurfaceResource> pSubsurface);
+        void                           onMap();
+        void                           onUnmap();
+
+        void                           recheckDamageForSubsurfaces(int depth = 0);
+
+        WP<Desktop::View::CSubsurface> m_self;
+
+      private:
+        CSubsurface();
+
+        struct {
+            CHyprSignalListener destroySubsurface;
+            CHyprSignalListener commitSubsurface;
+            CHyprSignalListener mapSubsurface;
+            CHyprSignalListener unmapSubsurface;
+            CHyprSignalListener newSubsurface;
+        } m_listeners;
+
+        WP<CWLSubsurfaceResource> m_subsurface;
+        Vector2D                  m_lastSize     = {};
+        Vector2D                  m_lastPosition = {};
+        Vector2D                  m_lastRecheckGlobalPos;
+        Vector2D                  m_lastRecheckGlobalSize;
+        bool                      m_hasLastRecheckGeometry = false;
+
+        // if nullptr, means it's a dummy node
+        WP<Desktop::View::CSubsurface>              m_parent;
+
+        PHLWINDOWREF                                m_windowParent;
+        WP<Desktop::View::CPopup>                   m_popupParent;
+        PHLLSREF                                    m_layerSurfaceParent;
+
+        std::vector<SP<Desktop::View::CSubsurface>> m_children;
+
+        bool                                        m_inert = false;
+
+        void                                        initSignals();
+        void                                        initExistingSubsurfaces(SP<CWLSurfaceResource> pSurface);
+        void                                        syncScaleTransform() const;
+        void                                        checkSiblingDamage();
+        void                                        damageLastArea();
+        size_t                                      countChildren(bool onlyMapped) const;
+    };
+}

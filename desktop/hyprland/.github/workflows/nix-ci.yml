@@ -1,0 +1,31 @@
+name: Nix
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  update-inputs:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/nix-update-inputs.yml
+    secrets: inherit
+
+  hyprland:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork)
+    uses: hyprwm/actions/.github/workflows/nix.yml@main
+    secrets: inherit
+    with:
+      checkout: false
+      command: nix build 'github:${{ github.repository }}?ref=${{ github.ref }}' -L --extra-substituters "https://hyprland.cachix.org"
+
+  xdph:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork)
+    needs: hyprland
+    uses: hyprwm/actions/.github/workflows/nix.yml@main
+    secrets: inherit
+    with:
+      checkout: false
+      command: nix build 'github:${{ github.repository }}?ref=${{ github.ref }}#xdg-desktop-portal-hyprland' -L --extra-substituters "https://hyprland.cachix.org"
+
+  test:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork)
+    uses: ./.github/workflows/nix-test.yml
+    secrets: inherit

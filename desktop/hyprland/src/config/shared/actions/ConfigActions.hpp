@@ -1,0 +1,128 @@
+#pragma once
+
+#include <expected>
+#include <string>
+#include <optional>
+
+#include "../../../desktop/DesktopTypes.hpp"
+#include "../../../workspace/HLWorkspace.hpp"
+#include "../../../input/Keys.hpp"
+#include "../../../helpers/math/Direction.hpp"
+#include "../ConfigErrors.hpp"
+
+namespace Fullscreen {
+    enum eFullscreenMode : int8_t;
+}
+
+namespace Config::Actions {
+    struct SActionResult {
+        bool passEvent = false;
+    };
+
+    using eActionErrorLevel = Config::eConfigErrorLevel;
+    using eActionErrorCode  = Config::eConfigErrorCode;
+    using SActionError      = Config::SConfigError;
+    using Config::toString;
+
+    inline std::unexpected<SActionError> actionError(std::string message, eActionErrorLevel level = eActionErrorLevel::ERROR, eActionErrorCode code = eActionErrorCode::UNKNOWN) {
+        return Config::configError(std::move(message), level, code);
+    }
+
+    enum eTogglableAction : uint8_t {
+        TOGGLE_ACTION_TOGGLE = 0,
+        TOGGLE_ACTION_ENABLE,
+        TOGGLE_ACTION_DISABLE,
+    };
+
+    using ActionResult = std::expected<SActionResult, SActionError>;
+
+    ActionResult closeWindow(std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult killWindow(std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult signalWindow(int sig, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult floatWindow(eTogglableAction action, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult pseudoWindow(eTogglableAction action, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult pinWindow(eTogglableAction action, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult fullscreenWindow(Fullscreen::eFullscreenMode mode, bool layoutAware, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult fullscreenWindow(Fullscreen::eFullscreenMode internalMode, Fullscreen::eFullscreenMode clientMode, bool layoutAware,
+                                  std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult moveToWorkspace(PHLWORKSPACE ws, bool silent, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult moveToWorkspace(const std::string& ws, bool silent, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult moveFocus(Math::eDirection dir);
+    ActionResult focus(PHLWINDOW window);
+    ActionResult moveInDirection(Math::eDirection dir, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult swapInDirection(Math::eDirection dir, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult swapWith(PHLWINDOW other, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult focusCurrentOrLast();
+    ActionResult focusUrgentOrLast();
+    ActionResult center(std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult moveCursorToCorner(int corner, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult resize(const Vector2D& size, bool relative = false, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult move(const Vector2D& pos, bool relative = false, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult cycleNext(const bool next, std::optional<bool> onlyTiled, std::optional<bool> onlyFloating, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult tag(const std::string& tag, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult clearTags(std::optional<PHLWINDOW> w = std::nullopt);
+    ActionResult pass(std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult pass(Input::ModifierMask modMask, uint32_t key, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult sendKeyState(Input::ModifierMask modMask, uint32_t key, uint32_t state, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult swapNext(const bool next, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult alterZOrder(const std::string& mode, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult setProp(const std::string& prop, const std::string& val, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+
+    ActionResult toggleGroup(std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult changeGroupActive(bool forward = true, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult setGroupActive(int index, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+
+    ActionResult changeWorkspace(PHLWORKSPACE ws, bool noFocus = false);
+    ActionResult changeWorkspace(const std::string& ws, bool noFocus = false);
+    ActionResult renameWorkspace(PHLWORKSPACE ws, const std::string& s);
+    ActionResult changeWorkspaceID(PHLWORKSPACE ws, int64_t id);
+    ActionResult moveToMonitor(PHLWORKSPACE ws, PHLMONITOR mon);
+    ActionResult changeWorkspaceOnCurrentMonitor(PHLWORKSPACE ws);
+    ActionResult changeWorkspaceOnCurrentMonitor(const std::string& ws);
+    ActionResult toggleSpecial(PHLWORKSPACE special);
+
+    ActionResult focusMonitor(PHLMONITOR mon);
+    ActionResult swapActiveWorkspaces(PHLMONITOR mon1, PHLMONITOR mon2);
+
+    ActionResult layoutMessage(const std::string& msg);
+
+    ActionResult moveCursor(const Vector2D& pos);
+    ActionResult exit();
+    ActionResult reloadConfig();
+    ActionResult forceRendererReload();
+    ActionResult toggleSwallow();
+    ActionResult setSubmap(const std::string& submap);
+    ActionResult dpms(eTogglableAction action, std::optional<PHLMONITOR> mon);
+    ActionResult forceIdle(float seconds);
+    ActionResult global(const std::string& action, const std::optional<bool> event = std::nullopt);
+    ActionResult event(const std::string& data);
+
+    ActionResult mouse(const std::string& action);
+
+    ActionResult lockGroup(eTogglableAction action, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult lockAllGroups(eTogglableAction action);
+    ActionResult moveIntoGroup(Math::eDirection direction, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult moveOutOfGroup(Math::eDirection direction, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult moveGroupWindow(bool forward = true);
+    ActionResult moveWindowOrGroup(Math::eDirection direction, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+    ActionResult denyWindowFromGroup(eTogglableAction action);
+    ActionResult moveIntoOrCreateGroup(Math::eDirection dir, std::optional<PHLWINDOW> window = std::nullopt /* Active */);
+
+    ActionResult releaseInputCapture();
+
+    class CActionState {
+      public:
+        CActionState()  = default;
+        ~CActionState() = default;
+
+        int         m_passPressed         = -1; // -1 = dynamic (press+release), 0 = released, 1 = pressed
+        int         m_bindInvocationDepth = 0;
+        bool        m_requestBindRelease  = false;
+        uint32_t    m_lastCode            = 0;  // last keycode (keyboard event), 0 if last was mouse
+        uint32_t    m_lastMouseCode       = 0;  // last mouse button code, 0 if last was keyboard
+        uint32_t    m_timeLastMs          = 0;  // timestamp of last key/mouse event
+        std::string m_currentSubmap       = ""; // current keybind submap name
+    };
+
+    UP<CActionState>& state();
+};

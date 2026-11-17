@@ -1,0 +1,106 @@
+#include "FullscreenGesture.hpp"
+#include "../../../../render/decorations/DecorationPositioner.hpp"
+
+#include "../../../../Compositor.hpp"
+#include "../../../../desktop/state/FocusState.hpp"
+#include "../../../../render/Renderer.hpp"
+#include "../../../../animation/WorkspaceAnimationController.hpp"
+#include "../../../../managers/fullscreen/FullscreenController.hpp"
+
+constexpr const float MAX_DISTANCE = 250.F;
+
+//
+static Vector2D lerpVal(const Vector2D& from, const Vector2D& to, const float& t) {
+    return Vector2D{
+        from.x + ((to.x - from.x) * t),
+        from.y + ((to.y - from.y) * t),
+    };
+}
+
+CFullscreenTrackpadGesture::CFullscreenTrackpadGesture(const std::string_view& mode) {
+    std::string lc = std::string{mode};
+    std::ranges::transform(lc, lc.begin(), ::tolower);
+
+    if (lc.starts_with("fullscreen"))
+        m_mode = MODE_FULLSCREEN;
+    else if (lc.starts_with("maximize"))
+        m_mode = MODE_MAXIMIZE;
+    else
+        m_mode = MODE_FULLSCREEN;
+}
+
+void CFullscreenTrackpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    ITrackpadGesture::begin(e);
+
+    m_window = Desktop::focusState()->window();
+
+    if (!m_window)
+        return;
+
+    m_posFrom  = m_window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    m_sizeFrom = m_window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+
+    m_originalMode = Fullscreen::controller()->getFullscreenModes(m_window.lock()).internal;
+
+    Fullscreen::controller()->setFullscreenMode(m_window.lock(), !Fullscreen::controller()->isFullscreen(m_window.lock()) ? fsModeForMode(m_mode) : Fullscreen::FSMODE_NONE);
+    m_window->flushPendingGeometry();
+
+    m_posTo  = m_window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    m_sizeTo = m_window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+
+    m_lastDelta = 0.F;
+}
+
+void CFullscreenTrackpadGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (!m_window)
+        return;
+
+    g_pHyprRenderer->damageWindow(m_window.lock());
+
+    m_lastDelta += distance(e);
+
+    const auto FADEPERCENT = std::clamp(m_lastDelta / MAX_DISTANCE, 0.F, 1.F);
+
+    m_window->positionAnimation()->setValueAndWarp(lerpVal(m_posFrom, m_posTo, FADEPERCENT));
+    m_window->sizeAnimation()->setValueAndWarp(lerpVal(m_sizeFrom, m_sizeTo, FADEPERCENT));
+
+    Animation::Workspace::overrideFullscreenFadeAmount(m_window->m_workspace, m_originalMode == Fullscreen::FSMODE_NONE ? 1.F - FADEPERCENT : FADEPERCENT, m_window.lock());
+
+    g_pDecorationPositioner->onWindowUpdate(m_window.lock());
+
+    g_pHyprRenderer->damageWindow(m_window.lock());
+}
+
+void CFullscreenTrackpadGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    if (!m_window)
+        return;
+
+    const auto COMPLETION = std::clamp(m_lastDelta / MAX_DISTANCE, 0.F, 1.F);
+
+    if (COMPLETION < 0.2F) {
+        // revert the animation
+        g_pHyprRenderer->damageWindow(m_window.lock());
+        Animation::Workspace::overrideFullscreenFadeAmount(m_window->m_workspace, m_originalMode == Fullscreen::FSMODE_NONE ? 1.F : 0.F, m_window.lock());
+        Fullscreen::controller()->setFullscreenMode(m_window.lock(), !Fullscreen::controller()->isFullscreen(m_window.lock()) ? m_originalMode : Fullscreen::FSMODE_NONE);
+        return;
+    }
+
+    m_window->move(m_posTo);
+    m_window->resize(m_sizeTo);
+
+    // the gesture warps m_realSize->goal() around during update(), which races the deferred
+    // sendWindowSize() queued when fullscreen began and can leave the client configured to an
+    // intermediate size. force a configure to the final size so the client matches its box.
+    m_window->sendWindowSize(true);
+
+    Animation::Workspace::overrideFullscreenFadeAmount(m_window->m_workspace, m_originalMode == Fullscreen::FSMODE_NONE ? 0.F : 1.F);
+}
+
+Fullscreen::eFullscreenMode CFullscreenTrackpadGesture::fsModeForMode(eMode mode) {
+    switch (mode) {
+        case MODE_FULLSCREEN: return Fullscreen::FSMODE_FULLSCREEN;
+        case MODE_MAXIMIZE: return Fullscreen::FSMODE_MAXIMIZED;
+        default: break;
+    }
+    return Fullscreen::FSMODE_FULLSCREEN;
+}

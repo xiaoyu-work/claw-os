@@ -1,0 +1,64 @@
+#include "tests.hpp"
+#include "../../shared.hpp"
+#include "../../hyprctlCompat.hpp"
+#include <algorithm>
+#include <ranges>
+#include <set>
+#include <hyprutils/os/Process.hpp>
+#include <hyprutils/memory/WeakPtr.hpp>
+#include "../shared.hpp"
+
+using namespace Hyprutils::OS;
+using namespace Hyprutils::Memory;
+
+#define UP CUniquePointer
+#define SP CSharedPointer
+
+SUBTEST(expectBlockedByAll, const std::string& blockedByLine, const std::set<std::string>& expectedBlockedBy) {
+    const std::set<std::string> blockedBy = blockedByLine | std::ranges::views::split(',') | std::ranges::to<std::set<std::string>>();
+    NLog::log("blockedBy = {}", blockedBy);
+    NLog::log("expectedBlockedBy = {}", expectedBlockedBy);
+    ASSERT(std::ranges::includes(blockedBy, expectedBlockedBy), true);
+}
+
+TEST_CASE(solitaryClients) {
+    OK(getFromSocket("/eval hl.config({ general = { allow_tearing = false } })"));
+    OK(getFromSocket("/eval hl.config({ render = { direct_scanout = 0 } })"));
+    OK(getFromSocket("/eval hl.config({ cursor = { no_hardware_cursors = 1 } })"));
+    NLog::log("{}Expecting blocked solitary/DS/tearing", Colors::YELLOW);
+    {
+        auto str = getFromSocket("/monitors");
+        EXPECT_CONTAINS(str, "solitary: 0\n");
+        CALL_SUBTEST(expectBlockedByAll, Tests::getAttribute(str, "solitaryBlockedBy"), {"windowed mode", "missing candidate"});
+        EXPECT_CONTAINS(str, "activelyTearing: false");
+        CALL_SUBTEST(expectBlockedByAll, Tests::getAttribute(str, "tearingBlockedBy"),
+                     {"next frame is not torn", "user settings", "not supported by monitor", "missing candidate"});
+        EXPECT_CONTAINS(str, "directScanoutTo: 0\n");
+        CALL_SUBTEST(expectBlockedByAll, Tests::getAttribute(str, "directScanoutBlockedBy"), {"user settings", "software renders/cursors", "missing candidate"});
+    }
+
+    // FIXME: need a reliable client with solitary opaque surface in fullscreen. kitty doesn't work all the time
+    // SPAWN_KITTY("a");
+
+    // OK(getFromSocket("/eval hl.config({ general = { allow_tearing = true } })"));
+    // OK(getFromSocket("/eval hl.config({ render = { direct_scanout = 1 } })"));
+    // NLog::log("{}", getFromSocket("/clients"));
+    // OK(getFromSocket("/dispatch hl.dsp.window.fullscreen()"));
+    // NLog::log("{}", getFromSocket("/clients"));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // NLog::log("{}Expecting kitty to almost pass for solitary/DS/tearing", Colors::YELLOW);
+    // {
+    //     auto str = getFromSocket("/monitors");
+    //     ASSERT_NOT_CONTAINS(str, "solitary: 0\n");
+    //     ASSERT_CONTAINS(str, "solitaryBlockedBy: null");
+    //     ASSERT_CONTAINS(str, "activelyTearing: false");
+    //     ASSERT_CONTAINS(str, "tearingBlockedBy: next frame is not torn,not supported by monitor,window settings");
+    // }
+
+    // OK(getFromSocket("/dispatch hl.dsp.window.set_prop({ window = 'active', prop = 'immediate', value = '1' })"));
+    // NLog::log("{}Expecting kitty to almost pass for tearing", Colors::YELLOW);
+    // {
+    //     auto str = getFromSocket("/monitors");
+    //     ASSERT_CONTAINS(str, "tearingBlockedBy: next frame is not torn,not supported by monitor\n");
+    // }
+}

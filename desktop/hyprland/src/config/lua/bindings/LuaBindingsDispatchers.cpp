@@ -1,0 +1,1421 @@
+#include "LuaBindingsInternal.hpp"
+
+#include <lua.h>
+#include <hyprutils/utils/ScopeGuard.hpp>
+
+#include "Check.hpp"
+
+#include "../../supplementary/executor/Executor.hpp"
+#include "../../shared/actions/ConfigActions.hpp"
+
+#include "../../../managers/fullscreen/FullscreenController.hpp"
+#include "../../../state/MonitorState.hpp"
+#include "../../../state/WorkspaceState.hpp"
+#include "../../../state/workspace/Resolver.hpp"
+#include "../../../workspace/WorkspaceUtils.hpp"
+#include "../../../desktop/rule/windowRule/WindowRule.hpp"
+#include "../../../keybinds/Resolver.hpp"
+
+using namespace Config;
+using namespace Config::Lua;
+using namespace Config::Lua::Bindings;
+
+namespace CA = Config::Actions;
+
+//
+static constexpr auto ERR        = CA::eActionErrorLevel::ERROR;
+static constexpr auto WARN       = CA::eActionErrorLevel::WARNING;
+static constexpr auto INFO       = CA::eActionErrorLevel::INFO;
+static constexpr auto C_UNKNOWN  = CA::eActionErrorCode::UNKNOWN;
+static constexpr auto C_INVARG   = CA::eActionErrorCode::INVALID_ARGUMENT;
+static constexpr auto C_NOTFOUND = CA::eActionErrorCode::NOT_FOUND;
+static constexpr auto C_NOTARGET = CA::eActionErrorCode::NO_TARGET;
+static constexpr auto C_UNAVAIL  = CA::eActionErrorCode::UNAVAILABLE;
+static constexpr auto C_EXECFAIL = CA::eActionErrorCode::EXECUTION_FAILED;
+
+static int            requestBindRelease(lua_State* L, int results) {
+    if (CA::state()->m_bindInvocationDepth > 0 && CA::state()->m_passPressed == 1)
+        CA::state()->m_requestBindRelease = true;
+
+    if (results != 1 || !lua_istable(L, -1))
+        return results;
+
+    lua_pushboolean(L, true);
+    lua_setfield(L, -2, "request_release");
+    return results;
+}
+
+static int dsp_moveCursorToCorner(lua_State* L) {
+    return Internal::checkResult(L, CA::moveCursorToCorner(sc<int>(lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_moveCursor(lua_State* L) {
+    return Internal::checkResult(L, CA::moveCursor(Vector2D{lua_tonumber(L, lua_upvalueindex(1)), lua_tonumber(L, lua_upvalueindex(2))}));
+}
+
+static int dsp_toggleGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::toggleGroup(Internal::windowFromUpval(L, 1)));
+}
+
+static int dsp_changeGroupActive(lua_State* L) {
+    return Internal::checkResult(L, CA::changeGroupActive(lua_toboolean(L, lua_upvalueindex(1)), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_setGroupActive(lua_State* L) {
+    return Internal::checkResult(L, CA::setGroupActive(sc<int>(lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_moveGroupWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::moveGroupWindow(lua_toboolean(L, lua_upvalueindex(1))));
+}
+
+static int dsp_lockGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::lockGroup(sc<CA::eTogglableAction>(lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_lockAllGroups(lua_State* L) {
+    return Internal::checkResult(L, CA::lockAllGroups(sc<CA::eTogglableAction>(lua_tonumber(L, lua_upvalueindex(1)))));
+}
+
+static int hlCursorMoveToCorner(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.cursor.move_to_corner: expected a table { corner, window? }");
+
+    lua_pushnumber(L, Internal::requireTableFieldNum(L, 1, "corner", "hl.cursor.move_to_corner"));
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_moveCursorToCorner, 2);
+    return 1;
+}
+
+static int hlCursorMove(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.cursor.move: expected a table { x, y }");
+
+    lua_pushnumber(L, Internal::requireTableFieldNum(L, 1, "x", "hl.cursor.move"));
+    lua_pushnumber(L, Internal::requireTableFieldNum(L, 1, "y", "hl.cursor.move"));
+    lua_pushcclosure(L, dsp_moveCursor, 2);
+    return 1;
+}
+
+static int hlGroupToggle(lua_State* L) {
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_toggleGroup, 1);
+    return 1;
+}
+
+static int hlGroupNext(lua_State* L) {
+    lua_pushboolean(L, true);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_changeGroupActive, 2);
+    return 1;
+}
+
+static int hlGroupPrev(lua_State* L) {
+    lua_pushboolean(L, false);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_changeGroupActive, 2);
+    return 1;
+}
+
+static int hlGroupMoveWindow(lua_State* L) {
+    bool forward = true;
+    if (lua_istable(L, 1)) {
+        auto f = Internal::tableOptBool(L, 1, "forward");
+        if (f)
+            forward = *f;
+    }
+    lua_pushboolean(L, forward);
+    lua_pushcclosure(L, dsp_moveGroupWindow, 1);
+    return 1;
+}
+
+static int hlGroupActive(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.group.active: expected a table { index, window? }");
+
+    lua_pushnumber(L, Internal::requireTableFieldNum(L, 1, "index", "hl.group.active"));
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_setGroupActive, 2);
+    return 1;
+}
+
+static int hlGroupLock(lua_State* L) {
+    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
+        // toggle lock on active window's group
+        lua_pushnumber(L, sc<int>(CA::TOGGLE_ACTION_TOGGLE));
+        lua_pushnil(L);
+        lua_pushcclosure(L, dsp_lockGroup, 2);
+        return 1;
+    }
+
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.group.lock: expected a table { window?, all?, action? } or no args");
+
+    const auto action = Internal::tableToggleAction(L, 1);
+    lua_pushnumber(L, sc<int>(action));
+
+    const auto all = Internal::tableOptBool(L, 1, "all");
+    if (all.value_or(false)) {
+        // global group lock
+        lua_pushcclosure(L, dsp_lockAllGroups, 1);
+    } else {
+        // lock specified window's group
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_lockGroup, 2);
+    }
+    return 1;
+}
+
+// TODO: Remove this later
+static int hlGroupLockActive(lua_State* L) {
+    Config::mgr()->warnDeprecated("hl.dsp.group.lock_active()", "The group.lock_active() dispatcher is deprecated, use group.lock() instead");
+
+    const auto action = Internal::tableToggleAction(L, 1);
+
+    lua_pushnumber(L, sc<int>(action));
+    lua_pushnil(L);
+    lua_pushcclosure(L, dsp_lockGroup, 2);
+    return 1;
+}
+
+static int dsp_execCmd(lua_State* L) {
+    auto proc = lua_tostring(L, lua_upvalueindex(1));
+
+    if (std::string_view{proc}.empty())
+        return Internal::dispatcherError(L, "Invalid process string", ERR, C_INVARG);
+
+    std::optional<uint64_t> pid;
+    auto                    ruleRet = Internal::buildRuleFromTable(L, lua_upvalueindex(2));
+
+    if (!ruleRet)
+        return ruleRet.error();
+
+    if (*ruleRet)
+        pid = Config::Supplementary::executor()->spawn(Config::Supplementary::SExecRequest{.exec = proc, .rule = std::move(*ruleRet)});
+    else
+        pid = Config::Supplementary::executor()->spawn(proc);
+
+    if (!pid.has_value())
+        return Internal::dispatcherError(L, "Failed to start process", ERR, C_EXECFAIL);
+    return Internal::pushSuccessResult(L);
+}
+
+static int dsp_execRaw(lua_State* L) {
+    auto proc = Config::Supplementary::executor()->spawnRaw(lua_tostring(L, lua_upvalueindex(1)));
+    if (!proc || !*proc)
+        return Internal::dispatcherError(L, "Failed to start process", ERR, C_EXECFAIL);
+    return Internal::pushSuccessResult(L);
+}
+
+static int dsp_exit(lua_State* L) {
+    return Internal::checkResult(L, CA::exit());
+}
+
+static int dsp_reload_config(lua_State* L) {
+    return Internal::checkResult(L, CA::reloadConfig());
+}
+
+static int dsp_submap(lua_State* L) {
+    return Internal::checkResult(L, CA::setSubmap(lua_tostring(L, lua_upvalueindex(1))));
+}
+
+static int dsp_pass(lua_State* L) {
+    const auto PWINDOW = Desktop::viewState()->query().selector(lua_tostring(L, lua_upvalueindex(1))).runWindow();
+    if (!PWINDOW)
+        return Internal::dispatcherError(L, "hl.pass: window not found", WARN, C_NOTFOUND);
+
+    return requestBindRelease(L, Internal::checkResult(L, CA::pass(PWINDOW)));
+}
+
+static int dsp_layoutMsg(lua_State* L) {
+    return Internal::checkResult(L, CA::layoutMessage(lua_tostring(L, lua_upvalueindex(1))));
+}
+
+static int dsp_dpms(lua_State* L) {
+    auto                      action = sc<CA::eTogglableAction>((int)lua_tonumber(L, lua_upvalueindex(1)));
+    std::optional<PHLMONITOR> mon    = std::nullopt;
+
+    if (!lua_isnil(L, lua_upvalueindex(2))) {
+        auto m = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
+        if (m)
+            mon = m;
+    }
+
+    return Internal::checkResult(L, CA::dpms(action, mon));
+}
+
+static int dsp_event(lua_State* L) {
+    return Internal::checkResult(L, CA::event(lua_tostring(L, lua_upvalueindex(1))));
+}
+
+static int dsp_global(lua_State* L) {
+    std::optional<bool> event = std::nullopt;
+    auto                i     = lua_upvalueindex(2);
+    if (lua_isboolean(L, i))
+        event = lua_toboolean(L, i);
+    return requestBindRelease(L, Internal::checkResult(L, CA::global(lua_tostring(L, lua_upvalueindex(1)), event)));
+}
+
+static int dsp_forceRendererReload(lua_State* L) {
+    return Internal::checkResult(L, CA::forceRendererReload());
+}
+
+static int dsp_forceIdle(lua_State* L) {
+    return Internal::checkResult(L, CA::forceIdle((float)lua_tonumber(L, lua_upvalueindex(1))));
+}
+
+static int dsp_releaseInputCapture(lua_State* L) {
+    return Internal::checkResult(L, CA::releaseInputCapture());
+}
+
+static int hlExecCmd(lua_State* L) {
+    const auto proc = Check::string(L, 1);
+
+    if (!proc)
+        return Internal::configError(L, std::format("exec_cmd: bad argument 1: {}", proc.error()));
+
+    const bool hasRuleArg = !lua_isnoneornil(L, 2);
+
+    lua_pushstring(L, proc->c_str());
+
+    if (hasRuleArg)
+        lua_pushvalue(L, 2);
+    else
+        lua_pushnil(L);
+
+    lua_pushcclosure(L, dsp_execCmd, 2);
+    return 1;
+}
+
+static int hlExecRaw(lua_State* L) {
+    auto proc = Check::string(L, 1);
+    if (!proc)
+        return Internal::configError(L, std::format("exec_raw: bad argument 1: {}", proc.error()));
+
+    lua_pushstring(L, proc->c_str());
+    lua_pushcclosure(L, dsp_execRaw, 1);
+    return 1;
+}
+
+static int hlExit(lua_State* L) {
+    lua_pushcclosure(L, dsp_exit, 0);
+    return 1;
+}
+
+static int hlReloadConfig(lua_State* L) {
+    lua_pushcclosure(L, dsp_reload_config, 0);
+    return 1;
+}
+
+static int hlSubmap(lua_State* L) {
+    auto str = Check::string(L, 1);
+    if (!str)
+        return Internal::configError(L, std::format("submap: bad argument 1: {}", str.error()));
+
+    lua_pushstring(L, str->c_str());
+    lua_pushcclosure(L, dsp_submap, 1);
+    return 1;
+}
+
+static int hlPass(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.pass: expected a table { window }");
+
+    const auto w = Internal::requireTableFieldWindowSelector(L, 1, "window", "hl.pass");
+    lua_pushstring(L, w.c_str());
+    lua_pushcclosure(L, dsp_pass, 1);
+    return 1;
+}
+
+static int hlLayout(lua_State* L) {
+    auto str = Check::string(L, 1);
+    if (!str)
+        return Internal::configError(L, std::format("layout: bad argument 1: {}", str.error()));
+
+    lua_pushstring(L, str->c_str());
+    lua_pushcclosure(L, dsp_layoutMsg, 1);
+    return 1;
+}
+
+static int hlDpms(lua_State* L) {
+    CA::eTogglableAction       action = Internal::tableToggleAction(L, 1);
+    std::optional<std::string> monStr;
+
+    if (lua_istable(L, 1))
+        monStr = Internal::tableOptMonitorSelector(L, 1, "monitor", "hl.dpms");
+
+    lua_pushnumber(L, (int)action);
+    if (monStr)
+        lua_pushstring(L, monStr->c_str());
+    else
+        lua_pushnil(L);
+    lua_pushcclosure(L, dsp_dpms, 2);
+    return 1;
+}
+
+static int hlEvent(lua_State* L) {
+    auto str = Check::string(L, 1);
+    if (!str)
+        return Internal::configError(L, std::format("event: bad argument 1: {}", str.error()));
+
+    lua_pushstring(L, str->c_str());
+    lua_pushcclosure(L, dsp_event, 1);
+    return 1;
+}
+
+static int hlGlobal(lua_State* L) {
+    auto str = Check::string(L, 1);
+    if (!str)
+        return Internal::configError(L, std::format("global: bad argument 1: {}", str.error()));
+    auto activate = Check::boolean(L, 2);
+
+    lua_pushstring(L, str->c_str());
+    if (activate.has_value())
+        lua_pushboolean(L, activate.value());
+    else
+        lua_pushnil(L);
+    lua_pushcclosure(L, dsp_global, 2);
+    return 1;
+}
+
+static int hlForceRendererReload(lua_State* L) {
+    lua_pushcclosure(L, dsp_forceRendererReload, 0);
+    return 1;
+}
+
+static int hlForceIdle(lua_State* L) {
+    auto timeout = Check::number(L, 1);
+    if (!timeout)
+        return Internal::configError(L, std::format("force_idle: bad argument 1: {}", timeout.error()));
+
+    lua_pushnumber(L, *timeout);
+    lua_pushcclosure(L, dsp_forceIdle, 1);
+    return 1;
+}
+
+static int hlReleaseInputCapture(lua_State* L) {
+    lua_pushcclosure(L, dsp_releaseInputCapture, 0);
+    return 1;
+}
+
+static int dsp_sendShortcut(lua_State* L) {
+    const auto        modMask = Keybinds::modMaskFromString(lua_tostring(L, lua_upvalueindex(1)));
+    const std::string key     = lua_tostring(L, lua_upvalueindex(2));
+
+    auto              keycodeResult = Keybinds::resolver()->resolveKeycode(key);
+    if (!keycodeResult)
+        return Internal::dispatcherError(L, std::format("send_shortcut: {}", keycodeResult.error()), ERR, C_INVARG);
+
+    PHLWINDOW window = nullptr;
+    if (!lua_isnil(L, lua_upvalueindex(3))) {
+        window = Desktop::viewState()->query().selector(lua_tostring(L, lua_upvalueindex(3))).runWindow();
+        if (!window)
+            return Internal::dispatcherError(L, "send_shortcut: window not found", WARN, C_NOTFOUND);
+    }
+
+    return requestBindRelease(L, Internal::checkResult(L, CA::pass(modMask, *keycodeResult, window)));
+}
+
+static int dsp_sendKeyState(lua_State* L) {
+    const auto        modMask  = Keybinds::modMaskFromString(lua_tostring(L, lua_upvalueindex(1)));
+    const std::string key      = lua_tostring(L, lua_upvalueindex(2));
+    const uint32_t    keyState = (uint32_t)lua_tonumber(L, lua_upvalueindex(3));
+
+    auto              keycodeResult = Keybinds::resolver()->resolveKeycode(key);
+    if (!keycodeResult)
+        return Internal::dispatcherError(L, std::format("send_key_state: {}", keycodeResult.error()), ERR, C_INVARG);
+
+    PHLWINDOW window = nullptr;
+    if (!lua_isnil(L, lua_upvalueindex(4))) {
+        window = Desktop::viewState()->query().selector(lua_tostring(L, lua_upvalueindex(4))).runWindow();
+        if (!window)
+            return Internal::dispatcherError(L, "send_key_state: window not found", WARN, C_NOTFOUND);
+    }
+
+    return Internal::checkResult(L, CA::sendKeyState(modMask, *keycodeResult, keyState, window));
+}
+
+static int hlSendShortcut(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "send_shortcut: expected a table { mods, key, window? }");
+
+    const auto mods = Internal::requireTableFieldStr(L, 1, "mods", "hl.send_shortcut");
+    const auto key  = Internal::requireTableFieldStr(L, 1, "key", "hl.send_shortcut");
+
+    lua_pushstring(L, mods.c_str());
+    lua_pushstring(L, key.c_str());
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_sendShortcut, 3);
+    return 1;
+}
+
+static int hlSendKeyState(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "send_key_state: expected a table { mods, key, state, window? }");
+
+    const auto mods     = Internal::requireTableFieldStr(L, 1, "mods", "hl.send_key_state");
+    const auto key      = Internal::requireTableFieldStr(L, 1, "key", "hl.send_key_state");
+    const auto stateStr = Internal::requireTableFieldStr(L, 1, "state", "hl.send_key_state");
+
+    uint32_t   keyState = 0;
+    if (stateStr == "down")
+        keyState = 1;
+    else if (stateStr == "repeat")
+        keyState = 2;
+    else if (stateStr != "up")
+        return Internal::configError(L, "send_key_state: 'state' must be \"down\", \"up\", or \"repeat\"");
+
+    lua_pushstring(L, mods.c_str());
+    lua_pushstring(L, key.c_str());
+    lua_pushnumber(L, keyState);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_sendKeyState, 4);
+    return 1;
+}
+
+static int dsp_moveToWorkspace(lua_State* L) {
+    std::string ws     = lua_tostring(L, lua_upvalueindex(1));
+    bool        silent = lua_toboolean(L, lua_upvalueindex(2));
+    return Internal::checkResult(L, CA::moveToWorkspace(ws, silent, Internal::windowFromUpval(L, 3)));
+}
+
+static int dsp_moveToMonitor(lua_State* L) {
+    auto mon = Internal::resolveMonitorStr(lua_tostring(L, lua_upvalueindex(1)));
+    if (!mon)
+        return Internal::dispatcherError(L, "Invalid monitor / monitor doesn't exist", ERR, C_INVARG);
+
+    bool silent = lua_toboolean(L, lua_upvalueindex(2));
+    return Internal::checkResult(L, CA::moveToWorkspace(mon->m_activeWorkspace, silent, Internal::windowFromUpval(L, 3)));
+}
+
+static int dsp_closeWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::closeWindow(Internal::windowFromUpval(L, 1)));
+}
+
+static int dsp_killWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::killWindow(Internal::windowFromUpval(L, 1)));
+}
+
+static int dsp_signalWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::signalWindow((int)lua_tonumber(L, lua_upvalueindex(1)), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_floatWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::floatWindow(sc<CA::eTogglableAction>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_fullscreenWindow(lua_State* L) {
+    return Internal::checkResult(L,
+                                 CA::fullscreenWindow(sc<Fullscreen::eFullscreenMode>((int)lua_tonumber(L, lua_upvalueindex(1))), (bool)lua_toboolean(L, lua_upvalueindex(2)),
+                                                      Internal::windowFromUpval(L, 3)));
+}
+
+static int dsp_fullscreenWindowWithAction(lua_State* L) {
+    const auto mode        = sc<Fullscreen::eFullscreenMode>((int)lua_tonumber(L, lua_upvalueindex(1)));
+    bool       layoutAware = lua_toboolean(L, lua_upvalueindex(2));
+    const int  actionRaw   = (int)lua_tonumber(L, lua_upvalueindex(3));
+    auto       maybeW      = Internal::windowFromUpval(L, 4);
+    if (actionRaw == 0)
+        return Internal::checkResult(L, CA::fullscreenWindow(mode, layoutAware, maybeW));
+
+    const auto target = maybeW.value_or(Desktop::focusState()->window());
+    if (!target)
+        return Internal::dispatcherError(L, "hl.window.fullscreen: no target", WARN, C_NOTARGET);
+
+    const bool currentlyMode = Fullscreen::controller()->isFullscreen(target, mode);
+
+    if (actionRaw == 1) {
+        if (!currentlyMode)
+            return Internal::checkResult(L, CA::fullscreenWindow(mode, layoutAware, maybeW));
+        return Internal::pushSuccessResult(L);
+    }
+
+    if (actionRaw == 2) {
+        if (currentlyMode)
+            return Internal::checkResult(L, CA::fullscreenWindow(mode, layoutAware, maybeW));
+        return Internal::pushSuccessResult(L);
+    }
+
+    return Internal::dispatcherError(L, "hl.window.fullscreen: invalid action", ERR, C_INVARG);
+}
+
+static int dsp_fullscreenState(lua_State* L) {
+    const auto desiredInternal = sc<Fullscreen::eFullscreenMode>((int)lua_tonumber(L, lua_upvalueindex(1)));
+    const auto desiredClient   = sc<Fullscreen::eFullscreenMode>((int)lua_tonumber(L, lua_upvalueindex(2)));
+    const int  actionRaw       = (int)lua_tonumber(L, lua_upvalueindex(3)); // 0: toggle, 1: set, 2: unset
+    bool       layoutAware     = lua_toboolean(L, lua_upvalueindex(4));
+    auto       maybeW          = Internal::windowFromUpval(L, 5);
+
+    const auto target = maybeW.value_or(Desktop::focusState()->window());
+    if (!target)
+        return Internal::pushSuccessResult(L);
+
+    const auto CURRENT        = Fullscreen::controller()->getFullscreenModes(target);
+    const bool atDesiredState = CURRENT.internal == desiredInternal && CURRENT.client == desiredClient;
+
+    if (actionRaw == 0)
+        return Internal::checkResult(L,
+                                     CA::fullscreenWindow(CURRENT.internal == desiredInternal ? Fullscreen::FSMODE_NONE : desiredInternal,
+                                                          CURRENT.client == desiredClient ? Fullscreen::FSMODE_NONE : desiredClient, layoutAware, maybeW));
+
+    if (actionRaw == 1) {
+        if (!atDesiredState)
+            return Internal::checkResult(L, CA::fullscreenWindow(desiredInternal, desiredClient, layoutAware, maybeW));
+        return Internal::pushSuccessResult(L);
+    }
+
+    if (actionRaw == 2) {
+        if (atDesiredState)
+            return Internal::checkResult(L, CA::fullscreenWindow(desiredInternal, desiredClient, layoutAware, maybeW));
+        return Internal::pushSuccessResult(L);
+    }
+
+    return Internal::dispatcherError(L, "hl.window.fullscreen_state: invalid action", ERR, C_INVARG);
+}
+
+static int dsp_pseudoWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::pseudoWindow(sc<CA::eTogglableAction>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_moveInDirection(lua_State* L) {
+    return Internal::checkResult(L, CA::moveInDirection(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_swapInDirection(lua_State* L) {
+    return Internal::checkResult(L, CA::swapInDirection(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_center(lua_State* L) {
+    return Internal::checkResult(L, CA::center(Internal::windowFromUpval(L, 1)));
+}
+
+static int dsp_cycleNext(lua_State* L) {
+    bool                next        = lua_toboolean(L, lua_upvalueindex(1));
+    int                 tiledRaw    = (int)lua_tonumber(L, lua_upvalueindex(2));
+    int                 floatingRaw = (int)lua_tonumber(L, lua_upvalueindex(3));
+    std::optional<bool> tiled       = tiledRaw < 0 ? std::nullopt : std::optional(tiledRaw > 0);
+    std::optional<bool> floating    = floatingRaw < 0 ? std::nullopt : std::optional(floatingRaw > 0);
+    return Internal::checkResult(L, CA::cycleNext(next, tiled, floating, Internal::windowFromUpval(L, 4)));
+}
+
+static int dsp_swapNext(lua_State* L) {
+    return Internal::checkResult(L, CA::swapNext(lua_toboolean(L, lua_upvalueindex(1)), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_swapWithWindow(lua_State* L) {
+    auto       source = Internal::windowFromUpval(L, 1);
+
+    const auto targetSelector = lua_tostring(L, lua_upvalueindex(2));
+    const auto target         = Desktop::viewState()->query().selector(targetSelector).runWindow();
+    if (!target)
+        return Internal::dispatcherError(L, "hl.window.swap: target window not found", WARN, C_NOTFOUND);
+
+    return Internal::checkResult(L, CA::swapWith(target, source));
+}
+
+static int dsp_tagWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::tag(lua_tostring(L, lua_upvalueindex(1)), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_clearTags(lua_State* L) {
+    return Internal::checkResult(L, CA::clearTags(Internal::windowFromUpval(L, 1)));
+}
+
+static int dsp_toggleSwallow(lua_State* L) {
+    return Internal::checkResult(L, CA::toggleSwallow());
+}
+
+static int dsp_resize(lua_State* L) {
+    Vector2D value{lua_tonumber(L, lua_upvalueindex(1)), lua_tonumber(L, lua_upvalueindex(2))};
+    return Internal::checkResult(L, CA::resize(value, lua_toboolean(L, lua_upvalueindex(3)), Internal::windowFromUpval(L, 4)));
+}
+
+static int dsp_move(lua_State* L) {
+    Vector2D value{lua_tonumber(L, lua_upvalueindex(1)), lua_tonumber(L, lua_upvalueindex(2))};
+    return Internal::checkResult(L, CA::move(value, lua_toboolean(L, lua_upvalueindex(3)), Internal::windowFromUpval(L, 4)));
+}
+
+static int dsp_pinWindow(lua_State* L) {
+    return Internal::checkResult(L, CA::pinWindow(sc<CA::eTogglableAction>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_bringToTop(lua_State* L) {
+    return Internal::checkResult(L, CA::alterZOrder("top"));
+}
+
+static int dsp_alterZOrder(lua_State* L) {
+    return Internal::checkResult(L, CA::alterZOrder(lua_tostring(L, lua_upvalueindex(1)), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_setProp(lua_State* L) {
+    return Internal::checkResult(L, CA::setProp(lua_tostring(L, lua_upvalueindex(1)), lua_tostring(L, lua_upvalueindex(2)), Internal::windowFromUpval(L, 3)));
+}
+
+static int dsp_moveIntoGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::moveIntoGroup(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_moveOutOfGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::moveOutOfGroup(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_moveWindowOrGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::moveWindowOrGroup(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_moveIntoOrCreateGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::moveIntoOrCreateGroup(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1))), Internal::windowFromUpval(L, 2)));
+}
+
+static int dsp_denyFromGroup(lua_State* L) {
+    return Internal::checkResult(L, CA::denyWindowFromGroup(sc<CA::eTogglableAction>((int)lua_tonumber(L, lua_upvalueindex(1)))));
+}
+
+static int dsp_mouseDrag(lua_State* L) {
+    return requestBindRelease(L, Internal::checkResult(L, CA::mouse("movewindow")));
+}
+
+static int dsp_mouseResize(lua_State* L) {
+    auto keepAspectRatio = Check::number(L, lua_upvalueindex(1));
+    if (!keepAspectRatio)
+        return Internal::configError(L, std::format("resize: bad argument 1: {}", keepAspectRatio.error()));
+
+    return requestBindRelease(L, Internal::checkResult(L, CA::mouse(std::format("resizewindow {}", *keepAspectRatio))));
+}
+
+static int hlWindowClose(lua_State* L) {
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_closeWindow, 1);
+    return 1;
+}
+
+static int hlWindowKill(lua_State* L) {
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_killWindow, 1);
+    return 1;
+}
+
+static int hlWindowSignal(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.signal: expected a table { signal, window? }");
+
+    lua_pushnumber(L, Internal::requireTableFieldNum(L, 1, "signal", "hl.window.signal"));
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_signalWindow, 2);
+    return 1;
+}
+
+static int hlWindowFloat(lua_State* L) {
+    const auto action = Internal::tableToggleAction(L, 1);
+
+    lua_pushnumber(L, (int)action);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_floatWindow, 2);
+    return 1;
+}
+
+static int hlWindowFullscreen(lua_State* L) {
+    Fullscreen::eFullscreenMode mode        = Fullscreen::FSMODE_FULLSCREEN;
+    int                         action      = 0; // 0: toggle, 1: set, 2: unset
+    bool                        layoutAware = true;
+    if (lua_istable(L, 1)) {
+        auto m = Internal::tableOptStr(L, 1, "mode");
+        if (m) {
+            if (*m == "maximized" || *m == "1")
+                mode = Fullscreen::FSMODE_MAXIMIZED;
+            else if (*m == "fullscreen" || *m == "0")
+                mode = Fullscreen::FSMODE_FULLSCREEN;
+            else
+                return Internal::configError(L, "hl.window.fullscreen: invalid mode \"{}\" (expected fullscreen/maximized)", *m);
+        }
+
+        auto a = Internal::tableOptStr(L, 1, "action");
+        if (a) {
+            if (*a == "toggle")
+                action = 0;
+            else if (*a == "set")
+                action = 1;
+            else if (*a == "unset")
+                action = 2;
+            else
+                return Internal::configError(L, "hl.window.fullscreen: invalid action \"{}\" (expected toggle/set/unset)", *a);
+        }
+
+        auto la = Internal::tableOptBool(L, 1, "layout_aware");
+        if (la) {
+            if (*la)
+                layoutAware = true;
+            else if (!*la)
+                layoutAware = false;
+            else
+                return Internal::configError(L, "hl.window.fullscreen: invalid action \"{}\" (expected true/false)", *la);
+        }
+    }
+    lua_pushnumber(L, (int)mode); // 1
+
+    lua_pushboolean(L, layoutAware); // 2
+
+    if (action == 0) {
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_fullscreenWindow, 3);
+    } else {
+        lua_pushnumber(L, action);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_fullscreenWindowWithAction, 4);
+    }
+    return 1;
+}
+
+static int hlWindowFullscreenState(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.fullscreen_state: expected a table { internal, client, action?, window? }");
+
+    int action = 1; // default to set semantics
+    if (auto a = Internal::tableOptStr(L, 1, "action"); a) {
+        if (*a == "toggle")
+            action = 0;
+        else if (*a == "set")
+            action = 1;
+        else if (*a == "unset")
+            action = 2;
+        else
+            return Internal::configError(L, "hl.window.fullscreen_state: invalid action \"{}\" (expected toggle/set/unset)", *a);
+    }
+
+    auto im = Internal::tableOptNum(L, 1, "internal");
+    auto cm = Internal::tableOptNum(L, 1, "client");
+    if (!im || !cm)
+        return Internal::configError(L, "hl.window.fullscreen_state: 'internal' and 'client' are required");
+
+    auto ls          = Internal::tableOptBool(L, 1, "layout_aware");
+    bool layoutAware = ls ? *ls : true;
+
+    lua_pushnumber(L, (int)*im);
+    lua_pushnumber(L, (int)*cm);
+    lua_pushnumber(L, action);
+    lua_pushboolean(L, layoutAware);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_fullscreenState, 5);
+    return 1;
+}
+
+static int hlWindowPseudo(lua_State* L) {
+    const auto action = Internal::tableToggleAction(L, 1);
+
+    lua_pushnumber(L, (int)action);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_pseudoWindow, 2);
+    return 1;
+}
+
+static int hlWindowMove(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.move: expected a table, e.g. { direction = \"left\" }");
+
+    auto dirStr = Internal::tableOptStr(L, 1, "direction");
+    if (dirStr) {
+        auto dir = Internal::parseDirectionStr(*dirStr);
+        if (dir == Math::DIRECTION_DEFAULT)
+            return Internal::configError(L, "hl.window.move: invalid direction \"{}\" (expected left/right/up/down)", *dirStr);
+
+        auto groupAware = Internal::tableOptBool(L, 1, "group_aware");
+        if (groupAware && *groupAware) {
+            lua_pushnumber(L, (int)dir);
+            Internal::pushWindowUpval(L, 1);
+            lua_pushcclosure(L, dsp_moveWindowOrGroup, 2);
+            return 1;
+        }
+
+        lua_pushnumber(L, (int)dir);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveInDirection, 2);
+        return 1;
+    }
+
+    auto x = Internal::tableOptNum(L, 1, "x");
+    auto y = Internal::tableOptNum(L, 1, "y");
+    if (x && y) {
+        bool relative = Internal::tableOptBool(L, 1, "relative").value_or(false);
+        lua_pushnumber(L, *x);
+        lua_pushnumber(L, *y);
+        lua_pushboolean(L, relative);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_move, 4);
+        return 1;
+    }
+
+    auto ws = Internal::tableOptWorkspaceSelector(L, 1, "workspace", "hl.window.move");
+    if (ws) {
+        auto follow = Internal::tableOptBool(L, 1, "follow");
+        bool silent = follow.has_value() && !*follow;
+        lua_pushstring(L, ws->c_str());
+        lua_pushboolean(L, silent);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveToWorkspace, 3);
+        return 1;
+    }
+
+    auto mon = Internal::tableOptMonitorSelector(L, 1, "monitor", "hl.window.move");
+    if (mon) {
+        auto follow = Internal::tableOptBool(L, 1, "follow");
+        bool silent = follow.has_value() && !*follow;
+        lua_pushstring(L, mon->c_str());
+        lua_pushboolean(L, silent);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveToMonitor, 3);
+        return 1;
+    }
+
+    auto intoGroup = Internal::tableOptStr(L, 1, "into_group");
+    if (intoGroup) {
+        auto dir = Internal::parseDirectionStr(*intoGroup);
+        if (dir == Math::DIRECTION_DEFAULT)
+            return Internal::configError(L, "hl.window.move: invalid into_group direction \"{}\"", *intoGroup);
+        lua_pushnumber(L, (int)dir);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveIntoGroup, 2);
+        return 1;
+    }
+
+    auto intoOrCreateGroup = Internal::tableOptStr(L, 1, "into_or_create_group");
+    if (intoOrCreateGroup) {
+        auto dir = Internal::parseDirectionStr(*intoOrCreateGroup);
+        if (dir == Math::DIRECTION_DEFAULT)
+            return Internal::configError(L, "hl.window.move: invalid into_or_create_group direction \"{}\"", *intoOrCreateGroup);
+        lua_pushnumber(L, (int)dir);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveIntoOrCreateGroup, 2);
+        return 1;
+    }
+
+    auto outOfGroup = Internal::tableOptStr(L, 1, "out_of_group");
+    if (outOfGroup) {
+        auto dir = Internal::parseDirectionStr(*outOfGroup);
+        lua_pushnumber(L, (int)dir);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveOutOfGroup, 2);
+        return 1;
+    }
+
+    auto outOfGroupBool = Internal::tableOptBool(L, 1, "out_of_group");
+    if (outOfGroupBool && *outOfGroupBool) {
+        lua_pushnumber(L, (int)Math::DIRECTION_DEFAULT);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_moveOutOfGroup, 2);
+        return 1;
+    }
+
+    return Internal::configError(L, "hl.window.move: unrecognized arguments. Expected one of: direction, x+y(+relative), workspace, into_group, out_of_group");
+}
+
+static int hlWindowSwap(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.swap: expected a table, e.g. { direction = \"left\" }");
+
+    auto dirStr = Internal::tableOptStr(L, 1, "direction");
+    if (dirStr) {
+        auto dir = Internal::parseDirectionStr(*dirStr);
+        if (dir == Math::DIRECTION_DEFAULT)
+            return Internal::configError(L, "hl.window.swap: invalid direction \"{}\" (expected left/right/up/down)", *dirStr);
+        lua_pushnumber(L, (int)dir);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_swapInDirection, 2);
+        return 1;
+    }
+
+    auto target = Internal::tableOptWindowSelector(L, 1, "target", "hl.window.swap");
+    if (!target)
+        target = Internal::tableOptWindowSelector(L, 1, "with", "hl.window.swap");
+    if (!target)
+        target = Internal::tableOptWindowSelector(L, 1, "other", "hl.window.swap");
+
+    if (target) {
+        Internal::pushWindowUpval(L, 1);
+        lua_pushstring(L, target->c_str());
+        lua_pushcclosure(L, dsp_swapWithWindow, 2);
+        return 1;
+    }
+
+    auto next = Internal::tableOptBool(L, 1, "next");
+    if (next && *next) {
+        lua_pushboolean(L, true);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_swapNext, 2);
+        return 1;
+    }
+
+    auto prev = Internal::tableOptBool(L, 1, "prev");
+    if (prev && *prev) {
+        lua_pushboolean(L, false);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_swapNext, 2);
+        return 1;
+    }
+
+    return Internal::configError(L, "hl.window.swap: unrecognized arguments. Expected one of: direction, target/with/other, next, prev");
+}
+
+static int hlWindowCenter(lua_State* L) {
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_center, 1);
+    return 1;
+}
+
+static int hlWindowCycleNext(lua_State* L) {
+    bool next     = true;
+    int  tiled    = -1;
+    int  floating = -1;
+    if (lua_istable(L, 1)) {
+        auto n = Internal::tableOptBool(L, 1, "next");
+        if (n)
+            next = *n;
+        auto t = Internal::tableOptBool(L, 1, "tiled");
+        if (t)
+            tiled = *t ? 1 : 0;
+        auto f = Internal::tableOptBool(L, 1, "floating");
+        if (f)
+            floating = *f ? 1 : 0;
+    }
+    lua_pushboolean(L, next);
+    lua_pushnumber(L, tiled);
+    lua_pushnumber(L, floating);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_cycleNext, 4);
+    return 1;
+}
+
+static int hlWindowTag(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.tag: expected a table { tag, window? }");
+
+    const auto tag = Internal::requireTableFieldStr(L, 1, "tag", "hl.window.tag");
+    lua_pushstring(L, tag.c_str());
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_tagWindow, 2);
+    return 1;
+}
+
+static int hlWindowClearTags(lua_State* L) {
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_clearTags, 1);
+    return 1;
+}
+
+static int hlWindowToggleSwallow(lua_State* L) {
+    lua_pushcclosure(L, dsp_toggleSwallow, 0);
+    return 1;
+}
+static int hlWindowPin(lua_State* L) {
+    const auto action = Internal::tableToggleAction(L, 1);
+
+    lua_pushnumber(L, (int)action);
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_pinWindow, 2);
+    return 1;
+}
+
+static int hlWindowBringToTop(lua_State* L) {
+    lua_pushcclosure(L, dsp_bringToTop, 0);
+    return 1;
+}
+
+static int hlWindowAlterZOrder(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.alter_zorder: expected a table { mode, window? }");
+
+    const auto mode = Internal::requireTableFieldStr(L, 1, "mode", "hl.window.alter_zorder");
+    lua_pushstring(L, mode.c_str());
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_alterZOrder, 2);
+    return 1;
+}
+
+static int hlWindowSetProp(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.set_prop: expected a table { prop, value, window? }");
+
+    const auto prop  = Internal::requireTableFieldStr(L, 1, "prop", "hl.window.set_prop");
+    const auto value = Internal::requireTableFieldStr(L, 1, "value", "hl.window.set_prop");
+    lua_pushstring(L, prop.c_str());
+    lua_pushstring(L, value.c_str());
+    Internal::pushWindowUpval(L, 1);
+    lua_pushcclosure(L, dsp_setProp, 3);
+    return 1;
+}
+
+static int hlWindowDenyFromGroup(lua_State* L) {
+    const auto action = Internal::tableToggleAction(L, 1);
+
+    lua_pushnumber(L, (int)action);
+    lua_pushcclosure(L, dsp_denyFromGroup, 1);
+    return 1;
+}
+
+static int hlWindowDrag(lua_State* L) {
+    lua_pushcclosure(L, dsp_mouseDrag, 0);
+    return 1;
+}
+
+static int hlWindowResize(lua_State* L) {
+    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
+        lua_pushnumber(L, 0);
+        lua_pushcclosure(L, dsp_mouseResize, 1);
+        return 1;
+    }
+
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.window.resize: expected no args, a table { x, y, relative?, window? }, or a table { keep_aspect_ratio }");
+
+    auto x = Internal::tableOptNum(L, 1, "x");
+    auto y = Internal::tableOptNum(L, 1, "y");
+    if (x && y) {
+        bool relative = Internal::tableOptBool(L, 1, "relative").value_or(false);
+        lua_pushnumber(L, *x);
+        lua_pushnumber(L, *y);
+        lua_pushboolean(L, relative);
+        Internal::pushWindowUpval(L, 1);
+        lua_pushcclosure(L, dsp_resize, 4);
+        return 1;
+    }
+
+    auto keepAspectRatio = Internal::tableOptBool(L, 1, "keep_aspect_ratio");
+    if (keepAspectRatio) {
+        lua_pushnumber(L, *keepAspectRatio ? 1 : 2);
+        lua_pushcclosure(L, dsp_mouseResize, 1);
+        return 1;
+    }
+
+    return Internal::configError(L, "hl.focus: unrecognized arguments. Expected positions (x & y) or keep_aspect_ratio");
+}
+
+static int dsp_moveFocus(lua_State* L) {
+    return Internal::checkResult(L, CA::moveFocus(sc<Math::eDirection>((int)lua_tonumber(L, lua_upvalueindex(1)))));
+}
+
+static int dsp_focusMonitor(lua_State* L) {
+    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
+    if (!PMONITOR)
+        return Internal::dispatcherError(L, "hl.focus.monitor: monitor not found", WARN, C_NOTFOUND);
+    return Internal::checkResult(L, CA::focusMonitor(PMONITOR));
+}
+
+static int dsp_focusWindowBySelector(lua_State* L) {
+    const auto PWINDOW = Desktop::viewState()->query().selector(lua_tostring(L, lua_upvalueindex(1))).runWindow();
+    if (!PWINDOW)
+        return Internal::dispatcherError(L, "hl.focus: window not found", WARN, C_NOTFOUND);
+    return Internal::checkResult(L, CA::focus(PWINDOW));
+}
+
+static int dsp_focusUrgentOrLast(lua_State* L) {
+    return Internal::checkResult(L, CA::focusUrgentOrLast());
+}
+
+static int dsp_focusCurrentOrLast(lua_State* L) {
+    return Internal::checkResult(L, CA::focusCurrentOrLast());
+}
+
+static int dsp_focusWorkspace(lua_State* L) {
+    return Internal::checkResult(L, CA::changeWorkspace(std::string(lua_tostring(L, lua_upvalueindex(1))), false));
+}
+
+static int dsp_focusWorkspaceOnCurrentMonitor(lua_State* L) {
+    return Internal::checkResult(L, CA::changeWorkspaceOnCurrentMonitor(std::string(lua_tostring(L, lua_upvalueindex(1)))));
+}
+
+static int hlFocus(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.focus: expected a table, e.g. { direction = \"left\" }");
+
+    auto dirStr = Internal::tableOptStr(L, 1, "direction");
+    if (dirStr) {
+        auto dir = Internal::parseDirectionStr(*dirStr);
+        if (dir == Math::DIRECTION_DEFAULT)
+            return Internal::configError(L, "hl.focus: invalid direction \"{}\" (expected left/right/up/down)", *dirStr);
+        lua_pushnumber(L, (int)dir);
+        lua_pushcclosure(L, dsp_moveFocus, 1);
+        return 1;
+    }
+
+    auto monStr = Internal::tableOptMonitorSelector(L, 1, "monitor", "hl.focus");
+    if (monStr) {
+        lua_pushstring(L, monStr->c_str());
+        lua_pushcclosure(L, dsp_focusMonitor, 1);
+        return 1;
+    }
+
+    auto wsStr = Internal::tableOptWorkspaceSelector(L, 1, "workspace", "hl.focus");
+    if (wsStr) {
+        auto onCurrentMon = Internal::tableOptBool(L, 1, "on_current_monitor");
+
+        lua_pushstring(L, wsStr->c_str());
+
+        if (onCurrentMon.value_or(false))
+            lua_pushcclosure(L, dsp_focusWorkspaceOnCurrentMonitor, 1);
+        else
+            lua_pushcclosure(L, dsp_focusWorkspace, 1);
+
+        return 1;
+    }
+
+    auto winStr = Internal::tableOptWindowSelector(L, 1, "window", "hl.focus");
+    if (winStr) {
+        lua_pushstring(L, winStr->c_str());
+        lua_pushcclosure(L, dsp_focusWindowBySelector, 1);
+        return 1;
+    }
+
+    auto urgent = Internal::tableOptBool(L, 1, "urgent_or_last");
+    if (urgent && *urgent) {
+        lua_pushcclosure(L, dsp_focusUrgentOrLast, 0);
+        return 1;
+    }
+
+    auto last = Internal::tableOptBool(L, 1, "last");
+    if (last && *last) {
+        lua_pushcclosure(L, dsp_focusCurrentOrLast, 0);
+        return 1;
+    }
+
+    return Internal::configError(L, "hl.focus: unrecognized arguments. Expected one of: direction, monitor, window, urgent_or_last, last");
+}
+
+static int dsp_noop(lua_State* L) {
+    return 0;
+}
+
+static int hlNoop(lua_State* L) {
+    lua_pushcclosure(L, dsp_noop, 0);
+    return 1;
+}
+
+static int dsp_toggleSpecial(lua_State* L) {
+    std::string name   = lua_isnil(L, lua_upvalueindex(1)) ? "" : lua_tostring(L, lua_upvalueindex(1));
+    const auto  TARGET = State::Workspace::resolver()->getWorkspaceTargetFromString(Workspace::specialWorkspaceAddressFromName(name));
+    if (!TARGET.valid() || TARGET.type != Workspace::eWorkspaceType::SPECIAL)
+        return Internal::dispatcherError(L, "Invalid special workspace", ERR, C_INVARG);
+
+    auto ws = State::Workspace::state()->find(TARGET);
+    if (!ws) {
+        const auto PMONITOR = Desktop::focusState()->monitor();
+        if (PMONITOR)
+            ws = State::Workspace::state()->create(TARGET, PMONITOR);
+    }
+    if (!ws)
+        return Internal::dispatcherError(L, "Could not resolve special workspace", ERR, C_UNAVAIL);
+
+    const auto res = Internal::checkResult(L, CA::toggleSpecial(ws));
+    ws->ready();
+    return res;
+}
+
+static int dsp_renameWorkspace(lua_State* L) {
+    const auto PWS = State::Workspace::state()->query().input(lua_tostring(L, lua_upvalueindex(1))).run();
+    if (!PWS)
+        return Internal::dispatcherError(L, "hl.workspace.rename: no such workspace", WARN, C_NOTFOUND);
+    std::string name = lua_isnil(L, lua_upvalueindex(2)) ? "" : lua_tostring(L, lua_upvalueindex(2));
+    return Internal::checkResult(L, CA::renameWorkspace(PWS, name));
+}
+
+static int dsp_workspaceChangeID(lua_State* L) {
+    const auto PWS = State::Workspace::state()->query().input(lua_tostring(L, lua_upvalueindex(1))).run();
+    if (!PWS)
+        return Internal::dispatcherError(L, "hl.workspace.change_id: no such workspace", WARN, C_NOTFOUND);
+    if (!PWS->numberedID())
+        return Internal::dispatcherError(L, "hl.workspace.change_id: cannot change id of workspace with a managed id", WARN, C_NOTFOUND);
+    int64_t id = lua_tonumber(L, lua_upvalueindex(2));
+    return Internal::checkResult(L, CA::changeWorkspaceID(PWS, id));
+}
+
+static int dsp_moveWorkspaceToMonitor(lua_State* L) {
+    const auto TARGET = State::Workspace::resolver()->getWorkspaceTargetFromString(lua_tostring(L, lua_upvalueindex(1)));
+    if (!TARGET.valid())
+        return Internal::dispatcherError(L, "Invalid workspace", ERR, C_INVARG);
+    const auto PWORKSPACE = State::Workspace::state()->find(TARGET);
+    if (!PWORKSPACE)
+        return Internal::dispatcherError(L, "Workspace not found", WARN, C_NOTFOUND);
+    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
+    if (!PMONITOR)
+        return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
+    return Internal::checkResult(L, CA::moveToMonitor(PWORKSPACE, PMONITOR));
+}
+
+static int dsp_moveCurrentWorkspaceToMonitor(lua_State* L) {
+    const auto PMONITOR = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
+    if (!PMONITOR)
+        return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
+    const auto PCURRENTWORKSPACE = Desktop::focusState()->monitor()->m_activeWorkspace;
+    if (!PCURRENTWORKSPACE)
+        return Internal::dispatcherError(L, "Invalid workspace", ERR, C_INVARG);
+    return Internal::checkResult(L, CA::moveToMonitor(PCURRENTWORKSPACE, PMONITOR));
+}
+
+static int dsp_swapActiveWorkspaces(lua_State* L) {
+    const auto PMON1 = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(1))).run();
+    const auto PMON2 = State::monitorState()->query().relativeTo(Desktop::focusState()->monitor()).configString(lua_tostring(L, lua_upvalueindex(2))).run();
+    if (!PMON1 || !PMON2)
+        return Internal::dispatcherError(L, "Monitor not found", WARN, C_NOTFOUND);
+    return Internal::checkResult(L, CA::swapActiveWorkspaces(PMON1, PMON2));
+}
+
+static int hlWorkspaceToggleSpecial(lua_State* L) {
+    lua_pushstring(L, lua_tostring(L, 1));
+    lua_pushcclosure(L, dsp_toggleSpecial, 1);
+    return 1;
+}
+
+static int hlWorkspaceRename(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.workspace.rename: expected a table { workspace, name? }");
+
+    const auto id   = Internal::requireTableFieldWorkspaceSelector(L, 1, "workspace", "hl.workspace.rename");
+    auto       name = Internal::tableOptStr(L, 1, "name");
+
+    lua_pushstring(L, id.c_str());
+    if (name)
+        lua_pushstring(L, name->c_str());
+    else
+        lua_pushnil(L);
+    lua_pushcclosure(L, dsp_renameWorkspace, 2);
+    return 1;
+}
+
+static int hlWorkspaceChangeID(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.workspace.change_id: expected a table { workspace, id }");
+
+    const auto workspace = Internal::requireTableFieldWorkspaceSelector(L, 1, "workspace", "hl.workspace.change_id");
+    auto       newID     = Internal::requireTableFieldNum(L, 1, "id", "hl.workspace.change_id");
+
+    if (newID <= 0 || newID >= std::numeric_limits<uint32_t>::max())
+        return Internal::configError(L, "hl.workspace.change_id: bad id");
+
+    lua_pushstring(L, workspace.c_str());
+    lua_pushnumber(L, newID);
+    lua_pushcclosure(L, dsp_workspaceChangeID, 2);
+    return 1;
+}
+
+static int hlWorkspaceMove(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.workspace.move: expected a table, e.g. { monitor = \"DP-1\" }");
+
+    const auto mon = Internal::requireTableFieldMonitorSelector(L, 1, "monitor", "hl.workspace.move");
+
+    auto       id = Internal::tableOptWorkspaceSelector(L, 1, "workspace", "hl.workspace.move");
+    if (id) {
+        lua_pushstring(L, id->c_str());
+        lua_pushstring(L, mon.c_str());
+        lua_pushcclosure(L, dsp_moveWorkspaceToMonitor, 2);
+        return 1;
+    }
+
+    lua_pushstring(L, mon.c_str());
+    lua_pushcclosure(L, dsp_moveCurrentWorkspaceToMonitor, 1);
+    return 1;
+}
+
+static int hlWorkspaceSwapMonitors(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.workspace.swap_monitors: expected a table { monitor1, monitor2 }");
+
+    const auto m1 = Internal::requireTableFieldMonitorSelector(L, 1, "monitor1", "hl.workspace.swap_monitors");
+    const auto m2 = Internal::requireTableFieldMonitorSelector(L, 1, "monitor2", "hl.workspace.swap_monitors");
+    lua_pushstring(L, m1.c_str());
+    lua_pushstring(L, m2.c_str());
+    lua_pushcclosure(L, dsp_swapActiveWorkspaces, 2);
+    return 1;
+}
+
+static int dsp_showWorkspace(lua_State* L) {
+    const auto TARGET = State::Workspace::resolver()->getWorkspaceTargetFromString(lua_tostring(L, lua_upvalueindex(1)));
+    if (!TARGET.valid())
+        return Internal::dispatcherError(L, "Invalid workspace", ERR, C_INVARG);
+    const auto PWORKSPACE = State::Workspace::state()->find(TARGET);
+    if (!PWORKSPACE)
+        return Internal::dispatcherError(L, "Workspace not found", WARN, C_NOTFOUND);
+    return Internal::checkResult(L, CA::changeWorkspace(PWORKSPACE, true));
+}
+
+static int hlWorkspaceShow(lua_State* L) {
+    if (!lua_istable(L, 1))
+        return Internal::configError(L, "hl.workspace.show: expected a table, e.g. { workspace }");
+
+    auto wsStr = Internal::tableOptWorkspaceSelector(L, 1, "workspace", "hl.workspace.show");
+    lua_pushstring(L, wsStr->c_str());
+    lua_pushcclosure(L, dsp_showWorkspace, 1);
+    return 1;
+}
+
+void Internal::registerDispatcherBindings(lua_State* L) {
+    lua_newtable(L);
+
+    {
+        lua_newtable(L);
+        Internal::setDispatcherFn(L, "move_to_corner", hlCursorMoveToCorner, 1);
+        Internal::setDispatcherFn(L, "move", hlCursorMove, 1);
+        lua_setfield(L, -2, "cursor");
+
+        lua_newtable(L);
+        Internal::setDispatcherFn(L, "toggle", hlGroupToggle, 1);
+        Internal::setDispatcherFn(L, "next", hlGroupNext, 1);
+        Internal::setDispatcherFn(L, "prev", hlGroupPrev, 1);
+        Internal::setDispatcherFn(L, "active", hlGroupActive, 1);
+        Internal::setDispatcherFn(L, "move_window", hlGroupMoveWindow, 1);
+        Internal::setDispatcherFn(L, "lock", hlGroupLock, 1);
+        Internal::setDispatcherFn(L, "lock_active", hlGroupLockActive, 1);
+        lua_setfield(L, -2, "group");
+
+        lua_newtable(L);
+        Internal::setDispatcherFn(L, "close", hlWindowClose, 1);
+        Internal::setDispatcherFn(L, "kill", hlWindowKill, 1);
+        Internal::setDispatcherFn(L, "signal", hlWindowSignal, 1);
+        Internal::setDispatcherFn(L, "float", hlWindowFloat, 1);
+        Internal::setDispatcherFn(L, "fullscreen", hlWindowFullscreen, 1);
+        Internal::setDispatcherFn(L, "fullscreen_state", hlWindowFullscreenState, 1);
+        Internal::setDispatcherFn(L, "pseudo", hlWindowPseudo, 1);
+        Internal::setDispatcherFn(L, "move", hlWindowMove, 1);
+        Internal::setDispatcherFn(L, "swap", hlWindowSwap, 1);
+        Internal::setDispatcherFn(L, "center", hlWindowCenter, 1);
+        Internal::setDispatcherFn(L, "cycle_next", hlWindowCycleNext, 1);
+        Internal::setDispatcherFn(L, "tag", hlWindowTag, 1);
+        Internal::setDispatcherFn(L, "clear_tags", hlWindowClearTags, 1);
+        Internal::setDispatcherFn(L, "toggle_swallow", hlWindowToggleSwallow, 0);
+        Internal::setDispatcherFn(L, "pin", hlWindowPin, 1);
+        Internal::setDispatcherFn(L, "bring_to_top", hlWindowBringToTop, 0);
+        Internal::setDispatcherFn(L, "alter_zorder", hlWindowAlterZOrder, 1);
+        Internal::setDispatcherFn(L, "set_prop", hlWindowSetProp, 1);
+        Internal::setDispatcherFn(L, "deny_from_group", hlWindowDenyFromGroup, 1);
+        Internal::setDispatcherFn(L, "drag", hlWindowDrag, 0);
+        Internal::setDispatcherFn(L, "resize", hlWindowResize, 1);
+        lua_setfield(L, -2, "window");
+
+        lua_newtable(L);
+        Internal::setDispatcherFn(L, "rename", hlWorkspaceRename, 1);
+        Internal::setDispatcherFn(L, "change_id", hlWorkspaceChangeID, 1);
+        Internal::setDispatcherFn(L, "move", hlWorkspaceMove, 1);
+        Internal::setDispatcherFn(L, "show", hlWorkspaceShow, 1);
+        Internal::setDispatcherFn(L, "swap_monitors", hlWorkspaceSwapMonitors, 1);
+        Internal::setDispatcherFn(L, "toggle_special", hlWorkspaceToggleSpecial, 1);
+        lua_setfield(L, -2, "workspace");
+
+        Internal::setDispatcherFn(L, "exec_cmd", hlExecCmd, 2);
+        Internal::setDispatcherFn(L, "exec_raw", hlExecRaw, 1);
+        Internal::setDispatcherFn(L, "exit", hlExit, 0);
+        Internal::setDispatcherFn(L, "reload_config", hlReloadConfig, 0);
+        Internal::setDispatcherFn(L, "submap", hlSubmap, 1);
+        Internal::setDispatcherFn(L, "pass", hlPass, 1);
+        Internal::setDispatcherFn(L, "send_shortcut", hlSendShortcut, 1);
+        Internal::setDispatcherFn(L, "send_key_state", hlSendKeyState, 1);
+        Internal::setDispatcherFn(L, "layout", hlLayout, 1);
+        Internal::setDispatcherFn(L, "dpms", hlDpms, 1);
+        Internal::setDispatcherFn(L, "event", hlEvent, 1);
+        Internal::setDispatcherFn(L, "global", hlGlobal, 2);
+        Internal::setDispatcherFn(L, "force_renderer_reload", hlForceRendererReload, 0);
+        Internal::setDispatcherFn(L, "force_idle", hlForceIdle, 1);
+        Internal::setDispatcherFn(L, "release_input_capture", hlReleaseInputCapture, 0);
+        Internal::setDispatcherFn(L, "focus", hlFocus, 1);
+        Internal::setDispatcherFn(L, "no_op", hlNoop, 0);
+    }
+
+    lua_setfield(L, -2, "dsp");
+}

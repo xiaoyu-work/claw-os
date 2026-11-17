@@ -1,0 +1,376 @@
+#pragma once
+
+#include "../defines.hpp"
+#include "../output/Monitor.hpp"
+#include "../helpers/Color.hpp"
+#include "../helpers/time/Timer.hpp"
+#include "../helpers/math/Math.hpp"
+#include "../helpers/Format.hpp"
+#include "../helpers/DeformableMesh.hpp"
+#include "../helpers/sync/SyncTimeline.hpp"
+#include <GLES3/gl32.h>
+#include <cstdint>
+#include <list>
+#include <optional>
+#include <string>
+#include <map>
+
+#include <cairo/cairo.h>
+
+#include "render/SyncFDManager.hpp"
+#include "types.hpp"
+#include "Shader.hpp"
+#include "Texture.hpp"
+#include "Framebuffer.hpp"
+#include "Renderbuffer.hpp"
+#include "../desktop/DesktopTypes.hpp"
+#include "pass/Pass.hpp"
+
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2ext.h>
+#include <aquamarine/buffer/Buffer.hpp>
+#include <hyprutils/os/FileDescriptor.hpp>
+#include <hyprgraphics/resource/resources/ImageResource.hpp>
+
+#include "../debug/TracyDefines.hpp"
+#include "../protocols/core/Compositor.hpp"
+#include "ShaderLoader.hpp"
+#include "gl/GLFramebuffer.hpp"
+#include "gl/GLRenderbuffer.hpp"
+#include "pass/TexPassElement.hpp"
+#include "WindowRenderPresentation.hpp"
+
+#define GLFB(ifb) dc<CGLFramebuffer*>(ifb.get())
+
+struct gbm_device;
+namespace Render {
+    class IHyprRenderer;
+}
+namespace Config {
+    class CGradientValueData;
+}
+
+namespace Render::GL {
+    class CDualKawaseBlurProvider;
+    class CHyprOpenGLImpl;
+
+    // Only framebuffer bindings and viewport; all values come from the backend cache.
+    class CFramebufferBindingGuard {
+      public:
+        explicit CFramebufferBindingGuard(WP<CHyprOpenGLImpl> backend);
+        ~CFramebufferBindingGuard();
+        CFramebufferBindingGuard(const CFramebufferBindingGuard&)            = delete;
+        CFramebufferBindingGuard& operator=(const CFramebufferBindingGuard&) = delete;
+
+      private:
+        WP<CHyprOpenGLImpl>       m_backend;
+        CFramebufferBindingGuard* m_previous = nullptr;
+        GLuint                    m_drawFB = 0, m_readFB = 0;
+        std::array<GLint, 4>      m_viewport = {};
+
+        friend class CHyprOpenGLImpl;
+    };
+
+    CBox resolveBlurUV(const CBox& destinationBox, const Vector2D& textureSize);
+
+    struct SVertex {
+        float x, y; // position
+        float u, v; // uv
+    };
+
+    constexpr std::array<SVertex, 4> fullVerts = {{
+        {0.0f, 0.0f, 0.0f, 0.0f}, // top-left
+        {0.0f, 1.0f, 0.0f, 1.0f}, // bottom-left
+        {1.0f, 0.0f, 1.0f, 0.0f}, // top-right
+        {1.0f, 1.0f, 1.0f, 1.0f}, // bottom-right
+    }};
+
+    inline const float               fanVertsFull[] = {-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f};
+
+    enum eMonitorRenderFBs : uint8_t {
+        FB_MONITOR_RENDER_MAIN    = 0,
+        FB_MONITOR_RENDER_CURRENT = 1,
+        FB_MONITOR_RENDER_OUT     = 2,
+    };
+
+    enum eMonitorExtraRenderFBs : uint8_t {
+        FB_MONITOR_RENDER_EXTRA_OFFLOAD = 0,
+        FB_MONITOR_RENDER_EXTRA_MIRROR,
+        FB_MONITOR_RENDER_EXTRA_MIRROR_SWAP,
+        FB_MONITOR_RENDER_EXTRA_OFF_MAIN,
+        FB_MONITOR_RENDER_EXTRA_MONITOR_MIRROR,
+        FB_MONITOR_RENDER_EXTRA_BLUR,
+    };
+
+    struct SFragShaderDesc {
+        Render::ePreparedFragmentShader id;
+        const char*                     file;
+    };
+
+    struct SPreparedShaders {
+        std::string                                                                     TEXVERTSRC;
+        std::string                                                                     TEXVERTSRC320;
+        std::array<std::map<Render::SShaderVariant, SP<CShader>>, Render::SH_FRAG_LAST> fragVariants;
+    };
+
+    class CEGLSync : public ISyncFDManager {
+      public:
+        static UP<CEGLSync> create();
+        ~CEGLSync() override;
+
+        bool isValid() override;
+
+      private:
+        CEGLSync() : ISyncFDManager() {};
+
+        EGLSyncKHR m_sync = EGL_NO_SYNC_KHR;
+
+        friend class CHyprOpenGLImpl;
+    };
+
+    class CHyprOpenGLImpl {
+      public:
+        CHyprOpenGLImpl();
+        ~CHyprOpenGLImpl();
+
+        struct SRectRenderData {
+            const CRegion*                    damage        = nullptr;
+            int                               round         = 0;
+            float                             roundingPower = 2.F;
+            bool                              blur          = false;
+            float                             blurA         = 1.F;
+            bool                              xray          = false;
+            std::optional<CBox>               blurPatternBox;
+            PHLWINDOWREF                      blurOwner;
+            Render::SWindowRenderPresentation workspacePresentation;
+        };
+
+        struct STextureRenderData {
+            bool                   blur           = false;
+            bool                   forceBlurBlend = false;
+            float                  blurA = 1.F, overallA = 1.F;
+            bool                   blockBlurOptimization = false;
+            SP<ITexture>           blurredBG;
+            SP<ITexture>           blurAlphaMatte;
+            const CRegion*         damage           = nullptr;
+            SP<CWLSurfaceResource> surface          = nullptr;
+            float                  a                = 1.F;
+            int                    round            = 0;
+            float                  roundingPower    = 2.F;
+            bool                   blurProportional = false;
+            bool                   discardActive    = false;
+            bool                   allowCustomUV    = false;
+            bool                   allowDim         = true;
+            bool                   noAA             = false; // unused
+            uint8_t                wrapX = WRAP_CLAMP_TO_EDGE, wrapY = WRAP_CLAMP_TO_EDGE;
+            bool                   cmBackToSRGB   = false;
+            bool                   finalMonitorCM = false;
+
+            uint8_t                discardMode    = DISCARD_OPAQUE;
+            float                  discardOpacity = 0.f;
+
+            CRegion                clipRegion;
+            PHLLSREF               currentLS;
+
+            Vector2D               primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+            Vector2D               primarySurfaceUVBottomRight = Vector2D(-1, -1);
+
+            SMotionBlurData        motionBlur;
+        };
+
+        struct SBorderRenderData {
+            int   round         = 0;
+            float roundingPower = 2.F;
+            int   borderSize    = 1;
+            float a             = 1.0;
+            int   outerRound    = -1; /* use round */
+        };
+
+        void makeEGLCurrent();
+        bool begin(CRenderContext& ctx, PHLMONITOR, const CRegion& damage, SP<IFramebuffer> fb = nullptr, std::optional<CRegion> finalDamage = {});
+        void beginSimple(CRenderContext& ctx, PHLMONITOR, const CRegion& damage, SP<IRenderbuffer> rb = nullptr, SP<IFramebuffer> fb = nullptr);
+        void end(CRenderContext& ctx);
+
+        void renderRect(CRenderContext& ctx, const CBox&, const CHyprColor&, SRectRenderData data);
+        void renderTexture(CRenderContext& ctx, SP<ITexture>, const CBox&, STextureRenderData data);
+        void renderTextureMesh(CRenderContext& ctx, SP<ITexture>, const CBox&, const std::vector<SMeshRenderVertex>& vertices, STextureRenderData data);
+        void renderRoundedShadow(CRenderContext& ctx, const CBox&, int round, float roundingPower, int range, const Config::CGradientValueData& color, float a,
+                                 const Render::SWindowRenderPresentation& presentation);
+        void renderRoundedShadow(CRenderContext& ctx, const CBox&, int round, float roundingPower, int range, const Config::CGradientValueData& grad1,
+                                 const Config::CGradientValueData& grad2, float lerp, float a, const Render::SWindowRenderPresentation& presentation);
+        void renderInnerGlow(CRenderContext& ctx, const CBox&, int round, float roundingPower, int range, const Config::CGradientValueData& color, int glowPower, float a = 1.0);
+        void renderInnerGlow(CRenderContext& ctx, const CBox&, int round, float roundingPower, int range, const Config::CGradientValueData& grad1,
+                             const Config::CGradientValueData& grad2, float lerp, int glowPower, float a = 1.0);
+        void renderBorder(CRenderContext& ctx, const CBox&, const Config::CGradientValueData&, SBorderRenderData data);
+        void renderBorder(CRenderContext& ctx, const CBox&, const Config::CGradientValueData&, const Config::CGradientValueData&, float lerp, SBorderRenderData data);
+        void renderTextureMatte(CRenderContext& ctx, SP<ITexture> tex, const CBox& pBox, SP<IFramebuffer> matte);
+        void renderTexturePrimitive(CRenderContext& ctx, SP<ITexture> tex, const CBox& box);
+
+        void setViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+        void setCapStatus(int cap, bool status);
+        void setActiveTexture(GLenum texture);
+        void blendFunc(GLenum sfactor, GLenum dfactor);
+        void bindArrayBuffer(GLuint buffer);
+        void bindFramebuffer(GLenum target, GLuint fb);
+        // GL implicitly rebinds 0 on every target the deleted fb was bound to, keep the shadow in sync
+        void                                      onFramebufferDeleted(GLuint fb);
+
+        void                                      blend(bool enabled);
+        bool                                      blendEnabled() const;
+
+        void                                      disableScissor();
+        void                                      scissor(CRenderContext& ctx, const CBox&, bool transform = true);
+        void                                      scissor(CRenderContext& ctx, const pixman_box32*, bool transform = true);
+        void                                      scissor(CRenderContext& ctx, const int x, const int y, const int w, const int h, bool transform = true);
+
+        void                                      destroyMonitorResources(PHLMONITORREF);
+
+        bool                                      saveBufferForMirror(CRenderContext& ctx, const CBox&);
+
+        void                                      applyScreenShader(const std::string& path);
+
+        void                                      renderOffToMain(CRenderContext& ctx, SP<IFramebuffer> off);
+
+        std::vector<SDRMFormat>                   getDRMFormats();
+        std::vector<uint64_t>                     getDRMFormatModifiers(DRMFormat format);
+        EGLImageKHR                               createEGLImage(const Aquamarine::SDMABUFAttrs& attrs);
+
+        bool                                      initShaders(const std::string& path = "");
+
+        WP<CShader>                               useShader(WP<CShader> prog);
+
+        bool                                      explicitSyncSupported();
+        bool                                      fp16Supported();
+        WP<CShader>                               getShaderVariant(Render::ePreparedFragmentShader frag, Render::ShaderFeatureFlags features = 0,
+                                                                   NColorManagement::eTransferFunction sourceTF = Render::SHADER_DEFAULT_TF,
+                                                                   NColorManagement::eTransferFunction targetTF = Render::SHADER_DEFAULT_TF);
+        WP<CShader>                               getShaderVariant(Render::ePreparedFragmentShader frag, const Render::SShaderVariant& variant);
+
+        bool                                      m_shadersInitialized = false;
+        SP<SPreparedShaders>                      m_shaders;
+
+        Hyprutils::OS::CFileDescriptor            m_gbmFD;
+        gbm_device*                               m_gbmDevice  = nullptr;
+        EGLContext                                m_eglContext = nullptr;
+        EGLDisplay                                m_eglDisplay = nullptr;
+        EGLDeviceEXT                              m_eglDevice  = nullptr;
+
+        std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
+
+        struct {
+            PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC glEGLImageTargetRenderbufferStorageOES = nullptr;
+            PFNGLEGLIMAGETARGETTEXTURE2DOESPROC           glEGLImageTargetTexture2DOES           = nullptr;
+            PFNEGLCREATEIMAGEKHRPROC                      eglCreateImageKHR                      = nullptr;
+            PFNEGLDESTROYIMAGEKHRPROC                     eglDestroyImageKHR                     = nullptr;
+            PFNEGLQUERYDMABUFFORMATSEXTPROC               eglQueryDmaBufFormatsEXT               = nullptr;
+            PFNEGLQUERYDMABUFMODIFIERSEXTPROC             eglQueryDmaBufModifiersEXT             = nullptr;
+            PFNEGLGETPLATFORMDISPLAYEXTPROC               eglGetPlatformDisplayEXT               = nullptr;
+            PFNEGLDEBUGMESSAGECONTROLKHRPROC              eglDebugMessageControlKHR              = nullptr;
+            PFNEGLQUERYDEVICESEXTPROC                     eglQueryDevicesEXT                     = nullptr;
+            PFNEGLQUERYDEVICESTRINGEXTPROC                eglQueryDeviceStringEXT                = nullptr;
+            PFNEGLQUERYDISPLAYATTRIBEXTPROC               eglQueryDisplayAttribEXT               = nullptr;
+            PFNEGLCREATESYNCKHRPROC                       eglCreateSyncKHR                       = nullptr;
+            PFNEGLDESTROYSYNCKHRPROC                      eglDestroySyncKHR                      = nullptr;
+            PFNEGLDUPNATIVEFENCEFDANDROIDPROC             eglDupNativeFenceFDANDROID             = nullptr;
+            PFNEGLWAITSYNCKHRPROC                         eglWaitSyncKHR                         = nullptr;
+        } m_proc;
+
+        struct {
+            bool EXT_read_format_bgra               = false;
+            bool EXT_color_buffer_half_float        = false;
+            bool EXT_image_dma_buf_import           = false;
+            bool EXT_image_dma_buf_import_modifiers = false;
+            bool KHR_context_flush_control          = false;
+            bool KHR_display_reference              = false;
+            bool IMG_context_priority               = false;
+            bool EXT_create_context_robustness      = false;
+            bool EGL_ANDROID_native_fence_sync_ext  = false;
+        } m_exts;
+
+        enum eEGLContextVersion : uint8_t {
+            EGL_CONTEXT_GLES_2_0 = 0,
+            EGL_CONTEXT_GLES_3_0,
+            EGL_CONTEXT_GLES_3_2,
+        };
+
+        eEGLContextVersion m_eglContextVersion = EGL_CONTEXT_GLES_3_2;
+
+        enum eCachedCapStatus : uint8_t {
+            CAP_STATUS_BLEND = 0,
+            CAP_STATUS_SCISSOR_TEST,
+            CAP_STATUS_STENCIL_TEST,
+            CAP_STATUS_END
+        };
+
+      private:
+        CFramebufferBindingGuard* m_bindingGuard = nullptr;
+
+        struct {
+            GLint   x      = 0;
+            GLint   y      = 0;
+            GLsizei width  = 0;
+            GLsizei height = 0;
+        } m_lastViewport;
+
+        std::array<bool, CAP_STATUS_END> m_capStatus = {};
+
+        // shadowed GL state, all initialized to the GL defaults
+        GLenum                  m_activeTexture    = GL_TEXTURE0;
+        GLuint                  m_boundArrayBuffer = 0;
+        GLuint                  m_boundDrawFB      = 0;
+        GLuint                  m_boundReadFB      = 0;
+        GLenum                  m_blendSFactor     = GL_ONE;
+        GLenum                  m_blendDFactor     = GL_ZERO;
+
+        std::vector<SDRMFormat> m_drmFormats;
+        bool                    m_hasModifiers  = false;
+        bool                    m_fp16Supported = false;
+
+        int                     m_drmFD = -1;
+        std::string             m_extensions;
+
+        bool                    m_blend       = false;
+        bool                    m_cmSupported = true;
+
+        SP<CShader>             m_finalScreenShader;
+        GLuint                  m_currentProgram;
+
+        void                    initDRMFormats();
+        void                    initEGL(bool gbm);
+        EGLDeviceEXT            eglDeviceFromDRMFD(int drmFD);
+
+        // for the final shader
+        std::array<CTimer, POINTER_PRESSED_HISTORY_LENGTH>   m_pressedHistoryTimers    = {};
+        std::array<Vector2D, POINTER_PRESSED_HISTORY_LENGTH> m_pressedHistoryPositions = {};
+        GLint                                                m_pressedHistoryKilled    = 0;
+        GLint                                                m_pressedHistoryTouched   = 0;
+
+        //
+        std::optional<std::vector<uint64_t>> getModsForFormat(EGLint format);
+
+        void passCMUniforms(WP<CShader>, const NColorManagement::PImageDescription imageDescription, const NColorManagement::PImageDescription targetImageDescription,
+                            bool modifySDR, float sdrMinLuminance, int sdrMaxLuminance, const SCMSettings& settings);
+        void passCMUniforms(CRenderContext& ctx, WP<CShader>, const NColorManagement::PImageDescription imageDescription,
+                            const NColorManagement::PImageDescription targetImageDescription, bool modifySDR = false, float sdrMinLuminance = -1.0f, int sdrMaxLuminance = -1);
+        void passCMUniforms(CRenderContext& ctx, WP<CShader>, const NColorManagement::PImageDescription imageDescription);
+        void passCMUniforms(CRenderContext& ctx, WP<CShader>, const NColorManagement::PImageDescription imageDescription, const SCMSettings& settings);
+        void renderRectWithBlurInternal(CRenderContext& ctx, const CBox&, const CHyprColor&, const SRectRenderData& data);
+        void renderRectWithDamageInternal(CRenderContext& ctx, const CBox&, const CHyprColor&, const SRectRenderData& data);
+        WP<CShader> renderScreenShaderInternal(CRenderContext& ctx);
+        WP<CShader> renderToFBInternal(CRenderContext& ctx, SP<ITexture> tex, const STextureRenderData& data, eTextureType texType, const CBox& newBox);
+        void        renderTextureInternal(CRenderContext& ctx, SP<ITexture>, const CBox&, const STextureRenderData& data);
+        void        renderTextureWithBlurInternal(CRenderContext& ctx, SP<ITexture>, const CBox&, const STextureRenderData& data);
+
+        friend class IHyprRenderer;
+        friend class CFramebufferBindingGuard;
+        friend class CHyprGLRenderer;
+        friend class CGLElementRenderer;
+        friend class CTexPassElement;
+        friend class CPreBlurElement;
+        friend class CSurfacePassElement;
+        friend class CDualKawaseBlurProvider;
+    };
+
+    inline UP<CHyprOpenGLImpl> g_pHyprOpenGL;
+}

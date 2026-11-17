@@ -1,0 +1,295 @@
+#include "DefaultFloatingAlgorithm.hpp"
+
+#include "../../Algorithm.hpp"
+
+#include "../../../target/WindowTarget.hpp"
+#include "../../../space/Space.hpp"
+
+#include "../../../../config/ConfigValue.hpp"
+#include "../../../../Compositor.hpp"
+#include "../../../../desktop/state/WindowState.hpp"
+#include "../../../../output/Monitor.hpp"
+#include "../../../../state/MonitorState.hpp"
+
+using namespace Layout;
+using namespace Layout::Floating;
+
+constexpr const Vector2D DEFAULT_SIZE = {640, 400};
+
+//
+void CDefaultFloatingAlgorithm::newTarget(SP<ITarget> target) {
+    const auto WORK_AREA    = m_parent->space()->workArea(true);
+    const auto DESIRED_GEOM = target->desiredGeometry();
+    const auto MONITOR_POS  = m_parent->space()->workspace()->m_monitor->logicalBox().pos();
+
+    CBox       windowGeometry;
+
+    if (!DESIRED_GEOM) {
+        switch (DESIRED_GEOM.error()) {
+            case GEOMETRY_INVALID_DESIRED: {
+                // if the desired is invalid, we hide the window.
+                if (target->type() == TARGET_TYPE_WINDOW)
+                    dynamicPointerCast<CWindowTarget>(target)->window()->setHidden(true);
+                return;
+            }
+            case GEOMETRY_NO_DESIRED: {
+                // add a default geom
+                windowGeometry = CBox{WORK_AREA.middle() - DEFAULT_SIZE / 2.F, DEFAULT_SIZE};
+                break;
+            }
+        }
+    } else {
+        if (DESIRED_GEOM->pos)
+            windowGeometry = CBox{DESIRED_GEOM->pos.value(), DESIRED_GEOM->size};
+        else
+            windowGeometry = CBox{WORK_AREA.middle() - DESIRED_GEOM->size / 2.F, DESIRED_GEOM->size};
+    }
+
+    bool posOverridden = false;
+
+    if (target->window() && (target->window()->m_state & Desktop::View::WINDOW_STATE_FIRST_MAP)) {
+        const auto WINDOW = target->window();
+
+        // set this here so that expressions can use it. This could be wrong of course.
+        WINDOW->sizeAnimation()->setValueAndWarp(DESIRED_GEOM ? DESIRED_GEOM->size : DEFAULT_SIZE);
+
+        if (WINDOW->m_ruleApplicator->static_.size) {
+            const auto COMPUTED = WINDOW->calculateExpression(*WINDOW->m_ruleApplicator->static_.size);
+            if (!COMPUTED)
+                LOG(Log::ERR, "failed to parse {} as an expression", WINDOW->m_ruleApplicator->static_.size->toString());
+            else {
+                windowGeometry.w = COMPUTED->x;
+                windowGeometry.h = COMPUTED->y;
+
+                // update the size for position expressions to use.
+                WINDOW->sizeAnimation()->setValueAndWarp(*COMPUTED);
+            }
+        }
+
+        if (WINDOW->m_ruleApplicator->static_.position) {
+            const auto COMPUTED = WINDOW->calculateExpression(*WINDOW->m_ruleApplicator->static_.position);
+            if (!COMPUTED)
+                LOG(Log::ERR, "failed to parse {} as an expression", WINDOW->m_ruleApplicator->static_.position->toString());
+            else {
+                windowGeometry.x = COMPUTED->x + MONITOR_POS.x;
+                windowGeometry.y = COMPUTED->y + MONITOR_POS.y;
+                posOverridden    = true;
+            }
+        }
+
+        if (WINDOW->m_ruleApplicator->static_.center.value_or(false)) {
+            const auto POS   = WORK_AREA.middle() - windowGeometry.size() / 2.f;
+            windowGeometry.x = POS.x;
+            windowGeometry.y = POS.y;
+            posOverridden    = true;
+        }
+    } else if (target->lastFloatingSize().x > 5 && target->lastFloatingSize().y > 5) {
+        windowGeometry.w = target->lastFloatingSize().x;
+        windowGeometry.h = target->lastFloatingSize().y;
+    }
+
+    if (!posOverridden && (!DESIRED_GEOM || !DESIRED_GEOM->pos))
+        windowGeometry = CBox{WORK_AREA.middle() - windowGeometry.size() / 2.F, windowGeometry.size()};
+
+    static auto PFORCEONSCREEN = CConfigValue<Config::INTEGER>("misc:new_float_force_onscreen");
+    switch (*PFORCEONSCREEN) {
+        default:
+        case 0: target->setPositionGlobal(windowGeometry); break;
+        case 1: target->setPositionGlobal(fitBoxInWorkArea(windowGeometry, target, false)); break;
+        case 2: target->setPositionGlobal(fitBoxInWorkArea(windowGeometry, target, true)); break;
+    }
+
+    // TODO: not very OOP, is it?
+    if (const auto WTARGET = dynamicPointerCast<CWindowTarget>(target); WTARGET) {
+        const auto PWINDOW = WTARGET->window();
+        const auto TRAITS  = PWINDOW->backend().traits();
+
+        if (TRAITS.suggestsNoBorder || (PWINDOW->backend().isX11() && TRAITS.overrideRedirect))
+            PWINDOW->finishAnimation();
+
+        if (!TRAITS.overrideRedirect)
+            Desktop::windowState()->raise(PWINDOW);
+        else
+            PWINDOW->acknowledgeClientGeometry(PWINDOW->geometricBox(Desktop::View::IGeometric::GEOMETRIC_GOAL));
+    }
+
+    // Ensure that the target is in the datas map in case setting geometry didn't trigger an update
+    updateTarget(target);
+}
+
+void CDefaultFloatingAlgorithm::movedTarget(SP<ITarget> target, std::optional<Vector2D> focalPoint) {
+    if (target->window() && (target->window()->m_state & Desktop::View::WINDOW_STATE_PINNED)) {
+        // check if we intersect at all.
+
+        const auto BOX = target->position();
+
+        if (!m_parent->space() || !m_parent->space()->workspace() || !m_parent->space()->workspace()->m_monitor)
+            return;
+
+        const auto THIS_BOX = m_parent->space()->workspace()->m_monitor->logicalBox();
+
+        if (!THIS_BOX.intersection(BOX).empty()) {
+            // Update the m_datas cache without repositioning
+            updateTarget(target);
+            return;
+        }
+    }
+
+    auto       LAST_SIZE    = target->lastFloatingSize();
+    const auto CURRENT_SIZE = target->position().size();
+
+    // ignore positioning a dragged target
+    if (g_layoutManager->dragController()->target() == target)
+        return;
+
+    if (LAST_SIZE.x < 5 || LAST_SIZE.y < 5) {
+        const auto DESIRED = target->desiredGeometry();
+        LAST_SIZE          = DESIRED ? DESIRED->size : DEFAULT_SIZE;
+    }
+
+    CBox wantPos;
+
+    if (target->wasTiling()) {
+        // Avoid floating toggles that don't change size, they aren't easily visible to the user
+        if (std::abs(LAST_SIZE.x - CURRENT_SIZE.x) < 5 && std::abs(LAST_SIZE.y - CURRENT_SIZE.y) < 5)
+            LAST_SIZE += Vector2D{10, 10};
+
+        // calculate new position
+        const auto OLD_CENTER = target->position().middle();
+
+        // put around the current center
+        wantPos = CBox{OLD_CENTER - LAST_SIZE / 2.F, LAST_SIZE};
+
+    } else {
+        // calculate new position
+        const auto THIS_MON_POS = m_parent->space()->workspace()->m_monitor->m_position;
+        const auto OLD_POS      = target->position().pos();
+        const auto MON_FROM_OLD = State::monitorState()->query().vec(OLD_POS).run();
+        const auto NEW_POS      = MON_FROM_OLD ? OLD_POS - MON_FROM_OLD->m_position + THIS_MON_POS : OLD_POS;
+
+        wantPos = CBox{NEW_POS, LAST_SIZE};
+    }
+
+    setPositionGlobal(target, wantPos);
+
+    // Update the m_datas cache even if the geometry didn't change
+    updateTarget(target);
+}
+
+CBox CDefaultFloatingAlgorithm::fitBoxInWorkArea(const CBox& box, SP<ITarget> t, bool fully) {
+    const auto WORK_AREA = m_parent->space()->workArea(true);
+    const auto EXTENTS   = t->window() ? t->window()->getWindowExtentsUnified(Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS) : SBoxExtents{};
+    CBox       targetBox = box.copy().addExtents(EXTENTS);
+
+    if (fully) {
+        targetBox.x = std::max(targetBox.x, WORK_AREA.x);
+        targetBox.y = std::max(targetBox.y, WORK_AREA.y);
+
+        if (targetBox.x + targetBox.w > WORK_AREA.x + WORK_AREA.w)
+            targetBox.x = WORK_AREA.x + WORK_AREA.w - targetBox.w;
+
+        if (targetBox.y + targetBox.h > WORK_AREA.y + WORK_AREA.h)
+            targetBox.y = WORK_AREA.y + WORK_AREA.h - targetBox.h;
+
+    } else {
+        // If we'd move offscreen, place centerpoint on nearest edge instead
+        if (targetBox.intersection(WORK_AREA).empty()) {
+
+            targetBox.x = std::max(targetBox.x, WORK_AREA.x - (targetBox.w / 2.F));
+            targetBox.y = std::max(targetBox.y, WORK_AREA.y - (targetBox.h / 2.F));
+
+            if (targetBox.x > WORK_AREA.x + WORK_AREA.w)
+                targetBox.x = WORK_AREA.x + WORK_AREA.w - (targetBox.w / 2.F);
+
+            if (targetBox.y > WORK_AREA.y + WORK_AREA.h)
+                targetBox.y = WORK_AREA.y + WORK_AREA.h - (targetBox.h / 2.F);
+        }
+    }
+
+    return targetBox.addExtents(SBoxExtents{.topLeft = -EXTENTS.topLeft, .bottomRight = -EXTENTS.bottomRight});
+}
+
+void CDefaultFloatingAlgorithm::removeTarget(SP<ITarget> target) {
+    target->rememberFloatingSize(target->position().size());
+    m_datas.erase(target);
+}
+
+void CDefaultFloatingAlgorithm::resizeTarget(const Vector2D& Δ, SP<ITarget> target, eRectCorner corner) {
+    auto pos = target->position();
+    pos.w += Δ.x;
+    pos.h += Δ.y;
+    pos.translate(-Δ / 2.F);
+    setPositionGlobal(target, pos);
+
+    if (g_layoutManager->dragController()->target() == target)
+        target->warpPositionSize();
+}
+
+void CDefaultFloatingAlgorithm::moveTarget(const Vector2D& Δ, SP<ITarget> target) {
+    auto pos = target->position();
+    pos.translate(Δ);
+    setPositionGlobal(target, pos);
+
+    if (g_layoutManager->dragController()->target() == target)
+        target->warpPositionSize();
+}
+
+void CDefaultFloatingAlgorithm::swapTargets(SP<ITarget> a, SP<ITarget> b) {
+    auto posABackup = a->position();
+    setPositionGlobal(a, b->position(), TARGET_UPDATE_NO_UPDATE_RESTORE_CACHE);
+    setPositionGlobal(b, posABackup, TARGET_UPDATE_NO_UPDATE_RESTORE_CACHE);
+}
+
+void CDefaultFloatingAlgorithm::moveTargetInDirection(SP<ITarget> t, Math::eDirection dir, bool silent) {
+    auto       pos  = t->position();
+    auto       work = m_parent->space()->workArea(true);
+
+    const auto EXTENTS = t->window() ? t->window()->getWindowExtentsUnified(Desktop::View::RESERVED_EXTENTS) : SBoxExtents{};
+
+    switch (dir) {
+        case Math::DIRECTION_LEFT: pos.x = work.x + EXTENTS.topLeft.x; break;
+        case Math::DIRECTION_RIGHT: pos.x = work.x + work.w - pos.w - EXTENTS.bottomRight.x; break;
+        case Math::DIRECTION_UP: pos.y = work.y + EXTENTS.topLeft.y; break;
+        case Math::DIRECTION_DOWN: pos.y = work.y + work.h - pos.h - EXTENTS.bottomRight.y; break;
+        default: LOG(Log::ERR, "Invalid direction in CDefaultFloatingAlgorithm::moveTargetInDirection"); break;
+    }
+
+    setPositionGlobal(t, pos);
+}
+
+void CDefaultFloatingAlgorithm::recenter(SP<ITarget> t) {
+    if (!m_datas.contains(t)) {
+        IFloatingAlgorithm::recenter(t);
+        return;
+    }
+
+    t->setPositionGlobal(m_datas.at(t).lastBox);
+}
+
+void CDefaultFloatingAlgorithm::setTargetGeom(const CBox& geom, SP<ITarget> target) {
+    setPositionGlobal(target, geom);
+}
+
+void CDefaultFloatingAlgorithm::updateTarget(SP<ITarget> t) {
+    m_datas[t] = {.lastBox = t->position()};
+}
+
+CBox CDefaultFloatingAlgorithm::setPositionGlobal(SP<ITarget> t, const CBox& box, uint8_t flags) {
+    CBox        adjustedBox;
+
+    static auto PFORCEONSCREEN = CConfigValue<Config::INTEGER>("misc:float_force_onscreen");
+    switch (*PFORCEONSCREEN) {
+        // No no limits, we'll reach for the sky
+        default:
+        case 0: adjustedBox = box.copy(); break;
+
+        // Must be partially visible
+        case 1: adjustedBox = fitBoxInWorkArea(box, t, false); break;
+
+        // Must be fully in-bounds
+        case 2: adjustedBox = fitBoxInWorkArea(box, t, true); break;
+    }
+
+    t->setPositionGlobal(adjustedBox, flags);
+    return adjustedBox;
+}

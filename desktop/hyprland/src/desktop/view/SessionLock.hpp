@@ -1,0 +1,42 @@
+#pragma once
+
+#include "../../defines.hpp"
+#include <vector>
+#include "WLSurface.hpp"
+#include "View.hpp"
+#include "types/Geometric.hpp"
+
+class CSessionLockSurface;
+
+namespace Desktop::View {
+    class CSessionLock : public virtual IView, public virtual IGeometric {
+      public:
+        static SP<CSessionLock> create(SP<CSessionLockSurface> resource);
+
+        static SP<CSessionLock> fromView(SP<IView>);
+
+        virtual ~CSessionLock();
+
+        virtual eViewType           type() const override;
+        virtual bool                mapped() const override;
+        virtual bool                focusAvailable() const override;
+        virtual std::optional<CBox> logicalBox() const override;
+        virtual bool                desktopComponent() const override;
+        virtual std::optional<CBox> surfaceLogicalBox() const override;
+        virtual Vector2D            position(eGeometricValueType) const override;
+        virtual Vector2D            size(eGeometricValueType) const override;
+        virtual CBox                geometricBox(eGeometricValueType) const override;
+        virtual bool                cantLockCursor() const override;
+
+        PHLMONITOR                  monitor() const;
+
+        WP<CSessionLock>            m_self;
+
+      private:
+        CSessionLock();
+
+        void                    init();
+
+        WP<CSessionLockSurface> m_surface;
+    };
+}

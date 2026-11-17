@@ -1,0 +1,157 @@
+#include "CloseGesture.hpp"
+#include "../../../../desktop/view/window/WindowPresentation.hpp"
+
+#include "../../../../Compositor.hpp"
+#include "../../../../render/Renderer.hpp"
+#include "../../../../managers/eventLoop/EventLoopManager.hpp"
+#include "../../../../managers/eventLoop/EventLoopTimer.hpp"
+#include "../../../../config/ConfigValue.hpp"
+#include "../../../../config/shared/animation/AnimationTree.hpp"
+#include "../../../../desktop/state/FocusState.hpp"
+#include "../../../../layout/target/Target.hpp"
+
+#include <cmath>
+
+using namespace Desktop::View;
+
+constexpr const float                   MAX_DISTANCE = 200.F;
+
+static std::vector<SP<CEventLoopTimer>> trackpadCloseTimers;
+
+//
+static Vector2D lerpVal(const Vector2D& from, const Vector2D& to, const float& t) {
+    return Vector2D{
+        from.x + ((to.x - from.x) * t),
+        from.y + ((to.y - from.y) * t),
+    };
+}
+
+void CCloseTrackpadGesture::begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+    ITrackpadGesture::begin(e);
+
+    m_window = Desktop::focusState()->window();
+
+    if (!m_window)
+        return;
+
+    m_window->flushPendingGeometry();
+    m_alphaFrom = m_window->presentation().alphaGoal(WINDOW_ALPHA_FADE);
+    m_posFrom   = m_window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    m_sizeFrom  = m_window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+
+    // FIXME: this shouldn't be needed but it is because style is decided by the fuckin anim from this
+    m_window->positionAnimation()->setConfig(Config::animationTree()->getAnimationPropertyConfig("windowsOut"));
+    m_window->sizeAnimation()->setConfig(Config::animationTree()->getAnimationPropertyConfig("windowsOut"));
+    m_window->presentation().alpha(WINDOW_ALPHA_FADE)->setConfig(Config::animationTree()->getAnimationPropertyConfig("fadeOut"));
+
+    const auto OUTCTX = m_window->presentation().animateOut();
+    m_alphaTo         = OUTCTX.alpha.to;
+    m_posTo           = OUTCTX.pos.to;
+    m_sizeTo          = OUTCTX.size.to;
+
+    m_window->presentation().alpha(WINDOW_ALPHA_FADE)->setValueAndWarp(m_alphaFrom);
+    m_window->positionAnimation()->setValueAndWarp(m_posFrom);
+    m_window->sizeAnimation()->setValueAndWarp(m_sizeFrom);
+
+    m_lastDelta = 0.F;
+}
+
+void CCloseTrackpadGesture::update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+    if (!m_window)
+        return;
+
+    g_pHyprRenderer->damageWindow(m_window.lock());
+
+    m_lastDelta += distance(e);
+
+    const auto FADEPERCENT = std::clamp(m_lastDelta / MAX_DISTANCE, 0.F, 1.F);
+
+    m_window->presentation().alpha(WINDOW_ALPHA_FADE)->setValueAndWarp(std::lerp(m_alphaFrom, m_alphaTo, FADEPERCENT));
+    m_window->positionAnimation()->setValueAndWarp(lerpVal(m_posFrom, m_posTo, FADEPERCENT));
+    m_window->sizeAnimation()->setValueAndWarp(lerpVal(m_sizeFrom, m_sizeTo, FADEPERCENT));
+
+    g_pDecorationPositioner->onWindowUpdate(m_window.lock());
+
+    g_pHyprRenderer->damageWindow(m_window.lock());
+}
+
+void CCloseTrackpadGesture::end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+    static const auto PTIMEOUT = CConfigValue<Config::INTEGER>("gestures:close_max_timeout");
+
+    if (!m_window)
+        return;
+
+    const auto COMPLETION = std::clamp(m_lastDelta / MAX_DISTANCE, 0.F, 1.F);
+
+    if (COMPLETION < 0.2F) {
+        // revert the animation
+        g_pHyprRenderer->damageWindow(m_window.lock());
+
+        // FIXME: this shouldn't be needed but it is because style is decided by the fuckin anim from this
+        m_window->positionAnimation()->setConfig(Config::animationTree()->getAnimationPropertyConfig("windowsMove"));
+        m_window->sizeAnimation()->setConfig(Config::animationTree()->getAnimationPropertyConfig("windowsMove"));
+        m_window->presentation().alpha(WINDOW_ALPHA_FADE)->setConfig(Config::animationTree()->getAnimationPropertyConfig("fade"));
+
+        *m_window->presentation().alpha(WINDOW_ALPHA_FADE) = m_alphaFrom;
+        m_window->move(m_posFrom);
+        m_window->resize(m_sizeFrom);
+        return;
+    }
+
+    // commence. Close the window and restore our current state to avoid a harsh anim
+    const auto CURRENT_ALPHA = m_window->presentation().alphaValue(WINDOW_ALPHA_FADE);
+    const auto CURRENT_POS   = m_window->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    const auto CURRENT_SIZE  = m_window->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+
+    Desktop::focusState()->window()->sendClose();
+
+    m_window->presentation().alpha(WINDOW_ALPHA_FADE)->setValueAndWarp(CURRENT_ALPHA);
+    m_window->positionAnimation()->setValueAndWarp(CURRENT_POS);
+    m_window->sizeAnimation()->setValueAndWarp(CURRENT_SIZE);
+
+    // this is a kinda hack, but oh well.
+    m_window->positionAnimation()->setCallbackOnBegin(
+        [CURRENT_POS, window = m_window](auto) {
+            if (!window || !window->mapped())
+                return;
+
+            window->positionAnimation()->setValueAndWarp(CURRENT_POS);
+        },
+        false);
+
+    m_window->sizeAnimation()->setCallbackOnBegin(
+        [CURRENT_SIZE, window = m_window](auto) {
+            if (!window || !window->mapped())
+                return;
+
+            window->sizeAnimation()->setValueAndWarp(CURRENT_SIZE);
+        },
+        false);
+
+    // we give windows 2s to close. If they don't, pop them back in.
+    auto timer = makeShared<CEventLoopTimer>(
+        std::chrono::milliseconds(*PTIMEOUT),
+        [window = m_window](SP<CEventLoopTimer> self, void* data) {
+            std::erase(trackpadCloseTimers, self);
+
+            // if after 2 seconds the window is still alive and mapped, we revert our changes.
+            if (!window)
+                return;
+
+            window->positionAnimation()->setCallbackOnBegin(nullptr);
+            window->sizeAnimation()->setCallbackOnBegin(nullptr);
+
+            if (!window->mapped())
+                return;
+
+            window->layoutTarget()->recalc();
+            window->presentation().refreshValues();
+            window->sendWindowSize(true);
+            *window->presentation().alpha(WINDOW_ALPHA_FADE) = 1.F;
+        },
+        nullptr);
+    trackpadCloseTimers.emplace_back(timer);
+    g_pEventLoopManager->addTimer(timer);
+
+    m_window.reset();
+}

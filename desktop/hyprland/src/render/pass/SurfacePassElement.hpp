@@ -1,0 +1,83 @@
+#pragma once
+#include "PassElement.hpp"
+#include "TexPassElement.hpp"
+#include "../WindowRenderPresentation.hpp"
+#include <optional>
+#include "../../helpers/time/Time.hpp"
+
+class CWLSurfaceResource;
+namespace Render {
+    class ITexture;
+}
+class CSyncTimeline;
+
+class CSurfacePassElement : public IPassElement {
+  public:
+    struct SRenderData {
+        PHLMONITORREF          pMonitor;
+        Time::steady_tp        when = Time::steadyNow();
+        Vector2D               pos, localPos;
+
+        void*                  data        = nullptr;
+        SP<CWLSurfaceResource> surface     = nullptr;
+        SP<Render::ITexture>   texture     = nullptr;
+        bool                   mainSurface = true;
+        double                 w = 0, h = 0;
+        int                    rounding      = 0;
+        bool                   dontRound     = true;
+        float                  roundingPower = 2.0F;
+        bool                   decorate      = false;
+        float                  alpha = 1.F, fadeAlpha = 1.F;
+        bool                   blur                  = false;
+        bool                   blockBlurOptimization = false;
+
+        uint8_t                wrapX = WRAP_CLAMP_TO_EDGE;
+        uint8_t                wrapY = WRAP_CLAMP_TO_EDGE;
+
+        // only for windows, not popups
+        bool squishOversized = true;
+
+        // for calculating UV
+        PHLWINDOW pWindow;
+        PHLLS     pLS;
+
+        bool      popup = false;
+
+        // counts how many surfaces this pass has rendered
+        int                               surfaceCounter = 0;
+
+        CBox                              clipBox = {}; // scaled coordinates
+
+        uint8_t                           discardMode    = DISCARD_OPAQUE;
+        float                             discardOpacity = 0.f;
+
+        bool                              useNearestNeighbor = false;
+        Render::SWindowRenderPresentation workspacePresentation;
+    };
+
+    CSurfacePassElement(const SRenderData& data);
+    virtual ~CSurfacePassElement() = default;
+
+    virtual bool                needsLiveBlur(Render::CRenderContext& ctx);
+    virtual bool                needsPrecomputeBlur(Render::CRenderContext& ctx);
+    virtual std::optional<CBox> boundingBox(Render::CRenderContext& ctx);
+    virtual CRegion             opaqueRegion(Render::CRenderContext& ctx);
+    virtual void                discard(Render::CRenderContext& ctx);
+    CRegion                     visibleRegion(Render::CRenderContext& ctx, bool& cancel);
+
+    virtual const char*         passName() {
+        return "CSurfacePassElement";
+    }
+
+    virtual ePassElementType type() {
+        return EK_SURFACE;
+    };
+
+    SRenderData m_data;
+
+    CBox        getTexBox();
+
+  private:
+    bool m_texBoxCached = false;
+    CBox m_cachedTexBox = {};
+};

@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/hyprwm/Hyprland.git",
+  "revision": "f3e076844484255b77629acc5c75379817c405a8",
+  "tree": "85b7b316d0b4104f23b1a7e73b9def3564b9b6db",
+  "path": "hyprland",
+  "license": "BSD-3-Clause",
+  "subprojects": {
+    "tracy": {
+      "repository": "https://github.com/wolfpld/tracy.git",
+      "revision": "05cceee0df3b8d7c6fa87e9638af311dbabc63cb",
+      "tree": "73643da6e9a1abbb659ee5c289f71847e21ad067",
+      "path": "subprojects/tracy",
+      "license": "BSD-3-Clause"
+    },
+    "udis86": {
+      "repository": "https://github.com/canihavesomecoffee/udis86.git",
+      "revision": "5336633af70f3917760a6d441ff02d93477b0c86",
+      "tree": "fdc50d20ce361a1efca666f8b11e5ac43cd6f4f8",
+      "path": "subprojects/udis86",
+      "license": "BSD-2-Clause"
+    }
+  }
+}

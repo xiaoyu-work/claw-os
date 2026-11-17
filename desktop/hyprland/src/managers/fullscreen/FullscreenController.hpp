@@ -1,0 +1,99 @@
+#pragma once
+
+#include "../../helpers/memory/Memory.hpp"
+#include "../../desktop/DesktopTypes.hpp"
+#include "FullscreenTypes.hpp"
+#include <optional>
+
+namespace Fullscreen {
+
+    class IFullscreenHandler;
+
+    class CFullscreenController {
+
+      public:
+        CFullscreenController()  = default;
+        ~CFullscreenController() = default;
+
+        // Window
+
+        /// @warning will return true for all covering fs windows is there are several
+        bool            isFullscreen(const PHLWINDOW window, const std::optional<eFullscreenMode> mode = std::nullopt, const std::optional<bool> covering = std::nullopt);
+
+        SFullscreenMode getFullscreenModes(const PHLWINDOW window);
+
+        // Per-window state published with geometry, including noncovering and maximized windows.
+        SFullscreenMode getPresentedFullscreenModes(const PHLWINDOW window);
+        bool            isPresentedFullscreen(const PHLWINDOW window, const std::optional<eFullscreenMode> mode = std::nullopt);
+        bool            isAllowedOverFullscreen(const PHLWINDOW window);
+        bool            isAllowedOverPresentedFullscreen(const PHLWINDOW window);
+
+        bool            layoutManagedFS(const PHLWINDOW window);
+
+        // Workspace
+
+        /// @warning only cosiders internal mode of FS windows
+        bool hasFullscreen(const PHLWORKSPACE workspace, const std::optional<bool> covering = true);
+
+        /// @warning Returns the topmost covering FS window is there are several.
+        PHLWINDOW getFullscreenWindow(const PHLWORKSPACE workspace, const std::optional<bool> covering = true);
+
+        /// @warning Will return the modes of the TOPMOST Covering FS Window if there are several
+        SFullscreenMode getFullscreenModes(const PHLWORKSPACE workspace, const std::optional<bool> covering = true);
+
+        // Topmost covering fullscreen state published with the workspace's geometry.
+        PHLWINDOW       getPresentedFullscreenWindow(const PHLWORKSPACE workspace, const std::optional<eFullscreenMode> mode = std::nullopt);
+        SFullscreenMode getPresentedFullscreenModes(const PHLWORKSPACE workspace);
+
+        // Monitor
+        // FS windows must be fullscreen (FSMODE_FULLSCREEN) to be considered as FS by monitor
+
+        /// @warning only cosiders internal mode of FS windows
+        bool hasFullscreen(const PHLMONITOR monitor, const std::optional<bool> covering = true);
+
+        /// @warning Returns the topmost covering FS window is there are several.
+        PHLWINDOW getFullscreenWindow(const PHLMONITOR monitor, const std::optional<bool> covering = true);
+
+        /// @warning Will return the modes of the TOPMOST Covering FS Window if there are several
+        SFullscreenMode getFullscreenModes(const PHLMONITOR monitor, const std::optional<bool> covering = true);
+
+        // Handler
+
+        eFullscreenHandler getFullscreenHandlerName(const PHLWINDOW window);
+
+        std::string        getFullscreenHandlerNameAsString(const PHLWINDOW window);
+
+        // FS Mode Setter
+
+        void setFullscreenMode(const PHLWINDOW window, std::optional<eFullscreenMode> internal = std::nullopt, std::optional<eFullscreenMode> client = std::nullopt,
+                               std::optional<bool> layoutAware = std::nullopt, eFullscreenMutationContext context = FULLSCREEN_MUTATION_NORMAL);
+
+        // Misc. Operations
+
+        // In order to avoid re-setting an FS window's size over and over again if it's FS and already set to the correct value.
+        bool m_windowPosSettingQueued = false;
+
+      private:
+        struct SFsHandlersForWorkspace {
+            const WP<IFullscreenHandler> TILED_FS_HANDLER;
+            const WP<IFullscreenHandler> TILED_DEFAULT_FS_HANDLER;
+            const WP<IFullscreenHandler> FLOATING_FS_HANDLER;
+        };
+
+        // FS Mode Setter Helpers
+        void setWindowFullscreenModeInternal(const PHLWINDOW window, const eFullscreenMode mode, bool layoutAware, eFullscreenMutationContext context);
+        void setWindowFullscreenModeClient(const PHLWINDOW window, const eFullscreenMode mode, bool layoutAware);
+
+        // FS Handler getters
+
+        WP<IFullscreenHandler>  getFsHandler(const PHLWINDOW window, std::optional<bool> layoutHandled = std::nullopt);
+
+        SFsHandlersForWorkspace getFsHandlersForWorkspace(const PHLWORKSPACE workspace) const;
+
+        // avoids re-resolving the handlers when the caller already has them
+        eFullscreenHandler getFullscreenHandlerName(const PHLWINDOW window, const SFsHandlersForWorkspace& handlers);
+    };
+
+    UP<CFullscreenController>& controller();
+
+}

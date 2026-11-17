@@ -1,5 +1,37 @@
 # Provenance
 
+## Hyprland replacement source
+
+The complete `hyprland/` source is imported from
+[`hyprwm/Hyprland`](https://github.com/hyprwm/Hyprland) revision
+`f3e076844484255b77629acc5c75379817c405a8`, under its original BSD-3-Clause
+license. The original source tree is
+`85b7b316d0b4104f23b1a7e73b9def3564b9b6db`.
+
+The two pinned Git submodules are expanded into ordinary complete directories:
+
+| Directory under `hyprland/` | Upstream | Revision | License |
+| --- | --- | --- | --- |
+| `subprojects/tracy/` | <https://github.com/wolfpld/tracy> | `05cceee0df3b8d7c6fa87e9638af311dbabc63cb` | BSD-3-Clause |
+| `subprojects/udis86/` | <https://github.com/canihavesomecoffee/udis86> | `5336633af70f3917760a6d441ff02d93477b0c86` | BSD-2-Clause |
+
+[`hyprland-source.lock.json`](hyprland-source.lock.json) retains each original
+Git tree. All upstream tracked files, executable modes, licenses and notices
+are preserved. The nested `.gitmodules` file is retained as source provenance,
+not an OS-repository submodule declaration. Known upstream whitespace is
+retained at this vendor boundary rather than changing license or source bytes.
+Two RST manual pages use file-scoped conflict-marker sizing so their original
+seven-character section underlines are not mistaken for merge conflicts.
+Claw modifications will be recorded separately from these immutable origins.
+
+The source baseline alone does not provide Claw display authorization and is
+not yet an installed compositor. See [integration boundaries](hyprland-claw/MODULE.md).
+The editable Caelestia UI, matching CLI and Material shape sources live in the
+[Desktop Shell product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-shell);
+no Omarchy source is used.
+
+## COSMIC origins
+
 The [Mail product fork](https://github.com/xiaoyu-work/clawos-app/blob/main/products/mail/PROVENANCE.md)
 and its Thunderbird/Mozilla provenance now live in `clawos-app`. The COSMIC
 origin table below covers the components remaining in this repository.
@@ -21,7 +53,7 @@ The same immutable pin supplies its native build inputs. The OS shell retains
 only hosting and a typed adapter to the shared history policy service; product
 code no longer imports Widget Rail.
 
-This directory is a **vendored fork** of the COSMIC Desktop Environment
+The original COSMIC component tree is a **vendored fork** of the COSMIC Desktop Environment
 by System76. Code was copied (not submodule-linked) on 2026-05-12, and
 **directory names were normalized** to drop the upstream `cosmic-`
 prefix. The original `LICENSE` file inside every directory is preserved

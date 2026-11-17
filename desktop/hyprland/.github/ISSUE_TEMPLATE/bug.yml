@@ -1,0 +1,15 @@
+name: Do not open issues, go to discussions please!
+description: Do not open an issue
+body:
+  - type: checkboxes
+    attributes:
+      label: Please close this issue.
+      description: Users cannot open issues. I want my issue to be closed.
+      options:
+        - label: Yes, I want this issue to be closed.
+          required: true
+
+  - type: textarea
+    id: body
+    attributes:
+      label: Issue body
