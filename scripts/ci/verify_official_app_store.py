@@ -73,9 +73,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("node", type=Path)
     args = parser.parse_args()
-    assert os.geteuid() == 0
-    assert os.environ.get("GITHUB_ACTIONS") == "true"
-    assert os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+    if (os.geteuid() != 0 or os.environ.get("GITHUB_ACTIONS") != "true"
+            or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
+        raise RuntimeError("Official Store installation is restricted to disposable hosted CI")
     os.umask(0o077)
     subprocess.run(
         ["useradd", "--create-home", "--uid", str(UID), "--shell", "/bin/sh", OWNER],
