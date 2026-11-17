@@ -503,11 +503,13 @@ pub(super) async fn thumbnails(first_group: &std::fs::File) {
                 }
             }
             if !write_approved {
+                let selection = if existing { "write" } else { "create" };
                 if let Some(request) = requests.iter().find(|request| {
                     request.verb == "fs.write"
-                        && request.scope == Scope::path(OUTPUT)
+                        && request.session.starts_with(&format!("gui-{selection}-{window}-"))
                         && request.operation_digest.is_some()
                 }) {
+                    assert_eq!(request.scope, Scope::path("/run/display-home/**"));
                     assert!(
                         read_approved,
                         "thumbnail requested output before its selected media read"
