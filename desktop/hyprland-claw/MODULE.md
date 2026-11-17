@@ -27,6 +27,12 @@ Claw-specific integration belongs here or in the owning OS definition/provider,
 not in the App repository. Any hooks added to upstream compositor files
 must remain narrow and preserve the original source license.
 
+The [native authority bridge](../../crates/claw-compositor/MODULE.md) now
+provides a GPL-3.0-only static library and the C ABI in
+`include/claw_compositor.h`. It is not yet linked into the upstream compositor.
+Linking that bridge requires preserving its GPL terms alongside the original
+Hyprland and dependency notices; it does not change the Agent's license.
+
 ## Required contracts
 
 - Preserve the [Root display/PAM lifetime](../../core/src/display_session/MODULE.md)
@@ -55,3 +61,9 @@ cargo test -p claw-display-control --locked -- --test-threads=1
 
 Native build, actual isolated GUI/display acceptance and package/update checks
 remain mandatory before production activation changes.
+
+Windows Git subtree exports must explicitly preserve Linux line endings:
+`git -c core.autocrlf=false -c core.eol=lf archive`. A subtree archive uses
+its own attributes rather than inheriting the repository root's `eol=lf`;
+an implicit Windows checkout conversion makes the upstream shell generators
+unexecutable on Linux.

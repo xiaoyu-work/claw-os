@@ -1,0 +1,14 @@
+[package]
+name = "claw-compositor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "GPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+claw-display-control = { path = "../claw-display-control" }
+libc = "0.2"

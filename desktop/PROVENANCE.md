@@ -26,6 +26,11 @@ Claw modifications will be recorded separately from these immutable origins.
 
 The source baseline alone does not provide Claw display authorization and is
 not yet an installed compositor. See [integration boundaries](hyprland-claw/MODULE.md).
+The separate OS-private enforcement port in
+[`crates/claw-compositor`](../crates/claw-compositor/MODULE.md) is GPL-3.0-only
+and preserves the existing Claw lease/origin semantics. It is not yet linked
+into the source baseline. Any linked distribution must preserve its GPL terms
+alongside the original compositor and subproject notices.
 The editable Caelestia UI, matching CLI and Material shape sources live in the
 [Desktop Shell product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-shell);
 no Omarchy source is used.

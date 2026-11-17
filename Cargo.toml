@@ -7,6 +7,7 @@ members = [
     "cos-runtime/rust",
     "crates/clawd-client",
     "crates/claw-display-control",
+    "crates/claw-compositor",
     "crates/claw-display-login",
     "crates/obscura-dom",
     "crates/obscura-net",
