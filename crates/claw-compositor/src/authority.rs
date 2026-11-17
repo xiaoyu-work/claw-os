@@ -173,7 +173,21 @@ struct Pending {
     command: Command,
     instance: Option<InstanceId>,
     descriptor: Option<OwnedFd>,
-    selection: Option<Arc<Payload>>,
+    selection: Option<PendingSelection>,
+}
+
+struct PendingSelection {
+    payload: Arc<Payload>,
+    expires_ms: u64,
+}
+
+impl PendingSelection {
+    fn validate(&self, active: bool, now: u64) -> Result<(), Error> {
+        if !active {
+            return Err(Error::Closed);
+        }
+        validate_expiry(self.expires_ms, now, 2000)
+    }
 }
 
 pub(crate) struct Authority {
@@ -479,7 +493,10 @@ impl Authority {
                     0,
                     Some(instance),
                     None,
-                    Some(Arc::new(payload)),
+                    Some(PendingSelection {
+                        payload: Arc::new(payload),
+                        expires_ms: expires_monotonic_ms,
+                    }),
                 )
                 .map(Some)
             }
@@ -495,6 +512,16 @@ impl Authority {
     }
 
     pub fn take_descriptor(&mut self, serial: u64) -> Result<i32, Error> {
+        let token = self
+            .pending
+            .as_ref()
+            .filter(|pending| pending.command.serial == serial)
+            .ok_or(Error::Identity)?
+            .command
+            .token;
+        if !self.lease(token)?.active()? {
+            return Err(Error::Closed);
+        }
         self.pending
             .as_mut()
             .filter(|pending| pending.command.serial == serial)
@@ -506,13 +533,17 @@ impl Authority {
     }
 
     pub fn take_selection(&mut self, serial: u64) -> Result<Arc<Payload>, Error> {
-        self.pending
+        let active = self.link.binding().active()?;
+        let pending = self
+            .pending
             .as_mut()
             .filter(|pending| pending.command.serial == serial)
-            .and_then(|pending| pending.selection.take())
-            .ok_or(Error::Protocol(
-                "native selection payload is unavailable or already taken",
-            ))
+            .ok_or(Error::Identity)?;
+        let selection = pending.selection.as_ref().ok_or(Error::Protocol(
+            "native selection payload is unavailable or already taken",
+        ))?;
+        selection.validate(active, monotonic_ms()?)?;
+        Ok(pending.selection.take().ok_or(Error::Identity)?.payload)
     }
 
     pub fn acknowledge(&mut self, serial: u64, accepted: bool) -> Result<(), Error> {
@@ -584,7 +615,7 @@ impl Authority {
         token: u64,
         instance: Option<InstanceId>,
         descriptor: Option<OwnedFd>,
-        selection: Option<Arc<Payload>>,
+        selection: Option<PendingSelection>,
     ) -> Result<Command, Error> {
         let command = Command {
             serial: sequence(&mut self.next_serial)?,

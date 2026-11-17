@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "../include/claw_compositor.h"
+#include "../Claw.hpp"
 #include <cstdlib>
 #include <iostream>
 
@@ -24,6 +25,14 @@ int main() {
         return 8;
     if (claw_selection_send(nullptr, nullptr, 0, -1))
         return 9;
+    if (Claw::initialize())
+        return 10;
+    if (Claw::permitted(nullptr, CLAW_PANEL))
+        return 11;
+    Claw::SOrigin origin{};
+    if (Claw::contextOrigin(nullptr, origin))
+        return 12;
+    Claw::shutdown();
     std::cout << "Native compositor ABI rejects unauthenticated startup and invalid handles\n";
     return 0;
 }

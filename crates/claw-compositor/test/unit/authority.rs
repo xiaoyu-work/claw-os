@@ -102,3 +102,20 @@ fn expired_or_overlong_leases_are_rejected_without_overflow() {
     assert!(sequence(&mut sequence_value).is_err());
     assert_eq!(sequence_value, u64::MAX);
 }
+
+#[test]
+fn native_selection_handoff_rechecks_display_and_request_expiry() {
+    let selection = PendingSelection {
+        payload: Arc::new(Payload {
+            entries: vec![claw_display_control::selection::Entry {
+                mime: "text/plain".into(),
+                data: b"owner selection".to_vec(),
+            }],
+        }),
+        expires_ms: 1000,
+    };
+    assert!(selection.validate(true, 999).is_ok());
+    assert!(selection.validate(false, 999).is_err());
+    assert!(selection.validate(true, 1000).is_err());
+    assert!(selection.validate(true, 1001).is_err());
+}

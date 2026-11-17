@@ -21,6 +21,7 @@ shared Apache-2.0 protocol crate and the Agent remain separate.
 | `src/ffi.rs` | Bounded OS-private C ABI and event-thread confinement |
 | `test/unit/authority.rs` | Grant separation, one-shot context, retirement and expiry regressions |
 | `../../desktop/hyprland-claw/include/claw_compositor.h` | Native declaration and ownership contract |
+| `../../desktop/hyprland-claw/Claw.cpp` | Native Wayland connection admission, origin tracking, timed control dispatch and checked resource callbacks |
 | `../../desktop/hyprland-claw/test/abi.cpp` | Real C++ linkage and unauthenticated-startup refusal |
 
 Only the protected compositor receives its Root activation descriptor.
@@ -50,9 +51,12 @@ cargo build -p claw-compositor
 clang-format --version
 clang-format --style=file:desktop/hyprland/.clang-format --dry-run --Werror \
   desktop/hyprland-claw/include/claw_compositor.h \
+  desktop/hyprland-claw/Claw.hpp desktop/hyprland-claw/Claw.cpp \
   desktop/hyprland-claw/test/abi.cpp
-c++ -std=c++20 desktop/hyprland-claw/test/abi.cpp \
-  target/debug/libclaw_compositor.a -ldl -lpthread -lm -o target/claw-compositor-abi
+c++ -std=c++20 $(pkg-config --cflags wayland-server) \
+  desktop/hyprland-claw/test/abi.cpp desktop/hyprland-claw/Claw.cpp \
+  target/debug/libclaw_compositor.a $(pkg-config --libs wayland-server) \
+  -ldl -lpthread -lm -o target/claw-compositor-abi
 target/claw-compositor-abi
 ```
 
@@ -62,3 +66,12 @@ linkage and refusal only, not a rendered or authenticated GUI session.
 The imported upstream formatting rules require a compatible formatter;
 23.1.5 is the verified version. Older distribution formatters may reject the
 upstream `PackArguments` option rather than checking the files.
+
+The adapter also has an independent native build:
+
+```bash
+cmake -S desktop/hyprland-claw -B build/claw-compositor-adapter -G Ninja \
+  -DCLAW_COMPOSITOR_LIBRARY="$PWD/target/debug/libclaw_compositor.a"
+cmake --build build/claw-compositor-adapter
+ctest --test-dir build/claw-compositor-adapter --output-on-failure
+```

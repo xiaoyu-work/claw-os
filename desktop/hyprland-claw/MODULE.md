@@ -29,7 +29,14 @@ must remain narrow and preserve the original source license.
 
 The [native authority bridge](../../crates/claw-compositor/MODULE.md) now
 provides a GPL-3.0-only static library and the C ABI in
-`include/claw_compositor.h`. It is not yet linked into the upstream compositor.
+`include/claw_compositor.h`. `Claw.cpp` implements the native Wayland client
+watcher, Root-origin assignment, standard-global filtering, lease dispatch and
+actual client/listener retirement callbacks. It is compiled and linked in the
+isolated ABI test, but not yet hooked into the upstream compositor.
+The standalone `CMakeLists.txt` builds this adapter and its actual C++ ABI
+test without requiring the complete renderer. It requires the built private
+Rust static library through `CLAW_COMPOSITOR_LIBRARY`; there is no
+unauthenticated or no-authority build mode.
 Linking that bridge requires preserving its GPL terms alongside the original
 Hyprland and dependency notices; it does not change the Agent's license.
 
