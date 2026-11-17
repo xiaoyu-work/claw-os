@@ -580,10 +580,10 @@ The **Release Claw OS** workflow (`release.yml`) has one target selector:
 
 | Target | Builds and publishes |
 | --- | --- |
-| `agent` | `claw-os-agent` for amd64 and arm64, with TUI and Ubuntu install/reinstall checks |
+| `agent` | `claw-os-agent` for amd64 and arm64, with TUI, Ubuntu install/reinstall and actual official Store/browser/MCP checks |
 | `base` | `claw-os-base` (`Architecture: all`) |
 | `core` | Agent and Base together, without Desktop or image builds; coordinated protocol updates and headless recovery |
-| `desktop` | `claw-os-desktop` for amd64 and arm64, using dedicated rootfs runners |
+| `desktop` | `claw-os-desktop` for amd64 and arm64, using native GitHub-hosted Ubuntu runners |
 | `images` | Shared-rootfs Docker/WSL images; consumes same-run signed Agent/Base packages without publishing them to APT |
 | `website` | Website and Pages composition; preserves every existing package |
 | `all` | Shared tests, all packages, Docker/WSL and one Pages publication |
@@ -665,8 +665,10 @@ process.
 Artifacts are downloaded from the same workflow run, never selected from an
 older successful run. The one-time bootstrap remains an explicit package
 publication input. A missing repository is treated automatically as first publication.
-Desktop publication requires Linux runners labeled `claw-os-desktop-amd64`
-and `claw-os-desktop-arm64`, each with at least 50 GB free.
+Desktop publication uses `ubuntu-24.04` and `ubuntu-24.04-arm`.
+The workflow removes unused Android, .NET and GHC toolchains only on these
+disposable hosted runners before the existing 30 GB free-space preflight.
+Never apply this CI-only cleanup to a developer host.
 
 ## Apt repo URL
 

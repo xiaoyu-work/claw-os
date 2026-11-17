@@ -1330,10 +1330,10 @@ report invalid ownership instead of bypassing owner isolation.
 Pushing a commit does not immediately make it available to existing
 installations. Publication workflows are manually dispatched. A maintainer can
 publish each package independently through **Release Claw OS** (`release.yml`):
-select `agent`, `base`, or `desktop`. Desktop still requires dedicated Linux
-runners labeled `claw-os-desktop-amd64` and `claw-os-desktop-arm64` with at least
-50 GB free. `images` publishes Docker/WSL from one headless rootfs per
-architecture, using the same run's signed Agent/Base packages without
+select `agent`, `base`, or `desktop`. Desktop uses native GitHub-hosted Ubuntu
+amd64/arm64 runners; disposable-CI-only removal of unused toolchains precedes
+the existing 30 GB free-space preflight. `images` publishes Docker/WSL from one
+headless rootfs per architecture, using the same run's signed Agent/Base packages without
 publishing those packages to APT. `website` updates the website while preserving
 the signed package pool. `all` runs shared tests and publishes every channel.
 
@@ -1344,8 +1344,12 @@ protocol generations and authenticated previous manifests before signing the
 index; a partial release that would fail the installed floor is refused.
 Compatible package versions need not match.
 
-Every run freezes one OS package version and, when needed, one immutable App
-snapshot shared by its tests and package builds. Each release requires the repository Actions secret
+Every run freezes one OS package version and, when needed, authenticated
+App APT inputs for both architectures. Production builds never use App source
+fixtures; only `all` separately freezes one immutable source snapshot for its
+shared tests. Agent publication also checks actual official Store installation
+and installed product browser/MCP calls for a synthetic owner on disposable CI.
+Each release requires the repository Actions secret
 `CLAW_OS_APT_SIGNING_PRIVATE_KEY`. Set
 `CLAW_OS_APT_SIGNING_PASSPHRASE` only when that private key is encrypted. The
 publisher restores other packages from the current signed repository, merges
