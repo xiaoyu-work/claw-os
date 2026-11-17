@@ -73,9 +73,23 @@ This establishes source completeness. The native build additionally compiles
 and links the complete compositor and `hyprctl`; the actual compositor refuses
 startup without Root display activation. These checks do not establish an
 authenticated rendered desktop session.
-The existing private PAM runner has not yet passed with this compositor:
-the render-node-only WSL trial fails during backend initialization. A build or
-an authority bypass cannot substitute for that runtime acceptance.
+The six-input activation-only mode of the existing private PAM runner now
+passes with the actual Hyprland executable on a temporary VKMS device. A
+signature-verified Ubuntu Base 26.04.1 runtime supplies the matching userspace
+inside private mount/network/IPC/UTS namespaces on Linux 6.17; the host system
+and its login configuration are not upgraded or replaced. A chroot used this
+way must itself be a bind mount before entering it, so the runner can make its
+root mount recursively private.
+
+The real PAM/kernel login, protected supervisor, native compositor readiness
+and checked logout/workload retirement passed. The fixture-installed compositor
+was byte-identical to the complete native build. Its helper cgroups were empty
+and removed, and the temporary VKMS module was unloaded. The render-node-only
+WSL trial remains insufficient for this acceptance.
+
+This activation-only run does not capture rendered frames or establish signed
+GUI App, XWayland startup, physical-display/greetd/logind or installed-package
+acceptance. A build or an authority bypass cannot substitute for those checks.
 
 The existing protocol baseline runs from the OS repository root:
 
