@@ -78,7 +78,8 @@ def main():
         raise RuntimeError("Official Store installation is restricted to disposable hosted CI")
     os.umask(0o077)
     subprocess.run(
-        ["useradd", "--create-home", "--uid", str(UID), "--shell", "/bin/sh", OWNER],
+        ["useradd", "--create-home", "--uid", str(UID), "--groups", "sudo",
+         "--shell", "/bin/sh", OWNER],
         check=True,
     )
     home = Path("/home") / OWNER
@@ -88,19 +89,14 @@ def main():
     }
     gid = home.stat().st_gid
 
-    def owner_identity():
-        os.setgroups([])
-        os.setgid(gid)
-        os.setuid(UID)
-
+    identity = {"user": UID, "group": gid, "extra_groups": os.getgrouplist(OWNER, gid)}
     bootstrap = secrets.token_hex(32)
     master, slave = pty.openpty()
     web = subprocess.Popen(
         ["/usr/local/bin/cos", "agent", "serve", "--bind", "127.0.0.1",
          "--port", "38082", "--token", bootstrap],
         cwd=home, env=owner_env, stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL, stderr=slave, preexec_fn=owner_identity,
-        start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=slave, start_new_session=True, **identity,
     )
     os.close(slave)
 
@@ -198,7 +194,7 @@ def main():
         try:
             subprocess.run(
                 [str(args.node), "--experimental-websocket", str(driver)],
-                cwd=home, preexec_fn=owner_identity, check=True, timeout=120,
+                cwd=home, check=True, timeout=120, **identity,
                 env={
                     **owner_env, "COS_APP_APT_PROCESS": "1",
                     "APP_STORE_INSTALLED_ORIGIN": ORIGIN,

@@ -50,8 +50,9 @@ private key or passphrase. Desktop rootfs builds inherit signing environment
 variables through `sudo --preserve-env`, not process arguments.
 
 Agent publication additionally verifies actual official-origin App delivery
-on the installed amd64 runner. A fresh synthetic owner starts the real Web
-server through normal CLI TTY bootstrap; the existing installed Root helper
+on the installed amd64 runner. A fresh synthetic owner has the installed
+broker's normal `sudo` socket-group access and starts the real Web server
+through normal CLI TTY bootstrap; the existing installed Root helper
 confirms only that owner's displayed package reviews, never capability choices.
 The normal Store controller downloads and installs the signed public KV/DB
 APT bundle. The existing actual-browser driver then exercises the installed
