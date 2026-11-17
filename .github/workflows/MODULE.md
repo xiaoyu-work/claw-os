@@ -86,6 +86,11 @@ the image targets.
 `core` publishes Agent and Base together without building Desktop or images.
 Its Agent matrix installs and reinstalls that exact pair in one APT transaction
 and verifies the installed floor before uploading the Agent packages.
+Before Agent upload, the amd64 runner also installs the actual official
+signed App Store KV/DB bundle for a fresh synthetic owner through protected
+displayed-revision review, then runs the existing real product browser/MCP
+driver against the installed Web server. This is public-origin delivery
+acceptance, not a source-fixture or physical-device claim.
 Use it when their protocol generations must advance together. The publisher
 compares every package's declared protocols with the maximum in both the new
 pool and authenticated previous manifests; incompatible partial releases fail

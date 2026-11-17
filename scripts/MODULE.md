@@ -28,6 +28,7 @@ shared build helpers.
 | `ci/import-signing-key.sh` | Require the configured signing identity and export its exact verification keyring through `GITHUB_ENV` |
 | `ci/verify-package.sh` | Check package identity, payload-free OS ownership, authenticated App APT inputs and signed release manifest before upload or images |
 | `ci/test-agent-package.sh` | Agent TUI and Ubuntu install/reinstall, terminal/Web polkit/PAM, broker and cgroup checks; `installed-core` validates the exact Agent/Base pair in one transaction |
+| `ci/verify_official_app_store.py` | Disposable hosted-CI-only actual public signed Store/APT installation, protected exact-revision review, installed product Web/browser and Root MCP, using the newly installed Agent and a synthetic owner |
 | `app_platform.py` | Reproducible, versioned SDK/runtime/toolkit development artifact; excludes App helpers and OS providers |
 | `app_packages.py` | Reauthenticate official fresh App APT indexes and final `.deb` bytes; select independent package closure and enforce one-owner OS staging |
 | `app_sources.py` | Prepare explicit immutable App test/development fixtures; never a production package fallback |
@@ -47,6 +48,17 @@ workspace's `target/`. Release preparation writes outputs through `GITHUB_OUTPUT
 signing-key import writes only paths and key identifiers through `GITHUB_ENV`, never the
 private key or passphrase. Desktop rootfs builds inherit signing environment
 variables through `sudo --preserve-env`, not process arguments.
+
+Agent publication additionally verifies actual official-origin App delivery
+on the installed amd64 runner. A fresh synthetic owner starts the real Web
+server through normal CLI TTY bootstrap; the existing installed Root helper
+confirms only that owner's displayed package reviews, never capability choices.
+The normal Store controller downloads and installs the signed public KV/DB
+APT bundle. The existing actual-browser driver then exercises the installed
+opaque product frame, real buttons/forms and Root MCP without a model.
+No fixture catalog, signing root, installed-state replacement or App source
+is used. The script refuses non-hosted environments; never run it on a shared
+developer host. Multi-architecture package/signature checks remain separate.
 
 The `capture` selection runs both real `clawd` helpers as a non-Root owner inside
 separate private mount/PID/network namespaces. Isolated synthetic portals check

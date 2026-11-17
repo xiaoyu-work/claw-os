@@ -177,6 +177,14 @@ jobs:
         if: needs.prepare.outputs.base == 'true'
         run: bash scripts/ci/test-agent-package.sh installed-core
 
+      - name: Verify official App Store installation and real product Web MCP
+        if: matrix.arch == 'amd64'
+        timeout-minutes: 35
+        run: |
+          node="$(command -v node)"
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,COS_PACKAGE_VERSION \
+            python3 -B scripts/ci/verify_official_app_store.py "$node"
+
       - name: Upload Agent package
         uses: actions/upload-artifact@v4
         with:
