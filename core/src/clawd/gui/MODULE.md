@@ -635,6 +635,11 @@ preparation remains retained and cannot acknowledge GUI retirement.
 Successfully retired metadata custody is consumed before removing the cgroup;
 supervisor drop must not reopen that already removed containment.
 
+Providers may observe the owned child's normal exit before the supervisor's
+next poll. A health error therefore rechecks that exact child: an observed
+exit retains its real status, while a still-running child retains the error.
+Neither path skips checked retirement or turns a nonzero exit into success.
+
 The approval `None` owner is the distinct system bucket, not every user or
 UID 0. GUI instances are owner-bound, so only `Some(uid)` can match them.
 Session approval-cache revocation also checks that exact owner, not just the

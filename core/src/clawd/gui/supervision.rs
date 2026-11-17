@@ -29,6 +29,22 @@ mod resources;
 const CONTROL: Duration = Duration::from_secs(2);
 const RETIREMENT: Duration = Duration::from_secs(5);
 
+fn health_while_running(
+    child: &mut Child,
+    health: Result<(), String>,
+) -> Result<Option<ExitStatus>, String> {
+    match health {
+        Ok(()) => Ok(None),
+        Err(error) => match child
+            .try_wait()
+            .map_err(|error| format!("observe GUI child: {error}"))?
+        {
+            Some(status) => Ok(Some(status)),
+            None => Err(error),
+        },
+    }
+}
+
 pub(crate) fn validate_optional_mounts(
     app: &crate::apps::App, entry: Option<&str>, home: &std::path::Path, caps: &crate::caps::CapSet,
 ) -> Result<(), String> {
@@ -338,18 +354,29 @@ impl Supervised {
             if self.job.stopping() {
                 return Err("GUI instance authority was retired".to_string());
             }
-            self.broker.health()?;
-            if let Some(home) = &self.home { home.health()?; }
-            self.transport
-                .as_ref()
-                .ok_or("GUI syscall guard is unavailable")?
-                .health()?;
-            self.display_proxy
-                .as_ref()
-                .ok_or("GUI display transport is unavailable")?
-                .health()?;
-            if let Some(proxy) = &self.egress_proxy {
-                proxy.health()?;
+            let health = (|| {
+                self.broker.health()?;
+                if let Some(home) = &self.home { home.health()?; }
+                self.transport
+                    .as_ref()
+                    .ok_or("GUI syscall guard is unavailable")?
+                    .health()?;
+                self.display_proxy
+                    .as_ref()
+                    .ok_or("GUI display transport is unavailable")?
+                    .health()?;
+                if let Some(proxy) = &self.egress_proxy {
+                    proxy.health()?;
+                }
+                Ok(())
+            })();
+            // Providers can observe this same child's exit between the two polls.
+            if let Some(status) = health_while_running(
+                self.child.as_mut().ok_or("GUI child is unavailable")?,
+                health,
+            )? {
+                self.status = Some(status);
+                return Ok(());
             }
             if Instant::now() >= refresh {
                 let view = self.job.registration.snapshot(
@@ -597,4 +624,9 @@ pub(super) fn run(job: Arc<Job>, manager: Arc<Manager>, request: LaunchRequest) 
         stdout,
         stderr,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/clawd/gui/supervision.rs"));
 }
