@@ -1,5 +1,6 @@
 #include "SecurityContext.hpp"
 #include "../Compositor.hpp"
+#include "../../../hyprland-claw/Claw.hpp"
 #include <sys/socket.h>
 using namespace Hyprutils::OS;
 
@@ -15,8 +16,8 @@ static int onCloseFdEvent(int fd, uint32_t mask, void* data) {
     return 0;
 }
 
-SP<CSecurityContextSandboxedClient> CSecurityContextSandboxedClient::create(CFileDescriptor clientFD_) {
-    auto p = SP<CSecurityContextSandboxedClient>(new CSecurityContextSandboxedClient(std::move(clientFD_)));
+SP<CSecurityContextSandboxedClient> CSecurityContextSandboxedClient::create(CFileDescriptor clientFD_, uint32_t clawOrigin, uint64_t clawToken) {
+    auto p = SP<CSecurityContextSandboxedClient>(new CSecurityContextSandboxedClient(std::move(clientFD_), clawOrigin, clawToken));
     if (!p->m_client)
         return nullptr;
     return p;
@@ -28,14 +29,14 @@ static void onSecurityContextClientDestroy(wl_listener* l, void* d) {
     client->onDestroy();
 }
 
-CSecurityContextSandboxedClient::CSecurityContextSandboxedClient(CFileDescriptor clientFD_) : m_clientFD(std::move(clientFD_)) {
-    m_client = wl_client_create(g_pCompositor->m_wlDisplay, m_clientFD.get());
+CSecurityContextSandboxedClient::CSecurityContextSandboxedClient(CFileDescriptor clientFD_, uint32_t clawOrigin, uint64_t clawToken) {
+    wl_list_init(&m_destroyListener.listener.link);
+    if (!clientFD_.setFlags(clientFD_.getFlags() | FD_CLOEXEC))
+        return;
+    m_client = Claw::createClient(clientFD_.take(), {clawOrigin, clawToken});
     if (!m_client)
         return;
 
-    m_clientFD.setFlags(m_clientFD.getFlags() | FD_CLOEXEC);
-
-    wl_list_init(&m_destroyListener.listener.link);
     m_destroyListener.listener.notify = ::onSecurityContextClientDestroy;
     m_destroyListener.parent          = this;
     wl_client_add_destroy_late_listener(m_client, &m_destroyListener.listener);
@@ -50,7 +51,8 @@ void CSecurityContextSandboxedClient::onDestroy() {
     std::erase_if(PROTO::securityContext->m_sandboxedClients, [this](const auto& e) { return e.get() == this; });
 }
 
-CSecurityContext::CSecurityContext(SP<CWpSecurityContextV1> resource_, int listenFD_, int closeFD_) : m_listenFD(listenFD_), m_closeFD(closeFD_), m_resource(resource_) {
+CSecurityContext::CSecurityContext(SP<CWpSecurityContextV1> resource_, int listenFD_, int closeFD_, uint32_t clawOrigin, uint64_t clawToken) :
+    m_clawOrigin(clawOrigin), m_clawToken(clawToken), m_listenFD(listenFD_), m_closeFD(closeFD_), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -114,6 +116,15 @@ CSecurityContext::CSecurityContext(SP<CWpSecurityContextV1> resource_, int liste
     });
 
     m_resource->setCommit([this](CWpSecurityContextV1* r) {
+        if (m_committed) {
+            r->error(WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED, "Context already committed");
+            return;
+        }
+        if (!Claw::listenerAdded({m_clawOrigin, m_clawToken})) {
+            wl_client_post_implementation_error(r->client(), "No live Root context authority");
+            return;
+        }
+        m_clawListener = true;
         m_committed = true;
 
         LOG(Log::DEBUG, "security_context at 0x{:x} commits", (uintptr_t)this);
@@ -123,6 +134,7 @@ CSecurityContext::CSecurityContext(SP<CWpSecurityContextV1> resource_, int liste
 
         if (!m_listenSource || !m_closeSource) {
             r->noMemory();
+            PROTO::securityContext->destroyContext(this);
             return;
         }
     });
@@ -133,6 +145,8 @@ CSecurityContext::~CSecurityContext() {
         wl_event_source_remove(m_listenSource);
     if (m_closeSource)
         wl_event_source_remove(m_closeSource);
+    if (m_clawListener)
+        Claw::listenerRemoved({m_clawOrigin, m_clawToken});
 }
 
 bool CSecurityContext::good() {
@@ -155,7 +169,9 @@ void CSecurityContext::onListen(uint32_t mask) {
         return;
     }
 
-    auto newClient = CSecurityContextSandboxedClient::create(std::move(clientFD));
+    if (!Claw::acceptsContext({m_clawOrigin, m_clawToken}, clientFD.get()))
+        return;
+    auto newClient = CSecurityContextSandboxedClient::create(std::move(clientFD), m_clawOrigin, m_clawToken);
     if UNLIKELY (!newClient) {
         LOG(Log::ERR, "security_context at 0x{:x} couldn't create a client", (uintptr_t)this);
         return;
@@ -181,8 +197,15 @@ CSecurityContextManagerResource::CSecurityContextManagerResource(SP<CWpSecurityC
     m_resource->setOnDestroy([this](CWpSecurityContextManagerV1* r) { PROTO::securityContext->destroyResource(this); });
 
     m_resource->setCreateListener([](CWpSecurityContextManagerV1* r, uint32_t id, int32_t lfd, int32_t cfd) {
-        const auto RESOURCE =
-            PROTO::securityContext->m_contexts.emplace_back(makeShared<CSecurityContext>(makeShared<CWpSecurityContextV1>(r->client(), r->version(), id), lfd, cfd));
+        CFileDescriptor listen{lfd};
+        CFileDescriptor close{cfd};
+        Claw::SOrigin   origin{};
+        if (!Claw::contextOrigin(r->client(), origin)) {
+            wl_client_post_implementation_error(r->client(), "No Root context creator authority");
+            return;
+        }
+        const auto RESOURCE = PROTO::securityContext->m_contexts.emplace_back(
+            makeShared<CSecurityContext>(makeShared<CWpSecurityContextV1>(r->client(), r->version(), id), listen.take(), close.take(), origin.kind, origin.token));
 
         if UNLIKELY (!RESOURCE->good()) {
             r->noMemory();
@@ -220,4 +243,8 @@ void CSecurityContextProtocol::destroyContext(CSecurityContext* context) {
 
 bool CSecurityContextProtocol::isClientSandboxed(const wl_client* client) {
     return std::ranges::find_if(m_sandboxedClients, [client](const auto& e) { return e->m_client == client; }) != m_sandboxedClients.end();
+}
+
+void CSecurityContextProtocol::retireClaw(uint64_t token) {
+    std::erase_if(m_contexts, [token](const auto& context) { return token == 0 || context->m_clawToken == token; });
 }

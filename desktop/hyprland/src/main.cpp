@@ -6,6 +6,7 @@
 #include "init/initHelpers.hpp"
 #include "ipc/s1/S1.hpp"
 #include "helpers/env/Env.hpp"
+#include "../../hyprland-claw/Claw.hpp"
 
 #include <csignal>
 #include <cstdio>
@@ -196,6 +197,11 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+    }
+
+    if (!verifyConfig && !Claw::initialize()) {
+        std::println(stderr, "[ ERROR ] Claw Root display activation is required.");
+        return 1;
     }
 
     if (auto env = getenv("XDG_RUNTIME_DIR"); !env || env[0] == '\0') {

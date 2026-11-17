@@ -33,7 +33,7 @@ class CWLSurfaceResource;
 
 class CWLDataOfferResource : public IDataOffer {
   public:
-    CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataSource> source_);
+    CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataSource> source_, bool selection = false);
     ~CWLDataOfferResource() = default;
 
     bool                             good();
@@ -53,6 +53,7 @@ class CWLDataOfferResource : public IDataOffer {
   private:
     void                              updateAction();
 
+    bool                              m_selection = false;
     SP<CWlDataOffer>                  m_resource;
     CHyprSignalListener               m_sourceDestroy;
     uint32_t                          m_destinationActions = 0;

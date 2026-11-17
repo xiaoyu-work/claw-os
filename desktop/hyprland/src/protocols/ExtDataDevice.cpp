@@ -1,4 +1,5 @@
 #include "ExtDataDevice.hpp"
+#include "../../../hyprland-claw/Claw.hpp"
 #include <algorithm>
 #include "../managers/SeatManager.hpp"
 #include "core/Seat.hpp"
@@ -13,6 +14,8 @@ CExtDataOffer::CExtDataOffer(SP<CExtDataControlOfferV1> resource_, SP<IDataSourc
 
     m_resource->setReceive([this](CExtDataControlOfferV1* r, const char* mime, int32_t fd) {
         CFileDescriptor sendFd{fd};
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_READ))
+            return;
         if (!m_source) {
             LOG(Log::WARN, "Possible bug: Receive on an offer w/o a source");
             return;
@@ -34,6 +37,8 @@ bool CExtDataOffer::good() {
 }
 
 void CExtDataOffer::sendData() {
+    if (!Claw::permitted(m_resource->client(), CLAW_SELECTION_READ))
+        return;
     if UNLIKELY (!m_source)
         return;
 
@@ -111,6 +116,8 @@ CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_) : m_resour
     m_resource->setOnDestroy([this](CExtDataControlDeviceV1* r) { PROTO::extDataDevice->destroyResource(this); });
 
     m_resource->setSetSelection([](CExtDataControlDeviceV1* r, wl_resource* sourceR) {
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_WRITE))
+            return;
         auto source = sourceR ? CExtDataSource::fromResource(sourceR) : CSharedPointer<CExtDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "ext reset selection received");
@@ -128,6 +135,8 @@ CExtDataDevice::CExtDataDevice(SP<CExtDataControlDeviceV1> resource_) : m_resour
     });
 
     m_resource->setSetPrimarySelection([](CExtDataControlDeviceV1* r, wl_resource* sourceR) {
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_WRITE))
+            return;
         auto source = sourceR ? CExtDataSource::fromResource(sourceR) : CSharedPointer<CExtDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "ext reset primary selection received");
@@ -260,6 +269,8 @@ void CExtDataDeviceProtocol::destroyResource(CExtDataOffer* resource) {
 }
 
 void CExtDataDeviceProtocol::sendSelectionToDevice(SP<CExtDataDevice> dev, SP<IDataSource> sel, bool primary) {
+    if (!Claw::permitted(dev->client(), CLAW_SELECTION_READ))
+        return;
     if (!sel) {
         if (primary)
             dev->m_resource->sendPrimarySelectionRaw(nullptr);

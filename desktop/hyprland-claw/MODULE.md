@@ -8,11 +8,10 @@ Quickshell and the independently source-owned
 [Caelestia frontend](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-shell).
 It does not replace the system Agent.
 
-The current change imports the source baseline only. The existing Desktop
-build and authenticated display activation have not switched to it.
-Upstream executables and installation scripts are not a production launch
-path until the existing display and GUI authority contracts are preserved
-and verified.
+The source now builds with mandatory Claw authority hooks. The existing
+Desktop package and authenticated display activation have not switched to it.
+A successful native build is not an authenticated rendered session or an
+installed-system cutover.
 
 ## Source ownership
 
@@ -31,14 +30,22 @@ The [native authority bridge](../../crates/claw-compositor/MODULE.md) now
 provides a GPL-3.0-only static library and the C ABI in
 `include/claw_compositor.h`. `Claw.cpp` implements the native Wayland client
 watcher, Root-origin assignment, standard-global filtering, lease dispatch and
-actual client/listener retirement callbacks. It is compiled and linked in the
-isolated ABI test, but not yet hooked into the upstream compositor.
+actual client/listener retirement callbacks. The compositor links this adapter
+unconditionally and authenticates its Root control descriptor before creating
+the display.
 The standalone `CMakeLists.txt` builds this adapter and its actual C++ ABI
 test without requiring the complete renderer. It requires the built private
 Rust static library through `CLAW_COMPOSITOR_LIBRARY`; there is no
 unauthenticated or no-authority build mode.
 Linking that bridge requires preserving its GPL terms alongside the original
 Hyprland and dependency notices; it does not change the Agent's license.
+
+`Selection.cpp` retains Root-owned sealed selection payloads independently of
+the calling GUI. Narrow hooks in Hyprland cover client creation, security-context
+listeners, standard/primary/data-control selections, layer-shell, focus grabs
+and checked shutdown. Selection and drag-and-drop offers retain distinct roles.
+XWayland focus never supplies a selection grant: its unleased clipboard bridge
+is refused, independently of drag-and-drop and window rendering.
 
 ## Required contracts
 
@@ -57,8 +64,13 @@ Hyprland and dependency notices; it does not change the Agent's license.
 
 The import checks the original Hyprland Git tree before expanding its
 submodules, then checks each expanded source against its pinned Git tree.
-This establishes source completeness, not a successful compositor build or
-an authenticated desktop session.
+This establishes source completeness. The native build additionally compiles
+and links the complete compositor and `hyprctl`; the actual compositor refuses
+startup without Root display activation. These checks do not establish an
+authenticated rendered desktop session.
+The existing private PAM runner has not yet passed with this compositor:
+the render-node-only WSL trial fails during backend initialization. A build or
+an authority bypass cannot substitute for that runtime acceptance.
 
 The existing protocol baseline runs from the OS repository root:
 
@@ -68,6 +80,10 @@ cargo test -p claw-display-control --locked -- --test-threads=1
 
 Native build, actual isolated GUI/display acceptance and package/update checks
 remain mandatory before production activation changes.
+
+The selected source builds with GCC 15. Two narrow C++ library substitutions
+retain allocation-free case-insensitive prefix comparison and string slicing
+without requiring newer `ranges::starts_with` or `string::subview` APIs.
 
 Windows Git subtree exports must explicitly preserve Linux line endings:
 `git -c core.autocrlf=false -c core.eol=lf archive`. A subtree archive uses

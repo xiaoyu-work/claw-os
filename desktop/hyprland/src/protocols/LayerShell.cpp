@@ -1,4 +1,5 @@
 #include "LayerShell.hpp"
+#include "../../../hyprland-claw/Claw.hpp"
 #include "../Compositor.hpp"
 #include "../desktop/view/LayerSurface.hpp"
 #include "XDGShell.hpp"
@@ -41,6 +42,10 @@ CLayerShellResource::CLayerShellResource(SP<CZwlrLayerSurfaceV1> resource_, SP<C
     m_listeners.unmapSurface = surf_->m_events.unmap.listen([this] { m_events.unmap.emit(); });
 
     m_listeners.commitSurface = surf_->m_events.commit.listen([this] {
+        if (!Claw::permitted(m_resource->client(), CLAW_PANEL)) {
+            sendClosed();
+            return;
+        }
         m_current           = m_pending;
         m_pending.committed = 0;
 
@@ -207,6 +212,10 @@ CLayerShellProtocol::CLayerShellProtocol(const wl_interface* iface, const int& v
 }
 
 void CLayerShellProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
+    if (!Claw::permitted(client, CLAW_PANEL)) {
+        wl_client_post_implementation_error(client, "No live Root panel authority");
+        return;
+    }
     const auto RESOURCE = m_managers.emplace_back(makeUnique<CZwlrLayerShellV1>(client, ver, id)).get();
     RESOURCE->setOnDestroy([this](CZwlrLayerShellV1* p) { this->onManagerResourceDestroy(p->resource()); });
 
@@ -252,6 +261,11 @@ void CLayerShellProtocol::onGetLayerSurface(CZwlrLayerShellV1* pMgr, uint32_t id
 
     if UNLIKELY (layer > ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY) {
         pMgr->error(ZWLR_LAYER_SHELL_V1_ERROR_INVALID_LAYER, "Invalid layer");
+        return;
+    }
+
+    if (!Claw::permitted(CLIENT, CLAW_PANEL)) {
+        wl_client_post_implementation_error(CLIENT, "No live Root panel authority");
         return;
     }
 

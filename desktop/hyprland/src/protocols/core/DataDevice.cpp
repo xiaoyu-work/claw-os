@@ -1,4 +1,5 @@
 #include "DataDevice.hpp"
+#include "../../../../hyprland-claw/Claw.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -21,7 +22,7 @@ using namespace Hyprutils::OS;
 
 static constexpr uint32_t DND_ACTIONS = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
-CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataSource> source_) : m_source(source_), m_resource(resource_) {
+CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataSource> source_, bool selection) : m_source(source_), m_selection(selection), m_resource(resource_) {
     if UNLIKELY (!good())
         return;
 
@@ -34,6 +35,8 @@ CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataS
     m_resource->setOnDestroy([this](CWlDataOffer* r) { PROTO::data->destroyResource(this); });
 
     m_resource->setAccept([this](CWlDataOffer* r, uint32_t serial, const char* mime) {
+        if (m_selection && !Claw::permitted(r->client(), CLAW_SELECTION_READ))
+            return;
         if (!m_source) {
             LOG(Log::WARN, "Possible bug: Accept on an offer w/o a source");
             return;
@@ -52,6 +55,8 @@ CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataS
 
     m_resource->setReceive([this](CWlDataOffer* r, const char* mime, int fd) {
         CFileDescriptor sendFd{fd};
+        if (m_selection && !Claw::permitted(r->client(), CLAW_SELECTION_READ))
+            return;
         if (!m_source) {
             LOG(Log::WARN, "Possible bug: Receive on an offer w/o a source");
             return;
@@ -147,6 +152,8 @@ bool CWLDataOfferResource::good() {
 }
 
 void CWLDataOfferResource::sendData() {
+    if (m_selection && !Claw::permitted(m_resource->client(), CLAW_SELECTION_READ))
+        return;
     if (!m_source)
         return;
 
@@ -301,6 +308,8 @@ CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : m_re
     m_client = m_resource->client();
 
     m_resource->setSetSelection([](CWlDataDevice* r, wl_resource* sourceR, uint32_t serial) {
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_WRITE))
+            return;
         auto source = sourceR ? CWLDataSourceResource::fromResource(sourceR) : CSharedPointer<CWLDataSourceResource>{};
         if (!source) {
             LOG(Log::DEBUG, "Reset selection received");
@@ -508,33 +517,21 @@ SP<IDataDevice> CWLDataDeviceProtocol::dataDeviceForClient(wl_client* c) {
 }
 
 void CWLDataDeviceProtocol::sendSelectionToDevice(SP<IDataDevice> dev, SP<IDataSource> sel) {
+    const auto WL = dev->getWayland();
+    if (!WL || !Claw::permitted(WL->client(), CLAW_SELECTION_READ))
+        return;
     if (!sel) {
         dev->sendSelection(nullptr);
         return;
     }
 
-    SP<IDataOffer> offer;
-
-    if (const auto WL = dev->getWayland(); WL) {
-        const auto OFFER = m_offers.emplace_back(makeShared<CWLDataOfferResource>(makeShared<CWlDataOffer>(WL->m_resource->client(), WL->m_resource->version(), 0), sel));
-        if UNLIKELY (!OFFER->good()) {
-            WL->m_resource->noMemory();
-            m_offers.pop_back();
-            return;
-        }
-        OFFER->m_source = sel;
-        OFFER->m_self   = OFFER;
-        offer           = OFFER;
-    }
-#ifndef NO_XWAYLAND
-    else if (const auto X11 = dev->getX11(); X11)
-        offer = g_pXWayland->m_wm->createX11DataOffer(g_pSeatManager->m_state.keyboardFocus.lock(), sel);
-#endif
-
-    if UNLIKELY (!offer) {
-        LOG(Log::ERR, "No offer could be created in sendSelectionToDevice");
+    const auto offer = m_offers.emplace_back(makeShared<CWLDataOfferResource>(makeShared<CWlDataOffer>(WL->m_resource->client(), WL->m_resource->version(), 0), sel, true));
+    if UNLIKELY (!offer->good()) {
+        WL->m_resource->noMemory();
+        m_offers.pop_back();
         return;
     }
+    offer->m_self = offer;
 
     LOG(Log::DEBUG, "New {} offer {:x} for data source {:x}", offer->type() == DATA_SOURCE_TYPE_WAYLAND ? "wayland" : "X11", (uintptr_t)offer.get(), (uintptr_t)sel.get());
 
@@ -551,7 +548,7 @@ void CWLDataDeviceProtocol::onDestroyDataSource(WP<CWLDataSourceResource> source
 
 void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source) {
     for (auto const& o : m_offers) {
-        if (o->m_source && o->m_source->hasDnd())
+        if (!o->m_selection)
             continue;
         o->m_dead = true;
     }
@@ -605,7 +602,7 @@ void CWLDataDeviceProtocol::updateSelection() {
 
 void CWLDataDeviceProtocol::onKeyboardFocus() {
     for (auto const& o : m_offers) {
-        if (o->m_source && o->m_source->hasDnd())
+        if (!o->m_selection)
             continue;
         o->m_dead = true;
     }

@@ -1,5 +1,7 @@
 
 #include "Compositor.hpp"
+#include "../../hyprland-claw/Claw.hpp"
+#include "../../hyprland-claw/Hyprland.hpp"
 #include "helpers/MiscFunctions.hpp"
 #include "render/decorations/DecorationPositioner.hpp"
 #include "config/supplementary/executor/Executor.hpp"
@@ -267,10 +269,7 @@ static std::vector<SP<Aquamarine::IOutput>> pendingOutputs;
 //
 
 static bool filterGlobals(const wl_client* client, const wl_global* global, void* data) {
-    if (!PROTO::securityContext->isClientSandboxed(client))
-        return true;
-
-    return !g_pProtocolManager || !g_pProtocolManager->isGlobalPrivileged(global);
+    return Claw::globalAllowed(client, global, !g_pProtocolManager || g_pProtocolManager->isGlobalPrivileged(global));
 }
 
 //
@@ -290,6 +289,18 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
     wl_display_set_global_filter(m_wlDisplay, ::filterGlobals, nullptr);
 
     m_wlEventLoop = wl_display_get_event_loop(m_wlDisplay);
+
+    if (!Claw::attach(m_wlDisplay,
+                      {
+                          .stop = [this] { stopCompositor(); },
+                          .retireContexts =
+                              [](uint64_t token) {
+                                  if (PROTO::securityContext)
+                                      PROTO::securityContext->retireClaw(token);
+                              },
+                          .installSelection = Claw::installSelection,
+                      }))
+        throwError("Claw display authority could not attach to Wayland");
 
     // register crit signal handler
     m_critSigSource = wl_event_loop_add_signal(m_wlEventLoop, SIGTERM, handleCritSignal, nullptr);
@@ -457,6 +468,9 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
         State::monitorState()->add(o);
     }
     pendingOutputs.clear();
+
+    if (!Claw::ready(m_wlDisplaySocket))
+        throwError("Claw display readiness could not be authenticated");
 }
 
 void CCompositor::initAllSignals() {
@@ -607,6 +621,7 @@ void CCompositor::cleanup() {
     g_pXWayland.reset();
 
     wl_display_destroy_clients(g_pCompositor->m_wlDisplay);
+    Claw::clearSelection();
 
     State::monitorState()->finish();
     State::fallbackState().reset();
@@ -642,6 +657,8 @@ void CCompositor::cleanup() {
     g_pANRManager.reset();
     Config::watcher().reset();
     g_pAsyncResourceGatherer.reset();
+
+    Claw::shutdown();
 
     if (m_aqBackend)
         m_aqBackend.reset();

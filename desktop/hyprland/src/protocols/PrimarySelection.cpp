@@ -1,4 +1,5 @@
 #include "PrimarySelection.hpp"
+#include "../../../hyprland-claw/Claw.hpp"
 #include <algorithm>
 #include "../managers/SeatManager.hpp"
 #include "core/Seat.hpp"
@@ -14,6 +15,8 @@ CPrimarySelectionOffer::CPrimarySelectionOffer(SP<CZwpPrimarySelectionOfferV1> r
 
     m_resource->setReceive([this](CZwpPrimarySelectionOfferV1* r, const char* mime, int32_t fd) {
         CFileDescriptor sendFd{fd};
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_READ))
+            return;
         if (!m_source) {
             LOG(Log::WARN, "Possible bug: Receive on an offer w/o a source");
             return;
@@ -35,6 +38,8 @@ bool CPrimarySelectionOffer::good() {
 }
 
 void CPrimarySelectionOffer::sendData() {
+    if (!Claw::permitted(m_resource->client(), CLAW_SELECTION_READ))
+        return;
     if UNLIKELY (!m_source)
         return;
 
@@ -112,6 +117,8 @@ CPrimarySelectionDevice::CPrimarySelectionDevice(SP<CZwpPrimarySelectionDeviceV1
     m_resource->setOnDestroy([this](CZwpPrimarySelectionDeviceV1* r) { PROTO::primarySelection->destroyResource(this); });
 
     m_resource->setSetSelection([](CZwpPrimarySelectionDeviceV1* r, wl_resource* sourceR, uint32_t serial) {
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_WRITE))
+            return;
         static auto PPRIMARYSEL = CConfigValue<Config::INTEGER>("misc:middle_click_paste");
 
         if (!*PPRIMARYSEL) {
@@ -248,6 +255,8 @@ void CPrimarySelectionProtocol::destroyResource(CPrimarySelectionOffer* resource
 }
 
 void CPrimarySelectionProtocol::sendSelectionToDevice(SP<CPrimarySelectionDevice> dev, SP<IDataSource> sel) {
+    if (!Claw::permitted(dev->client(), CLAW_SELECTION_READ))
+        return;
     if (!sel) {
         dev->sendSelection(nullptr);
         return;

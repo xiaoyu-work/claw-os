@@ -1,4 +1,5 @@
 #include "DataDeviceWlr.hpp"
+#include "../../../hyprland-claw/Claw.hpp"
 #include <algorithm>
 #include "../managers/SeatManager.hpp"
 #include "core/Seat.hpp"
@@ -13,6 +14,8 @@ CWLRDataOffer::CWLRDataOffer(SP<CZwlrDataControlOfferV1> resource_, SP<IDataSour
 
     m_resource->setReceive([this](CZwlrDataControlOfferV1* r, const char* mime, int32_t fd) {
         CFileDescriptor sendFd{fd};
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_READ))
+            return;
         if (!m_source) {
             LOG(Log::WARN, "Possible bug: Receive on an offer w/o a source");
             return;
@@ -34,6 +37,8 @@ bool CWLRDataOffer::good() {
 }
 
 void CWLRDataOffer::sendData() {
+    if (!Claw::permitted(m_resource->client(), CLAW_SELECTION_READ))
+        return;
     if UNLIKELY (!m_source)
         return;
 
@@ -111,6 +116,8 @@ CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_) : m_resou
     m_resource->setOnDestroy([this](CZwlrDataControlDeviceV1* r) { PROTO::dataWlr->destroyResource(this); });
 
     m_resource->setSetSelection([](CZwlrDataControlDeviceV1* r, wl_resource* sourceR) {
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_WRITE))
+            return;
         auto source = sourceR ? CWLRDataSource::fromResource(sourceR) : CSharedPointer<CWLRDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "wlr reset selection received");
@@ -128,6 +135,8 @@ CWLRDataDevice::CWLRDataDevice(SP<CZwlrDataControlDeviceV1> resource_) : m_resou
     });
 
     m_resource->setSetPrimarySelection([](CZwlrDataControlDeviceV1* r, wl_resource* sourceR) {
+        if (!Claw::permitted(r->client(), CLAW_SELECTION_WRITE))
+            return;
         auto source = sourceR ? CWLRDataSource::fromResource(sourceR) : CSharedPointer<CWLRDataSource>{};
         if (!source) {
             LOG(Log::DEBUG, "wlr reset primary selection received");
@@ -260,6 +269,8 @@ void CDataDeviceWLRProtocol::destroyResource(CWLRDataOffer* resource) {
 }
 
 void CDataDeviceWLRProtocol::sendSelectionToDevice(SP<CWLRDataDevice> dev, SP<IDataSource> sel, bool primary) {
+    if (!Claw::permitted(dev->client(), CLAW_SELECTION_READ))
+        return;
     if (primary && dev->m_resource->version() < 2)
         return;
 
