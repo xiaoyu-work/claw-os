@@ -1585,6 +1585,17 @@ pub(super) async fn run(group: &std::fs::File, product: Product) {
     }
     if let Some(fixture) = &media_fixture {
         fixture.verify_after_retirement();
+        // Keep verified playback evidence separate from the windowless thumbnail phases.
+        std::fs::write(
+            "/run/gui-fixture/native-media-player-consumer.json",
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "case":40,
+                "initial_window":before,
+                "retired_window":observe().unwrap(),
+                "actual_audio_stream_retired":true,
+            })).unwrap(),
+        ).unwrap();
+        std::fs::remove_file(OBSERVER).unwrap();
         media_player_fixture::thumbnails(group).await;
     }
     println!(

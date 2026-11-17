@@ -544,6 +544,7 @@ pub(super) async fn thumbnails(first_group: &std::fs::File) {
         );
         command(&control, b"CLSE");
         assert!(pam.wait().unwrap().success());
+        assert!(observe().is_none(), "thumbnail mode created an unexpected GUI surface");
         assert!(claw_display_control::identity::pidfd_exited(retained.process.as_fd()).unwrap());
         assert!(claw_display_control::identity::pidfd_exited(native.pidfd.as_fd()).unwrap());
         assert!(!runtime.exists());

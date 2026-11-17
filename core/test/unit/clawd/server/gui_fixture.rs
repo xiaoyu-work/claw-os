@@ -378,7 +378,7 @@ fn launch_parent(process: &ProcessIdentity, case: usize) -> String {
     if case == 24 {
         caps.insert(Cap::new(Verb::FS_META, Scope::path("/run/display-home/Projects/**")));
     }
-    let session = if case == 20 || case == 23 || case == 24 || case == 39 {
+    let session = if case == 20 || case == 23 || case == 24 || case == 39 || case == 41 {
         format!("gui-fixture-parent-{case}-{}", process.pid())
     } else {
         format!("gui-fixture-parent-{case}")

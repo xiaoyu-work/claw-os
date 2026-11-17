@@ -224,7 +224,7 @@ static int gui_fixture(void) {
                     _exit(121);
                 close(descriptors[0]);
                 char session[64];
-                int length = scenario == 20 || scenario == 23 || scenario == 24 || scenario == 39
+                int length = scenario == 20 || scenario == 23 || scenario == 24 || scenario == 39 || scenario == 41
                     ? snprintf(session, sizeof(session), "gui-fixture-parent-%u-%ld", scenario, (long)getpid())
                     : snprintf(session, sizeof(session), "gui-fixture-parent-%u", scenario);
                 if (length < 0 || (size_t)length >= sizeof(session))
