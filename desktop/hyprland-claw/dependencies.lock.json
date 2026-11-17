@@ -26,6 +26,14 @@
       "pkg_config": "hyprutils"
     },
     {
+      "name": "hyprwire",
+      "repository": "https://github.com/hyprwm/hyprwire.git",
+      "revision": "a3ddaa7e7d9fa19cafb85f4741620311cffb9ea9",
+      "version": "0.3.1",
+      "build": "cmake",
+      "pkg_config": "hyprwire"
+    },
+    {
       "name": "hyprlang",
       "repository": "https://github.com/hyprwm/hyprlang.git",
       "revision": "0d00dc118981531aa731150b6ea551ef037acddd",

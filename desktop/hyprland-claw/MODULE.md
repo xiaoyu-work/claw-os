@@ -82,6 +82,9 @@ the distribution baseline. `dependencies.lock.json` records exact source
 commits in build order. `build-dependencies.py` builds only those commits
 into an explicitly selected external Linux cache; it never installs into the
 host system or chooses an older dependency.
+The scanner is pinned with Wayland 1.25.0 because the selected protocol XML
+requires its DTD support. Hyprwire uses the revision selected by the
+compositor's own `flake.lock`, including its native protocol scanner.
 
 From the OS repository root, after installing the declared development tools
 and libraries:
