@@ -18,6 +18,7 @@ cargo +stable build --manifest-path "$project/desktop/services/claw-applet-servi
     --locked --release --features provider --bin claw-os-applet-provider
 
 source_adapter="$project/desktop/hyprland-claw"
+bash "$source_adapter/build-locker.sh" "$stage" "$work"
 compiler="$(python3 "$source_adapter/build-toolchain.py" "$work")"
 export CC="$compiler/bin/gcc" CXX="$compiler/bin/g++"
 export LD_LIBRARY_PATH="$compiler/lib64:$compiler/lib"
@@ -102,6 +103,7 @@ for library in "${libraries[@]}"; do
     objdump -p "$library" | sed -nE 's/^[[:space:]]+SONAME[[:space:]]+(.+)\.so\.(.+)$/\1 \2 claw-os-desktop/p'
 done >debian/shlibs.local
 dpkg-shlibdeps -O -l"$native/lib" -xclaw-os-desktop "$native/Hyprland" "${libraries[@]}" \
+    "$native/claw-lockscreen" \
     "$stage/usr/local/bin/cos-agent-ui" "$stage/usr/local/bin/cos-agent-bridge" \
     "$stage/usr/local/bin/cos-ask-claw-launcher" "$stage/usr/libexec/claw-os-applet-provider" \
     | sed -n 's/^shlibs:Depends=//p' >"$work/runtime-depends"

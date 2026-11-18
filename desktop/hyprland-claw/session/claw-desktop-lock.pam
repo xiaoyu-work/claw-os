@@ -1,0 +1,4 @@
+#%PAM-1.0
+auth requisite pam_succeed_if.so user != root quiet_success
+@include common-auth
+@include common-account

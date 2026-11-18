@@ -9,6 +9,7 @@ scripts=(
     tools/install-mail-ai.sh
     packaging/deb/build-debs.sh
     packaging/deb/build-desktop-deb.sh
+    desktop/hyprland-claw/build-locker.sh
     desktop/hyprland-claw/stage-desktop.sh
     rootfs/features/desktop/install.sh
     crates/claw-display-login/test/fixtures/bootstrap.sh

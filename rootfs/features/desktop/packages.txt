@@ -54,6 +54,7 @@ libheif-dev
 libjxl-dev
 
 # --- Wayland / graphics core ---
+wayland-protocols
 libwayland-dev
 libwayland-client0
 libwayland-server0

@@ -1,0 +1,76 @@
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -7 +6,0 @@
+-#include <signal.h>
+@@ -12,0 +12 @@
++#include <sys/prctl.h>
+@@ -305,6 +304,0 @@
+-static int sigusr_fds[2] = {-1, -1};
+-
+-void do_sigusr(int sig) {
+-	(void)write(sigusr_fds[1], "1", 1);
+-}
+-
+@@ -1031,0 +1026 @@
++static bool authenticated = false;
+@@ -1046,0 +1042 @@
++			authenticated = true;
+@@ -1060,4 +1055,0 @@
+-static void term_in(int fd, short mask, void *data) {
+-	state.run_display = false;
+-}
+-
+@@ -1091,0 +1084,4 @@
++	if (prctl(PR_SET_DUMPABLE, 0L, 0L, 0L, 0L) != 0) {
++		swaylock_log_errno(LOG_ERROR, "Failed to protect locker process memory");
++		return EXIT_FAILURE;
++	}
+@@ -1163,9 +1158,0 @@
+-	if (pipe(sigusr_fds) != 0) {
+-		swaylock_log(LOG_ERROR, "Failed to pipe");
+-		return EXIT_FAILURE;
+-	}
+-	if (fcntl(sigusr_fds[1], F_SETFL, O_NONBLOCK) == -1) {
+-		swaylock_log(LOG_ERROR, "Failed to make pipe end nonblocking");
+-		return EXIT_FAILURE;
+-	}
+-
+@@ -1252,8 +1238,0 @@
+-	loop_add_fd(state.eventloop, sigusr_fds[0], POLLIN, term_in, NULL);
+-
+-	struct sigaction sa;
+-	sa.sa_handler = do_sigusr;
+-	sigemptyset(&sa.sa_mask);
+-	sa.sa_flags = SA_RESTART;
+-	sigaction(SIGUSR1, &sa, NULL);
+-
+@@ -1268,0 +1248,3 @@
++	if (!authenticated) {
++		return EXIT_FAILURE;
++	}
+@@ -1270 +1252,3 @@
+-	wl_display_roundtrip(state.display);
++	if (wl_display_roundtrip(state.display) < 0) {
++		return EXIT_FAILURE;
++	}
+diff --git a/pam.c b/pam.c
+--- a/pam.c
++++ b/pam.c
+@@ -71 +71 @@
+-		return "swaylock cannot authenticate users; check /etc/pam.d/swaylock "
++		return "claw-lockscreen cannot authenticate users; check /etc/pam.d/claw-desktop-lock "
+@@ -100 +100 @@
+-	if (pam_start("swaylock", username, &conv, &auth_handle) != PAM_SUCCESS) {
++	if (pam_start("claw-desktop-lock", username, &conv, &auth_handle) != PAM_SUCCESS) {
+@@ -118 +118,4 @@
+-		int pam_status = pam_authenticate(auth_handle, 0);
++		pam_status = pam_authenticate(auth_handle, PAM_DISALLOW_NULL_AUTHTOK);
++		if (pam_status == PAM_SUCCESS) {
++			pam_status = pam_acct_mgmt(auth_handle, 0);
++		}
+@@ -140 +143,3 @@
+-	pam_setcred(auth_handle, PAM_REFRESH_CRED);
++	if (pam_status == PAM_SUCCESS) {
++		pam_setcred(auth_handle, PAM_REFRESH_CRED);
++	}

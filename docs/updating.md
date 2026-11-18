@@ -883,6 +883,9 @@ and power actions require the matching Agent build's private broker routes;
 launches also use its protected display supervisor. There is no raw fallback
 or change to the public App ABI. The new package removes the superseded
 session; it does not migrate or erase owner configuration.
+The Desktop package owns the native locker and its dedicated
+`/etc/pam.d/claw-desktop-lock` service. They do not change the greetd login
+PAM stack or give the Shell access to authentication inputs.
 Keep the packaged PAM close hook before keyring and logind teardown; a locally
 modified stack can otherwise reject checked display retirement.
 On Debian 13, Desktop uses the matching XKB runtime and X11 companion from

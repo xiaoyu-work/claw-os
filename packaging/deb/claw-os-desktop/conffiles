@@ -6,4 +6,5 @@
 /etc/xdg/mimeapps.list
 /etc/xdg/hypr/hyprland.lua
 /etc/pam.d/claw-desktop
+/etc/pam.d/claw-desktop-lock
 /etc/greetd/claw-desktop.toml

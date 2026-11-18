@@ -61,6 +61,9 @@ owner FileManager1 facade and invokes `cos app desktop-shell --gui`. Normal
 signed App review and capability decisions still apply, and the launcher does
 not start an Agent task or a second compositor. `stage-desktop.sh` installs
 the session wiring and compiled compositor into the Desktop package.
+The same stage builds the private `claw-lockscreen` executable from pinned
+Swaylock source, with mandatory PAM and the dedicated `claw-desktop-lock`
+service. This build artifact is not a lock or display authorization.
 The installed `/etc/xdg/hypr/hyprland.lua` supplies monitor discovery and
 native window/workspace bindings for a new owner. It does not launch a
 second panel, wallpaper process or terminal. Existing owner configuration
@@ -118,6 +121,9 @@ selection did not open a second App, and logout cancelled a pending selection.
 The session menu's denied PowerOff left the guest running; a separate
 approved PowerOff shut it down and left one correlated journal intent.
 These runs do not establish APT, deployable-image, restart or sleep acceptance.
+The PAM-only locker separately rejected a wrong password and accepted the
+correct password in that graphical session using a disposable guest binding.
+This proves the native provider, not the default lock action or broker custody.
 
 The existing protocol baseline runs from the OS repository root:
 

@@ -42,8 +42,9 @@ if [ -e "$STAGE_ROOT/usr/bin/pop-launcher" ] || [ -L "$STAGE_ROOT/usr/bin/pop-la
     exit 1
 fi
 compositor="$STAGE_ROOT/usr/libexec/claw-hyprland/Hyprland"
+locker="$STAGE_ROOT/usr/libexec/claw-hyprland/claw-lockscreen"
 APPLET_PROVIDER="$STAGE_ROOT/usr/libexec/claw-os-applet-provider"
-for executable in "$APPLET_PROVIDER" "$compositor"; do
+for executable in "$APPLET_PROVIDER" "$compositor" "$locker"; do
 if [ ! -f "$executable" ] || [ ! -x "$executable" ] || [ -L "$executable" ]; then
     echo "error: required native desktop ELF is not a regular executable: $executable" >&2
     exit 1

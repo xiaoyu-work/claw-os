@@ -47,6 +47,8 @@ for package in claw-os-desktop claw-app-desktop-shell; do
     test "$(chroot "$ROOTFS" dpkg-query -W -f='${db:Status-Status}' "$package")" = installed
 done
 test -x "$ROOTFS/usr/libexec/claw-hyprland/Hyprland"
+test -x "$ROOTFS/usr/libexec/claw-hyprland/claw-lockscreen"
+test -f "$ROOTFS/etc/pam.d/claw-desktop-lock"
 test -f "$ROOTFS/usr/lib/cos/apps/desktop-shell/app.json"
 test -f "$ROOTFS/usr/share/wayland-sessions/claw.desktop"
 test "$(readlink "$ROOTFS/etc/systemd/system/display-manager.service")" = /usr/lib/systemd/system/greetd.service

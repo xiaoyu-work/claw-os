@@ -54,6 +54,11 @@ def test_native_provider_passes_abi_guard_without_bypassing_other_package_requir
     compositor = tmp_path / "usr/libexec/claw-hyprland/Hyprland"
     compositor.parent.mkdir()
     shutil.copy2("/bin/true", compositor)
+    missing_locker = package_attempt(tmp_path)
+    assert missing_locker.returncode != 0
+    assert "claw-lockscreen" in missing_locker.stderr
+    assert not (tmp_path / "DEBIAN").exists()
+    shutil.copy2("/bin/true", compositor.with_name("claw-lockscreen"))
     result = package_attempt(tmp_path)
     assert result.returncode != 0
     assert "required desktop Agent binary missing" in result.stderr
