@@ -340,7 +340,7 @@ unsafe fn authenticated(handle: *mut PamHandle) -> Result<(ProcessIdentity, Sess
     let mut service = std::ptr::null();
     if unsafe { pam_get_item(handle, PAM_SERVICE, &mut service) } != PAM_SUCCESS
         || service.is_null()
-        || unsafe { CStr::from_ptr(service.cast()) }.to_bytes() != b"cosmic-greeter"
+        || unsafe { CStr::from_ptr(service.cast()) }.to_bytes() != b"claw-desktop"
     {
         return Err(Error::Protocol("unexpected login PAM service"));
     }

@@ -54,6 +54,12 @@ namespace Claw {
         std::string workspace;
         std::string special;
         bool        focused;
+        double      width;
+        double      height;
+        double      refresh;
+        double      x;
+        double      y;
+        double      scale;
     };
 
     struct SKeyboard {
@@ -158,7 +164,8 @@ namespace Claw {
                 result.workspaces.push_back({selector(ws), ws->displayName(), ws->numberedID(), ws->monitorID(), ws->hasUrgentWindow()});
             for (const auto& monitor : State::monitorState()->monitors()) {
                 result.outputs.push_back({monitor->m_id, monitor->m_name, selector(monitor->m_activeWorkspace), selector(monitor->m_activeSpecialWorkspace),
-                                          Desktop::focusState()->monitor() == monitor});
+                                          Desktop::focusState()->monitor() == monitor, monitor->m_pixelSize.x, monitor->m_pixelSize.y,
+                                          monitor->m_refreshRate, monitor->m_position.x, monitor->m_position.y, monitor->m_scale});
             }
         } else if (request.kind == CLAW_DESKTOP_FOCUS_WORKSPACE) {
             applied(Action::changeWorkspace(workspace));

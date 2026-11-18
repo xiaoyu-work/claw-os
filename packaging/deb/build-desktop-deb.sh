@@ -22,6 +22,11 @@ OUT_DIR="$PROJECT_DIR/build/debs"
 source "$PROJECT_DIR/scripts/lib/package-version.sh"
 VERSION="$(package_version "$PROJECT_DIR")"
 APP_RUNTIME_VERSION="$(python3 "$PROJECT_DIR/scripts/app_packages.py" runtime-version)"
+NATIVE_DEPS="${CLAW_DESKTOP_RUNTIME_DEPS:?native dependency scan is required}"
+if [[ ! "$NATIVE_DEPS" =~ ^[a-z0-9+.,~:\(\)=\<\>\ -]+$ ]]; then
+    echo "error: invalid native desktop package dependencies" >&2
+    exit 1
+fi
 python3 "$PROJECT_DIR/scripts/app_packages.py" check-version --version "$VERSION"
 if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
@@ -36,12 +41,14 @@ if [ -e "$STAGE_ROOT/usr/bin/pop-launcher" ] || [ -L "$STAGE_ROOT/usr/bin/pop-la
     echo "error: shared Launcher runtime belongs to claw-os-agent, not Desktop" >&2
     exit 1
 fi
+compositor="$STAGE_ROOT/usr/libexec/claw-hyprland/Hyprland"
 APPLET_PROVIDER="$STAGE_ROOT/usr/libexec/claw-os-applet-provider"
-if [ ! -f "$APPLET_PROVIDER" ] || [ ! -x "$APPLET_PROVIDER" ] || [ -L "$APPLET_PROVIDER" ]; then
-    echo "error: required Applet service ELF missing or not a regular executable: $APPLET_PROVIDER" >&2
+for executable in "$APPLET_PROVIDER" "$compositor"; do
+if [ ! -f "$executable" ] || [ ! -x "$executable" ] || [ -L "$executable" ]; then
+    echo "error: required native desktop ELF is not a regular executable: $executable" >&2
     exit 1
 fi
-python3 - "$APPLET_PROVIDER" "$DEB_ARCH" <<'PY'
+python3 - "$executable" "$DEB_ARCH" <<'PY'
 from pathlib import Path
 import struct
 import sys
@@ -50,7 +57,7 @@ path, arch = Path(sys.argv[1]), sys.argv[2]
 with path.open("rb") as source:
     header = source.read(64)
 if len(header) != 64 or header[:7] != b"\x7fELF\x02\x01\x01":
-    raise SystemExit(f"error: Applet service is not a complete little-endian ELF64: {path}")
+    raise SystemExit(f"error: not a complete little-endian ELF64: {path}")
 (_, kind, machine, version, entry, phoff, _, _, ehsize, phentsize, phnum, _, _, _) = struct.unpack(
     "<16sHHIQQQIHHHHHH", header,
 )
@@ -60,8 +67,9 @@ if (
     or ehsize != 64 or phentsize != 56 or phnum == 0
     or phoff < 64 or phoff + phnum * phentsize > path.stat().st_size
 ):
-    raise SystemExit(f"error: Applet service has an invalid executable header or architecture for {arch}: {path}")
+    raise SystemExit(f"error: invalid executable header or architecture for {arch}: {path}")
 PY
+done
 for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
     if [ ! -x "$STAGE_ROOT/usr/local/bin/$binary" ]; then
         echo "error: required desktop Agent binary missing: $binary" >&2
@@ -71,7 +79,6 @@ done
 
 python3 "$PROJECT_DIR/scripts/app_packages.py" check \
     --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" >/dev/null
-python3 "$PROJECT_DIR/scripts/app_packages.py" native-boundary
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
@@ -144,6 +151,7 @@ unset RELEASE_SECURITY_PASSPHRASE
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" \
     -e "s/__ABI__/$SECURITY_ABI/g" \
     -e "s/__APP_RUNTIME_VERSION__/$APP_RUNTIME_VERSION/g" \
+    -e "s/__NATIVE_DEPS__/$NATIVE_DEPS/g" \
     -e "s/__SECURITY_EPOCH__/$SECURITY_EPOCH/g" \
     -e "s/__MIN_AGENT__/$MIN_AGENT_VERSION/g" \
     -e "s/__MIN_BASE__/$MIN_BASE_VERSION/g" \

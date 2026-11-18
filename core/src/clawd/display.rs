@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -18,16 +17,11 @@ use super::client_identity::ClientIdentity;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 2 * 1024 * 1024;
-const MAX_LAYOUT_BYTES: u64 = 1024 * 1024;
 static DISPLAY_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum DisplayBackupState {
-    Layout {
-        before_kdl: String,
-        applied_sha256: String,
-    },
     Brightness {
         device: String,
         before: u64,
@@ -54,7 +48,7 @@ pub async fn control(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (params, client, authority);
-        return Err("Display Manager requires Linux COSMIC".to_string());
+        return Err("Display Manager requires Linux".to_string());
     }
 
     #[cfg(target_os = "linux")]
@@ -63,13 +57,6 @@ pub async fn control(
             return Err("Display Manager requires root clawd".to_string());
         }
         let uid = client.require_uid()?;
-        let gid = client
-            .gid
-            .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
         let action = required_string(&params, "action")?;
         let output = optional_string(&params, "output")?;
         let from = optional_string(&params, "from")?;
@@ -107,13 +94,21 @@ pub async fn control(
             token.as_deref(),
             confirm,
         )?;
-        let source = source.as_deref().map(resolve_source).transpose()?;
-        let requested = requested_caps(&action, source.as_deref());
+        if !matches!(action.as_str(), "status" | "brightness" | "restore") {
+            return Err("The active desktop does not provide this output layout effect".to_string());
+        }
+        let requested = requested_caps(&action, None);
         let _authorized = authorize_session(authority, &requested)?;
-        let environment = DisplayEnvironment::new(uid, gid, home, peer_pid)?;
-
         if action == "status" {
-            return display_status(&environment).await;
+            let outputs = super::desktop::output_state(client).await?;
+            let backlights = backlights();
+            return Ok(json!({
+                "output_count": outputs.as_array().map_or(0, Vec::len),
+                "outputs": outputs,
+                "backlight_count": backlights.len(),
+                "backlights": backlights,
+                "layout_control_available": false,
+            }));
         }
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
@@ -124,32 +119,10 @@ pub async fn control(
         .await
         .map_err(|_| "Display Manager is busy with another mutation".to_string())?;
         match action.as_str() {
-            "enable" | "disable" | "mirror" | "position" | "mode" | "scale" => {
-                mutate_layout(
-                    uid,
-                    &action,
-                    output.as_deref().unwrap(),
-                    from.as_deref(),
-                    width,
-                    height,
-                    refresh,
-                    scale,
-                    x,
-                    y,
-                    transform.as_deref(),
-                    adaptive_sync.as_deref(),
-                    &environment,
-                )
-                .await
-            }
-            "apply-layout" => {
-                let content = read_source(source.as_deref().unwrap())?;
-                apply_layout(uid, &content, &environment).await
-            }
             "brightness" => {
                 set_brightness(uid, backlight.as_deref().unwrap(), percent.unwrap()).await
             }
-            "restore" => restore_display(uid, token.as_deref().unwrap(), &environment).await,
+            "restore" => restore_display(uid, token.as_deref().unwrap()).await,
             _ => unreachable!("validated display action"),
         }
     }
@@ -180,338 +153,6 @@ fn requested_caps(action: &str, source: Option<&Path>) -> Vec<Cap> {
 /// should be refused twice.
 fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
     authority.require_all(requested)
-}
-
-async fn display_status(environment: &DisplayEnvironment) -> Result<Value, String> {
-    let kdl = list_kdl(environment).await?;
-    let outputs = parse_outputs(&kdl)?;
-    let backlights = backlights();
-    let output_count = outputs.len();
-    let backlight_count = backlights.len();
-    Ok(json!({
-        "outputs": outputs,
-        "output_count": output_count,
-        "backlights": backlights,
-        "backlight_count": backlight_count,
-        "kdl": kdl,
-    }))
-}
-
-async fn mutate_layout(
-    owner_uid: u32,
-    action: &str,
-    output: &str,
-    from: Option<&str>,
-    width: Option<i64>,
-    height: Option<i64>,
-    refresh: Option<f64>,
-    scale: Option<f64>,
-    x: Option<i64>,
-    y: Option<i64>,
-    transform: Option<&str>,
-    adaptive_sync: Option<&str>,
-    environment: &DisplayEnvironment,
-) -> Result<Value, String> {
-    let before_kdl = list_kdl(environment).await?;
-    let before = parse_outputs(&before_kdl)?;
-    ensure_output_exists(&before, output)?;
-    if action == "disable"
-        && before
-            .iter()
-            .filter(|output| output["enabled"].as_bool() == Some(true))
-            .count()
-            <= 1
-    {
-        return Err("refusing to disable the last enabled output".to_string());
-    }
-    if let Some(from) = from {
-        ensure_output_exists(&before, from)?;
-        if output == from {
-            return Err("an output cannot mirror itself".to_string());
-        }
-    }
-    if action == "mode" {
-        let modes = before
-            .iter()
-            .find(|item| item["name"].as_str() == Some(output))
-            .and_then(|item| item["modes"].as_array())
-            .ok_or_else(|| "output has no modes".to_string())?;
-        if !modes
-            .iter()
-            .any(|mode| mode["width"].as_i64() == width && mode["height"].as_i64() == height)
-        {
-            return Err(format!(
-                "output {output} does not advertise mode {}x{}",
-                width.unwrap(),
-                height.unwrap()
-            ));
-        }
-    }
-    let backup = prepare_layout_backup(owner_uid, action, &before_kdl)?;
-    let args = layout_command(
-        action,
-        output,
-        from,
-        width,
-        height,
-        refresh,
-        scale,
-        x,
-        y,
-        transform,
-        adaptive_sync,
-        &before,
-    )?;
-    let command = run_user_command(
-        cosmic_randr_path()?,
-        args,
-        environment.clone(),
-        None,
-        TOOL_TIMEOUT,
-    )
-    .await?;
-    require_success("cosmic-randr", &command)?;
-    finish_layout_backup(backup, environment).await
-}
-
-fn layout_command(
-    action: &str,
-    output: &str,
-    from: Option<&str>,
-    width: Option<i64>,
-    height: Option<i64>,
-    refresh: Option<f64>,
-    scale: Option<f64>,
-    x: Option<i64>,
-    y: Option<i64>,
-    transform: Option<&str>,
-    adaptive_sync: Option<&str>,
-    current: &[Value],
-) -> Result<Vec<String>, String> {
-    match action {
-        "enable" | "disable" => Ok(vec![action.to_string(), output.to_string()]),
-        "mirror" => Ok(vec![
-            "mirror".to_string(),
-            output.to_string(),
-            from.unwrap().to_string(),
-        ]),
-        "position" => {
-            let output_state = current
-                .iter()
-                .find(|item| item["name"].as_str() == Some(output))
-                .ok_or_else(|| "output not found".to_string())?;
-            let current_mode = output_state["modes"]
-                .as_array()
-                .and_then(|modes| {
-                    modes
-                        .iter()
-                        .find(|mode| mode["current"].as_bool() == Some(true))
-                })
-                .ok_or_else(|| "output has no current mode".to_string())?;
-            Ok(vec![
-                "mode".to_string(),
-                "--pos-x".to_string(),
-                x.unwrap().to_string(),
-                "--pos-y".to_string(),
-                y.unwrap().to_string(),
-                "--refresh".to_string(),
-                format!("{:.3}", current_mode["refresh_hz"].as_f64().unwrap_or(60.0)),
-                output.to_string(),
-                current_mode["width"].as_i64().unwrap().to_string(),
-                current_mode["height"].as_i64().unwrap().to_string(),
-            ])
-        }
-        "mode" => {
-            let mut args = vec!["mode".to_string()];
-            if let Some(refresh) = refresh {
-                args.extend(["--refresh".to_string(), format!("{refresh:.3}")]);
-            }
-            if let Some(scale) = scale {
-                args.extend(["--scale".to_string(), format!("{scale:.2}")]);
-            }
-            if let Some(x) = x {
-                args.extend(["--pos-x".to_string(), x.to_string()]);
-            }
-            if let Some(y) = y {
-                args.extend(["--pos-y".to_string(), y.to_string()]);
-            }
-            if let Some(transform) = transform {
-                args.extend(["--transform".to_string(), transform.to_string()]);
-            }
-            if let Some(adaptive_sync) = adaptive_sync {
-                args.extend(["--adaptive-sync".to_string(), adaptive_sync.to_string()]);
-            }
-            args.extend([
-                output.to_string(),
-                width.unwrap().to_string(),
-                height.unwrap().to_string(),
-            ]);
-            Ok(args)
-        }
-        "scale" => {
-            let output_state = current
-                .iter()
-                .find(|item| item["name"].as_str() == Some(output))
-                .ok_or_else(|| "output not found".to_string())?;
-            let current_mode = output_state["modes"]
-                .as_array()
-                .and_then(|modes| {
-                    modes
-                        .iter()
-                        .find(|mode| mode["current"].as_bool() == Some(true))
-                })
-                .ok_or_else(|| "output has no current mode".to_string())?;
-            Ok(vec![
-                "mode".to_string(),
-                "--scale".to_string(),
-                format!("{:.2}", scale.unwrap()),
-                "--refresh".to_string(),
-                format!("{:.3}", current_mode["refresh_hz"].as_f64().unwrap_or(60.0)),
-                output.to_string(),
-                current_mode["width"].as_i64().unwrap().to_string(),
-                current_mode["height"].as_i64().unwrap().to_string(),
-            ])
-        }
-        _ => unreachable!("validated display action"),
-    }
-}
-
-async fn apply_layout(
-    owner_uid: u32,
-    content: &[u8],
-    environment: &DisplayEnvironment,
-) -> Result<Value, String> {
-    let text = std::str::from_utf8(content).map_err(|_| "display KDL must be UTF-8".to_string())?;
-    let parsed = parse_outputs(text)?;
-    let before_kdl = list_kdl(environment).await?;
-    let current = parse_outputs(&before_kdl)?;
-    let enabled_matches_current = parsed.iter().any(|submitted| {
-        submitted["enabled"].as_bool() == Some(true)
-            && current.iter().any(|existing| {
-                existing["name"] == submitted["name"]
-                    && existing["make"] == submitted["make"]
-                    && existing["model"] == submitted["model"]
-            })
-    });
-    if !enabled_matches_current {
-        return Err(
-            "display layout must leave at least one currently connected output enabled".to_string(),
-        );
-    }
-    let backup = prepare_layout_backup(owner_uid, "apply-layout", &before_kdl)?;
-    let command = run_user_command(
-        cosmic_randr_path()?,
-        vec!["kdl".to_string()],
-        environment.clone(),
-        Some(content.to_vec()),
-        TOOL_TIMEOUT,
-    )
-    .await?;
-    require_success("cosmic-randr", &command)?;
-    finish_layout_backup(backup, environment).await
-}
-
-fn prepare_layout_backup(
-    owner_uid: u32,
-    action: &str,
-    before_kdl: &str,
-) -> Result<DisplayBackup, String> {
-    let backup = DisplayBackup {
-        token: uuid::Uuid::new_v4().simple().to_string(),
-        owner_uid,
-        created_at: chrono::Utc::now().to_rfc3339(),
-        action: action.to_string(),
-        state: DisplayBackupState::Layout {
-            before_kdl: before_kdl.to_string(),
-            applied_sha256: String::new(),
-        },
-        status: "prepared".to_string(),
-    };
-    save_backup(&backup)?;
-    Ok(backup)
-}
-
-async fn finish_layout_backup(
-    mut backup: DisplayBackup,
-    environment: &DisplayEnvironment,
-) -> Result<Value, String> {
-    let after_kdl = match list_kdl(environment).await {
-        Ok(after_kdl) => after_kdl,
-        Err(error) => return rollback_layout_failure(backup, environment, error).await,
-    };
-    let hash = sha256(after_kdl.as_bytes());
-    let before = match &backup.state {
-        DisplayBackupState::Layout { before_kdl, .. } => before_kdl.clone(),
-        _ => unreachable!(),
-    };
-    backup.state = DisplayBackupState::Layout {
-        before_kdl: before.clone(),
-        applied_sha256: hash.clone(),
-    };
-    backup.status = "applied".to_string();
-    if let Err(error) = save_backup(&backup) {
-        return rollback_layout_failure(backup, environment, error).await;
-    }
-    Ok(json!({
-        "action": backup.action,
-        "changed": before != after_kdl,
-        "backup_token": backup.token,
-        "before": parse_outputs(&before)?,
-        "after": parse_outputs(&after_kdl)?,
-        "applied_sha256": hash,
-    }))
-}
-
-async fn rollback_layout_failure(
-    mut backup: DisplayBackup,
-    environment: &DisplayEnvironment,
-    error: String,
-) -> Result<Value, String> {
-    let before_kdl = match &backup.state {
-        DisplayBackupState::Layout { before_kdl, .. } => before_kdl.clone(),
-        _ => return Err(error),
-    };
-    let rollback = async {
-        let command = run_user_command(
-            cosmic_randr_path()?,
-            vec!["kdl".to_string()],
-            environment.clone(),
-            Some(before_kdl.as_bytes().to_vec()),
-            TOOL_TIMEOUT,
-        )
-        .await?;
-        require_success("cosmic-randr rollback", &command)?;
-        let restored = list_kdl(environment).await?;
-        if sha256(restored.as_bytes()) != sha256(before_kdl.as_bytes()) {
-            return Err("rolled-back layout does not match the backup".to_string());
-        }
-        Ok::<(), String>(())
-    }
-    .await;
-    match rollback {
-        Ok(()) => {
-            backup.status = "auto-rolled-back".to_string();
-            let metadata_error = save_backup(&backup).err();
-            Err(format!(
-                "display mutation failed after applying and the previous layout was restored: {error}{}",
-                metadata_error
-                    .map(|metadata_error| format!("; backup metadata update also failed: {metadata_error}"))
-                    .unwrap_or_default()
-            ))
-        }
-        Err(rollback_error) => {
-            backup.status = "rollback-failed".to_string();
-            let metadata_error = save_backup(&backup).err();
-            Ok(json!({
-                "action": backup.action,
-                "action_applied": true,
-                "backup_token": backup.token,
-                "post_state_error": error,
-                "rollback_error": rollback_error,
-                "metadata_error": metadata_error,
-            }))
-        }
-    }
 }
 
 async fn set_brightness(owner_uid: u32, device: &str, percent: u64) -> Result<Value, String> {
@@ -575,15 +216,8 @@ async fn rollback_brightness_failure(
     mut backup: DisplayBackup,
     error: String,
 ) -> Result<Value, String> {
-    let (device, before, maximum) = match &backup.state {
-        DisplayBackupState::Brightness {
-            device,
-            before,
-            maximum,
-            ..
-        } => (device.clone(), *before, *maximum),
-        _ => return Err(error),
-    };
+    let DisplayBackupState::Brightness { device, before, maximum, .. } = &backup.state;
+    let (device, before, maximum) = (device.clone(), *before, *maximum);
     let rollback = async {
         let command = run_root_command(
             brightnessctl_path()?,
@@ -636,7 +270,6 @@ async fn rollback_brightness_failure(
 async fn restore_display(
     owner_uid: u32,
     token: &str,
-    environment: &DisplayEnvironment,
 ) -> Result<Value, String> {
     validate_token(token)?;
     let mut backup = load_backup(token)?;
@@ -647,32 +280,6 @@ async fn restore_display(
         return Err(format!("display backup is not applied: {}", backup.status));
     }
     match &backup.state {
-        DisplayBackupState::Layout {
-            before_kdl,
-            applied_sha256,
-        } => {
-            if backup.status == "applied" {
-                let current = list_kdl(environment).await?;
-                if sha256(current.as_bytes()) != *applied_sha256 {
-                    return Err("display layout changed after this backup was created".to_string());
-                }
-            }
-            let command = run_user_command(
-                cosmic_randr_path()?,
-                vec!["kdl".to_string()],
-                environment.clone(),
-                Some(before_kdl.as_bytes().to_vec()),
-                TOOL_TIMEOUT,
-            )
-            .await?;
-            require_success("cosmic-randr", &command)?;
-            let restored = list_kdl(environment).await?;
-            if sha256(restored.as_bytes()) != sha256(before_kdl.as_bytes()) {
-                return Err(
-                    "display restore completed but layout does not match backup".to_string()
-                );
-            }
-        }
         DisplayBackupState::Brightness {
             device,
             before,
@@ -715,139 +322,6 @@ async fn restore_display(
         "backup_token": token,
         "action": backup.action,
     }))
-}
-
-async fn list_kdl(environment: &DisplayEnvironment) -> Result<String, String> {
-    let output = run_user_command(
-        cosmic_randr_path()?,
-        vec!["list".to_string(), "--kdl".to_string()],
-        environment.clone(),
-        None,
-        TOOL_TIMEOUT,
-    )
-    .await?;
-    require_success("cosmic-randr", &output)?;
-    Ok(output.stdout)
-}
-
-fn parse_outputs(kdl: &str) -> Result<Vec<Value>, String> {
-    let mut outputs = Vec::new();
-    let mut current = None::<serde_json::Map<String, Value>>;
-    let mut modes = Vec::new();
-    for raw in kdl.lines() {
-        let line = raw.trim();
-        if let Some(rest) = line.strip_prefix("output \"") {
-            if let Some(mut output) = current.take() {
-                output.insert(
-                    "modes".to_string(),
-                    Value::Array(std::mem::take(&mut modes)),
-                );
-                outputs.push(Value::Object(output));
-            }
-            let (name, rest) = rest
-                .split_once('"')
-                .ok_or_else(|| "invalid output header in cosmic-randr KDL".to_string())?;
-            validate_output_name(name)?;
-            let enabled = rest.contains("enabled=#true");
-            let mut output = serde_json::Map::new();
-            output.insert("name".to_string(), Value::String(name.to_string()));
-            output.insert("enabled".to_string(), Value::Bool(enabled));
-            output.insert("make".to_string(), Value::String(String::new()));
-            output.insert("model".to_string(), Value::String(String::new()));
-            current = Some(output);
-        } else if let Some(output) = current.as_mut() {
-            if line.starts_with("description") {
-                if let Some(make) = quoted_attribute(line, "make") {
-                    output.insert("make".to_string(), Value::String(make));
-                }
-                if let Some(model) = quoted_attribute(line, "model") {
-                    output.insert("model".to_string(), Value::String(model));
-                }
-            } else if let Some(rest) = line.strip_prefix("position ") {
-                let values = rest.split_whitespace().collect::<Vec<_>>();
-                if values.len() == 2 {
-                    output.insert(
-                        "position".to_string(),
-                        json!([values[0].parse::<i64>().ok(), values[1].parse::<i64>().ok()]),
-                    );
-                }
-            } else if let Some(value) = line.strip_prefix("scale ") {
-                output.insert(
-                    "scale".to_string(),
-                    Value::from(value.parse::<f64>().unwrap_or(1.0)),
-                );
-            } else if let Some(value) = quoted_property(line, "mirroring") {
-                output.insert("mirroring".to_string(), Value::String(value));
-            } else if let Some(value) = quoted_property(line, "transform") {
-                output.insert("transform".to_string(), Value::String(value));
-            } else if let Some(value) = quoted_property(line, "serial_number") {
-                output.insert("serial_number".to_string(), Value::String(value));
-            } else if let Some(rest) = line.strip_prefix("mode ") {
-                let fields = rest.split_whitespace().collect::<Vec<_>>();
-                if fields.len() >= 3 {
-                    modes.push(json!({
-                        "width": fields[0].parse::<i64>().ok(),
-                        "height": fields[1].parse::<i64>().ok(),
-                        "refresh_millihz": fields[2].parse::<i64>().ok(),
-                        "refresh_hz": fields[2].parse::<f64>().ok().map(|value| value / 1000.0),
-                        "current": fields.contains(&"current=#true"),
-                        "preferred": fields.contains(&"preferred=#true"),
-                    }));
-                }
-            }
-        }
-    }
-    if let Some(mut output) = current {
-        output.insert("modes".to_string(), Value::Array(modes));
-        outputs.push(Value::Object(output));
-    }
-    if outputs.is_empty() {
-        return Err("cosmic-randr returned no parseable outputs".to_string());
-    }
-    Ok(outputs)
-}
-
-fn quoted_property(line: &str, key: &str) -> Option<String> {
-    line.strip_prefix(&format!("{key} \""))?
-        .strip_suffix('"')
-        .map(str::to_string)
-}
-
-fn quoted_attribute(line: &str, key: &str) -> Option<String> {
-    let marker = format!("{key}=\"");
-    let start = line.find(&marker)? + marker.len();
-    let mut value = String::new();
-    let mut escaped = false;
-    for character in line[start..].chars() {
-        if escaped {
-            value.push(match character {
-                'n' => '\n',
-                'r' => '\r',
-                't' => '\t',
-                other => other,
-            });
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == '"' {
-            return Some(value);
-        } else {
-            value.push(character);
-        }
-    }
-    None
-}
-
-fn ensure_output_exists(outputs: &[Value], name: &str) -> Result<(), String> {
-    validate_output_name(name)?;
-    if outputs
-        .iter()
-        .any(|output| output["name"].as_str() == Some(name))
-    {
-        Ok(())
-    } else {
-        Err(format!("display output not found: {name}"))
-    }
 }
 
 fn validate_output_name(value: &str) -> Result<(), String> {
@@ -915,187 +389,13 @@ fn read_u64(path: impl AsRef<Path>) -> Option<u64> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-fn resolve_source(raw: &str) -> Result<PathBuf, String> {
-    if raw.is_empty()
-        || raw.len() > 4096
-        || !raw.starts_with('/')
-        || raw.chars().any(|character| character.is_control())
-    {
-        return Err("display layout source must be an absolute path".to_string());
-    }
-    let metadata = fs::symlink_metadata(raw)
-        .map_err(|error| format!("inspect display layout source: {error}"))?;
-    if metadata.file_type().is_symlink() {
-        return Err("display layout source symlinks are not allowed".to_string());
-    }
-    fs::canonicalize(raw).map_err(|error| format!("resolve display layout source: {error}"))
-}
-
-fn read_source(path: &Path) -> Result<Vec<u8>, String> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|error| format!("open display layout source: {error}"))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("inspect display layout source: {error}"))?;
-    if !metadata.is_file() || metadata.len() > MAX_LAYOUT_BYTES {
-        return Err(format!(
-            "display layout source must be a regular file no larger than {MAX_LAYOUT_BYTES} bytes"
-        ));
-    }
-    let mut content = Vec::with_capacity(metadata.len() as usize);
-    file.read_to_end(&mut content)
-        .map_err(|error| format!("read display layout source: {error}"))?;
-    Ok(content)
-}
-
-#[derive(Clone)]
-struct DisplayEnvironment {
-    uid: u32,
-    gid: u32,
-    home: PathBuf,
-    runtime_dir: PathBuf,
-    wayland_display: String,
-    username: String,
-}
-
-impl DisplayEnvironment {
-    fn new(uid: u32, gid: u32, home: PathBuf, peer_pid: u32) -> Result<Self, String> {
-        let metadata = fs::metadata(&home)
-            .map_err(|error| format!("inspect display home {}: {error}", home.display()))?;
-        if metadata.uid() != uid {
-            return Err(format!(
-                "display home {} belongs to uid {}, expected {uid}",
-                home.display(),
-                metadata.uid()
-            ));
-        }
-        let runtime_dir = PathBuf::from(format!("/run/user/{uid}"));
-        let runtime_metadata = fs::symlink_metadata(&runtime_dir)
-            .map_err(|error| format!("inspect display runtime: {error}"))?;
-        if !runtime_metadata.is_dir()
-            || runtime_metadata.file_type().is_symlink()
-            || runtime_metadata.uid() != uid
-        {
-            return Err("display runtime directory is not user-owned".to_string());
-        }
-        let wayland_display = peer_wayland_display(peer_pid)
-            .filter(|value| valid_wayland_display(value))
-            .or_else(|| discover_wayland_display(&runtime_dir, uid).ok())
-            .ok_or_else(|| "no unique user-owned Wayland socket was found".to_string())?;
-        validate_wayland_socket(&runtime_dir, &wayland_display, uid)?;
-        Ok(Self {
-            uid,
-            gid,
-            home,
-            runtime_dir,
-            wayland_display,
-            username: username_for_uid(uid)?,
-        })
-    }
-}
-
-fn peer_wayland_display(pid: u32) -> Option<String> {
-    let file = fs::File::open(format!("/proc/{pid}/environ")).ok()?;
-    let mut reader = file.take(256 * 1024);
-    let mut data = Vec::new();
-    reader.read_to_end(&mut data).ok()?;
-    data.split(|byte| *byte == 0).find_map(|entry| {
-        let value = entry.strip_prefix(b"WAYLAND_DISPLAY=")?;
-        std::str::from_utf8(value).ok().map(str::to_string)
-    })
-}
-
-fn discover_wayland_display(runtime_dir: &Path, uid: u32) -> Result<String, String> {
-    let mut sockets = fs::read_dir(runtime_dir)
-        .map_err(|error| format!("list display runtime: {error}"))?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_string();
-            if !valid_wayland_display(&name) {
-                return None;
-            }
-            let metadata = fs::symlink_metadata(entry.path()).ok()?;
-            (metadata.file_type().is_socket() && metadata.uid() == uid).then_some(name)
-        })
-        .collect::<Vec<_>>();
-    sockets.sort();
-    sockets.dedup();
-    match sockets.as_slice() {
-        [socket] => Ok(socket.clone()),
-        [] => Err("no Wayland socket found".to_string()),
-        _ => Err("multiple Wayland sockets found".to_string()),
-    }
-}
-
-fn validate_wayland_socket(runtime_dir: &Path, display: &str, uid: u32) -> Result<(), String> {
-    let path = runtime_dir.join(display);
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|error| format!("inspect Wayland socket {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink()
-        || !metadata.file_type().is_socket()
-        || metadata.uid() != uid
-    {
-        return Err("Wayland socket is not a user-owned Unix socket".to_string());
-    }
-    Ok(())
-}
-
-fn valid_wayland_display(value: &str) -> bool {
-    value.starts_with("wayland-")
-        && value.len() <= 108
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
-fn username_for_uid(uid: u32) -> Result<String, String> {
-    use std::ffi::CStr;
-    const BUF_SIZE: usize = 16 * 1024;
-    let mut buffer = vec![0 as libc::c_char; BUF_SIZE];
-    let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result = std::ptr::null_mut();
-    let rc = unsafe {
-        libc::getpwuid_r(
-            uid,
-            &mut passwd,
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if rc != 0 || result.is_null() || passwd.pw_name.is_null() {
-        return Err(format!("passwd entry is unavailable for uid {uid}"));
-    }
-    unsafe { CStr::from_ptr(passwd.pw_name) }
-        .to_str()
-        .map(str::to_string)
-        .map_err(|_| format!("username is not UTF-8 for uid {uid}"))
-}
-
-async fn run_user_command(
-    program: &'static str,
-    args: Vec<String>,
-    environment: DisplayEnvironment,
-    stdin_data: Option<Vec<u8>>,
-    timeout: Duration,
-) -> Result<CommandOutput, String> {
-    tokio::task::spawn_blocking(move || {
-        run_command_sync(program, args, Some(environment), stdin_data, timeout)
-    })
-    .await
-    .map_err(|error| format!("{program} worker failed: {error}"))?
-}
-
 async fn run_root_command(
     program: &'static str,
     args: Vec<String>,
     stdin_data: Option<Vec<u8>>,
     timeout: Duration,
 ) -> Result<CommandOutput, String> {
-    tokio::task::spawn_blocking(move || run_command_sync(program, args, None, stdin_data, timeout))
+    tokio::task::spawn_blocking(move || run_command_sync(program, args, stdin_data, timeout))
         .await
         .map_err(|error| format!("{program} worker failed: {error}"))?
 }
@@ -1103,7 +403,6 @@ async fn run_root_command(
 fn run_command_sync(
     program: &str,
     args: Vec<String>,
-    environment: Option<DisplayEnvironment>,
     stdin_data: Option<Vec<u8>>,
     timeout: Duration,
 ) -> Result<CommandOutput, String> {
@@ -1121,31 +420,9 @@ fn run_command_sync(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let identity = environment.as_ref().map(|environment| {
-        command
-            .env("HOME", &environment.home)
-            .env("USER", &environment.username)
-            .env("LOGNAME", &environment.username)
-            .env("XDG_RUNTIME_DIR", &environment.runtime_dir)
-            .env("WAYLAND_DISPLAY", &environment.wayland_display);
-        (environment.uid, environment.gid)
-    });
-    if environment.is_none() {
-        command.env("HOME", "/root");
-    }
+    command.env("HOME", "/root");
     unsafe {
         command.pre_exec(move || {
-            if let Some((uid, gid)) = identity {
-                if libc::setgroups(0, std::ptr::null()) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::setgid(gid) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::setuid(uid) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -1518,17 +795,6 @@ fn backup_dir() -> PathBuf {
 
 fn backup_path(token: &str) -> PathBuf {
     backup_dir().join(format!("{token}.json"))
-}
-
-fn sha256(value: &[u8]) -> String {
-    hex::encode(Sha256::digest(value))
-}
-
-fn cosmic_randr_path() -> Result<&'static str, String> {
-    ["/usr/bin/cosmic-randr", "/usr/local/bin/cosmic-randr"]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .ok_or_else(|| "cosmic-randr is not installed".to_string())
 }
 
 fn brightnessctl_path() -> Result<&'static str, String> {

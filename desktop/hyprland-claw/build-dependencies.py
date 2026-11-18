@@ -3,6 +3,7 @@
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -58,9 +59,47 @@ def checkout(source, cache):
 
 
 def build(source, cache, prefix, environment, jobs):
-    directory = checkout(source, cache)
-    output = cache / "build" / f"{source['name']}-{source['revision']}"
-    if source["build"] == "cmake":
+    if "archive" in source:
+        name = f"{source['name']}-{source['version']}"
+        downloads = cache / "downloads"
+        downloads.mkdir(exist_ok=True)
+        archive = downloads / source["sha256"]
+        if not archive.exists():
+            with tempfile.TemporaryDirectory(dir=downloads) as temporary:
+                download = Path(temporary) / "download"
+                run(["curl", "--proto", "=https", "--proto-redir", "=https", "-fLsS",
+                     "--output", download, source["archive"]])
+                with download.open("rb") as stream:
+                    if hashlib.file_digest(stream, "sha256").hexdigest() != source["sha256"]:
+                        raise ValueError(f"{name} source digest mismatch")
+                download.rename(archive)
+        with archive.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != source["sha256"]:
+                raise ValueError(f"{name} cached source digest mismatch")
+        directory = cache / "sources" / name
+        if not directory.exists():
+            directory.parent.mkdir(exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=directory.parent) as temporary:
+                unpacked = Path(temporary) / "source"
+                unpacked.mkdir()
+                run(["tar", "-xf", archive, "-C", unpacked, "--strip-components=1", "--no-same-owner"])
+                unpacked.rename(directory)
+    else:
+        directory = checkout(source, cache)
+        name = f"{source['name']}-{source['revision']}"
+    output = cache / "build" / name
+    if source["build"] == "lua":
+        run(["make", "-C", directory / "src", "-j", jobs, "linux", "MYCFLAGS=-fPIC"],
+            environment=environment)
+        run(["make", "-C", directory, "install", f"INSTALL_TOP={prefix}"], environment=environment)
+        pc = prefix / "lib/pkgconfig"
+        pc.mkdir(parents=True, exist_ok=True)
+        (pc / "lua5.5.pc").write_text(
+            f"prefix={prefix}\nName: Lua\nDescription: Lua embedded language\n"
+            f"Version: {source['version']}\nLibs: -L${{prefix}}/lib -llua -lm -ldl\n"
+            "Cflags: -I${prefix}/include\n"
+        )
+    elif source["build"] == "cmake":
         run([
             "cmake", "-S", directory, "-B", output, "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
@@ -78,10 +117,12 @@ def build(source, cache, prefix, environment, jobs):
         command = ["meson", "setup"]
         if (output / "meson-private/coredata.dat").is_file():
             command.extend(["--reconfigure", "--clearcache"])
+        extra = (["-Dudev-dir=" + str(prefix / "lib/udev")]
+                 if source["name"] == "libinput" else [])
         run([
             *command, f"--prefix={prefix}", "--libdir=lib",
             "--buildtype=release", "-Dtests=false",
-            *source.get("meson_args", []), output, directory,
+            *extra, *source.get("meson_args", []), output, directory,
         ], environment=environment)
         run(["meson", "install", "-C", output], environment=environment)
     if "pkg_config" in source:
@@ -91,7 +132,7 @@ def build(source, cache, prefix, environment, jobs):
         ).stdout.strip()
         if actual != source["version"]:
             raise ValueError(f"{source['name']} version is {actual}, not {source['version']}")
-    print(f"Built {source['name']} at {source['revision']}", flush=True)
+    print(f"Built {name}", flush=True)
 
 
 def main():
@@ -101,7 +142,7 @@ def main():
     options = parser.parse_args()
     if sys.platform != "linux" or options.jobs < 1:
         parser.error("Use Linux/WSL with a positive build job count")
-    for tool in ("git", "cmake", "ninja", "meson", "pkg-config"):
+    for tool in ("git", "cmake", "ninja", "meson", "pkg-config", "curl", "tar", "make"):
         if shutil.which(tool) is None:
             parser.error(f"Required native build tool is missing: {tool}")
     cache = options.cache.resolve()
@@ -109,7 +150,7 @@ def main():
     if cache in (Path("/"), Path.home(), repository) or cache.is_relative_to(repository):
         parser.error("Use an explicit external Linux build cache, not a source or system root")
     cache.mkdir(parents=True, exist_ok=True)
-    for child in ("prefix", "sources", "build", ".build.lock"):
+    for child in ("prefix", "sources", "build", "downloads", ".build.lock"):
         if (cache / child).is_symlink():
             parser.error(f"Native build cache entry is a symlink: {child}")
     filesystem = run(["stat", "-f", "-c", "%T", cache], capture=True).stdout.strip()
@@ -118,13 +159,21 @@ def main():
     sources = json.loads((ROOT / "dependencies.lock.json").read_text())["sources"]
     names = set()
     for source in sources:
+        archive = source.get("archive")
+        valid_source = (
+            archive.startswith("https://")
+            and bool(re.fullmatch(r"[0-9a-f]{64}", source.get("sha256", "")))
+            if archive is not None
+            else bool(re.fullmatch(r"[0-9a-f]{40}", source.get("revision", "")))
+            and source["repository"].startswith("https://github.com/")
+            and source["repository"].endswith(".git")
+        )
         if (
             not re.fullmatch(r"[a-z][a-z0-9-]*", source["name"])
             or source["name"] in names
-            or not re.fullmatch(r"[0-9a-f]{40}", source["revision"])
-            or not source["repository"].startswith("https://github.com/")
-            or not source["repository"].endswith(".git")
-            or source["build"] not in ("cmake", "meson")
+            or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", source["version"])
+            or not valid_source
+            or source["build"] not in ("cmake", "meson", "lua")
         ):
             raise ValueError("Invalid pinned native dependency")
         names.add(source["name"])

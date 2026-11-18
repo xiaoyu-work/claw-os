@@ -14,7 +14,6 @@ restore_or_remove() {
 rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf
 rmdir /etc/systemd/system/getty@tty1.service.d 2>/dev/null || true
 
-restore_or_remove /etc/greetd/cosmic-greeter.toml
 restore_or_remove /etc/issue
 restore_or_remove /etc/motd
 

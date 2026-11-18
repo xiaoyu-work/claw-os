@@ -19,10 +19,6 @@
 #    read-only squashfs and waste bandwidth. Drops are conditional on
 #    `/run/live/medium` existing, so the timers re-enable themselves
 #    after Calamares installs to disk.
-#  - If a graphical session is also installed (the `desktop` feature
-#    ran first), drop an `[initial_session]` block into greetd's config
-#    so the live ISO boots straight into the live user's Wayland
-#    session — no password prompt on first boot.
 #
 # What we DON'T do:
 #  - Create the live user (live-config does this at boot via the
@@ -103,41 +99,6 @@ for timer in apt-daily.timer apt-daily-upgrade.timer; do
 ConditionPathExists=!/run/live/medium
 EOF
 done
-
-# -----------------------------------------------------------------------------
-# Optional: greetd autologin if the desktop feature ran first.
-# -----------------------------------------------------------------------------
-#
-# We DON'T require `desktop` to have run — live is useful as a pure
-# text-mode rescue medium too. But when greetd's cosmic-greeter.toml
-# is present, we layer an `[initial_session]` over it so the live
-# user goes straight into a Wayland session at first boot. After
-# logout, greetd falls back to `[default_session]` (the regular
-# greeter), which is what a "rescue + recovery shell" user expects.
-
-if [ -f "$ROOTFS/etc/greetd/cosmic-greeter.toml" ]; then
-    echo "  :: layering greetd initial_session for live user autologin"
-    cp -a "$ROOTFS/etc/greetd/cosmic-greeter.toml" \
-        "$ROOTFS/etc/greetd/cosmic-greeter.toml.claw-installed"
-    cat > "$ROOTFS/etc/greetd/cosmic-greeter.toml" <<'EOF'
-[terminal]
-vt = "1"
-
-[general]
-service = "cosmic-greeter"
-
-[default_session]
-command = "cosmic-greeter-start"
-user = "cosmic-greeter"
-
-# Live-only: skip the password prompt on first boot. live-config
-# creates the "user" account at boot before greetd starts. After
-# the live user logs out, default_session takes over.
-[initial_session]
-command = "cosmic-session"
-user = "user"
-EOF
-fi
 
 echo "  :: NetworkManager enabled, tty1 autologin configured"
 echo "  :: hostname=claw-os-live, /etc/issue + /etc/motd installed"

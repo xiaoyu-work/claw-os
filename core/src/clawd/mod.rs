@@ -1,4 +1,3 @@
-pub mod a11y_wayland;
 pub mod accessibility;
 pub mod activities;
 pub mod activity_attention;

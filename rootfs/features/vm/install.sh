@@ -50,18 +50,12 @@ fi
 # GRUB_CMDLINE_LINUX_DEFAULT was silently overwritten by 50-claw-os.cfg —
 # the serial console never actually reached the kernel.
 #
-# `vt.global_cursor_default=0` hides the text-mode cursor. Logging in tears
-# down the greeter's compositor and starts the user's, and for the moment
-# in between there is nothing on the VT but a blinking console cursor. The
-# gap is inherent to handing DRM master from one compositor to the other;
-# hiding the cursor is what keeps it from reading as a glitch.
-#
 # `splash` is kept from 50-claw-os.cfg: it is what starts plymouth, which
 # covers the boot-to-greeter transition.
 mkdir -p "$ROOTFS/etc/default/grub.d"
 cat > "$ROOTFS/etc/default/grub.d/60-claw-os-vm.cfg" <<'EOF'
 # Claw OS VM overrides. Sorts after 50-claw-os.cfg, so this wins.
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash vt.global_cursor_default=0 console=tty0 console=ttyS0,115200n8 video=1920x1080"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash console=tty0 console=ttyS0,115200n8 video=1920x1080"
 EOF
 
 # 2. Enable serial-getty on ttyS0 for headless login.
@@ -69,26 +63,4 @@ mkdir -p "$ROOTFS/etc/systemd/system/getty.target.wants"
 ln -sf /usr/lib/systemd/system/serial-getty@.service \
     "$ROOTFS/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 
-# 3. Don't auto-suspend a virtual machine.
-#
-# cosmic-idle suspends the whole machine after 30 minutes on AC (15 on
-# battery) — sensible on a laptop, wrong in a VM. There is no battery to
-# save, the host already manages power, and the guest cannot be woken from
-# inside: moving the mouse does nothing, because the machine it would wake
-# is suspended. The user is left staring at a black window that looks like
-# a hang, and has to power-cycle the VM from the hypervisor UI.
-#
-# Screen-off (and the lock that follows it) is left alone: that one *is*
-# wakeable from inside, since `process_input_event` turns the outputs back
-# on with the first event it sees.
-#
-# Written as a system default under /usr/share/cosmic, so it seeds the
-# value without pinning it — the user can still set a suspend time in
-# Settings and their choice, stored under ~/.config, takes precedence.
-IDLE_CONF_DIR="$ROOTFS/usr/share/cosmic/com.clawos.Idle/v1"
-mkdir -p "$IDLE_CONF_DIR"
-printf 'None' > "$IDLE_CONF_DIR/suspend_on_ac_time"
-printf 'None' > "$IDLE_CONF_DIR/suspend_on_battery_time"
-
 echo "  :: configured GRUB serial+console terminal, enabled serial-getty@ttyS0"
-echo "  :: disabled idle auto-suspend (a suspended guest cannot be woken from inside)"

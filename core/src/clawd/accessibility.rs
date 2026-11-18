@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -28,7 +28,7 @@ pub async fn control(
     {
         let _ = (params, client, authority);
         return Err(BrokerError::unavailable(
-            "Accessibility Manager requires Linux COSMIC",
+            "Accessibility Manager requires Linux",
         ));
     }
 
@@ -44,9 +44,6 @@ pub async fn control(
             .gid
             .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
         let action = required_string(&params, "action")?;
         let value = optional_string(&params, "value")?;
         let requested = if action == "status" {
@@ -56,16 +53,19 @@ pub async fn control(
         };
         let _authorized = authorize_session(authority, requested)?;
         validate_action(&action, value.as_deref()).map_err(BrokerError::execution)?;
-        let environment = A11yEnvironment::new(uid, gid, home, peer_pid)?;
+        let environment = A11yEnvironment::new(uid, gid, home)?;
 
         if action == "status" {
             return accessibility_status(&environment)
                 .await
                 .map_err(BrokerError::execution);
         }
-        if action == "screen-reader" {
-            busctl_path().map_err(backend_unavailable)?;
+        if action != "screen-reader" {
+            return Err(BrokerError::unavailable(
+                "The active desktop does not provide this accessibility effect",
+            ));
         }
+        busctl_path().map_err(backend_unavailable)?;
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
             A11Y_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
@@ -74,15 +74,9 @@ pub async fn control(
         .map_err(|_| {
             BrokerError::unavailable("Accessibility Manager is busy with another mutation")
         })?;
-        if action == "screen-reader" {
-            set_screen_reader(&environment, value.as_deref().unwrap() == "on")
-                .await
-                .map_err(BrokerError::execution)
-        } else {
-            run_helper(&environment, &[&action, value.as_deref().unwrap()])
-                .await
-                .map_err(BrokerError::execution)
-        }
+        set_screen_reader(&environment, value.as_deref() == Some("on"))
+            .await
+            .map_err(BrokerError::execution)
     }
 }
 
@@ -107,14 +101,11 @@ fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized,
 }
 
 async fn accessibility_status(environment: &A11yEnvironment) -> Result<Value, String> {
-    let wayland = run_helper(environment, &["status"])
-        .await
-        .unwrap_or_else(|error| json!({"available": false, "error": error}));
     let atspi = atspi_state(environment)
         .await
         .unwrap_or_else(|error| json!({"available": false, "error": error}));
     Ok(json!({
-        "cosmic_wayland": wayland,
+        "compositor_effects": {"available": false},
         "atspi": atspi,
     }))
 }
@@ -211,21 +202,6 @@ fn parse_busctl_bool(output: &str) -> Option<bool> {
     }
 }
 
-async fn run_helper(environment: &A11yEnvironment, args: &[&str]) -> Result<Value, String> {
-    let mut helper_args = vec!["--a11y-wayland-helper".to_string()];
-    helper_args.extend(args.iter().map(|value| value.to_string()));
-    let output = run_user_command(
-        PathBuf::from("/proc/self/exe"),
-        helper_args,
-        environment.clone(),
-        TOOL_TIMEOUT,
-    )
-    .await?;
-    require_success("a11y Wayland helper", &output)?;
-    serde_json::from_str(output.stdout.trim())
-        .map_err(|error| format!("parse a11y helper JSON: {error}"))
-}
-
 fn validate_action(action: &str, value: Option<&str>) -> Result<(), String> {
     match action {
         "status" if value.is_none() => Ok(()),
@@ -253,12 +229,11 @@ struct A11yEnvironment {
     gid: u32,
     home: PathBuf,
     runtime_dir: PathBuf,
-    wayland_display: String,
     username: String,
 }
 
 impl A11yEnvironment {
-    fn new(uid: u32, gid: u32, home: PathBuf, peer_pid: u32) -> Result<Self, String> {
+    fn new(uid: u32, gid: u32, home: PathBuf) -> Result<Self, String> {
         let metadata = fs::metadata(&home)
             .map_err(|error| format!("inspect accessibility home {}: {error}", home.display()))?;
         if metadata.uid() != uid {
@@ -277,74 +252,14 @@ impl A11yEnvironment {
         {
             return Err("accessibility runtime directory is not user-owned".to_string());
         }
-        let wayland_display = peer_wayland_display(peer_pid)
-            .filter(|value| valid_wayland_display(value))
-            .or_else(|| discover_wayland_display(&runtime_dir, uid).ok())
-            .ok_or_else(|| "no unique user-owned Wayland socket was found".to_string())?;
-        validate_wayland_socket(&runtime_dir, &wayland_display, uid)?;
         Ok(Self {
             uid,
             gid,
             home,
             runtime_dir,
-            wayland_display,
             username: username_for_uid(uid)?,
         })
     }
-}
-
-fn peer_wayland_display(pid: u32) -> Option<String> {
-    let file = fs::File::open(format!("/proc/{pid}/environ")).ok()?;
-    let mut reader = file.take(256 * 1024);
-    let mut data = Vec::new();
-    reader.read_to_end(&mut data).ok()?;
-    data.split(|byte| *byte == 0).find_map(|entry| {
-        let value = entry.strip_prefix(b"WAYLAND_DISPLAY=")?;
-        std::str::from_utf8(value).ok().map(str::to_string)
-    })
-}
-
-fn discover_wayland_display(runtime_dir: &Path, uid: u32) -> Result<String, String> {
-    let mut sockets = fs::read_dir(runtime_dir)
-        .map_err(|error| format!("list accessibility runtime: {error}"))?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_string();
-            if !valid_wayland_display(&name) {
-                return None;
-            }
-            let metadata = fs::symlink_metadata(entry.path()).ok()?;
-            (metadata.file_type().is_socket() && metadata.uid() == uid).then_some(name)
-        })
-        .collect::<Vec<_>>();
-    sockets.sort();
-    sockets.dedup();
-    match sockets.as_slice() {
-        [socket] => Ok(socket.clone()),
-        [] => Err("no Wayland socket found".to_string()),
-        _ => Err("multiple Wayland sockets found".to_string()),
-    }
-}
-
-fn validate_wayland_socket(runtime_dir: &Path, display: &str, uid: u32) -> Result<(), String> {
-    let path = runtime_dir.join(display);
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|error| format!("inspect Wayland socket {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink()
-        || !metadata.file_type().is_socket()
-        || metadata.uid() != uid
-    {
-        return Err("Wayland socket is not a user-owned Unix socket".to_string());
-    }
-    Ok(())
-}
-
-fn valid_wayland_display(value: &str) -> bool {
-    value.starts_with("wayland-")
-        && value.len() <= 108
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn username_for_uid(uid: u32) -> Result<String, String> {
@@ -402,7 +317,6 @@ fn run_user_command_sync(
         .env("LOGNAME", &environment.username)
         .env("LC_ALL", "C.UTF-8")
         .env("XDG_RUNTIME_DIR", &environment.runtime_dir)
-        .env("WAYLAND_DISPLAY", &environment.wayland_display)
         .env(
             "DBUS_SESSION_BUS_ADDRESS",
             format!("unix:path={}/bus", environment.runtime_dir.display()),

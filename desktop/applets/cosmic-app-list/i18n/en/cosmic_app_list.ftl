@@ -1,9 +1,0 @@
-cosmic-app-list = App Tray
-pin = Pin to Dock
-unpin = Unpin from Dock
-quit = Quit
-quit-all = Quit All
-new-window = New Window
-run = Run
-run-on = Run on {$gpu}
-run-on-default = (Default)

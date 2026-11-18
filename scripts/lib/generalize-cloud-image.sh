@@ -9,8 +9,6 @@ fi
 generalize_cloud_image() {
     local rootfs="${1:?generalize_cloud_image: rootfs path required}"
     local users
-    local greetd_config
-    local greetd_tmp
 
     if [ ! -d "$rootfs" ]; then
         echo "generalize_cloud_image: not a directory: $rootfs" >&2
@@ -85,20 +83,9 @@ generalize_cloud_image() {
         fi
     done
 
-    # Desktop cloud images receive their user from cloud-init. Remove the
-    # local appliance wizard and order the greeter after provisioning.
-    greetd_config="$rootfs/etc/greetd/cosmic-greeter.toml"
-    if [ -f "$greetd_config" ]; then
-        greetd_tmp="${greetd_config}.cloud"
-        awk '
-            /^\[initial_session\][[:space:]]*$/ { skip = 1; next }
-            skip && /^\[/ { skip = 0 }
-            !skip { print }
-        ' "$greetd_config" > "$greetd_tmp"
-        mv "$greetd_tmp" "$greetd_config"
-
-        install -d -m 0755 "$rootfs/etc/systemd/system/cosmic-greeter.service.d"
-        cat > "$rootfs/etc/systemd/system/cosmic-greeter.service.d/after-cloud-init.conf" <<'EOF'
+    if [ -f "$rootfs/etc/greetd/claw-desktop.toml" ]; then
+        install -d -m 0755 "$rootfs/etc/systemd/system/greetd.service.d"
+        cat > "$rootfs/etc/systemd/system/greetd.service.d/after-cloud-init.conf" <<'EOF'
 [Unit]
 Wants=cloud-init.target
 After=cloud-init.target

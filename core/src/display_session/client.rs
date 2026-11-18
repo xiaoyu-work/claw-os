@@ -70,7 +70,6 @@ fn session_command(subscription: &Subscription, executable: impl AsRef<OsStr>) -
         .env_remove("DISPLAY")
         .env_remove("XAUTHORITY")
         .env_remove("X_PRIVILEGED_WAYLAND_SOCKET")
-        .env_remove("COSMIC_SESSION_SOCK")
         .env_remove("CLAW_DISPLAY_CONTROL_FD");
     command
 }
@@ -120,20 +119,47 @@ fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
         let result = shell
             .map_err(Error::from)
             .and_then(|mut shell| wait_for_entrypoint(subscription, &mut shell));
-        if files.try_wait()?.is_none() {
-            files.kill()?;
-            files.wait()?;
-        }
+        stop_file_manager(&mut files)?;
         result
     })();
     let stopped = command("/usr/bin/systemctl")
         .args(["--user", "stop", target])
         .status();
+    if result.is_err() {
+        eprintln!(
+            "Desktop Shell did not start. On a text console, use `cos review pending` to inspect any pending App review or capability request."
+        );
+    }
     result?;
     if !stopped?.success() {
         return Err(Error::Protocol("could not stop the desktop session target"));
     }
     Ok(())
+}
+
+fn stop_file_manager(child: &mut Child) -> Result<(), Error> {
+    if child.try_wait()?.is_none() {
+        // The child is not reaped until this function observes its status.
+        if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(Error::Protocol("desktop file manager did not exit cleanly"))
+            };
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err(Error::Protocol("desktop file manager retirement timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn wait_for_entrypoint(subscription: &Subscription, child: &mut Child) -> Result<(), Error> {

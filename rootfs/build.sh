@@ -441,7 +441,7 @@ fi
 # the rest of the system stays on the stable `$SUITE` release. A backports
 # kernel ships newer DRM drivers, so we also pin the userspace half of GPU
 # support — Mesa (GL/EGL/Vulkan/VA-API) plus libdrm/libgbm — so the
-# COSMIC/Wayland desktop can actually light up the latest Intel/AMD GPUs.
+# Wayland desktop can actually light up the latest Intel/AMD GPUs.
 # Backports is `NotAutomatic` (default priority 100), so without this pin
 # apt would keep installing the older stable kernel/Mesa. Priority 600
 # (> main's 500) flips just these hardware-enablement packages to backports;

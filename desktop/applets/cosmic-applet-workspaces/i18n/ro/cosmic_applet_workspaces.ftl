@@ -1,1 +1,0 @@
-cosmic-applet-workspaces = Spații de lucru ClawOS

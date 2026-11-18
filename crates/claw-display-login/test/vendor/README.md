@@ -1,0 +1,95 @@
+# Compositor Smithay dependency
+
+`smithay/` is the complete 333-file upstream snapshot from
+[`Smithay/smithay`](https://github.com/Smithay/smithay) commit
+`211c19d712dc5f1b78eb879f1c195715801e37ff`, the compositor's previous Git pin.
+Its [MIT license](smithay/LICENSE.txt), build inputs, examples, tests and
+five upstream workspace members are retained. There are no Git submodules or
+other projects vendored here. The upstream workspace manifest is unchanged
+and excluded from the compositor workspace.
+
+Upstream trailing whitespace is preserved for byte-identical provenance.
+Repository whitespace checks remain enabled for the eight locally modified
+files; only trailing-space checks on the imported snapshot are exempted.
+
+The local production patch changes only these upstream files:
+
+- `src/wayland/selection/mod.rs`: compatibility-default
+  `SelectionHandler::allow_selection_read(client, seat, target)` and the
+  independent `allow_selection_write` hook.
+- `src/wayland/selection/seat_data.rs`: check the recipient before inspecting
+  selection state, constructing an offer or disclosing MIME types. Denial
+  preserves public initial/focus unavailability, not private change signals.
+- `src/wayland/selection/offer.rs`: retain the server-selected target and
+  recheck the requester before either client- or compositor-provided payload
+  transfer, including an already-created offer.
+- `src/wayland/selection/data_device/device.rs`,
+  `primary_selection/device.rs`, `wlr_data_control/device.rs` and
+  `ext_data_control/device.rs`: veto writes before selection/source mutation
+  or callbacks. Core `StartDrag` is not a selection write.
+- `src/wayland/shell/wlr_layer/handlers.rs`: reject unsigned dimensions outside
+  the signed coordinate range with the existing `invalid_size` protocol error,
+  before geometry construction. Untrusted overflow cannot panic the compositor;
+  valid dimensions and zero-size anchor semantics are unchanged.
+
+Both defaults return `true`, preserving other Smithay consumers. The dependency
+hooks do not grant authority or enforce an OS policy by themselves. This
+repository's [compositor](../MODULE.md) now overrides both from authenticated
+Root instance leases; the [Host](../../../core/src/clawd/gui/MODULE.md) owns
+capability projection and checked process retirement. Engine/App/instance
+strings and Panel labels do not authorize selection access. Read and write
+remain independent, and DnD is unchanged.
+
+Revoking already-delivered transfer FDs requires the actual instance/descendant
+retirement barrier. Disclosed bytes cannot be recalled. This boundary does not
+provide CopyQ-history authority, unmediated X11 or a producer's missing grant
+acquisition path.
+
+The existing authenticated panel probe sends oversized width and height on
+separate clients, requiring the exact `invalid_size` protocol error for each.
+A subsequent ordinary panel on the same display must still configure, so
+compositor exit, a generic disconnect or a timeout cannot satisfy the check.
+
+The [private dispatch fixture](../selection-read/Cargo.toml) is a separate
+test-only workspace. It consumes this same source with only the Wayland
+frontend and the compositor's pinned Wayland server/backend versions, rather
+than building the upstream reference compositors. Its client protocols are
+also pinned. It uses socket pairs and synthetic data, not a desktop socket,
+session bus, user selection or graphics backend. Coverage includes initial
+and updated offers from both provider kinds, held-offer permission changes,
+target isolation, default compatibility and an actual DnD payload transfer.
+It also records nullable selection events: empty and populated initial state
+must look identical to a denied client, and later set/clear transitions from
+either provider kind must produce no notifications for that client.
+
+The pinned `SeatData::send_selection` callers distinguish notification causes
+without keeping a mutable permission history:
+
+| Existing caller | `restrict_to` | `update_data_control` | Denied recipient |
+| --- | --- | --- | --- |
+| WLR/EXT device creation | New device | `true` | Initial null event for each supported target |
+| Core/primary focus change | `None` | `false` | Null focus notification |
+| Set, clear or source destruction | `None` | `true` | No selection notification |
+
+The WLR/EXT protocols require an initial selection event on device binding.
+Core/primary notifications follow their existing focus path. These public
+lifecycle events report unavailable content regardless of private state;
+selection mutations cannot become observable through repeated null events.
+Default-allow clients retain the original initial, focus and update behavior.
+
+From the OS repository root on Linux/WSL:
+
+```bash
+CARGO_TARGET_DIR="$PWD/build/smithay-read-hook-target" \
+  cargo test --manifest-path crates/claw-display-login/test/selection-read/Cargo.toml --locked
+CARGO_TARGET_DIR="$PWD/build/smithay-compositor-target" \
+  cargo build --manifest-path desktop/comp/Cargo.toml --locked
+```
+
+The compatibility build needs the compositor's ordinary native development
+libraries, including `libpixman-1-dev`; those dependencies are not vendored.
+
+Keep dependency updates explicit: replace this snapshot only with a verified
+real upstream revision, preserve its workspace/license, reapply and review the
+eight-file logical patch, update the compositor lock, and repeat both commands.
+Never edit Cargo's shared Git cache or substitute a fabricated revision.

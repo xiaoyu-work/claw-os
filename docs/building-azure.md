@@ -45,7 +45,7 @@ supported flavors:
 # Headless Azure image, 16 GiB virtual OS disk.
 sudo ./build.sh azure
 
-# Full COSMIC desktop Azure image, 50 GiB virtual OS disk.
+# Claw OS desktop Azure image, 50 GiB virtual OS disk.
 sudo IMAGE_FLAVOR=desktop ./build.sh azure
 
 # Optional virtual disk size override.
@@ -204,8 +204,8 @@ ssh clawadmin@<vm-address>
 sudo passwd clawadmin
 ```
 
-Azure does not expose a VMware-style interactive graphical console. Install and
-secure a remote desktop transport such as xrdp through your deployment
-configuration before expecting to use the COSMIC session remotely. Neither a
-password nor an Internet-facing remote desktop service is baked into the
-generalized image.
+The desktop image requires the signed Desktop Shell App from the authenticated
+App APT channel. It does not substitute another desktop if that package is
+unavailable. The Azure serial console is text-only; to see the running
+Wayland session, configure a compatible remote display transport separately.
+No password or Internet-facing remote desktop service is baked into the image.

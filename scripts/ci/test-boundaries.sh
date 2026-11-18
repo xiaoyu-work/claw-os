@@ -313,7 +313,7 @@ display() {
                 --release --locked -p pop-launcher-bin \
                 --target-dir "$CARGO_TARGET_DIR/native-launcher-service"
         fi
-        cargo test --manifest-path desktop/comp/test/display-control/Cargo.toml \
+        cargo test --manifest-path crates/claw-display-login/test/headless/Cargo.toml \
             --locked -- keyboard_plan_refuses pointer_plan_refuses calendar_snapshot --test-threads=1
         python3 -B scripts/ci/native_editor_payload.py \
             --product "${selection#native-}" \
@@ -348,13 +348,9 @@ display() {
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$CARGO_TARGET_DIR/gui-tests.jsonl"
     test_binary="$(cos_test_binary "$CARGO_TARGET_DIR/gui-tests.jsonl")"
-    cargo clippy --manifest-path desktop/comp/test/display-control/Cargo.toml \
+    cargo clippy --manifest-path crates/claw-display-login/test/headless/Cargo.toml \
         --locked --all-targets -- -D warnings
-    cargo build --manifest-path desktop/comp/test/display-control/Cargo.toml --locked
-    cargo clippy --manifest-path desktop/session/Cargo.toml --locked -- -D warnings
-    cargo build --manifest-path desktop/session/Cargo.toml --locked
-    cargo test --manifest-path desktop/session/Cargo.toml --locked file_manager::tests \
-        -- --test-threads=1
+    cargo build --manifest-path crates/claw-display-login/test/headless/Cargo.toml --locked
     cc -std=c11 -Wall -Wextra -Werror \
         crates/claw-display-login/test/fixtures/pam_login.c \
         -lpam -ldl -o "$CARGO_TARGET_DIR/pam-login-fixture"
@@ -419,8 +415,7 @@ display() {
             "$CARGO_TARGET_DIR/pam-login-fixture" "$private" \
             "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
             "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
-            "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session" \
-            "$CARGO_TARGET_DIR/debug/claw-file-manager" desktop/session/data/claw-file-manager.desktop \
+            "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/claw-file-manager" \
             "${selectors[@]}"
     done
     if [[ "$selection" != display ]]; then

@@ -2,11 +2,7 @@
 #
 # Target distro: Debian 13 "trixie" (kernel 6.12 LTS, PipeWire 1.4, Mesa 24).
 #
-# The desktop is built from the vendored monorepo under <repo>/desktop/.
-# install.sh runs `just build` + `just install` against that tree to put the
-# binaries / .desktop / systemd unit files into the rootfs, then wires up
-# the greeter / display manager / user services so the system boots into a
-# graphical login.
+# Build the native display against the target Debian ABI.
 
 # --- Build toolchain (host-side, used during rootfs build only) ---
 build-essential
@@ -14,9 +10,45 @@ pkg-config
 clang
 mold
 lld
-just
 git
 rustup
+curl
+ca-certificates
+cmake
+ninja-build
+meson
+dpkg-dev
+patchelf
+glslang-dev
+glslang-tools
+libevdev-dev
+libmtdev-dev
+libwacom-dev
+libeis-dev
+libxcursor-dev
+libxcb-composite0-dev
+libxcb-errors-dev
+libxcb-icccm4-dev
+libxcb-render0-dev
+libxcb-res0-dev
+libxcb-xfixes0-dev
+libcairo2-dev
+libpango1.0-dev
+uuid-dev
+libglib2.0-dev
+libzip-dev
+librsvg2-dev
+libmagic-dev
+libre2-dev
+libmuparser-dev
+liblcms2-dev
+libcanberra-dev
+libtomlplusplus-dev
+libjpeg-dev
+libpng-dev
+libwebp-dev
+libheif-dev
+libjxl-dev
 
 # --- Wayland / graphics core ---
 libwayland-dev
@@ -24,7 +56,7 @@ libwayland-client0
 libwayland-server0
 libwayland-cursor0
 libwayland-egl1
-libxkbcommon-dev
+libxkbcommon-dev/trixie-backports
 libxkbcommon0
 libinput-dev
 libinput10
@@ -48,6 +80,7 @@ xwayland
 # --- Display manager / login chain ---
 adduser
 greetd
+kbd
 libpam0g-dev
 gnome-keyring
 # pam_gnome_keyring.so lives in this separate package; without it the
@@ -143,9 +176,7 @@ libclang-dev
 # used by cos-term, cos-edit and any libcosmic monospace context.
 # Noto Sans CJK provides Chinese/Japanese/Korean fallback;
 # Noto Color Emoji handles emoji.
-# Tela (black variant, folders #4d4d4d) is installed by desktop/justfile
-# (icons-tela-pkg/install) and selected as default via the toolkit's default
-# icon_theme = "Tela-black-light".
+# Shared icon themes remain available to native Apps.
 # adwaita-icon-theme remains as the safety-net fallback for any icon name
 # Tela does not provide.
 fonts-inter
@@ -169,7 +200,7 @@ locales
 # fcitx5 is the modern multi-language IME framework. Claw OS ships
 # zh / ja / ko locale data, fonts and dictionaries, so users on real
 # hardware can switch to Pinyin / Mozc / Hangul out of the box without
-# touching apt. cosmic-comp implements Wayland input-method-v1 +
+# touching apt. Hyprland implements Wayland input and
 # text-input-v3, so libcosmic apps consume fcitx5 natively. The Gtk /
 # Qt frontends + /etc/environment exports handle legacy apps.
 fcitx5
@@ -183,7 +214,7 @@ fcitx5-mozc
 fcitx5-hangul
 
 # --- GUI automation (AI agent driving the desktop) ---
-# wtype: Wayland-native, uses wlr-virtual-keyboard-v1 (cosmic-comp
+# wtype: Wayland-native, uses the virtual-keyboard protocol (the compositor
 # supports it). Good for typing into focused windows.
 # ydotool: low-level libevdev / uinput; works regardless of compositor
 # protocol support but needs the ydotoold system service running. We
@@ -212,7 +243,7 @@ udisks2
 ntfs-3g
 exfatprogs
 # gvfs: GIO Virtual Filesystem. cosmic-files is built with the
-# `gvfs` feature on (desktop/files/Cargo.toml), so it depends on
+# `gvfs` feature on (Files product), so it depends on
 # this at runtime for: the trash, mount-monitoring, network
 # locations, archive:// scheme. gvfs-backends adds smb / sftp /
 # afp / dav / mtp / gphoto2 transports. gvfs-fuse exposes mounts

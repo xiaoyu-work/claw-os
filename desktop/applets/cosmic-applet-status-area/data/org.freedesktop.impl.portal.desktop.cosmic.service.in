@@ -1,7 +1,0 @@
-[Unit]
-Description=COSMIC Status Notifier Watcher backend
-
-[Service]
-Type=dbus
-BusName=com.clawos.StatusNotifierWatcher
-ExecStart=@bindir@/cosmic-applet-status-area --status-notifier-watcher

@@ -40,7 +40,8 @@ Examples:
 - `azure` requires `cloud-init`, restricts it to the Azure datasource, configures
   Azure Linux Agent integration, forces Hyper-V storage/network modules into
   initramfs, and enables Azure serial-console boot diagnostics.
-- `desktop` adds the COSMIC desktop independently of the platform.
+- `desktop` adds authenticated Hyprland login and requires the signed Desktop
+  Shell App independently of the platform.
 - `qwen3-embedding` supplies the fixed local Qwen3 model and its validated
   ONNX Runtime/GenAI pair in the system registry for real personal-file vectors.
 
@@ -62,7 +63,7 @@ feature combinations. Targets use these defaults but continue to accept a
 
 | Profile | Identity model | Platform integration |
 | --- | --- | --- |
-| Local VM | Serial-console password setup for locked `cos`, or desktop first-boot wizard | Generic VM; optional VMware Tools |
+| Local VM | One-time console password setup for locked `cos` | Generic VM; optional VMware Tools |
 | Azure | User, hostname, and SSH key supplied per instance | cloud-init, WALinuxAgent, Hyper-V |
 | WSL | User created interactively by the WSL first-launch OOBE | Modern `.wsl` package conventions |
 | Docker | User name and numeric identity supplied at container creation | Container/systemd conventions |
@@ -91,14 +92,13 @@ Artifacts fall into two identity models.
 **Locally managed artifacts** need a usable account because the runtime has no
 metadata service. The default headless VM creates `cos` in a locked state and
 blocks its normal serial getty with `cos-local-first-login.service` until the
-console user sets a password. The desktop and WSL profiles create an account
-interactively; Docker creates the requested account from `CLAW_USER`,
+console user sets a password. The desktop profile moves that password prompt to its local VT. WSL creates
+an account interactively; Docker creates the requested account from `CLAW_USER`,
 `CLAW_UID`, and `CLAW_GID` when the container starts.
 
 The first-login service writes its completion marker only after `passwd`
 succeeds. An interrupted setup repeats, while an account deliberately
-provisioned with a password before boot is accepted. The desktop wizard skips
-this feature's account and service entirely. Azure profiles exclude
+provisioned with a password before boot is accepted. Azure profiles exclude
 `local-user`, so Azure identity and credentials remain cloud-init managed.
 
 **Cloud generalized artifacts** must contain no reusable human account or

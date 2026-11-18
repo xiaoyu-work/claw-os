@@ -10,7 +10,7 @@ parent/start identity; the request has no owner, session, epoch or executable
 fields. The broker generates a fresh epoch and retains the workload guard
 before the compositor can dispatch protocols.
 
-`host.rs` executes only the protected `/usr/bin/cosmic-comp`, with the
+`host.rs` executes only the protected `/usr/libexec/claw-hyprland/Hyprland`, with the
 authenticated account's credentials and a cleared environment. The inherited
 control descriptor precedes Wayland dispatch. Bounded locale values come
 from the PAM handle, not a loader environment; the compositor and downstream
@@ -24,7 +24,7 @@ nor that bus authorizes a GUI instance.
 | `containment.rs` | Exact Root login/workload cgroups, pre-exec membership and checked cleanup |
 | `creator.rs` | One Root security-context creator per GUI instance, refresh and retirement |
 | `runtime.rs` | Root-created instance sockets; protected backend versus traversable credential-checking fronts |
-| `client.rs` | Unprivileged `claw-display-session --watch` / `--exec` attachment |
+| `client.rs` | Unprivileged `--watch`, `--exec`, and installed `--desktop` attachment |
 
 The shared closed protocol is
 [`claw-display-control`](../../../crates/claw-display-control/MODULE.md), an
@@ -41,7 +41,7 @@ binding and projects opaque identifiers containing the display epoch. A
 mutation is sent once; read-only queries distinguish a requested focus/close
 from an observed outcome. Desktop launch and shared owner helpers also take
 their Wayland name from the selected Root display, not caller variables or
-owner socket enumeration. Installed compositor cutover remains separate.
+owner socket enumeration. The Desktop source path has no old compositor fallback.
 
 Locale projection currently preserves only the bounded PAM environment.
 There is no AccountsService `Language` or locale1 startup resolver here.
@@ -58,10 +58,10 @@ work; regional persistence/readback does not establish startup consumption.
 | `/usr/local/bin/claw-display-session` | Agent |
 | `/usr/local/bin/claw-gui-runner` | Agent |
 | `/usr/lib/<GNU-multiarch>/security/pam_claw_display.so` | Agent |
-| `/usr/bin/cosmic-comp`, `/usr/bin/cosmic-session` | Desktop |
-| `/etc/pam.d/cosmic-greeter` and greetd startup integration | Desktop |
+| `/usr/libexec/claw-hyprland/Hyprland` | Desktop |
+| `/etc/pam.d/claw-desktop` and greetd startup integration | Desktop |
 
-Agent provides the OS-only `claw-os-display-session-v1` ABI; Desktop requires
+Agent provides the OS-only `claw-os-display-session-v2` ABI; Desktop requires
 it. The PAM library is built for the GNU target and requires the system PAM
 development library. Package assembly takes real architecture-checked ELF
 inputs, never an App payload or a source-only substitute.
@@ -110,11 +110,10 @@ runtime binaries and PAM, authenticates a disposable NSS account, creates real
 kernel login identities and supervises signed synthetic native Apps. No real
 desktop, user selection/history, provider model or account data is used.
 
-Inputs, in order, are the core libtest executable, display host, headless
+Inputs, in order, are the core libtest executable, display host, private
 compositor, PAM library, compiled PAM C fixture, private scratch directory,
-`cos`, GUI runner, App runner, native protocol probe, display-session client,
-the actual `cosmic-session`, actual `claw-file-manager` and its desktop-session
-autostart source resource. The fixture also requires `dbus-daemon`.
+`cos`, GUI runner, App runner, native protocol probe, display-session client
+and `claw-file-manager`. The fixture also requires `dbus-daemon`.
 The separate six-input activation-only mode remains available. Build commands
 and the private fixture entry points are documented in the
 [PAM module guide](../../../crates/claw-display-login/MODULE.md).
@@ -128,22 +127,20 @@ UID 0 and other owners, and force an audit-write failure after a durable App
 denial through the actual owner CLI. Checked teardown must finish before that
 CLI reports its audit error. This does not add a capability-acquisition path.
 The startup-unwind case keeps an authenticated display subscription and private
-bus alive while a missing component makes the actual session panic; both that
+bus alive while a missing entrypoint makes the authenticated subscriber fail; both that
 session and PAM must exit within bounds, retaining the original diagnostic.
 It is not a real greetd/logind/KMS login or an installed-image acceptance test.
 
 `clawd::server::gui_fixture::private_file_manager_session` is the isolated
-FileManager1 acceptance selection (`--file-manager-only` on the fourteen-input
+FileManager1 acceptance selection (`--file-manager-only` on the twelve-input
 runner); the full GUI selection includes it. It runs actual PAM, display
-attachment, cosmic-session, the session-child facade and protected cos through
+attachment, the session-child facade and protected cos through
 ordinary signed zero-needs GUI hosting. Literal URIs, successful and failed
 checked outcomes, exact kernel login ancestry, no borrowed parent grants,
 cross-UID facade refusal before fork/vfork, raw App bus denial, private logs
-and live-GUI/descendant/session/PAM teardown are asserted. The unmodified
-autostart resource is staged, with only an owner-local default-handler
-preference selecting the signed test App. Other COSMIC components are explicit
-idle availability fixtures, not product UI or full Files acceptance; see the
-[complete evidence boundary](../../../crates/claw-display-login/MODULE.md#private-authenticated-process-fixture).
+and live-GUI/descendant/session/PAM teardown are asserted. An owner-local
+default-handler preference selects the signed test App. This uses authenticated
+attachment, not a complete signed desktop or Files product acceptance.
 
 The separate ignored
 `display_session::registry::tests::private_deferred_retirement_reclaims_the_exact_slot_and_workload`

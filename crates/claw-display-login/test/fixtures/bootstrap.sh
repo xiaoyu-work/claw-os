@@ -16,73 +16,73 @@ native_capture_helper=
 native_notification_helper=
 native_notification_probe=
 notification_case=42
-if [[ $# == 18 && ( "${15}" == --native-notifications-only || "${15}" == --native-notifications-revoke-only ) ]]; then
-    [[ "${15}" != --native-notifications-revoke-only ]] || notification_case=43
-    native_notification_helper=$(realpath -- "${17}")
-    native_notification_probe=$(realpath -- "${18}")
+if [[ $# == 16 && ( "${13}" == --native-notifications-only || "${13}" == --native-notifications-revoke-only ) ]]; then
+    [[ "${13}" != --native-notifications-revoke-only ]] || notification_case=43
+    native_notification_helper=$(realpath -- "${15}")
+    native_notification_probe=$(realpath -- "${16}")
     [[ -f "$native_notification_helper" && -x "$native_notification_helper" && ! -L "$native_notification_helper" \
         && -f "$native_notification_probe" && -x "$native_notification_probe" && ! -L "$native_notification_probe" ]] || exit 64
-    set -- "${@:1:14}" --native-notifications-only "${16}"
-elif [[ $# == 16 && "${15}" == --native-notifications-only ]]; then
+    set -- "${@:1:12}" --native-notifications-only "${14}"
+elif [[ $# == 14 && "${13}" == --native-notifications-only ]]; then
     printf 'actual Notifications requires its OS panel helper and owner descriptor probe\n' >&2
     exit 64
 fi
-if [[ $# == 17 && "${15}" == --native-capture-only ]]; then
-    native_capture_helper=$(realpath -- "${17}")
+if [[ $# == 15 && "${13}" == --native-capture-only ]]; then
+    native_capture_helper=$(realpath -- "${15}")
     [[ -f "$native_capture_helper" && -x "$native_capture_helper" && ! -L "$native_capture_helper" ]] || exit 64
     set -- "${@:1:16}"
-elif [[ $# == 16 && "${15}" == --native-capture-only ]]; then
+elif [[ $# == 14 && "${13}" == --native-capture-only ]]; then
     printf 'actual Capture requires its matching compiled OS clawd helper\n' >&2
     exit 64
 fi
-if [[ $# == 17 && "${15}" == --native-launcher-only ]]; then
-    native_launcher_backend=$(realpath -- "${17}")
+if [[ $# == 15 && "${13}" == --native-launcher-only ]]; then
+    native_launcher_backend=$(realpath -- "${15}")
     [[ -f "$native_launcher_backend" && -x "$native_launcher_backend" && ! -L "$native_launcher_backend" ]] || exit 64
     set -- "${@:1:16}"
-elif [[ $# == 16 && "${15}" == --native-launcher-only ]]; then
+elif [[ $# == 14 && "${13}" == --native-launcher-only ]]; then
     printf 'actual Launcher requires its compiled OS backend\n' >&2
     exit 64
 fi
-if [[ $# == 17 && ( "${15}" == --native-calendar-only || "${15}" == --native-desktop-widgets-only ) ]]; then
-    native_calendar_reader=$(realpath -- "${17}")
+if [[ $# == 15 && ( "${13}" == --native-calendar-only || "${13}" == --native-desktop-widgets-only ) ]]; then
+    native_calendar_reader=$(realpath -- "${15}")
     [[ -f "$native_calendar_reader" && -x "$native_calendar_reader" && ! -L "$native_calendar_reader" ]] || exit 64
     set -- "${@:1:16}"
-elif [[ $# == 16 && ( "${15}" == --native-calendar-only || "${15}" == --native-desktop-widgets-only ) ]]; then
+elif [[ $# == 14 && ( "${13}" == --native-calendar-only || "${13}" == --native-desktop-widgets-only ) ]]; then
     printf 'actual Calendar consumers require the existing compiled OS reader\n' >&2
     exit 64
 fi
-if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files-only || "${15}" == --native-terminal-only || "${15}" == --native-calendar-only || "${15}" == --native-store-only || "${15}" == --native-store-package-only || "${15}" == --native-desktop-widgets-only || "${15}" == --native-clipboard-only || "${15}" == --native-launcher-only || "${15}" == --native-settings-only || "${15}" == --native-capture-only || "${15}" == --native-notifications-only || "${15}" == --native-media-player-only ) ]]; then
-    if [[ "${15}" == --native-editor-only ]]; then
+if [[ $# == 14 && ( "${13}" == --native-editor-only || "${13}" == --native-files-only || "${13}" == --native-terminal-only || "${13}" == --native-calendar-only || "${13}" == --native-store-only || "${13}" == --native-store-package-only || "${13}" == --native-desktop-widgets-only || "${13}" == --native-clipboard-only || "${13}" == --native-launcher-only || "${13}" == --native-settings-only || "${13}" == --native-capture-only || "${13}" == --native-notifications-only || "${13}" == --native-media-player-only ) ]]; then
+    if [[ "${13}" == --native-editor-only ]]; then
         native_product=editor
         native_app=cosmic-edit
-    elif [[ "${15}" == --native-files-only ]]; then
+    elif [[ "${13}" == --native-files-only ]]; then
         native_product=files
         native_app=cosmic-files
-    elif [[ "${15}" == --native-terminal-only ]]; then
+    elif [[ "${13}" == --native-terminal-only ]]; then
         native_product=terminal
         native_app=cosmic-term
-    elif [[ "${15}" == --native-store-only || "${15}" == --native-store-package-only ]]; then
+    elif [[ "${13}" == --native-store-only || "${13}" == --native-store-package-only ]]; then
         native_product=store
         native_app=cosmic-store
-    elif [[ "${15}" == --native-desktop-widgets-only ]]; then
+    elif [[ "${13}" == --native-desktop-widgets-only ]]; then
         native_product=desktop-widgets
         native_app=widget-rail
-    elif [[ "${15}" == --native-clipboard-only ]]; then
+    elif [[ "${13}" == --native-clipboard-only ]]; then
         native_product=clipboard
         native_app=panel-clipboard
-    elif [[ "${15}" == --native-launcher-only ]]; then
+    elif [[ "${13}" == --native-launcher-only ]]; then
         native_product=launcher
         native_app=cosmic-launcher
-    elif [[ "${15}" == --native-settings-only ]]; then
+    elif [[ "${13}" == --native-settings-only ]]; then
         native_product=settings
         native_app=cosmic-settings
-    elif [[ "${15}" == --native-capture-only ]]; then
+    elif [[ "${13}" == --native-capture-only ]]; then
         native_product=capture
         native_app=cosmic-screenshot
-    elif [[ "${15}" == --native-notifications-only ]]; then
+    elif [[ "${13}" == --native-notifications-only ]]; then
         native_product=notifications
         native_app=cosmic-notifications
-    elif [[ "${15}" == --native-media-player-only ]]; then
+    elif [[ "${13}" == --native-media-player-only ]]; then
         native_product=media-player
         native_app=cosmic-player
     else
@@ -90,28 +90,28 @@ if [[ $# == 16 && ( "${15}" == --native-editor-only || "${15}" == --native-files
         native_app=panel-calendar
     fi
     selection="native-$native_product"
-    if [[ "${15}" == --native-store-package-only ]]; then
+    if [[ "${13}" == --native-store-package-only ]]; then
         selection=native-store-package
     fi
-    native_product_input=$(realpath -- "${16}")
+    native_product_input=$(realpath -- "${14}")
     [[ -d "$native_product_input/$native_app" && ! -L "$native_product_input/$native_app" \
         && -f "$native_product_input/native-$native_product.json" && ! -L "$native_product_input/native-$native_product.json" ]] || exit 64
-    set -- "${@:1:14}"
-elif [[ $# == 15 ]]; then
-    case "${15}" in
+    set -- "${@:1:12}"
+elif [[ $# == 13 ]]; then
+    case "${13}" in
         --session-startup-only) selection=startup ;;
         --file-manager-only) selection=file-manager ;;
         --native-fs-only) selection=native-fs ;;
         --native-package-only) selection=native-package ;;
         *) exit 64 ;;
     esac
-    set -- "${@:1:14}"
+    set -- "${@:1:12}"
 fi
 package_fixture=0
 if [[ "$selection" == native-package || "$selection" == native-store-package ]]; then
     package_fixture=1
 fi
-[[ "$EUID" == 0 && ( $# == 6 || $# == 14 ) ]] || exit 64
+[[ "$EUID" == 0 && ( $# == 6 || $# == 12 ) ]] || exit 64
 if [[ "$package_fixture" == 0 ]]; then
     [[ "$(readlink /proc/self/ns/mnt)" != "$(readlink /proc/1/ns/mnt)" ]] || exit 64
 fi
@@ -122,7 +122,7 @@ pam_module=$(realpath -- "$4")
 pam_fixture=$(realpath -- "$5")
 private=$(realpath -- "$6")
 gui=0
-if [[ $# == 14 ]]; then
+if [[ $# == 12 ]]; then
     gui=1
     if [[ "$package_fixture" == 0 ]]; then
         [[ "$(readlink /proc/self/ns/net)" != "$(readlink /proc/1/ns/net)" ]] || exit 64
@@ -132,12 +132,9 @@ if [[ $# == 14 ]]; then
     app_runner=$(realpath -- "$9")
     probe=$(realpath -- "${10}")
     session=$(realpath -- "${11}")
-    cosmic_session=$(realpath -- "${12}")
-    file_manager=$(realpath -- "${13}")
-    file_manager_autostart=$(realpath -- "${14}")
+    file_manager=$(realpath -- "${12}")
     [[ -x "$cos" && -x "$gui_runner" && -x "$app_runner" && -x "$probe" \
-        && -x "$session" && -x "$cosmic_session" && -x "$file_manager" \
-        && -f "$file_manager_autostart" ]] || exit 64
+        && -x "$session" && -x "$file_manager" ]] || exit 64
     if [[ "$package_fixture" == 0 ]]; then
         if [[ -z "$native_notification_helper" ]]; then
             native_notification_helper=$(realpath -e -- "$(dirname -- "$cos")/claw-notification-panel")
@@ -175,8 +172,8 @@ if [[ "$gui" == 1 && "$package_fixture" == 0 ]]; then
 fi
 install -d -m0755 /usr/lib/cos/bin
 install -m0755 "$host" /usr/lib/cos/bin/claw-display-host
-install -m0755 "$compositor" /usr/bin/cosmic-comp
-install -m0644 "$pam_module" /usr/lib/x86_64-linux-gnu/security/pam_claw_display.so
+install -Dm0755 "$compositor" /usr/libexec/claw-hyprland/Hyprland
+install -m0644 "$pam_module" "/usr/lib/$(uname -m)-linux-gnu/security/pam_claw_display.so"
 if [[ "$gui" == 1 ]]; then
     install -d -m0755 /usr/local/bin
     install -m0755 "$registry" /usr/local/bin/claw-gui-broker-fixture
@@ -192,10 +189,8 @@ if [[ "$gui" == 1 ]]; then
     install -m0755 "$app_runner" /usr/local/bin/claw-app-runner
     install -m0755 "$session" /usr/local/bin/claw-display-session
     if [[ "$package_fixture" == 0 ]]; then
-        install -m0755 "$cosmic_session" /usr/bin/cosmic-session
         install -m0755 "$native_notification_helper" /usr/lib/cos/bin/claw-notification-panel
         install -m0755 "$file_manager" /usr/lib/cos/bin/claw-file-manager
-        install -Dm0644 "$file_manager_autostart" /etc/xdg/autostart/claw-file-manager.desktop
     else
         install -m0755 "${COS_APP_APT_TEST_HOOK:?matching compiled APT helper}" /usr/lib/cos/bin/claw-app-apt-hook
         install -m0755 "${COS_APP_APT_TEST_HOST:?matching compiled App Host}" /usr/local/bin/claw-extension-host
@@ -250,7 +245,7 @@ printf '%s\n' \
     'account required pam_unix.so' \
     'session required pam_loginuid.so' \
     'session required pam_claw_display.so close-before' \
-    'session required pam_claw_display.so open-after' >"$private/pam/cosmic-greeter"
+    'session required pam_claw_display.so open-after' >"$private/pam/claw-desktop"
 group=/sys/fs/cgroup/claw-display-fixture.$BASHPID
 mkdir -m0755 -- "$group"
 printf '%s\n' "$group" >"$private/cgroup"
@@ -322,11 +317,6 @@ if [[ "$gui" == 1 ]]; then
     done
     install -d -m0755 /run/gui-session-empty-path
     install -d -m0755 /run/gui-session-components
-    for component in cosmic-settings-daemon cosmic-notifications cosmic-panel \
-        cosmic-app-library cosmic-launcher cosmic-workspaces cosmic-osd cosmic-bg \
-        cosmic-greeter cosmic-files-applet cosmic-idle; do
-        ln -s /usr/lib/cos/bin/pam-login-fixture "/run/gui-session-components/$component"
-    done
     install -d -m0711 -o62050 -g62050 /run/gui-public/file-manager-bus
     cat > /run/gui-public/file-manager-bus.conf <<'BUS'
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"

@@ -16,6 +16,12 @@ use super::client_identity::ClientIdentity;
 mod settings;
 mod helper;
 mod windows;
+
+pub(super) async fn output_state(client: &ClientIdentity) -> Result<Value, String> {
+    let uid = client.require_uid()?;
+    let pid = client.pid.ok_or("clawd peer pid is unavailable")?;
+    windows::output_state(&windows::target(uid, pid)?).await
+}
 pub(super) use helper::{authenticated_helper_gate, protected_helper_command};
 mod portal;
 pub(super) use portal::{owner_portal_request, PortalReply, PortalResult};

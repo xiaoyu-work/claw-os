@@ -1,8 +1,0 @@
-[package]
-name = "cosmic-applets-config"
-version = "1.0.2"
-edition = "2024"
-
-[dependencies]
-cosmic-config.workspace = true
-serde.workspace = true

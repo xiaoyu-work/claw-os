@@ -65,8 +65,6 @@ static int display_hook(pam_handle_t *handle, int opening) {
 int main(int argc, char **argv) {
     if (argc > 2 && strcmp(argv[1], "--entry") == 0)
         return gui_entry(argc - 2, argv + 2);
-    if (argc == 1 && getuid() == 62050)
-        return session_component();
     if (getuid() != 0 || geteuid() != 0 || argc != 3)
         return 64;
     struct pam_conv conv = {
@@ -76,7 +74,7 @@ int main(int argc, char **argv) {
             : "private-disposable-display-fixture-password"
     };
     pam_handle_t *handle = NULL;
-    int result = pam_start_confdir("cosmic-greeter", "claw-display-test",
+    int result = pam_start_confdir("claw-desktop", "claw-display-test",
                                   &conv, argv[1], &handle);
     if (result == PAM_SUCCESS)
         result = pam_authenticate(handle, PAM_SILENT);
@@ -187,7 +185,7 @@ int main(int argc, char **argv) {
     int ended = pam_end(handle, result);
     if (strcmp(argv[2], "session-startup-failure") == 0
         && result == PAM_SUCCESS && ended == PAM_SUCCESS)
-        fprintf(stderr, "private PAM retired after cosmic-session startup failure\n");
+        fprintf(stderr, "private PAM retired after session startup failure\n");
     if (strcmp(argv[2], "session-file-manager") == 0
         && result == PAM_SUCCESS && ended == PAM_SUCCESS && fixture_result == 0)
         fprintf(stderr, "private PAM retired after actual FileManager1 session forwarding\n");

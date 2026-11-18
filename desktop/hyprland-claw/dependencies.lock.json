@@ -1,6 +1,23 @@
 {
   "sources": [
     {
+      "name": "lua",
+      "archive": "https://www.lua.org/ftp/lua-5.5.1.tar.gz",
+      "sha256": "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce",
+      "version": "5.5.1",
+      "build": "lua",
+      "pkg_config": "lua5.5"
+    },
+    {
+      "name": "libinput",
+      "archive": "https://deb.debian.org/debian/pool/main/libi/libinput/libinput_1.31.3.orig.tar.gz",
+      "sha256": "1c37348cf34cc1ac85c94f41a978ec6a81613f7146bf994c9457137c4a85a249",
+      "version": "1.31.3",
+      "build": "meson",
+      "pkg_config": "libinput",
+      "meson_args": ["-Ddocumentation=false", "-Ddebug-gui=false", "-Dlua-plugins=disabled", "-Dautoload-plugins=false", "-Dlibwacom=true", "-Dmtdev=true"]
+    },
+    {
       "name": "wayland",
       "repository": "https://github.com/wayland-mirror/wayland.git",
       "revision": "3e673a438b0a9749e3bdf5cac4befac86333024c",

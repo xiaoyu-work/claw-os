@@ -8,10 +8,9 @@ Quickshell and the independently source-owned
 [Caelestia frontend](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-shell).
 It does not replace the system Agent.
 
-The source now builds with mandatory Claw authority hooks. The existing
-Desktop package and authenticated display activation have not switched to it.
-A successful native build is not an authenticated rendered session or an
-installed-system cutover.
+Desktop source builds select only the Root-integrated Hyprland executable.
+Installed acceptance requires the corresponding Agent package, the signed
+Desktop Shell App and a real authenticated graphical session.
 
 ## Source ownership
 
@@ -59,8 +58,8 @@ presentation model without an App-side Hyprland IPC client.
 The installed subscriber's `--desktop` mode attaches to the Root login binding, starts the existing
 owner FileManager1 facade and invoke `cos app desktop-shell --gui`. Normal
 signed App review and capability decisions still apply, and the launcher does
-not start an Agent task or a second compositor. These files are not yet
-selected by the installed Desktop package.
+not start an Agent task or a second compositor. `stage-desktop.sh` installs
+the session wiring and compiled compositor into the Desktop package.
 
 ## Required contracts
 

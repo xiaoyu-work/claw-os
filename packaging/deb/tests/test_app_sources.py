@@ -598,23 +598,12 @@ def test_browser_transport_peer_identity_comes_from_kernel(browser_transport):
         assert browser_transport._peer_uid(left) == os.getuid()
 
 
-def test_os_installer_owns_shared_desktop_policy_without_app_sources(tmp_path):
-    source = ROOT / "desktop/initial-setup"
-    recipe = (source / "justfile").read_text()
-    for name, variable, relative in [
-        ("cosmic-settings.rules", "desktop-rules-dst", "rules.d/cosmic-settings.rules"),
-        ("com.clawos.Settings.Users.policy", "accounts-policy-dst", "actions/com.clawos.Settings.Users.policy"),
-    ]:
-        destination = tmp_path / "package root/usr/share/polkit-1" / relative
-        command = next(line.strip() for line in recipe.splitlines()
-                       if line.strip().startswith("install -Dm0644 res/" + name))
-        command = command.replace("'{{" + variable + "}}'", shlex.quote(str(destination)))
-        subprocess.run(["bash", "-euc", command], cwd=source, check=True)
-        assert destination.read_bytes() == (source / "res" / name).read_bytes()
-        assert destination.stat().st_mode & 0o777 == 0o644
+def test_os_installer_owns_shared_desktop_policy_without_app_sources():
+    source = ROOT / "rootfs/features/desktop/overlay/usr/share/polkit-1"
+    assert (source / "rules.d/claw-settings.rules").is_file()
     import xml.etree.ElementTree as ET
 
-    action = ET.parse(source / "res/com.clawos.Settings.Users.policy").find("action")
+    action = ET.parse(source / "actions/com.clawos.Settings.Users.policy").find("action")
     assert action.get("id") == "com.clawos.Settings.Users.Admin"
     assert {node.tag: node.text for node in action.find("defaults")} == {
         "allow_any": "no", "allow_inactive": "no", "allow_active": "auth_admin_keep",
@@ -665,6 +654,8 @@ def apt_selection(tmp_path, monkeypatch):
          "Depends": runtime + ", claw-app-support-v1", "Provides": "claw-app-python-beta-v1"},
         {"Package": "claw-app-native-desktop", "Version": "0.2.1", "X-Claw-App-Ids": "native",
          "Depends": runtime + ", claw-app-support-v1"},
+        {"Package": "claw-app-desktop-shell", "Version": "0.2.1", "X-Claw-App-Ids": "desktop-shell",
+         "Depends": runtime},
     ]
     return records, configuration
 
@@ -676,7 +667,7 @@ def test_official_package_selection_resolves_one_library_owner_without_a_desktop
         "claw-apps-agent", "claw-app-alpha", "claw-cap-beta", "claw-app-support",
     }
     desktop = packages.selection(records, "desktop", configuration)
-    assert len(desktop) == len(agent) + 2
+    assert len(desktop) == len(agent) + 3
     with pytest.raises(ValueError, match="Missing"):
         packages.selection([record for record in records if record["Package"] != "claw-cap-beta"],
                            "agent", configuration)
@@ -864,9 +855,6 @@ def test_runtime_provides_uses_the_platform_implementation_version(tmp_path):
     with pytest.raises(ValueError, match="cannot be symlinks"):
         assets.stage(aliased)
     assert not list(outside.iterdir())
-    installer = (ROOT / "desktop/justfile").read_text()
-    assert "prefix={{prefix}} icons/install" not in installer
-    assert "prefix={{prefix}} launcher-backend/install" not in installer
     # A real ELF exercises byte staging only; it is never run as a provider.
     launcher_stage = tmp_path / "launcher-runtime"
     assets.stage(launcher_stage, Path(sys.executable))
@@ -1386,37 +1374,10 @@ def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
 
 
 def test_native_manual_image_and_asset_build_paths_agree():
-    applets = ROOT / "desktop/applets"
-    cargo = (applets / "cosmic-applets/Cargo.toml").read_text()
-    assert "build/native-apps" not in cargo
-    build = (applets / "cosmic-applets/build.rs").read_text()
-    dispatcher = (applets / "cosmic-applets/src/main.rs").read_text()
-    just = (applets / "justfile").read_text()
-    for product in ("calendar", "clipboard", "widget-rail"):
-        assert f"claw-applet-{product}" not in cargo + build + just
-        assert f"claw_applet_{product.replace('-', '_')}" not in dispatcher
-    assert "scripts/app_sources.py" not in just
-    assert "install-applet-provider" in just
-    layout = (ROOT / "desktop/panel/cosmic-panel-config/src/container_config.rs").read_text()
-    for identity in ("PanelCalendarButton", "AppletClipboard", "AppletWidgetRail"):
-        assert f"com.clawos.{identity}" in layout
     script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
     assert "scripts/app_sources.py" not in script
-    assert "CHROOT_NATIVE_APPS" not in script
-    assert '"$PROJECT_DIR/scripts/app_packages.py" native-boundary' in script
+    assert "desktop/hyprland-claw/stage-desktop.sh" in script
     assert '"$APP_PACKAGE_INPUTS"/archives/*.deb' in script
-    packages.native_boundary()
-
-
-def test_native_source_guard_still_rejects_reintroduced_product_dependencies(tmp_path, monkeypatch):
-    source = tmp_path / "desktop/applets/consumer"
-    source.mkdir(parents=True)
-    (source / "Cargo.toml").write_text(
-        '[dependencies]\nproduct = { path = "../../../build/native-apps/product" }\n'
-    )
-    monkeypatch.setattr(packages, "ROOT", tmp_path)
-    with pytest.raises(ValueError, match="still links App-owned"):
-        packages.native_boundary()
 
 
 @pytest.mark.parametrize(("product", "app_id"), [
@@ -1501,81 +1462,6 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
         sources.prepare_native()
 
 
-@pytest.mark.parametrize(("product", "component"), [
-    ("launcher", "launcher"), ("editor", "edit"), ("files", "files"), ("terminal", "term"),
-    ("store", "store"), ("settings", "settings"), ("capture", "screenshot"), ("player", "player"),
-    ("notifications", "notifications"),
-])
-def test_standalone_app_uses_external_source_and_matching_chroot_layout(product, component):
-    just = (ROOT / "desktop/justfile").read_text()
-    assert f"{product} := '../build/native-apps/cosmic-{component}/justfile'" in just
-    assert f"{product}-build: prepare-native-apps" in just
-    assert f"test -f {{{{ {product} }}}}" in just
-    assert "default: build" in just
-    assert "build-source-fixtures: prepare-native-apps\n    #!/usr/bin/env bash" in just
-    production = just.split("\nbuild:", 1)[1].split("# Explicit development fixtures", 1)[0]
-    assert "scripts/app_packages.py native-boundary" in production
-    assert "--justfile" not in production
-    assert "export CLAW_NATIVE_APPS_PREPARED=1" in just
-    assert "{{ just }} --justfile {{ " + product + " }} build-release --locked" in just
-    assert "{{ just }} --justfile {{ " + product + " }} rootdir={{rootdir}} prefix={{prefix}} install" in just
-    assert "{{ just }} " + component + "/build-release" not in just
-    script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
-    assert 'CHROOT_SRC="$ROOTFS/build/desktop"' in script
-    assert "cd /build/desktop" in script
-    assert "/build/desktop-src" not in script
-    assert not (ROOT / "desktop" / component).exists()
-    assert not (ROOT / "apps" / f"cosmic-{component}").exists()
-    assert f"cosmic-{component}" in sources.read_lock()["apps"]
-    assert f"cosmic-{component}" in sources.desktop_apps()
-
-
-@pytest.mark.skipif(shutil.which("just") is None, reason="desktop just runner unavailable")
-def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
-    desktop = tmp_path / "desktop"
-    desktop.mkdir()
-    shutil.copyfile(ROOT / "desktop/justfile", desktop / "justfile")
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    (scripts / "app_sources.py").write_text(
-        "from pathlib import Path\n"
-        "root = Path(__file__).resolve().parents[1]\n"
-        "with (root / 'prepared').open('a') as log: log.write('prepared\\n')\n"
-    )
-    runner = tmp_path / "runner"
-    runner.write_text(
-        "#!/bin/sh\n"
-        'test "$CLAW_NATIVE_APPS_PREPARED" = 1 || exit 97\n'
-        'printf "%s\\n" "$*" >> "$0.calls"\n'
-    )
-    runner.chmod(0o755)
-    env = os.environ.copy()
-    env.pop("CLAW_NATIVE_APPS_PREPARED", None)
-    snapshot = tmp_path / "source-fixture.json"
-    snapshot.write_text('{"version":1,"revision":"explicit-test-fixture"}\n')
-    env["CLAW_APP_SOURCE_LOCK"] = str(snapshot)
-    subprocess.run(
-        ["just", "--justfile", str(desktop / "justfile"),
-         f"just={runner}", f"make={runner}", "build-source-fixtures"],
-        check=True, env=env, capture_output=True, text=True,
-    )
-    assert (tmp_path / "prepared").read_text() == "prepared\n"
-    calls = (tmp_path / "runner.calls").read_text().splitlines()
-    assert calls.count("editor-build") == 1
-    assert calls.count("files-build") == 1
-    assert calls.count("launcher-build") == 1
-    assert calls.count("terminal-build") == 1
-    assert calls.count("store-build") == 1
-    assert calls.count("settings-build") == 1
-    assert calls.count("capture-build") == 1
-    assert calls.count("player-build") == 1
-    assert calls.count("notifications-build") == 1
-    assert calls.count("calendar-build") == 1
-    assert calls.count("clipboard-build") == 1
-    assert calls.count("widgets-build") == 1
-    assert calls.count("build-shell") == 1
-
-
 def test_media_player_is_package_only_for_hot_swap(tmp_path):
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/hot-swap-to-vmware.sh"), "--no-build", "cosmic-player"],
@@ -1606,10 +1492,7 @@ def test_native_notifications_keep_private_inputs_and_legacy_state_separate(publ
     assert not (ROOT / "apps/cosmic-notifications").exists()
     assert not (ROOT / "apps/notify").exists()
     assert lock["apps"].count("notify") == 1
-    applet = (ROOT / "desktop/applets/cosmic-applet-notifications/Cargo.toml").read_text()
-    panel = (ROOT / "desktop/panel/cosmic-panel-bin/Cargo.toml").read_text()
     for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
-        assert library not in applet + panel
         assert f'cosmic-notifications/{library}/Cargo.toml' not in (
             ROOT / "rootfs/features/desktop/install.sh"
         ).read_text()
@@ -1626,18 +1509,11 @@ def test_native_notifications_keep_private_inputs_and_legacy_state_separate(publ
     component = product / package["native"]["cosmic-notifications"]
     for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
         assert _app_payload(staged / "cosmic-notifications" / library) == _app_payload(component / library)
-    assert "claw-notification-presentation" in applet + panel
-    assert 'git = "https://github.com/pop-os/cosmic-notifications"' not in applet + panel
-    panel_just = (ROOT / "desktop/panel/justfile").read_text()
-    assert "prepare-apps" not in panel_just
-    assert "scripts/app_sources.py" not in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
     assert "Source migration covered all original 75 identities" in status
     assert "**24 business product groups**" in status
     assert "**4 shared-capability source groups**: 51 Agent-package identities and" in status
-    assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
-    assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
 
 
 def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():

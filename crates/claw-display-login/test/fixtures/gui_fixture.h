@@ -400,7 +400,7 @@ static pid_t session_user_child(char *const arguments[], int output, uid_t uid,
             || setenv("LANGUAGE", "fr:en", 1) != 0
             || setenv("LC_TIME", "C.UTF-8", 1) != 0
             || setenv("XDG_CONFIG_DIRS", "/etc/xdg", 1) != 0
-            || setenv("XDG_CURRENT_DESKTOP", "COSMIC", 1) != 0
+            || setenv("XDG_CURRENT_DESKTOP", "Hyprland", 1) != 0
             || setenv("XDG_RUNTIME_DIR", "/run/user/62050", 1) != 0
             || setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/62050/bus", 1) != 0)
             _exit(120);
@@ -421,18 +421,6 @@ static pid_t session_user_child(char *const arguments[], int output, uid_t uid,
 
 static pid_t session_child(char *const arguments[], int output) {
     return session_user_child(arguments, output, 62050, "/run/gui-session-empty-path", NULL);
-}
-
-static int session_component(void) {
-    struct stat marker;
-    if (getuid() != 62050 || geteuid() != 62050
-        || stat("/run/gui-public/isolated", &marker) != 0 || marker.st_uid != 0
-        || !S_ISREG(marker.st_mode) || (marker.st_mode & 0022) != 0
-        || prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) != 0)
-        return 64;
-    /* Unrelated desktop UI components are idle fixtures, not a GUI outcome. */
-    for (;;)
-        pause();
 }
 
 static int session_ready(int descriptor, const char *prefix) {
@@ -514,21 +502,24 @@ static int session_startup_failure(void) {
         goto cleanup;
     }
     fprintf(stderr, "private authenticated display observer is ready\n");
-    char *const session_arguments[] = {"/usr/bin/cosmic-session", NULL};
+    char *const session_arguments[] = {
+        "/usr/local/bin/claw-display-session", "--exec",
+        "/run/gui-session-empty-path/not-installed", NULL
+    };
     session = session_child(session_arguments, -1);
     if (session <= 0)
         goto cleanup;
     int exited = session_exited(session, 5000), status;
     if (exited == 1 && waitpid(session, &status, 0) == session) {
         session = -1;
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 101) {
-            fprintf(stderr, "private cosmic-session exited with startup panic: 101\n");
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 1) {
+            fprintf(stderr, "private display session reported startup failure\n");
             result = 0;
         } else {
-            fprintf(stderr, "private cosmic-session returned an unexpected status: %d\n", status);
+            fprintf(stderr, "private display session returned an unexpected status: %d\n", status);
         }
     } else {
-        fprintf(stderr, "private cosmic-session did not exit within 5s after startup failure\n");
+        fprintf(stderr, "private display session did not exit within 5s after startup failure\n");
     }
     if (session_exited(observer, 0) == 0 && session_exited(bus, 0) == 0) {
         fprintf(stderr, "private authenticated display subscription remained alive after startup failure\n");
@@ -538,7 +529,7 @@ static int session_startup_failure(void) {
     }
 cleanup:
     if (session > 0)
-        fprintf(stderr, "private fixture must kill the non-exiting cosmic-session\n");
+        fprintf(stderr, "private display session failed to exit\n");
     if (session_cleanup(session) != 0)
         result = -1;
     if (session_cleanup(observer) != 0)
@@ -590,7 +581,7 @@ static int file_manager_session(void) {
     if (chmod("/run/gui-public/file-manager-bus/bus", 0666) != 0)
         goto cleanup;
     char *const arguments[] = {
-        "/usr/local/bin/claw-display-session", "--exec", "/usr/bin/cosmic-session", NULL
+        "/usr/local/bin/claw-display-session", "--exec", "/usr/lib/cos/bin/claw-file-manager", NULL
     };
     session = session_user_child(arguments, -1, 62050, "/run/gui-session-components", NULL);
     if (session <= 0)
@@ -602,7 +593,7 @@ static int file_manager_session(void) {
     close(pidfd);
     if (ready != 0)
         goto cleanup;
-    fprintf(stderr, "private actual cosmic-session child started for FileManager1\n");
+    fprintf(stderr, "private authenticated session started FileManager1\n");
     for (;;) {
         char command[4];
         if (gui_command(command) != 0)
@@ -617,13 +608,12 @@ static int file_manager_session(void) {
         else if (memcmp(command, "OTHR", 4) == 0) { role = "other"; uid = 62051; }
         else if (memcmp(command, "STOP", 4) == 0 && session > 0) {
             int status;
-            if (file_manager_call("exit", 62050) != 0
-                || session_exited(session, 15000) != 1
+            if (session_exited(session, 15000) != 1
                 || waitpid(session, &status, 0) != session)
                 break;
             session = -1;
             if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-                fprintf(stderr, "private cosmic-session orderly exit failed\n");
+                fprintf(stderr, "private display session orderly exit failed\n");
                 break;
             }
             if (gui_reply("PASS", -1) != 0)

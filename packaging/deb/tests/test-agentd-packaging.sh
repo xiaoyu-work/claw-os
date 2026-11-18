@@ -77,7 +77,7 @@ assert_contains "$BUILD_DEBS" 'install -Dm0644 "$PAM_DISPLAY_MODULE"' \
     "the PAM module must retain its non-executable installation mode"
 assert_contains "$BUILD_DEBS" '/usr/lib/$PAM_MULTIARCH/security/pam_claw_display.so' \
     "the PAM module must use the target multiarch installation directory"
-assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-display-session-v1' \
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-display-session-v2' \
     "Agent must provide the internal display runtime interface"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'libpam0g' \
     "Agent must declare its PAM runtime dependency"
@@ -85,7 +85,7 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'pkexec' \
     "Agent must install the protected terminal approval launcher"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'polkitd' \
     "Agent must install the unprivileged pkttyagent authentication presenter"
-assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-display-session-v1' \
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-display-session-v2' \
     "Desktop must require the Agent display runtime"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-file-manager-v1 (= 1)' \
     "Agent must provide the unprivileged file-manager transport interface"
@@ -93,20 +93,8 @@ assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-fi
     "Desktop must require the file-manager interface without an App entitlement"
 assert_contains "$BUILD_DEBS" 'install -m 755 "$FILE_MANAGER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-file-manager"' \
     "Agent must own the actual file-manager transport binary"
-assert_contains "$PROJECT_DIR/desktop/session/Justfile" \
-    'install -Dm0644 data/claw-file-manager.desktop {{ autostartdir }}/claw-file-manager.desktop' \
-    "Desktop session installation must own the optional autostart resource"
-assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/conffiles" \
-    '/etc/xdg/autostart/claw-file-manager.desktop' \
-    "Desktop must preserve administrator changes to the optional autostart resource"
-assert_contains "$PROJECT_DIR/desktop/session/data/claw-file-manager.desktop" 'OnlyShowIn=COSMIC;' \
-    "Agent-only or other desktop sessions must not claim FileManager1"
-assert_contains "$PROJECT_DIR/desktop/session/data/claw-file-manager.desktop" 'X-systemd-skip=true' \
-    "the file-manager facade must not inherit unauthenticated user-manager ancestry"
-assert_contains "$PROJECT_DIR/desktop/session/src/main.rs" 'let file_manager = file_manager::start(&env_vars);' \
+assert_contains "$PROJECT_DIR/core/src/display_session/client.rs" 'command("/usr/lib/cos/bin/claw-file-manager").spawn()' \
     "the authenticated session must start and retain the OS intent transport itself"
-assert_contains "$PROJECT_DIR/desktop/session/src/main.rs" 'file_manager.stop().await;' \
-    "session teardown must wait for its retained intent transport"
 assert_contains "$RELEASE_WORKFLOW" 'libpam0g-dev' \
     "the native package build must install PAM development inputs"
 assert_contains "$RELEASE_WORKFLOW" 'bash scripts/ci/test-agent-package.sh installed' \

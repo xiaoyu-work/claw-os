@@ -30,7 +30,7 @@ mkdir -m 0700 "$private/pam"
 printf '%s\n' \
     'auth required pam_unix.so' \
     'account required pam_unix.so' \
-    'session required pam_loginuid.so' >"$private/pam/cosmic-greeter"
+    'session required pam_loginuid.so' >"$private/pam/claw-desktop"
 if "$fixture" "$private/pam" deny-password; then
     printf 'wrong private password was accepted\n' >&2
     exit 1

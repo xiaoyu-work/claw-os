@@ -51,8 +51,8 @@ Debian packages and a signed multi-architecture APT repository.
 | `apt-repo/verify-release-security.sh` | Refuse a publication that regresses, is incoherent, or has no authenticated baseline |
 | `deb/tests/test-agentd-packaging.sh` | Worker/extension-host binary, identity, service, and isolation contract |
 | `deb/claw-os-agent/nearby/`, `deb/tests/test_nearby.py` | D-Bus-only Root radio activation, network/link policies and isolated nearby transport package contract |
-| `../core/src/bin/claw-file-manager.rs`, `../desktop/session/data/claw-file-manager.desktop` | Agent-owned unprivileged FileManager1 transport and Desktop-owned session-child-only autostart |
-| `../core/src/bin/claw-notification-panel.rs`, `../desktop/session/src/notifications.rs` | Agent-owned OS presentation descriptor helper and Desktop-owned descriptor lifetime; no product payload or App authority |
+| `../core/src/bin/claw-file-manager.rs`, `../core/src/display_session/client.rs` | Agent-owned unprivileged FileManager1 transport started only by the authenticated desktop subscriber |
+| `../desktop/hyprland-claw/stage-desktop.sh` | Target-native compositor, shared desktop helpers and greetd/PAM staging; the signed App delivers the shell |
 | `../crates/claw-display-login/MODULE.md`, `../core/src/display_session/MODULE.md` | Native GNU PAM/display helpers, OS-only Agent-to-Desktop interface, private installation fixture and logout boundary |
 | `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |
 | `deb/tests/test-remove-home-overlay.sh` | Merged-tree, metadata, whiteout, and opaque-directory removal regression tests |

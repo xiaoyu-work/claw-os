@@ -40,28 +40,15 @@ ensure_line() {
     grep -qxF "$line" "$file" || echo "$line" >> "$file"
 }
 
-ensure_initial_setup_user() {
-    if id cosmic-initial-setup >/dev/null 2>&1; then
-        return 0
-    fi
-    adduser --system --force-badname --quiet \
-        --home /var/lib/cosmic-initial-setup \
-        --shell /bin/bash \
-        cosmic-initial-setup
-    install -d -o cosmic-initial-setup -g nogroup -m 0755 \
-        /var/lib/cosmic-initial-setup
-}
-
 enable_desktop_links() {
     mkdir -p /etc/systemd/system/graphical.target.wants
-    mkdir -p /etc/systemd/system/multi-user.target.wants
-    ln -sf /lib/systemd/system/cosmic-greeter.service \
-        /etc/systemd/system/graphical.target.wants/cosmic-greeter.service
-    ln -sf /lib/systemd/system/cosmic-greeter.service \
+    # Older Desktop postinst created these links outside dpkg's inventory.
+    rm -f /etc/systemd/system/graphical.target.wants/cosmic-greeter.service \
+        /etc/systemd/system/multi-user.target.wants/cosmic-greeter-daemon.service \
+        /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
+    ln -sf /usr/lib/systemd/system/greetd.service \
         /etc/systemd/system/display-manager.service
-    ln -sf /lib/systemd/system/cosmic-greeter-daemon.service \
-        /etc/systemd/system/multi-user.target.wants/cosmic-greeter-daemon.service
-    ln -sf /lib/systemd/system/graphical.target \
+    ln -sf /usr/lib/systemd/system/graphical.target \
         /etc/systemd/system/default.target
 
     mkdir -p /etc/systemd/user/sockets.target.wants
@@ -77,10 +64,6 @@ enable_desktop_links() {
                 "/etc/systemd/user/default.target.wants/$unit"
     done
 
-    mkdir -p /etc/systemd/user/graphical-session.target.wants
-    [ -e /usr/lib/systemd/user/cos-agent-bridge.service ] && \
-        ln -sf /usr/lib/systemd/user/cos-agent-bridge.service \
-            /etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service
 }
 
 enable_desktop_services() {
@@ -154,7 +137,6 @@ if [ "$1" = "configure" ]; then
         ensure_line /etc/environment "XMODIFIERS=@im=fcitx"
         ensure_line /etc/environment "SDL_IM_MODULE=fcitx"
         ensure_line /etc/environment "GLFW_IM_MODULE=ibus"
-        ensure_initial_setup_user
         enable_desktop_links
         enable_desktop_services
         enable_fingerprint_auth

@@ -68,17 +68,7 @@ fn private_file_manager_client() {
                 .get_name_owner(SERVICE.try_into().unwrap())
                 .await
                 .unwrap();
-            let result = if role == "exit" {
-                connection
-                    .call_method(
-                        Some("com.clawos.Session"),
-                        "/com/clawos/Session",
-                        Some("com.clawos.Session"),
-                        "Exit",
-                        &(),
-                    )
-                    .await
-            } else {
+            let result = {
                 let vectors = vectors();
                 let name = if role == "other" { "folders" } else { &role };
                 let call = vectors["calls"]
@@ -365,7 +355,7 @@ fn configure() {
     std::fs::create_dir_all("/run/systemd/system").unwrap();
 }
 
-async fn bound_processes(pam: &mut Child, wrapper: &ProcessIdentity) -> (Process, Process) {
+async fn bound_processes(pam: &mut Child, wrapper: &ProcessIdentity) -> Process {
     let connection = zbus::connection::Builder::address(BUS)
         .unwrap()
         .build()
@@ -400,34 +390,19 @@ async fn bound_processes(pam: &mut Child, wrapper: &ProcessIdentity) -> (Process
             .await
             .unwrap(),
     );
-    let session_name = bus
-        .get_name_owner("com.clawos.Session".try_into().unwrap())
-        .await
-        .unwrap();
-    let session = process(
-        bus.get_connection_unix_process_id(session_name.into())
-            .await
-            .unwrap(),
+    assert_eq!(parent(helper.identity.pid()), wrapper.pid());
+    assert_eq!(helper.identity.uid(), OWNER);
+    assert_eq!(
+        claw_display_control::KernelLogin::of(&helper.identity).unwrap(),
+        claw_display_control::KernelLogin::of(wrapper).unwrap()
     );
-    assert_eq!(parent(helper.identity.pid()), session.identity.pid());
-    assert_eq!(parent(session.identity.pid()), wrapper.pid());
-    for (process, executable) in [
-        (&helper, "/usr/lib/cos/bin/claw-file-manager"),
-        (&session, "/usr/bin/cosmic-session"),
-    ] {
-        assert_eq!(process.identity.uid(), OWNER);
-        assert_eq!(
-            claw_display_control::KernelLogin::of(&process.identity).unwrap(),
-            claw_display_control::KernelLogin::of(wrapper).unwrap()
-        );
-        assert_eq!(
-            std::fs::read_link(format!("/proc/{}/exe", process.identity.pid())).unwrap(),
-            Path::new(executable)
-        );
-    }
+    assert_eq!(
+        std::fs::read_link(format!("/proc/{}/exe", helper.identity.pid())).unwrap(),
+        Path::new("/usr/lib/cos/bin/claw-file-manager")
+    );
     drop(bus);
     connection.close().await.unwrap();
-    (helper, session)
+    helper
 }
 
 fn active(name: &str, pam: &mut Child, helper: &Process) -> (String, RetainedInstance, Process) {
@@ -610,7 +585,7 @@ pub(super) async fn run(root: &Path) {
         login,
         claw_display_control::KernelLogin::of(&ProcessIdentity::child(&pam).unwrap()).unwrap()
     );
-    let (helper, session) = bound_processes(&mut pam, &wrapper_identity).await;
+    let helper = bound_processes(&mut pam, &wrapper_identity).await;
     println!("private FileManager1 actual COSMIC child retains authenticated PAM/kernel ancestry");
     for (index, (tag, name)) in [
         (b"FLDR", "folders"),
@@ -645,6 +620,18 @@ pub(super) async fn run(root: &Path) {
         *b"PASS"
     );
     let (_id, retained, cli) = active("hold", &mut pam, &helper);
+    assert_eq!(
+        unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                helper.descriptor.as_raw_fd(),
+                libc::SIGTERM,
+                std::ptr::null::<libc::siginfo_t>(),
+                0_u32,
+            )
+        },
+        0
+    );
     command(&control, b"STOP");
     assert_eq!(
         status(&control, &pam, Instant::now() + Duration::from_secs(20)),
@@ -652,7 +639,6 @@ pub(super) async fn run(root: &Path) {
     );
     retired(&mut pam, &retained, &cli).await;
     assert!(claw_display_control::identity::pidfd_exited(helper.descriptor.as_fd()).unwrap());
-    assert!(claw_display_control::identity::pidfd_exited(session.descriptor.as_fd()).unwrap());
     assert!(claw_display_control::identity::pidfd_exited(wrapper.descriptor.as_fd()).unwrap());
     command(&control, b"CLSE");
     let until = Instant::now() + Duration::from_secs(15);

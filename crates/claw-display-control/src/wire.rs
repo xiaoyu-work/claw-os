@@ -4,7 +4,7 @@ use crate::{Error, Packet};
 
 pub const LOGIN_SOCKET: &str = "/run/cos/display-login.sock";
 pub const DISPLAY_HOST: &str = "/usr/lib/cos/bin/claw-display-host";
-pub const COMPOSITOR: &str = "/usr/bin/cosmic-comp";
+pub const COMPOSITOR: &str = "/usr/libexec/claw-hyprland/Hyprland";
 pub const SESSION_DIRECTORY: &str = "/run/cos/display-sessions";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]

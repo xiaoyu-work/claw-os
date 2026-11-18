@@ -867,9 +867,11 @@ not the separate network-diagnostics provider.
 
 These requirements describe the unpublished Root-managed display implementation,
 not approval to deploy it or a completed installed-system acceptance result.
-Agent supplies the internal `claw-os-display-session-v1` interface and native
-PAM/display helpers; Desktop supplies its matching compositor, session manager
-and greetd/PAM startup configuration.
+Agent supplies the internal `claw-os-display-session-v2` interface and native
+PAM/display helpers; Desktop supplies the matching protected Hyprland
+executable and greetd/PAM startup configuration. The Agent and Desktop upgrade
+must be coordinated with the signed Desktop Shell App. The new package removes
+the superseded session; it does not migrate or erase owner configuration.
 
 Replacing or restarting `clawd`, the Root display supervisor or the compositor
 retires the affected display epoch and its GUI instances. Save unsaved work and

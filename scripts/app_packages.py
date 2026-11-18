@@ -222,6 +222,8 @@ def selection(records, variant, configuration):
         for interface in interfaces(record):
             providers.setdefault(interface, set()).add(name)
     pending = [(configuration["sets"][variant], None, None)]
+    if variant == "desktop":
+        pending.append(("claw-app-desktop-shell", None, None))
     selected = {}
     constraints = {}
     steps = 0
@@ -253,6 +255,8 @@ def selection(records, variant, configuration):
         pending.extend(dependencies(record))
     reachable = set()
     pending = [configuration["sets"][variant]]
+    if variant == "desktop":
+        pending.append("claw-app-desktop-shell")
     while pending:
         name = pending.pop()
         owner = name if name in available else next(iter(providers[name]))
@@ -274,6 +278,8 @@ def selection(records, variant, configuration):
     expected = set(json.loads((ROOT / "packaging/apps.lock.json").read_text())["apps"])
     if variant == "agent":
         expected -= set((ROOT / "packaging/deb/claw-os-desktop/apps.list").read_text().split())
+    else:
+        expected.add("desktop-shell")
     owners = {}
     for record in selected.values():
         for app in record.get("X-Claw-App-Ids", "").replace(",", " ").split():
@@ -381,24 +387,9 @@ def check_stage(stage, owners):
             raise ValueError(f"OS package still owns an App/support/library payload: {name}")
 
 
-def native_boundary():
-    linked = [
-        path.relative_to(ROOT).as_posix()
-        for source in ("desktop/applets", "desktop/panel")
-        for path in (ROOT / source).glob("*/Cargo.toml")
-        if "build/native-apps/" in path.read_text()
-    ]
-    if linked:
-        raise ValueError(
-            "Production desktop still links App-owned UI/private libraries: "
-            + ", ".join(sorted(linked))
-            + ". Use explicit source fixtures only; generic shell/interface cutover remains a release blocker."
-        )
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "check", "native-boundary", "runtime-version", "check-version"))
+    parser.add_argument("command", choices=("prepare", "check", "runtime-version", "check-version"))
     parser.add_argument("--variant", choices=("agent", "desktop"))
     parser.add_argument("--architecture", choices=("amd64", "arm64"))
     parser.add_argument("--stage", type=Path)
@@ -406,9 +397,6 @@ def main():
     options = parser.parse_args()
     if options.command == "runtime-version":
         print(platform()["version"])
-        return
-    if options.command == "native-boundary":
-        native_boundary()
         return
     if options.command == "check-version":
         if not options.version:

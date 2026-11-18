@@ -92,7 +92,7 @@ def stage(destination, launcher_binary=None):
         for name in ("README.md", "LICENSE"):
             shutil.copy2(backend / name, licenses / name)
         shutil.copy2(backend / "bin/Cargo.toml", licenses / "binary-Cargo.toml")
-        shutil.copy2(ROOT / "desktop/comp/LICENSE", licenses / "GPL-3")
+        shutil.copy2(ROOT / "crates/claw-display-login/test/headless/LICENSE", licenses / "GPL-3")
         shutil.copy2(backend / "debian/copyright", licenses / "copyright")
         shutil.copy2(ROOT / "desktop/PROVENANCE.md", licenses / "PROVENANCE.md")
         for path in (runtime, licenses):

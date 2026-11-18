@@ -38,7 +38,7 @@ packaging/
 |---|---|---|---|
 | `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, skills, SDK/runtime, trust roots, Agent system/user units and App channel configuration; no App payloads | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec`; recommends `claw-apps-agent` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
-| `claw-os-desktop` | COSMIC shell/services, graphical Agent UI/bridge, initial setup, PAM/policy and system assets; no product-native payloads | `amd64`, `arm64` | `claw-os-base`; recommends `claw-apps-desktop` |
+| `claw-os-desktop` | Protected Hyprland, greetd/PAM session, graphical Agent UI/bridge and system services; no product-native payloads | `amd64`, `arm64` | `claw-os-base`, `claw-os-display-session-v2`, signed `claw-app-desktop-shell`; recommends `claw-apps-desktop` |
 
 ### Coordinated 0.2.1 source ownership cutover
 

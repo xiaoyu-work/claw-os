@@ -81,6 +81,18 @@ struct Output {
     workspace: String,
     special: String,
     focused: bool,
+    #[serde(default)]
+    width: f64,
+    #[serde(default)]
+    height: f64,
+    #[serde(default)]
+    refresh: f64,
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
+    #[serde(default)]
+    scale: f64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -179,7 +191,29 @@ async fn snapshot(control: &GuiControl, command: Command) -> Result<Snapshot, St
     if !snapshot.ok {
         return Err(snapshot.error);
     }
+
     Ok(snapshot)
+}
+
+pub(super) async fn output_state(control: &GuiControl) -> Result<Value, String> {
+    let state = snapshot(control, Command::List).await?;
+    let outputs = state
+        .outputs
+        .into_iter()
+        .map(|output| {
+            json!({
+                "name": output.name,
+                "enabled": true,
+                "width": output.width as i64,
+                "height": output.height as i64,
+                "refresh": output.refresh,
+                "x": output.x as i64,
+                "y": output.y as i64,
+                "scale": output.scale,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!(outputs))
 }
 
 fn values(windows: &[Window], epoch: Epoch) -> Vec<Value> {

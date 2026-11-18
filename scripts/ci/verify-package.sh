@@ -67,7 +67,7 @@ case "$component" in
         )
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-calendar-read-v1
         dpkg-deb -f "$deb" Provides | grep -qw claw-os-nearby-v1
-        dpkg-deb -f "$deb" Provides | grep -qw claw-os-display-session-v1
+        dpkg-deb -f "$deb" Provides | grep -qw claw-os-display-session-v2
         if grep -Fxq './etc/cos/oauth.conf' "$files" \
             || grep -q '/usr/lib/cos/apps/' "$files"; then
             echo "error: Agent contains excluded OAuth configuration or App payloads" >&2
@@ -89,6 +89,10 @@ case "$component" in
         ;;
     desktop)
         required=(
+            usr/libexec/claw-hyprland/Hyprland
+            usr/share/wayland-sessions/claw.desktop
+            etc/pam.d/claw-desktop
+            etc/greetd/claw-desktop.toml
             usr/local/bin/cos-agent-ui
             usr/local/bin/cos-agent-bridge
             usr/local/bin/cos-ask-claw-launcher
@@ -106,7 +110,6 @@ done
 if [ "$component" != base ]; then
     if [ "$component" = desktop ]; then
         dpkg-deb -x "$deb" "$extract/payload"
-        python3 scripts/app_packages.py native-boundary
     fi
     python3 scripts/app_packages.py check --variant "$component" \
         --architecture "$arch" --stage "$extract/payload" >/dev/null

@@ -1,3 +1,0 @@
-power = Straum
-cancel = Avbryt
-settings = Innstillingar...

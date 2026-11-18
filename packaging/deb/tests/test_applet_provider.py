@@ -19,7 +19,8 @@ def package_attempt(stage):
     version = json.loads((ROOT / "packaging/app-platform.json").read_text())["version"]
     return subprocess.run(
         ["bash", str(ROOT / "packaging/deb/build-desktop-deb.sh"), str(stage)],
-        env={**os.environ, "ARCH": ARCH, "COS_PACKAGE_VERSION": f"{epoch}:{version}"},
+        env={**os.environ, "ARCH": ARCH, "COS_PACKAGE_VERSION": f"{epoch}:{version}",
+             "CLAW_DESKTOP_RUNTIME_DEPS": "libc6"},
         capture_output=True, text=True, timeout=10,
     )
 
@@ -42,7 +43,7 @@ def test_invalid_provider_is_rejected_before_packaging(tmp_path, kind):
             output.write(b"\xb7\x00" if ARCH == "amd64" else b"\x3e\x00")
     result = package_attempt(tmp_path)
     assert result.returncode != 0
-    assert "Applet service" in result.stderr
+    assert "claw-os-applet-provider" in result.stderr
     assert not (tmp_path / "DEBIAN").exists()
 
 
@@ -50,8 +51,11 @@ def test_native_provider_passes_abi_guard_without_bypassing_other_package_requir
     binary = tmp_path / "usr/libexec/claw-os-applet-provider"
     binary.parent.mkdir(parents=True)
     shutil.copy2(os.environ.get("CLAW_APPLET_TEST_BINARY", "/bin/true"), binary)
+    compositor = tmp_path / "usr/libexec/claw-hyprland/Hyprland"
+    compositor.parent.mkdir()
+    shutil.copy2("/bin/true", compositor)
     result = package_attempt(tmp_path)
     assert result.returncode != 0
     assert "required desktop Agent binary missing" in result.stderr
-    assert "Applet service" not in result.stderr
+    assert "claw-os-applet-provider" not in result.stderr
     assert not (tmp_path / "DEBIAN").exists()

@@ -729,8 +729,7 @@ fn session_startup_failure(root: &Path) {
     };
     let log = std::fs::read_to_string("/run/gui-fixture/pam-session-startup.log").unwrap();
     assert!(
-        log.contains("got environmental variables from cosmic-comp")
-            && log.contains("failed to start settings daemon"),
+        log.contains("No such file or directory"),
         "the actual session must attach its display and retain the startup diagnostic: {log}",
     );
     assert_eq!(
@@ -740,9 +739,9 @@ fn session_startup_failure(root: &Path) {
     );
     for evidence in [
         "private authenticated display observer is ready",
-        "private cosmic-session exited with startup panic: 101",
+        "private display session reported startup failure",
         "private authenticated display subscription remained alive after startup failure",
-        "private PAM retired after cosmic-session startup failure",
+        "private PAM retired after session startup failure",
     ] {
         assert!(log.contains(evidence), "missing {evidence}: {log}");
     }
@@ -753,7 +752,7 @@ fn session_startup_failure(root: &Path) {
             .any(|line| line == "populated 0"),
         "private session/PAM processes remain after startup failure",
     );
-    println!("private actual cosmic-session startup failure and checked PAM exit: passed");
+    println!("private display session startup failure and checked PAM exit: passed");
 }
 
 async fn owner_permissions(params: serde_json::Value) -> std::process::Output {
@@ -1923,13 +1922,13 @@ fn private_authenticated_gui() {
 }
 
 #[test]
-#[ignore = "requires the private authenticated Root PAM/display fixture and cosmic-session"]
+#[ignore = "requires the private authenticated Root PAM/display fixture"]
 fn private_session_startup_failure() {
     private_gui_fixture(true, false);
 }
 
 #[test]
-#[ignore = "requires the private authenticated PAM/COSMIC/FileManager1 fixture"]
+#[ignore = "requires the private authenticated PAM/FileManager1 fixture"]
 fn private_file_manager_session() {
     private_gui_fixture(false, true);
 }

@@ -1,1 +1,0 @@
-# Note: only include keys that differ from the default en locale.

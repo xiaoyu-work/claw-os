@@ -13,7 +13,6 @@
 #   cosmic-files           — build/native-apps/cosmic-files, target/release/cosmic-files
 #   cosmic-edit            — build/native-apps/cosmic-edit, target/release/cosmic-edit
 #   cosmic-term            — build/native-apps/cosmic-term, target/release/cosmic-term
-#   cosmic-initial-setup   — desktop/initial-setup, target/release/cosmic-initial-setup
 #   cosmic-player          — refused: update its paired signed Agent/Desktop packages
 #   cosmic-notifications   — refused: update its paired signed Agent/Desktop packages
 #
@@ -82,7 +81,6 @@ target_spec() {
     cosmic-files)          echo "build/native-apps/cosmic-files|cosmic-files|/usr/bin/cosmic-files" ;;
     cosmic-edit)           echo "build/native-apps/cosmic-edit|cosmic-edit|/usr/bin/cosmic-edit" ;;
     cosmic-term)           echo "build/native-apps/cosmic-term|cosmic-term|/usr/bin/cosmic-term" ;;
-    cosmic-initial-setup)  echo "desktop/initial-setup|cosmic-initial-setup|/usr/bin/cosmic-initial-setup" ;;
     *) echo "" ;;
   esac
 }

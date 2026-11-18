@@ -1,0 +1,11 @@
+[terminal]
+vt = 7
+
+[general]
+service = "claw-desktop"
+source_profile = false
+
+[default_session]
+service = "greetd-greeter"
+command = "/usr/sbin/agreety -c '/usr/local/bin/claw-display-session --desktop'"
+user = "greeter"
