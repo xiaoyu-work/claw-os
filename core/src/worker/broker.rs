@@ -467,7 +467,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
             Verb::BROWSER_INPUT_SECRET,
             Verb::BROWSER_EVAL,
         ],
-        "system.display.control" => &[Verb::DEVICE_DISPLAY],
+        "system.display.control" => &[Verb::SYS_OBSERVE, Verb::DEVICE_DISPLAY],
         "system.events.control" => &[Verb::SYS_EVENTS],
         "system.hardware.inspect" => &[Verb::SYS_OBSERVE],
         "system.location.query" => &[Verb::DEVICE_LOCATION],
