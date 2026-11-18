@@ -152,8 +152,10 @@ release schedules:
 | Package | Contents |
 | --- | --- |
 | `claw-os-agent` | Reusable Agent, `clawd`, `claw-agentd`, `claw-extension-host`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
-| `claw-os-base` | Claw OS recovery, managed agent home, and distribution boot/service policy |
+| `claw-os-base` | Claw OS recovery, managed agent home, distribution boot/service policy, and device-specific udev/libinput rules |
 | `claw-os-desktop` | Desktop shell, graphical Agent UI, and graphical applications, when installed |
+
+After upgrading Base and Desktop (if installed), reboot to apply the [hardware workarounds](image-architecture.md#hardware-enablement) to devices already present and reload the desktop's libinput rules. Existing installs do not gain newly added image-only firmware packages via the Base upgrade; install `firmware-cirrus` or, on a Qualcomm arm64 machine, `firmware-qcom-soc` from the configured Debian repositories if needed.
 
 Each published package version is generated from the Git commit count and SHA,
 for example `0.1.0+git1226.g876f3ad810ca`. A later repository build therefore

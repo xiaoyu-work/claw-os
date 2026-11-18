@@ -51,6 +51,7 @@ case "$ARCH" in
         # kernel loads only the matching vendor blob at early boot.
         MICROCODE_INTEL_PKG=intel-microcode
         MICROCODE_AMD_PKG=amd64-microcode
+        QCOM_SOC_FIRMWARE_PKG=""
         # thermald is Intel-centric but harmless on AMD (the unit
         # self-disables when no Intel temperature interface is found).
         # It's an x86-only package on Debian, so empty on arm64.
@@ -75,6 +76,7 @@ case "$ARCH" in
         # bootloader instead.
         MICROCODE_INTEL_PKG=""
         MICROCODE_AMD_PKG=""
+        QCOM_SOC_FIRMWARE_PKG=firmware-qcom-soc
         # thermald is x86-only on Debian.
         THERMALD_PKG=""
             # Intel iHD media driver is x86-only.
@@ -98,7 +100,7 @@ fi
 
 export ARCH DEB_ARCH RUST_TARGET KERNEL_PKG
 export GRUB_EFI_TARGET GRUB_EFI_PKG GRUB_BIOS_TARGET GRUB_BIOS_PKG
-export MICROCODE_INTEL_PKG MICROCODE_AMD_PKG
+export MICROCODE_INTEL_PKG MICROCODE_AMD_PKG QCOM_SOC_FIRMWARE_PKG
 export THERMALD_PKG
 export VAAPI_INTEL_NONFREE_PKG
 

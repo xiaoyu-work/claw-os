@@ -700,6 +700,14 @@ install -m 644 "$SYSTEM_UNITS_SRC/cos-home-setup.service" \
 install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-home" \
     "$BASE_STAGE/etc/default/cos-home"
 
+HARDWARE_SRC="$SCRIPT_DIR/claw-os-base/hardware"
+install -Dm0644 "$HARDWARE_SRC/69-claw-os-hardware.rules" \
+    "$BASE_STAGE/usr/lib/udev/rules.d/69-claw-os-hardware.rules"
+install -Dm0644 "$HARDWARE_SRC/99-claw-os-hardware.quirks" \
+    "$BASE_STAGE/usr/share/libinput/99-claw-os-hardware.quirks"
+install -Dm0644 "$HARDWARE_SRC/omarchy.LICENSE" \
+    "$BASE_STAGE/usr/share/doc/claw-os-base/omarchy-hardware.LICENSE"
+
 echo "  :: dpkg-deb --build claw-os-base"
 write_release_manifest claw-os-base "$BASE_STAGE" all
 render_security_preinst claw-os-base "$BASE_STAGE"

@@ -12,8 +12,8 @@ Depends: claw-os-agent (>= __MIN_AGENT__), claw-os-abi-__ABI__,
  init-system-helpers (>= 1.52)
 Description: Claw OS distribution integration layer
  Extends `claw-os-agent` with the recovery helper, managed OverlayFS
- agent home, and boot/service policies used by Claw OS WSL, Docker,
- VM, ISO, Azure, and installed-system images.
+ agent home, boot/service policies, and device-specific Linux workarounds
+ used by Claw OS images and installed systems.
  .
  This package is not required on Debian or Ubuntu hosts that only want
  the reusable system agent. It deliberately owns no agent runtime,

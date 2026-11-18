@@ -1,0 +1,12 @@
+# Tag the Framework 16 keyboard for active-seat access before 73-seat-late.rules.
+ACTION=="add|change", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="32ac", ATTRS{idProduct}=="0012", TAG+="uaccess"
+
+# Pair the detachable touchpad with the internal keyboard for disable-while-typing.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event[0-9]*", ENV{ID_INPUT_TOUCHPAD}=="1", \
+  ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1a30", ATTR{[dmi/id]sys_vendor}=="ASUSTeK COMPUTER INC.", \
+  ATTR{[dmi/id]product_name}=="*GZ302*", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}="internal"
+
+# These Intel MacBooks can lose their NVMe drive on resume from D3cold.
+ACTION=="add|bind", SUBSYSTEM=="pci", KERNEL=="0000:01:00.0", ATTR{class}=="0x010802", \
+  ATTR{[dmi/id]sys_vendor}=="Apple*", ATTR{[dmi/id]product_name}=="MacBook[89],1|MacBook10,1|MacBookPro1[34],[123]", \
+  TEST=="d3cold_allowed", ATTR{d3cold_allowed}="0"

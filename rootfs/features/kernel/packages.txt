@@ -22,6 +22,9 @@ firmware-libertas
 # MediaTek Wi-Fi/Bluetooth (MT7921/MT7922 etc.), common in recent
 # AMD laptops and many mini-PCs. Without it those radios are dead.
 firmware-mediatek
+# Qualcomm Adreno and platform firmware for arm64; board-specific blobs
+# and device trees still depend on the machine and kernel.
+${QCOM_SOC_FIRMWARE_PKG}
 
 # --- GPU firmware (modern iGPU/dGPU need signed microcode blobs) ---
 # Intel iGPU GuC/HuC/DMC + IPU6 MIPI cameras (i915/xe, gen9+). Without
@@ -40,6 +43,8 @@ firmware-nvidia-graphics
 # modern Intel laptops (Tiger Lake and newer, incl. Core Ultra). Without
 # it there is NO sound output or microphone on those machines.
 firmware-sof-signed
+# Firmware for Cirrus Logic codecs and speaker amplifiers.
+firmware-cirrus
 
 # CPU microcode (security errata: Spectre/Meltdown/MDS/etc.). x86-only;
 # the variables expand to empty strings on arm64 so this is a no-op

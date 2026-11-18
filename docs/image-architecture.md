@@ -85,6 +85,21 @@ Cloud generalization happens only in the staged disk filesystem. It does not
 mutate the composed rootfs and does not affect local VM, WSL, or Docker
 artifacts.
 
+## Hardware enablement
+
+Bootable images use the Debian kernel, firmware, and graphics stack selected by the hardware backports pin. The `kernel` feature includes Cirrus audio firmware and, on arm64, `firmware-qcom-soc`. The existing `firmware-libertas` package already supplies the Marvell Wi-Fi firmware used by applicable Intel Surface models. These packages supply firmware, not a board-specific boot path.
+
+The following workarounds are adapted from [Omarchy's hardware setup and udev rules](https://github.com/omacom/omarchy/tree/3b36b9e19). They are packaged in this repository rather than installing Arch packages. They match devices on the running machine, not on the image builder.
+
+| Hardware | Workaround |
+| --- | --- |
+| Framework Laptop 16 keyboard (`32ac:0012`) | Let the active local seat access the keyboard's QMK HID device. This does not install a QMK utility. |
+| ASUS ROG Flow Z13 GZ302 | Classify the detachable keyboard's touchpad as internal so libinput can disable it while typing. |
+| ASUS ExpertBook B9406 with the PixArt `093a:4f05` touchpad | Ignore the pad's binary pressure axes so libinput can retain motion events. This does not change the display or backlight. |
+| Intel `MacBook8,1`, `MacBook9,1`, `MacBook10,1`, and `MacBookPro13,1`–`14,3` | Prevent the NVMe controller at `0000:01:00.0` from entering D3cold, avoiding a known resume failure. |
+
+These are individual workarounds, not full-model certification. Apple Silicon needs its Asahi boot and kernel stack. Snapdragon X/X2 still need the right per-model device tree, early boot drivers, and any board-signed firmware absent from Debian. NVIDIA N1x and GB10 need their matching platform kernel, GPU stack, and boot configuration. Intel T2 and other fixes that depend on a custom kernel, DKMS package, or OEM payload are not supplied by these rules. Do not copy firmware from a vendor's recovery or Windows image into a distribution package without redistribution rights.
+
 ## Instance identity
 
 Artifacts fall into two identity models.
