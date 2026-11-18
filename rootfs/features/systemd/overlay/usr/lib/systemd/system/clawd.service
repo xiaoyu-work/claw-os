@@ -51,7 +51,8 @@ StateDirectory=cos
 StateDirectoryMode=0711
 LogsDirectory=cos
 LogsDirectoryMode=0700
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Bubblewrap configures private loopback before installing the worker socket filter.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 NoNewPrivileges=true
 PrivateTmp=true
 # Required for per-task cgroup-v2 CPU/memory/pids limits and cgroup.kill.

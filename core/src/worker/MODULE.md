@@ -13,6 +13,10 @@ There is no second isolation implementation. `crate::sandbox`
 services) and `crate::agent::tools::mcp::integration` (external MCP servers and
 adapters) are consumers of this module, not peers of it.
 
+The `clawd` service permits Netlink so Bubblewrap can initialize loopback in
+the new network namespace. The installed worker and GUI seccomp filters still
+refuse Netlink in App and untrusted worker code.
+
 Linux workers receive sealed, read-only single-account `/etc/passwd` and
 single-group `/etc/group` views through the existing descriptor-pinned mounts.
 The account binds the runtime UID/GID and its OS-resolved name/login shell;

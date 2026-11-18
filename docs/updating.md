@@ -875,6 +875,8 @@ the superseded session; it does not migrate or erase owner configuration.
 On Debian 13, Desktop uses the matching XKB runtime and X11 companion from
 `trixie-backports`. Existing installs need that APT source enabled before the
 desktop upgrade.
+Use the matching Agent service unit: Bubblewrap needs Netlink while creating
+private loopback, but the App sandbox does not permit Netlink.
 
 Replacing or restarting `clawd`, the Root display supervisor or the compositor
 retires the affected display epoch and its GUI instances. Save unsaved work and
