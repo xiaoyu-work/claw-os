@@ -105,6 +105,13 @@ This activation-only run does not capture rendered frames or establish signed
 GUI App, XWayland startup, physical-display/greetd/logind or installed-package
 acceptance. A build or an authority bypass cannot substitute for those checks.
 
+A separate Debian 13 KVM guest booted through the real VT7 greetd/PAM flow.
+The installed signed Shell passed the separate App activation and capability
+reviews, then rendered through the ordinary GUI Host on a virtio display.
+This source-staged guest did not exercise the official APT transaction.
+It did not establish ordinary App launch, checked Logout, or a deployable
+desktop image.
+
 The existing protocol baseline runs from the OS repository root:
 
 ```bash
