@@ -55,8 +55,9 @@ replaying mutations. It provides the native workspace, output and keyboard
 presentation model without an App-side Hyprland IPC client.
 
 [`session/`](session/) contains the downstream session entry and user target.
-The installed subscriber's `--desktop` mode attaches to the Root login binding, starts the existing
-owner FileManager1 facade and invoke `cos app desktop-shell --gui`. Normal
+Debian's `_greetd` account runs `agreety` on VT7. The installed subscriber's
+`--desktop` mode attaches to the Root login binding, starts the existing
+owner FileManager1 facade and invokes `cos app desktop-shell --gui`. Normal
 signed App review and capability decisions still apply, and the launcher does
 not start an Agent task or a second compositor. `stage-desktop.sh` installs
 the session wiring and compiled compositor into the Desktop package.
