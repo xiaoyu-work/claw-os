@@ -30,8 +30,10 @@ prefix="$dependencies/prefix"
 export PATH="$prefix/bin:$PATH"
 export CMAKE_PREFIX_PATH="$prefix"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
-cmake -S "$work/hyprland" -B "$cmake_build" -G Ninja \
+cmake --fresh -S "$work/hyprland" -B "$cmake_build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    -DPKG_CONFIG_EXECUTABLE=/usr/bin/env \
+    '-DPKG_CONFIG_ARGN=-u;PKG_CONFIG_ALLOW_SYSTEM_LIBS;/usr/bin/pkg-config' \
     "-DCLAW_COMPOSITOR_LIBRARY=$CARGO_TARGET_DIR/release/libclaw_compositor.a" \
     -DNO_UWSM=ON -DBUILD_TESTING=OFF
 cmake --build "$cmake_build" --parallel "$jobs" --target Hyprland

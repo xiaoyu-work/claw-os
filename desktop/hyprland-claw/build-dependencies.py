@@ -100,9 +100,13 @@ def build(source, cache, prefix, environment, jobs):
             "Cflags: -I${prefix}/include\n"
         )
     elif source["build"] == "cmake":
+        # FindPkgConfig asks for explicit system -L paths even when a pinned
+        # .pc file supplied newer headers. Use the normal pkg-config filtering.
         run([
-            "cmake", "-S", directory, "-B", output, "-G", "Ninja",
+            "cmake", "--fresh", "-S", directory, "-B", output, "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
+            "-DPKG_CONFIG_EXECUTABLE=/usr/bin/env",
+            "-DPKG_CONFIG_ARGN=-u;PKG_CONFIG_ALLOW_SYSTEM_LIBS;/usr/bin/pkg-config",
             f"-DCMAKE_INSTALL_PREFIX={prefix}",
             "-DCMAKE_INSTALL_LIBDIR=lib",
             "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON",
