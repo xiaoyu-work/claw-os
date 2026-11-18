@@ -40,6 +40,7 @@ libzip-dev
 librsvg2-dev
 libmagic-dev
 libre2-dev
+libreadline-dev
 libmuparser-dev
 liblcms2-dev
 libcanberra-dev
