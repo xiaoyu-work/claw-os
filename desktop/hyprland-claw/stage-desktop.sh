@@ -83,6 +83,7 @@ install -Dm0644 "$project/desktop/services/claw-applet-services/LICENSE" "$licen
 
 session="$work/hyprland-claw/session"
 install -Dm0644 "$session/claw.desktop" "$stage/usr/share/wayland-sessions/claw.desktop"
+install -Dm0644 "$session/hyprland.lua" "$stage/etc/xdg/hypr/hyprland.lua"
 install -Dm0644 "$session/claw-desktop-session.target" "$stage/usr/lib/systemd/user/claw-desktop-session.target"
 install -Dm0644 "$session/claw-desktop.pam" "$stage/etc/pam.d/claw-desktop"
 install -Dm0644 "$session/greetd.toml" "$stage/etc/greetd/claw-desktop.toml"

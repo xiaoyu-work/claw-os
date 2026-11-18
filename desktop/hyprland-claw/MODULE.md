@@ -60,6 +60,10 @@ owner FileManager1 facade and invoke `cos app desktop-shell --gui`. Normal
 signed App review and capability decisions still apply, and the launcher does
 not start an Agent task or a second compositor. `stage-desktop.sh` installs
 the session wiring and compiled compositor into the Desktop package.
+The installed `/etc/xdg/hypr/hyprland.lua` supplies monitor discovery and
+native window/workspace bindings for a new owner. It does not launch a
+second panel, wallpaper process or terminal. Existing owner configuration
+continues to take precedence.
 
 ## Required contracts
 

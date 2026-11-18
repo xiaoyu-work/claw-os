@@ -4,5 +4,6 @@
 /etc/systemd/zram-generator.conf
 /etc/xdg/autostart/copyq.desktop
 /etc/xdg/mimeapps.list
+/etc/xdg/hypr/hyprland.lua
 /etc/pam.d/claw-desktop
 /etc/greetd/claw-desktop.toml

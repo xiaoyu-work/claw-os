@@ -90,6 +90,7 @@ case "$component" in
     desktop)
         required=(
             usr/libexec/claw-hyprland/Hyprland
+            etc/xdg/hypr/hyprland.lua
             usr/share/wayland-sessions/claw.desktop
             etc/pam.d/claw-desktop
             etc/greetd/claw-desktop.toml
