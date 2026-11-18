@@ -45,6 +45,7 @@ liblcms2-dev
 libcanberra-dev
 libtomlplusplus-dev
 libpugixml-dev
+hwdata
 libjpeg-dev
 libpng-dev
 libwebp-dev

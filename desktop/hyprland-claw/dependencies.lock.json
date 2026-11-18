@@ -75,6 +75,14 @@
       "pkg_config": "hyprcursor"
     },
     {
+      "name": "hyprwayland-scanner",
+      "repository": "https://github.com/hyprwm/hyprwayland-scanner.git",
+      "revision": "62e62c1ca23da17612c6890d4ad2064f575643db",
+      "version": "0.4.6",
+      "build": "cmake",
+      "pkg_config": "hyprwayland-scanner"
+    },
+    {
       "name": "aquamarine",
       "repository": "https://github.com/hyprwm/aquamarine.git",
       "revision": "7c1c55b2a76ddb9f6602f8c0886ecf1b899529f9",
