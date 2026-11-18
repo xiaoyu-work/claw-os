@@ -167,6 +167,10 @@ are compatible; the publisher refuses a mixed or regressing protocol set.
 Only four workflows remain: `test.yml` (PR/manual/reusable validation),
 `release.yml` (manual OS publication), `publish-sdk-release.yml`, and
 `publish-app-platform.yml` (independent versioned developer releases).
+
+Run manual validation with `gh workflow run test.yml --ref main`. Do not push
+a temporary branch to dispatch it. GitHub blocks creating branches under `ci/`.
+
 The repository is consumable as:
 
 ```bash

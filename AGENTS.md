@@ -198,7 +198,7 @@ Documentation-only changes do not require code tests.
 ## Conventions
 
 - Commit and push this repository's code directly to `main`; do not create or
-  push separate feature branches.
+  push feature or temporary CI branches. Dispatch manual CI on `main`.
 - Preserve unrelated dirty-worktree changes. Stage explicit paths rather than
   using `git add -A`.
 - Keep public SDK code in `claw-os-sdk`; `cos-runtime` is for bundled apps and
