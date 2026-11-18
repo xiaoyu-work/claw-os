@@ -126,8 +126,8 @@ assert_contains "$TEST_WORKFLOW" 'bash scripts/ci/test-boundaries.sh display' \
     "CI must invoke the authenticated display checks"
 assert_contains "$TEST_BOUNDARIES" 'crates/claw-display-login/test/fixtures/bootstrap.sh' \
     "CI must retain the private authenticated display fixture"
-assert_contains "$TEST_BOUNDARIES" '"$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session"' \
-    "the private fixture must receive the actual session binary as input twelve"
+assert_contains "$TEST_BOUNDARIES" '"$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/claw-file-manager"' \
+    "the private fixture must receive the real display subscriber and FileManager1 facade"
 assert_contains "$TEST_BOUNDARIES" 'private_deferred_retirement_reclaims_the_exact_slot_and_workload' \
     "CI must exercise deferred display retirement and slot reclamation"
 assert_contains "$BUILD_DEBS" 'ensure_bin claw-agentd cos' \

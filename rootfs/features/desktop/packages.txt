@@ -425,18 +425,7 @@ wl-clipboard
 orca
 brltty
 
-# --- P0 desktop plumbing (boot-into-usable-system essentials) ---
-#
-# xdg-desktop-portal: the freedesktop "portal" frontend D-Bus daemon.
-# Apps speak `org.freedesktop.portal.*` to it (screen share, file
-# picker for sandboxed/Flatpak apps, screenshot, screencast, secret
-# storage, ...) and it dispatches to the backend impl appropriate
-# for the current session — for us that's xdg-desktop-portal-cosmic
-# (built from source under desktop/xdg-desktop-portal). Without the
-# frontend installed, the cosmic backend has nothing to register
-# with, so screen sharing in Chromium/Discord/Zoom/OBS and Flatpak
-# file pickers silently fail or freeze. The package is dbus-activated
-# (no systemd enable needed) and tiny (~200KB).
+# The Desktop package selects the GTK and wlroots portal backends.
 xdg-desktop-portal
 # xdg-utils: provides /usr/bin/xdg-open, xdg-mime, xdg-settings,
 # xdg-email, xdg-screensaver, etc. Every shell script or CLI tool

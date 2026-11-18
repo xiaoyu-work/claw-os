@@ -11,7 +11,7 @@ Before=multi-user.target
 Type=oneshot
 RemainAfterExit=yes
 # Detection + MOTD only. This NEVER auto-installs a driver: on bare metal the
-# user opts in through the desktop wizard or `claw-gpu-setup install`, and in
+# user opts in through `sudo claw-gpu-setup install`, and in
 # WSL/containers a kernel-mode driver must not be installed inside the guest
 # at all. The service just makes the GPU status visible (journal + MOTD) so a
 # headless WSL/Docker user knows what to do.
