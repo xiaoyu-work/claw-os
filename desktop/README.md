@@ -227,7 +227,7 @@ repository root (repeat after changing the App source lock):
 
 ```bash
 python3 scripts/app_sources.py --native
-cargo test --manifest-path desktop/applets/Cargo.toml -p claw-applet-services --lib
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked
 cargo build --manifest-path desktop/applets/Cargo.toml -p cosmic-applets --locked
 ```
 

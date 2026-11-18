@@ -3,7 +3,7 @@
 This public, language-neutral App interface has a Rust binding,
 `applet::Client`. Calendar, Clipboard and Widget Rail are current consumers,
 not an eligibility list. OS providers remain in
-[`claw-applet-services`](../../../desktop/applets/claw-applet-services/MODULE.md);
+[`claw-applet-services`](../../../desktop/services/claw-applet-services/MODULE.md);
 neither the public client nor the App contains provider implementations.
 
 This is a separate fixed-helper protocol, not an extension of `cos --wire=1`,

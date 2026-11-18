@@ -183,7 +183,7 @@ app_bind() {
 
 calendar() {
     cargo build -p cos --bin cos --locked
-    cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+    cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml \
         --features provider --bins --locked --target-dir "$RUNNER_TEMP/calendar-target"
     cargo test -p cos --lib --locked --no-run --message-format=json-render-diagnostics \
         > "$RUNNER_TEMP/calendar-tests.jsonl"
@@ -301,7 +301,7 @@ display() {
         if [[ "$selection" == native-calendar || "$selection" == native-desktop-widgets ]]; then
             cargo test -p cos --lib --locked native_calendar_readiness -- --test-threads=1
             cargo test -p cos --lib --locked native_calendar_popup -- --test-threads=1
-            cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+            cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml \
                 --bin claw-calendar-reader --locked --target-dir "$CARGO_TARGET_DIR/native-calendar-service"
         fi
         if [[ "$selection" == native-terminal ]]; then
@@ -478,7 +478,7 @@ display() {
 }
 
 applets() {
-    manifest=desktop/applets/claw-applet-services/Cargo.toml
+    manifest=desktop/services/claw-applet-services/Cargo.toml
     cargo test -p claw-os-sdk --lib --locked -- --test-threads=1
     cargo clippy -p claw-os-sdk --all-targets --locked -- -D warnings
     cargo test --manifest-path "$manifest" --lib --locked -- --test-threads=1
@@ -497,7 +497,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
                if row.get("executable") and row["target"]["name"] == "kernel_policy"))
 PY
     )"
-    sudo python3 desktop/applets/claw-applet-services/test/support/run_kernel_fixture.py \
+    sudo python3 desktop/services/claw-applet-services/test/support/run_kernel_fixture.py \
         --kernel "$CARGO_TARGET_DIR/debug/cos" \
         --provider "$CARGO_TARGET_DIR/debug/claw-os-applet-provider" \
         --test-binary "$test_binary" \

@@ -27,7 +27,7 @@ build-debug *args: (build-applet-provider args)
     cargo build {{ args }}
 
 build-applet-provider *args:
-    cargo build --locked --manifest-path claw-applet-services/Cargo.toml --features provider --target-dir {{ targetdir }} {{ args }}
+    cargo build --locked --manifest-path ../services/claw-applet-services/Cargo.toml --features provider --target-dir {{ targetdir }} {{ args }}
 
 # Compiles with release profile
 build-release *args: (build-debug '--release' args)
@@ -88,7 +88,7 @@ install: install-applet-provider (_install_bin 'cosmic-applets') (_link_applet '
 # Vendor Cargo dependencies locally
 vendor:
     mkdir -p .cargo
-    cargo vendor --sync claw-applet-services/Cargo.toml | head -n -1 > .cargo/config
+    cargo vendor --sync ../services/claw-applet-services/Cargo.toml | head -n -1 > .cargo/config
     echo 'directory = "vendor"' >> .cargo/config
     tar pcf vendor.tar vendor
     rm -rf vendor

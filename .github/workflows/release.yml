@@ -141,7 +141,7 @@ jobs:
           source scripts/lib/arch.sh
           cargo build --release --locked -p cos --target "$RUST_TARGET"
           cargo build --release --locked \
-            --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+            --manifest-path desktop/services/claw-applet-services/Cargo.toml \
             --bin claw-calendar-reader --target "$RUST_TARGET" \
             --target-dir "$GITHUB_WORKSPACE/target"
           cargo build --release --locked \

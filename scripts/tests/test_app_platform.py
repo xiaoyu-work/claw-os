@@ -37,8 +37,8 @@ def source(tmp_path):
         "claw-os-sdk/rust/src/applet/protocol.rs",
         "claw-os-sdk/wire/v1/applet-services.md",
         "claw-os-sdk/wire/v1/applet-services.cases.json",
-        "desktop/applets/claw-applet-services/src/service.rs",
-        "desktop/applets/claw-applet-services/src/bin/claw-os-applet-provider.rs",
+        "desktop/services/claw-applet-services/src/service.rs",
+        "desktop/services/claw-applet-services/src/bin/claw-os-applet-provider.rs",
     ):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +91,7 @@ def test_applet_export_contains_public_client_and_contract_but_no_os_provider(so
             "claw-os-sdk/wire/v1/applet-services.cases.json",
         ):
             assert archive.extractfile(relative).read() == (ROOT / relative).read_bytes()
-        assert not any(name.startswith(("desktop/applets/", "usr/libexec/")) for name in archive.getnames())
+        assert not any(name.startswith(("desktop/services/", "usr/libexec/")) for name in archive.getnames())
 
 
 def test_modified_export_is_not_published(source, tmp_path):

@@ -61,18 +61,18 @@ without supplementary groups. Live sidecar entries retain SQLite's normal
 WAL/checkpoint locking; the reader also requests SQLite's NOFOLLOW mode.
 Caller/App names create no entitlement and no other App directory is exposed.
 
-`../justfile` independently builds/installs the helper and syncs its lock during
-vendoring. The Desktop package advertises `claw-os-applet-services-v1 (= 1)`
+The Desktop builder independently builds and installs the helper. The package
+advertises `claw-os-applet-services-v1 (= 1)`
 only with a regular, executable, correctly targeted ELF. Existing linked shell
 and App installation recipes are not cut over by this source slice.
 
 From the repository root:
 
 ```bash
-cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
-cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
-just --justfile desktop/applets/justfile build-applet-provider --release
-cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml --bin claw-calendar-reader --locked
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
+cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml --features provider --bin claw-os-applet-provider --release --locked
+cargo build --manifest-path desktop/services/claw-applet-services/Cargo.toml --bin claw-calendar-reader --locked
 ```
 
 `tests/provider_process.rs` uses the actual public client and provider with a

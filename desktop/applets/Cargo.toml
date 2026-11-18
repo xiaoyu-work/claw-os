@@ -22,7 +22,6 @@ members = [
     "claw-applet-approval-gate",
     "cosmic-applets-config",
 ]
-exclude = ["claw-applet-services"]
 
 resolver = "3"
 

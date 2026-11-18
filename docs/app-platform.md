@@ -45,7 +45,7 @@ contract needs a versioned interface and explicit package dependency.
 
 The public Rust `applet` client and its
 [versioned pipe contract](../claw-os-sdk/wire/v1/applet-services.md) belong to
-`rust-sdk`; `desktop/applets/claw-applet-services` and the installed provider
+`rust-sdk`; `desktop/services/claw-applet-services` and the installed provider
 binary do not enter the archive. Source-cohort checks may canonically prepare
 native workspaces against a separate, explicitly unpublished copy of these
 public libraries. They must not alter a verified artifact/cache or claim

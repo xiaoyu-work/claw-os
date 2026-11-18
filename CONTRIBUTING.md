@@ -247,8 +247,8 @@ PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
 cargo test -p cos-browser
 
 # OS Applet providers build independently, without App sources or GUI inputs.
-cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
-cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
 ```
 
 ### Project Structure

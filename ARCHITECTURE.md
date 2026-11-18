@@ -466,7 +466,7 @@ Explicit immutable source fixtures can still prepare/build them under
 `build/native-apps`; production never mounts or fetches those sources.
 Shared read-only Calendar,
 task-list and telemetry providers and policy checks live in
-`desktop/applets/claw-applet-services`, not in an App. Agent Activity shares
+`desktop/services/claw-applet-services`, not in an App. Agent Activity shares
 only the task-list provider; task mutations and Agent execution remain OS-owned.
 Widget Rail's presentation mapping is App-owned; OS telemetry/provider policy
 remains separate. No new state store or cross-App call is introduced.
@@ -476,7 +476,7 @@ unchanged; installed updates remain signed APT packages.
 Standalone consumers use the public Rust SDK's versioned
 [`applet` pipe protocol](claw-os-sdk/wire/v1/applet-services.md) and the OS-owned
 `/usr/libexec/claw-os-applet-provider`, built independently from
-`desktop/applets/claw-applet-services`. Its Calendar, task and telemetry access
+`desktop/services/claw-applet-services`. Its Calendar, task and telemetry access
 checks the same separate resource scopes; its legacy Clipboard history checks
 are preflight only. Current panel history clients use the actual OS clipboard
 broker below instead. Provider/data/authority implementation is excluded from the public

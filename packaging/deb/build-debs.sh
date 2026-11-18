@@ -271,7 +271,7 @@ ensure_calendar_reader() {
     ensure_cargo
     ( cd "$PROJECT_DIR" && cargo build --release --locked --target "$RUST_TARGET" \
         --target-dir "$PROJECT_DIR/target" \
-        --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+        --manifest-path desktop/services/claw-applet-services/Cargo.toml \
         --bin claw-calendar-reader ) >&2
     find_bin claw-calendar-reader
 }
@@ -536,7 +536,7 @@ install -Dm0644 "$PROJECT_DIR/crates/claw-nearby/vendor/owlyd/PROVENANCE.md" \
     "$AGENT_STAGE/usr/share/doc/claw-os-agent/vendor/owlyd/PROVENANCE.md"
 install -Dm0644 "$PROJECT_DIR/crates/claw-nearby/vendor/owlyd/LICENSE" \
     "$AGENT_STAGE/usr/share/doc/claw-os-agent/vendor/owlyd/LICENSE"
-install -Dm0644 "$PROJECT_DIR/desktop/applets/LICENSE" \
+install -Dm0644 "$PROJECT_DIR/desktop/services/claw-applet-services/LICENSE" \
     "$AGENT_STAGE/usr/share/doc/claw-os-agent/calendar-reader.LICENSE"
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"

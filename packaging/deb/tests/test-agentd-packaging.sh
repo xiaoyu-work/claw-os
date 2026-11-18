@@ -162,7 +162,7 @@ assert_contains "$BUILD_DEBS" 'claw-os-agent/preinst' \
     "claw-os-agent must ship an identity-provisioning preinst"
 assert_contains "$BUILD_DEBS" 'ensure_calendar_reader' \
     "Agent must build the independent Calendar reader"
-assert_contains "$BUILD_DEBS" '--manifest-path desktop/applets/claw-applet-services/Cargo.toml' \
+assert_contains "$BUILD_DEBS" '--manifest-path desktop/services/claw-applet-services/Cargo.toml' \
     "Calendar query code must remain in its existing standalone workspace"
 assert_contains "$BUILD_DEBS" 'usr/lib/cos/bin/claw-calendar-reader' \
     "Agent must own the Calendar reader executable"

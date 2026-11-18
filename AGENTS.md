@@ -184,8 +184,8 @@ GITHUB_WORKSPACE="$PWD" RUNNER_TEMP="$PWD/build" \
 cargo test -p cos-browser
 
 # OS Applet providers (independent workspace; no App source preparation)
-cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
-cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
+cargo test --manifest-path desktop/services/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
 
 # OS-owned Python suite; external App tests run in clawos-app
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
