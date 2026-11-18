@@ -204,6 +204,17 @@ fn trust_cmd(args: &[String]) -> Result<Value, String> {
     match sub {
         "list" => trust_list(),
         "add" => trust_add(rest),
+        "record-system" => {
+            if !rest.is_empty() {
+                return Err("usage: cos provenance trust record-system".into());
+            }
+            let domain_generation = trust::record_system_generation()?;
+            super::audit(
+                "provenance.system_trust_recorded",
+                json!({ "domain_generation": domain_generation }),
+            );
+            Ok(json!({ "domain_generation": domain_generation }))
+        }
         "revoke" => trust_revoke(rest),
         "status" | "recover" => Err("Trust withdrawal status/recovery requires the public router and authenticated Root controller".into()),
         "roots" => Ok(json!({
@@ -218,7 +229,7 @@ fn trust_cmd(args: &[String]) -> Result<Value, String> {
             "note": "Trust roots are compiled in. No environment variable can add one.",
         })),
         other => Err(format!(
-            "unknown trust command `{other}`; try: list, roots, add, revoke, status, recover"
+            "unknown trust command `{other}`; try: list, roots, add, record-system, revoke, status, recover"
         )),
     }
 }

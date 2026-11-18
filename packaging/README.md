@@ -370,7 +370,7 @@ retains the overlay/recovery data; see
 ## Authenticated desktop runtime
 
 The unpublished authenticated desktop runtime adds the OS-only
-`claw-os-display-session-v1` interface: Agent provides it and Desktop requires
+`claw-os-display-session-v2` interface: Agent provides it and Desktop requires
 it. Agent owns `/usr/lib/cos/bin/claw-display-host`,
 `/usr/local/bin/claw-display-session`, `/usr/local/bin/claw-gui-runner` and
 `/usr/lib/<GNU-multiarch>/security/pam_claw_display.so`. The executables install
@@ -389,13 +389,9 @@ acceptance. No release or version change is implied by this source wiring.
 
 Agent provides `claw-os-file-manager-v1 (= 1)` and installs the unprivileged
 `/usr/lib/cos/bin/claw-file-manager` (`0755`). Desktop requires that public OS
-interface and installs `/etc/xdg/autostart/claw-file-manager.desktop` as a
-`0644` conffile.
-`cosmic-session` consumes this optional entry directly, retains its child and
-terminates/waits it on session exit or restart. This works independently of
-the general autostart feature. `OnlyShowIn=COSMIC;` limits availability, while
-`X-systemd-skip=true` prevents activation under a user manager without the
-authenticated session's kernel login ancestry. Neither label grants authority.
+interface. The authenticated `claw-display-session --desktop` starts the
+helper directly and checks its retirement at logout. It does not depend on
+XDG autostart or start under the user's systemd manager.
 Agent-only Ubuntu/WSL installs no activation file, user service, autostart or
 GNOME/Nautilus override and never starts or claims this desktop interface.
 
@@ -436,11 +432,10 @@ their own bus and an explicit test-only fake executable, never installed
 
 ```bash
 cargo test -p cos --bin claw-file-manager -- --test-threads=1
-cargo test --manifest-path desktop/session/Cargo.toml --locked file_manager::tests
 ```
 
-The full Files product/App-owned FileManager1 removal and real authenticated
-COSMIC autostart/GUI acceptance are separate coordinated cutover checks.
+Real authenticated GUI acceptance with the installed Files App is a separate
+check.
 The existing GUI CLI audit in `core/src/router.rs::launch_app_gui` still passes
 raw GUI arguments to `audit::log_entry`; its parent-owned privacy projection
 must be corrected before this transport is installed. Discarding child output
@@ -455,6 +450,7 @@ This source wiring changes no release, App pin, security floor or update gate.
 |---|---|---|
 | `/usr/lib/cos/trust/publishers.d/` | `0755`, files `0644` | Vendor keys shipped by the package |
 | `/etc/cos/trust/publishers.d/` | `0755`, empty | Operator-managed keys; never shipped |
+| `/etc/cos/trust/state.json` | `0644` | Combined generation recorded during Agent package configuration |
 
 Content for the vendor root comes from
 `packaging/deb/claw-os-agent/trust/publishers.d/`. The build fails if a

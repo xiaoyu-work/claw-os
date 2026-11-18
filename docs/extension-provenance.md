@@ -102,6 +102,12 @@ no environment variable that appends a trust root, relaxes the
 ownership checks or disables verification, and no model-reachable
 surface that can add one.
 
+The vendor and operator roots share `/etc/cos/trust/state.json`. Agent package
+configuration records the system generation after installing vendor keys,
+before starting the broker. After intentionally changing operator publisher
+files, an administrator must run `sudo cos provenance trust record-system`.
+An unrecorded change to either root fails the system domain closed.
+
 ### Key ids, usage constraints, rotation and revocation
 
 A key id is `sha256:<hex>` over the raw 32-byte Ed25519 verifying key,
@@ -630,6 +636,7 @@ cos provenance verify --kind app --path ./notes --id notes
 cos provenance trust list            # keys, revocations, grants, diagnostics
 cos provenance trust roots           # the compiled-in root list
 cos provenance trust add --file entry.json
+sudo cos provenance trust record-system # after reviewing changes to system publisher files
 cos provenance trust revoke --key-id sha256:…
 cos provenance trust revoke --digest sha256:…
 cos provenance artifacts --kind app --id notes

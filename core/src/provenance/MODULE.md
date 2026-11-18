@@ -71,6 +71,12 @@ Missing consumer-private keys/grants do not alter Root's positive verifier.
 Owner-policy readers bound file bytes and directory entries and use pinned,
 no-follow, nonblocking descriptors so a replaced FIFO cannot stall Root.
 
+The packaged vendor and local operator publisher roots share one system
+generation at `/etc/cos/trust/state.json`. Agent package configuration records
+it with the root-only `cos provenance trust record-system` command. It
+activates no App permissions; verification still checks each trusted key
+and signed payload.
+
 ## Tests
 
 ```bash

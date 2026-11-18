@@ -41,6 +41,7 @@ Trust is a human decision, taken out of band:
 ```bash
 # Operator-wide (root): drop the entry into the system root.
 sudo install -m 0644 publisher.json /etc/cos/trust/publishers.d/
+sudo cos provenance trust record-system
 
 # Or for one user only:
 cos provenance trust add --file publisher.json
@@ -115,8 +116,8 @@ A single compromised artifact is revoked by content digest through
 `revoked_packages`, which stops launches, disclosures and attachments
 for that exact package without invalidating the publisher.
 
-Any change must be followed by a `cos provenance trust` command (or, for
-the system domain, a re-run of the packaging step) so the domain's
-durable generation in `state.json` is re-recorded. Long-lived daemons
-compare that generation to decide when to reload; a trust file edited
-without re-recording fails the domain closed rather than being honoured.
+The Agent post-install script records the combined system generation.
+For local operator changes, review the publisher files and run
+`sudo cos provenance trust record-system`. Per-user trust changes record
+their own generation automatically. An unrecorded edit fails its domain
+closed.

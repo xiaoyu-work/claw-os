@@ -58,6 +58,7 @@ pub const USAGE_PACKAGE_SIGNING: &str = "package-signing";
 pub const VENDOR_TRUST_ROOT: &str = "/usr/lib/cos/trust/publishers.d";
 /// Root-owned operator trust root.
 pub const SYSTEM_TRUST_ROOT: &str = "/etc/cos/trust/publishers.d";
+const SYSTEM_TRUST_STATE_DIR: &str = "/etc/cos/trust";
 /// Per-user publisher trust root, relative to the owner's home.
 pub const USER_TRUST_SUBDIR: &str = ".config/cos/trust/publishers.d";
 /// Per-user developer trust root, relative to the owner's home.
@@ -286,13 +287,36 @@ impl TrustRootSpec {
     /// Directory holding the domain's `state.json`. For the system
     /// domain that is `/etc/cos/trust`; for an owner it is
     /// `~/.config/cos/trust`. Both are the parent of the roots
-    /// themselves.
+    /// themselves, except for the packaged vendor root.
     pub fn state_dir(&self) -> PathBuf {
+        if self.domain == TrustDomain::System && self.path == Path::new(VENDOR_TRUST_ROOT) {
+            return PathBuf::from(SYSTEM_TRUST_STATE_DIR);
+        }
         self.path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.path.clone())
     }
+}
+
+pub(super) fn record_system_generation() -> Result<u64, String> {
+    if fsec::effective_uid() != 0 {
+        return Err("recording system publisher trust requires root".into());
+    }
+    let roots = [VENDOR_TRUST_ROOT, SYSTEM_TRUST_ROOT].map(PathBuf::from);
+    for root in &roots {
+        let location = fsec::require_secure_location(root, &[0]).map_err(|e| e.to_string())?;
+        if !location.is_dir {
+            return Err(format!("{} is not a trust directory", root.display()));
+        }
+    }
+    state::bump(
+        Path::new(SYSTEM_TRUST_STATE_DIR),
+        TrustDomain::System,
+        &roots,
+    )
+    .map(|state| state.generation)
+    .map_err(|e| format!("record system trust generation: {e}"))
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

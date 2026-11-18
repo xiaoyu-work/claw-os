@@ -116,6 +116,13 @@ case "$1" in
         # run. This is also the step that publishes the unprivileged
         # runtime view every other Claw OS binary enforces against.
         commit_security_floor
+        if [ -d "$DPKG_ROOT/usr/lib/cos/trust/publishers.d" ]; then
+            if [ -n "$DPKG_ROOT" ]; then
+                chroot "$DPKG_ROOT" /usr/local/bin/cos --json provenance trust record-system
+            else
+                /usr/local/bin/cos --json provenance trust record-system
+            fi
+        fi
 
         # Service management only applies to the running system. Under
         # DPKG_ROOT — an image build, a staged root, a test — there is

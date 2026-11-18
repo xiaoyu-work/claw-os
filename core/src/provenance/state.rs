@@ -326,6 +326,15 @@ pub fn write_state(
             path: tmp.clone(),
             reason: e.to_string(),
         })?;
+        #[cfg(unix)]
+        if domain == TrustDomain::System {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o644))
+                .map_err(|e| StateError::Io {
+                    path: tmp.clone(),
+                    reason: e.to_string(),
+                })?;
+        }
         use std::io::Write;
         file.write_all(&body).map_err(|e| StateError::Io {
             path: tmp.clone(),

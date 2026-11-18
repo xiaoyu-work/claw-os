@@ -945,9 +945,10 @@ an update does not change that:
   and a `provenance.vendor_pin_rotated` record is written to
   `/var/log/cos/provenance.jsonl`. A path that stops being root-owned or
   becomes group/world-writable fails closed instead.
-* Publisher trust roots (`/usr/lib/cos/trust/publishers.d`,
-  `/etc/cos/trust/publishers.d`) survive the upgrade. `/etc/cos` is
-  operator-owned configuration and is not overwritten.
+* Local publisher entries in `/etc/cos/trust/publishers.d` are not
+  overwritten. Agent package configuration records the combined vendor
+  and operator publisher generation before starting the broker. See
+  [publisher trust roots](extension-provenance.md#trust-roots).
 * User-installed extensions that carry no signature **fail closed** into
   a quarantined state after upgrading. They are listed by
   `cos app` (and in the skill/MCP discovery diagnostics) with an
