@@ -45,6 +45,7 @@ struct GuiCall {
 pub(crate) struct GuiControl {
     pub epoch: Epoch,
     pub owner_uid: u32,
+    pub wayland_display: String,
     pub workload: Arc<Workload>,
     sender: SyncSender<GuiCall>,
     verified_retired: Arc<AtomicBool>,
@@ -107,12 +108,12 @@ impl GuiControl {
 
     pub fn of(display: &Mutex<Display>) -> Result<Self, Error> {
         let display = display.lock().map_err(|_| Error::Identity)?;
-        if display.wayland_display.is_none() {
-            return Err(Error::Protocol("GUI display is not active"));
-        }
+        let wayland_display = display.wayland_display.clone()
+            .ok_or(Error::Protocol("GUI display is not active"))?;
         Ok(Self {
             epoch: display.epoch,
             owner_uid: display.login.owner_uid,
+            wayland_display,
             workload: display.workload.clone().ok_or(Error::Identity)?,
             sender: display.control.clone(),
             verified_retired: display.verified_retired.clone(),

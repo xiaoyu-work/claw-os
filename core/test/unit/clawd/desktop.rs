@@ -601,14 +601,6 @@ fn canonical_launch_keeps_its_existing_rights_for_native_app_ids() {
     }
 }
 
-#[test]
-fn display_validation_rejects_paths_and_options() {
-    assert!(valid_wayland_display("wayland-0"));
-    assert!(!valid_wayland_display("../wayland-0"));
-    assert!(valid_display(":0"));
-    assert!(!valid_display("-display"));
-}
-
 fn decision_for_app(app_id: Option<&str>, caps: Vec<Cap>, session: &str) -> Decision {
     decision_for_app_with_uses(app_id, caps, session, Uses::Unbounded)
 }

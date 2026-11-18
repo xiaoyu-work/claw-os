@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Claw OS
+Comment=Claw OS desktop
+Exec=/usr/local/bin/claw-display-session --desktop
+TryExec=/usr/local/bin/claw-display-session
+Type=Application
+DesktopNames=Hyprland

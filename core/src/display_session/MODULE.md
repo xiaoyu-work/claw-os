@@ -39,7 +39,9 @@ These Root service effects never acquire a GUI instance lifetime from their
 correlation IDs. The public window provider selects this owner/kernel-login
 binding and projects opaque identifiers containing the display epoch. A
 mutation is sent once; read-only queries distinguish a requested focus/close
-from an observed outcome. Installed compositor cutover remains separate.
+from an observed outcome. Desktop launch and shared owner helpers also take
+their Wayland name from the selected Root display, not caller variables or
+owner socket enumeration. Installed compositor cutover remains separate.
 
 Locale projection currently preserves only the bounded PAM environment.
 There is no AccountsService `Language` or locale1 startup resolver here.

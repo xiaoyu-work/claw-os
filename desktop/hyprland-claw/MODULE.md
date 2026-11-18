@@ -52,7 +52,15 @@ Hyprland control socket. The existing display supervisor forwards authenticated
 response descriptors without interpreting them as grants. The
 [public window provider](../../core/src/clawd/desktop/windows.rs) uses this
 channel, binds opaque IDs to the display epoch and observes effects without
-replaying mutations. Installed compositor/session cutover remains separate.
+replaying mutations. It provides the native workspace, output and keyboard
+presentation model without an App-side Hyprland IPC client.
+
+[`session/`](session/) contains the downstream session entry and user target.
+The installed subscriber's `--desktop` mode attaches to the Root login binding, starts the existing
+owner FileManager1 facade and invoke `cos app desktop-shell --gui`. Normal
+signed App review and capability decisions still apply, and the launcher does
+not start an Agent task or a second compositor. These files are not yet
+selected by the installed Desktop package.
 
 ## Required contracts
 

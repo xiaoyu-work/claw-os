@@ -1,5 +1,6 @@
+use std::ffi::OsStr;
 use std::io::Write;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 pub use claw_display_control::session::Subscription;
@@ -10,9 +11,9 @@ pub fn run() -> Result<(), Error> {
     let mut arguments = std::env::args_os().skip(1);
     let mode = arguments
         .next()
-        .ok_or(Error::Protocol("expected --watch or --exec"))?;
-    if mode != "--watch" && mode != "--exec" {
-        return Err(Error::Protocol("expected --watch or --exec"));
+        .ok_or(Error::Protocol("expected --watch, --exec or --desktop"))?;
+    if mode != "--watch" && mode != "--exec" && mode != "--desktop" {
+        return Err(Error::Protocol("expected --watch, --exec or --desktop"));
     }
     let arguments: Vec<_> = arguments.collect();
     if mode == "--watch" {
@@ -32,6 +33,12 @@ pub fn run() -> Result<(), Error> {
         while !subscription.ended(Instant::now() + Duration::from_secs(1))? {}
         return Ok(());
     }
+    if mode == "--desktop" {
+        if !arguments.is_empty() {
+            return Err(Error::Protocol("unexpected desktop startup argument"));
+        }
+        return desktop_session(&Subscription::connect()?);
+    }
     let (executable, arguments) = arguments
         .split_first()
         .ok_or(Error::Protocol("missing session entrypoint"))?;
@@ -46,8 +53,15 @@ pub fn run() -> Result<(), Error> {
         return Err(Error::Protocol("invalid session entrypoint arguments"));
     }
     let subscription = Subscription::connect()?;
-    let mut child = Command::new(executable)
+    let mut child = session_command(&subscription, executable)
         .args(arguments)
+        .spawn()?;
+    wait_for_entrypoint(&subscription, &mut child)
+}
+
+fn session_command(subscription: &Subscription, executable: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(executable);
+    command
         .env("WAYLAND_DISPLAY", subscription.display())
         .env("XDG_RUNTIME_DIR", subscription.runtime_dir())
         .env("XDG_SESSION_TYPE", "wayland")
@@ -57,8 +71,72 @@ pub fn run() -> Result<(), Error> {
         .env_remove("XAUTHORITY")
         .env_remove("X_PRIVILEGED_WAYLAND_SOCKET")
         .env_remove("COSMIC_SESSION_SOCK")
-        .env_remove("CLAW_DISPLAY_CONTROL_FD")
-        .spawn()?;
+        .env_remove("CLAW_DISPLAY_CONTROL_FD");
+    command
+}
+
+fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
+    let command = |program: &str| {
+        let mut command = session_command(subscription, program);
+        command
+            .env("XDG_CURRENT_DESKTOP", "Hyprland")
+            .env("XDG_SESSION_DESKTOP", "Hyprland")
+            .env("GDK_BACKEND", "wayland")
+            .env("QT_QPA_PLATFORM", "wayland")
+            .env("MOZ_ENABLE_WAYLAND", "1")
+            .env_remove("COS_SESSION");
+        command
+    };
+    if !command("/usr/bin/dbus-update-activation-environment")
+        .args([
+            "--systemd",
+            "WAYLAND_DISPLAY",
+            "XDG_CURRENT_DESKTOP",
+            "XDG_SESSION_DESKTOP",
+            "XDG_SESSION_TYPE",
+        ])
+        .status()?
+        .success()
+    {
+        return Err(Error::Protocol(
+            "could not initialize the authenticated desktop user environment",
+        ));
+    }
+    let target = "claw-desktop-session.target";
+    if !command("/usr/bin/systemctl")
+        .args(["--user", "start", target])
+        .status()?
+        .success()
+    {
+        return Err(Error::Protocol(
+            "could not start the desktop session target",
+        ));
+    }
+    let result = (|| {
+        let mut files = command("/usr/lib/cos/bin/claw-file-manager").spawn()?;
+        let shell = command("/usr/local/bin/cos")
+            .args(["app", "desktop-shell", "--gui"])
+            .spawn();
+        let result = shell
+            .map_err(Error::from)
+            .and_then(|mut shell| wait_for_entrypoint(subscription, &mut shell));
+        if files.try_wait()?.is_none() {
+            files.kill()?;
+            files.wait()?;
+        }
+        result
+    })();
+    let stopped = command("/usr/bin/systemctl")
+        .args(["--user", "stop", target])
+        .status();
+    result?;
+    if !stopped?.success() {
+        return Err(Error::Protocol("could not stop the desktop session target"));
+    }
+    Ok(())
+}
+
+fn wait_for_entrypoint(subscription: &Subscription, child: &mut Child) -> Result<(), Error> {
     loop {
         if let Some(status) = child.try_wait()? {
             return if status.success() {

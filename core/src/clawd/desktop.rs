@@ -482,8 +482,6 @@ pub(super) struct DesktopEnvironment {
     home: PathBuf,
     runtime_dir: PathBuf,
     wayland_display: String,
-    display: Option<String>,
-    xauthority: Option<String>,
     username: String,
 }
 
@@ -511,83 +509,16 @@ impl DesktopEnvironment {
                 runtime_dir.display()
             ));
         }
-        let peer_env = peer_environment(peer_pid)?;
-        let wayland_display = peer_env
-            .get("WAYLAND_DISPLAY")
-            .filter(|value| valid_wayland_display(value))
-            .cloned()
-            .or_else(|| discover_wayland_display(&runtime_dir, uid).ok())
-            .ok_or_else(|| "no unique user-owned Wayland socket was found".to_string())?;
+        let wayland_display = windows::target(uid, peer_pid)?.wayland_display;
         validate_wayland_socket(&runtime_dir, &wayland_display, uid)?;
-        let display = peer_env
-            .get("DISPLAY")
-            .filter(|value| valid_display(value))
-            .cloned();
-        let xauthority = peer_env
-            .get("XAUTHORITY")
-            .filter(|value| valid_environment_path(value))
-            .cloned();
         Ok(Self {
             uid,
             gid,
             home,
             runtime_dir,
             wayland_display,
-            display,
-            xauthority,
             username: username_for_uid(uid)?,
         })
-    }
-}
-
-fn peer_environment(pid: u32) -> Result<std::collections::BTreeMap<String, String>, String> {
-    let file = fs::File::open(format!("/proc/{pid}/environ"))
-        .map_err(|error| format!("read desktop request environment: {error}"))?;
-    let mut data = Vec::new();
-    let mut limited = file.take(256 * 1024);
-    limited
-        .read_to_end(&mut data)
-        .map_err(|error| format!("read desktop request environment: {error}"))?;
-    let mut values = std::collections::BTreeMap::new();
-    for entry in data.split(|byte| *byte == 0) {
-        let Some(separator) = entry.iter().position(|byte| *byte == b'=') else {
-            continue;
-        };
-        let (key, value) = entry.split_at(separator);
-        let value = &value[1..];
-        let Ok(key) = std::str::from_utf8(key) else {
-            continue;
-        };
-        if !matches!(key, "WAYLAND_DISPLAY" | "DISPLAY" | "XAUTHORITY") {
-            continue;
-        }
-        let Ok(value) = std::str::from_utf8(value) else {
-            continue;
-        };
-        values.insert(key.to_string(), value.to_string());
-    }
-    Ok(values)
-}
-
-fn discover_wayland_display(runtime_dir: &Path, uid: u32) -> Result<String, String> {
-    let mut sockets = fs::read_dir(runtime_dir)
-        .map_err(|error| format!("list Wayland runtime {}: {error}", runtime_dir.display()))?
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_string();
-            if !valid_wayland_display(&name) {
-                return None;
-            }
-            let metadata = fs::symlink_metadata(entry.path()).ok()?;
-            (metadata.file_type().is_socket() && metadata.uid() == uid).then_some(name)
-        })
-        .collect::<Vec<_>>();
-    sockets.sort();
-    sockets.dedup();
-    match sockets.as_slice() {
-        [socket] => Ok(socket.clone()),
-        [] => Err("no Wayland socket found".to_string()),
-        _ => Err("multiple Wayland sockets found without WAYLAND_DISPLAY".to_string()),
     }
 }
 
@@ -605,28 +536,6 @@ fn validate_wayland_socket(runtime_dir: &Path, display: &str, uid: u32) -> Resul
         ));
     }
     Ok(())
-}
-
-fn valid_wayland_display(value: &str) -> bool {
-    value.starts_with("wayland-")
-        && value.len() <= 108
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
-fn valid_display(value: &str) -> bool {
-    value.len() <= 64
-        && value.starts_with(':')
-        && value[1..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte == b'.')
-}
-
-fn valid_environment_path(value: &str) -> bool {
-    value.len() <= 4096
-        && value.starts_with('/')
-        && !value.chars().any(|character| character.is_control())
 }
 
 fn username_for_uid(uid: u32) -> Result<String, String> {
@@ -957,12 +866,6 @@ pub(super) fn configured_user_command(
         .env("XDG_CURRENT_DESKTOP", "COSMIC")
         .current_dir("/")
         .stdin(Stdio::null());
-    if let Some(display) = &environment.display {
-        command.env("DISPLAY", display);
-    }
-    if let Some(xauthority) = &environment.xauthority {
-        command.env("XAUTHORITY", xauthority);
-    }
     let uid = environment.uid;
     let gid = environment.gid;
     let expected_parent = unsafe { libc::getpid() };

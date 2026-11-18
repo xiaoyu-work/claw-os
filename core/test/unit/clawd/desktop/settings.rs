@@ -7,8 +7,6 @@ fn environment(runtime_dir: PathBuf) -> DesktopEnvironment {
         home: PathBuf::from("/home/fixture"),
         runtime_dir,
         wayland_display: "wayland-1".into(),
-        display: Some(":0".into()),
-        xauthority: Some("/home/fixture/.Xauthority".into()),
         username: "fixture".into(),
     }
 }
