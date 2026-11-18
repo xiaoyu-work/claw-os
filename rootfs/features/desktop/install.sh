@@ -20,7 +20,7 @@ trap cleanup EXIT
 mount --bind "$PROJECT_DIR" "$work/source"
 mount --make-private "$work/source"
 mount -o remount,bind,ro "$work/source"
-cp -a --no-preserve=ownership "$SCRIPT_DIR/features/desktop/overlay/." "$stage/"
+(umask 022; cp -a --no-preserve=mode,ownership "$SCRIPT_DIR/features/desktop/overlay/." "$stage/")
 
 echo "  :: building Claw OS Hyprland and desktop services against Debian $SUITE"
 chroot "$ROOTFS" /bin/bash "$inside/source/desktop/hyprland-claw/stage-desktop.sh" \

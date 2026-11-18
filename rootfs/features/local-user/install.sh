@@ -10,7 +10,7 @@ fi
 
 add_cos_user "$ROOTFS"
 test "$(LC_ALL=C chroot "$ROOTFS" passwd --status cos | awk '{print $2}')" = L
-cp -a --no-preserve=ownership "$SCRIPT_DIR/features/local-user/overlay/." "$ROOTFS/"
+(umask 022; cp -a --no-preserve=mode,ownership "$SCRIPT_DIR/features/local-user/overlay/." "$ROOTFS/")
 chmod 0755 "$ROOTFS/usr/lib/cos/init/local-first-login"
 
 if [[ -f "$ROOTFS/etc/greetd/claw-desktop.toml" ]]; then

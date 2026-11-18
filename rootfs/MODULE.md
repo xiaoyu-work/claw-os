@@ -27,6 +27,9 @@ target.
 
 Features describe OS capabilities; targets select profiles and package the
 result. Feature code must not depend on a WSL/Docker/VM-specific staging path.
+Global, desktop and local-login overlay copies keep existing directory modes
+and apply a `022` umask to new entries. Checkout/archive modes must not make
+the installed executable or publisher trust ancestors group-writable.
 Installed Claw OS binaries arrive through packages built from the current
 source. Reuse is allowed only when the complete stamp, artifacts, environment,
 architecture, and feature list match.
