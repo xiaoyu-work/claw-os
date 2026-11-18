@@ -1,0 +1,50 @@
+#!/bin/sh
+set -e
+
+[ -n "${CLAW_QCOM_DTB:-}" ] || exit 0
+[ "$(dpkg --print-architecture)" = arm64 ] || exit 0
+. /usr/lib/cos/hw/qualcomm-boot.sh
+. /usr/share/grub/grub-mkconfig_lib
+
+board=$(claw_qcom_board "$CLAW_QCOM_DTB") || exit 1
+model=${board##*|}
+root_device=${GRUB_DEVICE:?}
+if [ -n "${GRUB_DEVICE_UUID:-}" ] && [ "${GRUB_DISABLE_LINUX_UUID:-false}" != true ]; then
+    root_device=UUID=$GRUB_DEVICE_UUID
+fi
+args=$claw_qcom_args
+if [ "${GRUB_FS:-}" = btrfs ]; then
+    subvolume=$(make_system_path_relative_to_its_root /)
+    [ "$subvolume" = / ] || args="$args rootflags=subvol=${subvolume#/}"
+fi
+found=no
+for kernel in $(printf '%s\n' /boot/vmlinuz-* | LC_ALL=C sort -Vr); do
+    [ -s "$kernel" ] || continue
+    version=${kernel#/boot/vmlinuz-}
+    initrd=/boot/initrd.img-$version
+    [ -s "$initrd" ] || continue
+    dtb=$(claw_qcom_tree '' "$version" "$CLAW_QCOM_DTB") || continue
+    dtb_device=$("$grub_probe" --target=device "$dtb")
+    if [ "$found" = no ]; then
+        id=claw-qcom
+        found=yes
+    else
+        id=claw-qcom-$version
+    fi
+    cat <<MENU
+menuentry 'Claw OS - $model ($version)' --id '$id' {
+$(prepare_grub_to_access_device "$dtb_device" | grub_add_tab)
+    set claw_dtb_root="\$root"
+$(prepare_grub_to_access_device "$GRUB_DEVICE_BOOT" | grub_add_tab)
+    if devicetree "(\$claw_dtb_root)$(make_system_path_relative_to_its_root "$dtb")"; then
+        linux '$(make_system_path_relative_to_its_root "$kernel" | grub_quote)' root=$root_device ro $args ${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}
+        initrd '$(make_system_path_relative_to_its_root "$initrd" | grub_quote)'
+    fi
+}
+MENU
+done
+
+if [ "$found" = no ]; then
+    echo "Claw OS Snapdragon boot: no installed kernel has both an initramfs and $CLAW_QCOM_DTB" >&2
+    exit 1
+fi

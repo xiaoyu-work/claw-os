@@ -1,1 +1,2 @@
 /etc/default/cos-home
+/etc/grub.d/09_claw_qualcomm

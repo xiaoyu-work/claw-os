@@ -157,6 +157,10 @@ release schedules:
 
 After upgrading Base and Desktop (if installed), reboot to apply the [hardware workarounds](image-architecture.md#hardware-enablement) to devices already present and reload the desktop's libinput rules. Existing installs do not gain newly added image-only firmware packages via the Base upgrade; install `firmware-cirrus` or, on a Qualcomm arm64 machine, `firmware-qcom-soc` from the configured Debian repositories if needed.
 
+On an affected x86 machine that was installed before the board options shipped, `claw-hardware-setup --print` shows the matching options. `sudo claw-hardware-setup` applies them and rebuilds the boot images; reboot to load them. Add local modprobe options in a separate file, not in the file managed by the command.
+
+An [experimental Snapdragon X install](image-architecture.md#experimental-snapdragon-x-boot) keeps the chosen board in `/etc/default/grub.d/60-claw-os-qualcomm.cfg`. Kernel upgrades generate boot entries only for kernels that still ship that board's tree and a matching initramfs. Keep the last working kernel until its replacement has booted on the device.
+
 Each published package version is generated from the Git commit count and SHA,
 for example `0.1.0+git1226.g876f3ad810ca`. A later repository build therefore
 sorts as a newer Debian package and is selected by APT.

@@ -12,6 +12,12 @@ case "$1" in
         if [ -x /usr/bin/deb-systemd-helper ]; then
             deb-systemd-helper purge cos-home-setup.service >/dev/null || true
         fi
+        config="${DPKG_ROOT:-}/etc/modprobe.d/20-claw-os-board.conf"
+        if [ ! -L "$config" ] && [ -f "$config" ] &&
+           [ "$(head -n 1 "$config")" = '# Managed by claw-hardware-setup. Put local overrides in a separate file.' ]; then
+            rm -f -- "$config"
+            dpkg-trigger --no-await update-initramfs
+        fi
         ;;
     remove|upgrade|abort-install|abort-upgrade|disappear|failed-upgrade)
         ;;

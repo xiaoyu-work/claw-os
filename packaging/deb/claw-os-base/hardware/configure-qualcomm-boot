@@ -1,0 +1,45 @@
+#!/bin/sh
+set -efu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+[ "$(dpkg --print-architecture)" = arm64 ] || exit 0
+[ "$(id -u)" = 0 ] || exit 1
+. /usr/lib/cos/hw/qualcomm-boot.sh
+
+fail() {
+    echo "Claw OS Snapdragon boot: $*" >&2
+    exit 1
+}
+
+tree=
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        claw.board_tree=*)
+            [ -z "$tree" ] || fail "multiple board selections"
+            tree=${arg#claw.board_tree=}
+            [ -n "$tree" ] || fail "empty board selection"
+            ;;
+    esac
+done
+[ -n "$tree" ] || exit 0
+
+board=$(claw_qcom_board "$tree") || fail "unknown device tree: $tree"
+compatible=${board#*|}
+compatible=${compatible%%|*}
+if ! tr '\000' '\n' </sys/firmware/devicetree/base/compatible | grep -Fxq "$compatible"; then
+    fail "the running device tree does not match $tree"
+fi
+
+version=$(uname -r)
+claw_qcom_tree '' "$version" "$tree" >/dev/null || fail "installed kernel $version has no $tree"
+[ -s "/boot/initrd.img-$version" ] || fail "missing initramfs for $version"
+
+config=/etc/default/grub.d/60-claw-os-qualcomm.cfg
+header='# Managed by Claw OS Snapdragon installer.'
+if [ -e "$config" ] || [ -L "$config" ]; then
+    if [ -L "$config" ] || [ ! -f "$config" ] || [ "$(head -n 1 "$config")" != "$header" ]; then
+        fail "refusing to replace $config"
+    fi
+fi
+printf "%s\nexport CLAW_QCOM_DTB='%s'\nGRUB_DEFAULT=claw-qcom\n" \
+    "$header" "$tree" | install -Dm0644 /dev/stdin "$config"

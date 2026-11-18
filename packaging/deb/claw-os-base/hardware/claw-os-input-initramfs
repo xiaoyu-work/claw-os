@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = prereqs ]; then
+    exit 0
+fi
+
+. /usr/share/initramfs-tools/hook-functions
+
+# Include drivers without forcing them to load on other boards.
+arch=$DPKG_ARCH
+case "$arch" in
+    amd64)
+        set -- applespi spi_pxa2xx_platform spi_pxa2xx_pci intel_lpss_pci \
+            surface_aggregator surface_aggregator_registry surface_aggregator_hub \
+            surface_hid surface_kbd 8250_dw
+        ;;
+    arm64)
+        set -- msm dispcc_x1e80100 gpucc_x1e80100 gpucc_x1p42100 phy_qcom_edp \
+            panel_edp panel_samsung_atna33xc20 pwm_bl leds_qcom_lpg qcom_pbs \
+            phy_qcom_qmp_combo qrtr qcom_pd_mapper pmic_glink pmic_glink_altmode \
+            ps883x gpio_sbu_mux display_connector simple_bridge i2c_hid_of \
+            surface_aggregator surface_aggregator_registry surface_hid
+        ;;
+    *) exit 0 ;;
+esac
+for module do
+    if modinfo -k "$version" "$module" >/dev/null 2>&1; then
+        manual_add_modules "$module"
+    fi
+done
+
+if [ "$arch" = arm64 ]; then
+    for blob in gen70500_sqe.fw gen70500_gmu.bin gen71500_sqe.fw gen71500_gmu.bin; do
+        for suffix in '' .zst .xz; do
+            firmware=/usr/lib/firmware/qcom/$blob$suffix
+            if [ -f "$firmware" ]; then
+                if [ ! -e "$DESTDIR$firmware" ]; then
+                    copy_file firmware "$firmware"
+                fi
+                break
+            fi
+        done
+    done
+fi

@@ -1,0 +1,101 @@
+#!/bin/sh
+set -eu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+case "$#:${1:-}" in
+    0:|1:--print) ;;
+    *) echo "Usage: claw-hardware-setup [--print]" >&2; exit 2 ;;
+esac
+if [ "$#" -eq 0 ] && [ "$(id -u)" != 0 ]; then
+    echo "claw-hardware-setup: applying settings requires root" >&2
+    exit 1
+fi
+
+[ "$(dpkg --print-architecture)" = amd64 ] || exit 0
+dmi=/sys/class/dmi/id
+[ -r "$dmi/sys_vendor" ] && [ -r "$dmi/product_name" ] || exit 0
+read -r manufacturer <"$dmi/sys_vendor"
+read -r model <"$dmi/product_name"
+if [ -r "$dmi/product_family" ]; then
+    read -r family <"$dmi/product_family"
+    model="$model $family"
+fi
+
+option() {
+    for image in /boot/initrd.img-*; do
+        [ -f "$image" ] || continue
+        if modinfo -k "${image#/boot/initrd.img-}" -F parm "$1" 2>/dev/null | grep -q "^$2:"; then
+            printf 'options %s %s=%s\n' "$1" "$2" "$3"
+            return
+        fi
+    done
+}
+
+panther_lake=no
+intel_wifi7=no
+apple_broadcom=no
+for device in /sys/bus/pci/devices/*; do
+    [ -r "$device/vendor" ] && [ -r "$device/device" ] && [ -r "$device/class" ] || continue
+    read -r vendor <"$device/vendor"
+    read -r id <"$device/device"
+    read -r class <"$device/class"
+    case "$vendor:$id:$class" in
+        0x8086:0xb08[0-7f]:0x03*|0x8086:0xb0[9ab]0:0x03*) panther_lake=yes ;;
+        0x8086:0xe440:0x02*|0x8086:0x272b:0x02*) intel_wifi7=yes ;;
+        0x14e4:0x43ba:*|0x14e4:0x43bb:*|0x14e4:0x43bc:*|0x14e4:0x43a3:*|0x14e4:0x43dc:*|\
+        0x14e4:0x4464:*|0x14e4:0x4488:*|0x14e4:0x4425:*|0x14e4:0x4433:*) apple_broadcom=yes ;;
+    esac
+done
+
+settings() {
+    case "$manufacturer:$model" in
+        "ASUSTeK COMPUTER INC.:"*B9406*)
+            if [ "$panther_lake" = yes ]; then
+                option xe enable_dpcd_backlight 1
+                option xe enable_panel_replay 0
+            fi
+            ;;
+        "ASUSTeK COMPUTER INC.:"*UX5406AA*)
+            if [ "$panther_lake" = yes ]; then
+                option xe enable_dpcd_backlight 1
+            fi
+            ;;
+        "Dell Inc.:"*XPS*14*|"Dell Inc.:"*XPS*16*|"Dell Inc.:"*DX14260*|"Dell Inc.:"*DX16260*)
+            if [ "$panther_lake:$intel_wifi7" = yes:yes ]; then
+                option iwlwifi disable_11be Y
+            fi
+            ;;
+        LENOVO:*"Yoga Pro 7 14IAH10"*)
+            option snd-sof-intel-hda-generic hda_model alc287-yoga9-bass-spk-pin
+            ;;
+        Apple*:*)
+            if [ "$apple_broadcom" = yes ]; then
+                option brcmfmac feature_disable 0x82000
+            fi
+            ;;
+    esac
+}
+
+options=$(settings)
+if [ "$#" -ne 0 ]; then
+    [ -z "$options" ] || printf '%s\n' "$options"
+    exit 0
+fi
+
+config=/etc/modprobe.d/20-claw-os-board.conf
+header='# Managed by claw-hardware-setup. Put local overrides in a separate file.'
+if [ -e "$config" ] || [ -L "$config" ]; then
+    if [ -L "$config" ] || [ ! -f "$config" ] || [ "$(head -n 1 "$config")" != "$header" ]; then
+        echo "claw-hardware-setup: refusing to replace $config" >&2
+        exit 1
+    fi
+elif [ -z "$options" ]; then
+    exit 0
+fi
+
+if [ -z "$options" ]; then
+    rm -f -- "$config"
+else
+    printf '%s\n%s\n' "$header" "$options" | install -Dm0644 /dev/stdin "$config"
+fi
+update-initramfs -u -k all

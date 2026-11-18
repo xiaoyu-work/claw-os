@@ -684,6 +684,7 @@ chmod 0755 "$BASE_STAGE/DEBIAN"
 
 render_control "$SCRIPT_DIR/claw-os-base/control" "$BASE_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-base/conffiles" "$BASE_STAGE/DEBIAN/conffiles"
+install -m 644 "$SCRIPT_DIR/claw-os-base/triggers" "$BASE_STAGE/DEBIAN/triggers"
 render_control "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
 chmod 0755 "$BASE_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-base/prerm" "$BASE_STAGE/DEBIAN/prerm"
@@ -701,6 +702,12 @@ install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-hom
     "$BASE_STAGE/etc/default/cos-home"
 
 HARDWARE_SRC="$SCRIPT_DIR/claw-os-base/hardware"
+install -Dm0755 "$HARDWARE_SRC/claw-hardware-setup" "$BASE_STAGE/usr/sbin/claw-hardware-setup"
+install -Dm0755 "$HARDWARE_SRC/claw-os-input-initramfs" \
+    "$BASE_STAGE/usr/share/initramfs-tools/hooks/claw-os-input"
+install -Dm0644 "$HARDWARE_SRC/qualcomm-boot.sh" "$BASE_STAGE/usr/lib/cos/hw/qualcomm-boot.sh"
+install -Dm0755 "$HARDWARE_SRC/configure-qualcomm-boot" "$BASE_STAGE/usr/lib/cos/hw/configure-qualcomm-boot"
+install -Dm0755 "$HARDWARE_SRC/09_claw_qualcomm" "$BASE_STAGE/etc/grub.d/09_claw_qualcomm"
 install -Dm0644 "$HARDWARE_SRC/69-claw-os-hardware.rules" \
     "$BASE_STAGE/usr/lib/udev/rules.d/69-claw-os-hardware.rules"
 install -Dm0644 "$HARDWARE_SRC/99-claw-os-hardware.quirks" \

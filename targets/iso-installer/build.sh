@@ -72,10 +72,11 @@ if [ -d "$SCRIPT_DIR/overlay" ]; then
 fi
 
 # 3. Locate kernel + initrd.
-KERNEL=$(find "$ROOTFS/boot" -name 'vmlinuz-*' | sort | tail -1)
-INITRD=$(find "$ROOTFS/boot" -name 'initrd.img-*' | sort | tail -1)
-if [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
-    echo "error: kernel or initrd not found in $ROOTFS/boot" >&2
+KERNEL=$(find "$ROOTFS/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
+KERNEL_VERSION=${KERNEL##*/vmlinuz-}
+INITRD="$ROOTFS/boot/initrd.img-$KERNEL_VERSION"
+if [ ! -s "$KERNEL" ] || [ ! -s "$INITRD" ]; then
+    echo "error: matching kernel and initramfs not found in $ROOTFS/boot" >&2
     exit 1
 fi
 echo ":: kernel: $KERNEL"
@@ -126,6 +127,11 @@ menuentry "Install Claw OS (failsafe)" {
     initrd /live/initrd.img
 }
 GRUBCFG
+
+if [ "$DEB_ARCH" = arm64 ]; then
+    source "$PROJECT_DIR/packaging/deb/claw-os-base/hardware/qualcomm-boot.sh"
+    claw_qcom_iso_menu "$ROOTFS" "$ISO_BUILD" "$KERNEL_VERSION" "Install Claw OS" >> "$ISO_BUILD/boot/grub/grub.cfg"
+fi
 
 # 7. Sanity check.
 for f in live/filesystem.squashfs live/vmlinuz live/initrd.img boot/grub/grub.cfg; do

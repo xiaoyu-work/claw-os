@@ -87,7 +87,7 @@ artifacts.
 
 ## Hardware enablement
 
-Bootable images use the Debian kernel, firmware, and graphics stack selected by the hardware backports pin. The `kernel` feature includes Cirrus audio firmware and, on arm64, `firmware-qcom-soc`. The existing `firmware-libertas` package already supplies the Marvell Wi-Fi firmware used by applicable Intel Surface models. These packages supply firmware, not a board-specific boot path.
+Bootable images use the Debian kernel, firmware, and graphics stack selected by the hardware backports pin. The `kernel` feature includes Cirrus audio firmware and, on arm64, `firmware-qcom-soc`. The existing `firmware-libertas` package supplies the Marvell Wi-Fi firmware used by applicable Intel Surface models. Desktop installs include the PipeWire libcamera backend for cameras already supported by the installed kernel and libcamera.
 
 The following workarounds are adapted from [Omarchy's hardware setup and udev rules](https://github.com/omacom/omarchy/tree/3b36b9e19). They are packaged in this repository rather than installing Arch packages. They match devices on the running machine, not on the image builder.
 
@@ -95,10 +95,24 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 | --- | --- |
 | Framework Laptop 16 keyboard (`32ac:0012`) | Let the active local seat access the keyboard's QMK HID device. This does not install a QMK utility. |
 | ASUS ROG Flow Z13 GZ302 | Classify the detachable keyboard's touchpad as internal so libinput can disable it while typing. |
-| ASUS ExpertBook B9406 with the PixArt `093a:4f05` touchpad | Ignore the pad's binary pressure axes so libinput can retain motion events. This does not change the display or backlight. |
+| ASUS ExpertBook B9406 with the PixArt `093a:4f05` touchpad | Ignore the pad's binary pressure axes so libinput can retain motion events. |
 | Intel `MacBook8,1`, `MacBook9,1`, `MacBook10,1`, and `MacBookPro13,1`–`14,3` | Prevent the NVMe controller at `0000:01:00.0` from entering D3cold, avoiding a known resume failure. |
+| ASUS ExpertBook B9406 and Zenbook UX5406AA with Panther Lake graphics | Use DPCD backlight control; on the B9406, also disable the panel-replay path that can leave the display stuck. |
+| Panther Lake Dell XPS 14/16 with the affected Intel Wi-Fi 7 PCI IDs | Disable EHT for those cards to use the working Wi-Fi 6 path. |
+| Lenovo Yoga Pro 7 14IAH10 | Select the SOF HDA codec model that routes audio to both amplifiers. |
+| Intel Macs with the listed Broadcom `brcmfmac` PCI devices | Let the host supplicant handle WPA instead of the affected firmware offload. |
 
-These are individual workarounds, not full-model certification. Apple Silicon needs its Asahi boot and kernel stack. Snapdragon X/X2 still need the right per-model device tree, early boot drivers, and any board-signed firmware absent from Debian. NVIDIA N1x and GB10 need their matching platform kernel, GPU stack, and boot configuration. Intel T2 and other fixes that depend on a custom kernel, DKMS package, or OEM payload are not supplied by these rules. Do not copy firmware from a vendor's recovery or Windows image into a distribution package without redistribution rights.
+`claw-hardware-setup` runs inside the Calamares target, not on the image builder. It applies the last four workarounds only when the target's installed kernel exposes the needed parameters, then rebuilds the initramfs. The x86 initramfs also includes Debian's available Apple SPI and Surface keyboard modules for early input; udev still decides what hardware is present.
+
+### Experimental Snapdragon X boot
+
+The arm64 live and installer ISOs list recognized Snapdragon X models in a separate GRUB submenu when the exact device tree is present in the selected Debian kernel. Choose the exact model and panel/SoC variant; the generic entry is unchanged. The installer records the selected tree only if it matches the running device tree. On disk, GRUB offers only the selected board's tree for each kernel that ships it and has its matching initramfs; older compatible kernels stay available.
+
+Debian's Qualcomm firmware and the available display/input drivers are included in early boot. The experimental entries do not start the Qualcomm DSP: some boards need OEM-signed firmware, and DSP startup can disconnect USB-C root disks. Audio, power reporting and other features that depend on it are not covered. A menu entry is not hardware certification; the selected tree and installation still need physical testing.
+
+### Remaining platform gaps
+
+Apple Silicon needs its Asahi boot and kernel stack. Snapdragon X2 and other models absent from the [board list](../packaging/deb/claw-os-base/hardware/qualcomm-boot.sh) are not supported by this boot path. NVIDIA N1x and GB10 need their matching platform kernel, GPU stack, and boot configuration. Intel T2 and fixes that depend on a custom kernel, DKMS package, or OEM payload are not supplied by these rules. Do not copy firmware from a vendor's recovery or Windows image into a distribution package without redistribution rights.
 
 ## Instance identity
 
