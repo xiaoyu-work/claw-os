@@ -1321,6 +1321,16 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(request_wire_clawd(Command::GuiPowerReview, params)?.to_string()));
     }
 
+    if name == "__desktop-lock" {
+        if args.len() != 1 {
+            return Err("desktop lock takes no arguments".into());
+        }
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "desktop lock requires a bound GUI session".to_string())?;
+        let value = request_wire_clawd(Command::GuiDesktopLock, json!({"session": session}))?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__desktop-preferences" {
         let body = if args.get(1).map(String::as_str)==Some("--request-stdin") && args.len()==2 {
             let body=parse_internal_request_object(stdin_data.as_deref(),256*1024,"desktop preferences")?;

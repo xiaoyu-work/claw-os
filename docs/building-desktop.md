@@ -40,5 +40,9 @@ Approval is only for the selected action in this login, not a reusable power
 permission. Save work before approving; the machine can stop before it
 responds.
 
+The session menu's Lock button uses the OS locker and the login account's
+PAM authentication. The Shell can request a lock but neither sees input on
+the lock screen nor offers an unlock action.
+
 Use the [coordinated logout/update procedure](updating.md#root-managed-desktop-session-lifetime)
 when replacing the compositor and display authority on an existing system.

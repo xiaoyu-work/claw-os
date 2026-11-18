@@ -647,6 +647,11 @@ logind's reply; lost acknowledgements are not retried. Consent and submission
 are not completion. Neither
 the Shell nor a caller claiming a review ID inherits `sys.power`.
 
+The private `gui.desktop.lock` route separately requires the live named
+`ipc.invoke:desktop.session.lock` right. It can only request lock of the bound
+display; protected display custody, password entry and PAM unlock never
+enter App transport.
+
 Filtered Home teardown also checks instance death before dropping Root source
 pins, exact unmount and provider joins. Failed metadata or checked-cgroup
 preparation remains retained and cannot acknowledge GUI retirement.

@@ -220,22 +220,6 @@ bool CSessionLockManager::clientDenied() {
     return m_sessionLock && m_sessionLock->hasSentDenied;
 }
 
-void CSessionLockManager::clearSessionLock() {
-    m_events.unlock.emit();
-    m_sessionLock = {};
-}
-
-void CSessionLockManager::forceUnlock() {
-    PROTO::sessionLock->forceUnlock();
-    clearSessionLock();
-
-    Desktop::focusState()->rawSurfaceFocus(nullptr);
-    for (auto const& m : State::monitorState()->monitors())
-        g_pHyprRenderer->damageMonitor(m);
-
-    g_pInputManager->refocus();
-}
-
 void CSessionLockManager::forceLock() {
     PROTO::sessionLock->forceLock();
     m_events.lock.emit();

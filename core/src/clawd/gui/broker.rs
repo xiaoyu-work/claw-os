@@ -435,6 +435,17 @@ async fn serve(
                     }
                     Err(_) => Response::fault(id, Fault::InvalidParams),
                 }
+            } else if request.command == Command::GuiDesktopLock {
+                let id = request.id;
+                let process = endpoint.process.get().expect("authenticated bound GUI process").process.clone();
+                let context = crate::paths::RoutedPathContext::for_owner(
+                    endpoint.registration.owner(), endpoint.registration.home.clone(),
+                );
+                match tokio::task::spawn_blocking(move || context.scope_sync(|| endpoint.lock_display(&process))).await {
+                    Ok(Ok(reply)) => Response::ok(id, reply),
+                    Ok(Err(error)) => Response::handler_error(id, error),
+                    Err(_) => Response::handler_error(id, BrokerError::unavailable("native lock result is unavailable")),
+                }
             } else if request.command == Command::GuiMediaExchange {
                 match endpoint.media.exchange(request.params, &client).await {
                     Ok(value) => Response::ok(request.id, value),
@@ -455,6 +466,34 @@ async fn serve(
         }
     };
     respond(&mut stream, response).await;
+}
+
+impl State {
+    fn lock_display(&self, process: &ProcessIdentity) -> Result<Value, BrokerError> {
+        use crate::caps::{Cap, Scope};
+
+        let observed = std::time::Instant::now();
+        let view = self.registration.snapshot(process).map_err(BrokerError::authorization)?;
+        let lock = Cap::new(Verb::IPC_INVOKE, Scope::name("desktop.session.lock"));
+        if self.stopped.load(Ordering::Acquire)
+            || view.subject.task_id.is_some()
+            || view.subject.workspace.is_some()
+            || view.subject.activity.is_some()
+            || !view.caps.covers(&lock)
+        {
+            return Err(BrokerError::authorization("current GUI cannot lock this display"));
+        }
+        let deadline = observed + view.expires_in.min(Duration::from_secs(8));
+        let result = self.registration.control.lock(deadline);
+        crate::provenance::audit("desktop.lock", json!({
+            "owner_uid": self.registration.owner(),
+            "app_id": self.registration.launch.app_id(),
+            "epoch": self.registration.control.epoch.label(),
+            "confirmed": result.is_ok(),
+        }));
+        result.map_err(|error| BrokerError::execution(error.to_string()))?;
+        Ok(json!({"locked": true}))
+    }
 }
 
 async fn fault(stream: &mut PeerStream, id: RequestId, fault: Fault) {

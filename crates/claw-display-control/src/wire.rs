@@ -129,6 +129,16 @@ pub enum CompositorCommand {
         expires_monotonic_ms: u64,
         command: crate::desktop::Command,
     },
+    Lock {
+        epoch: Epoch,
+        instance: InstanceId,
+        expires_monotonic_ms: u64,
+    },
+    Locker {
+        epoch: Epoch,
+        instance: InstanceId,
+        expires_monotonic_ms: u64,
+    },
     Shutdown {
         epoch: Epoch,
     },
@@ -138,7 +148,7 @@ impl Packet for CompositorCommand {
     fn descriptor_count(&self) -> usize {
         match self {
             Self::Creator { .. } => 3,
-            Self::SetSelection { .. } => 1,
+            Self::SetSelection { .. } | Self::Locker { .. } => 1,
             _ => 0,
         }
     }
@@ -175,6 +185,14 @@ pub enum CompositorReply {
         instance: InstanceId,
     },
     DesktopResult {
+        epoch: Epoch,
+        instance: InstanceId,
+    },
+    LockerReady {
+        epoch: Epoch,
+        instance: InstanceId,
+    },
+    Locked {
         epoch: Epoch,
         instance: InstanceId,
     },
@@ -336,6 +354,7 @@ impl Packet for AuthorityCommand {
                     | CompositorCommand::Retire { .. }
                     | CompositorCommand::SetSelection { .. }
                     | CompositorCommand::Desktop { .. }
+                    | CompositorCommand::Lock { .. }
             ) {
                 return Err(Error::Protocol("invalid GUI control command"));
             }
@@ -388,6 +407,7 @@ impl Packet for AuthorityReply {
                     | CompositorReply::Refreshed { .. }
                     | CompositorReply::SelectionSet { .. }
                     | CompositorReply::DesktopResult { .. }
+                    | CompositorReply::Locked { .. }
                     | CompositorReply::Retired { .. }
                     | CompositorReply::InstanceEnded { .. }
                     | CompositorReply::Rejected { .. }

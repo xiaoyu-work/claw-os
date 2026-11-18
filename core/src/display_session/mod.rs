@@ -5,5 +5,6 @@ mod containment;
 pub(crate) use containment::protected_executable;
 pub(crate) mod creator;
 pub mod host;
+mod locker;
 pub mod registry;
 pub(crate) mod runtime;

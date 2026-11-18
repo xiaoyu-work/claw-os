@@ -62,6 +62,12 @@ pub struct DesktopPowerReview {
     pub review_id: Option<Token>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopLock {
+    pub session: Token,
+}
+
 pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{

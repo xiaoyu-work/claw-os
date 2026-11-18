@@ -64,7 +64,6 @@ class CSessionLockManager {
     bool                    isSurfaceSessionLock(SP<CWLSurfaceResource>);
     bool                    anySessionLockSurfacesPresent();
 
-    void                    forceUnlock();
     void                    forceLock();
 
     void                    removeSessionLockSurface(SSessionLockSurface*);
@@ -87,7 +86,6 @@ class CSessionLockManager {
 
     void onNewSessionLock(SP<CSessionLock> pWlrLock);
     void removeSendLockedTimer();
-    void clearSessionLock();
 };
 
 inline UP<CSessionLockManager> g_pSessionLockManager;

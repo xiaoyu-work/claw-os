@@ -21,6 +21,7 @@ nor that bus authorizes a GUI instance.
 | --- | --- |
 | `registry.rs` | Root activation admission, epochs, heartbeat and correlated GUI/desktop exchanges |
 | `host.rs` | Owned compositor process, private control, read-only login subscriptions and display teardown |
+| `locker.rs` | One protected PAM-only native locker, private Wayland descriptor and checked readiness |
 | `containment.rs` | Exact Root login/workload cgroups, pre-exec membership and checked cleanup |
 | `creator.rs` | One Root security-context creator per GUI instance, refresh and retirement |
 | `runtime.rs` | Root-created instance sockets; protected backend versus traversable credential-checking fronts |
@@ -48,6 +49,14 @@ display supervisor on the same epoch. The supervisor starts only a fixed
 `cos app <id> --gui` as the logged-in user, inside the display workload, and
 pins the selected publisher and content digest. Its acknowledgement says the
 launcher process was submitted, not that the target passed GUI admission.
+
+Lock requests carry no executable, password or owner selector. The supervisor
+links the fixed native locker to its compositor by a Root-held Wayland
+descriptor and reports lock only after compositor admission and native ready.
+Only the dedicated locker role receives the session-lock global; no GUI lease
+or normal login peer does. An abnormal locker exit retires the display, not
+its input guard. A successful child exit must follow the locker's PAM
+authentication and Wayland unlock acknowledgement.
 
 Locale projection currently preserves only the bounded PAM environment.
 There is no AccountsService `Language` or locale1 startup resolver here.

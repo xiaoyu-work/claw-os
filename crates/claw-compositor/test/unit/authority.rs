@@ -17,6 +17,9 @@ fn origin_class_never_inherits_another_origins_rights() {
         state.permissions(Origin::Instance(1), true),
         READ | WRITE | PANEL
     );
+    let locker = Origin::from_native(4, 0).unwrap();
+    assert_eq!(state.permissions(locker, true), SESSION_LOCK);
+    assert_eq!(state.permissions(locker, false), 0);
     for kind in [0, 4, u32::MAX] {
         assert!(Origin::from_native(kind, 1).is_err());
     }
@@ -58,7 +61,7 @@ fn inactive_or_retired_instances_cannot_keep_protocol_rights() {
     assert!(state.consume_context(false).is_err());
     assert!(!state.context_used);
     state.retired = true;
-    for origin in [Origin::Login, Origin::Creator(1), Origin::Instance(1)] {
+    for origin in [Origin::Login, Origin::Creator(1), Origin::Instance(1), Origin::Locker] {
         assert_eq!(state.permissions(origin, true), 0);
     }
     assert!(state.add_client(true).is_err());

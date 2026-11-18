@@ -271,6 +271,11 @@ namespace Claw {
                     accepted              = descriptor >= 0 && createClient(descriptor, {CLAW_ORIGIN_CREATOR, command.token});
                     break;
                 }
+                case CLAW_LOCKER: {
+                    const auto descriptor = claw_compositor_take_descriptor(m_handle, command.serial);
+                    accepted              = descriptor >= 0 && createClient(descriptor, {CLAW_ORIGIN_LOCKER, 0});
+                    break;
+                }
                 case CLAW_RETIRE:
                 case CLAW_INSTANCE_ENDED:
                     retire(command.token);
@@ -342,6 +347,8 @@ namespace Claw {
             return false;
         const auto interface = std::string_view(wl_global_get_interface(global)->name);
         const auto rights    = controller()->rights(client);
+        if (interface == "ext_session_lock_manager_v1")
+            return rights & CLAW_SESSION_LOCK;
         if (interface == "wp_security_context_manager_v1")
             return rights & CLAW_CONTEXT;
         if (interface == "zwlr_layer_shell_v1" || interface == "hyprland_focus_grab_manager_v1")

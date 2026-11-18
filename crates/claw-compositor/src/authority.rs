@@ -23,12 +23,14 @@ pub(crate) const WRITE: u32 = 2;
 pub(crate) const PANEL: u32 = 4;
 pub(crate) const CONTEXT: u32 = 8;
 pub(crate) const OS_SESSION: u32 = 16;
+pub(crate) const SESSION_LOCK: u32 = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Origin {
     Login,
     Creator(u64),
     Instance(u64),
+    Locker,
 }
 
 impl Origin {
@@ -37,13 +39,14 @@ impl Origin {
             (1, 0) => Ok(Self::Login),
             (2, token) if token != 0 => Ok(Self::Creator(token)),
             (3, token) if token != 0 => Ok(Self::Instance(token)),
+            (4, 0) => Ok(Self::Locker),
             _ => Err(Error::Protocol("invalid native client origin")),
         }
     }
 
     fn token(self) -> Option<u64> {
         match self {
-            Self::Login => None,
+            Self::Login | Self::Locker => None,
             Self::Creator(token) | Self::Instance(token) => Some(token),
         }
     }
@@ -67,6 +70,7 @@ impl GrantState {
         }
         match origin {
             Origin::Login => OS_SESSION | PANEL | CONTEXT,
+            Origin::Locker => SESSION_LOCK,
             Origin::Creator(_) => {
                 if self.context_used {
                     0
@@ -162,6 +166,7 @@ pub(crate) enum CommandKind {
     Stop = 4,
     Ended = 5,
     Desktop = 6,
+    Locker = 7,
 }
 
 #[derive(Clone, Copy)]
@@ -208,6 +213,7 @@ pub(crate) struct Authority {
     next_serial: u64,
     pending: Option<Pending>,
     ready: bool,
+    locker_attached: bool,
 }
 
 impl Authority {
@@ -221,6 +227,7 @@ impl Authority {
             next_serial: 1,
             pending: None,
             ready: false,
+            locker_attached: false,
         })
     }
 
@@ -234,6 +241,9 @@ impl Authority {
     }
 
     pub fn rights(&self, origin: Origin) -> Result<u32, Error> {
+        if origin == Origin::Locker && !self.locker_attached {
+            return Ok(0);
+        }
         match origin.token() {
             None => Ok(GrantState::default().permissions(origin, self.link.binding().active()?)),
             Some(token) => {
@@ -254,6 +264,19 @@ impl Authority {
         origin: Origin,
         descriptor: BorrowedFd<'_>,
     ) -> Result<(), Error> {
+        if origin == Origin::Locker {
+            if self.locker_attached
+                || !self.link.binding().active()?
+                || !self.pending.as_ref().is_some_and(|pending| {
+                    matches!(pending.command.kind, CommandKind::Locker) && pending.descriptor.is_none()
+                })
+                || ProcessIdentity::unix_peer(descriptor)?.uid() != 0
+            {
+                return Err(Error::Identity);
+            }
+            self.locker_attached = true;
+            return Ok(());
+        }
         let Some(token) = origin.token() else {
             return if self.accepts_login(descriptor)? {
                 Ok(())
@@ -269,6 +292,11 @@ impl Authority {
     }
 
     pub fn client_removed(&mut self, origin: Origin) -> Result<(), Error> {
+        if origin == Origin::Locker {
+            if !std::mem::take(&mut self.locker_attached) {
+                return Err(Error::Identity);
+            }
+        }
         if let Some(token) = origin.token() {
             self.lease_mut(token)?.state.remove_client()?;
         }
@@ -334,7 +362,8 @@ impl Authority {
                 | CompositorCommand::Refresh { instance, .. }
                 | CompositorCommand::Retire { instance, .. }
                 | CompositorCommand::SetSelection { instance, .. } => Some(instance),
-                CompositorCommand::Desktop { instance, .. } => Some(instance),
+                CompositorCommand::Desktop { instance, .. }
+                | CompositorCommand::Locker { instance, .. } => Some(instance),
                 _ => None,
             };
             match self.prepare(packet) {
@@ -534,6 +563,24 @@ impl Authority {
                 });
                 Ok(Some(native))
             }
+            CompositorCommand::Locker { epoch, instance, expires_monotonic_ms } => {
+                if epoch != binding.epoch()
+                    || instance.0 == [0; 16]
+                    || !binding.active()?
+                    || self.locker_attached
+                {
+                    return Err(Error::Identity);
+                }
+                validate_expiry(expires_monotonic_ms, monotonic_ms()?, 8000)?;
+                let stream = claw_display_control::identity::unix_stream(
+                    packet.descriptors.pop().ok_or(Error::Identity)?,
+                )?;
+                if ProcessIdentity::unix_peer(stream.as_fd())?.uid() != 0 {
+                    return Err(Error::Identity);
+                }
+                self.pending(CommandKind::Locker, 0, Some(instance), Some(stream.into()), None)
+                    .map(Some)
+            }
             CompositorCommand::Shutdown { epoch } if epoch == binding.epoch() => {
                 for lease in self.leases.values_mut() {
                     lease.state.retired = true;
@@ -546,14 +593,18 @@ impl Authority {
     }
 
     pub fn take_descriptor(&mut self, serial: u64) -> Result<i32, Error> {
-        let token = self
+        let command = self
             .pending
             .as_ref()
             .filter(|pending| pending.command.serial == serial)
             .ok_or(Error::Identity)?
-            .command
-            .token;
-        if !self.lease(token)?.active()? {
+            .command;
+        let active = match command.kind {
+            CommandKind::Creator => self.lease(command.token)?.active()?,
+            CommandKind::Locker => self.link.binding().active()? && !self.locker_attached,
+            _ => false,
+        };
+        if !active {
             return Err(Error::Closed);
         }
         self.pending
@@ -562,7 +613,7 @@ impl Authority {
             .and_then(|pending| pending.descriptor.take())
             .map(IntoRawFd::into_raw_fd)
             .ok_or(Error::Protocol(
-                "native creator descriptor is unavailable or already taken",
+                "native display descriptor is unavailable or already taken",
             ))
     }
 
@@ -687,8 +738,16 @@ impl Authority {
                     )
                 }
             }
+            CommandKind::Locker => {
+                let instance = instance.ok_or(Error::Identity)?;
+                if accepted && pending.descriptor.is_none() && self.locker_attached {
+                    self.link.reply(&CompositorReply::LockerReady { epoch, instance })
+                } else {
+                    self.reject(instance, Error::Protocol("native locker connection was not installed"))
+                }
+            }
             CommandKind::Stop => {
-                if !accepted || self.leases.values().any(|lease| !lease.state.empty()) {
+                if !accepted || self.locker_attached || self.leases.values().any(|lease| !lease.state.empty()) {
                     return Err(Error::Protocol(
                         "native display retirement was not confirmed",
                     ));

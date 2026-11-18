@@ -9,11 +9,12 @@ use claw_display_control::identity::pidfd_exited;
 use claw_display_control::wire::{
     monotonic_ms, AuthorityCommand, AuthorityReply, CompositorCommand, CompositorReply, PamCommand,
     PamReply, SessionEvent, SessionRequest, LaunchTarget, COMPOSITOR, HOST_RETIRE_TIMEOUT,
-    MENU_LAUNCH_DIGEST, MENU_LAUNCH_PUBLISHER, SESSION_DIRECTORY,
+    GuiRefusal, MENU_LAUNCH_DIGEST, MENU_LAUNCH_PUBLISHER, SESSION_DIRECTORY,
 };
 use claw_display_control::{Connection, Epoch, Error, KernelLogin, Listener, ProcessIdentity};
 
 use super::containment::{self, Containment};
+use super::locker::{Locker, Status as LockStatus, LOCK_START_MS};
 
 const STARTUP: Duration = Duration::from_secs(20);
 const STOP: Duration = Duration::from_secs(5);
@@ -170,6 +171,7 @@ struct Supervisor {
     listener: Option<Listener>,
     subscribers: Vec<Subscriber>,
     launchers: Vec<Child>,
+    locker: Option<Locker>,
 }
 
 struct Subscriber {
@@ -228,6 +230,7 @@ impl Supervisor {
             listener: None,
             subscribers: Vec::new(),
             launchers: Vec::new(),
+            locker: None,
         };
         supervisor.control.send(
             &CompositorCommand::Initialize {
@@ -333,6 +336,12 @@ impl Supervisor {
                 AuthorityCommand::Shutdown { epoch } if epoch == self.controllers.epoch => {
                     return Err(Error::Closed);
                 }
+                AuthorityCommand::Gui { command: CompositorCommand::Lock { epoch, instance, expires_monotonic_ms } }
+                    if epoch == self.controllers.epoch =>
+                {
+                    self.lock(instance, expires_monotonic_ms)?;
+                }
+                AuthorityCommand::Gui { command: CompositorCommand::Lock { .. } } => return Err(Error::Identity),
                 AuthorityCommand::Gui { command } => {
                     let descriptors: Vec<_> = packet.descriptors.iter().map(AsFd::as_fd).collect();
                     self.control
@@ -376,6 +385,38 @@ impl Supervisor {
         Ok(())
     }
 
+    fn lock(&mut self, instance: claw_display_control::InstanceId, expires: u64) -> Result<(), Error> {
+        let now = monotonic_ms()?;
+        let epoch = self.controllers.epoch;
+        let failure = if expires <= now || expires > now.saturating_add(LOCK_START_MS) {
+            GuiRefusal::Expired
+        } else if self.display.is_empty() || self.locker.is_some() {
+            GuiRefusal::Unavailable
+        } else {
+            match Locker::spawn(
+                instance, expires, self.controllers.login.owner_uid, self.containment.compositor_membership().as_fd(),
+            ) {
+                Ok((locker, compositor_fd)) => {
+                    self.locker = Some(locker);
+                    return self.control.send(
+                        &CompositorCommand::Locker { epoch, instance, expires_monotonic_ms: expires },
+                        &[compositor_fd.as_fd()],
+                        self.controllers.live_io_deadline()?,
+                    );
+                }
+                Err(error) => {
+                    log_failure(c"native locker refused before display admission: %s", &error);
+                    GuiRefusal::Unavailable
+                }
+            }
+        };
+        self.controllers.authority.send(
+            &AuthorityReply::Gui { reply: CompositorReply::Rejected { epoch, instance, reason: failure } },
+            &[],
+            self.controllers.live_io_deadline()?,
+        )
+    }
+
     fn watch(&mut self) -> Result<(), Error> {
         loop {
             if pidfd_exited(self.compositor_pidfd.as_fd())? {
@@ -391,6 +432,19 @@ impl Supervisor {
                         self.controllers.live_io_deadline()?,
                     )
                     .map_err(|error| io_timeout(error, "timed out receiving compositor reply"))?;
+                match packet.message {
+                    CompositorReply::LockerReady { epoch, instance } => {
+                        let locker = self.locker.as_mut()
+                            .filter(|locker| locker.instance == instance && epoch == self.controllers.epoch)
+                            .ok_or(Error::Identity)?;
+                        locker.admit()?;
+                        continue;
+                    }
+                    CompositorReply::Rejected { instance, .. }
+                        if self.locker.as_ref().is_some_and(|locker| locker.instance == instance) =>
+                            return Err(Error::Protocol("compositor refused the native locker")),
+                    _ => {}
+                }
                 if !matches!(
                     packet.message,
                     CompositorReply::CreatorReady { .. }
@@ -402,6 +456,19 @@ impl Supervisor {
                         | CompositorReply::Rejected { .. }
                 ) {
                     return Err(Error::Protocol("unexpected running compositor response"));
+                }
+                if let Some(locker) = &mut self.locker {
+                    match locker.poll()? {
+                        LockStatus::Waiting => {}
+                        LockStatus::Locked => self.controllers.authority.send(
+                            &AuthorityReply::Gui { reply: CompositorReply::Locked {
+                                epoch: self.controllers.epoch, instance: locker.instance,
+                            } },
+                            &[],
+                            self.controllers.live_io_deadline()?,
+                        )?,
+                        LockStatus::Unlocked => { self.locker.take(); }
+                    }
                 }
                 let descriptors: Vec<_> = packet.descriptors.iter().map(AsFd::as_fd).collect();
                 self.controllers.authority.send(
@@ -544,6 +611,9 @@ impl Supervisor {
         self.compositor.wait()?;
         for mut launcher in self.launchers.drain(..) {
             launcher.wait()?;
+        }
+        if let Some(locker) = self.locker.take() {
+            locker.reap()?;
         }
         self.prune_subscribers();
         for subscriber in self.subscribers.drain(..) {

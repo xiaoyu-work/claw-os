@@ -2544,6 +2544,17 @@ routes! {
         run: |_c| Err(BrokerError::authorization(
             "desktop power reviews require the exact Root-held private GUI endpoint")),
     }
+    GuiDesktopLock {
+        name: "gui.desktop.lock",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::GuiResource),
+        body: body::DesktopLock,
+        audit: &[("session", FieldRule::Token)],
+        run: |_c| Err(BrokerError::authorization(
+            "screen locking requires the exact Root-held private GUI endpoint")),
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

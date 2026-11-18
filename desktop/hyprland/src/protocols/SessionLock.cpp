@@ -1,4 +1,5 @@
 #include "SessionLock.hpp"
+#include "../../../hyprland-claw/Claw.hpp"
 #include "../managers/SeatManager.hpp"
 #include "FractionalScale.hpp"
 #include "LockNotify.hpp"
@@ -191,6 +192,10 @@ void CSessionLockProtocol::destroyResource(CSessionLockSurface* surf) {
 }
 
 void CSessionLockProtocol::onLock(CExtSessionLockManagerV1* pMgr, uint32_t id) {
+    if (!Claw::permitted(pMgr->client(), CLAW_SESSION_LOCK)) {
+        wl_client_post_implementation_error(pMgr->client(), "No OS lockscreen authority");
+        return;
+    }
 
     LOG(Log::DEBUG, "New sessionLock with id {}", id);
 
@@ -244,16 +249,6 @@ void CSessionLockProtocol::onGetLockSurface(CExtSessionLockV1* lock, uint32_t id
 
 bool CSessionLockProtocol::isLocked() {
     return m_locked;
-}
-
-void CSessionLockProtocol::forceUnlock() {
-    m_locked = false;
-
-    for (const auto& l : m_locks) {
-        l->sendDenied();
-    }
-
-    PROTO::lockNotify->onUnlocked();
 }
 
 void CSessionLockProtocol::forceLock() {

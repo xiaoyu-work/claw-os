@@ -16,6 +16,7 @@ enum ClawOriginKind {
     CLAW_ORIGIN_LOGIN    = 1,
     CLAW_ORIGIN_CREATOR  = 2,
     CLAW_ORIGIN_INSTANCE = 3,
+    CLAW_ORIGIN_LOCKER   = 4,
 };
 
 enum ClawRights {
@@ -24,6 +25,7 @@ enum ClawRights {
     CLAW_PANEL           = 4,
     CLAW_CONTEXT         = 8,
     CLAW_OS_SESSION      = 16,
+    CLAW_SESSION_LOCK    = 32,
 };
 
 enum ClawCommandKind {
@@ -33,6 +35,7 @@ enum ClawCommandKind {
     CLAW_STOP           = 4,
     CLAW_INSTANCE_ENDED = 5,
     CLAW_DESKTOP        = 6,
+    CLAW_LOCKER         = 7,
 };
 
 enum ClawDesktopKind {

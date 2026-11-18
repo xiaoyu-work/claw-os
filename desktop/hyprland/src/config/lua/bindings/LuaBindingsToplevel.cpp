@@ -310,21 +310,6 @@ static int hlExecCmd(lua_State* L) {
     return 0;
 }
 
-static int hlClearCrashedLockscreen(lua_State* L) {
-    if (!g_pSessionLockManager)
-        return Internal::configError(L, "hl.clear_crashed_lockscreen: sessionLockMgr not init'd yet");
-
-    if (!g_pSessionLockManager->isSessionLocked())
-        return Internal::configError(L, "hl.clear_crashed_lockscreen: session is not locked");
-
-    if (g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
-        return Internal::configError(L, "hl.clear_crashed_lockscreen: session is locked with a client, refusing to unlock");
-
-    g_pSessionLockManager->forceUnlock();
-
-    return 0;
-}
-
 static int hlDispatch(lua_State* L) {
     if (const auto result = Internal::pushDispatcherFunction(L, 1); !result)
         return Internal::configError(L, std::format("hl.dispatch: {}", result.error()));
@@ -477,8 +462,6 @@ void Internal::registerToplevelBindings(lua_State* L, CConfigManager* mgr) {
     Internal::setFn(L, "version", hlVersion);
     Internal::setFn(L, "get_loaded_plugins", hlGetPlugins);
     Internal::setFn(L, "exec_cmd", hlExecCmd);
-
-    Internal::setFn(L, "clear_crashed_lockscreen", hlClearCrashedLockscreen);
 
     Internal::setFn(L, "exec_scheduled_prop_refresh_immediately", hlExecuteScheduledRefreshImmediately);
 

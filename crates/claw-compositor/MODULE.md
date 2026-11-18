@@ -6,9 +6,8 @@ Provide the OS-private native compositor enforcement bridge for Hyprland.
 It consumes the existing [display control contract](../claw-display-control/MODULE.md);
 it does not replace the Root broker or make App capability decisions.
 
-The lease/origin rules preserve the existing
-[COSMIC enforcement](../../desktop/comp/src/display_authority.rs), including
-Root-only creator descriptors, actual process/cgroup identity, single-use
+The lease/origin rules preserve Root-only creator descriptors, actual
+process/cgroup identity, single-use
 context creation, independent selection read/write and panel rights, finite
 leases and checked retirement. This implementation is GPL-3.0-only; the
 shared Apache-2.0 protocol crate and the Agent remain separate.
@@ -37,9 +36,14 @@ payloads retain sealed, bounded MIME transfer semantics and do not inherit an
 App lifetime. The native adapter must still enforce read checks on offers and
 transfers; owning a payload does not authorize its disclosure.
 
-The bridge is mandatory in the native Hyprland build. Installed desktop
-activation has not switched; actual authenticated-display acceptance and
-package activation remain separate gates.
+The locker origin exists only while the matching Root-provided private
+Wayland client is attached. It exposes the session-lock global without
+clipboard, panel or context-creator authority. Normal login and App
+connections cannot bind that global. Lock readiness and process custody
+remain in the Root display supervisor.
+
+The bridge is mandatory in the native Hyprland build. The authenticated
+guest checks and official package activation remain separate gates.
 
 Root desktop commands carry an exact display epoch, owner, correlation and
 finite deadline. Native handoff and result acceptance both recheck that

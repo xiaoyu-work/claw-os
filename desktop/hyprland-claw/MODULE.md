@@ -64,6 +64,10 @@ the session wiring and compiled compositor into the Desktop package.
 The same stage builds the private `claw-lockscreen` executable from pinned
 Swaylock source, with mandatory PAM and the dedicated `claw-desktop-lock`
 service. This build artifact is not a lock or display authorization.
+The Root supervisor admits the locker through its private Wayland descriptor.
+The compositor requires that role for the session-lock protocol and does not
+provide an owner Lua recovery unlock. PAM alone releases a live lock;
+supervisor retirement recovers a dead locker without exposing the old desktop.
 The installed `/etc/xdg/hypr/hyprland.lua` supplies monitor discovery and
 native window/workspace bindings for a new owner. It does not launch a
 second panel, wallpaper process or terminal. Existing owner configuration
@@ -121,9 +125,11 @@ selection did not open a second App, and logout cancelled a pending selection.
 The session menu's denied PowerOff left the guest running; a separate
 approved PowerOff shut it down and left one correlated journal intent.
 These runs do not establish APT, deployable-image, restart or sleep acceptance.
-The PAM-only locker separately rejected a wrong password and accepted the
-correct password in that graphical session using a disposable guest binding.
-This proves the native provider, not the default lock action or broker custody.
+The signed Shell's default Lock button used the private native locker in a
+fresh guest without a lab binding. A wrong password left it locked; the
+correct PAM password returned to the same compositor and Shell. A second
+lock followed by controlled locker termination retired that display and
+returned to the login prompt instead of exposing the old desktop.
 
 The existing protocol baseline runs from the OS repository root:
 

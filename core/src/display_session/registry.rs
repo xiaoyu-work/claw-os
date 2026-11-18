@@ -144,6 +144,23 @@ impl GuiControl {
         Ok(())
     }
 
+    pub(crate) fn lock(&self, deadline: Instant) -> Result<(), Error> {
+        let instance = InstanceId::random()?;
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis() as u64;
+        match self.exchange(
+            CompositorCommand::Lock {
+                epoch: self.epoch,
+                instance,
+                expires_monotonic_ms: monotonic_ms()?.saturating_add(remaining.min(super::locker::LOCK_START_MS)),
+            },
+            Vec::new(),
+            deadline,
+        )? {
+            CompositorReply::Locked { epoch, instance: received } if epoch == self.epoch && received == instance => Ok(()),
+            _ => Err(Error::Protocol("native display lock was not confirmed")),
+        }
+    }
+
     pub fn exchange(
         &self,
         command: CompositorCommand,
@@ -530,7 +547,7 @@ fn monitor(
                     "GUI control retirement correlation limit reached",
                 ));
             }
-            if !matches!(kind, 6 | 7) { channel.send(
+            if !matches!(kind, 6 | 7 | 8) { channel.send(
                 &AuthorityCommand::Gui {
                     command: CompositorCommand::Retire { epoch, instance },
                 },
@@ -627,7 +644,7 @@ fn monitor(
                         message: reply,
                         descriptors: packet.descriptors,
                         sender: packet.sender,
-                    })).is_err() && !matches!(expected, 6 | 7) {
+                    })).is_err() && !matches!(expected, 6 | 7 | 8) {
                         tracing::warn!("GUI control requester disappeared; retiring its instance");
                         channel.send(
                             &AuthorityCommand::Gui {
@@ -657,6 +674,7 @@ fn control_target(command: &CompositorCommand, expected: Epoch) -> Result<(Insta
         CompositorCommand::Retire { epoch, instance } => (*epoch, *instance, 3),
         CompositorCommand::SetSelection { epoch, instance, .. } => (*epoch, *instance, 6),
         CompositorCommand::Desktop { epoch, instance, .. } => (*epoch, *instance, 7),
+        CompositorCommand::Lock { epoch, instance, .. } => (*epoch, *instance, 8),
         _ => return Err(Error::Protocol("invalid GUI control transition")),
     };
     if epoch != expected {
@@ -673,6 +691,7 @@ fn reply_target(reply: &CompositorReply, expected: Epoch) -> Result<(InstanceId,
         CompositorReply::InstanceEnded { epoch, instance } => (*epoch, *instance, 5),
         CompositorReply::SelectionSet { epoch, instance } => (*epoch, *instance, 6),
         CompositorReply::DesktopResult { epoch, instance } => (*epoch, *instance, 7),
+        CompositorReply::Locked { epoch, instance } => (*epoch, *instance, 8),
         CompositorReply::Rejected {
             epoch, instance, ..
         } => (*epoch, *instance, 4),
