@@ -17,6 +17,7 @@ use super::containment::{self, Containment};
 const STARTUP: Duration = Duration::from_secs(20);
 const STOP: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(10);
+const CONTROL_IO: Duration = Duration::from_millis(250);
 const MAX_SUBSCRIBERS: usize = 32;
 
 struct Controllers {
@@ -118,6 +119,12 @@ impl Controllers {
             return Err(Error::Closed);
         }
         Ok(())
+    }
+
+    fn live_io_deadline(&self) -> Result<Instant, Error> {
+        let now = Instant::now();
+        let remaining = self.expires_ms.saturating_sub(monotonic_ms()?);
+        Ok(now + CONTROL_IO.min(Duration::from_millis(remaining)))
     }
 
     fn wait_authority(&mut self, retired: bool, deadline: Instant) -> Result<(), Error> {
@@ -292,7 +299,12 @@ impl Supervisor {
             let packet = self
                 .controllers
                 .authority
-                .receive::<AuthorityCommand>(&self.controllers.broker, Instant::now() + TICK)?;
+                .receive::<AuthorityCommand>(
+                    &self.controllers.broker,
+                    self.controllers.live_io_deadline()?,
+                )
+                .map_err(|error| io_timeout(error, "timed out receiving display authority"))?;
+            self.controllers.assert_live()?;
             match packet.message {
                 AuthorityCommand::Heartbeat {
                     epoch,
@@ -305,8 +317,9 @@ impl Supervisor {
                             expires_monotonic_ms,
                         },
                         &[],
-                        Instant::now() + TICK,
-                    )?;
+                        self.controllers.live_io_deadline()?,
+                    )
+                    .map_err(|error| io_timeout(error, "timed out forwarding display heartbeat"))?;
                 }
                 AuthorityCommand::Shutdown { epoch } if epoch == self.controllers.epoch => {
                     return Err(Error::Closed);
@@ -314,7 +327,8 @@ impl Supervisor {
                 AuthorityCommand::Gui { command } => {
                     let descriptors: Vec<_> = packet.descriptors.iter().map(AsFd::as_fd).collect();
                     self.control
-                        .send(&command, &descriptors, Instant::now() + TICK)?;
+                        .send(&command, &descriptors, self.controllers.live_io_deadline()?)
+                        .map_err(|error| io_timeout(error, "timed out forwarding compositor command"))?;
                 }
                 _ => {
                     return Err(Error::Protocol(
@@ -336,7 +350,11 @@ impl Supervisor {
             if self.control.readable()? {
                 let packet = self
                     .control
-                    .receive::<CompositorReply>(&self.compositor_identity, Instant::now() + TICK)?;
+                    .receive::<CompositorReply>(
+                        &self.compositor_identity,
+                        self.controllers.live_io_deadline()?,
+                    )
+                    .map_err(|error| io_timeout(error, "timed out receiving compositor reply"))?;
                 if !matches!(
                     packet.message,
                     CompositorReply::CreatorReady { .. }
@@ -355,14 +373,18 @@ impl Supervisor {
                         reply: packet.message,
                     },
                     &descriptors,
-                    Instant::now() + TICK,
-                )?;
+                    self.controllers.live_io_deadline()?,
+                )
+                .map_err(|error| io_timeout(error, "timed out forwarding compositor reply"))?;
             }
             if self.controllers.pam.readable()? {
                 match self
                     .controllers
                     .pam
-                    .receive::<PamCommand>(&self.controllers.parent, Instant::now() + TICK)
+                    .receive::<PamCommand>(
+                        &self.controllers.parent,
+                        self.controllers.live_io_deadline()?,
+                    )
                 {
                     Ok(packet) => match packet.message {
                         PamCommand::Close { epoch } if epoch == self.controllers.epoch => {
@@ -539,11 +561,30 @@ pub fn run() -> Result<(), Error> {
     let controllers = Controllers::receive()?;
     let mut supervisor = Supervisor::start(controllers)?;
     let outcome = supervisor.watch();
+    if let Err(error) = &outcome {
+        if let Ok(reason) = std::ffi::CString::new(error.to_string()) {
+            // The compositor owns the VT, so a terminal-only error can be lost at logout.
+            unsafe {
+                libc::syslog(
+                    libc::LOG_DAEMON | libc::LOG_ERR,
+                    c"authenticated display lost: %s".as_ptr(),
+                    reason.as_ptr(),
+                );
+            }
+        }
+    }
     let retirement = supervisor.retire(outcome.is_ok());
     match (outcome, retirement) {
         (_, Err(error)) => Err(error),
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn io_timeout(error: Error, phase: &'static str) -> Error {
+    match error {
+        Error::Timeout => Error::Protocol(phase),
+        other => other,
     }
 }
 

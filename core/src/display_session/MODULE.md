@@ -71,6 +71,11 @@ owned workload is empty and waits for GUI resource retirement. Control loss,
 expired authority and crashes fail closed and can report a PAM/session error
 even after emergency containment succeeds. An interrupted `--exec` child is
 not a successful session command. Existing disclosed bytes cannot be recalled.
+The Root supervisor logs the first running-session failure to syslog before
+cleanup, so it remains visible if greetd clears the graphical console.
+Its control packets have a bounded I/O budget separate from the 10 ms poll
+cadence, never beyond the existing display lease. Brief scheduling delays
+do not shorten the lease; expired or unresponsive peers still fail closed.
 Ordinary login-leaf background processes remain logind-owned; they are not
 killed or moved by UID inference.
 
