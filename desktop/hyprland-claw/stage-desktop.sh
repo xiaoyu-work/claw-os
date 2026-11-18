@@ -17,22 +17,36 @@ cargo +stable build --manifest-path "$project/cos-runtime/rust/Cargo.toml" --loc
 cargo +stable build --manifest-path "$project/desktop/services/claw-applet-services/Cargo.toml" \
     --locked --release --features provider --bin claw-os-applet-provider
 
-cp -a "$project/desktop/hyprland" "$project/desktop/hyprland-claw" "$work/"
-python3 "$project/desktop/hyprland-claw/build-dependencies.py" --cache "$work/deps" --jobs "$jobs"
-prefix="$work/deps/prefix"
+source_adapter="$project/desktop/hyprland-claw"
+compiler="$(python3 "$source_adapter/build-toolchain.py" "$work")"
+export CC="$compiler/bin/gcc" CXX="$compiler/bin/g++"
+export LD_LIBRARY_PATH="$compiler/lib64:$compiler/lib"
+toolchain="$("$CXX" -dumpfullversion)"
+dependencies="$work/deps-gcc-$toolchain"
+cmake_build="$work/compositor-gcc-$toolchain"
+cp -a "$project/desktop/hyprland" "$source_adapter" "$work/"
+python3 "$source_adapter/build-dependencies.py" --cache "$dependencies" --jobs "$jobs"
+prefix="$dependencies/prefix"
 export PATH="$prefix/bin:$PATH"
 export CMAKE_PREFIX_PATH="$prefix"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
-cmake -S "$work/hyprland" -B "$work/compositor" -G Ninja \
+cmake -S "$work/hyprland" -B "$cmake_build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
     "-DCLAW_COMPOSITOR_LIBRARY=$CARGO_TARGET_DIR/release/libclaw_compositor.a" \
     -DNO_UWSM=ON -DBUILD_TESTING=OFF
-cmake --build "$work/compositor" --parallel "$jobs" --target Hyprland
+cmake --build "$cmake_build" --parallel "$jobs" --target Hyprland
 
 native="$stage/usr/libexec/claw-hyprland"
-install -Dm0755 "$work/compositor/Hyprland" "$native/Hyprland"
+install -Dm0755 "$cmake_build/Hyprland" "$native/Hyprland"
 install -d "$native/lib"
 cp -a "$prefix"/lib/*.so.* "$native/lib/"
+# Use the same newer C++ runtime as the build, private to the compositor.
+for library in libstdc++.so.6 libgcc_s.so.1; do
+    file="$("$CXX" "-print-file-name=$library")"
+    test "${file#"$compiler/"}" != "$file"
+    install -m0644 "$file" "$native/lib/$library"
+done
+unset LD_LIBRARY_PATH
 patchelf --set-rpath '$ORIGIN/lib' "$native/Hyprland"
 find "$native/lib" -type f -name '*.so.*' -exec patchelf --set-rpath '$ORIGIN' {} +
 if find "$native/lib" -xtype l -print -quit | grep -q .; then
@@ -48,13 +62,15 @@ install -Dm0644 "$work/hyprland/LICENSE" "$license/hyprland/LICENSE"
 install -Dm0644 "$work/hyprland/subprojects/udis86/LICENSE" "$license/hyprland/LICENSE-udis86"
 install -Dm0644 /usr/share/common-licenses/GPL-3 "$license/hyprland/LICENSE-claw-authority"
 install -Dm0644 "$work/hyprland-claw/dependencies.lock.json" "$license/hyprland/sources.json"
-for source in "$work"/deps/sources/*; do
+install -Dm0644 "$source_adapter/toolchain.lock.json" "$license/hyprland/gcc/sources.json"
+install -m0644 "$compiler/claw-notices/"* "$license/hyprland/gcc/"
+for source in "$dependencies"/sources/*; do
     while IFS= read -r -d '' notice; do
         install -Dm0644 "$notice" "$license/hyprland/${source##*/}/${notice##*/}"
     done < <(find "$source" -maxdepth 1 -type f \
         \( -iname 'license*' -o -iname 'copying*' -o -iname 'copyright*' \) -print0)
 done
-install -Dm0644 "$work/deps/sources/lua-5.5.1/doc/readme.html" "$license/hyprland/lua/LICENSE.html"
+install -Dm0644 "$dependencies/sources/lua-5.5.1/doc/readme.html" "$license/hyprland/lua/LICENSE.html"
 
 for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
     install -Dm0755 "$CARGO_TARGET_DIR/release/$binary" "$stage/usr/local/bin/$binary"

@@ -11,6 +11,10 @@ is provenance, not a Claw OS submodule dependency.
 The [GPL-3.0-only Root authority adapter](hyprland-claw/MODULE.md) is linked
 unconditionally. Native dependency revisions and archive hashes are recorded
 in [`dependencies.lock.json`](hyprland-claw/dependencies.lock.json).
+[`toolchain.lock.json`](hyprland-claw/toolchain.lock.json) pins the GCC
+compiler layer of the Docker Official Image for each native architecture.
+The installed private C++ runtime carries the original GCC license and
+runtime exception; its compiler is not included.
 The [Desktop Shell App](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-shell)
 records its own sources and licenses. No Omarchy source is used.
 

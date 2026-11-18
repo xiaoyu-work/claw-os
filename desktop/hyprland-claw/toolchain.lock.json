@@ -1,0 +1,20 @@
+{
+  "image": "docker.io/library/gcc:15.3.0-trixie",
+  "image_digest": "sha256:60a0af4b79226d7cb062cc18dcb56f91b4385aace8f6d514f114c3f1af363ef1",
+  "version": "15.3.0",
+  "dockerfile_revision": "5719f2f1af9000a4129748ce85656c7964b76c31",
+  "compiler_layers": {
+    "amd64": {
+      "sha256": "2dfcd369f0bae3a8846fef822f055e0a168904326f8929c5ac84eb2321226dcc",
+      "size": 168164494
+    },
+    "arm64": {
+      "sha256": "444c535388faa544dcb49328a7fc94b6b812457a15412ce82cabba6d57cb92bd",
+      "size": 158038832
+    }
+  },
+  "notices": {
+    "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+  }
+}

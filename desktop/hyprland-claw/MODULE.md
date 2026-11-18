@@ -141,7 +141,12 @@ python3 desktop/hyprland-claw/build-dependencies.py \
 ```
 
 The build requires Git, CMake, Ninja, Meson, pkg-config, a C++26 compiler and
-the development libraries declared by the upstream manifests. Distribution
+the development libraries declared by the upstream manifests. For Debian 13,
+`stage-desktop.sh` uses the pinned official GCC 15.3 Trixie build:
+`build-toolchain.py` verifies and extracts only its compiler layer. Debian's
+GCC 14 standard library does not support Hyprwire's `append_range`.
+Only the matching private C++ runtime enters the Desktop payload; neither
+the compiler nor the system's C++ libraries are replaced. Distribution
 packages include glslang tools/development files, Wayland, DRM/GBM, libinput,
 libseat, libdisplay-info, Cairo/Pango, libeis, Lua 5.5, librsvg, libzip and
 tomlplusplus. Source caches retain licenses and refuse changed tracked files.
