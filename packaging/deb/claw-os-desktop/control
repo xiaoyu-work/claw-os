@@ -15,7 +15,7 @@ Depends: claw-os-base (>= __MIN_BASE__), claw-os-abi-__ABI__, claw-os-app-runtim
  network-manager, iwd, wpasupplicant, bluez, bluez-tools, udev,
  upower, power-profiles-daemon, accountsservice, xdg-user-dirs,
  libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1,
- libxkbcommon0, libinput10, libdrm2, libgbm1, libegl1, libgles2, libgl1,
+ libxkbcommon0 (>= 1.11), libxkbcommon-x11-0 (>= 1.11), libinput10, libdrm2, libgbm1, libegl1, libgles2, libgl1,
  mesa-utils, mesa-vulkan-drivers, libvulkan1, libseat1, seatd, xwayland,
  libfontconfig1, libfreetype6, libexpat1, libpixman-1-0, libgtk-4-1,
  libpulse0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
