@@ -1,0 +1,88 @@
+{
+  "archive": "https://pkgs.omarchy.org/edge/aarch64/",
+  "key_url": "https://raw.githubusercontent.com/omacom/omarchy-pkgs/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/omarchy-keyring/omarchy.gpg",
+  "key_sha256": "15d6aac44df688165b2ea35fe0b23af239bbc66a6909c10a5c219e8d94b707de",
+  "fingerprint": "40DFB630FF42BCFFB047046CF0134EE680CAC571",
+  "inputs": {
+    "t2-image": {
+      "url": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/releases/download/v7.3.4-3/linux-image-7.3.4-3-t2-trixie_7.3.4-3_amd64.deb",
+      "sha256": "348ea11aee07d6255f9491adac9bb9b7ec7196440efb1ad536b54f88d2f0ce0e",
+      "source": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/tree/09a9b830e62942aa78d862ca32a4109b30d9a0f7"
+    },
+    "t2-headers": {
+      "url": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/releases/download/v7.3.4-3/linux-headers-7.3.4-3-t2-trixie_7.3.4-3_amd64.deb",
+      "sha256": "926f8e46185a6bda8a5455dea05bc15c755ac6e08b7c664eaffe8e3cb152e951",
+      "source": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/tree/09a9b830e62942aa78d862ca32a4109b30d9a0f7"
+    },
+    "aurora-kernel": {
+      "file": "linux-aurora-7.2.11.aurora16-1-aarch64.pkg.tar.zst",
+      "sha256": "d53b5d32b87a00982952e458da567922e237760561fd15ea26458302f570f2c3",
+      "source": "https://github.com/omacom/linux-aurora/tree/bed544bdf93a496ebf70ba180923bab12b6e01cf"
+    },
+    "m1n1": {
+      "file": "m1n1-aurora-1.6.1.aurora23-3-aarch64.pkg.tar.zst",
+      "sha256": "3ea63621222be3445a52ae700c69d0ee31440972669d93cf9158ef3afa739c0f",
+      "source": "https://github.com/omacom/m1n1/tree/ba130ffbeeadaa35215ed88b07ebcee3199d0be7"
+    },
+    "uboot": {
+      "file": "uboot-aurora-2026.07.aurora6-1-aarch64.pkg.tar.zst",
+      "sha256": "bb8c79ee1d361a80e8c1e5e9844f0563fd578494bd467abc1c4549dfa9ef7715",
+      "source": "https://github.com/aurora-silicon/u-boot/tree/d30213eadcaa886f4206d7661b61bc6cf7837828"
+    },
+    "omarchy-kernel": {
+      "file": "linux-omarchy-7.3-72-aarch64.pkg.tar.zst",
+      "sha256": "02598130b6ef4cada1735ea4e4a51e26f0af2fac4208da302a43ba4e9560dd5d",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
+    },
+    "omarchy-dtbs": {
+      "file": "linux-omarchy-dtbs-7.3-48-aarch64.pkg.tar.zst",
+      "sha256": "25f0510f1aa7842a6f0fef9c7cfd2bfc2ed7d512d485adffcce58cb3e8d62cb1",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-dtbs"
+    },
+    "nvidia-modules": {
+      "file": "linux-omarchy-nvidia-open-7.3-72-aarch64.pkg.tar.zst",
+      "sha256": "e41cb0eb347384bd80628d6235c2514b07dca5c23bc09879fd5d311e8f010f9f",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
+    },
+    "nvidia-userspace": {
+      "file": "nvidia-utils-615.78.08-3-aarch64.pkg.tar.zst",
+      "sha256": "651ba16b80f9505ca6577f23fab51cc10c02f6ffc90a9d1619f4a37d9695680c",
+      "source": "https://download.nvidia.com/XFree86/Linux-aarch64/615.78.08/"
+    }
+  },
+  "platforms": {
+    "x86-t2": {
+      "arch": "amd64",
+      "release": "7.3.4-3-t2-trixie",
+      "boot_args": "intel_iommu=on iommu=pt pm_async=off",
+      "native": ["t2-image", "t2-headers"]
+    },
+    "aarch64-apple": {
+      "arch": "arm64",
+      "release": "7.2.11-16-1-ARCH",
+      "kernel": "aurora-kernel",
+      "boot": ["m1n1", "uboot"]
+    },
+    "aarch64-qualcomm": {
+      "arch": "arm64",
+      "release": "7.3.0-72-omarchy",
+      "kernel": "omarchy-kernel",
+      "dtbs": "omarchy-dtbs"
+    },
+    "aarch64-n1x": {
+      "arch": "arm64",
+      "release": "7.3.0-72-omarchy",
+      "boot_args": "console=tty0 acpi=nospcr pci=hpbussize=0x20",
+      "kernel": "omarchy-kernel",
+      "dtbs": "omarchy-dtbs",
+      "gpu": ["nvidia-modules", "nvidia-userspace"]
+    },
+    "aarch64-gb10": {
+      "arch": "arm64",
+      "release": "7.3.0-72-omarchy",
+      "kernel": "omarchy-kernel",
+      "dtbs": "omarchy-dtbs",
+      "gpu": ["nvidia-modules", "nvidia-userspace"]
+    }
+  }
+}

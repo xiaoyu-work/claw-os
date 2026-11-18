@@ -15,6 +15,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 
 | Feature | What it adds |
 |---|---|
+| `kernel-platform` | Opt-in vendor kernel, selected firmware/driver stack and boot settings for `CLAW_PLATFORM`, after the standard kernel and image features |
 | `base` | Core CLI tools, Node.js 24 (+ pnpm/typescript/tsx), Python apt packages, runtime dirs, `/etc/cos/profile.sh` sourcing, version injection |
 | `cos-core` | `claw-os-agent` plus `claw-os-base`: Agent/browser binaries, skills, SDK/runtime and OS integration; separately checked App APT packages supply the headless/support/library set |
 | `browser` | Chromium executable and target runtime integration for the browser binaries already shipped by `claw-os-agent` |

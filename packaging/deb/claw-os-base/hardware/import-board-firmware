@@ -1,0 +1,128 @@
+#!/usr/bin/python3
+"""Install firmware from an extracted OEM driver directory on this machine."""
+
+import argparse
+from collections import Counter
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import stat
+import subprocess
+import tempfile
+
+
+DT = Path("/sys/firmware/devicetree/base")
+FIRMWARE = Path("/usr/lib/firmware")
+
+
+def firmware_requests():
+    if not (DT / "compatible").is_file() or not any(
+        re.match(rb"qcom,(?:x1|glymur|mahua|kalambo)", entry)
+        for entry in (DT / "compatible").read_bytes().split(b"\0")
+    ):
+        raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
+    names = set()
+    for prop in DT.rglob("firmware-name"):
+        for name in prop.read_bytes().decode("ascii").split("\0"):
+            path = PurePosixPath(name)
+            if name.startswith("qcom/") and re.fullmatch(r"[A-Za-z0-9._/-]+", name) and ".." not in path.parts:
+                names.add(name)
+    if not names:
+        raise ValueError("the running device tree declares no Qualcomm firmware paths")
+    return sorted(names)
+
+
+def existing(name):
+    return any(
+        (root / f"{name}{suffix}").is_file()
+        for root in (FIRMWARE, FIRMWARE / "updates")
+        for suffix in ("", ".zst", ".xz")
+    )
+
+
+def open_firmware(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    stream = os.fdopen(fd, "rb")
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+        stream.close()
+        raise ValueError(f"{path}: expected a nonempty regular file")
+    return stream
+
+
+def candidates(source, requests, missing):
+    by_name = {}
+    for file in source.rglob("*"):
+        if not file.is_symlink() and file.is_file():
+            by_name.setdefault(file.name.lower(), []).append(file)
+    counts = Counter(PurePosixPath(name).name.lower() for name in requests)
+    for name in missing:
+        basename = PurePosixPath(name).name
+        exact = source / name
+        if exact.is_file() and not exact.is_symlink():
+            files = [exact]
+        elif counts[basename.lower()] == 1:
+            files = by_name.get(basename.lower(), [])
+        else:
+            continue
+        if not files and basename.endswith("_dtb.mbn"):
+            files = by_name.get(basename.removesuffix("_dtb.mbn").lower() + "_dtbs.elf", [])
+        if not files:
+            continue
+        hashes = set()
+        for file in files:
+            with open_firmware(file) as stream:
+                hashes.add(hashlib.file_digest(stream, "sha256").digest())
+        if len(hashes) != 1:
+            raise ValueError(f"{name}: multiple different files; supply only the matching OEM driver")
+        yield name, files[0], hashes.pop()
+
+
+def install(name, source, expected):
+    target = FIRMWARE / "updates" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=target.parent) as staged, open_firmware(source) as payload:
+        shutil.copyfileobj(payload, staged)
+        staged.flush()
+        staged.seek(0)
+        if hashlib.file_digest(staged, "sha256").digest() != expected:
+            raise ValueError(f"{source}: changed during import")
+        os.chmod(staged.name, 0o644)
+        os.link(staged.name, target)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path, nargs="?", help="local directory of OEM driver files")
+    parser.add_argument("--list-missing", action="store_true")
+    args = parser.parse_args()
+    if args.list_missing == (args.source is not None):
+        parser.error("use --list-missing or specify one local OEM directory")
+    requests = firmware_requests()
+    missing = [name for name in requests if not existing(name)]
+    if args.list_missing:
+        for name in missing:
+            print(name)
+        return
+    if os.geteuid() != 0:
+        raise ValueError("import requires root")
+    if not args.source.is_dir():
+        raise ValueError("the OEM driver directory does not exist")
+    matches = list(candidates(args.source, requests, missing))
+    for name, file, expected in matches:
+        install(name, file, expected)
+        print(f"Installed {name}")
+    if any((FIRMWARE / "updates" / name).is_file() for name in requests):
+        subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
+    for name in missing:
+        if not existing(name):
+            print(f"Still missing: {name}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"claw-import-board-firmware: {error}") from error

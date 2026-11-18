@@ -80,6 +80,7 @@ Targets package a profile and may finalize a staged copy of its rootfs:
 - `wsl` emits a modern `.wsl` package with a first-launch OOBE.
 - `docker` builds an OCI container image.
 - `iso-live` and `iso-installer` emit bootable ISO media.
+- `asahi-rootfs` emits a desktop root filesystem archive for a separately provisioned Apple Silicon boot chain.
 
 Cloud generalization happens only in the staged disk filesystem. It does not
 mutate the composed rootfs and does not affect local VM, WSL, or Docker
@@ -110,9 +111,22 @@ The arm64 live and installer ISOs list recognized Snapdragon X models in a separ
 
 Debian's Qualcomm firmware and the available display/input drivers are included in early boot. The experimental entries do not start the Qualcomm DSP: some boards need OEM-signed firmware, and DSP startup can disconnect USB-C root disks. Audio, power reporting and other features that depend on it are not covered. A menu entry is not hardware certification; the selected tree and installation still need physical testing.
 
-### Remaining platform gaps
+On the running Snapdragon machine, `claw-import-board-firmware --list-missing` shows the files named by its device tree. `sudo claw-import-board-firmware /path/to/extracted-oem-driver` installs matching files from that machine's own driver into `/usr/lib/firmware/updates`, never downloading or replacing existing firmware, then updates the initramfs. This does not enable the DSP or authorize using another model's firmware.
 
-Apple Silicon needs its Asahi boot and kernel stack. Snapdragon X2 and other models absent from the [board list](../packaging/deb/claw-os-base/hardware/qualcomm-boot.sh) are not supported by this boot path. NVIDIA N1x and GB10 need their matching platform kernel, GPU stack, and boot configuration. Intel T2 and fixes that depend on a custom kernel, DKMS package, or OEM payload are not supplied by these rules. Do not copy firmware from a vendor's recovery or Windows image into a distribution package without redistribution rights.
+### Experimental vendor kernels
+
+The generic Debian kernel remains the default. Build an opt-in image on a native Debian host with `sudo env CLAW_PLATFORM=<profile> ./build.sh iso-installer` or `iso-live`. Install the ISO tools plus `python3`, `gnupg`, `gpgv`, `zstd`, `kmod` and `device-tree-compiler` on the build host. The profile uses the exact kernel and matching initramfs for the ISO and the installed system rather than choosing an unrelated kernel by version.
+
+| Profile | Native artifact and remaining limits |
+| --- | --- |
+| `x86-t2` | Debian 13 T2 kernel with early virtual USB for internal input. Mac-specific firmware for Wi-Fi and Bluetooth is not bundled. |
+| `aarch64-qualcomm` | Patched kernel and version-matched retail Snapdragon X/X2 device trees. Choose the exact model and variant in GRUB. DSP-dependent hardware remains off in these entries. |
+| `aarch64-n1x` / `aarch64-gb10` | Matched NVIDIA open kernel modules, GPU firmware and driver libraries. GB10 media disables unsupported system sleep; N1x acceleration requires working production GPU firmware. |
+| `aarch64-apple` | Aurora kernel, matching device trees and m1n1/U-Boot stage-two assets. Use `iso-live` for pre-provisioned Asahi UEFI or `sudo ./build.sh asahi-rootfs` for a desktop rootfs archive. Generic Calamares is disabled for this profile: it does not provision macOS recovery, an Apple boot policy or a dedicated Asahi ESP. |
+
+`python3 scripts/platform_kernels.py <profile>` prepares the corresponding Debian packages and boot assets without building the full OS. Kernel and driver inputs are pinned by SHA-256; Omarchy artifacts also require signatures from the pinned archive key. Neither the image nor the install adds an Arch package repository. Generated platform artifacts carry their upstream source references and are not published by the regular Claw OS APT workflow.
+
+Apple provisioning must first create and enroll a dedicated Asahi boot chain without overwriting macOS or recovery. The rootfs archive is for that Linux root and ESP only. It carries the matched stage-two image at `/usr/lib/cos/asahi/boot.bin` (`boot-j700.bin` for MacBook Neo); it does not activate either image or replace an enrolled Apple Stage 1. Internal speaker audio is disabled until the matching speaker protection stack is qualified. Other device-specific OEM firmware and user-space workarounds are not assumed to be covered by the kernel. Do not bundle material from a vendor recovery or Windows image without redistribution rights.
 
 ## Instance identity
 

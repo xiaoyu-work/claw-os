@@ -703,6 +703,7 @@ install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-hom
 
 HARDWARE_SRC="$SCRIPT_DIR/claw-os-base/hardware"
 install -Dm0755 "$HARDWARE_SRC/claw-hardware-setup" "$BASE_STAGE/usr/sbin/claw-hardware-setup"
+install -Dm0755 "$HARDWARE_SRC/import-board-firmware" "$BASE_STAGE/usr/sbin/claw-import-board-firmware"
 install -Dm0755 "$HARDWARE_SRC/claw-os-input-initramfs" \
     "$BASE_STAGE/usr/share/initramfs-tools/hooks/claw-os-input"
 install -Dm0644 "$HARDWARE_SRC/qualcomm-boot.sh" "$BASE_STAGE/usr/lib/cos/hw/qualcomm-boot.sh"

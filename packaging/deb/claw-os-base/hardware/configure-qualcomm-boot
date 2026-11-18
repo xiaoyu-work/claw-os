@@ -23,14 +23,14 @@ for arg in $(cat /proc/cmdline); do
 done
 [ -n "$tree" ] || exit 0
 
-board=$(claw_qcom_board "$tree") || fail "unknown device tree: $tree"
+version=$(uname -r)
+board=$(claw_qcom_board "$tree" "$version") || fail "unknown device tree: $tree"
 compatible=${board#*|}
 compatible=${compatible%%|*}
 if ! tr '\000' '\n' </sys/firmware/devicetree/base/compatible | grep -Fxq "$compatible"; then
     fail "the running device tree does not match $tree"
 fi
 
-version=$(uname -r)
 claw_qcom_tree '' "$version" "$tree" >/dev/null || fail "installed kernel $version has no $tree"
 [ -s "/boot/initrd.img-$version" ] || fail "missing initramfs for $version"
 

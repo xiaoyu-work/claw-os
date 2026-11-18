@@ -1,6 +1,11 @@
 # Shared by the ISO builders and the installed ARM boot configuration.
 
 claw_qcom_boards() {
+    local boards="${1:-}/usr/lib/modules/${2:-}/dtb/qcom/claw-boards.list"
+    if [ -f "$boards" ]; then
+        cat "$boards"
+        return
+    fi
     cat <<'BOARDS'
 x1e80100-asus-vivobook-s15.dtb|asus,vivobook-s15|ASUS Vivobook S 15 (X Elite)
 x1p42100-asus-vivobook-s15.dtb|asus,vivobook-s15-x1p4|ASUS Vivobook S 15 (X1P-42-100)
@@ -26,7 +31,7 @@ BOARDS
 }
 
 claw_qcom_board() {
-    claw_qcom_boards | awk -F '|' -v "tree=$1" '$1 == tree { print; found=1 } END { exit !found }'
+    claw_qcom_boards '' "$2" | awk -F '|' -v "tree=$1" '$1 == tree { print; found=1 } END { exit !found }'
 }
 
 claw_qcom_tree() {
@@ -49,7 +54,7 @@ claw_qcom_iso_menu() {
     local rootfs=$1 media=$2 version=$3 label=$4
     local entries tree _compatible model source
     entries=$(
-        claw_qcom_boards | while IFS='|' read -r tree _compatible model; do
+        claw_qcom_boards "$rootfs" "$version" | while IFS='|' read -r tree _compatible model; do
             source=$(claw_qcom_tree "$rootfs" "$version" "$tree") || continue
             install -Dm0644 "$source" "$media/live/dtb/qcom/$tree" || exit 1
             cat <<MENU
@@ -63,6 +68,6 @@ MENU
         done
     ) || return 1
     if [ -n "$entries" ]; then
-        printf "\nsubmenu '%s - Snapdragon X (experimental)' {\n%s\n}\n" "$label" "$entries"
+        printf "\nsubmenu '%s - Snapdragon X/X2 (experimental)' {\n%s\n}\n" "$label" "$entries"
     fi
 }

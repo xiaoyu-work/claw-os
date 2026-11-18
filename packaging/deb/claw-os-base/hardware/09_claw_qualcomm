@@ -6,8 +6,6 @@ set -e
 . /usr/lib/cos/hw/qualcomm-boot.sh
 . /usr/share/grub/grub-mkconfig_lib
 
-board=$(claw_qcom_board "$CLAW_QCOM_DTB") || exit 1
-model=${board##*|}
 root_device=${GRUB_DEVICE:?}
 if [ -n "${GRUB_DEVICE_UUID:-}" ] && [ "${GRUB_DISABLE_LINUX_UUID:-false}" != true ]; then
     root_device=UUID=$GRUB_DEVICE_UUID
@@ -23,6 +21,8 @@ for kernel in $(printf '%s\n' /boot/vmlinuz-* | LC_ALL=C sort -Vr); do
     version=${kernel#/boot/vmlinuz-}
     initrd=/boot/initrd.img-$version
     [ -s "$initrd" ] || continue
+    board=$(claw_qcom_board "$CLAW_QCOM_DTB" "$version") || continue
+    model=${board##*|}
     dtb=$(claw_qcom_tree '' "$version" "$CLAW_QCOM_DTB") || continue
     dtb_device=$("$grub_probe" --target=device "$dtb")
     if [ "$found" = no ]; then

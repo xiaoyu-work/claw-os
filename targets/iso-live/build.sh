@@ -24,8 +24,10 @@ ISO_BUILD="$PROJECT_DIR/build/iso-build"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 source "$PROJECT_DIR/scripts/lib/image-profiles.sh"
+source "$PROJECT_DIR/targets/common/platform-iso.sh"
+select_iso_platform live "${FEATURES:-$IMAGE_FEATURES_LIVE}"
 
-OUTPUT="$PROJECT_DIR/build/claw-os-live-${ARCH_SUFFIX}.iso"
+OUTPUT="$PROJECT_DIR/build/claw-os-live-${ARCH_SUFFIX}${PLATFORM_SUFFIX}.iso"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "error: must run as root" >&2
@@ -66,9 +68,8 @@ done
 #    Note: rootfs/features/live/install.sh detects whether `desktop` was
 #    already applied and, if so, layers a greetd [initial_session] block
 #    for autologin into a Wayland session.
-FEATURES="${FEATURES:-$IMAGE_FEATURES_LIVE}"
-echo ":: features: $FEATURES"
-"$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
+echo ":: features: $ISO_FEATURES"
+"$PROJECT_DIR/rootfs/build.sh" --features "$ISO_FEATURES"
 
 # 2. Apply iso-live overlay if any.
 if [ -d "$SCRIPT_DIR/overlay" ]; then
@@ -76,15 +77,7 @@ if [ -d "$SCRIPT_DIR/overlay" ]; then
 fi
 
 # 3. Locate kernel + initrd in the rootfs (linux-image-amd64 installs both).
-KERNEL=$(find "$ROOTFS/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
-KERNEL_VERSION=${KERNEL##*/vmlinuz-}
-INITRD="$ROOTFS/boot/initrd.img-$KERNEL_VERSION"
-if [ ! -s "$KERNEL" ] || [ ! -s "$INITRD" ]; then
-    echo "error: matching kernel and initramfs not found in $ROOTFS/boot" >&2
-    exit 1
-fi
-echo ":: kernel: $KERNEL"
-echo ":: initrd: $INITRD"
+select_iso_kernel
 
 # 4. Reset ISO build dir.
 rm -rf "$ISO_BUILD"
@@ -123,7 +116,8 @@ menuentry "Claw OS Live (failsafe)" {
 }
 GRUBCFG
 
-if [ "$DEB_ARCH" = arm64 ]; then
+finalize_iso_platform
+if [[ $DEB_ARCH == arm64 && ( -z ${CLAW_PLATFORM:-} || $CLAW_PLATFORM == aarch64-qualcomm ) ]]; then
     source "$PROJECT_DIR/packaging/deb/claw-os-base/hardware/qualcomm-boot.sh"
     claw_qcom_iso_menu "$ROOTFS" "$ISO_BUILD" "$KERNEL_VERSION" "Claw OS Live" >> "$ISO_BUILD/boot/grub/grub.cfg"
 fi

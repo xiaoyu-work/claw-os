@@ -161,6 +161,8 @@ On an affected x86 machine that was installed before the board options shipped, 
 
 An [experimental Snapdragon X install](image-architecture.md#experimental-snapdragon-x-boot) keeps the chosen board in `/etc/default/grub.d/60-claw-os-qualcomm.cfg`. Kernel upgrades generate boot entries only for kernels that still ship that board's tree and a matching initramfs. Keep the last working kernel until its replacement has booted on the device.
 
+The [vendor kernel profiles](image-architecture.md#experimental-vendor-kernels) install a pinned kernel alongside Debian's default. Claw's regular APT upgrades do not replace the pinned platform kernel, NVIDIA driver or Apple stage-two bundle. To update a profile, build it with reviewed newer pins, update the matching packages together and verify the new boot image before discarding the old one.
+
 Each published package version is generated from the Git commit count and SHA,
 for example `0.1.0+git1226.g876f3ad810ca`. A later repository build therefore
 sorts as a newer Debian package and is selected by APT.
@@ -876,7 +878,10 @@ not approval to deploy it or a completed installed-system acceptance result.
 Agent supplies the internal `claw-os-display-session-v2` interface and native
 PAM/display helpers; Desktop supplies the matching protected Hyprland
 executable and greetd/PAM startup configuration. The Agent and Desktop upgrade
-must be coordinated with the signed Desktop Shell App. The new package removes
+must be coordinated with the signed Desktop Shell App. The reviewed menu
+requires the matching Agent build's private broker and supervisor routes;
+it does not use a raw launch fallback or change the public App ABI.
+The new package removes
 the superseded session; it does not migrate or erase owner configuration.
 Keep the packaged PAM close hook before keyring and logind teardown; a locally
 modified stack can otherwise reject checked display retirement.

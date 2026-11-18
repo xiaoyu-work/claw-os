@@ -30,8 +30,10 @@ ISO_BUILD="$PROJECT_DIR/build/iso-installer-build"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 source "$PROJECT_DIR/scripts/lib/image-profiles.sh"
+source "$PROJECT_DIR/targets/common/platform-iso.sh"
+select_iso_platform installer "$IMAGE_FEATURES_INSTALLER"
 
-OUTPUT="$PROJECT_DIR/build/claw-os-installer-${ARCH_SUFFIX}.iso"
+OUTPUT="$PROJECT_DIR/build/claw-os-installer-${ARCH_SUFFIX}${PLATFORM_SUFFIX}.iso"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "error: must run as root" >&2
@@ -64,7 +66,7 @@ done
 #    Includes apt-source so the installed system can apt upgrade out of
 #    the box, AND grub-disk so Calamares finds grub-install/efibootmgr.
 "$PROJECT_DIR/rootfs/build.sh" \
-    --features "$IMAGE_FEATURES_INSTALLER"
+    --features "$ISO_FEATURES"
 
 # 2. Apply iso-installer overlay if any.
 if [ -d "$SCRIPT_DIR/overlay" ]; then
@@ -72,15 +74,7 @@ if [ -d "$SCRIPT_DIR/overlay" ]; then
 fi
 
 # 3. Locate kernel + initrd.
-KERNEL=$(find "$ROOTFS/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
-KERNEL_VERSION=${KERNEL##*/vmlinuz-}
-INITRD="$ROOTFS/boot/initrd.img-$KERNEL_VERSION"
-if [ ! -s "$KERNEL" ] || [ ! -s "$INITRD" ]; then
-    echo "error: matching kernel and initramfs not found in $ROOTFS/boot" >&2
-    exit 1
-fi
-echo ":: kernel: $KERNEL"
-echo ":: initrd: $INITRD"
+select_iso_kernel
 
 # 4. Reset ISO build dir.
 rm -rf "$ISO_BUILD"
@@ -128,7 +122,8 @@ menuentry "Install Claw OS (failsafe)" {
 }
 GRUBCFG
 
-if [ "$DEB_ARCH" = arm64 ]; then
+finalize_iso_platform
+if [[ $DEB_ARCH == arm64 && ( -z ${CLAW_PLATFORM:-} || $CLAW_PLATFORM == aarch64-qualcomm ) ]]; then
     source "$PROJECT_DIR/packaging/deb/claw-os-base/hardware/qualcomm-boot.sh"
     claw_qcom_iso_menu "$ROOTFS" "$ISO_BUILD" "$KERNEL_VERSION" "Install Claw OS" >> "$ISO_BUILD/boot/grub/grub.cfg"
 fi

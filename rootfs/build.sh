@@ -239,6 +239,7 @@ ENVIRONMENT_HASH="$(
         printf 'COS_APT_PUBLIC_KEY_FILE=%s\0' "${COS_APT_PUBLIC_KEY_FILE:-}"
         printf 'COS_APT_PUBLIC_KEY_URL=%s\0' "${COS_APT_PUBLIC_KEY_URL:-}"
         printf 'COS_APT_PUBLIC_KEY_FINGERPRINT=%s\0' "${COS_APT_PUBLIC_KEY_FINGERPRINT:-}"
+        printf 'CLAW_PLATFORM=%s\0' "${CLAW_PLATFORM:-}"
     } | sha256sum | awk '{print $1}'
 )"
 

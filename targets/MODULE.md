@@ -21,6 +21,7 @@ redefining the operating-system feature set.
 | `docker/container-entrypoint.sh` | Container identity and startup |
 | `vm/` | Disk-image staging |
 | `iso-live/`, `iso-installer/` | Live and install media |
+| `asahi-rootfs/` | Desktop rootfs archive for an already provisioned Asahi boot chain |
 | `azure/` | Azure generalization and fixed-VHD packaging |
 | `common/` | Shared target helpers |
 | `../scripts/lib/image-profiles.sh` | Target-to-feature source of truth |

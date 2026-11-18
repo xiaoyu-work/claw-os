@@ -26,6 +26,7 @@ IMAGE_FEATURES_AZURE_DESKTOP="base,cos-core,systemd,kernel,desktop,copilot-cli,g
 # Bootable media profiles.
 IMAGE_FEATURES_LIVE="base,cos-core,systemd,kernel,live,gpu-drivers,apt-source"
 IMAGE_FEATURES_INSTALLER="base,cos-core,systemd,kernel,grub-disk,live,installer,gpu-drivers,apt-source"
+IMAGE_FEATURES_ASAHI="base,cos-core,systemd,kernel,desktop,grub-disk,apt-source,kernel-platform"
 
 case ",$IMAGE_FEATURES_VM," in
     *,local-user,*) ;;
