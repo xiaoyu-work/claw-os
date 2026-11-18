@@ -66,7 +66,18 @@ pub async fn control(
         let identifier = optional_string(&params, "identifier")?;
         let app_id = optional_string(&params, "app_id")?;
         let uris = optional_string_list(&params, "uris")?;
-        validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
+        let workspace = optional_string(&params, "workspace")?;
+        if matches!(action.as_str(), "focus-workspace" | "toggle-special" | "move-window" | "toggle-floating" | "toggle-pin") {
+            windows::validate_action(&action, identifier.as_deref(), workspace.as_deref())?;
+            if app_id.is_some() || !uris.is_empty() {
+                return Err("Workspace and window actions do not accept AppIDs or URIs".into());
+            }
+        } else {
+            if workspace.is_some() {
+                return Err("This desktop action does not accept a workspace".into());
+            }
+            validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
+        }
         match native_launch_target(authority, &action, app_id.as_deref()) {
             Some(NativeLaunchTarget::Terminal) => {
                 return open_terminal(&uris, authority, uid, gid, home, peer_pid).await;
@@ -89,7 +100,7 @@ pub async fn control(
         if action == "list" {
             let authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
             let display = windows::target(uid, peer_pid)?;
-            return windows::request(&display, "list", None, None, &authorized).await;
+            return windows::request(&display, "list", None, None, None, &authorized).await;
         }
         if action == "launch" {
             let _authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
@@ -112,9 +123,6 @@ pub async fn control(
         let authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
         let display = windows::target(uid, peer_pid)?;
         match action.as_str() {
-            "focus" | "close" => {
-                windows::request(&display, &action, identifier.as_deref(), None, &authorized).await
-            }
             "restart" => {
                 let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
                 restart(
@@ -126,7 +134,9 @@ pub async fn control(
                 )
                 .await
             }
-            _ => unreachable!("validated desktop action"),
+            _ => windows::request(
+                &display, &action, identifier.as_deref(), None, workspace.as_deref(), &authorized,
+            ).await,
         }
     }
 }
@@ -134,7 +144,10 @@ pub async fn control(
 fn requested_caps(action: &str, app_id: Option<&str>, uris: &[String]) -> Result<Vec<Cap>, String> {
     let mut caps = match action {
         "list" => vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop"))],
-        "focus" | "close" => vec![Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control"))],
+        "focus" | "close" | "focus-workspace" | "toggle-special" | "move-window"
+        | "toggle-floating" | "toggle-pin" => {
+            vec![Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control"))]
+        }
         "launch" => vec![Cap::new(
             Verb::DESKTOP_LAUNCH,
             Scope::name(app_id.unwrap_or_default()),
@@ -393,7 +406,7 @@ async fn restart(
     authorized: &Authorized,
 ) -> Result<Value, String> {
     let close = windows::request(
-        display, "close-app", Some(identifier), Some(app_id), authorized,
+        display, "close-app", Some(identifier), Some(app_id), None, authorized,
     ).await?;
     if close["remaining_count"].as_u64().unwrap_or(1) != 0 {
         return Ok(json!({
@@ -408,7 +421,7 @@ async fn restart(
     }
     let launch = launch_desktop_app(environment, app_id, &[]).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let windows = windows::request(display, "list", None, None, authorized).await?;
+    let windows = windows::request(display, "list", None, None, None, authorized).await?;
     let matching = windows["windows"]
         .as_array()
         .into_iter()

@@ -23,7 +23,7 @@ the display, so completed clipboard writes do not depend on the caller's GUI
 or an AI task remaining alive. Existing independent read checks still guard
 offers and transfers. Root-origin effect correlation never retires an App
 instance on acknowledgement loss.
-`desktop.rs` defines closed list/focus/close commands for the same Root
+`desktop.rs` defines closed window and workspace queries/effects for the same Root
 display channel. Response data uses a bounded sealed descriptor owned by the
 authenticated compositor account, not an oversized control frame or a raw
 App-accessible Hyprland socket. Receivers verify owner/seals and read by offset,

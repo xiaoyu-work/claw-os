@@ -20,13 +20,54 @@ pub enum Command {
     Focus { identifier: u64 },
     Close { identifier: u64 },
     CloseApp { identifier: u64, app_id: String },
+    FocusWorkspace { workspace: String },
+    ToggleSpecial { workspace: String },
+    MoveWindow { identifier: u64, workspace: String },
+    ToggleFloating { identifier: u64 },
+    TogglePin { identifier: u64 },
+}
+
+pub fn valid_workspace(value: &str) -> bool {
+    if let Some(name) = value
+        .strip_prefix("special:")
+        .or_else(|| value.strip_prefix("name:"))
+    {
+        return !name.is_empty()
+            && value.len() < 80
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
+    }
+    matches!(value, "r-1" | "r+1")
+        || (value.len() <= 10
+            && !value.starts_with('0')
+            && value.bytes().all(|b| b.is_ascii_digit())
+            && value.parse::<u32>().is_ok())
 }
 
 impl Command {
     pub fn validate(&self) -> Result<(), Error> {
         let identifier = match self {
             Self::List => return Ok(()),
-            Self::Focus { identifier } | Self::Close { identifier } => *identifier,
+            Self::Focus { identifier }
+            | Self::Close { identifier }
+            | Self::ToggleFloating { identifier }
+            | Self::TogglePin { identifier } => *identifier,
+            Self::FocusWorkspace { workspace } if valid_workspace(workspace) => return Ok(()),
+            Self::ToggleSpecial { workspace }
+                if workspace.starts_with("special:") && valid_workspace(workspace) =>
+            {
+                return Ok(());
+            }
+            Self::MoveWindow {
+                identifier,
+                workspace,
+            } if !matches!(workspace.as_str(), "r-1" | "r+1") && valid_workspace(workspace) => {
+                *identifier
+            }
+            Self::FocusWorkspace { .. } | Self::ToggleSpecial { .. } | Self::MoveWindow { .. } => {
+                return Err(Error::Protocol("invalid desktop workspace"));
+            }
             Self::CloseApp { identifier, app_id } => {
                 if app_id.is_empty()
                     || app_id.len() > 255

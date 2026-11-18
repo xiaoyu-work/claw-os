@@ -38,6 +38,7 @@ struct ClawDesktopRequest {
     kind: u32,
     identifier: u64,
     app_id: [u8; 256],
+    workspace: [u8; 80],
 }
 
 impl Default for ClawDesktopRequest {
@@ -46,6 +47,7 @@ impl Default for ClawDesktopRequest {
             kind: 0,
             identifier: 0,
             app_id: [0; 256],
+            workspace: [0; 80],
         }
     }
 }
@@ -199,6 +201,30 @@ unsafe extern "C" fn claw_compositor_take_desktop(
                     output.kind = 4;
                     output.identifier = identifier;
                     output.app_id[..app_id.len()].copy_from_slice(app_id.as_bytes());
+                }
+                DesktopCommand::FocusWorkspace { workspace } => {
+                    output.kind = 5;
+                    output.workspace[..workspace.len()].copy_from_slice(workspace.as_bytes());
+                }
+                DesktopCommand::ToggleSpecial { workspace } => {
+                    output.kind = 6;
+                    output.workspace[..workspace.len()].copy_from_slice(workspace.as_bytes());
+                }
+                DesktopCommand::MoveWindow {
+                    identifier,
+                    workspace,
+                } => {
+                    output.kind = 7;
+                    output.identifier = identifier;
+                    output.workspace[..workspace.len()].copy_from_slice(workspace.as_bytes());
+                }
+                DesktopCommand::ToggleFloating { identifier } => {
+                    output.kind = 8;
+                    output.identifier = identifier;
+                }
+                DesktopCommand::TogglePin { identifier } => {
+                    output.kind = 9;
+                    output.identifier = identifier;
                 }
             }
             Ok(())

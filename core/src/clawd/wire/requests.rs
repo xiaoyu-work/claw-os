@@ -1553,6 +1553,8 @@ pub struct DesktopControl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<Name>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Name<80>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uris: Option<TextList<32, PATH_BYTES>>,
 }
 

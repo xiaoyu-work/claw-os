@@ -683,6 +683,7 @@ struct DesktopBridgeArgs {
     action: String,
     identifier: Option<String>,
     app_id: Option<String>,
+    workspace: Option<String>,
     uris: Vec<String>,
 }
 
@@ -693,11 +694,12 @@ fn parse_desktop_bridge_args(args: &[String]) -> Result<DesktopBridgeArgs, Strin
         .clone();
     let mut identifier = None;
     let mut app_id = None;
+    let mut workspace = None;
     let mut uris = Vec::new();
     let mut index = 2;
     while index < args.len() {
         let flag = args[index].as_str();
-        if !matches!(flag, "--identifier" | "--app-id" | "--uri") {
+        if !matches!(flag, "--identifier" | "--app-id" | "--uri" | "--workspace") {
             return Err(format!("unknown internal desktop flag: {flag}"));
         }
         let value = args
@@ -707,8 +709,9 @@ fn parse_desktop_bridge_args(args: &[String]) -> Result<DesktopBridgeArgs, Strin
         match flag {
             "--identifier" if identifier.is_none() => identifier = Some(value),
             "--app-id" if app_id.is_none() => app_id = Some(value),
+            "--workspace" if workspace.is_none() => workspace = Some(value),
             "--uri" => uris.push(value),
-            "--identifier" | "--app-id" => {
+            "--identifier" | "--app-id" | "--workspace" => {
                 return Err(format!("{flag} may only be provided once"));
             }
             _ => unreachable!("validated internal desktop flag"),
@@ -719,6 +722,7 @@ fn parse_desktop_bridge_args(args: &[String]) -> Result<DesktopBridgeArgs, Strin
         action,
         identifier,
         app_id,
+        workspace,
         uris,
     })
 }
@@ -1284,6 +1288,7 @@ fn dispatch_with_stdin_impl(
                 "action": desktop.action,
                 "identifier": desktop.identifier,
                 "app_id": desktop.app_id,
+                "workspace": desktop.workspace,
                 "uris": desktop.uris,
             }),
         )?;

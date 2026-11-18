@@ -36,16 +36,22 @@ enum ClawCommandKind {
 };
 
 enum ClawDesktopKind {
-    CLAW_DESKTOP_LIST      = 1,
-    CLAW_DESKTOP_FOCUS     = 2,
-    CLAW_DESKTOP_CLOSE     = 3,
-    CLAW_DESKTOP_CLOSE_APP = 4,
+    CLAW_DESKTOP_LIST            = 1,
+    CLAW_DESKTOP_FOCUS           = 2,
+    CLAW_DESKTOP_CLOSE           = 3,
+    CLAW_DESKTOP_CLOSE_APP       = 4,
+    CLAW_DESKTOP_FOCUS_WORKSPACE = 5,
+    CLAW_DESKTOP_TOGGLE_SPECIAL  = 6,
+    CLAW_DESKTOP_MOVE_WINDOW     = 7,
+    CLAW_DESKTOP_TOGGLE_FLOATING = 8,
+    CLAW_DESKTOP_TOGGLE_PIN      = 9,
 };
 
 typedef struct ClawDesktopRequest {
     uint32_t kind;
     uint64_t identifier;
     uint8_t  app_id[256];
+    uint8_t  workspace[80];
 } ClawDesktopRequest;
 
 typedef struct ClawCommand {

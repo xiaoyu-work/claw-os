@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant};
 
-use claw_display_control::{desktop::Command, Epoch};
+use claw_display_control::{
+    desktop::{valid_workspace, Command},
+    Epoch,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -30,6 +33,10 @@ struct Window {
     output_count: usize,
     workspace_count: usize,
     geometry: Vec<Geometry>,
+    workspace: String,
+    monitor: i64,
+    floating: bool,
+    xwayland: bool,
     manageable: bool,
 }
 
@@ -47,9 +54,43 @@ impl Window {
             "output_count": self.output_count,
             "workspace_count": self.workspace_count,
             "geometry": self.geometry,
+            "workspace": self.workspace,
+            "monitor": self.monitor,
+            "floating": self.floating,
+            "xwayland": self.xwayland,
             "manageable": self.manageable,
         })
     }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Workspace {
+    selector: String,
+    name: String,
+    number: Option<u32>,
+    monitor: i64,
+    urgent: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Output {
+    id: i64,
+    name: String,
+    workspace: String,
+    special: String,
+    focused: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Keyboard {
+    layout: String,
+    default_layout: String,
+    active_name: String,
+    caps_lock: bool,
+    num_lock: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +102,9 @@ struct Snapshot {
     count: usize,
     requested: usize,
     before: Option<Window>,
+    workspaces: Vec<Workspace>,
+    outputs: Vec<Output>,
+    keyboard: Option<Keyboard>,
 }
 
 pub(super) fn target(owner: u32, pid: u32) -> Result<GuiControl, String> {
@@ -94,6 +138,32 @@ fn bound_identifier(value: &str, epoch: Epoch) -> Result<u64, String> {
         return Err("window identifier belongs to a different display epoch".into());
     }
     Ok(id)
+}
+
+pub(super) fn validate_action(
+    action: &str,
+    identifier: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<(), String> {
+    let window = identifier.is_some_and(|id| parse_identifier(id).is_ok());
+    let valid = match action {
+        "focus-workspace" => identifier.is_none() && workspace.is_some_and(valid_workspace),
+        "toggle-special" => {
+            identifier.is_none()
+                && workspace.is_some_and(|ws| ws.starts_with("special:") && valid_workspace(ws))
+        }
+        "move-window" => {
+            window
+                && workspace.is_some_and(|ws| !matches!(ws, "r-1" | "r+1") && valid_workspace(ws))
+        }
+        "toggle-floating" | "toggle-pin" => window && workspace.is_none(),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err("Invalid workspace or window action arguments".into())
+    }
 }
 
 async fn snapshot(control: &GuiControl, command: Command) -> Result<Snapshot, String> {
@@ -132,6 +202,7 @@ pub(super) async fn request(
     action: &str,
     identifier: Option<&str>,
     app_id: Option<&str>,
+    workspace: Option<&str>,
     _authorized: &Authorized,
 ) -> Result<Value, String> {
     let id = identifier
@@ -149,6 +220,22 @@ pub(super) async fn request(
             identifier: id.ok_or("close-app requires a window identifier")?,
             app_id: app_id.ok_or("close-app requires an AppID")?.to_string(),
         },
+        "focus-workspace" => Command::FocusWorkspace {
+            workspace: workspace.ok_or("workspace is required")?.to_owned(),
+        },
+        "toggle-special" => Command::ToggleSpecial {
+            workspace: workspace.ok_or("workspace is required")?.to_owned(),
+        },
+        "move-window" => Command::MoveWindow {
+            identifier: id.ok_or("window identifier is required")?,
+            workspace: workspace.ok_or("workspace is required")?.to_owned(),
+        },
+        "toggle-floating" => Command::ToggleFloating {
+            identifier: id.ok_or("window identifier is required")?,
+        },
+        "toggle-pin" => Command::TogglePin {
+            identifier: id.ok_or("window identifier is required")?,
+        },
         _ => return Err("unsupported native desktop action".into()),
     };
     let mut state = snapshot(control, command).await?;
@@ -157,7 +244,13 @@ pub(super) async fn request(
             "windows": values(&state.windows, control.epoch),
             "count": state.count,
             "capabilities": ["close", "activate"],
+            "workspaces": state.workspaces,
+            "outputs": state.outputs,
+            "keyboard": state.keyboard,
         }));
+    }
+    if !matches!(action, "focus" | "close" | "close-app") {
+        return Ok(json!({ "action": action, "action_applied": state.requested == 1 }));
     }
     let before = state
         .before

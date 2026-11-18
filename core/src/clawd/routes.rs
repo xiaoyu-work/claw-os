@@ -2524,6 +2524,7 @@ routes! {
             ("action", FieldRule::Token),
             ("app_id", FieldRule::Token),
             ("identifier", FieldRule::Token),
+            ("workspace", FieldRule::Token),
             ("uris", FieldRule::Size),
         ],
         run: |c| {
