@@ -121,10 +121,9 @@ authority; ordinary attended TUI one-shot decisions stay inline.
 
 Agent provides `claw-os-file-manager-v1 (= 1)` and owns only the
 `/usr/lib/cos/bin/claw-file-manager` transport executable. Desktop requires
-that interface and owns its optional COSMIC-only XDG autostart resource.
+that interface.
 The session launches it directly under the authenticated PAM/kernel login,
-including on systemd systems; `X-systemd-skip=true` excludes user-manager
-activation. Agent installs no FileManager1 D-Bus activation file, user unit,
+not through the user manager. Agent installs no FileManager1 D-Bus activation file, user unit,
 autostart entry or GNOME/Nautilus configuration. The helper routes bounded
 same-owner URI intents through ordinary `cos app --gui`; package/review,
 delegation, capability, sandbox and GUI lifetime checks remain Root-owned.

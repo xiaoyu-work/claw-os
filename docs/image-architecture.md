@@ -34,8 +34,8 @@ Examples:
 - `kernel` installs the Debian kernel and initramfs tooling.
 - `grub-disk` installs disk-boot configuration.
 - `vm` configures generic virtual-machine console and power behavior.
-- `local-user` creates a locked `cos` account and gates the VM serial getty on
-  one-time password setup.
+- `local-user` creates a locked `cos` account and requires one-time password
+  setup on the serial console for headless VMs or VT7 for desktop VMs.
 - `cloud-init` adds provider-neutral first-boot provisioning.
 - `azure` requires `cloud-init`, restricts it to the Azure datasource, configures
   Azure Linux Agent integration, forces Hyper-V storage/network modules into
