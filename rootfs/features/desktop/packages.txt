@@ -44,6 +44,7 @@ libmuparser-dev
 liblcms2-dev
 libcanberra-dev
 libtomlplusplus-dev
+libpugixml-dev
 libjpeg-dev
 libpng-dev
 libwebp-dev
