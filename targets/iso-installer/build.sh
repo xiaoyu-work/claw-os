@@ -31,7 +31,11 @@ ISO_BUILD="$PROJECT_DIR/build/iso-installer-build"
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 source "$PROJECT_DIR/scripts/lib/image-profiles.sh"
 source "$PROJECT_DIR/targets/common/platform-iso.sh"
-select_iso_platform installer "$IMAGE_FEATURES_INSTALLER"
+if [[ $DEB_ARCH == amd64 ]]; then
+    select_iso_platform installer "$IMAGE_FEATURES_DESKTOP_INSTALLER"
+else
+    select_iso_platform installer "$IMAGE_FEATURES_INSTALLER"
+fi
 
 OUTPUT="$PROJECT_DIR/build/claw-os-installer-${ARCH_SUFFIX}${PLATFORM_SUFFIX}.iso"
 
@@ -122,7 +126,7 @@ menuentry "Install Claw OS (failsafe)" {
 }
 GRUBCFG
 
-finalize_iso_platform
+finalize_iso_platform installer
 if [[ $DEB_ARCH == arm64 && ( -z ${CLAW_PLATFORM:-} || $CLAW_PLATFORM == aarch64-qualcomm ) ]]; then
     source "$PROJECT_DIR/packaging/deb/claw-os-base/hardware/qualcomm-boot.sh"
     claw_qcom_iso_menu "$ROOTFS" "$ISO_BUILD" "$KERNEL_VERSION" "Install Claw OS" >> "$ISO_BUILD/boot/grub/grub.cfg"

@@ -93,6 +93,9 @@ install -Dm0644 "$session/claw-desktop.pam" "$stage/etc/pam.d/claw-desktop"
 install -Dm0644 "$session/greetd.toml" "$stage/etc/greetd/claw-desktop.toml"
 install -Dm0644 "$session/greetd.conf" "$stage/usr/lib/systemd/system/greetd.service.d/claw-desktop.conf"
 install -Dm0644 "$session/hyprland-portals.conf" "$stage/usr/share/xdg-desktop-portal/hyprland-portals.conf"
+install -Dm0755 "$session/claw-oobe" "$stage/usr/libexec/claw-oobe"
+install -Dm0644 "$session/claw-driver-online.service" "$stage/usr/lib/systemd/system/claw-driver-online.service"
+install -Dm0755 "$session/70-claw-driver-setup" "$stage/usr/lib/NetworkManager/dispatcher.d/70-claw-driver-setup"
 
 # Query the target distro's shlibs database, not that of the image builder.
 cd "$work"

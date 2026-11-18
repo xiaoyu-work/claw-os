@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -100,6 +101,10 @@ fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
         return Err(Error::Protocol(
             "could not initialize the authenticated desktop user environment",
         ));
+    }
+    if Path::new("/etc/cos/first-run").is_file() {
+        let mut setup = command("/usr/libexec/claw-oobe").spawn()?;
+        wait_for_entrypoint(subscription, &mut setup)?;
     }
     let target = "claw-desktop-session.target";
     if !command("/usr/bin/systemctl")

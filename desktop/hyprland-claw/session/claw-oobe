@@ -1,0 +1,353 @@
+#!/usr/bin/python3
+"""First-run setup inside the authenticated desktop session."""
+
+import json
+import os
+from pathlib import Path
+import signal
+
+
+DRIVERS = Path("/var/lib/cos/driver-setup/status.json")
+COS = "/usr/local/bin/cos"
+
+
+def main():
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    completed = config / "cos/first-run-complete"
+    if completed.is_file():
+        return 0
+
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("NM", "1.0")
+    gi.require_version("Vte", "3.91")
+    from gi.repository import Gio, GLib, Gtk, NM, Vte
+
+    class Setup(Gtk.Application):
+        def __init__(self):
+            super().__init__(application_id="org.clawos.FirstRun")
+            self.completed = False
+            self.model_pid = None
+            self.model_start = None
+            self.networks = []
+            self.scan_signals = []
+            self.nm = None
+
+        def do_activate(self):
+            self.window = Gtk.ApplicationWindow(application=self, title="Set up Claw OS")
+            self.window.set_default_size(1024, 720)
+            self.window.fullscreen()
+            page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
+                           margin_top=32, margin_bottom=32, margin_start=32, margin_end=32,
+                           halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+            page.set_size_request(620, -1)
+            self.window.set_child(page)
+            self.step = self.label()
+            self.step.add_css_class("dim-label")
+            page.append(self.step)
+            self.stack = Gtk.Stack(vhomogeneous=False)
+            page.append(self.stack)
+
+            welcome = self.page("welcome", "Welcome to Claw OS",
+                                "Connect to the internet, finish setting up your hardware, and choose a model for your Agent.")
+            self.button(welcome, "Next", lambda: self.go("network"), primary=True)
+
+            network = self.page("network", "Connect to the internet",
+                                "Connect to Wi-Fi or plug in an Ethernet cable.")
+            self.network_status = self.label()
+            network.append(self.network_status)
+            self.wifi = Gtk.ComboBoxText()
+            network.append(self.wifi)
+            self.password = Gtk.PasswordEntry(placeholder_text="Wi-Fi password", show_peek_icon=True)
+            network.append(self.password)
+            self.connect_button = self.button(network, "Connect to Wi-Fi", self.connect_wifi)
+            self.scan_button = self.button(network, "Scan for Wi-Fi", self.scan)
+            self.network_next = self.button(network, "Next", self.after_network, primary=True)
+            self.button(network, "Continue offline", lambda: self.go("model"))
+            self.connecting = False
+
+            drivers = self.page("drivers", "Set up your hardware",
+                                "Claw OS installs only the additional packages that match this computer.")
+            self.driver_status = self.label()
+            drivers.append(self.driver_status)
+            self.driver_skip = self.button(drivers, "Continue without these drivers", lambda: self.go("model"))
+            self.monitor = None
+            if DRIVERS.parent.is_dir():
+                self.monitor = Gio.File.new_for_path(str(DRIVERS.parent)).monitor_directory(
+                    Gio.FileMonitorFlags.WATCH_MOVES, None
+                )
+                self.monitor.connect("changed", lambda *_: self.update_drivers())
+
+            model = self.page("model", "Choose a model for your Agent",
+                              "Configure your provider and credentials now, or set up your Agent later.")
+            self.model_status = self.label()
+            model.append(self.model_status)
+            self.model_box = model
+            self.model_buttons = Gtk.Box(spacing=10)
+            model.append(self.model_buttons)
+            self.model_start_button = self.button(self.model_buttons, "Configure model", self.start_model, primary=True)
+            self.model_skip = self.button(self.model_buttons, "Set up later", lambda: self.go("finish"))
+            self.model_next = self.button(self.model_buttons, "Next", lambda: self.go("finish"), primary=True)
+            self.model_next.set_visible(False)
+
+            finish = self.page("finish", "You're ready",
+                               "Select Finish to open the Claw OS desktop.")
+            self.finish_status = self.label()
+            finish.append(self.finish_status)
+            self.button(finish, "Finish", self.finish, primary=True)
+            self.go("welcome")
+            self.window.present()
+
+            try:
+                self.nm = NM.Client.new(None)
+            except GLib.Error:
+                self.network_status.set_text("NetworkManager is unavailable. You can continue offline.")
+            if self.nm is not None:
+                self.nm.connect("notify::connectivity", lambda *_: self.update_network())
+                self.nm.connect("device-added", lambda *_: self.watch_wifi())
+                self.nm.connect("device-removed", lambda *_: self.watch_wifi())
+            self.update_network()
+            self.watch_wifi()
+
+        def label(self, text=""):
+            return Gtk.Label(label=text, xalign=0, wrap=True, max_width_chars=68)
+
+        def page(self, name, title, description):
+            page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+            heading = self.label(title)
+            heading.add_css_class("title-1")
+            page.append(heading)
+            page.append(self.label(description))
+            self.stack.add_named(page, name)
+            return page
+
+        def button(self, page, label, action, primary=False):
+            button = Gtk.Button(label=label, halign=Gtk.Align.START)
+            if primary:
+                button.add_css_class("suggested-action")
+            button.connect("clicked", lambda *_: action())
+            page.append(button)
+            return button
+
+        def go(self, step):
+            names = {"welcome": "Welcome", "network": "Network", "drivers": "Drivers",
+                     "model": "Agent model", "finish": "Finish"}
+            self.step.set_text(f"Claw OS setup  /  {names[step]}")
+            self.stack.set_visible_child_name(step)
+            if step == "network":
+                self.scan()
+            if step == "drivers":
+                self.update_drivers()
+
+        def online(self):
+            return self.nm is not None and self.nm.get_connectivity() == NM.ConnectivityState.FULL
+
+        def update_network(self):
+            self.network_next.set_sensitive(self.online())
+            if self.nm is not None and not self.connecting:
+                state = self.nm.get_connectivity()
+                if self.online():
+                    message = "Connected to the internet."
+                elif state == NM.ConnectivityState.PORTAL:
+                    message = "This network requires a sign-in. Use another connection or continue offline."
+                else:
+                    message = "No internet connection yet."
+                self.network_status.set_text(message)
+            self.update_drivers()
+
+        def wifi_devices(self):
+            devices = self.nm.get_devices() if self.nm is not None else []
+            return [device for device in devices if isinstance(device, NM.DeviceWifi)]
+
+        def watch_wifi(self):
+            for device, handler in self.scan_signals:
+                device.disconnect(handler)
+            self.scan_signals = [
+                (device, device.connect("notify::last-scan", lambda *_: self.update_wifi()))
+                for device in self.wifi_devices()
+            ]
+            self.update_wifi()
+
+        def scan(self):
+            devices = self.wifi_devices()
+            for device in devices:
+                device.request_scan_async(None, self.scan_done)
+            self.update_wifi()
+
+        def scan_done(self, device, result):
+            try:
+                device.request_scan_finish(result)
+            except GLib.Error:
+                pass  # NetworkManager can reject a scan while one is already in progress.
+            self.update_wifi()
+
+        def update_wifi(self):
+            selected = self.wifi.get_active_text()
+            self.wifi.remove_all()
+            networks = {}
+            for device in self.wifi_devices():
+                for access_point in device.get_access_points():
+                    ssid = access_point.get_ssid()
+                    if ssid is not None:
+                        name = NM.utils_ssid_to_utf8(ssid.get_data())
+                        previous = networks.get(name)
+                        if name and (previous is None or access_point.get_strength() > previous[1].get_strength()):
+                            networks[name] = (device, access_point)
+            self.networks = sorted(networks.items())
+            for name, _ in self.networks:
+                self.wifi.append_text(name)
+            if self.networks:
+                names = [name for name, _ in self.networks]
+                self.wifi.set_active(names.index(selected) if selected in names else 0)
+            self.wifi.set_visible(bool(self.networks))
+            self.password.set_visible(bool(self.networks))
+            self.connect_button.set_visible(bool(self.networks))
+            self.connect_button.set_sensitive(not self.connecting)
+            self.scan_button.set_visible(bool(self.wifi_devices()))
+
+        def connect_wifi(self):
+            selected = self.wifi.get_active()
+            if selected < 0 or self.connecting:
+                return
+            name, (device, access_point) = self.networks[selected]
+            password = self.password.get_text()
+            self.password.set_text("")
+            profile = next((connection for connection in device.get_available_connections()
+                            if access_point.connection_valid(connection)), None)
+            self.connecting = True
+            self.connect_button.set_sensitive(False)
+            self.network_status.set_text(f"Connecting to {name}...")
+            if profile is not None and not password:
+                self.nm.activate_connection_async(profile, device, access_point.get_path(), None,
+                                                  self.connected, False)
+                return
+            connection = NM.SimpleConnection.new()
+            identity = NM.SettingConnection.new()
+            identity.props.id = name
+            identity.props.uuid = GLib.uuid_string_random()
+            identity.props.type = "802-11-wireless"
+            identity.add_permission("user", GLib.get_user_name(), None)
+            connection.add_setting(identity)
+            wireless = NM.SettingWireless.new()
+            wireless.props.ssid = access_point.get_ssid()
+            connection.add_setting(wireless)
+            if "privacy" in access_point.get_flags().value_nicks:
+                methods = set(access_point.get_rsn_flags().value_nicks + access_point.get_wpa_flags().value_nicks)
+                mode = "wpa-psk" if "key-mgmt-psk" in methods else "sae" if "key-mgmt-sae" in methods else None
+                if not mode or not password:
+                    self.connecting = False
+                    self.connect_button.set_sensitive(True)
+                    self.network_status.set_text("Enter a WPA password or select an open or previously saved network.")
+                    return
+                security = NM.SettingWirelessSecurity.new()
+                security.props.key_mgmt = mode
+                security.props.psk = password
+                connection.add_setting(security)
+            self.nm.add_and_activate_connection_async(connection, device, access_point.get_path(), None,
+                                                      self.connected, True)
+
+        def connected(self, client, result, new_profile):
+            self.connecting = False
+            self.connect_button.set_sensitive(True)
+            try:
+                if new_profile:
+                    client.add_and_activate_connection_finish(result)
+                else:
+                    client.activate_connection_finish(result)
+            except GLib.Error:
+                self.network_status.set_text("Couldn't connect. Check the Wi-Fi password or try another network.")
+                return
+            self.update_network()
+
+        def driver_info(self):
+            try:
+                return json.loads(DRIVERS.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                return {"state": "ready", "packages": []}
+
+        def after_network(self):
+            if self.online():
+                self.go("model" if self.driver_info()["state"] == "ready" else "drivers")
+
+        def update_drivers(self):
+            if self.stack.get_visible_child_name() != "drivers":
+                return
+            info = self.driver_info()
+            state = info["state"]
+            if state == "ready":
+                self.go("model")
+                return
+            messages = {
+                "pending": "Waiting for internet access to install the remaining drivers.",
+                "installing": "Downloading and installing the matched driver packages...",
+                "failed": "Driver installation didn't finish. Claw OS will retry on a new connection.",
+            }
+            self.driver_status.set_text(messages[state] + "\n" + ", ".join(info["packages"]))
+            self.driver_skip.set_visible(state != "installing")
+
+        def start_model(self):
+            self.model_start_button.set_sensitive(False)
+            self.model_skip.set_sensitive(False)
+            self.terminal = Vte.Terminal()
+            self.terminal.set_size(76, 15)
+            self.terminal.connect("child-exited", self.model_exited)
+            self.model_box.insert_child_after(self.terminal, self.model_status)
+            self.model_start = Gio.Cancellable()
+            self.terminal.spawn_async(
+                Vte.PtyFlags.DEFAULT, str(Path.home()), [COS, "agent", "setup", "text"], None,
+                GLib.SpawnFlags.DEFAULT, None, None, -1, self.model_start, self.model_spawned, None,
+            )
+            self.terminal.grab_focus()
+
+        def model_spawned(self, terminal, pid, error, _data):
+            if error is not None:
+                if not self.model_start.is_cancelled():
+                    self.model_status.set_text("Couldn't start model setup. Retry or select Set up later.")
+                    self.model_box.remove(terminal)
+                    self.model_start_button.set_sensitive(True)
+                    self.model_skip.set_sensitive(True)
+                return
+            self.model_pid = pid
+
+        def model_exited(self, terminal, status):
+            self.model_pid = None
+            if os.waitstatus_to_exitcode(status) == 0:
+                self.model_status.set_text("Model configuration saved.")
+                self.model_next.set_visible(True)
+                self.model_next.grab_focus()
+                self.model_start_button.set_visible(False)
+                self.model_skip.set_visible(False)
+            else:
+                self.model_status.set_text("Model setup didn't finish. Retry or select Set up later.")
+                self.model_box.remove(terminal)
+                self.model_start_button.set_sensitive(True)
+                self.model_skip.set_sensitive(True)
+
+        def finish(self):
+            try:
+                completed.parent.mkdir(parents=True, exist_ok=True)
+                completed.touch(mode=0o600)
+            except OSError:
+                self.finish_status.set_text("Couldn't save your setup progress. Check that your home is writable.")
+                return
+            self.completed = True
+            self.quit()
+
+        def do_shutdown(self):
+            if self.model_start is not None:
+                self.model_start.cancel()
+            if self.model_pid is not None:
+                try:
+                    os.kill(self.model_pid, signal.SIGHUP)
+                except ProcessLookupError:
+                    pass
+            Gtk.Application.do_shutdown(self)
+
+    app = Setup()
+    result = app.run([])
+    return result or (0 if app.completed else 1)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

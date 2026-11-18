@@ -1,0 +1,174 @@
+#!/usr/bin/python3
+"""Install optional hardware packages selected from the installed machine."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+
+CACHE = Path("/usr/share/cos/driver-cache")
+STATE = Path("/var/lib/cos/driver-setup")
+PENDING = STATE / "pending"
+STATUS = STATE / "status.json"
+OOBE = Path("/usr/libexec/claw-oobe")
+APT = [
+    "/usr/bin/apt-get", "-o", "Dpkg::Use-Pty=0", "-o", "DPkg::Lock::Timeout=30",
+    "-o", "Acquire::http::Timeout=20", "-o", "Acquire::https::Timeout=20",
+    "-o", "APT::Get::AllowUnauthenticated=false",
+]
+BACKPORTS = "trixie-backports"
+AUDIO = ("alsa-ucm-conf", "1.2.16.1-1~bpo13+1")
+PACKS = {
+    "surface-laptop-7-intel": (
+        AUDIO,
+        ("libcamera-ipa", "0.7.1-1~bpo13+1"),
+        ("libcamera-tools", "0.7.1-1~bpo13+1"),
+        ("libspa-0.2-libcamera", "1.6.9-2~bpo13+1"),
+        ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
+    ),
+    "lenovo-yoga-pro-7-14iah10": (AUDIO,),
+}
+
+
+def detect(sysfs=Path("/sys")):
+    if subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip() != "amd64":
+        return None
+    if (sysfs / "bus/acpi/devices/MSHW0551:00").exists():
+        return "surface-laptop-7-intel"
+    dmi = sysfs / "class/dmi/id"
+    try:
+        vendor = (dmi / "sys_vendor").read_text().strip()
+        family = (dmi / "product_family").read_text().strip()
+        model = (dmi / "product_name").read_text().strip()
+    except FileNotFoundError:
+        return None
+    if vendor == "LENOVO" and "Yoga Pro 7 14IAH10" in (model, family):
+        return "lenovo-yoga-pro-7-14iah10"
+    return None
+
+
+def missing(pack):
+    packages = []
+    for package, minimum in PACKS.get(pack, ()):
+        query = subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status} ${Version}", package],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False,
+        )
+        state, _, version = query.stdout.partition(" ")
+        if state != "installed" or not version or subprocess.run(
+            ["/usr/bin/dpkg", "--compare-versions", version, "lt", minimum], check=False,
+        ).returncode == 0:
+            packages.append(package)
+    return packages
+
+
+def publish(state, pack, packages):
+    STATE.mkdir(parents=True, exist_ok=True)
+    STATE.chmod(0o755)
+    with tempfile.NamedTemporaryFile(mode="w", dir=STATE, delete=False) as out:
+        json.dump({"state": state, "pack": pack, "packages": packages}, out)
+        out.write("\n")
+        os.fchmod(out.fileno(), 0o644)
+    os.replace(out.name, STATUS)
+
+
+def apt(*args):
+    subprocess.run(
+        [*APT, *args], stdin=subprocess.DEVNULL, check=True,
+        env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"),
+    )
+
+
+def from_archive(packages):
+    return [f"{name}/{BACKPORTS}" for name in packages]
+
+
+def stage_offline():
+    apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
+    for pack in PACKS:
+        packages = missing(pack)
+        if not packages:
+            continue
+        directory = CACHE / pack
+        directory.mkdir(parents=True, exist_ok=True)
+        apt("-o", f"Dir::Cache::archives={directory}", "install", "-t", BACKPORTS, "--download-only",
+            "--no-install-recommends", "--no-remove", "-y", *from_archive(packages))
+
+
+def install_offline():
+    pack = detect()
+    packages = missing(pack)
+    if packages:
+        payload = sorted((CACHE / pack).glob("*.deb"))
+        if payload:
+            try:
+                apt("-o", "Dir::Etc::sourcelist=/dev/null", "-o", "Dir::Etc::sourceparts=-",
+                    "install", "--no-install-recommends", "--no-remove",
+                    "-y", *map(str, payload))
+            except subprocess.CalledProcessError:
+                print("Offline driver installation failed; remaining packages will be retried online.",
+                      flush=True)
+        packages = missing(pack)
+    if CACHE.is_dir():
+        shutil.rmtree(CACHE)
+    publish("pending" if packages else "ready", pack, packages)
+    if packages:
+        PENDING.touch()
+    else:
+        PENDING.unlink(missing_ok=True)
+
+
+def online():
+    if not PENDING.is_file():
+        return
+    pack = detect()
+    packages = missing(pack)
+    if not packages:
+        publish("ready", pack, [])
+        PENDING.unlink(missing_ok=True)
+        return
+    connectivity = subprocess.check_output(
+        ["/usr/bin/nmcli", "-g", "CONNECTIVITY", "general"], text=True,
+        env=dict(os.environ, LC_ALL="C"),
+    ).strip()
+    if connectivity != "full":
+        publish("pending", pack, packages)
+        return
+
+    publish("installing", pack, packages)
+    try:
+        apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
+        apt("install", "-t", BACKPORTS, "--no-install-recommends", "--no-remove", "-y", *from_archive(packages))
+    except subprocess.CalledProcessError:
+        publish("failed", pack, missing(pack))
+        raise
+    packages = missing(pack)
+    publish("failed" if packages else "ready", pack, packages)
+    if not packages:
+        PENDING.unlink(missing_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--stage-offline", action="store_true")
+    mode.add_argument("--install-offline", action="store_true")
+    mode.add_argument("--online", action="store_true")
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("driver package setup requires root")
+    if OOBE.is_file():
+        if args.stage_offline:
+            stage_offline()
+        elif args.install_offline:
+            install_offline()
+        else:
+            online()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+[Unit]
+Description=Install pending Claw OS hardware packages
+After=NetworkManager.service
+ConditionPathExists=/var/lib/cos/driver-setup/pending
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/cos/hw/claw-driver-setup --online
+
+[Install]
+WantedBy=multi-user.target

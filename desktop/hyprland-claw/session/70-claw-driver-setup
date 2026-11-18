@@ -1,0 +1,6 @@
+#!/bin/sh
+
+[ -f /var/lib/cos/driver-setup/pending ] || exit 0
+case "$2" in
+    up|connectivity-change) /usr/bin/systemctl --no-block start claw-driver-online.service ;;
+esac

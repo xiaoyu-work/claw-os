@@ -40,4 +40,8 @@ user ALL=(ALL) NOPASSWD:ALL
 EOF
 chmod 0440 "$ROOTFS/etc/sudoers.d/cos-installer"
 
+if [ "$DEB_ARCH" = amd64 ] && [ -x "$ROOTFS/usr/libexec/claw-oobe" ]; then
+    chroot "$ROOTFS" /usr/lib/cos/hw/claw-driver-setup --stage-offline
+fi
+
 echo "  :: Calamares configured; X autostarts on tty1 login"

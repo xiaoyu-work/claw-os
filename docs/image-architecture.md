@@ -67,7 +67,8 @@ feature combinations. Targets use these defaults but continue to accept a
 | Azure | User, hostname, and SSH key supplied per instance | cloud-init, WALinuxAgent, Hyper-V |
 | WSL | User created interactively by the WSL first-launch OOBE | Modern `.wsl` package conventions |
 | Docker | User name and numeric identity supplied at container creation | Container/systemd conventions |
-| Live/installer ISO | Temporary live user or installer-created user | Live boot and Calamares |
+| Live ISO / headless installer | Temporary live user or installer-created user | Live boot and Calamares |
+| amd64 desktop installer | Calamares-created account, then first-run setup inside the authenticated login | Generic Debian kernel, offline driver selection, and a desktop wizard before the Shell |
 
 ### Targets
 
@@ -104,6 +105,14 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 | Intel Macs with the listed Broadcom `brcmfmac` PCI devices | Let the host supplicant handle WPA instead of the affected firmware offload. |
 
 `claw-hardware-setup` runs inside the Calamares target, not on the image builder. It applies the last four workarounds only when the target's installed kernel exposes the needed parameters, then rebuilds the initramfs. The x86 initramfs also includes Debian's available Apple SPI and Surface keyboard modules for early input; udev still decides what hardware is present.
+
+### First-run desktop setup
+
+The default amd64 installer includes the signed Desktop Shell and keeps the generic Debian kernel. On the USB, Calamares still uses its own installer session. After installation, the first authenticated graphical login opens **Welcome → Network → Drivers (if needed) → Agent model → Finish** before starting the normal Shell. The model page uses `cos agent setup text` in an embedded terminal, running as the installed user rather than the privileged installer. Only Finish records completion. Existing desktops, WSL, Docker and VM images without the installer marker do not enter this flow.
+
+The installer prefetches selected Debian backports packages into an offline cache. Calamares recognizes the actual machine, installs only its matching optional packages before reboot, and removes the remaining cache from the installed system. The first rules match the Intel Surface Laptop 7 (camera userspace and audio profiles) and Lenovo Yoga Pro 7 14IAH10 (audio profiles). The optional packages are distinct from the kernel modules and firmware needed to boot or establish the first connection, which must already be on the media.
+
+If matched packages are still missing, the target leaves a pending job. NetworkManager starts it from the configured signed APT repositories when it has internet access; the wizard displays the job only after the Network page. The job installs only the repository-defined matches, does not remove other packages, and never handles NVIDIA proprietary installation. An explicit offline or skip choice lets the user finish; a later connection can retry missing optional packages without restarting setup. The current Intel Surface-specific kernel fixes remain in the experimental profile below; selecting stock camera and audio packages does not give the generic kernel those patches.
 
 ### Experimental Snapdragon X boot
 

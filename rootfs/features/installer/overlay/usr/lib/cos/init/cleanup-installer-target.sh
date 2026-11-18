@@ -22,6 +22,13 @@ restore_or_remove /etc/motd
 # text as the live hostname.
 rm -f /etc/hostname.claw-installed
 
+if [ -x /usr/libexec/claw-oobe ]; then
+    install -Dm0644 /dev/null /etc/cos/first-run
+    install -d /etc/systemd/system/multi-user.target.wants
+    ln -sfn /usr/lib/systemd/system/claw-driver-online.service \
+        /etc/systemd/system/multi-user.target.wants/claw-driver-online.service
+fi
+
 rm -f \
     /etc/profile.d/cos-installer.sh \
     /etc/cos/installer-xstartup \

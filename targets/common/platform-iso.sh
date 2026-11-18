@@ -19,12 +19,8 @@ select_iso_platform() {
         echo "error: Apple Silicon needs existing Asahi provisioning; use the live media and separate Asahi boot assets" >&2
         return 1
     fi
-    if [[ $CLAW_PLATFORM == x86-surface-laptop-7-intel ]]; then
+    if [[ $CLAW_PLATFORM == x86-surface-laptop-7-intel && ,$ISO_FEATURES, != *,desktop,* ]]; then
         ISO_FEATURES="$ISO_FEATURES,desktop"
-        if [[ $role == installer ]]; then
-            # Keep the live tty1 installer; the installed system uses greetd.
-            PLATFORM_BOOT_ARGS="${PLATFORM_BOOT_ARGS:+$PLATFORM_BOOT_ARGS }systemd.mask=greetd.service"
-        fi
     fi
     ISO_FEATURES="$ISO_FEATURES,kernel-platform"
     PLATFORM_SUFFIX="-$CLAW_PLATFORM"
@@ -47,8 +43,13 @@ select_iso_kernel() {
 }
 
 finalize_iso_platform() {
-    if [[ -n $PLATFORM_BOOT_ARGS ]]; then
-        sed -i "s|boot=live components|boot=live components $PLATFORM_BOOT_ARGS|" "$ISO_BUILD/boot/grub/grub.cfg"
+    local boot_args=$PLATFORM_BOOT_ARGS
+    if [[ ${1:-live} == installer && ,$ISO_FEATURES, == *,desktop,* ]]; then
+        # Calamares uses tty1 on the USB. Keep greetd enabled on the target.
+        boot_args="${boot_args:+$boot_args }systemd.mask=greetd.service"
+    fi
+    if [[ -n $boot_args ]]; then
+        sed -i "s|boot=live components|boot=live components $boot_args|" "$ISO_BUILD/boot/grub/grub.cfg"
     fi
     if [[ ${CLAW_PLATFORM:-} == aarch64-apple ]]; then
         install -d "$ISO_BUILD/asahi"
