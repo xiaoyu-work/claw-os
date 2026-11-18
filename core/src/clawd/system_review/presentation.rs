@@ -338,6 +338,15 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
             value: "Restores the existing App policy only; it does not mint execution authority."
                 .into(),
         }]
+    } else if approvals::is_desktop_launch_approval(
+        verb,
+        &request.session,
+        request.operation_digest.as_deref(),
+    ) {
+        vec![ReviewDetail {
+            label: "Single launch".into(),
+            value: "Applies only to this selection in the current desktop login. The App's own activation and permissions are separate.".into(),
+        }]
     } else {
         [("Once", GrantDuration::Once), ("Session", GrantDuration::Session), ("Reusable", GrantDuration::Forever)]
             .into_iter().map(|(label, duration)| {

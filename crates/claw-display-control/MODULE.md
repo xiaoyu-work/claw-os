@@ -9,6 +9,9 @@ permission decisions.
 `transport.rs` requires Unix `SOCK_SEQPACKET`, per-message kernel credentials,
 close-on-exec descriptor receipt, closed messages, deadlines and exact FD counts.
 `wire.rs` separates login activation, PAM lifetime and compositor commands.
+The broker-to-supervisor channel also carries the closed signed App launch
+target and a correlated submission acknowledgement. It carries no command
+line, executable path, or App permission decision.
 `install.rs` checks fixed executables and every ancestor. `locale.rs` admits
 only bounded PAM locale values, never loader variables or authority metadata.
 `session.rs` provides read-only kernel-login subscriptions and canonical

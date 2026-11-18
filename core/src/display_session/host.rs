@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use claw_display_control::identity::pidfd_exited;
 use claw_display_control::wire::{
     monotonic_ms, AuthorityCommand, AuthorityReply, CompositorCommand, CompositorReply, PamCommand,
-    PamReply, SessionEvent, SessionRequest, COMPOSITOR, HOST_RETIRE_TIMEOUT, SESSION_DIRECTORY,
+    PamReply, SessionEvent, SessionRequest, LaunchTarget, COMPOSITOR, HOST_RETIRE_TIMEOUT,
+    MENU_LAUNCH_DIGEST, MENU_LAUNCH_PUBLISHER, SESSION_DIRECTORY,
 };
 use claw_display_control::{Connection, Epoch, Error, KernelLogin, Listener, ProcessIdentity};
 
@@ -19,6 +20,7 @@ const STOP: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(10);
 const CONTROL_IO: Duration = Duration::from_millis(250);
 const MAX_SUBSCRIBERS: usize = 32;
+const MAX_APP_LAUNCHERS: usize = 16;
 
 struct Controllers {
     parent: ProcessIdentity,
@@ -143,6 +145,7 @@ impl Controllers {
                 AuthorityCommand::Gui { .. } if retired => {
                     // This workload is already dead. Queued requests cannot run or renew it.
                 }
+                AuthorityCommand::Launch { epoch, .. } if retired && epoch == self.epoch => {}
                 AuthorityCommand::Heartbeat {
                     epoch,
                     expires_monotonic_ms,
@@ -166,6 +169,7 @@ struct Supervisor {
     display: String,
     listener: Option<Listener>,
     subscribers: Vec<Subscriber>,
+    launchers: Vec<Child>,
 }
 
 struct Subscriber {
@@ -223,6 +227,7 @@ impl Supervisor {
             display: String::new(),
             listener: None,
             subscribers: Vec::new(),
+            launchers: Vec::new(),
         };
         supervisor.control.send(
             &CompositorCommand::Initialize {
@@ -334,6 +339,33 @@ impl Supervisor {
                         .send(&command, &descriptors, self.controllers.live_io_deadline()?)
                         .map_err(|error| io_timeout(error, "timed out forwarding compositor command"))?;
                 }
+                AuthorityCommand::Launch { epoch, request, expires_monotonic_ms, target }
+                    if epoch == self.controllers.epoch =>
+                {
+                    let now = monotonic_ms()?;
+                    let submitted = if !self.display.is_empty()
+                        && self.launchers.len() < MAX_APP_LAUNCHERS
+                        && expires_monotonic_ms > now && expires_monotonic_ms <= now.saturating_add(2000)
+                    {
+                        match spawn_app_launcher(&self.controllers, &self.containment, &self.display, target) {
+                            Ok(child) => {
+                                self.launchers.push(child);
+                                true
+                            }
+                            Err(error) => {
+                                log_failure(c"desktop App launcher refused: %s", &error);
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    self.controllers.authority.send(
+                        &AuthorityReply::Launch { epoch, request, submitted },
+                        &[],
+                        self.controllers.live_io_deadline()?,
+                    )?;
+                }
                 _ => {
                     return Err(Error::Protocol(
                         "unexpected running display authority message",
@@ -404,6 +436,14 @@ impl Supervisor {
             }
             self.prune_subscribers();
             self.accept_subscriber()?;
+            let mut index = 0;
+            while index < self.launchers.len() {
+                if self.launchers[index].try_wait()?.is_some() {
+                    self.launchers.swap_remove(index);
+                } else {
+                    index += 1;
+                }
+            }
             std::thread::sleep(TICK);
         }
     }
@@ -502,6 +542,9 @@ impl Supervisor {
             ));
         }
         self.compositor.wait()?;
+        for mut launcher in self.launchers.drain(..) {
+            launcher.wait()?;
+        }
         self.prune_subscribers();
         for subscriber in self.subscribers.drain(..) {
             if let Err(error) = subscriber.connection.send(
@@ -595,6 +638,63 @@ fn io_timeout(error: Error, phase: &'static str) -> Error {
         Error::Timeout => Error::Protocol(phase),
         other => other,
     }
+}
+
+fn spawn_app_launcher(
+    controllers: &Controllers,
+    containment: &Containment,
+    display: &str,
+    target: LaunchTarget,
+) -> Result<Child, Error> {
+    const COS: &str = "/usr/local/bin/cos";
+    containment::protected_executable(COS)?;
+    let uid = controllers.login.owner_uid;
+    let (gid, name, home) = containment::account(uid)?;
+    let username = name.to_str().map_err(|_| Error::Identity)?;
+    let runtime = format!("/run/user/{uid}");
+    let membership = containment.compositor_membership().as_raw_fd();
+    let parent = unsafe { libc::getpid() };
+    let mut command = Command::new(COS);
+    command.args(["app", &target.app_id, "--gui"])
+        .env_clear()
+        .envs(controllers.locale.iter())
+        .env("HOME", &home)
+        .env("USER", username)
+        .env("LOGNAME", username)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("COS_APPS_DIR", "/usr/lib/cos/apps")
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("WAYLAND_DISPLAY", display)
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env(MENU_LAUNCH_DIGEST, target.digest)
+        .env(MENU_LAUNCH_PUBLISHER, target.publisher)
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    unsafe {
+        command.pre_exec(move || {
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+            }
+            containment::enter(membership)?;
+            if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC) != 0
+                || libc::initgroups(name.as_ptr(), gid) != 0
+                || libc::setresgid(gid, gid, gid) != 0
+                || libc::setresuid(uid, uid, uid) != 0
+                || libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+            }
+            libc::umask(0o077);
+            Ok(())
+        });
+    }
+    Ok(command.spawn()?)
 }
 
 fn spawn_compositor(

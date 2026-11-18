@@ -759,19 +759,19 @@ impl AppIdentitySession {
         // by `clawd` from this connection, never reported here.
         let params = app_registration_params(app_id, request, parent_caps.as_ref(), package)?;
 
-        // A launch that needs capability consent is answered with the ids of the
-        // requests the daemon filed. This process stays alive and waits,
-        // then retries over the same connection identity, so the user
-        // never has to rerun anything and no secret has to travel.
-        let result = match clawd_request(ClawdCommand::AppSessionRegister, params.clone()) {
-            Ok(result) => result,
-            Err(error) => {
-                let ids = approval_requests(&error);
-                if ids.is_empty() {
-                    return Err(error.into());
+        let result = if matches!(request, LaunchRequest::Gui { .. }) {
+            consent::register_with_wait(app_id, params).map_err(String::from)?
+        } else {
+            match clawd_request(ClawdCommand::AppSessionRegister, params.clone()) {
+                Ok(result) => result,
+                Err(error) => {
+                    let ids = approval_requests(&error);
+                    if ids.is_empty() {
+                        return Err(error.into());
+                    }
+                    wait_for_approvals(&ids)?;
+                    clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
                 }
-                wait_for_approvals(&ids)?;
-                clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
             }
         };
         Self::from_clawd_registration(

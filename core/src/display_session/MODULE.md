@@ -43,6 +43,12 @@ from an observed outcome. Desktop launch and shared owner helpers also take
 their Wayland name from the selected Root display, not caller variables or
 owner socket enumeration. The Desktop source path has no old compositor fallback.
 
+Reviewed desktop-menu effects go from the broker to its authenticated Root
+display supervisor on the same epoch. The supervisor starts only a fixed
+`cos app <id> --gui` as the logged-in user, inside the display workload, and
+pins the selected publisher and content digest. Its acknowledgement says the
+launcher process was submitted, not that the target passed GUI admission.
+
 Locale projection currently preserves only the bounded PAM environment.
 There is no AccountsService `Language` or locale1 startup resolver here.
 The compositor receives that snapshot before the downstream user login shell

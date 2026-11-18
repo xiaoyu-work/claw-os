@@ -39,6 +39,18 @@ pub(crate) use crate::clawd::media_player::gui::Exchange as GuiMediaExchange;
 pub(crate) use crate::clawd::gui::audio::Request as GuiAudioControl;
 pub(crate) use crate::clawd::gui::file_picker::Request as GuiFilePicker;
 pub(crate) use crate::clawd::notifications::gui::{Exchange as GuiNotificationExchange, PanelRequest as NotificationPresentationControl};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopMenuLaunch {
+    pub session: Token,
+    pub action: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_id: Option<Token>,
+}
+
 pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{

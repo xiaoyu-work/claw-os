@@ -29,5 +29,11 @@ App permission approval. Use the independent text console and
 `cos review pending` to inspect any Desktop Shell review raised on first
 launch. Headless `cos` does not require the desktop.
 
+Selecting an installed signed App from the desktop menu creates one
+`desktop.launch` review. Confirm it in Claw OS reviews or on the independent
+console with `cos review approve <review-id>`. That confirmation is spent on
+the selected App only; it does not skip the App's own activation or approval
+prompts.
+
 Use the [coordinated logout/update procedure](updating.md#root-managed-desktop-session-lifetime)
 when replacing the compositor and display authority on an existing system.

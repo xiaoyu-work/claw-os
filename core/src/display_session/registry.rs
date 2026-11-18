@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use claw_display_control::identity::pidfd_exited;
 use claw_display_control::wire::{
     monotonic_ms, AuthorityCommand, AuthorityReply, CompositorCommand, CompositorReply, LoginReply,
-    LoginRequest, BROKER_RETIRE_TIMEOUT, LOGIN_SOCKET,
+    LaunchTarget, LoginRequest, BROKER_RETIRE_TIMEOUT, LOGIN_SOCKET,
 };
 use claw_display_control::workload::{SessionGroup, Workload};
 use claw_display_control::{
@@ -31,6 +31,7 @@ pub struct Display {
     pub wayland_display: Option<String>,
     pub workload: Option<Arc<Workload>>,
     control: SyncSender<GuiCall>,
+    launch: SyncSender<LaunchCall>,
     verified_retired: Arc<AtomicBool>,
 }
 
@@ -41,6 +42,12 @@ struct GuiCall {
     deadline: Instant,
 }
 
+struct LaunchCall {
+    target: LaunchTarget,
+    reply: SyncSender<Result<bool, Error>>,
+    deadline: Instant,
+}
+
 #[derive(Clone)]
 pub(crate) struct GuiControl {
     pub epoch: Epoch,
@@ -48,6 +55,7 @@ pub(crate) struct GuiControl {
     pub wayland_display: String,
     pub workload: Arc<Workload>,
     sender: SyncSender<GuiCall>,
+    launcher: SyncSender<LaunchCall>,
     verified_retired: Arc<AtomicBool>,
 }
 
@@ -116,8 +124,24 @@ impl GuiControl {
             wayland_display,
             workload: display.workload.clone().ok_or(Error::Identity)?,
             sender: display.control.clone(),
+            launcher: display.launch.clone(),
             verified_retired: display.verified_retired.clone(),
         })
+    }
+
+    pub(crate) fn launch(&self, target: LaunchTarget, deadline: Instant) -> Result<(), Error> {
+        target.validate()?;
+        let (reply, result) = mpsc::sync_channel(1);
+        self.launcher
+            .try_send(LaunchCall { target, reply, deadline })
+            .map_err(|_| Error::Protocol("desktop launcher is unavailable or busy"))?;
+        if !result
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| Error::Timeout)??
+        {
+            return Err(Error::Protocol("desktop session refused the launch"));
+        }
+        Ok(())
     }
 
     pub fn exchange(
@@ -266,6 +290,7 @@ impl Registry {
         }
         let epoch = Epoch::random()?;
         let (control, requests) = mpsc::sync_channel(16);
+        let (launch, launches) = mpsc::sync_channel(1);
         let display = Arc::new(Mutex::new(Display {
             epoch,
             login,
@@ -273,6 +298,7 @@ impl Registry {
             wayland_display: None,
             workload: None,
             control,
+            launch,
             verified_retired: Arc::new(AtomicBool::new(false)),
         }));
         self.insert_display(login.session_id, display.clone())?;
@@ -305,6 +331,7 @@ impl Registry {
                         &host_pidfd,
                         &authenticator_pidfd,
                         &requests,
+                        &launches,
                     );
                     let needs_retirement = result.is_err();
                     if let Err(error) = result {
@@ -401,10 +428,12 @@ fn monitor(
     host_pidfd: &OwnedFd,
     authenticator_pidfd: &OwnedFd,
     requests: &Receiver<GuiCall>,
+    launches: &Receiver<LaunchCall>,
 ) -> Result<(), Error> {
     let started = Instant::now();
     let mut pending = HashMap::<InstanceId, (u8, GuiCall)>::new();
     let mut timed_out = std::collections::HashSet::new();
+    let mut launch_pending: Option<(InstanceId, LaunchCall)> = None;
     loop {
         if pidfd_exited(host_pidfd.as_fd())? || pidfd_exited(authenticator_pidfd.as_fd())? {
             return Err(Error::Closed);
@@ -426,6 +455,33 @@ fn monitor(
             &[],
             Instant::now() + Duration::from_millis(250),
         )?;
+        if launch_pending.as_ref().is_some_and(|(_, call)| Instant::now() >= call.deadline) {
+            if let Some((_, call)) = launch_pending.take() {
+                let _ = call.reply.send(Err(Error::Timeout));
+            }
+        }
+        if launch_pending.is_none() {
+            if let Ok(call) = launches.try_recv() {
+                let remaining = call.deadline.saturating_duration_since(Instant::now());
+                if ready && !remaining.is_zero() {
+                    let request = InstanceId::random()?;
+                    let expires_monotonic_ms = monotonic_ms()?.saturating_add(remaining.as_millis().min(2000) as u64);
+                    channel.send(
+                        &AuthorityCommand::Launch {
+                            epoch,
+                            request,
+                            expires_monotonic_ms,
+                            target: call.target.clone(),
+                        },
+                        &[],
+                        call.deadline,
+                    )?;
+                    launch_pending = Some((request, call));
+                } else {
+                    let _ = call.reply.send(Err(Error::Protocol("desktop launch expired or display ended")));
+                }
+            }
+        }
         while let Ok(call) = requests.try_recv() {
             let admission = control_target(&call.command, epoch).and_then(|(instance, kind)| {
                 if !ready || pending.len() >= 16 || pending.contains_key(&instance) {
@@ -527,6 +583,15 @@ fn monitor(
                         Instant::now() + Duration::from_millis(250),
                     )?;
                     return Ok(());
+                }
+                AuthorityReply::Launch { epoch: received_epoch, request, submitted }
+                    if received_epoch == epoch =>
+                {
+                    if launch_pending.as_ref().is_some_and(|(id, _)| *id == request) {
+                        if let Some((_, call)) = launch_pending.take() {
+                            let _ = call.reply.send(Ok(submitted));
+                        }
+                    }
                 }
                 AuthorityReply::Gui { reply } => {
                     let (instance, kind) = reply_target(&reply, epoch)?;

@@ -1000,10 +1000,30 @@ fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization,
     })
 }
 
-fn validate_agent_duration(
+pub(crate) const DESKTOP_LAUNCH_APPROVAL: &str = "desktop-launch:";
+
+pub(crate) fn is_desktop_launch_approval(
+    verb: Verb,
+    session: &str,
+    operation_digest: Option<&str>,
+) -> bool {
+    verb == Verb::DESKTOP_LAUNCH
+        && session.starts_with(DESKTOP_LAUNCH_APPROVAL)
+        && operation_digest.is_some()
+}
+
+fn validate_duration(
     authorization: &ApprovalAuthorization,
     duration: GrantDuration,
 ) -> Result<(), String> {
+    if is_desktop_launch_approval(
+        authorization.capability.verb,
+        &authorization.session,
+        authorization.operation_digest.as_deref(),
+    ) && duration != GrantDuration::Once
+    {
+        return Err("desktop menu launches can only be approved once".into());
+    }
     if authorization.context != Some(ConsentContext::Attended) {
         return Ok(());
     }
@@ -1028,7 +1048,7 @@ pub(crate) fn supported_durations(request: &Request) -> Result<Vec<GrantDuration
         GrantDuration::Forever,
     ]
     .into_iter()
-    .filter(|duration| validate_agent_duration(&authorization, *duration).is_ok())
+    .filter(|duration| validate_duration(&authorization, *duration).is_ok())
     .collect())
 }
 
@@ -1409,7 +1429,7 @@ fn resolve_locked(
             }
         };
         if let Some(duration) = duration {
-            if let Err(error) = validate_agent_duration(&authorization, duration) {
+            if let Err(error) = validate_duration(&authorization, duration) {
                 fs::rename(&scratch, &pending)
                     .map_err(|restore| format!("{error}; restore pending {id}: {restore}"))?;
                 return Err(error);

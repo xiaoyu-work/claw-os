@@ -13,6 +13,34 @@ pub const SESSION_DIRECTORY: &str = "/run/cos/display-sessions";
 pub const BROKER_RETIRE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const HOST_RETIRE_TIMEOUT: Duration = Duration::from_secs(12);
 pub const PAM_RETIRE_TIMEOUT: Duration = Duration::from_secs(15);
+pub const MENU_LAUNCH_DIGEST: &str = "CLAW_DESKTOP_EXPECTED_DIGEST";
+pub const MENU_LAUNCH_PUBLISHER: &str = "CLAW_DESKTOP_EXPECTED_PUBLISHER";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchTarget {
+    pub app_id: String,
+    pub digest: String,
+    pub publisher: String,
+}
+
+impl LaunchTarget {
+    pub fn validate(&self) -> Result<(), Error> {
+        let hash = |value: &str| {
+            value.strip_prefix("sha256:").is_some_and(|hex| {
+                hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+        };
+        if self.app_id.is_empty() || self.app_id.len() > 128
+            || !self.app_id.bytes().next().is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            || !self.app_id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || !hash(&self.digest) || !hash(&self.publisher)
+        {
+            return Err(Error::Protocol("invalid signed desktop launch target"));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Epoch(pub [u8; 16]);
@@ -283,6 +311,12 @@ pub enum AuthorityCommand {
     Gui {
         command: CompositorCommand,
     },
+    Launch {
+        epoch: Epoch,
+        request: InstanceId,
+        expires_monotonic_ms: u64,
+        target: LaunchTarget,
+    },
 }
 
 impl Packet for AuthorityCommand {
@@ -307,6 +341,9 @@ impl Packet for AuthorityCommand {
             }
             command.validate()?;
         }
+        if let Self::Launch { target, .. } = self {
+            target.validate()?;
+        }
         Ok(())
     }
 }
@@ -326,6 +363,11 @@ pub enum AuthorityReply {
     },
     Gui {
         reply: CompositorReply,
+    },
+    Launch {
+        epoch: Epoch,
+        request: InstanceId,
+        submitted: bool,
     },
 }
 

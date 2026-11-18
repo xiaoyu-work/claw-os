@@ -36,6 +36,7 @@ struct State {
     audio: Arc<super::audio::Window>,
     picker: Arc<super::file_picker::Window>,
     notifications: Arc<crate::clawd::notifications::gui::Window>,
+    desktop_launch: super::desktop_launch::Window,
     process: OnceLock<BoundProcess>,
     stopped: AtomicBool,
     listener_done: AtomicBool,
@@ -73,6 +74,7 @@ impl Broker {
             audio: super::audio::Window::new(registration.clone()),
             picker: super::file_picker::Window::new(registration.clone()),
             notifications: crate::clawd::notifications::gui::Window::new(registration.clone()),
+            desktop_launch: super::desktop_launch::Window::new(registration.clone()),
             registration,
             process: OnceLock::new(),
             stopped: AtomicBool::new(false),
@@ -161,17 +163,19 @@ impl Broker {
         self.state.audio.stop();
         self.state.picker.stop();
         self.state.notifications.stop();
+        self.state.desktop_launch.stop();
         self.state.shutdown.send_replace(true);
     }
 
-    pub fn retire_package_intents_after_death(
+    pub fn retire_intents_after_death(
         &self, group: &claw_display_control::workload::Workload, deadline: std::time::Instant,
     ) -> Result<(), String> {
         if !self.state.stopped.load(Ordering::Acquire) || !self.quiescent() {
             return Err("package-intent provider has not quiesced".into());
         }
         self.state.package_intents.release_after_death(group, deadline)?;
-        self.state.notifications.release_after_death()
+        self.state.notifications.release_after_death()?;
+        self.state.desktop_launch.retire()
     }
 
     pub fn quiescent(&self) -> bool {
@@ -390,6 +394,25 @@ async fn serve(
                     Ok(value) => Response::ok(request.id, value),
                     Err(error) => Response::handler_error(request.id, error),
                 }
+            } else if request.command == Command::GuiDesktopLaunch {
+                let id = request.id;
+                let response = match serde_json::from_value(request.params) {
+                    Ok(params) => {
+                        let process = endpoint.process.get().expect("authenticated bound GUI process").process.clone();
+                        let context = crate::paths::RoutedPathContext::for_owner(
+                            endpoint.registration.owner(), endpoint.registration.home.clone(),
+                        );
+                        match tokio::task::spawn_blocking(move ||
+                            context.scope_sync(|| endpoint.desktop_launch.request(&process, params))
+                        ).await {
+                            Ok(Ok(reply)) => Response::ok(id, reply),
+                            Ok(Err(error)) => Response::handler_error(id, BrokerError::authorization(error)),
+                            Err(_) => Response::handler_error(id, BrokerError::unavailable("desktop launch request ended without a confirmed outcome")),
+                        }
+                    }
+                    Err(_) => Response::fault(id, Fault::InvalidParams),
+                };
+                response
             } else if request.command == Command::GuiMediaExchange {
                 match endpoint.media.exchange(request.params, &client).await {
                     Ok(value) => Response::ok(request.id, value),

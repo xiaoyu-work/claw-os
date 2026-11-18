@@ -2512,6 +2512,22 @@ routes! {
             super::media_player::control(c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
+    GuiDesktopLaunch {
+        name: "gui.desktop.launch",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::GuiResource),
+        body: body::DesktopMenuLaunch,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("app_id", FieldRule::Token),
+            ("review_id", FieldRule::Token),
+        ],
+        run: |_c| Err(BrokerError::authorization(
+            "desktop menu launches require the exact Root-held private GUI endpoint")),
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

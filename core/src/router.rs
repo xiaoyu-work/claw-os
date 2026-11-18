@@ -1295,6 +1295,19 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__desktop-menu" {
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "desktop menu requests require a bound GUI session".to_string())?;
+        let params = match args {
+            [_, action, target] if action == "request" =>
+                json!({"session": session, "action": action, "app_id": target}),
+            [_, action, review] if matches!(action.as_str(), "complete" | "cancel") =>
+                json!({"session": session, "action": action, "review_id": review}),
+            _ => return Err("expected __desktop-menu request APP_ID or complete|cancel REVIEW_ID".into()),
+        };
+        return Ok(Some(request_wire_clawd(Command::GuiDesktopLaunch, params)?.to_string()));
+    }
+
     if name == "__desktop-preferences" {
         let body = if args.get(1).map(String::as_str)==Some("--request-stdin") && args.len()==2 {
             let body=parse_internal_request_object(stdin_data.as_deref(),256*1024,"desktop preferences")?;
@@ -2562,9 +2575,26 @@ fn launch_app_gui(
     let data = data_dir();
     let apps = apps_dir().to_string_lossy().to_string();
 
-    let launch = app
-        .require_verified()
-        .and_then(|pkg| bridge::AppLaunch::new(std::sync::Arc::clone(pkg)))?;
+    let package = app.require_verified()?;
+    #[cfg(target_os = "linux")]
+    {
+        use claw_display_control::wire::{MENU_LAUNCH_DIGEST, MENU_LAUNCH_PUBLISHER};
+        use std::ffi::OsStr;
+        let digest = env::var_os(MENU_LAUNCH_DIGEST);
+        let publisher = env::var_os(MENU_LAUNCH_PUBLISHER);
+        if digest.is_some() || publisher.is_some() {
+            let verified_publisher = match package.source() {
+                crate::provenance::TrustSource::Publisher { key_id } => Some(OsStr::new(key_id)),
+                _ => None,
+            };
+            if digest.as_deref() != Some(OsStr::new(package.content_digest()))
+                || publisher.is_none() || publisher.as_deref() != verified_publisher
+            {
+                return Err("the signed desktop launch target changed; select it again".into());
+            }
+        }
+    }
+    let launch = bridge::AppLaunch::new(std::sync::Arc::clone(package))?;
     let command = match gui_entry {
         Some(name) => format!("--gui:{name}"),
         None => exec.to_string(),

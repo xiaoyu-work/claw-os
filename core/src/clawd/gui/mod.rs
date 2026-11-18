@@ -3,6 +3,8 @@
 #[cfg(target_os = "linux")]
 mod broker;
 #[cfg(target_os = "linux")]
+mod desktop_launch;
+#[cfg(target_os = "linux")]
 pub(crate) mod audio;
 #[cfg(target_os = "linux")]
 pub(crate) mod file_picker;

@@ -63,6 +63,8 @@ Root retains the selected name, package snapshot, entry and selector before
 authorization and checks the same binding at launch. Every selected target
 uses the generic signed regular-file/executable admission and descriptor-pinned
 sandbox path. The launch request cannot change its GUI/MCP/entry/runtime.
+The ordinary GUI CLI can wait for the broker's exact activation and capability
+reviews, then retry registration as the same caller. It cannot confirm either.
 All surfaces keep the same App/data/audit identity and per-App mutation fence.
 The protected review lists every target and its needs/purposes, including
 unbound requests. New fields enter its comparison digest, not approval authority.
@@ -628,6 +630,15 @@ provider, proxy, transport and output cleanup. The App permission and Root
 approval-revocation controllers await these barriers before returning success.
 A session barrier also matches the Root-derived launcher grant session.
 Internal grant cleanup must not recursively wait on the same job.
+
+`desktop_launch.rs` accepts one pending menu selection per private GUI
+endpoint. A GUI declares eligibility without acquiring launch rights.
+Root resolves the desktop ID through a publisher-signed installed `.desktop`
+resource and asks the existing review controller for a one-use decision.
+The decision binds the live source instance, display epoch, target publisher
+and content digest. Expired, denied, changed, and retired requests cannot
+dispatch. The Root display supervisor submits only the normal managed GUI
+launch; the target's own activation review and capabilities still apply.
 
 Filtered Home teardown also checks instance death before dropping Root source
 pins, exact unmount and provider joins. Failed metadata or checked-cgroup
