@@ -459,7 +459,7 @@ pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::
     if matches!(command, super::Command::GuiPackageIntent | super::Command::GuiCaptureControl
         | super::Command::GuiMediaExchange | super::Command::GuiAudioControl
         | super::Command::GuiFilePicker | super::Command::GuiNotificationExchange
-        | super::Command::GuiDesktopLaunch) {
+        | super::Command::GuiDesktopLaunch | super::Command::GuiPowerReview) {
         return Ok(command.route());
     }
     super::relayable_route(command)

@@ -35,5 +35,10 @@ console with `cos review approve <review-id>`. That confirmation is spent on
 the selected App only; it does not skip the App's own activation or approval
 prompts.
 
+Shutdown and restart from the session menu use the same protected review UI.
+Approval is only for the selected action in this login, not a reusable power
+permission. Save work before approving; the machine can stop before it
+responds.
+
 Use the [coordinated logout/update procedure](updating.md#root-managed-desktop-session-lifetime)
 when replacing the compositor and display authority on an existing system.

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::caps::Verb;
 use crate::clawd::app_sessions::gui::{kernel_peer, Registration};
 use crate::clawd::client_identity::ClientIdentity;
 use crate::clawd::protocol::{encode_response, BrokerError, Response};
@@ -19,6 +20,9 @@ use crate::clawd::wire::{
     Fault, InboundRequest, Request, RequestId, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION,
 };
+use crate::clawd::wire::requests::{DesktopMenuLaunch, DesktopPowerReview};
+
+use super::desktop_review::{Reply as DesktopReply, Window as DesktopReview};
 
 const CONNECTIONS: usize = 8;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -36,7 +40,7 @@ struct State {
     audio: Arc<super::audio::Window>,
     picker: Arc<super::file_picker::Window>,
     notifications: Arc<crate::clawd::notifications::gui::Window>,
-    desktop_launch: super::desktop_launch::Window,
+    desktop_review: Arc<DesktopReview>,
     process: OnceLock<BoundProcess>,
     stopped: AtomicBool,
     listener_done: AtomicBool,
@@ -74,7 +78,7 @@ impl Broker {
             audio: super::audio::Window::new(registration.clone()),
             picker: super::file_picker::Window::new(registration.clone()),
             notifications: crate::clawd::notifications::gui::Window::new(registration.clone()),
-            desktop_launch: super::desktop_launch::Window::new(registration.clone()),
+            desktop_review: Arc::new(DesktopReview::new(registration.clone())),
             registration,
             process: OnceLock::new(),
             stopped: AtomicBool::new(false),
@@ -163,7 +167,7 @@ impl Broker {
         self.state.audio.stop();
         self.state.picker.stop();
         self.state.notifications.stop();
-        self.state.desktop_launch.stop();
+        self.state.desktop_review.stop();
         self.state.shutdown.send_replace(true);
     }
 
@@ -175,7 +179,7 @@ impl Broker {
         }
         self.state.package_intents.release_after_death(group, deadline)?;
         self.state.notifications.release_after_death()?;
-        self.state.desktop_launch.retire()
+        self.state.desktop_review.retire()
     }
 
     pub fn quiescent(&self) -> bool {
@@ -394,25 +398,43 @@ async fn serve(
                     Ok(value) => Response::ok(request.id, value),
                     Err(error) => Response::handler_error(request.id, error),
                 }
-            } else if request.command == Command::GuiDesktopLaunch {
+            } else if matches!(request.command, Command::GuiDesktopLaunch | Command::GuiPowerReview) {
                 let id = request.id;
-                let response = match serde_json::from_value(request.params) {
-                    Ok(params) => {
+                let selection = match request.command {
+                    Command::GuiDesktopLaunch => serde_json::from_value::<DesktopMenuLaunch>(request.params)
+                        .map(|r| (Verb::DESKTOP_LAUNCH, r.session, r.action, r.app_id, r.review_id)),
+                    _ => serde_json::from_value::<DesktopPowerReview>(request.params)
+                        .map(|r| (Verb::SYS_POWER, r.session, r.action, r.power_action, r.review_id)),
+                };
+                match selection {
+                    Ok((verb, session, action, selected, review_id)) => {
                         let process = endpoint.process.get().expect("authenticated bound GUI process").process.clone();
                         let context = crate::paths::RoutedPathContext::for_owner(
                             endpoint.registration.owner(), endpoint.registration.home.clone(),
                         );
-                        match tokio::task::spawn_blocking(move ||
-                            context.scope_sync(|| endpoint.desktop_launch.request(&process, params))
-                        ).await {
-                            Ok(Ok(reply)) => Response::ok(id, reply),
+                        let window = endpoint.desktop_review.clone();
+                        let result = tokio::task::spawn_blocking({
+                            let (window, process, context) = (window.clone(), process.clone(), context.clone());
+                            move || context.scope_sync(|| window.request(
+                                &process, verb, session.as_str(), action.as_str(),
+                                selected.as_ref().map(|name| name.as_str()),
+                                review_id.as_ref().map(|value| value.as_str()),
+                            ))
+                        }).await;
+                        match result {
+                            Ok(Ok(DesktopReply::Message(reply))) => Response::ok(id, reply),
+                            Ok(Ok(DesktopReply::Power(effect))) => {
+                                match Box::pin(effect.dispatch(window, process, context)).await {
+                                    Ok(reply) => Response::ok(id, reply),
+                                    Err(error) => Response::handler_error(id, error),
+                                }
+                            }
                             Ok(Err(error)) => Response::handler_error(id, BrokerError::authorization(error)),
-                            Err(_) => Response::handler_error(id, BrokerError::unavailable("desktop launch request ended without a confirmed outcome")),
+                            Err(_) => Response::handler_error(id, BrokerError::unavailable("desktop request ended without a confirmed outcome")),
                         }
                     }
                     Err(_) => Response::fault(id, Fault::InvalidParams),
-                };
-                response
+                }
             } else if request.command == Command::GuiMediaExchange {
                 match endpoint.media.exchange(request.params, &client).await {
                     Ok(value) => Response::ok(request.id, value),

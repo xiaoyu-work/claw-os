@@ -51,6 +51,17 @@ pub struct DesktopMenuLaunch {
     pub review_id: Option<Token>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopPowerReview {
+    pub session: Token,
+    pub action: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_action: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_id: Option<Token>,
+}
+
 pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{

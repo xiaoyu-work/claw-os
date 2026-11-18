@@ -16,6 +16,7 @@ mod profiles;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const REVIEW_IO_TIMEOUT: Duration = Duration::from_millis(1500);
 const STREAM_CAP_BYTES: usize = 1024 * 1024;
 static POWER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
@@ -68,18 +69,7 @@ pub async fn control(
         if action == "status" {
             return power_status().await.map_err(BrokerError::execution);
         }
-        busctl_path().map_err(backend_unavailable)?;
-        let _guard = tokio::time::timeout(
-            LOCK_TIMEOUT,
-            POWER_LOCK
-                .get_or_init(|| tokio::sync::Mutex::new(()))
-                .lock(),
-        )
-        .await
-        .map_err(|_| BrokerError::unavailable("Power Manager is busy with another operation"))?;
-        request_power_action(&action, uid, &session_id)
-            .await
-            .map_err(BrokerError::execution)
+        request_power_action(&action, uid, &session_id, None, || Ok(())).await
     }
 }
 
@@ -209,7 +199,7 @@ async fn logind_capabilities() -> Result<Value, String> {
         ("reboot", "CanReboot"),
         ("poweroff", "CanPowerOff"),
     ] {
-        match call_logind(method, &[]).await {
+        match call_logind(method, &[], TOOL_TIMEOUT).await {
             Ok(output) => {
                 capabilities.insert(
                     name.to_string(),
@@ -224,31 +214,66 @@ async fn logind_capabilities() -> Result<Value, String> {
     Ok(Value::Object(capabilities))
 }
 
-async fn request_power_action(
-    action: &str,
-    owner_uid: u32,
-    session_id: &str,
-) -> Result<Value, String> {
-    let (capability_method, action_method) = match action {
+pub(crate) fn power_methods(action: &str) -> Option<(&'static str, &'static str)> {
+    Some(match action {
         "suspend" => ("CanSuspend", "Suspend"),
         "hibernate" => ("CanHibernate", "Hibernate"),
         "hybrid-sleep" => ("CanHybridSleep", "HybridSleep"),
         "suspend-then-hibernate" => ("CanSuspendThenHibernate", "SuspendThenHibernate"),
         "reboot" => ("CanReboot", "Reboot"),
         "poweroff" => ("CanPowerOff", "PowerOff"),
-        _ => unreachable!("validated power action"),
+        _ => return None,
+    })
+}
+
+pub(crate) async fn request_power_action(
+    action: &str,
+    owner_uid: u32,
+    session_id: &str,
+    review_id: Option<&str>,
+    authorize_dispatch: impl FnOnce() -> Result<(), BrokerError> + Send + 'static,
+) -> Result<Value, BrokerError> {
+    let (capability_method, action_method) = power_methods(action)
+        .ok_or_else(|| BrokerError::execution("unknown power action"))?;
+    let program = busctl_path().map_err(backend_unavailable)?;
+    let (lock_timeout, tool_timeout) = if review_id.is_some() {
+        (REVIEW_IO_TIMEOUT, REVIEW_IO_TIMEOUT)
+    } else {
+        (LOCK_TIMEOUT, TOOL_TIMEOUT)
     };
-    let capability = call_logind(capability_method, &[]).await?;
+    let _guard = tokio::time::timeout(
+        lock_timeout,
+        POWER_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
+    )
+    .await
+    .map_err(|_| BrokerError::unavailable("Power Manager is busy with another operation"))?;
+    let capability = call_logind(capability_method, &[], tool_timeout)
+        .await
+        .map_err(BrokerError::execution)?;
     let capability = parse_busctl_string(&capability.stdout)
-        .ok_or_else(|| format!("unexpected logind {capability_method} response"))?;
+        .ok_or_else(|| BrokerError::execution(format!("unexpected logind {capability_method} response")))?;
     if !matches!(capability.as_str(), "yes" | "challenge") {
-        return Err(format!(
+        return Err(BrokerError::execution(format!(
             "logind reports {action} is unavailable: {capability}"
-        ));
+        )));
     }
-    super::system_journal::record_power_intent(action, owner_uid, session_id)?;
     let before_boot_id = current_boot_id();
-    let output = call_logind_no_reply(action_method, &["b", "false"]).await?;
+    let context = crate::paths::RoutedPathContext::capture();
+    let (operation, session, review) = (
+        action.to_owned(),
+        session_id.to_owned(),
+        review_id.map(str::to_owned),
+    );
+    // Keep the sender connected until logind resolves its credentials and replies.
+    let args = logind_args(action_method, &["b", "false"]);
+    let output = tokio::task::spawn_blocking(move || context.scope_sync(|| {
+        authorize_dispatch()?;
+        super::system_journal::record_power_intent(&operation, owner_uid, &session, review.as_deref())
+            .map_err(BrokerError::execution)?;
+        run_checked_sync(program, args, tool_timeout).map_err(BrokerError::execution)
+    }))
+    .await
+    .map_err(|_| BrokerError::unavailable("power dispatch did not return a confirmed result"))??;
     Ok(json!({
         "action": action,
         "requested": true,
@@ -261,21 +286,14 @@ async fn request_power_action(
     }))
 }
 
-async fn call_logind(method: &str, method_args: &[&str]) -> Result<CommandOutput, String> {
-    let mut args = vec![
-        "call",
-        "org.freedesktop.login1",
-        "/org/freedesktop/login1",
-        "org.freedesktop.login1.Manager",
-        method,
-    ];
-    args.extend_from_slice(method_args);
-    run_checked(busctl_path()?, &args, TOOL_TIMEOUT).await
+async fn call_logind(method: &str, method_args: &[&str], timeout: Duration) -> Result<CommandOutput, String> {
+    let program = busctl_path()?;
+    let args = logind_args(method, method_args);
+    run_owned(program, args, timeout).await
 }
 
-async fn call_logind_no_reply(method: &str, method_args: &[&str]) -> Result<CommandOutput, String> {
+fn logind_args(method: &str, method_args: &[&str]) -> Vec<String> {
     let mut args = vec![
-        "--expect-reply=no",
         "call",
         "org.freedesktop.login1",
         "/org/freedesktop/login1",
@@ -283,7 +301,7 @@ async fn call_logind_no_reply(method: &str, method_args: &[&str]) -> Result<Comm
         method,
     ];
     args.extend_from_slice(method_args);
-    run_checked(busctl_path()?, &args, TOOL_TIMEOUT).await
+    args.into_iter().map(str::to_owned).collect()
 }
 
 fn parse_busctl_string(output: &str) -> Option<String> {
@@ -304,23 +322,9 @@ fn current_boot_id() -> Option<String> {
 fn validate_action(action: &str, confirm: bool) -> Result<(), String> {
     match action {
         "status" if !confirm => Ok(()),
-        "suspend"
-        | "hibernate"
-        | "hybrid-sleep"
-        | "suspend-then-hibernate"
-        | "reboot"
-        | "poweroff"
-            if confirm =>
-        {
-            Ok(())
-        }
         "status" => Err("status does not accept --confirm".to_string()),
-        "suspend"
-        | "hibernate"
-        | "hybrid-sleep"
-        | "suspend-then-hibernate"
-        | "reboot"
-        | "poweroff" => Err(format!("{action} requires --confirm")),
+        _ if power_methods(action).is_some() && confirm => Ok(()),
+        _ if power_methods(action).is_some() => Err(format!("{action} requires --confirm")),
         _ => Err(format!("unknown power action: {action}")),
     }
 }
@@ -330,7 +334,14 @@ async fn run_checked(
     args: &[&str],
     timeout: Duration,
 ) -> Result<CommandOutput, String> {
-    let args = args.iter().map(|value| value.to_string()).collect();
+    run_owned(program, args.iter().map(|value| value.to_string()).collect(), timeout).await
+}
+
+async fn run_owned(
+    program: &'static str,
+    args: Vec<String>,
+    timeout: Duration,
+) -> Result<CommandOutput, String> {
     tokio::task::spawn_blocking(move || run_checked_sync(program, args, timeout))
         .await
         .map_err(|error| format!("{program} worker failed: {error}"))?

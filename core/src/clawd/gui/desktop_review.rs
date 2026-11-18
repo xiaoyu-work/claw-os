@@ -1,4 +1,4 @@
-//! One reviewed, exact signed App launch at a time for a bound desktop GUI.
+//! One reviewed desktop effect at a time for a bound GUI.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,14 +6,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use claw_display_control::{Epoch, ProcessIdentity, wire::LaunchTarget};
+use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::approvals::{self, DESKTOP_LAUNCH_APPROVAL, GrantDuration, RequestStatus};
+use crate::approvals::{
+    self, DESKTOP_LAUNCH_APPROVAL, DESKTOP_POWER_APPROVAL, GrantDuration, RequestStatus,
+};
 use crate::caps::manifest::ScopeBinding;
 use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::app_sessions::gui::Registration;
 use crate::clawd::authority::GrantView;
-use crate::clawd::wire::requests::DesktopMenuLaunch;
+use crate::clawd::{power, protocol::BrokerError};
+use crate::paths::RoutedPathContext;
 use crate::provenance::{PackageKind, TrustSource, VerifyOptions};
 
 const REVIEW_LIFETIME: Duration = Duration::from_secs(120);
@@ -23,11 +27,85 @@ struct Review {
     id: String,
     session: String,
     digest: String,
-    desktop_id: String,
-    target: LaunchTarget,
+    effect: Effect,
     deadline: Instant,
     grant: crate::clawd::authority::GrantId,
     generation: u64,
+}
+
+#[derive(Serialize)]
+enum Effect {
+    Launch {
+        desktop_id: String,
+        target: LaunchTarget,
+    },
+    Power(String),
+}
+
+impl Effect {
+    fn capability(&self) -> Cap {
+        match self {
+            Self::Launch { desktop_id, .. } => {
+                Cap::new(Verb::DESKTOP_LAUNCH, Scope::name(desktop_id))
+            }
+            Self::Power(_) => Cap::new(Verb::SYS_POWER, Scope::Wild),
+        }
+    }
+
+    fn review(&self) -> (&'static str, String) {
+        match self {
+            Self::Launch { desktop_id, target } => (
+                DESKTOP_LAUNCH_APPROVAL,
+                format!("Open signed App {} ({desktop_id}) once", target.app_id),
+            ),
+            Self::Power(action) => (
+                DESKTOP_POWER_APPROVAL,
+                format!("Request system {action} once"),
+            ),
+        }
+    }
+}
+
+pub(super) enum Reply {
+    Message(Value),
+    Power(PowerDispatch),
+}
+
+fn status(state: &'static str) -> Reply {
+    Reply::Message(json!({"status": state}))
+}
+
+pub(super) struct PowerDispatch {
+    review: Review,
+    generation: u32,
+}
+
+impl PowerDispatch {
+    pub(super) async fn dispatch(
+        self,
+        window: Arc<Window>,
+        process: ProcessIdentity,
+        context: RoutedPathContext,
+    ) -> Result<Value, BrokerError> {
+        let Effect::Power(action) = &self.review.effect else {
+            return Err(BrokerError::authorization(
+                "expected a reviewed power effect",
+            ));
+        };
+        let action = action.clone();
+        let id = self.review.id.clone();
+        let owner = window.registration.owner();
+        let session = window.registration.session_id.clone();
+        power::request_power_action(&action, owner, &session, Some(&id), move || {
+            context
+                .scope_sync(|| {
+                    window.require_live_confirmation(&process, &self.review, self.generation)
+                })
+                .map_err(BrokerError::authorization)
+        })
+        .await?;
+        Ok(json!({"status": "submitted"}))
+    }
 }
 
 pub(super) struct Window {
@@ -53,7 +131,7 @@ impl Window {
         let mut review = self
             .review
             .lock()
-            .map_err(|_| "desktop launch review lock poisoned")?;
+            .map_err(|_| "desktop review lock poisoned")?;
         self.retire_review(&mut review)
     }
 
@@ -64,29 +142,28 @@ impl Window {
                 &record.session,
                 &record.id,
                 &record.digest,
-                "desktop menu request has ended",
+                "desktop request has ended",
             )?;
             review.take();
         }
         Ok(())
     }
 
-    fn live(&self, process: &ProcessIdentity, desktop_id: &str) -> Result<GrantView, String> {
+    fn live(&self, process: &ProcessIdentity, cap: &Cap) -> Result<GrantView, String> {
         if self.closed.load(Ordering::Acquire) {
-            return Err("the desktop launch window has closed".into());
+            return Err("the desktop review window has closed".into());
         }
         let view = self.registration.snapshot(process)?;
         if view.subject.task_id.is_some()
             || view.subject.activity.is_some()
             || view.subject.workspace.is_some()
         {
-            return Err("desktop menu launches require an independent interactive desktop".into());
+            return Err("desktop reviews require an independent interactive desktop".into());
         }
         let launch = &self.registration.launch;
         if !matches!(launch.package().source(), TrustSource::Publisher { .. }) {
-            return Err("desktop launch requests require a signed GUI".into());
+            return Err("desktop requests require a signed GUI".into());
         }
-        let cap = capability(desktop_id);
         let selected = launch
             .manifest()
             .gui_entry(self.registration.gui_entry.as_deref())?;
@@ -99,13 +176,11 @@ impl Window {
                     _ => false,
                 }
         }) {
-            return Err(
-                "this signed GUI does not declare desktop launch requests for that AppID".into(),
-            );
+            return Err("this signed GUI does not declare the requested desktop action".into());
         }
-        let caps = CapSet::from_caps([cap]);
+        let caps = CapSet::from_caps([cap.clone()]);
         if launch.ceiling().clamp(&caps).0 != caps {
-            return Err("desktop launch is outside the requesting App's authority ceiling".into());
+            return Err("the action is outside the requesting App's authority ceiling".into());
         }
         crate::approvals::app_policy::require(self.registration.owner(), launch.app_id(), &caps)?;
         Ok(view)
@@ -114,33 +189,25 @@ impl Window {
     pub(super) fn request(
         &self,
         process: &ProcessIdentity,
-        request: DesktopMenuLaunch,
-    ) -> Result<Value, String> {
-        if request.session.as_str() != self.registration.session_id {
-            return Err("desktop launch request belongs to another GUI".into());
+        verb: Verb,
+        session: &str,
+        action: &str,
+        selected: Option<&str>,
+        review_id: Option<&str>,
+    ) -> Result<Reply, String> {
+        if session != self.registration.session_id {
+            return Err("desktop request belongs to another GUI".into());
         }
         let mut review = self
             .review
             .lock()
-            .map_err(|_| "desktop launch review lock poisoned")?;
+            .map_err(|_| "desktop review lock poisoned")?;
         if self.closed.load(Ordering::Acquire) {
-            return Err("the desktop launch window has closed".into());
+            return Err("the desktop review window has closed".into());
         }
-        match (request.action.as_str(), request.app_id, request.review_id) {
-            ("request", Some(desktop_id), None) => {
-                let desktop_id = desktop_id.as_str();
-                if desktop_id.is_empty()
-                    || desktop_id.len() > 255
-                    || !desktop_id
-                        .bytes()
-                        .next()
-                        .is_some_and(|b| b.is_ascii_alphanumeric())
-                    || !desktop_id
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-                {
-                    return Err("invalid desktop AppID".into());
-                }
+        match (action, selected, review_id) {
+            ("request", Some(selection), None) => {
+                let cap = selected_capability(verb, selection)?;
                 if review
                     .as_ref()
                     .is_some_and(|r| Instant::now() >= r.deadline)
@@ -149,30 +216,37 @@ impl Window {
                 }
                 if review.is_some() {
                     return Err(
-                        "another desktop launch is awaiting a decision in this window".into(),
+                        "another desktop action is awaiting a decision in this window".into(),
                     );
                 }
-                let view = self.live(process, desktop_id)?;
-                let target = resolve_target(desktop_id)?;
+                let view = self.live(process, &cap)?;
+                let effect = if verb == Verb::DESKTOP_LAUNCH {
+                    Effect::Launch {
+                        desktop_id: selection.to_owned(),
+                        target: resolve_target(selection)?,
+                    }
+                } else {
+                    Effect::Power(selection.to_owned())
+                };
+                let (prefix, reason) = effect.review();
                 let nonce = Epoch::random().map_err(|e| e.to_string())?.label();
                 let digest = crate::crypto::sha256_hex(
                     &serde_json::to_vec(&(
-                        "desktop-menu-launch",
+                        prefix,
                         &nonce,
                         self.registration.owner(),
                         &self.registration.session_id,
                         self.registration.control.epoch,
-                        desktop_id,
-                        &target,
+                        &effect,
                     ))
                     .map_err(|error| error.to_string())?,
                 );
-                let session = format!("{DESKTOP_LAUNCH_APPROVAL}{nonce}");
+                let session = format!("{prefix}{nonce}");
                 let id = approvals::submit_owned_with_context_for_operation(
-                    Verb::DESKTOP_LAUNCH,
-                    Scope::name(desktop_id),
+                    cap.verb,
+                    cap.scope,
                     session.clone(),
-                    format!("Open signed App {} ({desktop_id}) once", target.app_id),
+                    reason,
                     Some(format!(
                         "App {} / GUI {}",
                         self.registration.launch.app_id(),
@@ -186,68 +260,79 @@ impl Window {
                     id: id.clone(),
                     session,
                     digest,
-                    desktop_id: desktop_id.to_owned(),
-                    target,
+                    effect,
                     deadline: Instant::now() + REVIEW_LIFETIME.min(view.expires_in),
                     grant: view.id,
                     generation: view.generation,
                 });
-                Ok(json!({"status": "pending", "review_id": id}))
+                Ok(Reply::Message(
+                    json!({"status": "pending", "review_id": id}),
+                ))
             }
             ("complete" | "cancel", None, Some(id)) => {
                 let record = review
                     .as_ref()
-                    .filter(|r| r.id == id.as_str())
-                    .ok_or("no matching desktop menu request is retained by this window")?;
-                if request.action.as_str() == "cancel" || Instant::now() >= record.deadline {
+                    .filter(|r| r.id == id && r.effect.capability().verb == verb)
+                    .ok_or("no matching desktop request is retained by this window")?;
+                if action == "cancel" || Instant::now() >= record.deadline {
                     self.retire_review(&mut review)?;
-                    return Ok(json!({"status": "cancelled"}));
+                    return Ok(status("cancelled"));
                 }
-                let view = self.live(process, &record.desktop_id)?;
+                let cap = record.effect.capability();
+                let view = self.live(process, &cap)?;
                 if view.id != record.grant || view.generation != record.generation {
                     return Err("the requesting GUI authority changed".into());
                 }
                 let owner = self.registration.owner();
                 match approvals::status_for_owner(&record.id, Some(owner)) {
                     RequestStatus::Pending | RequestStatus::Resolving => {
-                        return Ok(json!({"status": "pending"}));
+                        return Ok(status("pending"));
                     }
                     RequestStatus::Denied => {
                         self.retire_review(&mut review)?;
-                        return Ok(json!({"status": "denied"}));
+                        return Ok(status("denied"));
                     }
                     RequestStatus::Approved => {}
-                    _ => return Err("the desktop launch decision is no longer available".into()),
+                    _ => return Err("the desktop decision is no longer available".into()),
                 }
-                let installed = resolve_target(&record.desktop_id)?;
-                if installed.app_id != record.target.app_id
-                    || installed.digest != record.target.digest
-                    || installed.publisher != record.target.publisher
-                {
-                    self.retire_review(&mut review)?;
-                    return Err("the signed desktop launch target changed; select it again".into());
-                }
+                let installed = if let Effect::Launch { desktop_id, target } = &record.effect {
+                    let installed = resolve_target(desktop_id)?;
+                    if installed.app_id != target.app_id
+                        || installed.digest != target.digest
+                        || installed.publisher != target.publisher
+                    {
+                        self.retire_review(&mut review)?;
+                        return Err(
+                            "the signed desktop launch target changed; select it again".into()
+                        );
+                    }
+                    Some(installed)
+                } else {
+                    None
+                };
                 let evidence = approvals::consume_grant_set_once_for_owner_operation_evidence(
                     &record.session,
-                    &[capability(&record.desktop_id)],
+                    &[cap],
                     Some(owner),
                     Some(&record.digest),
                 )?
-                .ok_or("the exact desktop launch confirmation expired or was revoked")?;
+                .ok_or("the exact desktop confirmation expired or was revoked")?;
                 let [approval] = evidence.as_slice() else {
-                    return Err("desktop launch approval binding is invalid".into());
+                    return Err("desktop approval binding is invalid".into());
                 };
                 let record = review.take().expect("checked review retained under lock");
-                let current = self.live(process, &record.desktop_id)?;
-                if approval.duration != GrantDuration::Once
-                    || approvals::generations::current(Some(owner), &record.session)?
-                        != approval.generation
-                    || current.id != record.grant
-                    || current.generation != record.generation
-                    || Instant::now() >= record.deadline
-                {
-                    return Err("desktop launch confirmation is no longer live".into());
+                if approval.duration != GrantDuration::Once {
+                    return Err("desktop confirmation must be single-use".into());
                 }
+                self.require_live_confirmation(process, &record, approval.generation)?;
+                let (Some(installed), Effect::Launch { desktop_id, target }) =
+                    (installed, &record.effect)
+                else {
+                    return Ok(Reply::Power(PowerDispatch {
+                        review: record,
+                        generation: approval.generation,
+                    }));
+                };
                 let deadline = record.deadline.min(Instant::now() + Duration::from_secs(2));
                 let result = self.registration.control.launch(installed, deadline);
                 crate::provenance::audit(
@@ -257,26 +342,62 @@ impl Window {
                         "source_app": self.registration.launch.app_id(),
                         "epoch": self.registration.control.epoch.label(),
                         "review_id": record.id,
-                        "desktop_id": record.desktop_id,
-                        "app_id": record.target.app_id,
-                        "content_digest": record.target.digest,
+                        "desktop_id": desktop_id,
+                        "app_id": target.app_id,
+                        "content_digest": target.digest,
                         "submitted": result.is_ok(),
                     }),
                 );
                 result.map_err(|error| {
                     format!("desktop launch was not confirmed; do not retry automatically: {error}")
                 })?;
-                Ok(json!({"status": "submitted"}))
+                Ok(status("submitted"))
             }
-            _ => {
-                Err("expected request with one AppID, or complete/cancel with one review ID".into())
-            }
+            _ => Err(
+                "expected request with one selection, or complete/cancel with one review ID".into(),
+            ),
         }
+    }
+
+    fn require_live_confirmation(
+        &self,
+        process: &ProcessIdentity,
+        review: &Review,
+        generation: u32,
+    ) -> Result<(), String> {
+        let view = self.live(process, &review.effect.capability())?;
+        if self.closed.load(Ordering::Acquire)
+            || approvals::generations::current(Some(self.registration.owner()), &review.session)?
+                != generation
+            || view.id != review.grant
+            || view.generation != review.generation
+            || Instant::now() >= review.deadline
+        {
+            return Err("desktop confirmation is no longer live".into());
+        }
+        Ok(())
     }
 }
 
-fn capability(id: &str) -> Cap {
-    Cap::new(Verb::DESKTOP_LAUNCH, Scope::name(id))
+fn selected_capability(verb: Verb, selection: &str) -> Result<Cap, String> {
+    match verb {
+        Verb::DESKTOP_LAUNCH
+            if selection.len() <= 255
+                && selection
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphanumeric())
+                && selection
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')) =>
+        {
+            Ok(Cap::new(verb, Scope::name(selection)))
+        }
+        Verb::SYS_POWER if power::power_methods(selection).is_some() => {
+            Ok(Cap::new(verb, Scope::Wild))
+        }
+        _ => Err("invalid desktop AppID or power action".into()),
+    }
 }
 
 fn resolve_target(desktop_id: &str) -> Result<LaunchTarget, String> {

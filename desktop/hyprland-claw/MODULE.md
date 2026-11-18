@@ -112,9 +112,12 @@ This source-staged guest did not exercise the official APT transaction.
 Clicking the Shell's Logout after the PAM close-hook ordering change removed
 the exact GUI, supervisor, compositor, cgroup and logind session, and returned
 to the greeter without a retirement error for that session. A later guest
-also rendered the signed Editor with ordinary GUI permission reviews and
-accepted keyboard input. A lab-only owner shortcut selected Editor; this
-is not default launcher or deployable-image acceptance.
+selected the signed Editor from the default menu, approved that launch once,
+then completed the Editor's separate reviews and entered text. Denying a new
+selection did not open a second App, and logout cancelled a pending selection.
+The session menu's denied PowerOff left the guest running; a separate
+approved PowerOff shut it down and left one correlated journal intent.
+These runs do not establish APT, deployable-image, restart or sleep acceptance.
 
 The existing protocol baseline runs from the OS repository root:
 

@@ -187,6 +187,9 @@ Observation and critical `sys.power` do not substitute for this right. The
 Root-owned system76 or freedesktop profile service is pinned, and changes are
 read back before being reported as applied. Native Power UI reads the existing
 UPower aggregate, not a fabricated missing battery on provider failure.
+The signed desktop menu requests an exact, once-only power action through the
+[private GUI review window](gui/MODULE.md). It uses the same Root logind
+provider as other clients without adding ambient power authority.
 
 Official Store v2 binds each App to a final signed Debian package inventory.
 Preparation verifies the actual App bytes and discloses the concrete APT

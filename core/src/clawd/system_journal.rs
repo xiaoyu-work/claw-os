@@ -246,8 +246,8 @@ fn task_event_record(event: &'static str, job: &Job) -> Value {
     })
 }
 
-pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str) -> Result<(), String> {
-    append(json!({
+pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str, review_id: Option<&str>) -> Result<(), String> {
+    let mut entry = json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "system.power",
@@ -256,7 +256,11 @@ pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str) -> Re
         "ok": true,
         "session_id": session_id,
         "owner_uid": owner_uid,
-    }))
+    });
+    if let Some(review_id) = review_id {
+        entry["review_id"] = json!(audit_policy::safe_reference(review_id));
+    }
+    append(entry)
 }
 
 /// Surface a session-journal alarm on the user-visible timeline.

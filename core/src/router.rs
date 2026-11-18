@@ -1308,6 +1308,19 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(request_wire_clawd(Command::GuiDesktopLaunch, params)?.to_string()));
     }
 
+    if name == "__desktop-power" {
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "desktop power requests require a bound GUI session".to_string())?;
+        let params = match args {
+            [_, action, target] if action == "request" =>
+                json!({"session": session, "action": action, "power_action": target}),
+            [_, action, review] if matches!(action.as_str(), "complete" | "cancel") =>
+                json!({"session": session, "action": action, "review_id": review}),
+            _ => return Err("expected __desktop-power request ACTION or complete|cancel REVIEW_ID".into()),
+        };
+        return Ok(Some(request_wire_clawd(Command::GuiPowerReview, params)?.to_string()));
+    }
+
     if name == "__desktop-preferences" {
         let body = if args.get(1).map(String::as_str)==Some("--request-stdin") && args.len()==2 {
             let body=parse_internal_request_object(stdin_data.as_deref(),256*1024,"desktop preferences")?;

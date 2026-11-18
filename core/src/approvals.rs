@@ -1001,28 +1001,32 @@ fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization,
 }
 
 pub(crate) const DESKTOP_LAUNCH_APPROVAL: &str = "desktop-launch:";
+pub(crate) const DESKTOP_POWER_APPROVAL: &str = "desktop-power:";
 
-pub(crate) fn is_desktop_launch_approval(
+pub(crate) fn is_desktop_effect_approval(
     verb: Verb,
     session: &str,
     operation_digest: Option<&str>,
 ) -> bool {
-    verb == Verb::DESKTOP_LAUNCH
-        && session.starts_with(DESKTOP_LAUNCH_APPROVAL)
-        && operation_digest.is_some()
+    operation_digest.is_some()
+        && match verb {
+            Verb::DESKTOP_LAUNCH => session.starts_with(DESKTOP_LAUNCH_APPROVAL),
+            Verb::SYS_POWER => session.starts_with(DESKTOP_POWER_APPROVAL),
+            _ => false,
+        }
 }
 
 fn validate_duration(
     authorization: &ApprovalAuthorization,
     duration: GrantDuration,
 ) -> Result<(), String> {
-    if is_desktop_launch_approval(
+    if is_desktop_effect_approval(
         authorization.capability.verb,
         &authorization.session,
         authorization.operation_digest.as_deref(),
     ) && duration != GrantDuration::Once
     {
-        return Err("desktop menu launches can only be approved once".into());
+        return Err("desktop effects can only be approved once".into());
     }
     if authorization.context != Some(ConsentContext::Attended) {
         return Ok(());

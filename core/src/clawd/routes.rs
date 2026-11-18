@@ -2528,6 +2528,22 @@ routes! {
         run: |_c| Err(BrokerError::authorization(
             "desktop menu launches require the exact Root-held private GUI endpoint")),
     }
+    GuiPowerReview {
+        name: "gui.power.review",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::GuiResource),
+        body: body::DesktopPowerReview,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("power_action", FieldRule::Enum(&["poweroff", "reboot", "suspend", "hibernate", "hybrid-sleep", "suspend-then-hibernate"])),
+            ("review_id", FieldRule::Token),
+        ],
+        run: |_c| Err(BrokerError::authorization(
+            "desktop power reviews require the exact Root-held private GUI endpoint")),
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

@@ -631,14 +631,21 @@ approval-revocation controllers await these barriers before returning success.
 A session barrier also matches the Root-derived launcher grant session.
 Internal grant cleanup must not recursively wait on the same job.
 
-`desktop_launch.rs` accepts one pending menu selection per private GUI
-endpoint. A GUI declares eligibility without acquiring launch rights.
+`desktop_review.rs` accepts one pending desktop effect per private GUI
+endpoint. A GUI declares eligibility without acquiring an effect grant.
 Root resolves the desktop ID through a publisher-signed installed `.desktop`
 resource and asks the existing review controller for a one-use decision.
 The decision binds the live source instance, display epoch, target publisher
 and content digest. Expired, denied, changed, and retired requests cannot
 dispatch. The Root display supervisor submits only the normal managed GUI
 launch; the target's own activation review and capabilities still apply.
+Power actions use the same review window with an exact power verb and action
+instead of an App target. The OS Power Manager checks logind availability,
+rechecks the live confirmation, and journals the action and review ID before
+sending the effect. It keeps the authenticated D-Bus caller connected for
+logind's reply; lost acknowledgements are not retried. Consent and submission
+are not completion. Neither
+the Shell nor a caller claiming a review ID inherits `sys.power`.
 
 Filtered Home teardown also checks instance death before dropping Root source
 pins, exact unmount and provider joins. Failed metadata or checked-cgroup
