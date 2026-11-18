@@ -18,7 +18,7 @@ cargo +stable build --manifest-path "$project/desktop/services/claw-applet-servi
     --locked --release --features provider --bin claw-os-applet-provider
 
 cp -a "$project/desktop/hyprland" "$project/desktop/hyprland-claw" "$work/"
-python3 "$work/hyprland-claw/build-dependencies.py" --cache "$work/deps" --jobs "$jobs"
+python3 "$project/desktop/hyprland-claw/build-dependencies.py" --cache "$work/deps" --jobs "$jobs"
 prefix="$work/deps/prefix"
 export PATH="$prefix/bin:$PATH"
 export CMAKE_PREFIX_PATH="$prefix"
