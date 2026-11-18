@@ -109,8 +109,10 @@ A separate Debian 13 KVM guest booted through the real VT7 greetd/PAM flow.
 The installed signed Shell passed the separate App activation and capability
 reviews, then rendered through the ordinary GUI Host on a virtio display.
 This source-staged guest did not exercise the official APT transaction.
-It did not establish ordinary App launch, checked Logout, or a deployable
-desktop image.
+Clicking the Shell's Logout after the PAM close-hook ordering change removed
+the exact GUI, supervisor, compositor, cgroup and logind session, and returned
+to the greeter without a retirement error for that session. Ordinary App
+launch and deployable-image acceptance remain separate.
 
 The existing protocol baseline runs from the OS repository root:
 

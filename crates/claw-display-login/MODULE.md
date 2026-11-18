@@ -7,8 +7,10 @@ the kernel audit UID/session established by `pam_loginuid`, captures the
 exact Root PAM worker, and starts only the protected display supervisor.
 
 The `open-after` entry follows `common-session`, when logind has created the
-session and cgroup. The `close-before` entry precedes it to retire the display
-before logind tears down that session. The only module argument is its phase.
+session and cgroup. The `close-before` entry runs before keyring revocation
+and logind teardown. Keyring revocation may change the PAM worker's saved GID
+even after restoring its effective GID; display close needs the unchanged
+authenticated Root peer. The only module argument is its phase.
 Root derives identity, epoch, cgroup and executable; the bounded PAM locale
 projection cannot pass loader or display variables.
 

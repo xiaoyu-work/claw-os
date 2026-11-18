@@ -872,6 +872,8 @@ PAM/display helpers; Desktop supplies the matching protected Hyprland
 executable and greetd/PAM startup configuration. The Agent and Desktop upgrade
 must be coordinated with the signed Desktop Shell App. The new package removes
 the superseded session; it does not migrate or erase owner configuration.
+Keep the packaged PAM close hook before keyring and logind teardown; a locally
+modified stack can otherwise reject checked display retirement.
 On Debian 13, Desktop uses the matching XKB runtime and X11 companion from
 `trixie-backports`. Existing installs need that APT source enabled before the
 desktop upgrade.
