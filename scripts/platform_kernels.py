@@ -247,7 +247,7 @@ def build(lock, platform, cache, output):
     keys = list(profile.get("native", [])) or [profile["kernel"]]
     if "dtbs" in profile:
         keys.append(profile["dtbs"])
-    keys += profile.get("gpu", []) + profile.get("boot", [])
+    keys += profile.get("gpu", []) + profile.get("boot", []) + profile.get("surface", [])
     output.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     provenance = {name: lock["inputs"][name] for name in keys}
@@ -264,6 +264,10 @@ def build(lock, platform, cache, output):
                 if arch != profile["arch"] or name != f"linux-{kind}-{profile['release']}":
                     raise ValueError(f"{artifact.name}: package does not match {platform}")
                 shutil.copyfile(artifact, out / artifact.name)
+            if "surface" in profile:
+                from surface_laptop7 import build_surface
+
+                build_surface(profile, source, provenance, work, out, package)
         else:
             kernel_package(profile, source, provenance, work, out)
             if "gpu" in profile:

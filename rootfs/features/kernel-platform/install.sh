@@ -23,6 +23,13 @@ packages=()
 for file in "$stage"/linux-image-*.deb "$stage"/claw-os-nvidia-platform_*.deb; do
     [[ -f $file ]] && packages+=("$inside/${file##*/}")
 done
+if [[ $platform == x86-surface-laptop-7-intel ]]; then
+    for file in "$stage"/{claw-os-surface-laptop-7,libcamera*,gstreamer1.0-libcamera}_*.deb; do
+        test -f "$file"
+        packages+=("$inside/${file##*/}")
+    done
+    packages+=("alsa-ucm-conf/$SUITE-backports" "libspa-0.2-libcamera/$SUITE-backports")
+fi
 chroot "$ROOTFS" apt-get update -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
     install -y --no-install-recommends "${packages[@]}" </dev/null
@@ -52,3 +59,7 @@ if [[ -n $boot_args ]]; then
 fi
 test -s "$ROOTFS/boot/vmlinuz-$release"
 test -s "$ROOTFS/boot/initrd.img-$release"
+if [[ $platform == x86-surface-laptop-7-intel ]]; then
+    chroot "$ROOTFS" lsinitramfs "/boot/initrd.img-$release" |
+        grep -E '/updates/claw-surface/surface_aggregator_registry\.ko$' >/dev/null
+fi

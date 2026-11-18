@@ -120,6 +120,7 @@ The generic Debian kernel remains the default. Build an opt-in image on a native
 | Profile | Native artifact and remaining limits |
 | --- | --- |
 | `x86-t2` | Debian 13 T2 kernel with early virtual USB for internal input. Mac-specific firmware for Wi-Fi and Bluetooth is not bundled. |
+| `x86-surface-laptop-7-intel` | Desktop ISO for the Surface Laptop for Business 7th Edition with Intel Core Ultra 200V (ACPI `MSHW0551`), not the Snapdragon edition. See the [build and hardware checks](#intel-surface-laptop-7). |
 | `aarch64-qualcomm` | Patched kernel and version-matched retail Snapdragon X/X2 device trees. Choose the exact model and variant in GRUB. DSP-dependent hardware remains off in these entries. |
 | `aarch64-n1x` / `aarch64-gb10` | Matched NVIDIA open kernel modules, GPU firmware and driver libraries. GB10 media disables unsupported system sleep; N1x acceleration requires working production GPU firmware. |
 | `aarch64-apple` | Aurora kernel, matching device trees and m1n1/U-Boot stage-two assets. Use `iso-live` for pre-provisioned Asahi UEFI or `sudo ./build.sh asahi-rootfs` for a desktop rootfs archive. Generic Calamares is disabled for this profile: it does not provision macOS recovery, an Apple boot policy or a dedicated Asahi ESP. |
@@ -127,6 +128,21 @@ The generic Debian kernel remains the default. Build an opt-in image on a native
 `python3 scripts/platform_kernels.py <profile>` prepares the corresponding Debian packages and boot assets without building the full OS. Kernel and driver inputs are pinned by SHA-256; Omarchy artifacts also require signatures from the pinned archive key. Neither the image nor the install adds an Arch package repository. Generated platform artifacts carry their upstream source references and are not published by the regular Claw OS APT workflow.
 
 Apple provisioning must first create and enroll a dedicated Asahi boot chain without overwriting macOS or recovery. The rootfs archive is for that Linux root and ESP only. It carries the matched stage-two image at `/usr/lib/cos/asahi/boot.bin` (`boot-j700.bin` for MacBook Neo); it does not activate either image or replace an enrolled Apple Stage 1. Internal speaker audio is disabled until the matching speaker protection stack is qualified. Other device-specific OEM firmware and user-space workarounds are not assumed to be covered by the kernel. Do not bundle material from a vendor recovery or Windows image without redistribution rights.
+
+### Intel Surface Laptop 7
+
+The opt-in profile builds against one pinned Linux Surface kernel and Debian 13. It adds the Intel SSAM device mapping for the keyboard, battery, charger, fan and ambient-light sensor before disk unlock, the Sensel `iptsd` stack for touchpad gestures, SoundWire audio, the IPU7 RGB and IR sensor drivers, and a matching libcamera/PipeWire stack. It includes the reported backlight and sleep workarounds; it does not activate the experimental IR illuminator or change login authentication. Intel graphics, Wi-Fi and Bluetooth firmware still come from Debian.
+
+Build on native amd64 Debian 13 with the ISO tools above and a Debian package build environment. Install `build-essential`, `libelf-dev`, `meson`, `ninja-build`, `cmake`, `systemd-dev` and `libudev-dev`, plus the [libcamera 0.7.2 build dependencies](https://sources.debian.org/src/libcamera/0.7.2-1/debian/control/). The pinned `iptsd` sources use Meson wraps for their static dependencies. First build the stack by itself, or build the complete desktop installer:
+
+```bash
+python3 scripts/platform_kernels.py x86-surface-laptop-7-intel
+sudo env CLAW_PLATFORM=x86-surface-laptop-7-intel ./build.sh iso-installer
+```
+
+The installer copies the matching kernel and packages to disk, keeps the Debian kernel as a fallback, and verifies that the patched registry is in the initramfs. The local modules are unsigned; they will not load under Secure Boot enforcement without a locally enrolled signing key. Keep the kernel and its companion modules together when updating the profile. Generic Debian package updates continue normally.
+
+Boot the USB before changing partitions. Verify internal input in the installer and after a cold boot (including the passphrase prompt if encrypted), battery/charging, brightness, speaker/mic/headphones, camera capture, touchpad gestures, Wi-Fi, Bluetooth, external ports and repeated lid sleep/wake. Test microSD sleep behavior on the 15-inch model. The profile is experimental until verified on the target hardware; intermittent sleep failures have been reported upstream.
 
 ## Instance identity
 

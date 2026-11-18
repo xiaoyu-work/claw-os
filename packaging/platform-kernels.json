@@ -14,6 +14,56 @@
       "sha256": "926f8e46185a6bda8a5455dea05bc15c755ac6e08b7c664eaffe8e3cb152e951",
       "source": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/tree/09a9b830e62942aa78d862ca32a4109b30d9a0f7"
     },
+    "surface-image": {
+      "url": "https://github.com/linux-surface/linux-surface/releases/download/debian-7.3.4-2/linux-image-7.3.4-2-surface_7.3.4-2_amd64.deb",
+      "sha256": "3eb631210feeeb3383f78d4c596c3a4e4420c95cf0abf379a7135eb59148973e",
+      "source": "https://github.com/linux-surface/linux-surface/tree/38ba90ffb48b0666fb3acb432325ff5b98ca4d7d"
+    },
+    "surface-headers": {
+      "url": "https://github.com/linux-surface/linux-surface/releases/download/debian-7.3.4-2/linux-headers-7.3.4-2-surface_7.3.4-2_amd64.deb",
+      "sha256": "8e7486bf24316857358a57bdd74c137d2a248b29f2adf914ac1477c4702e7171",
+      "source": "https://github.com/linux-surface/linux-surface/tree/38ba90ffb48b0666fb3acb432325ff5b98ca4d7d"
+    },
+    "surface-linux-source": {
+      "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.4.tar.xz",
+      "sha256": "b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f",
+      "source": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tag/?h=v7.3.4"
+    },
+    "surface-fixes": {
+      "url": "https://codeload.github.com/floopflop/SL_Intel_Linux/tar.gz/7a24833d6a059a565e3b2cd3d85d163ab99e5e41",
+      "sha256": "be2ce02debd8c0ac991db3363dac7e240ab1cdfe009c87f5288dd8248c257b3c",
+      "source": "https://github.com/floopflop/SL_Intel_Linux/tree/7a24833d6a059a565e3b2cd3d85d163ab99e5e41"
+    },
+    "surface-iptsd": {
+      "url": "https://codeload.github.com/alex-lentz/iptsd/tar.gz/3663e96e758145801c3cb1ce7c72f362d0d4a5f5",
+      "sha256": "ce9935fb7c38365f4fa65070e819bf901e10082c5fb2ea67e49b3a60b225ed92",
+      "source": "https://github.com/alex-lentz/iptsd/tree/3663e96e758145801c3cb1ce7c72f362d0d4a5f5"
+    },
+    "surface-backlight": {
+      "url": "https://raw.githubusercontent.com/richiemort79/sl7-linux-enablement/f5cae4c584680cf35caa40c1bc6b346667a5f6b5/patches/0008-drm-display-edp-backlight-restore-dpcd-mode.patch",
+      "sha256": "3451f4091e8b8309e65438c28caab71acfcf0daf732c4fb8418cbc0e8e1e7f9e",
+      "source": "https://github.com/richiemort79/sl7-linux-enablement/tree/f5cae4c584680cf35caa40c1bc6b346667a5f6b5"
+    },
+    "surface-ir-driver": {
+      "url": "https://raw.githubusercontent.com/linux-surface/kernel/8ab9347b169233b08950086f49dafd1d58bb5bbf/drivers/media/i2c/vd55g0.c",
+      "sha256": "bc6202d89c1dc51010747c3b6ef0f51e8ec8e38069bf3c1aacd4aa7163b26a5d",
+      "source": "https://github.com/linux-surface/kernel/pull/164"
+    },
+    "surface-ir-data": {
+      "url": "https://raw.githubusercontent.com/linux-surface/kernel/8ab9347b169233b08950086f49dafd1d58bb5bbf/drivers/media/i2c/vd55g0_patches.h",
+      "sha256": "68f182a3f3a7fd65509cd0650b1ef520453a9ce65889d22d9a822e4ad4794511",
+      "source": "https://github.com/linux-surface/kernel/pull/164"
+    },
+    "surface-libcamera": {
+      "url": "https://deb.debian.org/debian/pool/main/libc/libcamera/libcamera_0.7.2.orig.tar.gz",
+      "sha256": "e27f5670fe9443eebc8e2f24235cd20b533324ef481a3684d34c78f1c3a12afb",
+      "source": "https://sources.debian.org/src/libcamera/0.7.2-1/"
+    },
+    "surface-libcamera-debian": {
+      "url": "https://deb.debian.org/debian/pool/main/libc/libcamera/libcamera_0.7.2-1.debian.tar.xz",
+      "sha256": "437475ac9a4266ce481430a6d7868fa3c94f2e3107729713b3df4fa10c1b0d7e",
+      "source": "https://sources.debian.org/src/libcamera/0.7.2-1/"
+    },
     "aurora-kernel": {
       "file": "linux-aurora-7.2.11.aurora16-1-aarch64.pkg.tar.zst",
       "sha256": "d53b5d32b87a00982952e458da567922e237760561fd15ea26458302f570f2c3",
@@ -56,6 +106,17 @@
       "release": "7.3.4-3-t2-trixie",
       "boot_args": "intel_iommu=on iommu=pt pm_async=off",
       "native": ["t2-image", "t2-headers"]
+    },
+    "x86-surface-laptop-7-intel": {
+      "arch": "amd64",
+      "release": "7.3.4-2-surface",
+      "boot_args": "acpi_mask_gpe=0xAB",
+      "native": ["surface-image", "surface-headers"],
+      "surface": [
+        "surface-linux-source", "surface-fixes", "surface-iptsd",
+        "surface-backlight", "surface-ir-driver", "surface-ir-data",
+        "surface-libcamera", "surface-libcamera-debian"
+      ]
     },
     "aarch64-apple": {
       "arch": "arm64",

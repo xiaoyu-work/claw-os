@@ -19,6 +19,13 @@ select_iso_platform() {
         echo "error: Apple Silicon needs existing Asahi provisioning; use the live media and separate Asahi boot assets" >&2
         return 1
     fi
+    if [[ $CLAW_PLATFORM == x86-surface-laptop-7-intel ]]; then
+        ISO_FEATURES="$ISO_FEATURES,desktop"
+        if [[ $role == installer ]]; then
+            # Keep the live tty1 installer; the installed system uses greetd.
+            PLATFORM_BOOT_ARGS="${PLATFORM_BOOT_ARGS:+$PLATFORM_BOOT_ARGS }systemd.mask=greetd.service"
+        fi
+    fi
     ISO_FEATURES="$ISO_FEATURES,kernel-platform"
     PLATFORM_SUFFIX="-$CLAW_PLATFORM"
 }
