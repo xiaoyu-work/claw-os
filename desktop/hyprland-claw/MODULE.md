@@ -111,8 +111,10 @@ reviews, then rendered through the ordinary GUI Host on a virtio display.
 This source-staged guest did not exercise the official APT transaction.
 Clicking the Shell's Logout after the PAM close-hook ordering change removed
 the exact GUI, supervisor, compositor, cgroup and logind session, and returned
-to the greeter without a retirement error for that session. Ordinary App
-launch and deployable-image acceptance remain separate.
+to the greeter without a retirement error for that session. A later guest
+also rendered the signed Editor with ordinary GUI permission reviews and
+accepted keyboard input. A lab-only owner shortcut selected Editor; this
+is not default launcher or deployable-image acceptance.
 
 The existing protocol baseline runs from the OS repository root:
 

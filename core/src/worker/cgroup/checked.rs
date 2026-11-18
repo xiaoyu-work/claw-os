@@ -3,9 +3,7 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use claw_display_control::workload::{
-    cgroup_is_empty, check_cgroup, open_directory, read_file, retire_cgroup, write_file, Workload,
-};
+use claw_display_control::workload::{check_cgroup, open_directory, read_file, write_file, Workload};
 use claw_display_control::InstanceId;
 
 use super::Limits;
@@ -13,7 +11,7 @@ use super::Limits;
 #[derive(Debug)]
 pub(super) struct CheckedScope {
     parent: OwnedFd,
-    directory: OwnedFd,
+    directory: Workload,
     name: CString,
     path: PathBuf,
     removed: bool,
@@ -72,7 +70,17 @@ impl CheckedScope {
             }
             return Err(format!("open GUI cgroup: {error}"));
         }
-        let directory = unsafe { OwnedFd::from_raw_fd(raw) };
+        let directory = match Workload::pin(unsafe { OwnedFd::from_raw_fd(raw) }) {
+            Ok(directory) => directory,
+            Err(error) => {
+                if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) }
+                    != 0
+                {
+                    return Err(format!("pin GUI cgroup: {error}; rollback: {}", std::io::Error::last_os_error()));
+                }
+                return Err(error.to_string());
+            }
+        };
         let scope = Self {
             parent,
             directory,
@@ -80,13 +88,12 @@ impl CheckedScope {
             path,
             removed: false,
         };
-        if unsafe { libc::fchmod(scope.directory.as_raw_fd(), 0o755) } != 0 {
+        if unsafe { libc::fchmod(scope.directory.as_fd().as_raw_fd(), 0o755) } != 0 {
             return Err(format!(
                 "permit compositor cgroup identity inspection: {}",
                 std::io::Error::last_os_error()
             ));
         }
-        check_cgroup(scope.directory.as_fd()).map_err(|error| error.to_string())?;
         if let Some(limits) = limits {
             for (control, value) in [
                 ("memory.max", limits.memory_bytes.to_string()),
@@ -117,8 +124,12 @@ impl CheckedScope {
 
     pub fn duplicate(&self) -> Result<OwnedFd, String> {
         self.directory
-            .try_clone()
+            .duplicate()
             .map_err(|error| format!("duplicate GUI cgroup: {error}"))
+    }
+
+    pub(super) fn workload(&self) -> &Workload {
+        &self.directory
     }
 
     pub(super) fn attach(&self, pid: u32) -> Result<(), String> {
@@ -130,7 +141,7 @@ impl CheckedScope {
         if self.removed {
             return Ok(());
         }
-        retire_cgroup(self.directory.as_fd(), deadline)
+        self.directory.retire(deadline)
             .map_err(|error| format!("checked GUI retirement failed: {error}"))
     }
 
@@ -138,16 +149,24 @@ impl CheckedScope {
         if self.removed {
             return Ok(());
         }
-        if !cgroup_is_empty(self.directory.as_fd()).map_err(|error| error.to_string())? {
+        if self.directory.is_removed().map_err(|error| error.to_string())? {
+            self.removed = true;
+            return Ok(());
+        }
+        if !self.directory.is_empty().map_err(|error| error.to_string())? {
             return Err("GUI cgroup remains populated".to_string());
         }
         use std::os::unix::fs::MetadataExt;
         let expected = std::fs::File::from(self.duplicate()?)
             .metadata()
             .map_err(|e| e.to_string())?;
-        let current = std::fs::File::from(open_directory(&self.path).map_err(|e| e.to_string())?)
-            .metadata()
+        let current = self.directory.confirm_removed(open_directory(&self.path).map(Some), None)
             .map_err(|e| e.to_string())?;
+        let Some(current) = current else {
+            self.removed = true;
+            return Ok(());
+        };
+        let current = std::fs::File::from(current).metadata().map_err(|e| e.to_string())?;
         if (expected.dev(), expected.ino()) != (current.dev(), current.ino()) {
             return Err("GUI cgroup pathname was replaced".to_string());
         }
@@ -159,10 +178,9 @@ impl CheckedScope {
             )
         } != 0
         {
-            return Err(format!(
-                "remove retired GUI cgroup: {}",
-                std::io::Error::last_os_error()
-            ));
+            self.directory
+                .confirm_removed(Err(std::io::Error::last_os_error().into()), ())
+                .map_err(|error| format!("remove retired GUI cgroup: {error}"))?;
         }
         self.removed = true;
         Ok(())

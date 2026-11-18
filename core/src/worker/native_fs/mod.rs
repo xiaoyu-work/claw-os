@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -45,8 +45,7 @@ pub(crate) fn fixture_io_counters() -> serde_json::Value {
 }
 
 struct Binding {
-    process: workload::InstanceProcess,
-    group: OwnedFd,
+    process: Arc<workload::InstanceProcess>,
 }
 
 #[cfg(test)]
@@ -164,16 +163,14 @@ impl Shared {
     }
 
     fn retire_processes(&self, deadline: Instant) -> Result<(), String> {
-        let group = self
+        let process = self
             .binding
             .lock()
             .map_err(|_| "native filesystem binding poisoned")?
             .as_ref()
-            .map(|binding| binding.group.try_clone())
-            .transpose()
-            .map_err(|error| error.to_string())?;
-        if let Some(group) = group {
-            workload::retire_cgroup(group.as_fd(), deadline).map_err(|error| error.to_string())?;
+            .map(|binding| binding.process.clone());
+        if let Some(process) = process {
+            process.workload().retire(deadline).map_err(|error| error.to_string())?;
         }
         Ok(())
     }
@@ -619,7 +616,7 @@ impl NativeFsView {
 
         let process = workload::InstanceProcess::receive(
             process.pidfd().map_err(|error| error.to_string())?,
-            group.try_clone().map_err(|error| error.to_string())?,
+            group,
         )
         .map_err(|error| error.to_string())?;
         let mut binding = self
@@ -630,7 +627,7 @@ impl NativeFsView {
         if binding.is_some() {
             return Err("native filesystem process binding is one-use".into());
         }
-        *binding = Some(Binding { process, group });
+        *binding = Some(Binding { process: Arc::new(process) });
         Ok(())
     }
 

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use claw_display_control::identity::pidfd_exited;
 use claw_display_control::wire::{
     monotonic_ms, AuthorityCommand, AuthorityReply, CompositorCommand, CompositorReply, LoginReply,
-    LoginRequest, LOGIN_SOCKET,
+    LoginRequest, BROKER_RETIRE_TIMEOUT, LOGIN_SOCKET,
 };
 use claw_display_control::workload::{SessionGroup, Workload};
 use claw_display_control::{
@@ -353,6 +353,7 @@ impl Registry {
                     .is_some_and(|entry| Arc::ptr_eq(entry, display))
                 {
                     entries.remove(&session);
+                    tracing::info!(session, "checked display retirement complete");
                 }
                 Ok(())
             });
@@ -619,6 +620,7 @@ fn reply_target(reply: &CompositorReply, expected: Epoch) -> Result<(InstanceId,
 }
 
 fn retire_display(display: &Mutex<Display>, channel: &Connection) -> Result<(), Error> {
+    let deadline = Instant::now() + BROKER_RETIRE_TIMEOUT;
     let (epoch, workload, verified_retired) = {
         let mut state = display.lock().map_err(|_| Error::Identity)?;
         state.wayland_display = None;
@@ -627,16 +629,16 @@ fn retire_display(display: &Mutex<Display>, channel: &Connection) -> Result<(), 
     let send = channel.send(
         &AuthorityCommand::Shutdown { epoch },
         &[],
-        Instant::now() + Duration::from_millis(250),
+        (Instant::now() + Duration::from_millis(250)).min(deadline),
     );
     if !verified_retired.load(Ordering::Acquire) {
         if let Some(workload) = workload {
-            workload.retire(Instant::now() + Duration::from_secs(5))?;
+            workload.retire(deadline)?;
         }
         // PAM may remove this empty cgroup while GUI services finish retiring.
         verified_retired.store(true, Ordering::Release);
     }
-    crate::clawd::gui::retire_epoch(epoch, Instant::now() + Duration::from_secs(5))
+    crate::clawd::gui::retire_epoch(epoch, deadline)
         .map_err(|error| Error::Io(std::io::Error::other(error)))?;
     if let Err(error) = send {
         tracing::debug!(%error, "display control already unavailable during retirement");

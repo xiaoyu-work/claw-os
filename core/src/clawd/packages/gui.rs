@@ -1,12 +1,12 @@
 //! Package-only intent mediation for a Root-held GUI. No GUI grant is widened.
 
 use std::collections::BTreeMap;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use claw_display_control::{ProcessIdentity, workload::InstanceProcess};
+use claw_display_control::{ProcessIdentity, workload::{InstanceProcess, Workload}};
 use serde_json::{Value, json};
 
 use crate::caps::{Cap, CapSet, Scope, Verb};
@@ -110,7 +110,6 @@ impl IntentLedger {
 struct WindowProcess {
     process: ProcessIdentity,
     containment: InstanceProcess,
-    group: OwnedFd,
 }
 
 /// One Root-held registry per private GUI broker, never supplied by an App.
@@ -140,10 +139,10 @@ impl WindowIntents {
         self.registration.snapshot(&process)?;
         let containment = InstanceProcess::receive(
             process.pidfd().map_err(|error| error.to_string())?,
-            group.try_clone().map_err(|error| error.to_string())?,
+            group,
         ).map_err(|error| error.to_string())?;
         self.open()?;
-        self.process.set(WindowProcess { process, containment, group })
+        self.process.set(WindowProcess { process, containment })
             .map_err(|_| "package-intent process was already bound".into())
     }
 
@@ -255,7 +254,7 @@ impl WindowIntents {
     }
 
     /// Called only from the checked after-death GUI path, before cgroup removal.
-    pub(crate) fn release_after_death(&self, group: OwnedFd, deadline: Instant) -> Result<(), String> {
+    pub(crate) fn release_after_death(&self, group: &Workload, deadline: Instant) -> Result<(), String> {
         self.stop();
         let _retirement = lock_until(&self.retirement, deadline)?;
         let batch = {
@@ -263,12 +262,12 @@ impl WindowIntents {
             ledger.fence()
         };
         // No proposal lock is held during custody, approval, generation or audit I/O.
-        if !claw_display_control::workload::cgroup_is_empty(group.as_fd()).map_err(|error| error.to_string())? {
+        if !group.is_empty().map_err(|error| error.to_string())? {
             return Err("package decisions require checked GUI cgroup death".into());
         }
         if let Some(bound) = self.process.get() {
             if bound.containment.active().map_err(|error| error.to_string())?
-                || !claw_display_control::workload::cgroup_is_empty(bound.group.as_fd()).map_err(|error| error.to_string())?
+                || !bound.containment.workload().is_empty().map_err(|error| error.to_string())?
             { return Err("package-intent process custody is still active".into()); }
         } else if !batch.is_empty() {
             return Err("package intent custody is unavailable; absence is not retirement proof".into());

@@ -165,7 +165,7 @@ impl Broker {
     }
 
     pub fn retire_package_intents_after_death(
-        &self, group: std::os::fd::OwnedFd, deadline: std::time::Instant,
+        &self, group: &claw_display_control::workload::Workload, deadline: std::time::Instant,
     ) -> Result<(), String> {
         if !self.state.stopped.load(Ordering::Acquire) || !self.quiescent() {
             return Err("package-intent provider has not quiesced".into());

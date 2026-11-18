@@ -13,6 +13,9 @@ close-on-exec descriptor receipt, closed messages, deadlines and exact FD counts
 only bounded PAM locale values, never loader variables or authority metadata.
 `session.rs` provides read-only kernel-login subscriptions and canonical
 display/runtime/user-bus projection.
+`workload.rs` pins `cgroup.events` with the protected cgroup directory.
+If logind removes the empty subtree first, kernel `ENODEV` on that original
+control descriptor proves removal; a missing path alone is not evidence.
 Owner, session and epoch fields in compositor messages are Root projections;
 no user registration message may supply them.
 `selection.rs` transports bounded standard MIME bytes in one Root-owned sealed

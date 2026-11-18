@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use claw_display_control::identity::pidfd_exited;
 use claw_display_control::wire::{
-    LoginReply, LoginRequest, PamCommand, PamReply, DISPLAY_HOST, LOGIN_SOCKET,
+    LoginReply, LoginRequest, PamCommand, PamReply, DISPLAY_HOST, LOGIN_SOCKET, PAM_RETIRE_TIMEOUT,
 };
 use claw_display_control::workload::{SessionGroup, Workload};
 use claw_display_control::{Connection, Epoch, Error, KernelLogin, ProcessIdentity};
@@ -206,7 +206,7 @@ impl Login {
         if ProcessIdentity::current()? != self.controller {
             return Err(Error::Identity);
         }
-        let deadline = Instant::now() + STOP_TIMEOUT;
+        let deadline = Instant::now() + PAM_RETIRE_TIMEOUT;
         self.channel
             .send(&PamCommand::Close { epoch: self.epoch }, &[], deadline)?;
         let reply = self

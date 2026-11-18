@@ -65,6 +65,13 @@ impl Scope {
             .duplicate()
     }
 
+    pub(crate) fn checked_workload(&self) -> Result<&claw_display_control::workload::Workload, String> {
+        self.checked
+            .as_ref()
+            .map(checked::CheckedScope::workload)
+            .ok_or_else(|| "GUI retirement requires a checked cgroup-v2 governor".to_string())
+    }
+
     pub fn remove_checked(&mut self) -> Result<(), String> {
         self.checked
             .as_mut()

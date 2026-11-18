@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Packet};
@@ -6,6 +8,11 @@ pub const LOGIN_SOCKET: &str = "/run/cos/display-login.sock";
 pub const DISPLAY_HOST: &str = "/usr/lib/cos/bin/claw-display-host";
 pub const COMPOSITOR: &str = "/usr/libexec/claw-hyprland/Hyprland";
 pub const SESSION_DIRECTORY: &str = "/run/cos/display-sessions";
+
+// Allow workload shutdown, the broker's checked GUI cleanup, and the final handshakes.
+pub const BROKER_RETIRE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const HOST_RETIRE_TIMEOUT: Duration = Duration::from_secs(12);
+pub const PAM_RETIRE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Epoch(pub [u8; 16]);

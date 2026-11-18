@@ -1,7 +1,6 @@
 //! Protected, operation-bound selected file reads. App proposals are not grants.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -281,7 +280,6 @@ pub(super) struct SelectedReads {
     instance: InstanceId,
     process: ProcessIdentity,
     containment: InstanceProcess,
-    group: std::os::fd::OwnedFd,
     provider: ReadProvider,
     metadata_cap: Cap,
     metadata_ceiling: Instant,
@@ -308,7 +306,7 @@ impl SelectedReads {
     ) -> Result<Arc<Self>, String> {
         let containment = InstanceProcess::receive(
             process.pidfd().map_err(|error| error.to_string())?,
-            group.try_clone().map_err(|error| error.to_string())?,
+            group,
         )
         .map_err(|error| error.to_string())?;
         if process.uid() != registration.owner()
@@ -324,7 +322,6 @@ impl SelectedReads {
             instance,
             process,
             containment,
-            group,
             provider,
             metadata_cap,
             metadata_ceiling,
@@ -927,7 +924,7 @@ impl SelectedReads {
                 .containment
                 .active()
                 .map_err(|error| error.to_string())?
-            || !claw_display_control::workload::cgroup_is_empty(self.group.as_fd())
+            || !self.containment.workload().is_empty()
                 .map_err(|error| error.to_string())?
         {
             return Err("selected read source pins require checked instance death".into());

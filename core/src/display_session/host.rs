@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use claw_display_control::identity::pidfd_exited;
 use claw_display_control::wire::{
     monotonic_ms, AuthorityCommand, AuthorityReply, CompositorCommand, CompositorReply, PamCommand,
-    PamReply, SessionEvent, SessionRequest, COMPOSITOR, SESSION_DIRECTORY,
+    PamReply, SessionEvent, SessionRequest, COMPOSITOR, HOST_RETIRE_TIMEOUT, SESSION_DIRECTORY,
 };
 use claw_display_control::{Connection, Epoch, Error, KernelLogin, Listener, ProcessIdentity};
 
@@ -138,6 +138,10 @@ impl Controllers {
                 }
                 AuthorityCommand::Retired { epoch } if retired && epoch == self.epoch => {
                     return Ok(());
+                }
+                AuthorityCommand::Heartbeat { epoch, .. } if retired && epoch == self.epoch => {}
+                AuthorityCommand::Gui { .. } if retired => {
+                    // This workload is already dead. Queued requests cannot run or renew it.
                 }
                 AuthorityCommand::Heartbeat {
                     epoch,
@@ -470,7 +474,9 @@ impl Supervisor {
     }
 
     fn retire(&mut self, pam_closed: bool) -> Result<(), Error> {
-        let deadline = Instant::now() + STOP;
+        let started = Instant::now();
+        let work_deadline = started + STOP;
+        let deadline = started + HOST_RETIRE_TIMEOUT;
         if let Some(listener) = self.listener.take() {
             listener.close()?;
         }
@@ -479,17 +485,17 @@ impl Supervisor {
                 epoch: self.controllers.epoch,
             },
             &[],
-            deadline,
+            work_deadline,
         );
         if let Err(error) = shutdown {
             eprintln!("display control unavailable at retirement: {error}");
         } else if pam_closed {
-            let graceful = (Instant::now() + Duration::from_secs(1)).min(deadline);
+            let graceful = (Instant::now() + Duration::from_secs(1)).min(work_deadline);
             while !pidfd_exited(self.compositor_pidfd.as_fd())? && Instant::now() < graceful {
                 std::thread::sleep(TICK);
             }
         }
-        self.containment.retire(deadline)?;
+        self.containment.retire(work_deadline)?;
         if !pidfd_exited(self.compositor_pidfd.as_fd())? {
             return Err(Error::Protocol(
                 "compositor remains alive after workload retirement",
@@ -562,22 +568,25 @@ pub fn run() -> Result<(), Error> {
     let mut supervisor = Supervisor::start(controllers)?;
     let outcome = supervisor.watch();
     if let Err(error) = &outcome {
-        if let Ok(reason) = std::ffi::CString::new(error.to_string()) {
-            // The compositor owns the VT, so a terminal-only error can be lost at logout.
-            unsafe {
-                libc::syslog(
-                    libc::LOG_DAEMON | libc::LOG_ERR,
-                    c"authenticated display lost: %s".as_ptr(),
-                    reason.as_ptr(),
-                );
-            }
-        }
+        log_failure(c"authenticated display lost: %s", error);
     }
     let retirement = supervisor.retire(outcome.is_ok());
+    if let Err(error) = &retirement {
+        log_failure(c"authenticated display retirement failed: %s", error);
+    }
     match (outcome, retirement) {
         (_, Err(error)) => Err(error),
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn log_failure(format: &std::ffi::CStr, error: &Error) {
+    if let Ok(reason) = std::ffi::CString::new(error.to_string()) {
+        // The compositor owns the VT, so terminal diagnostics can be lost at logout.
+        unsafe {
+            libc::syslog(libc::LOG_DAEMON | libc::LOG_ERR, format.as_ptr(), reason.as_ptr());
+        }
     }
 }
 

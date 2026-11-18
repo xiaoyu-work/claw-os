@@ -403,6 +403,14 @@ impl LaunchResources {
     }
 
     #[cfg(target_os = "linux")]
+    pub(crate) fn gui_workload(&self) -> Result<&claw_display_control::workload::Workload, String> {
+        self.cgroup
+            .as_ref()
+            .ok_or("GUI launch has no checked cgroup governor")?
+            .checked_workload()
+    }
+
+    #[cfg(target_os = "linux")]
     pub fn remove_gui_cgroup(&mut self) -> Result<(), String> {
         self.cgroup
             .as_mut()

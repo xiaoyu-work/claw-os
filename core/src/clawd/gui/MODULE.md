@@ -634,6 +634,9 @@ pins, exact unmount and provider joins. Failed metadata or checked-cgroup
 preparation remains retained and cannot acknowledge GUI retirement.
 Successfully retired metadata custody is consumed before removing the cgroup;
 supervisor drop must not reopen that already removed containment.
+When logind removes the subtree first, final cleanup uses the kernel removal
+result from the instance's pinned `cgroup.events` descriptor. Process death,
+provider joins, and the remaining custody checks are still required.
 
 Providers may observe the owned child's normal exit before the supervisor's
 next poll. A health error therefore rechecks that exact child: an observed

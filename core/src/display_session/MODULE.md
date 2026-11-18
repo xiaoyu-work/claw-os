@@ -67,7 +67,10 @@ development library. Package assembly takes real architecture-checked ELF
 inputs, never an App payload or a source-only substitute.
 
 Normal PAM logout allows a bounded compositor shutdown, then confirms the
-owned workload is empty and waits for GUI resource retirement. Control loss,
+owned workload is empty and waits for GUI resource retirement. The supervisor
+discards queued GUI effects without extending authority once the workload is
+dead. The PAM wait includes the broker's bounded cleanup and supervisor's
+acknowledgement; it must outlast the inner deadlines. Control loss,
 expired authority and crashes fail closed and can report a PAM/session error
 even after emergency containment succeeds. An interrupted `--exec` child is
 not a successful session command. Existing disclosed bytes cannot be recalled.

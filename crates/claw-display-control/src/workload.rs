@@ -4,7 +4,7 @@ use std::ffi::CString;
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -76,6 +76,7 @@ impl SessionGroup {
 #[derive(Debug)]
 pub struct Workload {
     descriptor: OwnedFd,
+    events: std::fs::File,
 }
 
 #[derive(Debug)]
@@ -83,7 +84,7 @@ pub struct InstanceProcess {
     process: ProcessIdentity,
     pidfd: OwnedFd,
     group: SessionGroup,
-    descriptor: OwnedFd,
+    workload: Workload,
 }
 
 impl InstanceProcess {
@@ -113,7 +114,7 @@ impl InstanceProcess {
             process,
             pidfd,
             group,
-            descriptor,
+            workload: Workload::pin(descriptor)?,
         })
     }
 
@@ -126,8 +127,12 @@ impl InstanceProcess {
         if current_group.path() != self.group.path() {
             return Err(Error::Identity);
         }
-        check_cgroup(self.descriptor.as_fd())?;
+        check_cgroup(self.workload.as_fd())?;
         Ok(true)
+    }
+
+    pub fn workload(&self) -> &Workload {
+        &self.workload
     }
 
     pub fn is_peer(&self, peer: &ProcessIdentity) -> Result<bool, Error> {
@@ -140,6 +145,12 @@ impl InstanceProcess {
 }
 
 impl Workload {
+    pub fn pin(descriptor: OwnedFd) -> Result<Self, Error> {
+        check_cgroup(descriptor.as_fd())?;
+        let events = open_file(descriptor.as_fd(), "cgroup.events", libc::O_RDONLY)?;
+        Ok(Self { descriptor, events })
+    }
+
     pub fn receive(
         descriptor: OwnedFd,
         session: &SessionGroup,
@@ -154,9 +165,9 @@ impl Workload {
                 "workload is not the authenticated session's cgroup",
             ));
         }
-        let workload = Self { descriptor };
+        let workload = Self::pin(descriptor)?;
         // A real, readable populated record is required, never a regular-file fixture.
-        workload.is_empty()?;
+        cgroup_is_empty(workload.as_fd())?;
         Ok(workload)
     }
 
@@ -165,11 +176,33 @@ impl Workload {
     }
 
     pub fn is_empty(&self) -> Result<bool, Error> {
-        cgroup_is_empty(self.as_fd())
+        self.confirm_removed(cgroup_is_empty(self.as_fd()), true)
     }
 
     pub fn retire(&self, deadline: Instant) -> Result<(), Error> {
-        retire_cgroup(self.as_fd(), deadline)
+        self.confirm_removed(retire_cgroup(self.as_fd(), deadline), ())
+    }
+
+    pub fn is_removed(&self) -> Result<bool, Error> {
+        // kernfs rejects reads of this pinned control after removing the cgroup.
+        // A missing pathname, or an opened replacement, cannot supply this proof.
+        match self.events.read_at(&mut [0], 0) {
+            Err(error) if error.raw_os_error() == Some(libc::ENODEV) => Ok(true),
+            Err(error) => Err(error.into()),
+            Ok(_) => Ok(false),
+        }
+    }
+
+    pub fn confirm_removed<T>(&self, result: Result<T, Error>, removed: T) -> Result<T, Error> {
+        match result {
+            Err(Error::Io(ref error))
+                if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ENODEV))
+                    && self.is_removed()? =>
+            {
+                Ok(removed)
+            }
+            other => other,
+        }
     }
 }
 
