@@ -93,15 +93,44 @@ impl PowerDispatch {
             ));
         };
         let action = action.clone();
+        let locks_before_dispatch = matches!(
+            action.as_str(),
+            "suspend" | "hibernate" | "hybrid-sleep" | "suspend-then-hibernate"
+        );
         let id = self.review.id.clone();
         let owner = window.registration.owner();
         let session = window.registration.session_id.clone();
         power::request_power_action(&action, owner, &session, Some(&id), move || {
-            context
-                .scope_sync(|| {
-                    window.require_live_confirmation(&process, &self.review, self.generation)
-                })
-                .map_err(BrokerError::authorization)
+            context.scope_sync(|| {
+                let require_confirmation = || {
+                    window
+                        .require_live_confirmation(&process, &self.review, self.generation)
+                        .map_err(BrokerError::authorization)
+                };
+                require_confirmation()?;
+                if locks_before_dispatch {
+                    let control = &window.registration.control;
+                    let deadline = self
+                        .review
+                        .deadline
+                        .min(Instant::now() + Duration::from_secs(8));
+                    control.lock(deadline).map_err(|error| {
+                        BrokerError::execution(format!(
+                            "Desktop sleep requires a confirmed native lock: {error}"
+                        ))
+                    })?;
+                    require_confirmation()?;
+                    crate::provenance::audit(
+                        "desktop.sleep_lock",
+                        json!({
+                            "owner_uid": owner,
+                            "epoch": control.epoch.label(),
+                            "review_id": self.review.id,
+                        }),
+                    );
+                }
+                Ok(())
+            })
         })
         .await?;
         Ok(json!({"status": "submitted"}))

@@ -2,6 +2,7 @@
 
 #include "../Renderer.hpp"
 #include "../../event/EventBus.hpp"
+#include "../../managers/SessionLockManager.hpp"
 #include "../../output/Monitor.hpp"
 
 using namespace Render;
@@ -15,6 +16,12 @@ void CMonitorScene::draw(CRenderContext& ctx, const Time::steady_tp& now) {
     if (!MONITOR)
         return;
 
+    const CBox GEOMETRY = {0, 0, sc<int>(MONITOR->m_transformedSize.x), sc<int>(MONITOR->m_transformedSize.y)};
+    if (g_pSessionLockManager->isSessionLocked()) {
+        g_pHyprRenderer->renderLockscreen(ctx, MONITOR, now, GEOMETRY);
+        return;
+    }
+
     if (MONITOR->isMirror()) {
         g_pHyprRenderer->blend(false);
         g_pHyprRenderer->renderMirrored(ctx);
@@ -23,7 +30,6 @@ void CMonitorScene::draw(CRenderContext& ctx, const Time::steady_tp& now) {
         return;
     }
 
-    const CBox GEOMETRY = {0, 0, sc<int>(MONITOR->m_transformedSize.x), sc<int>(MONITOR->m_transformedSize.y)};
     g_pHyprRenderer->renderWorkspace(ctx, MONITOR, MONITOR->m_activeWorkspace, now, GEOMETRY);
     g_pHyprRenderer->renderLockscreen(ctx, MONITOR, now, GEOMETRY);
 

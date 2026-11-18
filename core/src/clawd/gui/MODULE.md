@@ -646,6 +646,10 @@ sending the effect. It keeps the authenticated D-Bus caller connected for
 logind's reply; lost acknowledgements are not retried. Consent and submission
 are not completion. Neither
 the Shell nor a caller claiming a review ID inherits `sys.power`.
+Reviewed desktop sleep actions wait for a confirmed native lock of the
+requesting display and recheck the same one-use decision before dispatch.
+If the lock or review is no longer valid, no sleep effect is sent. This gate
+does not change headless power commands or external logind sleep triggers.
 
 The private `gui.desktop.lock` route separately requires the live named
 `ipc.invoke:desktop.session.lock` right. It can only request lock of the bound

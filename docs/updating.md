@@ -888,6 +888,10 @@ The Desktop package owns the native locker and its dedicated
 compositor must support the private locker descriptor before exposing Lock.
 This does not change the greetd login PAM stack or give the Shell access to
 authentication inputs.
+Claw OS locks no longer render the desktop, input method or App layers behind
+or above the native lock screen. Previous look-through/blur settings cannot
+override this boundary. Lock readiness requires a presented lock frame, not
+an elapsed timer.
 Keep the packaged PAM close hook before keyring and logind teardown; a locally
 modified stack can otherwise reject checked display retirement.
 On Debian 13, Desktop uses the matching XKB runtime and X11 companion from

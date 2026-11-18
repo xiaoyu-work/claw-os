@@ -36,7 +36,6 @@ struct SSessionLockSurface {
 struct SSessionLock {
     WP<CSessionLock>                     lock;
     CTimer                               lockTimer;
-    SP<CEventLoopTimer>                  sendLockedTimer;
 
     std::vector<SP<SSessionLockSurface>> vSessionLockSurfaces;
 
@@ -68,7 +67,7 @@ class CSessionLockManager {
 
     void                    removeSessionLockSurface(SSessionLockSurface*);
 
-    void                    onLockscreenRenderedOnMonitor(uint64_t id);
+    void                    onLockscreenPresentedOnMonitor(uint64_t id, const WP<CWLSurfaceResource>& surface);
 
     bool                    shallConsiderLockMissing();
 
@@ -85,7 +84,6 @@ class CSessionLockManager {
     } m_listeners;
 
     void onNewSessionLock(SP<CSessionLock> pWlrLock);
-    void removeSendLockedTimer();
 };
 
 inline UP<CSessionLockManager> g_pSessionLockManager;

@@ -124,12 +124,17 @@ then completed the Editor's separate reviews and entered text. Denying a new
 selection did not open a second App, and logout cancelled a pending selection.
 The session menu's denied PowerOff left the guest running; a separate
 approved PowerOff shut it down and left one correlated journal intent.
-These runs do not establish APT, deployable-image, restart or sleep acceptance.
+The reviewed Restart action changed the guest's boot ID.
 The signed Shell's default Lock button used the private native locker in a
 fresh guest without a lab binding. A wrong password left it locked; the
 correct PAM password returned to the same compositor and Shell. A second
 lock followed by controlled locker termination retired that display and
 returned to the login prompt instead of exposing the old desktop.
+In the standard VGA guest, approved Sleep could not dispatch without the
+locker. With the locker available, S3 resume displayed the native lock screen
+until PAM returned to the same desktop. Hibernation and VirtIO VGA scanout
+after S3 were not accepted; neither the guest runs nor the native build
+establish official APT or deployable-image acceptance.
 
 The existing protocol baseline runs from the OS repository root:
 

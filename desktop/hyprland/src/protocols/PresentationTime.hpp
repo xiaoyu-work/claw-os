@@ -13,7 +13,7 @@ class CPresentationFeedback;
 
 class CQueuedPresentationData {
   public:
-    CQueuedPresentationData(SP<CWLSurfaceResource> surf, std::vector<WP<CPresentationFeedback>> feedbacks);
+    CQueuedPresentationData(SP<CWLSurfaceResource> surf, std::vector<WP<CPresentationFeedback>> feedbacks, bool lockFrame = false);
 
     void setPresentationType(bool zeroCopy);
     void attachMonitor(PHLMONITOR pMonitor);
@@ -27,6 +27,7 @@ class CQueuedPresentationData {
     bool                                   m_zeroCopy     = false;
     bool                                   m_tearing      = false;
     bool                                   m_vrr          = false;
+    bool                                   m_lockFrame    = false;
     std::optional<uint64_t>                m_commitID;
     PHLMONITORREF                          m_monitor;
     WP<CWLSurfaceResource>                 m_surface;

@@ -1176,12 +1176,9 @@ void IHyprRenderer::renderIMEPopup(CRenderContext& ctx, CInputPopup* pPopup, PHL
 }
 
 void IHyprRenderer::renderSessionLockSurface(CRenderContext& ctx, WP<SSessionLockSurface> pSurface, PHLMONITOR pMonitor, const Time::steady_tp& time) {
-    static auto                      PSESSIONLOCKXRAY = CConfigValue<Config::BOOL>("misc:session_lock_xray");
-    static auto                      PSESSIONLOCKBLUR = CConfigValue<Config::BOOL>("misc:session_lock_blur");
-
     CSurfacePassElement::SRenderData renderdata = {pMonitor, time, pMonitor->m_position, pMonitor->m_position};
 
-    renderdata.blur     = *PSESSIONLOCKBLUR && *PSESSIONLOCKXRAY;
+    renderdata.blur     = false;
     renderdata.surface  = pSurface->surface->surface();
     renderdata.decorate = false;
     renderdata.w        = pMonitor->m_size.x;
@@ -1221,8 +1218,7 @@ void IHyprRenderer::renderAllClientsForWorkspace(CRenderContext& ctx, PHLMONITOR
 
 void IHyprRenderer::renderAllClientsForWorkspace(CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time, eSceneMode mode,
                                                  const Vector2D& translate, const float& scale) {
-    static auto PXPMODE          = CConfigValue<Config::INTEGER>("render:xp_mode");
-    static auto PSESSIONLOCKXRAY = CConfigValue<Config::INTEGER>("misc:session_lock_xray");
+    static auto PXPMODE = CConfigValue<Config::INTEGER>("render:xp_mode");
 
     if UNLIKELY (!pMonitor)
         return;
@@ -1230,12 +1226,8 @@ void IHyprRenderer::renderAllClientsForWorkspace(CRenderContext& ctx, PHLMONITOR
     if (mode != eSceneMode::MONITOR && !pWorkspace)
         return;
 
-    if UNLIKELY (g_pSessionLockManager->isSessionLocked() && !*PSESSIONLOCKXRAY) {
-        // We stop to render workspaces as soon as the lockscreen was sent the "locked" or "finished" (aka denied) event.
-        // In addition we make sure to stop rendering workspaces after misc:lockdead_screen_delay has passed.
-        if (g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
-            return;
-    }
+    if UNLIKELY (g_pSessionLockManager->isSessionLocked())
+        return;
 
     SRenderModifData RENDERMODIFDATA;
     if (translate != Vector2D{0, 0})
@@ -1809,9 +1801,7 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
         return;
     }
 
-    const bool RENDERPRIMER = g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied();
-    if (RENDERPRIMER)
-        renderSessionLockPrimer(ctx, pMonitor);
+    renderSessionLockPrimer(ctx, pMonitor);
 
     const auto PSLS              = g_pSessionLockManager->getSessionLockSurfaceForMonitor(pMonitor->m_id);
     const bool RENDERLOCKMISSING = (PSLS.expired() || g_pSessionLockManager->clientDenied()) && g_pSessionLockManager->shallConsiderLockMissing();
@@ -1822,27 +1812,16 @@ void IHyprRenderer::renderLockscreen(CRenderContext& ctx, PHLMONITOR pMonitor, c
         renderSessionLockMissing(ctx, pMonitor);
     else if (PSLS) {
         renderSessionLockSurface(ctx, PSLS, pMonitor, now);
-        g_pSessionLockManager->onLockscreenRenderedOnMonitor(pMonitor->m_id);
-
-        // render layers and then their popups for abovelock rule
-        for (auto const& lsl : pMonitor->m_layerSurfaceLayers) {
-            for (auto const& ls : lsl) {
-                renderLayer(ctx, ls.lock(), pMonitor, now, false, true);
-            }
-        }
-        for (auto const& lsl : pMonitor->m_layerSurfaceLayers) {
-            for (auto const& ls : lsl) {
-                renderLayer(ctx, ls.lock(), pMonitor, now, true, true);
-            }
+        const auto SURFACE = PSLS->pWlrSurface.lock();
+        if (!g_pSessionLockManager->clientLocked() && SURFACE && SURFACE->m_current.texture) {
+            auto frame = makeUnique<CQueuedPresentationData>(SURFACE, std::vector<WP<CPresentationFeedback>>{}, true);
+            frame->attachMonitor(pMonitor);
+            PROTO::presentation->queueData(std::move(frame));
         }
     }
 }
 
 void IHyprRenderer::renderSessionLockPrimer(CRenderContext& ctx, PHLMONITOR pMonitor) {
-    static auto PSESSIONLOCKXRAY = CConfigValue<Config::INTEGER>("misc:session_lock_xray");
-    if (*PSESSIONLOCKXRAY)
-        return;
-
     CRectPassElement::SRectData data;
     data.color = CHyprColor(0, 0, 0, 1.f);
     data.box   = CBox{{}, pMonitor->m_transformedSize};
@@ -2430,9 +2409,10 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     Event::bus()->m_events.render.stage.emit({RENDER_BEGIN, pMonitor, ctx});
 
-    bool renderCursor = true;
+    const bool LOCKED       = g_pSessionLockManager->isSessionLocked();
+    bool       renderCursor = !LOCKED;
 
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+    if (!LOCKED && pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
         renderWindow(ctx, pMonitor->m_solitaryClient.lock(), pMonitor, pMonitor->m_solitaryClient->presentation().renderPresentation(), NOW, false,
                      RENDER_PASS_MAIN /* solitary = no popups */);
     else if (!finalDamage.empty()) {
@@ -2442,7 +2422,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
         if (IS_MIRROR)
             renderCursor = false;
-        else {
+        else if (!LOCKED) {
             if (pMonitor == Desktop::focusState()->monitor()) {
                 Notification::overlay()->draw(ctx, pMonitor);
                 ErrorOverlay::overlay()->draw(ctx);

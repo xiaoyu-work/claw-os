@@ -43,6 +43,10 @@ responds.
 The session menu's Lock button uses the OS locker and the login account's
 PAM authentication. The Shell can request a lock but neither sees input on
 the lock screen nor offers an unlock action.
+The session menu's Sleep button also requires the OS to confirm that native
+lock before it sends the approved sleep action to logind. If confirming on
+another console, return promptly to the graphical session so it can present
+the lock screen.
 
 Use the [coordinated logout/update procedure](updating.md#root-managed-desktop-session-lifetime)
 when replacing the compositor and display authority on an existing system.

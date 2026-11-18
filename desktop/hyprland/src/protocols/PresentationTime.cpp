@@ -2,12 +2,13 @@
 #include <algorithm>
 #include "../output/Monitor.hpp"
 #include "../event/EventBus.hpp"
+#include "../managers/SessionLockManager.hpp"
 #include "core/Compositor.hpp"
 #include "core/Output.hpp"
 #include <aquamarine/output/Output.hpp>
 
-CQueuedPresentationData::CQueuedPresentationData(SP<CWLSurfaceResource> surf, std::vector<WP<CPresentationFeedback>> feedbacks) :
-    m_surface(surf), m_feedbacks(std::move(feedbacks)) {
+CQueuedPresentationData::CQueuedPresentationData(SP<CWLSurfaceResource> surf, std::vector<WP<CPresentationFeedback>> feedbacks, bool lockFrame) :
+    m_lockFrame(lockFrame), m_surface(surf), m_feedbacks(std::move(feedbacks)) {
     ;
 }
 
@@ -151,6 +152,9 @@ void CPresentationProtocol::onPresented(PHLMONITOR pMonitor, const timespec& whe
         if (data->m_commitID && *data->m_commitID != commitID)
             continue;
 
+        if (data->m_lockFrame && presented && data->m_commitID && g_pSessionLockManager)
+            g_pSessionLockManager->onLockscreenPresentedOnMonitor(pMonitor->m_id, data->m_surface);
+
         if (!presented)
             data->discarded();
 
@@ -188,7 +192,7 @@ void CPresentationProtocol::queueData(UP<CQueuedPresentationData>&& data) {
 
 void CPresentationProtocol::tagQueued(PHLMONITOR monitor, uint64_t commitID, bool tearing, bool vrr) {
     for (const auto& data : m_queue) {
-        if (!data->m_surface || data->m_monitor != monitor || !data->m_commitID.has_value())
+        if (!data->m_surface || data->m_monitor != monitor || data->m_commitID.has_value())
             continue;
 
         data->setCommitInfo(commitID, tearing, vrr);
