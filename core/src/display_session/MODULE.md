@@ -36,8 +36,10 @@ owner-selected compositor socket. The supervisor retains actual per-message
 credentials and forwards the sealed response descriptor; the broker reads it
 only after checking its exact correlation and compositor-owner binding.
 These Root service effects never acquire a GUI instance lifetime from their
-correlation IDs. Public provider and installed compositor cutover remain
-separate from this transport foundation.
+correlation IDs. The public window provider selects this owner/kernel-login
+binding and projects opaque identifiers containing the display epoch. A
+mutation is sent once; read-only queries distinguish a requested focus/close
+from an observed outcome. Installed compositor cutover remains separate.
 
 Locale projection currently preserves only the bounded PAM environment.
 There is no AccountsService `Language` or locale1 startup resolver here.

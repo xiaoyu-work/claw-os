@@ -324,15 +324,54 @@ fn spontaneous_instance_end_cannot_consume_a_retirement_or_refresh_reply() {
 #[test]
 #[ignore = "process fixture: requires its private Root mount namespace"]
 fn private_registry_process() {
+    use std::io::BufRead;
+
     assert_eq!(ProcessIdentity::current().unwrap().uid(), 0);
     assert_ne!(
         std::fs::read_link("/proc/self/ns/mnt").unwrap(),
         std::fs::read_link("/proc/1/ns/mnt").unwrap(),
     );
-    let _registry = Registry::start().unwrap();
+    let registry = Registry::start().unwrap();
     println!("private display registry ready");
     std::io::stdout().flush().unwrap();
-    let mut command = String::new();
-    std::io::stdin().read_line(&mut command).unwrap();
-    assert_eq!(command, "stop\n");
+    let mut input = std::io::stdin().lock();
+    loop {
+        let mut command = String::new();
+        assert_ne!(input.read_line(&mut command).unwrap(), 0);
+        match command.as_str() {
+            "stop\n" => break,
+            "native-desktop\n" => {
+                let control = registry
+                    .owner_control(62050, std::process::id())
+                    .unwrap();
+                let response = control
+                    .desktop(
+                        claw_display_control::desktop::Command::List,
+                        Instant::now() + Duration::from_secs(2),
+                    )
+                    .unwrap();
+                assert_eq!(response["ok"], true);
+                assert_eq!(response["error"], "");
+                assert_eq!(response["requested"], 0);
+                assert_eq!(
+                    response["count"].as_u64().unwrap(),
+                    response["windows"].as_array().unwrap().len() as u64,
+                );
+                println!("private native desktop response: {response}");
+                let missing = control
+                    .desktop(
+                        claw_display_control::desktop::Command::Close {
+                            identifier: u64::MAX,
+                        },
+                        Instant::now() + Duration::from_secs(2),
+                    )
+                    .unwrap();
+                assert_eq!(missing["ok"], false);
+                assert_eq!(missing["error"], "desktop window is unavailable");
+                println!("private native desktop protocol verified");
+                std::io::stdout().flush().unwrap();
+            }
+            _ => panic!("unexpected private registry command"),
+        }
+    }
 }

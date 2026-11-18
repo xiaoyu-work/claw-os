@@ -49,7 +49,6 @@ pub mod crash;
 pub mod credentials;
 pub mod desktop;
 pub mod desktop_preferences;
-pub mod desktop_wayland;
 pub mod display;
 pub mod event_center;
 pub mod file_changes;

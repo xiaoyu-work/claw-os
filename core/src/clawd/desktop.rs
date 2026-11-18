@@ -15,6 +15,7 @@ use super::client_identity::ClientIdentity;
 
 mod settings;
 mod helper;
+mod windows;
 pub(super) use helper::{authenticated_helper_gate, protected_helper_command};
 mod portal;
 pub(super) use portal::{owner_portal_request, PortalReply, PortalResult};
@@ -30,7 +31,6 @@ pub(super) async fn start_thunderbird(client: &ClientIdentity) -> Result<(), Str
     ).await
 }
 
-const HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 2 * 1024 * 1024;
@@ -86,13 +86,14 @@ pub async fn control(
             None => {}
         }
         let uris = canonicalize_launch_uris(&uris)?;
-        let _authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
-        let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
-
         if action == "list" {
-            return run_helper(&environment, &["list"]).await;
+            let authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
+            let display = windows::target(uid, peer_pid)?;
+            return windows::request(&display, "list", None, None, &authorized).await;
         }
         if action == "launch" {
+            let _authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
+            let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
             return launch_desktop_app(
                 &environment,
                 app_id.as_deref().expect("validated launch app_id"),
@@ -108,15 +109,20 @@ pub async fn control(
         )
         .await
         .map_err(|_| "Desktop Manager is busy with another window action".to_string())?;
+        let authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
+        let display = windows::target(uid, peer_pid)?;
         match action.as_str() {
             "focus" | "close" => {
-                run_helper(&environment, &[&action, identifier.as_deref().unwrap()]).await
+                windows::request(&display, &action, identifier.as_deref(), None, &authorized).await
             }
             "restart" => {
+                let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
                 restart(
                     &environment,
+                    &display,
                     identifier.as_deref().unwrap(),
                     app_id.as_deref().unwrap(),
+                    &authorized,
                 )
                 .await
             }
@@ -381,10 +387,14 @@ async fn reveal_files(
 
 async fn restart(
     environment: &DesktopEnvironment,
+    display: &crate::display_session::registry::GuiControl,
     identifier: &str,
     app_id: &str,
+    authorized: &Authorized,
 ) -> Result<Value, String> {
-    let close = run_helper(environment, &["close-app", identifier, app_id]).await?;
+    let close = windows::request(
+        display, "close-app", Some(identifier), Some(app_id), authorized,
+    ).await?;
     if close["remaining_count"].as_u64().unwrap_or(1) != 0 {
         return Ok(json!({
             "action": "restart",
@@ -398,7 +408,7 @@ async fn restart(
     }
     let launch = launch_desktop_app(environment, app_id, &[]).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let windows = run_helper(environment, &["list"]).await?;
+    let windows = windows::request(display, "list", None, None, authorized).await?;
     let matching = windows["windows"]
         .as_array()
         .into_iter()
@@ -416,27 +426,6 @@ async fn restart(
         "launch": launch,
         "windows": matching,
     }))
-}
-
-async fn run_helper(environment: &DesktopEnvironment, args: &[&str]) -> Result<Value, String> {
-    let mut helper_args = vec!["--desktop-wayland-helper".to_string()];
-    helper_args.extend(args.iter().map(|value| value.to_string()));
-    let output = run_user_command(
-        PathBuf::from("/proc/self/exe"),
-        helper_args,
-        environment.clone(),
-        HELPER_TIMEOUT,
-    )
-    .await?;
-    if !output.status.success() {
-        return Err(format!(
-            "desktop Wayland helper exited {}: {}",
-            output.status.code().unwrap_or(-1),
-            tail(&output.stderr)
-        ));
-    }
-    serde_json::from_str(output.stdout.trim())
-        .map_err(|error| format!("parse desktop Wayland helper JSON: {error}"))
 }
 
 async fn launch_desktop_app(
@@ -760,12 +749,7 @@ fn canonicalize_launch_uris(uris: &[String]) -> Result<Vec<String>, String> {
 }
 
 fn valid_identifier(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        !value.is_empty()
-            && value.len() <= 512
-            && !value.starts_with('-')
-            && !value.chars().any(|character| character.is_control())
-    })
+    value.is_some_and(|value| windows::parse_identifier(value).is_ok())
 }
 
 fn valid_app_id(value: Option<&str>) -> bool {

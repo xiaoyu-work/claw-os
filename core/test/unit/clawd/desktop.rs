@@ -6,6 +6,7 @@ use crate::clawd::authority::{
 use serde_json::json;
 
 const APP_ID: &str = "com.example.App";
+const WINDOW_ID: &str = "11111111111111111111111111111111:402653184";
 const NATIVE_TARGETS: [(NativeLaunchTarget, &str, &str); 5] = [
     (NativeLaunchTarget::Terminal, "com.clawos.Term", "cosmic-term"),
     (NativeLaunchTarget::Store, "com.clawos.Store", "cosmic-store"),
@@ -315,8 +316,8 @@ async fn editor_launch_requires_original_proc_and_exact_read_before_desktop_acce
 
 #[test]
 fn desktop_action_validation_is_strict() {
-    validate_action("focus", Some("window-1"), None, &[]).unwrap();
-    validate_action("restart", Some("window-1"), Some(APP_ID), &[]).unwrap();
+    validate_action("focus", Some(WINDOW_ID), None, &[]).unwrap();
+    validate_action("restart", Some(WINDOW_ID), Some(APP_ID), &[]).unwrap();
     validate_action("launch", None, Some(APP_ID), &[]).unwrap();
     validate_action(
         "launch",
@@ -329,13 +330,13 @@ fn desktop_action_validation_is_strict() {
     )
     .unwrap();
 
-    assert!(validate_action("restart", Some("window-1"), Some("*"), &[]).is_err());
-    assert!(validate_action("list", Some("window-1"), None, &[]).is_err());
-    assert!(validate_action("launch", Some("window-1"), Some(APP_ID), &[]).is_err());
+    assert!(validate_action("restart", Some(WINDOW_ID), Some("*"), &[]).is_err());
+    assert!(validate_action("list", Some(WINDOW_ID), None, &[]).is_err());
+    assert!(validate_action("launch", Some(WINDOW_ID), Some(APP_ID), &[]).is_err());
     assert!(validate_action("launch", None, None, &[]).is_err());
     assert!(validate_action("launch", None, Some(".hidden"), &[]).is_err());
     assert!(validate_action("launch", None, Some("_hidden"), &[]).is_err());
-    assert!(validate_action("focus", Some("window-1"), None, &["uri".to_string()]).is_err());
+    assert!(validate_action("focus", Some(WINDOW_ID), None, &["uri".to_string()]).is_err());
 }
 
 #[test]

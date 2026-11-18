@@ -178,7 +178,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub(crate) fn selection_control(&self, owner: u32, pid: u32) -> Result<GuiControl, Error> {
+    pub(crate) fn owner_control(&self, owner: u32, pid: u32) -> Result<GuiControl, Error> {
         let raw = unsafe { libc::syscall(libc::SYS_pidfd_open,
             i32::try_from(pid).map_err(|_| Error::Identity)?, 0_u32) };
         if raw < 0 { return Err(std::io::Error::last_os_error().into()); }
@@ -196,7 +196,7 @@ impl Registry {
             if state.login.owner_uid == owner && state.wayland_display.is_some() {
                 state.host.assert_current()?;
                 if selected.is_some() {
-                    return Err(Error::Protocol("selection target is ambiguous across displays"));
+                    return Err(Error::Protocol("owner desktop target is ambiguous across displays"));
                 }
                 selected = Some(display.clone());
             }

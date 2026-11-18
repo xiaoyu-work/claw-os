@@ -2,6 +2,11 @@
 set -euo pipefail
 
 selection=all
+native_desktop=0
+if [[ $# == 7 && "${7}" == --native-desktop ]]; then
+    native_desktop=1
+    set -- "${@:1:6}"
+fi
 native_product_input=
 native_product=
 native_app=
@@ -578,6 +583,16 @@ for _ in $(seq 1 500); do
 done
 grep -q '^authenticated 62050 ' "$private/pam-output"
 cat "$private/pam-output"
+if [[ "$native_desktop" == 1 ]]; then
+    printf 'native-desktop\n' >&"$registry_input"
+    for _ in $(seq 1 100); do
+        if grep -qF 'private native desktop protocol verified' "$private/registry-output"; then break; fi
+        if ! kill -0 "$registry_pid" 2>/dev/null; then cat "$private/registry-error" >&2; exit 1; fi
+        sleep 0.05
+    done
+    grep -F 'private native desktop response:' "$private/registry-output"
+    grep -F 'private native desktop protocol verified' "$private/registry-output"
+fi
 printf 'close\n' >&"$pam_input"
 if ! wait "$pam_pid"; then cat "$private/pam-error" >&2; exit 1; fi
 pam_pid=

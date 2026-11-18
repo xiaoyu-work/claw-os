@@ -69,21 +69,6 @@ fn main() {
     }
     if raw_args
         .first()
-        .is_some_and(|arg| arg == "--desktop-wayland-helper")
-    {
-        match cos::clawd::desktop_wayland::helper(&raw_args[1..]) {
-            Ok(value) => {
-                println!("{value}");
-                return;
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        }
-    }
-    if raw_args
-        .first()
         .is_some_and(|arg| arg == "--a11y-wayland-helper")
     {
         match cos::clawd::a11y_wayland::helper(&raw_args[1..]) {

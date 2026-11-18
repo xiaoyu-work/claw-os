@@ -49,8 +49,10 @@ is refused, independently of drag-and-drop and window rendering.
 `Desktop.cpp` handles only the closed Root list/focus/close operations against
 native stable window IDs. Neither the App nor the Agent receives a raw
 Hyprland control socket. The existing display supervisor forwards authenticated
-response descriptors without interpreting them as grants; public provider
-cutover and epoch-bound identifier projection remain separate work.
+response descriptors without interpreting them as grants. The
+[public window provider](../../core/src/clawd/desktop/windows.rs) uses this
+channel, binds opaque IDs to the display epoch and observes effects without
+replaying mutations. Installed compositor/session cutover remains separate.
 
 ## Required contracts
 

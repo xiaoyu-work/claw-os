@@ -100,6 +100,12 @@ checked retirement, with an outer 25-second session/PAM deadline. Append
 `--session-startup-only` to the same fourteen-input command for the isolated
 `clawd::server::gui_fixture::private_session_startup_failure` regression.
 The six-input activation-only mode is unchanged.
+Appending `--native-desktop` to that six-input invocation additionally checks
+the native Root list exchange and a rejected nonexistent-window close before
+logout. This mode requires the actual native compositor, uses the same
+authenticated control channel and sealed response descriptor, and does not
+fall back to a COSMIC toplevel client. It is not signed GUI App or real-window
+focus/close acceptance.
 
 Append `--file-manager-only` to the fourteen-input command to select
 `clawd::server::gui_fixture::private_file_manager_session`. The complete

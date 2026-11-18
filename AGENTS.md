@@ -87,7 +87,7 @@ editing additional surfaces.
 | Update downgrade protection | `core/src/update/`, `packaging/release-security/policy.json` | `packaging/deb/common/`, maintainer scripts, `packaging/apt-repo/verify-release-security.sh`, `docs/updating.md` |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license; external native Apps via `scripts/app_sources.py --native`; Media Player uses `just player-build` and `core/src/clawd/media_player.rs` for authority |
-| Hyprland/Quickshell desktop replacement | `desktop/hyprland-claw/MODULE.md`, `core/src/display_session/MODULE.md` | Full native compositor source, existing Root display/GUI authority, desktop providers and signed external Caelestia frontend; source presence never authorizes activation |
+| Hyprland/Quickshell desktop replacement | `desktop/hyprland-claw/MODULE.md`, `core/src/display_session/MODULE.md` | Full native compositor source, existing Root display/GUI authority, `core/src/clawd/desktop/windows.rs`, other desktop providers and signed external Caelestia frontend; source presence never authorizes activation |
 | Migrated App / shared-capability source | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` | Product UI/business/MCP/native source and explicitly kinded capability clients live there; `scripts/app_sources.py` resolves main and stages one immutable build snapshot |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
 

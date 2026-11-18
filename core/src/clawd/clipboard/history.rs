@@ -221,7 +221,7 @@ pub(super) async fn control(
         let target = if request.action == Action::Restore {
             let registry = crate::display_session::registry::Registry::get()
                 .map_err(|_| BrokerError::unavailable("authenticated display service is unavailable"))?;
-            Some(registry.selection_control(owner, client.pid.ok_or_else(||
+            Some(registry.owner_control(owner, client.pid.ok_or_else(||
                 BrokerError::unavailable("clipboard caller PID is unavailable"))?)
                 .map_err(|_| BrokerError::unavailable("clipboard restore has no unique authenticated display target"))?)
         } else { None };
