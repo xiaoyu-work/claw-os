@@ -642,7 +642,7 @@ def apt_selection(tmp_path, monkeypatch):
         "schema": "claw.app-platform/v1", "version": "0.2.1", "runtime_abi": 1,
     }))
     monkeypatch.setattr(packages, "ROOT", root)
-    configuration = {"sets": {"agent": "claw-apps-agent", "desktop": "claw-apps-desktop"}}
+    configuration = {"headless_set": "claw-apps-agent", "desktop_extras": ["claw-app-mail-desktop"]}
     runtime = "claw-os-app-runtime-v1 (>= 0.2.1)"
     records = [
         {"Package": "claw-apps-agent", "Version": "0.2.1", "Depends": "claw-app-alpha, claw-cap-beta"},
@@ -656,6 +656,7 @@ def apt_selection(tmp_path, monkeypatch):
          "Depends": runtime + ", claw-app-support-v1"},
         {"Package": "claw-app-desktop-shell", "Version": "0.2.1", "X-Claw-App-Ids": "desktop-shell",
          "Depends": runtime},
+        {"Package": "claw-app-mail-desktop", "Version": "0.2.1", "Depends": runtime},
     ]
     return records, configuration
 
@@ -667,7 +668,9 @@ def test_official_package_selection_resolves_one_library_owner_without_a_desktop
         "claw-apps-agent", "claw-app-alpha", "claw-cap-beta", "claw-app-support",
     }
     desktop = packages.selection(records, "desktop", configuration)
-    assert len(desktop) == len(agent) + 3
+    assert {record["Package"] for record in desktop} == {
+        *(record["Package"] for record in agent), "claw-app-native-desktop", "claw-app-mail-desktop",
+    }
     with pytest.raises(ValueError, match="Missing"):
         packages.selection([record for record in records if record["Package"] != "claw-cap-beta"],
                            "agent", configuration)

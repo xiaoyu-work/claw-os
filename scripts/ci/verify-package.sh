@@ -119,6 +119,7 @@ done
 if [ "$component" != base ]; then
     if [ "$component" = desktop ]; then
         dpkg-deb -x "$deb" "$extract/payload"
+        python3 scripts/desktop_shell.py check --architecture "$arch" --stage "$extract/payload" >/dev/null
     fi
     python3 scripts/app_packages.py check --variant "$component" \
         --architecture "$arch" --stage "$extract/payload" >/dev/null

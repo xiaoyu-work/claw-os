@@ -69,7 +69,9 @@ a rootfs except for the separately staged desktop package. Rootfs features
 install the resulting packages. Package dependencies express runtime layering
 without forcing synchronized versions or publication schedules.
 
-One release run freezes a package version and authenticated App APT inputs. Its image matrix
+One release run freezes a package version and authenticated App APT inputs.
+Desktop releases also freeze an approved signed Desktop Shell build and verify
+its final installed tree; the App remains launched by the common Host. The image matrix
 consumes the same signed Agent/Base `.deb` artifacts rather than rebuilding
 their binaries and installs the checked App packages as independent owners.
 Only `all` tests separately receive an immutable source fixture. Desktop's
@@ -83,8 +85,9 @@ once, preserving the authenticated candidates for families not rebuilt.
 The coordinated first transfer is strictly below `1:0.2.1`; runtime ABI stays
 1. Agent's versioned `claw-os-app-runtime-v1` Provides is rendered from
 `app-platform.json` (0.2.1 implementation), and App packages require `>= 0.2.1`.
-Agent recommends `claw-apps-agent`; Desktop recommends `claw-apps-desktop`
-and requires runtime-v1 implementation 0.2.1 for its actual SDK consumer.
+Agent recommends `claw-apps-agent`. Desktop requires that headless set, the
+independently owned graphical App packages and Mail's Thunderbird integration.
+Desktop requires runtime-v1 implementation 0.2.1 for its actual SDK consumer.
 No Agent → App hard dependency prevents publishing independent App APT
 packages before the new Agent. SDK/runtime Python and Root authority stay
 OS-owned; `_shared`, `gateway`, `canonical_argv` and `claw_files` do not.

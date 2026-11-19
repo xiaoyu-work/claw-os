@@ -17,6 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+python3 "$PROJECT_DIR/scripts/desktop_shell.py" stage --architecture "$DEB_ARCH" --stage "$stage"
 mount --bind "$PROJECT_DIR" "$work/source"
 mount --make-private "$work/source"
 mount -o remount,bind,ro "$work/source"
@@ -41,11 +42,10 @@ app_debs=()
 for app_deb in "$work"/apps/*.deb; do
     app_debs+=("${app_deb#"$ROOTFS"}")
 done
+chroot "$ROOTFS" apt-get update --error-on=any -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     "$inside/desktop.deb" "${app_debs[@]}"
-for package in claw-os-desktop claw-app-desktop-shell; do
-    test "$(chroot "$ROOTFS" dpkg-query -W -f='${db:Status-Status}' "$package")" = installed
-done
+test "$(chroot "$ROOTFS" dpkg-query -W -f='${db:Status-Status}' claw-os-desktop)" = installed
 test -x "$ROOTFS/usr/libexec/claw-hyprland/Hyprland"
 test -x "$ROOTFS/usr/libexec/claw-hyprland/claw-lockscreen"
 test -x "$ROOTFS/usr/libexec/claw-greeter"
@@ -53,7 +53,9 @@ test -x "$ROOTFS/usr/libexec/claw-create-local-owner"
 test -x "$ROOTFS/usr/libexec/claw-desktop-reviews"
 test -s "$ROOTFS/usr/share/backgrounds/claw-os/claw-default.jpg"
 test -f "$ROOTFS/etc/pam.d/claw-desktop-lock"
-test -f "$ROOTFS/usr/lib/cos/apps/desktop-shell/app.json"
+shell_manifest=/usr/lib/cos/apps/desktop-shell/app.json
+test "$(chroot "$ROOTFS" dpkg-query -S "$shell_manifest")" = "claw-os-desktop: $shell_manifest"
+test -s "$ROOTFS/usr/lib/cos/apps/desktop-shell/.provenance.json"
 test -f "$ROOTFS/usr/share/wayland-sessions/claw.desktop"
 test "$(readlink "$ROOTFS/etc/systemd/system/display-manager.service")" = /usr/lib/systemd/system/greetd.service
 echo "  :: installed the authenticated Hyprland desktop and signed Desktop Shell"

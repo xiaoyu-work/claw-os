@@ -1,21 +1,29 @@
 # Building the Claw OS Desktop Image
 
-The desktop profile builds Hyprland and the graphical Agent against Debian
-13. Quickshell, Caelestia and private Qt arrive through the signed
-`claw-app-desktop-shell` package. If that package is unavailable in the
-authenticated App channel, composition stops without installing an alternative.
+The desktop profile builds Hyprland and the graphical Agent against Debian 13.
+`claw-os-desktop` also contains the signed Desktop Shell (Quickshell, Caelestia
+and private Qt). Every other Claw App is installed by default through its own
+package. The build stops if the approved Shell input or signed App APT inputs
+are unavailable.
 
 On a Linux host or in WSL2, keep the checkout and build directory on a Linux
 filesystem. From the repository root, install the normal disk-image tools
-and prepare both signed App package sets:
+and prepare the authenticated inputs:
 
 ```bash
 sudo apt install git debootstrap qemu-utils parted dosfstools mtools rsync \
   util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin dpkg-dev curl
 python3 scripts/app_packages.py prepare --variant agent --architecture amd64
 python3 scripts/app_packages.py prepare --variant desktop --architecture amd64
+python3 scripts/desktop_shell.py prepare --architecture amd64 --version "${DESKTOP_SHELL_RELEASE:?set the approved version}"
 sudo ./presets/desktop.sh
 ```
+
+`DESKTOP_SHELL_RELEASE` is the version of an approved immutable
+`desktop-shell-v<version>` release in `xiaoyu-work/clawos-app`. Supply the
+same version as `desktop_shell_version` when dispatching the OS `desktop` or
+`all` release. It is a build input, not a package the user installs. Changing
+it for a published Desktop requires a new OS package version.
 
 Use the native architecture and corresponding GRUB package on arm64.
 The default output is `build/claw-os-vm-amd64.vmdk`; import it into VMware.

@@ -38,7 +38,7 @@ packaging/
 |---|---|---|---|
 | `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, skills, SDK/runtime, trust roots, Agent system/user units and App channel configuration; no App payloads | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec`; recommends `claw-apps-agent` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy, and model-specific udev/libinput rules | `all` | `claw-os-agent` |
-| `claw-os-desktop` | Protected Hyprland, graphical greetd/PAM greeter, first-run and review windows, graphical Agent UI/bridge and system services; no product-native payloads | `amd64`, `arm64` | `claw-os-base`, `claw-os-display-session-v2`, signed `claw-app-desktop-shell`; recommends `claw-apps-desktop` |
+| `claw-os-desktop` | Protected Hyprland, graphical login and Agent, system services, and the signed Desktop Shell (Quickshell, Caelestia and private Qt) | `amd64`, `arm64` | `claw-os-base`, `claw-os-display-session-v2`, `claw-apps-agent`, every individual graphical Claw App package and the Thunderbird integration |
 
 Keep the [hardware workarounds](../docs/image-architecture.md#hardware-enablement) in `deb/claw-os-base/hardware/`. Base stages the system udev and libinput data; Desktop stages the same libinput quirk source into Hyprland's private libinput database. Both packages use the existing signed release path.
 
@@ -67,9 +67,19 @@ refuse any OS/App file overlap. Missing, stale, incomplete or changed inputs
 fail closed; there is no production source fallback. Images install the same
 checked independent `.deb` files in the ordinary APT transaction.
 
-Bootstrap order is approved SDK artifact → independent App APT packages →
-payload-free OS Agent/Desktop. Agent only *recommends* the headless set, so
-App runtime dependencies create no circular hard dependency and Agent-only
+Desktop embeds only the signed `desktop-shell` App in
+`/usr/lib/cos/apps/desktop-shell`. Release preparation freezes the approved
+immutable Shell build from `clawos-app`, and assembly checks its signature,
+entrypoint, resources and target architecture without changing the App tree.
+Its launcher, identity and permission checks are unchanged. The remaining
+63 identities and Mail's Thunderbird integration are separately owned packages
+required by Desktop, not an installed `claw-apps-desktop` metapackage.
+The historical immutable metapackage remains in the App archive for retention.
+
+Bootstrap publishes the approved SDK and independent App APT packages first,
+then the OS packages. Desktop also needs its approved signed Shell build input.
+Agent only *recommends* the headless set, so App runtime dependencies create
+no circular hard dependency and Agent-only
 Ubuntu/WSL installs do not require the full Desktop. Configure both signed
 channels before a default install; Agent also ships `claw-apps.sources` and
 the public key. An existing minimal `--no-install-recommends` Agent can run

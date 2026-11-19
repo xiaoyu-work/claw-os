@@ -26,12 +26,18 @@ mkdir -p build/release
 if [ "$agent" = true ] || [ "$desktop" = true ]; then
     python3 scripts/app_packages.py check-version --version "$version"
 fi
+if [ "$desktop" = true ]; then
+    : "${DESKTOP_SHELL_RELEASE:?an approved Desktop Shell build version is required for a Desktop release}"
+fi
 export CLAW_APP_PACKAGE_ROOT="$GITHUB_WORKSPACE/build/release/app-packages"
 for variant in agent desktop; do
     if [ "$variant" = agent ] && [ "$agent" != true ]; then continue; fi
     if [ "$variant" = desktop ] && [ "$desktop" != true ]; then continue; fi
     for architecture in amd64 arm64; do
         python3 scripts/app_packages.py prepare --variant "$variant" --architecture "$architecture"
+        if [ "$variant" = desktop ]; then
+            python3 scripts/desktop_shell.py prepare --architecture "$architecture" --version "$DESKTOP_SHELL_RELEASE"
+        fi
     done
 done
 if [ "$target" = all ]; then

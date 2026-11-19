@@ -78,8 +78,10 @@ for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
     fi
 done
 
-python3 "$PROJECT_DIR/scripts/app_packages.py" check \
-    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" >/dev/null
+APP_DEPS="$(python3 "$PROJECT_DIR/scripts/app_packages.py" check \
+    --variant desktop --architecture "$DEB_ARCH" --stage "$STAGE_ROOT" --print-depends)"
+SHELL_DEPS="$(python3 "$PROJECT_DIR/scripts/desktop_shell.py" check \
+    --architecture "$DEB_ARCH" --stage "$STAGE_ROOT")"
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
@@ -152,7 +154,8 @@ unset RELEASE_SECURITY_PASSPHRASE
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" \
     -e "s/__ABI__/$SECURITY_ABI/g" \
     -e "s/__APP_RUNTIME_VERSION__/$APP_RUNTIME_VERSION/g" \
-    -e "s/__NATIVE_DEPS__/$NATIVE_DEPS/g" \
+    -e "s/__APP_DEPS__/$APP_DEPS/g" \
+    -e "s/__NATIVE_DEPS__/$NATIVE_DEPS, $SHELL_DEPS/g" \
     -e "s/__SECURITY_EPOCH__/$SECURITY_EPOCH/g" \
     -e "s/__MIN_AGENT__/$MIN_AGENT_VERSION/g" \
     -e "s/__MIN_BASE__/$MIN_BASE_VERSION/g" \

@@ -16,6 +16,10 @@ on:
           - images
           - website
           - all
+      desktop_shell_version:
+        description: "Approved immutable Desktop Shell build version (required for desktop or all)"
+        required: false
+        type: string
       release_security_bootstrap:
         description: "One-time migration for a package repository without a release-security baseline"
         required: false
@@ -49,10 +53,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Freeze release version and authenticated App APT inputs
+      - name: Freeze release version, authenticated Apps and Desktop Shell input
         id: plan
         env:
           RELEASE_TARGET: ${{ inputs.target }}
+          DESKTOP_SHELL_RELEASE: ${{ inputs.desktop_shell_version }}
           RELEASE_SECURITY_BOOTSTRAP: ${{ inputs.release_security_bootstrap && '1' || '0' }}
         run: bash scripts/ci/prepare-release.sh
 

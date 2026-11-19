@@ -19,8 +19,9 @@ This update path applies to:
 ### Coordinated 0.2.1 ownership boundary (source only)
 
 The initial independent App packaging boundary is `1:0.2.1`, not `1:0.3.0`.
-New Agent/Desktop builders do not stage product Apps, native payloads or
-App-owned common/named Python libraries. Separate App APT packages replace
+Agent and Desktop do not stage the independently packaged Apps or App-owned
+common/named Python libraries. Desktop embeds only the signed Desktop Shell.
+Separate App APT packages replace
 former owners only `(<< 1:0.2.1)`; no new OS package may be overwritten.
 SDK/runtime Python and OS toolkit/services, PAM, initial setup, keyboard and
 policy stay OS-owned. Identities, installed App paths, data, credentials and
@@ -31,10 +32,12 @@ The existing runtime ABI remains 1, but Agent provides
 require `claw-os-app-runtime-v1 (>= 0.2.1)`. Old/unversioned Provides cannot
 satisfy that dependency. Agent recommends only `claw-apps-agent`; native
 packages can be selected independently on Ubuntu/WSL without the full OS
-Desktop. A default graphical OS install recommends `claw-apps-desktop`.
-Publish the approved SDK and independent App APT artifacts before releasing
-the payload-free Agent/OS, with both signed channels configured for the normal
-transaction. The release guard refuses unavailable or changed App artifacts.
+Desktop. `apt install claw-os-desktop` installs all Claw Apps, including the
+headless set and the individually packaged graphical Apps and Thunderbird
+integration. It replaces the separately named Shell package and removes the
+obsolete `claw-apps-desktop` metapackage if present. Configure both signed
+channels for the normal transaction. Desktop releases check the approved
+Shell input and the complete App APT closure before package assembly.
 
 Shell App UI/private-library source links are removed without deleting native
 UX: matching App packages retain the three panel binaries/resources and
@@ -902,9 +905,18 @@ override this boundary. Lock readiness requires a presented lock frame, not
 an elapsed timer.
 Keep the packaged PAM close hook before keyring and logind teardown; a locally
 modified stack can otherwise reject checked display retirement.
-On Debian 13, Desktop uses the matching XKB runtime and X11 companion from
-`trixie-backports`. Existing installs need that APT source enabled before the
-desktop upgrade.
+On Debian 13, Desktop uses the matching Wayland and XKB runtime packages from
+`trixie-backports`, which the Desktop image selects during composition. When
+adding Desktop to a headless installation that still selects stable versions,
+enable `trixie-backports` and select the matched runtimes in the same transaction:
+
+```bash
+sudo apt install claw-os-desktop \
+  libxkbcommon0/trixie-backports libxkbcommon-x11-0/trixie-backports libxkbregistry0/trixie-backports \
+  libwayland-client0/trixie-backports libwayland-server0/trixie-backports \
+  libwayland-cursor0/trixie-backports libwayland-egl1/trixie-backports
+```
+
 Use the matching Agent service unit: Bubblewrap needs Netlink while creating
 private loopback, but the App sandbox does not permit Netlink.
 

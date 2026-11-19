@@ -54,15 +54,18 @@ libheif-dev
 libjxl-dev
 
 # --- Wayland / graphics core ---
-wayland-protocols
-libwayland-dev
-libwayland-client0
-libwayland-server0
-libwayland-cursor0
-libwayland-egl1
+# Match the Debian backports ABI used to build the signed Desktop Shell.
+wayland-protocols/trixie-backports
+libwayland-dev/trixie-backports
+libwayland-bin/trixie-backports
+libwayland-client0/trixie-backports
+libwayland-server0/trixie-backports
+libwayland-cursor0/trixie-backports
+libwayland-egl1/trixie-backports
 libxkbcommon-dev/trixie-backports
 libxkbcommon-x11-0/trixie-backports
-libxkbcommon0
+libxkbcommon0/trixie-backports
+libxkbregistry0/trixie-backports
 libinput-dev
 libinput10
 libudev-dev

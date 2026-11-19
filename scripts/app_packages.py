@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT_ENV = "CLAW_APP_PACKAGE_ROOT"
 APP_NAME = re.compile(r"claw-(?:app-|apps-|cap-)[a-z0-9][a-z0-9+.-]*\Z")
 APP_INTERFACE = re.compile(r"claw-app-(?:support|python-[a-z0-9][a-z0-9-]*)-v1\Z")
+RETIRED_DESKTOP = {"claw-apps-desktop", "claw-app-desktop-shell"}
+DESKTOP_SHELL_ROOT = "usr/lib/cos/apps/desktop-shell"
 
 
 def run(arguments, **kwargs):
@@ -204,6 +206,30 @@ def interfaces(record):
         yield name
 
 
+def app_ids(record):
+    return record.get("X-Claw-App-Ids", "").replace(",", " ").split()
+
+
+def roots(records, variant, configuration, desktop_ids):
+    headless = configuration["headless_set"]
+    if variant == "agent":
+        return [headless]
+    owners = {app: set() for app in desktop_ids}
+    for record in records:
+        for app in desktop_ids.intersection(app_ids(record)):
+            owners[app].add(record["Package"])
+    packages = {headless, *configuration["desktop_extras"]}
+    for app, candidates in sorted(owners.items()):
+        if len(candidates) != 1:
+            raise ValueError(f"Missing or ambiguous official desktop App owner: {app}")
+        packages.update(candidates)
+    return sorted(packages)
+
+
+def desktop_app_ids():
+    return set((ROOT / "packaging/deb/claw-os-desktop/apps.list").read_text().split())
+
+
 def selection(records, variant, configuration):
     available = {}
     providers = {}
@@ -212,6 +238,8 @@ def selection(records, variant, configuration):
         name = record["Package"]
         if not APP_NAME.fullmatch(name):
             raise ValueError("Non-App package in the App APT channel")
+        if name in RETIRED_DESKTOP:
+            continue
         identity = (name, record["Version"], record.get("Architecture", "all"))
         if identity in identities:
             if identities[identity] != record:
@@ -221,9 +249,9 @@ def selection(records, variant, configuration):
         available.setdefault(name, []).append(record)
         for interface in interfaces(record):
             providers.setdefault(interface, set()).add(name)
-    pending = [(configuration["sets"][variant], None, None)]
-    if variant == "desktop":
-        pending.append(("claw-app-desktop-shell", None, None))
+    desktop_ids = desktop_app_ids()
+    requested = roots(identities.values(), variant, configuration, desktop_ids)
+    pending = [(name, None, None) for name in requested]
     selected = {}
     constraints = {}
     steps = 0
@@ -254,9 +282,7 @@ def selection(records, variant, configuration):
         selected[owner] = record
         pending.extend(dependencies(record))
     reachable = set()
-    pending = [configuration["sets"][variant]]
-    if variant == "desktop":
-        pending.append("claw-app-desktop-shell")
+    pending = requested.copy()
     while pending:
         name = pending.pop()
         owner = name if name in available else next(iter(providers[name]))
@@ -267,7 +293,7 @@ def selection(records, variant, configuration):
     selected = {name: record for name, record in selected.items() if name in reachable}
     minimum = configuration.get("runtime_minimum", platform()["version"])
     for record in selected.values():
-        if record["Package"] in configuration["sets"].values():
+        if record["Package"] == configuration["headless_set"]:
             continue
         runtime = re.findall(r"(?:^|,\s*)claw-os-app-runtime-v1 \(>= ([^\s()]+)\)(?:,|$)",
                              record.get("Depends", "").replace("\n", " "))
@@ -277,12 +303,10 @@ def selection(records, variant, configuration):
             raise ValueError(f"Official App package lacks the coordinated runtime floor: {record['Package']}")
     expected = set(json.loads((ROOT / "packaging/apps.lock.json").read_text())["apps"])
     if variant == "agent":
-        expected -= set((ROOT / "packaging/deb/claw-os-desktop/apps.list").read_text().split())
-    else:
-        expected.add("desktop-shell")
+        expected -= desktop_ids
     owners = {}
     for record in selected.values():
-        for app in record.get("X-Claw-App-Ids", "").replace(",", " ").split():
+        for app in app_ids(record):
             if app in owners:
                 raise ValueError(f"Multiple App package owners: {app}")
             owners[app] = record["Package"]
@@ -324,9 +348,9 @@ def verify_packages(directory, selected):
             if name in owners:
                 raise ValueError(f"Multiple dpkg owners for {name}")
             if any(name == root or name.startswith(root + "/") for root in (
-                "usr/lib/cos/python/claw_os_sdk", "usr/lib/cos/python/cos_runtime",
+                "usr/lib/cos/python/claw_os_sdk", "usr/lib/cos/python/cos_runtime", DESKTOP_SHELL_ROOT,
             )):
-                raise ValueError("App package contains OS-owned SDK/runtime")
+                raise ValueError("App package contains OS-owned SDK/runtime or Desktop Shell")
             owners[name] = record["Package"]
     return owners
 
@@ -371,16 +395,19 @@ def check(variant, architecture, directory, stage=None):
         raise ValueError("App package inputs differ from the authenticated release selection")
     owners = verify_packages(directory, selected)
     if stage is not None:
-        check_stage(stage, owners)
+        check_stage(stage, owners, desktop=variant == "desktop")
     return selected
 
 
-def check_stage(stage, owners):
+def check_stage(stage, owners, *, desktop=False):
     for path in stage.rglob("*"):
-        if path.is_dir() and not path.is_symlink():
-            continue
         name = path.relative_to(stage).as_posix()
-        if name.startswith("usr/lib/cos/apps/") or name in owners or (
+        if name not in owners and path.is_dir() and not path.is_symlink():
+            continue
+        if name in owners or (
+            name.startswith("usr/lib/cos/apps/")
+            and not (desktop and name.startswith(DESKTOP_SHELL_ROOT + "/"))
+        ) or (
             name.startswith("usr/lib/cos/python/")
             and name.split("/")[4] not in ("claw_os_sdk", "cos_runtime")
         ):
@@ -394,6 +421,7 @@ def main():
     parser.add_argument("--architecture", choices=("amd64", "arm64"))
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--version")
+    parser.add_argument("--print-depends", action="store_true")
     options = parser.parse_args()
     if options.command == "runtime-version":
         print(platform()["version"])
@@ -405,11 +433,16 @@ def main():
         return
     if not options.variant or not options.architecture:
         parser.error("--variant and --architecture are required")
+    if options.print_depends and (options.command != "check" or options.variant != "desktop"):
+        parser.error("--print-depends requires check --variant desktop")
     directory = work_root() / f"{options.variant}-{options.architecture}"
     if options.command == "prepare":
         prepare(options.variant, options.architecture, directory)
     else:
-        check(options.variant, options.architecture, directory, options.stage)
+        selected = check(options.variant, options.architecture, directory, options.stage)
+        if options.print_depends:
+            print(", ".join(roots(selected, "desktop", settings(), desktop_app_ids())))
+            return
     print(directory)
 
 
