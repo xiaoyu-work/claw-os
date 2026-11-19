@@ -7,6 +7,7 @@ fn display_fixture(
     workload: Option<Arc<Workload>>,
 ) -> Arc<Mutex<Display>> {
     let (control, _requests) = mpsc::sync_channel(1);
+    let (launch, _launches) = mpsc::sync_channel(1);
     Arc::new(Mutex::new(Display {
         epoch,
         login: KernelLogin {
@@ -17,6 +18,7 @@ fn display_fixture(
         wayland_display: Some("wayland-fixture".to_string()),
         workload,
         control,
+        launch,
         verified_retired: Arc::new(AtomicBool::new(false)),
     }))
 }

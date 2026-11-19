@@ -34,7 +34,7 @@ into the Linux filesystem rather than `/mnt/c`.
 sudo apt update
 sudo apt install -y git build-essential pkg-config \
     debootstrap qemu-utils parted dosfstools mtools rsync \
-    util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin
+    util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin bubblewrap
 ```
 
 Install the Rust toolchain as described in

@@ -17,8 +17,10 @@ supervisor-to-compositor channel may attach the actual locker descriptor; the
 broker-to-supervisor route cannot supply one.
 `install.rs` checks fixed executables and every ancestor. `locale.rs` admits
 only bounded PAM locale values, never loader variables or authority metadata.
-`session.rs` provides read-only kernel-login subscriptions and canonical
-display/runtime/user-bus projection.
+`session.rs` provides kernel-login subscriptions and canonical
+display/runtime/user-bus projection. Only the authenticated PAM session client
+can request the supervisor's one fixed system shell launch. The request names
+no App or executable.
 `workload.rs` pins `cgroup.events` with the protected cgroup directory.
 If logind removes the empty subtree first, kernel `ENODEV` on that original
 control descriptor proves removal; a missing path alone is not evidence.

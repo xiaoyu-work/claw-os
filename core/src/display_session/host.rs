@@ -15,6 +15,7 @@ use claw_display_control::{Connection, Epoch, Error, KernelLogin, Listener, Proc
 
 use super::containment::{self, Containment};
 use super::locker::{Locker, Status as LockStatus, LOCK_START_MS};
+use super::{registry::parent_pid, SHELL_APP};
 
 const STARTUP: Duration = Duration::from_secs(20);
 const STOP: Duration = Duration::from_secs(5);
@@ -171,6 +172,8 @@ struct Supervisor {
     listener: Option<Listener>,
     subscribers: Vec<Subscriber>,
     launchers: Vec<Child>,
+    shell_started: bool,
+    shell: Option<(ProcessIdentity, Child)>,
     locker: Option<Locker>,
 }
 
@@ -230,6 +233,8 @@ impl Supervisor {
             listener: None,
             subscribers: Vec::new(),
             launchers: Vec::new(),
+            shell_started: false,
+            shell: None,
             locker: None,
         };
         supervisor.control.send(
@@ -354,9 +359,10 @@ impl Supervisor {
                     let now = monotonic_ms()?;
                     let submitted = if !self.display.is_empty()
                         && self.launchers.len() < MAX_APP_LAUNCHERS
+                        && target.app_id != SHELL_APP
                         && expires_monotonic_ms > now && expires_monotonic_ms <= now.saturating_add(2000)
                     {
-                        match spawn_app_launcher(&self.controllers, &self.containment, &self.display, target) {
+                        match spawn_app_launcher(&self.controllers, &self.containment, &self.display, Some(target)) {
                             Ok(child) => {
                                 self.launchers.push(child);
                                 true
@@ -503,6 +509,12 @@ impl Supervisor {
             }
             self.prune_subscribers();
             self.accept_subscriber()?;
+            if let Some(status) = self.shell.as_mut()
+                .map(|(_, child)| child.try_wait()).transpose()?.flatten()
+            {
+                let (subscriber, _) = self.shell.take().ok_or(Error::Identity)?;
+                self.shell_result(&subscriber, status.success());
+            }
             let mut index = 0;
             while index < self.launchers.len() {
                 if self.launchers[index].try_wait()?.is_some() {
@@ -526,6 +538,9 @@ impl Supervisor {
             )?;
             if KernelLogin::of(&packet.sender)? != self.controllers.login {
                 return Err(Error::Identity);
+            }
+            if !matches!(packet.message, SessionRequest::Subscribe {}) {
+                return Err(Error::Protocol("expected display subscription"));
             }
             if self.subscribers.len() >= MAX_SUBSCRIBERS {
                 return Err(Error::Protocol("display subscriber capacity exceeded"));
@@ -568,6 +583,10 @@ impl Supervisor {
                 {
                     Err(Error::Closed) => Ok(false),
                     Err(Error::Timeout) => Ok(true),
+                    Ok(packet) if matches!(packet.message, SessionRequest::StartShell {}) => {
+                        self.start_shell(&subscriber)?;
+                        Ok(true)
+                    }
                     Ok(_) => Err(Error::Protocol("duplicate display subscription")),
                     Err(error) => Err(error),
                 }
@@ -576,6 +595,44 @@ impl Supervisor {
                 Ok(true) => self.subscribers.push(subscriber),
                 Ok(false) => {}
                 Err(error) => eprintln!("display session subscription retired: {error}"),
+            }
+        }
+    }
+
+    fn start_shell(&mut self, subscriber: &Subscriber) -> Result<(), Error> {
+        const CLIENT: &str = "/usr/local/bin/claw-display-session";
+        self.controllers.assert_live()?;
+        if self.shell_started
+            || parent_pid(&subscriber.process)? != self.controllers.parent.pid()
+            || std::fs::read_link(format!("/proc/{}/exe", subscriber.process.pid()))?
+                != Path::new(CLIENT)
+        {
+            return Err(Error::Protocol("system desktop shell startup is reserved for the login client"));
+        }
+        containment::protected_executable(CLIENT)?;
+        self.shell_started = true;
+        match spawn_app_launcher(&self.controllers, &self.containment, &self.display, None) {
+            Ok(child) => self.shell = Some((subscriber.process.clone(), child)),
+            Err(error) => {
+                log_failure(c"system desktop shell launcher refused: %s", &error);
+                subscriber.connection.send(
+                    &SessionEvent::ShellExited { epoch: self.controllers.epoch, success: false },
+                    &[],
+                    Instant::now() + CONTROL_IO,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn shell_result(&self, process: &ProcessIdentity, success: bool) {
+        if let Some(subscriber) = self.subscribers.iter().find(|peer| &peer.process == process) {
+            if let Err(error) = subscriber.connection.send(
+                &SessionEvent::ShellExited { epoch: self.controllers.epoch, success },
+                &[],
+                Instant::now() + CONTROL_IO,
+            ) {
+                eprintln!("desktop shell exit notification failed: {error}");
             }
         }
     }
@@ -612,11 +669,16 @@ impl Supervisor {
         for mut launcher in self.launchers.drain(..) {
             launcher.wait()?;
         }
+        if let Some((_, mut shell)) = self.shell.take() {
+            shell.wait()?;
+        }
         if let Some(locker) = self.locker.take() {
             locker.reap()?;
         }
-        self.prune_subscribers();
         for subscriber in self.subscribers.drain(..) {
+            if pidfd_exited(subscriber.pidfd.as_fd())? {
+                continue;
+            }
             if let Err(error) = subscriber.connection.send(
                 &SessionEvent::Ended {
                     epoch: self.controllers.epoch,
@@ -714,7 +776,7 @@ fn spawn_app_launcher(
     controllers: &Controllers,
     containment: &Containment,
     display: &str,
-    target: LaunchTarget,
+    target: Option<LaunchTarget>,
 ) -> Result<Child, Error> {
     const COS: &str = "/usr/local/bin/cos";
     containment::protected_executable(COS)?;
@@ -725,7 +787,9 @@ fn spawn_app_launcher(
     let membership = containment.compositor_membership().as_raw_fd();
     let parent = unsafe { libc::getpid() };
     let mut command = Command::new(COS);
-    command.args(["app", &target.app_id, "--gui"])
+    let app_id = target.as_ref().map_or(SHELL_APP, |target| target.app_id.as_str());
+    command
+        .args(["app", app_id, "--gui"])
         .env_clear()
         .envs(controllers.locale.iter())
         .env("HOME", &home)
@@ -737,12 +801,18 @@ fn spawn_app_launcher(
         .env("WAYLAND_DISPLAY", display)
         .env("XDG_SESSION_TYPE", "wayland")
         .env("XDG_CURRENT_DESKTOP", "Hyprland")
-        .env(MENU_LAUNCH_DIGEST, target.digest)
-        .env(MENU_LAUNCH_PUBLISHER, target.publisher)
         .current_dir(home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
+    if let Some(target) = target {
+        command
+            .env(MENU_LAUNCH_DIGEST, target.digest)
+            .env(MENU_LAUNCH_PUBLISHER, target.publisher);
+    } else {
+        // The CLI prints structured errors to stdout. Keep them in the login log.
+        command.stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
+    }
     unsafe {
         command.pre_exec(move || {
             if libc::getppid() != parent {

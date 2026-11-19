@@ -291,6 +291,9 @@ pub(crate) async fn launch(params: Value, client: &ClientIdentity) -> Result<Val
         .map_err(|_| BrokerError::execution("invalid GUI launch arguments"))?;
     let manager = Manager::get().map_err(BrokerError::unavailable)?;
     let job = manager.lookup(request.session_id.as_str(), client)?;
+    if job.registration.desktop_shell && !request.args.as_slice().is_empty() {
+        return Err(BrokerError::authorization("the system desktop shell accepts no arguments"));
+    }
     let admission = crate::clawd::app_mutation::admit_for_owner(
         job.registration.launch.app_id(), job.registration.owner(),
     )

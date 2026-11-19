@@ -1,4 +1,4 @@
-//! Read-only attachment to the display created by the authenticated login.
+//! Attachment to the display created by the authenticated login.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -73,6 +73,33 @@ impl Subscription {
             },
             Err(Error::Timeout) => Ok(false),
             Err(error) => Err(error),
+        }
+    }
+
+    pub fn run_shell(&self) -> Result<(), Error> {
+        self.connection.send(
+            &SessionRequest::StartShell {},
+            &[],
+            Instant::now() + Duration::from_secs(2),
+        )?;
+        loop {
+            match self.connection.receive::<SessionEvent>(
+                &self.host,
+                Instant::now() + Duration::from_secs(1),
+            ) {
+                Ok(packet) => match packet.message {
+                    SessionEvent::ShellExited { epoch, success } if epoch == self.epoch => {
+                        return if success {
+                            Ok(())
+                        } else {
+                            Err(Error::Protocol("the system desktop shell exited with an error"))
+                        };
+                    }
+                    _ => return Err(Error::Protocol("display ended before the system shell exited")),
+                },
+                Err(Error::Timeout) => {}
+                Err(error) => return Err(error),
+            }
         }
     }
 }

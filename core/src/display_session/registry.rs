@@ -35,6 +35,18 @@ pub struct Display {
     verified_retired: Arc<AtomicBool>,
 }
 
+impl Display {
+    pub(crate) fn starts_desktop_shell(&self, launcher: &ProcessIdentity) -> Result<bool, Error> {
+        if parent_pid(launcher)? != self.host.pid() {
+            return Ok(false);
+        }
+        self.host.assert_current()?;
+        launcher.assert_current()?;
+        Ok(std::fs::read_link(format!("/proc/{}/exe", launcher.pid()))?
+            == Path::new("/usr/local/bin/cos"))
+    }
+}
+
 struct GuiCall {
     command: CompositorCommand,
     descriptors: Vec<OwnedFd>,
@@ -730,7 +742,7 @@ fn retire_display(display: &Mutex<Display>, channel: &Connection) -> Result<(), 
     Ok(())
 }
 
-fn parent_pid(process: &ProcessIdentity) -> Result<i32, Error> {
+pub(super) fn parent_pid(process: &ProcessIdentity) -> Result<i32, Error> {
     let stat = claw_display_control::identity::read_bounded(
         &format!("/proc/{}/stat", process.pid()),
         8192,

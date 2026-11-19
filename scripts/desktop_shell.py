@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -54,17 +53,30 @@ def verify(root, architecture, pin):
     if not tool.is_file() or sha256(tool) != VERIFIER_SHA256[host]:
         raise ValueError("Missing or changed public Desktop Shell verifier")
     publisher = json.loads(PUBLISHER.read_text())["keys"][0]["key_id"]
-    with tempfile.TemporaryDirectory(prefix="claw-desktop-shell-trust-") as home:
-        trust = Path(home) / ".config/cos/trust/publishers.d"
-        trust.mkdir(mode=0o700, parents=True)
-        shutil.copyfile(PUBLISHER, trust / PUBLISHER.name)
-        result = subprocess.run(
-            [tool, "provenance", "verify", "--kind", "app", "--id", APP, "--path", root],
-            env={"HOME": home, "PATH": os.defpath, "LC_ALL": "C"},
-            check=False, capture_output=True,
+    # The pinned verifier uses passwd, not $HOME, to find its trust store.
+    with tempfile.TemporaryDirectory(prefix="claw-desktop-shell-trust-") as scratch:
+        publisher_file = Path(scratch) / PUBLISHER.name
+        shutil.copyfile(PUBLISHER, publisher_file)
+        publisher_file.chmod(0o644)
+        home = Path(scratch) / "home"
+        home.mkdir(mode=0o700)
+        passwd = Path(scratch) / "passwd"
+        passwd.write_text("builder:x:0:0:Build verifier:/home/builder:/bin/false\n")
+        isolate = [
+            "bwrap", "--unshare-all", "--die-with-parent", "--uid", "0", "--gid", "0",
+            "--clearenv", "--setenv", "LC_ALL", "C", "--chdir", "/",
+            "--ro-bind", passwd, "/etc/passwd", "--bind", home, "/home/builder",
+            "--ro-bind", publisher_file, "/publisher.json",
+            "--ro-bind", tool, "/cos", "--ro-bind", root, "/payload",
+            "--", "/cos", "--json", "provenance",
+        ]
+        subprocess.run(
+            [*isolate, "trust", "add", "--file", "/publisher.json"], check=True, capture_output=True,
         )
-    if result.returncode:
-        raise ValueError("Desktop Shell failed public App provenance verification")
+        result = subprocess.run(
+            [*isolate, "verify", "--kind", "app", "--id", APP, "--path", "/payload"],
+            check=True, capture_output=True,
+        )
     report = json.loads(result.stdout)
     package = report["package"]
     if report["verified"] is not True or report["manifest_path"] != "app.json" or (
@@ -106,7 +118,8 @@ def verify(root, architecture, pin):
 def extract(archive, root, checksum):
     if not archive.is_file() or archive.stat().st_size > MAX_BYTES or sha256(archive) != checksum:
         raise ValueError("Missing or changed Desktop Shell archive")
-    root.mkdir(mode=0o755)
+    root.mkdir()
+    root.chmod(0o755)
     nodes = set()
     size = 0
     with tarfile.open(archive, mode="r|gz") as payload:
@@ -205,6 +218,7 @@ if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as error:
-        raise SystemExit(f"error: Desktop Shell input failed: {error.stderr.decode(errors='replace').strip()}")
+        details = error.stderr or error.stdout or str(error).encode()
+        raise SystemExit(f"error: Desktop Shell input failed: {details.decode(errors='replace').strip()}")
     except (ValueError, KeyError, OSError, tarfile.TarError) as error:
         raise SystemExit(f"error: Desktop Shell input failed: {error}")

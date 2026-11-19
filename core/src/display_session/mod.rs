@@ -8,3 +8,5 @@ pub mod host;
 mod locker;
 pub mod registry;
 pub(crate) mod runtime;
+
+pub(crate) const SHELL_APP: &str = "desktop-shell";

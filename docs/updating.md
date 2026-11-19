@@ -966,10 +966,11 @@ an OS-owned panel descriptor helper and one Root-held desktop delivery
 consumer. The App package retains the original native popup UI and license.
 Deploy the helper/session/applet changes and matching signed App manifest
 together; the old Agent-UI bridge is not a fallback consumer.
-The GUI's explicit `ipc.subscribe` / `ipc.invoke` requests for
-`notifications.presentation` require their normal owner decisions, separately
-from `ui.panel` and the MCP producer's `ui.notify`. Installation, package trust
-and an existing own-source inbox grant do not authorize all-source display.
+The Root-supervised, vendor-signed system shell gets the declared
+`notifications.presentation` rights from its fixed startup policy. Other
+GUIs still require the normal owner decisions, separately from `ui.panel`
+and the MCP producer's `ui.notify`. Installation, package trust and an
+existing own-source inbox grant alone do not authorize all-source display.
 
 The common Host keeps native popup preferences in private App HOME using the
 original schema. No owner-wide configuration mount, automatic legacy preference

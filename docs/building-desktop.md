@@ -12,7 +12,7 @@ and prepare the authenticated inputs:
 
 ```bash
 sudo apt install git debootstrap qemu-utils parted dosfstools mtools rsync \
-  util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin dpkg-dev curl
+  util-linux e2fsprogs grub-efi-amd64-bin grub-pc-bin dpkg-dev curl bubblewrap
 python3 scripts/app_packages.py prepare --variant agent --architecture amd64
 python3 scripts/app_packages.py prepare --variant desktop --architecture amd64
 python3 scripts/desktop_shell.py prepare --architecture amd64 --version "${DESKTOP_SHELL_RELEASE:?set the approved version}"
@@ -24,6 +24,8 @@ sudo ./presets/desktop.sh
 same version as `desktop_shell_version` when dispatching the OS `desktop` or
 `all` release. It is a build input, not a package the user installs. Changing
 it for a published Desktop requires a new OS package version.
+The build's signature check uses Bubblewrap with only the packaged publisher;
+it does not read or change the build host's trust store.
 
 Use the native architecture and corresponding GRUB package on arm64.
 The default output is `build/claw-os-vm-amd64.vmdk`; import it into VMware.
@@ -32,13 +34,13 @@ See [the Azure build](building-azure.md) for a generalized Gen2 VHD.
 ## Login
 
 The local desktop VM opens the graphical setup wizard without asking you to
-sign in. Create your account in the wizard and select **Finish**. Choose your
-account at the sign-in screen and enter its password. Both screens use the
-original Claw OS wallpaper and frosted-glass panels.
+sign in. Create your account and select **Finish** to enter the desktop.
+After logout or reboot, sign in with that account and password. Setup and
+sign-in use the original Claw OS wallpaper and frosted-glass panels.
 
-There is no default account password or automatic App permission approval.
-Review Desktop Shell requests in the graphical OS review window. The
-headless VM still sets up its `cos` account on the serial console.
+The signed system shell starts with its built-in desktop permissions.
+Other App permission requests still appear in the graphical OS review
+window. The headless VM still sets up its `cos` account on the serial console.
 
 On an installed machine, the greeter and desktop use the connected display's
 preferred mode as reported by its graphics driver. The setup wizard fits that

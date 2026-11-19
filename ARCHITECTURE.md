@@ -207,8 +207,8 @@ disclosed, not simulated with unenforced switches.
 The [Root display runtime](core/src/display_session/MODULE.md) binds the
 PAM-authenticated account to the kernel login identity before user startup
 customization. The broker assigns the display epoch; a protected supervisor
-starts the compositor. `claw-display-session --desktop` starts downstream components and
-subscribes to that display rather than creating an owner-authored replacement.
+starts the compositor. `claw-display-session --desktop` attaches to that
+display and asks the supervisor to start the fixed, signed system desktop shell.
 Fresh local desktop images run their account wizard in Cage before greetd
 sign-in. A fixed OS helper provisions the one local owner; it grants no
 display or App authority. The Cage greeter hands off through normal PAM.
@@ -224,8 +224,10 @@ identity. `--gui:<name>` selects only declared manifest data; Root retains the
 package/entry/selector binding across approval and launch. Protected review
 discloses each target and its needs without granting them. Selection read and
 write remain independent, and Panel metadata grants nothing.
-`ui.panel` separately admits LayerShell only from the live bound GUI grant;
-System Agent/default launchers receive none. Generic owner-path needs resolve
+`ui.panel` separately admits LayerShell only from the live bound GUI grant.
+Only the supervisor's fixed system shell launch gets the built-in desktop
+defaults; the System Agent and ordinary launchers receive no such authority.
+Generic owner-path needs resolve
 only Root-authenticated owner home into bounded canonical Path scopes and
 normal exact-owner approval, never environment-derived home or a default grant.
 Protected mount/credential-root refusals remain unchanged. Mandatory

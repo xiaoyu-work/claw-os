@@ -10,17 +10,17 @@ parent/start identity; the request has no owner, session, epoch or executable
 fields. The broker generates a fresh epoch and retains the workload guard
 before the compositor can dispatch protocols.
 
-`host.rs` executes only the protected `/usr/libexec/claw-hyprland/Hyprland`, with the
+`host.rs` starts the protected `/usr/libexec/claw-hyprland/Hyprland` with the
 authenticated account's credentials and a cleared environment. The inherited
-control descriptor precedes Wayland dispatch. Bounded locale values come
-from the PAM handle, not a loader environment; the compositor and downstream
+control descriptor precedes Wayland dispatch. Bounded locale values come from
+the PAM handle, not a loader environment; the compositor and downstream
 session share the canonical logind user bus. Neither presentation metadata
 nor that bus authorizes a GUI instance.
 
 | File | Responsibility |
 | --- | --- |
 | `registry.rs` | Root activation admission, epochs, heartbeat and correlated GUI/desktop exchanges |
-| `host.rs` | Owned compositor process, private control, read-only login subscriptions and display teardown |
+| `host.rs` | Owned compositor process, private control, login subscriptions, system shell startup and display teardown |
 | `locker.rs` | One protected PAM-only native locker, private Wayland descriptor and checked readiness |
 | `containment.rs` | Exact Root login/workload cgroups, pre-exec membership and checked cleanup |
 | `creator.rs` | One Root security-context creator per GUI instance, refresh and retirement |
@@ -29,11 +29,14 @@ nor that bus authorizes a GUI instance.
 
 The desktop attachment starts the graphical OS review presenter in the PAM
 login. On a fresh local desktop VM, the wizard creates the account before this
-PAM login. Installer profiles with an account already provisioned can run
-post-login setup before submitting the signed Shell through the normal GUI
-Host. The presenter independently reads broker
-reviews. Confirmation uses polkit; denial uses the owner-only cancellation
-route with the displayed revision.
+PAM login and submits the just-entered password to greetd once. Installer
+profiles with an account already provisioned can run post-login setup first.
+The installed PAM session client then requests one fixed system shell launch.
+The Root supervisor starts the launcher as the account and reports its exit
+back to the client for normal logout. The [GUI Host](../clawd/gui/MODULE.md)
+retains signature, capability and lifetime checks. The presenter independently
+reads broker reviews for other actions. Confirmation uses polkit; denial
+uses the owner-only cancellation route at the displayed revision.
 
 The shared closed protocol is
 [`claw-display-control`](../../../crates/claw-display-control/MODULE.md), an

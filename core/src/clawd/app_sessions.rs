@@ -361,6 +361,10 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             "authenticated GUI launch requires Linux",
         ));
     }
+    #[cfg(target_os = "linux")]
+    let desktop_shell = gui_draft.as_ref().is_some_and(|draft| draft.desktop_shell);
+    #[cfg(not(target_os = "linux"))]
+    let desktop_shell = false;
 
     let (command, mut plan, caller_invoke) = match kind {
         LaunchKind::Operation => {
@@ -401,10 +405,23 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     };
     plan.app_name = Some(app.manifest.name.current().trim().to_owned());
     plan.require(caller_invoke.clone(), &delegation);
-    super::system_review::require_app_review(uid, &app, &delegation.requester)?;
+    #[cfg(target_os = "linux")]
+    if desktop_shell {
+        if !gui::desktop_shell_startup_caps().covers_all(&plan.caps) {
+            return Err(BrokerError::authorization(
+                "desktop shell requests capabilities outside the OS startup policy",
+            ));
+        }
+        plan.missing.clear();
+    }
+    if !desktop_shell {
+        super::system_review::require_app_review(uid, &app, &delegation.requester)?;
+    }
     let mut grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
     let optional_gui = if kind == LaunchKind::Gui {
-        authorize_optional_gui_needs(&app, gui_entry.as_deref(), &delegation, &ceiling, &mut grant_caps)
+        authorize_optional_gui_needs(
+            &app, gui_entry.as_deref(), &delegation, &ceiling, &mut grant_caps, desktop_shell,
+        )
     } else {
         OptionalGuiAuthorization::default()
     };
@@ -498,6 +515,15 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             crate::provenance::runtime::deregister(uid, &session_id);
             return Err(BrokerError::unavailable(error));
         }
+    }
+    #[cfg(target_os = "linux")]
+    if desktop_shell {
+        crate::provenance::audit("desktop.shell_startup", json!({
+            "owner_uid": uid,
+            "app_id": app_id,
+            "content_digest": package.content_digest(),
+            "session_id": session_id,
+        }));
     }
     let mut response = json!({
         "session_id": session_id,
@@ -2298,6 +2324,8 @@ fn authorize_optional_gui_needs(
     delegation: &Delegation,
     ceiling: &Ceiling,
     granted: &mut CapSet,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    desktop_shell: bool,
 ) -> OptionalGuiAuthorization {
     let mut result = OptionalGuiAuthorization::default();
     let selected = match app.manifest.gui_entry(gui_entry) {
@@ -2337,6 +2365,11 @@ fn authorize_optional_gui_needs(
                 Ok((cap, _)) => cap,
                 Err(_) => { complete = false; continue; }
             };
+            #[cfg(target_os = "linux")]
+            if desktop_shell && !gui::desktop_shell_optional_cap(&cap) {
+                complete = false;
+                continue;
+            }
             if owner_scope.as_ref().is_some_and(|scope| !scope.covers(&cap.scope)) {
                 complete = false;
                 continue;
@@ -2358,7 +2391,7 @@ fn authorize_optional_gui_needs(
                 complete = false;
                 continue;
             }
-            if delegation.ceiling.covers(&cap) {
+            if desktop_shell || delegation.ceiling.covers(&cap) {
                 granted.insert(cap);
                 continue;
             }

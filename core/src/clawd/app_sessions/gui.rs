@@ -8,6 +8,7 @@ use claw_display_control::{Epoch, ProcessIdentity};
 use crate::bridge::AppLaunch;
 use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::display_session::registry::{GuiControl, Registry};
+use crate::display_session::SHELL_APP;
 
 #[cfg(test)]
 use crate::provenance::verify::test_profile::{Guard as ProfileGuard, Span, Step};
@@ -26,6 +27,7 @@ pub(crate) struct Draft {
     home: PathBuf,
     control: GuiControl,
     delegation: BoundDelegation,
+    pub(super) desktop_shell: bool,
 }
 
 pub(crate) struct Registration {
@@ -37,6 +39,7 @@ pub(crate) struct Registration {
     pub client: ClientIdentity,
     pub home: PathBuf,
     pub control: GuiControl,
+    pub(crate) desktop_shell: bool,
     pub session_id: String,
     pub caps: CapSet,
     pub optional_needs_ungranted: Vec<usize>,
@@ -77,6 +80,17 @@ impl Draft {
             .map_err(|error| error.to_string())?
             .for_process(&launcher)
             .map_err(|error| error.to_string())?;
+        let desktop_shell = launch.app_id() == SHELL_APP
+            && gui_entry.is_none()
+            && launcher_authority.parent.is_none()
+            && display
+                .lock()
+                .map_err(|_| "display registry lock poisoned")?
+                .starts_desktop_shell(&launcher)
+                .map_err(|error| error.to_string())?;
+        if desktop_shell {
+            verify_system_shell(&launch, &entry, selector)?;
+        }
         let control = GuiControl::of(&display).map_err(|error| error.to_string())?;
         let home = crate::paths::verified_home_for_uid(control.owner_uid)?;
         let generation =
@@ -99,6 +113,7 @@ impl Draft {
             client: client.clone(),
             home,
             control,
+            desktop_shell,
             delegation: BoundDelegation {
                 parent: launcher_authority.parent.clone(),
                 session: delegation.grant_session.clone(),
@@ -125,6 +140,7 @@ impl Draft {
             client: self.client,
             home: self.home,
             control: self.control,
+            desktop_shell: self.desktop_shell,
             session_id,
             caps,
             optional_needs_ungranted,
@@ -134,6 +150,61 @@ impl Draft {
             delegation: self.delegation,
         })
     }
+}
+
+fn verify_system_shell(launch: &AppLaunch, entry: &str, selector: &str) -> Result<(), String> {
+    use crate::provenance::{
+        envelope::ENVELOPE_FILE, fsec, trust::VENDOR_TRUST_ROOT, TrustSource, TrustTier,
+    };
+    use std::path::Path;
+
+    let package = launch.package();
+    let trust = crate::provenance::trust_store();
+    let publisher = Path::new(VENDOR_TRUST_ROOT).join("clawos-app.json");
+    if package.dir() != Path::new("/usr/lib/cos/apps/desktop-shell")
+        || entry != "bin/claw-desktop-shell"
+        || selector != "--gui"
+        || launch.manifest().runtime != crate::caps::manifest::Runtime::Binary
+        || launch.manifest().gui_entry(None)?.legacy_needs
+        || package.tier() != TrustTier::Vendor
+        || !matches!(package.source(), TrustSource::Publisher { key_id }
+            if trust.key(key_id).is_some_and(|key| key.source == publisher))
+    {
+        return Err("OS desktop startup requires the installed vendor-signed desktop shell".into());
+    }
+    fsec::require_secure_location(package.dir(), &[0]).map_err(|error| error.to_string())?;
+    for path in package.files().map(|file| file.path.as_str()).chain([ENVELOPE_FILE]) {
+        let node = fsec::lstat(&package.dir().join(path)).map_err(|error| error.to_string())?;
+        if node.uid != 0 || node.is_symlink || node.is_group_or_world_writable() {
+            return Err("system desktop shell contains an unprotected resource".into());
+        }
+    }
+    package.assert_current(&trust).map_err(|error| error.to_string())
+}
+
+pub(super) fn desktop_shell_startup_caps() -> CapSet {
+    let notifications = crate::clawd::notifications::gui::RESOURCE;
+    CapSet::from_caps([
+        Cap::new(Verb::AGENT_INVOKE, Scope::name(SHELL_APP)),
+        Cap::unscoped(Verb::UI_PANEL),
+        Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop")),
+        Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control")),
+        Cap::new(Verb::IPC_SUBSCRIBE, Scope::name(notifications)),
+        Cap::new(Verb::IPC_INVOKE, Scope::name(notifications)),
+        Cap::new(Verb::IPC_INVOKE, Scope::name("desktop.session.lock")),
+    ])
+}
+
+pub(super) fn desktop_shell_optional_cap(cap: &Cap) -> bool {
+    let Scope::Name(name) = &cap.scope else {
+        return false;
+    };
+    matches!((cap.verb, name.as_str()),
+        (Verb::SYS_OBSERVE, "audio" | "display")
+        | (Verb::DEVICE_AUDIO, "output")
+        | (Verb::DEVICE_MICROPHONE, "input")
+        | (Verb::DEVICE_MEDIA_ROUTE, "pipewire")
+        | (Verb::DEVICE_DISPLAY, "manage"))
 }
 
 impl Registration {

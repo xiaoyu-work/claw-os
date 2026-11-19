@@ -141,12 +141,7 @@ fn run_desktop(
     }
     let result = (|| {
         let mut files = command("/usr/lib/cos/bin/claw-file-manager").spawn()?;
-        let shell = command("/usr/local/bin/cos")
-            .args(["app", "desktop-shell", "--gui"])
-            .spawn();
-        let result = shell
-            .map_err(Error::from)
-            .and_then(|mut shell| wait_for_entrypoint(subscription, &mut shell));
+        let result = subscription.run_shell();
         stop_child(&mut files)?;
         result
     })();

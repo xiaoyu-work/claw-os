@@ -435,6 +435,7 @@ impl Packet for AuthorityReply {
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SessionRequest {
     Subscribe {},
+    StartShell {},
 }
 
 impl Packet for SessionRequest {
@@ -452,6 +453,10 @@ pub enum SessionEvent {
     },
     Ended {
         epoch: Epoch,
+    },
+    ShellExited {
+        epoch: Epoch,
+        success: bool,
     },
 }
 

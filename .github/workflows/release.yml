@@ -53,6 +53,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install isolated Desktop Shell verifier dependency
+        if: inputs.target == 'desktop' || inputs.target == 'all'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap
+
       - name: Freeze release version, authenticated Apps and Desktop Shell input
         id: plan
         env:
@@ -272,7 +276,7 @@ jobs:
           path: build/release
 
       - name: Install host build tools
-        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg git-lfs
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg git-lfs bubblewrap
 
       - name: Import signing key
         env:

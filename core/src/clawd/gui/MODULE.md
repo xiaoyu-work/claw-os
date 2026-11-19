@@ -18,6 +18,15 @@ Argument-bound GUI needs are unsupported/unbound. Explicit conditional GUI
 needs are also unbound, not unconditional grants; the legacy operation union
 still does not evaluate `when`. Neither binds a later file-picker selection.
 
+The installed system desktop shell is started by the authenticated Root
+display supervisor, not by an ordinary App launcher. Only its direct launcher
+and verified vendor-signed default entry qualify for the fixed desktop startup
+policy. That policy covers the declared panel, window controls, notification
+presentation and current-display lock, plus supported optional device controls.
+It still checks App denials, package trust and instance lifetime. It grants no
+power, App-launch, or Agent authority to exercise unrelated effects; opening
+another App or requesting a power action keeps its separate review.
+
 `desktop.optional_needs` and each `desktop.entries.<name>.optional_needs` are
 independent best-effort feature lists, empty when absent. Missing, denied,
 ask-unapproved, unbound, package/policy-refused or unsupported optional rights
@@ -25,9 +34,9 @@ do not block startup and never create an approval request. Mandatory `needs`
 remain strict, including required `ui.panel`; optional declarations do not
 subtract from them or from the default GUI's legacy operation union.
 
-Root first settles the complete mandatory plan, then admits optional caps only
-from the authenticated parent or a still-live, exact owner/session/scope
-reusable approval. Reusable admission spends one bounded use, never a once
+For ordinary Apps, Root first settles the complete mandatory plan, then
+admits optional caps only from the authenticated parent or a still-live,
+exact owner/session/scope reusable approval. Reusable admission spends one bounded use, never a once
 grant or a restoration receipt, and retains its expiry and revocation checks.
 Optional Wild requests retain the existing bounded parent-only inheritance;
 they never scan unrelated approved scopes or other GUI/MCP declarations.

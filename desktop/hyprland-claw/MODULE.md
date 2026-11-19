@@ -71,8 +71,9 @@ mode, scaling and taskbar layout to the defaults. `claw-desktop-locales`
 generates the Debian locales used by the language picker.
 
 The subscriber's `--desktop` mode attaches to the Root login binding. It runs
-post-login configuration only on installed profiles that request it, then starts
-the FileManager1 facade and `cos app desktop-shell --gui`.
+post-login configuration only on installed profiles that request it, starts
+the FileManager1 facade, and asks the Root supervisor to launch the signed
+system shell with its fixed [desktop startup rights](../../core/src/clawd/gui/MODULE.md).
 The [desktop review presenter](session/claw-desktop-reviews) opens a compact,
 centered window for one pending request. It puts the action, target and choices
 first; full disclosure remains available under **Request details**. Accepting
