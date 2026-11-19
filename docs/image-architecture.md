@@ -69,7 +69,7 @@ feature combinations. Targets use these defaults but continue to accept a
 | WSL | User created interactively by the WSL first-launch OOBE | Modern `.wsl` package conventions |
 | Docker | User name and numeric identity supplied at container creation | Container/systemd conventions |
 | Live ISO / headless installer | Temporary live user or installer-created user | Live boot and Calamares |
-| amd64 desktop installer | Calamares-created account, then first-run setup inside the authenticated login | Generic Debian kernel, offline driver selection, and a desktop wizard before the Shell |
+| amd64 and Qualcomm desktop installers | Calamares-created account, then first-run setup inside the authenticated login | Debian or Qualcomm kernel, offline driver selection, and a desktop wizard before the Shell |
 
 ### Targets
 
@@ -122,17 +122,21 @@ authenticated account runs its follow-up network, Agent and optional hardware
 configuration. Neither wizard needs to launch the signed Desktop Shell App
 or use its private runtime.
 
-The installer prefetches selected Debian backports packages into an offline cache. Calamares recognizes the actual machine, installs only its matching optional packages before reboot, and removes the remaining cache from the installed system. The first rules match the Intel Surface Laptop 7 (camera userspace and audio profiles) and Lenovo Yoga Pro 7 14IAH10 (audio profiles). The optional packages are distinct from the kernel modules and firmware needed to boot or establish the first connection, which must already be on the media.
+The Qualcomm desktop installer uses the same Calamares and first-run flow.
 
-If matched packages are still missing, the target leaves a pending job. NetworkManager starts it from the configured signed APT repositories when it has internet access; the wizard displays the job only after the Network page. The job installs only the repository-defined matches, does not remove other packages, and never handles NVIDIA proprietary installation. An explicit offline or skip choice lets the user finish; a later connection can retry missing optional packages without restarting setup. The current Intel Surface-specific kernel fixes remain in the experimental profile below; selecting stock camera and audio packages does not give the generic kernel those patches.
+The installer caches model-specific packages when building the ISO. Calamares recognizes the actual machine, installs its matching packages offline before reboot, and removes the remaining cache. It recognizes the Intel Surface Laptop 7 by ACPI `MSHW0551`, the Snapdragon 13.8-inch and 15-inch Surface Laptop 7 by their device-tree compatible IDs, and the Lenovo Yoga Pro 7 14IAH10 by DMI. Boot-critical modules and firmware are already on the media so input and networking do not depend on the wizard.
+
+If matching Debian packages are still missing, the target leaves a pending job. NetworkManager starts it from the configured signed APT repositories when it has internet access; the wizard displays the job only after the Network page. An explicit offline or skip choice lets the user finish, and a later connection can retry without restarting setup. Locally built Surface drivers come from the installer cache, not the online fallback. The job does not install proprietary drivers or firmware.
 
 ### Experimental Snapdragon X boot
 
-The arm64 live and installer ISOs list recognized Snapdragon X models in a separate GRUB submenu when the exact device tree is present in the selected Debian kernel. Choose the exact model and panel/SoC variant; the generic entry is unchanged. The installer records the selected tree only if it matches the running device tree. On disk, GRUB offers only the selected board's tree for each kernel that ships it and has its matching initramfs; older compatible kernels stay available.
+The arm64 live and installer ISOs list recognized Snapdragon X models in a separate GRUB submenu when the selected kernel ships the exact device tree. Choose the exact model and panel/SoC variant; the generic entry is unchanged. The installer records the selected tree only if it matches the running device tree. On disk, GRUB offers only the selected board's tree for each kernel that ships it and has its matching initramfs; older compatible kernels stay available.
 
-Debian's Qualcomm firmware and the available display/input drivers are included in early boot. The experimental entries do not start the Qualcomm DSP: some boards need OEM-signed firmware, and DSP startup can disconnect USB-C root disks. Audio, power reporting and other features that depend on it are not covered. A menu entry is not hardware certification; the selected tree and installation still need physical testing.
+Build the Qualcomm desktop installer with `sudo env CLAW_PLATFORM=aarch64-qualcomm ./build.sh iso-installer` on arm64 Debian 13. The same ISO provides separate Surface Laptop 7 entries for the 13.8-inch (`romulus13`) and 15-inch (`romulus15`) boards. The Qualcomm kernel includes the QSPI HID driver missing from the generic Debian image. The 13.8-inch tree carries its own touchpad wiring; the 15-inch tree also describes a SPI digitizer and front RGB camera. Calamares selects the offline Debian `iptsd` and audio profiles for either board. Wi-Fi and Bluetooth address recovery is already available on the live medium and remains installed only on matching Surface models.
 
-On the running Snapdragon machine, `claw-import-board-firmware --list-missing` shows the files named by its device tree. `sudo claw-import-board-firmware /path/to/extracted-oem-driver` installs matching files from that machine's own driver into `/usr/lib/firmware/updates`, never downloading or replacing existing firmware, then updates the initramfs. This does not enable the DSP or authorize using another model's firmware.
+The live and default installed entries do not start the Qualcomm DSP: some boards need OEM-signed firmware, and DSP startup can disconnect USB-C storage. On a running Snapdragon machine, `claw-import-board-firmware --list-missing` shows the requested files. `sudo claw-import-board-firmware /path/to/extracted-oem-driver` imports files from that machine's own driver without downloading or replacing firmware. On a Surface Laptop 7 using the Qualcomm profile, it adds an **OEM audio (experimental)** GRUB entry only after the matching audio files pass checksum verification and the root, boot and device-tree files are all on NVMe. The no-DSP entry remains the default. Do not select the OEM audio entry with USB storage in use.
+
+The Qualcomm ISO does not bundle Microsoft OEM firmware. The 13.8-inch touch/pen variants do not yet have device-tree mappings in this profile. The 15-inch camera and digitizer descriptions, OEM audio, and suspend/resume paths are not a guarantee of working capture, touch, sound or sleep; those depend on the exact hardware and firmware.
 
 ### Experimental vendor kernels
 
@@ -142,7 +146,7 @@ The generic Debian kernel remains the default. Build an opt-in image on a native
 | --- | --- |
 | `x86-t2` | Debian 13 T2 kernel with early virtual USB for internal input. Mac-specific firmware for Wi-Fi and Bluetooth is not bundled. |
 | `x86-surface-laptop-7-intel` | Desktop ISO for the Surface Laptop for Business 7th Edition with Intel Core Ultra 200V (ACPI `MSHW0551`), not the Snapdragon edition. See the [build and hardware checks](#intel-surface-laptop-7). |
-| `aarch64-qualcomm` | Patched kernel and version-matched retail Snapdragon X/X2 device trees. Choose the exact model and variant in GRUB. DSP-dependent hardware remains off in these entries. |
+| `aarch64-qualcomm` | Patched kernel and version-matched retail Snapdragon X/X2 device trees. Choose the exact model and variant in GRUB; the desktop installer selects Surface driver packages automatically. DSP remains off by default. |
 | `aarch64-n1x` / `aarch64-gb10` | Matched NVIDIA open kernel modules, GPU firmware and driver libraries. GB10 media disables unsupported system sleep; N1x acceleration requires working production GPU firmware. |
 | `aarch64-apple` | Aurora kernel, matching device trees and m1n1/U-Boot stage-two assets. Use `iso-live` for pre-provisioned Asahi UEFI or `sudo ./build.sh asahi-rootfs` for a desktop rootfs archive. Generic Calamares is disabled for this profile: it does not provision macOS recovery, an Apple boot policy or a dedicated Asahi ESP. |
 
@@ -152,7 +156,9 @@ Apple provisioning must first create and enroll a dedicated Asahi boot chain wit
 
 ### Intel Surface Laptop 7
 
-The opt-in profile builds against one pinned Linux Surface kernel and Debian 13. It adds the Intel SSAM device mapping for the keyboard, battery, charger, fan and ambient-light sensor before disk unlock, the Sensel `iptsd` stack for touchpad gestures, SoundWire audio, the IPU7 RGB and IR sensor drivers, and a matching libcamera/PipeWire stack. It includes the reported backlight and sleep workarounds; it does not activate the experimental IR illuminator or change login authentication. Intel graphics, Wi-Fi and Bluetooth firmware still come from Debian.
+The standard amd64 desktop installer builds a Surface driver pack against the exact Debian kernel on the media. The live initramfs includes the patched Intel SSAM registry so the built-in keyboard can work before disk unlock. Calamares installs the full pack on `MSHW0551` systems and removes the temporary registry and rebuilds the stock initramfs on other PCs.
+
+The pack adds the SSAM mapping for keyboard, battery, charger, fan and ambient-light sensor, Sensel `iptsd` touchpad gestures, SoundWire audio, IPU7 RGB and IR sensor drivers and matched libcamera/PipeWire userspace. It includes backlight and sleep workarounds, but does not enable the experimental IR illuminator or change login authentication. The dedicated Linux Surface kernel profile remains available. Intel graphics, Wi-Fi and Bluetooth firmware still come from Debian.
 
 Build on native amd64 Debian 13 with the ISO tools above and a Debian package build environment. Install `build-essential`, `libelf-dev`, `meson`, `ninja-build`, `cmake`, `systemd-dev` and `libudev-dev`, plus the [libcamera 0.7.2 build dependencies](https://sources.debian.org/src/libcamera/0.7.2-1/debian/control/). The pinned `iptsd` sources use Meson wraps for their static dependencies. First build the stack by itself, or build the complete desktop installer:
 
@@ -161,7 +167,7 @@ python3 scripts/platform_kernels.py x86-surface-laptop-7-intel
 sudo env CLAW_PLATFORM=x86-surface-laptop-7-intel ./build.sh iso-installer
 ```
 
-The installer copies the matching kernel and packages to disk, keeps the Debian kernel as a fallback, and verifies that the patched registry is in the initramfs. The local modules are unsigned; they will not load under Secure Boot enforcement without a locally enrolled signing key. Keep the kernel and its companion modules together when updating the profile. Generic Debian package updates continue normally.
+Both installer paths check for the patched registry in the initramfs. The local modules are unsigned; they will not load under Secure Boot enforcement without a locally enrolled signing key. The standard path keeps the matched Debian kernel as the GRUB default on this model. Installing a new Debian kernel does not rebuild the Surface modules; build a matching pack before switching to a new kernel ABI.
 
 Boot the USB before changing partitions. Verify internal input in the installer and after a cold boot (including the passphrase prompt if encrypted), battery/charging, brightness, speaker/mic/headphones, camera capture, touchpad gestures, Wi-Fi, Bluetooth, external ports and repeated lid sleep/wake. Test microSD sleep behavior on the 15-inch model. The profile is experimental until verified on the target hardware; intermittent sleep failures have been reported upstream.
 

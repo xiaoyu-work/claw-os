@@ -13,7 +13,7 @@ case "$arch" in
     amd64)
         set -- applespi spi_pxa2xx_platform spi_pxa2xx_pci intel_lpss_pci \
             surface_aggregator surface_aggregator_registry surface_aggregator_hub \
-            surface_hid surface_kbd 8250_dw usbhid hid_apple xhci_pci
+            surface_hid surface_kbd 8250_dw pinctrl_intel_platform usbhid hid_apple xhci_pci
         if modinfo -k "$version" t2bce_vhci >/dev/null 2>&1; then
             force_load t2bce_vhci
         fi
@@ -23,7 +23,7 @@ case "$arch" in
             panel_edp panel_samsung_atna33xc20 pwm_bl leds_qcom_lpg qcom_pbs \
             phy_qcom_qmp_combo qrtr qcom_pd_mapper pmic_glink pmic_glink_altmode \
             ps883x gpio_sbu_mux display_connector simple_bridge i2c_hid_of \
-            surface_aggregator surface_aggregator_registry surface_hid \
+            spi_qcom_qspi spi_hid_of surface_aggregator surface_aggregator_registry surface_hid \
             pinctrl_glymur gpucc_glymur gxclkctl_kaanapali thunderbolt_qcom \
             i2c_mt65xx i2c_hid_acpi nvidia nvidia_modeset nvidia_drm nvidia_uvm \
             nvme_apple apple_pmp pwm_apple leds_pwm
@@ -49,7 +49,8 @@ if [ "$arch" = arm64 ]; then
         done
     done
     if [ -d /usr/lib/firmware/updates/qcom ]; then
-        find /usr/lib/firmware/updates/qcom -type f -name '*zap*.mbn' | while IFS= read -r firmware; do
+        find /usr/lib/firmware/updates/qcom -type f \
+            \( -name '*zap*.mbn' -o -name 'qcdxkmsuc8380.mbn' \) | while IFS= read -r firmware; do
             if [ ! -e "$DESTDIR$firmware" ]; then
                 copy_file firmware "$firmware"
             fi

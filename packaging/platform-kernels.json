@@ -64,6 +64,21 @@
       "sha256": "437475ac9a4266ce481430a6d7868fa3c94f2e3107729713b3df4fa10c1b0d7e",
       "source": "https://sources.debian.org/src/libcamera/0.7.2-1/"
     },
+    "surface-snapdragon-addresses": {
+      "file": "microsoft-surface-snapdragon-addresses-1-2-aarch64.pkg.tar.zst",
+      "sha256": "91101068aa6fa9d953c27b7859f73e882a5a3b5b05e663322022a8084deec076",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/2082b74a83403217413d97576ff930f01320effd/pkgbuilds/microsoft-surface-snapdragon-addresses"
+    },
+    "surface-snapdragon-iptsd": {
+      "url": "https://codeload.github.com/linux-surface/iptsd/tar.gz/a83bc1232f7096f8b33b50fdbda249cd640de670",
+      "sha256": "af64f692c01be4d0c64b8c2f13e4409146184b01668bfc4d76ceb77ab63fb3a8",
+      "source": "https://github.com/linux-surface/iptsd/tree/a83bc1232f7096f8b33b50fdbda249cd640de670"
+    },
+    "surface-snapdragon-fixes": {
+      "url": "https://codeload.github.com/omacom/omarchy-pkgs/tar.gz/2082b74a83403217413d97576ff930f01320effd",
+      "sha256": "e5eca90cbe82167a1bf43c1e99c9da28a1e19f66db46df018154cef70874716f",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/2082b74a83403217413d97576ff930f01320effd/pkgbuilds"
+    },
     "aurora-kernel": {
       "file": "linux-aurora-7.2.11.aurora16-1-aarch64.pkg.tar.zst",
       "sha256": "d53b5d32b87a00982952e458da567922e237760561fd15ea26458302f570f2c3",
@@ -128,7 +143,8 @@
       "arch": "arm64",
       "release": "7.3.0-72-omarchy",
       "kernel": "omarchy-kernel",
-      "dtbs": "omarchy-dtbs"
+      "dtbs": "omarchy-dtbs",
+      "romulus": ["surface-snapdragon-addresses", "surface-snapdragon-iptsd", "surface-snapdragon-fixes"]
     },
     "aarch64-n1x": {
       "arch": "arm64",

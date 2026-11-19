@@ -47,7 +47,19 @@ claw_qcom_tree() {
 
 # Keep the DSP off by default: it can reset USB-C storage, and some boards
 # still need a signed image not supplied by Debian.
-claw_qcom_args='acpi=off console=tty0 clk_ignore_unused pd_ignore_unused iommu.passthrough=0 modprobe.blacklist=qcom_q6v5_pas'
+claw_qcom_args='acpi=off console=tty0 clk_ignore_unused pd_ignore_unused iommu.passthrough=0'
+claw_qcom_no_dsp='modprobe.blacklist=qcom_q6v5_pas'
+
+claw_qcom_nvme_boot() {
+    local device
+    for device do
+        [ -b "$device" ] || return 1
+        lsblk -snro TYPE,TRAN "$device" | awk '
+            $1 == "disk" { found=1; if ($2 != "nvme") other=1 }
+            END { exit !found || other }
+        ' || return 1
+    done
+}
 
 # Do not call the private selector *.dtb: the EFI stub also scans for dtb=.
 claw_qcom_iso_menu() {
@@ -60,7 +72,7 @@ claw_qcom_iso_menu() {
             cat <<MENU
     menuentry '$model' {
         if devicetree /live/dtb/qcom/$tree; then
-            linux /live/vmlinuz boot=live components $claw_qcom_args claw.board_tree=$tree
+            linux /live/vmlinuz boot=live components $claw_qcom_args $claw_qcom_no_dsp claw.board_tree=$tree
             initrd /live/initrd.img
         fi
     }

@@ -6,6 +6,20 @@ set -e
 . /usr/lib/cos/hw/qualcomm-boot.sh
 . /usr/share/grub/grub-mkconfig_lib
 
+board_menu_entry() {
+    cat <<MENU
+menuentry 'Claw OS - $model ($version)' --id '$id' {
+$(prepare_grub_to_access_device "$dtb_device" | grub_add_tab)
+    set claw_dtb_root="\$root"
+$(prepare_grub_to_access_device "$GRUB_DEVICE_BOOT" | grub_add_tab)
+    if devicetree "(\$claw_dtb_root)$(make_system_path_relative_to_its_root "$dtb")"; then
+        linux '$(make_system_path_relative_to_its_root "$kernel" | grub_quote)' root=$root_device ro $1 ${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}
+        initrd '$(make_system_path_relative_to_its_root "$initrd" | grub_quote)'
+    fi
+}
+MENU
+}
+
 root_device=${GRUB_DEVICE:?}
 if [ -n "${GRUB_DEVICE_UUID:-}" ] && [ "${GRUB_DISABLE_LINUX_UUID:-false}" != true ]; then
     root_device=UUID=$GRUB_DEVICE_UUID
@@ -31,17 +45,21 @@ for kernel in $(printf '%s\n' /boot/vmlinuz-* | LC_ALL=C sort -Vr); do
     else
         id=claw-qcom-$version
     fi
-    cat <<MENU
-menuentry 'Claw OS - $model ($version)' --id '$id' {
-$(prepare_grub_to_access_device "$dtb_device" | grub_add_tab)
-    set claw_dtb_root="\$root"
-$(prepare_grub_to_access_device "$GRUB_DEVICE_BOOT" | grub_add_tab)
-    if devicetree "(\$claw_dtb_root)$(make_system_path_relative_to_its_root "$dtb")"; then
-        linux '$(make_system_path_relative_to_its_root "$kernel" | grub_quote)' root=$root_device ro $args ${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}
-        initrd '$(make_system_path_relative_to_its_root "$initrd" | grub_quote)'
-    fi
-}
-MENU
+    board_menu_entry "$args $claw_qcom_no_dsp"
+    case "$CLAW_QCOM_DTB" in
+        x1e80100-microsoft-romulus13.dtb|x1e80100-microsoft-romulus15.dtb)
+            # Keep the no-DSP entry as the default even after importing firmware.
+            if [ "${version%-omarchy}" != "$version" ] &&
+                [ -f "${dtb%/*}/claw-boards.list" ] &&
+                [ -f /usr/share/alsa/ucm2/Qualcomm/x1e80100/SurfaceLaptop7-HiFi.conf ] &&
+                claw_qcom_nvme_boot "$GRUB_DEVICE" "$GRUB_DEVICE_BOOT" "$dtb_device" &&
+                /usr/sbin/claw-import-board-firmware --romulus-audio-ready; then
+                id=claw-qcom-oem-audio-$version
+                model="$model, OEM audio (experimental)"
+                board_menu_entry "$args"
+            fi
+            ;;
+    esac
 done
 
 if [ "$found" = no ]; then

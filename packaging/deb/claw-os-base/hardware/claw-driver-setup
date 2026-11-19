@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -30,12 +31,26 @@ PACKS = {
         ("libspa-0.2-libcamera", "1.6.9-2~bpo13+1"),
         ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
     ),
+    "surface-laptop-7-snapdragon": (AUDIO,),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
+}
+LOCAL_PACKAGES = {
+    "surface-laptop-7-intel": "claw-os-surface-laptop-7",
+    "surface-laptop-7-snapdragon": "claw-os-surface-snapdragon-touchpad",
 }
 
 
 def detect(sysfs=Path("/sys")):
-    if subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip() != "amd64":
+    arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
+    if arch == "arm64":
+        try:
+            compatible = (sysfs / "firmware/devicetree/base/compatible").read_bytes().split(b"\0")
+        except FileNotFoundError:
+            return None
+        if b"qcom,x1e80100" in compatible and {b"microsoft,romulus13", b"microsoft,romulus15"}.intersection(compatible):
+            return "surface-laptop-7-snapdragon"
+        return None
+    if arch != "amd64":
         return None
     if (sysfs / "bus/acpi/devices/MSHW0551:00").exists():
         return "surface-laptop-7-intel"
@@ -89,29 +104,56 @@ def from_archive(packages):
 
 def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
-    for pack in PACKS:
-        packages = missing(pack)
-        if not packages:
-            continue
+    arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
+    for pack in ("surface-laptop-7-snapdragon",) if arch == "arm64" else (
+        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10",
+    ):
         directory = CACHE / pack
+        local = sorted(directory.glob("*.deb"))
+        local_names = {file.name.split("_", 1)[0] for file in local}
+        stock = [name for name in missing(pack) if name not in local_names]
+        if not stock and not local:
+            continue
         directory.mkdir(parents=True, exist_ok=True)
-        apt("-o", f"Dir::Cache::archives={directory}", "install", "-t", BACKPORTS, "--download-only",
-            "--no-install-recommends", "--no-remove", "-y", *from_archive(packages))
+        apt("-o", f"Dir::Cache::archives={directory}", "install", "-t", BACKPORTS,
+            "--download-only", "--no-install-recommends", "--no-remove", "-y",
+            *map(str, local), *from_archive(stock))
+
+
+def remove_media_keyboard(pack):
+    directory = CACHE / "surface-laptop-7-intel"
+    release_file = directory / "kernel-release"
+    if not release_file.is_file():
+        return
+    release = release_file.read_text().strip()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64", release):
+        raise ValueError(f"{release_file}: invalid Debian kernel ABI")
+    Path("/etc/modprobe.d/60-claw-surface-media.conf").unlink(missing_ok=True)
+    if pack != "surface-laptop-7-intel":
+        registry = Path(f"/usr/lib/modules/{release}/updates/claw-surface/surface_aggregator_registry.ko")
+        registry.unlink(missing_ok=True)
+        subprocess.run(["/usr/sbin/depmod", "-a", release], check=True)
+        subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", release], check=True)
 
 
 def install_offline():
     pack = detect()
     packages = missing(pack)
-    if packages:
-        payload = sorted((CACHE / pack).glob("*.deb"))
-        if payload:
-            try:
-                apt("-o", "Dir::Etc::sourcelist=/dev/null", "-o", "Dir::Etc::sourceparts=-",
-                    "install", "--no-install-recommends", "--no-remove",
-                    "-y", *map(str, payload))
-            except subprocess.CalledProcessError:
-                print("Offline driver installation failed; remaining packages will be retried online.",
-                      flush=True)
+    remove_media_keyboard(pack)
+    if pack != "surface-laptop-7-snapdragon" and Path(
+        "/var/lib/dpkg/info/claw-os-surface-snapdragon-radio.list"
+    ).is_file():
+        subprocess.run(["/usr/bin/dpkg", "--purge", "claw-os-surface-snapdragon-radio"], check=True)
+    payload = sorted((CACHE / pack).glob("*.deb")) if pack else []
+    if payload:
+        try:
+            apt("-o", "Dir::Etc::sourcelist=/dev/null", "-o", "Dir::Etc::sourceparts=-",
+                "install", "--no-install-recommends", "--no-remove", "-y", *map(str, payload))
+        except subprocess.CalledProcessError:
+            local_package = LOCAL_PACKAGES.get(pack)
+            if local_package and any(path.name.startswith(local_package + "_") for path in payload):
+                raise
+            print("Offline driver installation failed; remaining packages will be retried online.", flush=True)
         packages = missing(pack)
     if CACHE.is_dir():
         shutil.rmtree(CACHE)

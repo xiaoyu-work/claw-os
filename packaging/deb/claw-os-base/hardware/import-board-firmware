@@ -15,12 +15,26 @@ import tempfile
 
 DT = Path("/sys/firmware/devicetree/base")
 FIRMWARE = Path("/usr/lib/firmware")
+ROMULUS = {b"microsoft,romulus13", b"microsoft,romulus15"}
+# SHA-256 values recorded for the OEM files in omarchy-pkgs at 2082b74a.
+ROMULUS_ADSP = {
+    "qcadsp8380.mbn": "3a0240f9a1c0c43b657959b1bf10433a1a9793eb5c4af9f6beff8644c174f5a0",
+    "adsp_dtbs.elf": "b03f066e2645dbe35a33a08a91312842f5cee3676cac3e111f1f3dabd1cf4e9e",
+    "adspua.jsn": "d65dc1aedce2c1131da8ffaed7dcffc05cc9c58da491e0c39acb2ac5b3f4bc1d",
+    "adspr.jsn": "e9ba7199626b0c03f2ec02822d744f678ad567fe0625a28fe5f5908b7281e9db",
+    "adsps.jsn": "19b1396b5e2c0d14fb8a4eb8e47181df7f62989f4af519b439cf0ee45a46f76e",
+    "battmgr.jsn": "b8aad1d149128f414eb1fd6fcbb6e0a5b7dabcd2cba001599e1ce9a0e2e291a4",
+}
+ROMULUS_ADSP = {"qcom/x1e80100/microsoft/Romulus/" + name: checksum for name, checksum in ROMULUS_ADSP.items()}
 
 
 def firmware_requests():
-    if not (DT / "compatible").is_file() or not any(
+    if not (DT / "compatible").is_file():
+        raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
+    compatible = set((DT / "compatible").read_bytes().split(b"\0"))
+    if not any(
         re.match(rb"qcom,(?:x1|glymur|mahua|kalambo)", entry)
-        for entry in (DT / "compatible").read_bytes().split(b"\0")
+        for entry in compatible
     ):
         raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
     names = set()
@@ -31,6 +45,8 @@ def firmware_requests():
                 names.add(name)
     if not names:
         raise ValueError("the running device tree declares no Qualcomm firmware paths")
+    if ROMULUS.intersection(compatible):
+        names.update(ROMULUS_ADSP)
     return sorted(names)
 
 
@@ -77,7 +93,10 @@ def candidates(source, requests, missing):
                 hashes.add(hashlib.file_digest(stream, "sha256").digest())
         if len(hashes) != 1:
             raise ValueError(f"{name}: multiple different files; supply only the matching OEM driver")
-        yield name, files[0], hashes.pop()
+        checksum = hashes.pop()
+        if name in ROMULUS_ADSP and checksum.hex() != ROMULUS_ADSP[name]:
+            raise ValueError(f"{name}: expected the firmware from the verified Surface Laptop 7 driver")
+        yield name, files[0], checksum
 
 
 def install(name, source, expected):
@@ -97,7 +116,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, nargs="?", help="local directory of OEM driver files")
     parser.add_argument("--list-missing", action="store_true")
+    parser.add_argument("--romulus-audio-ready", action="store_true")
     args = parser.parse_args()
+    if args.romulus_audio_ready:
+        if args.list_missing or args.source is not None:
+            parser.error("--romulus-audio-ready does not accept a source directory")
+        for name, expected in ROMULUS_ADSP.items():
+            path = FIRMWARE / "updates" / name
+            if not path.is_file():
+                return 1
+            with open_firmware(path) as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+                    return 1
+        return 0
     if args.list_missing == (args.source is not None):
         parser.error("use --list-missing or specify one local OEM directory")
     requests = firmware_requests()
@@ -116,6 +147,8 @@ def main():
         print(f"Installed {name}")
     if any((FIRMWARE / "updates" / name).is_file() for name in requests):
         subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
+        if ROMULUS_ADSP.keys() <= set(requests) and Path("/etc/default/grub.d/60-claw-os-qualcomm.cfg").is_file():
+            subprocess.run(["/usr/sbin/update-grub"], check=True)
     for name in missing:
         if not existing(name):
             print(f"Still missing: {name}")
@@ -123,6 +156,6 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         raise SystemExit(f"claw-import-board-firmware: {error}") from error

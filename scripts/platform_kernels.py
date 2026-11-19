@@ -148,6 +148,19 @@ def kernel_package(profile, source, provenance, work, out):
         (module_dir / "dtb").mkdir()
         boards = module_dir / "dtb/qcom"
         shutil.move(work / "dtbs" / directory, boards)
+        if "romulus" in profile:
+            romulus13 = boards / "x1e80100-microsoft-romulus13.dtb"
+            overlay = work / "romulus13.dtbo"
+            board = ROOT / "packaging/surface-romulus13-touchpad.dtso"
+            subprocess.run(["dtc", "-@", "-I", "dts", "-O", "dtb", "-o", overlay, board], check=True)
+            patched = work / romulus13.name
+            subprocess.run(["fdtoverlay", "-i", romulus13, "-o", patched, overlay], check=True)
+            patched.replace(romulus13)
+            provenance["romulus13-touchpad"] = {
+                "sha256": digest(board),
+                "source": "https://github.com/xiaoyu-work/claw-os/blob/main/packaging/surface-romulus13-touchpad.dtso",
+                "board_reference": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
+            }
         write_qualcomm_boards(boards)
     if "boot" in profile:
         # Do not expose internal speakers without the matching speaker protection stack.
@@ -242,12 +255,19 @@ def apple_boot(profile, source, work, out):
     shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
 
 
-def build(lock, platform, cache, output):
+def build(lock, platform, cache, output, debian_release=None, board_tools=False):
     profile = lock["platforms"][platform]
-    keys = list(profile.get("native", [])) or [profile["kernel"]]
+    if debian_release:
+        profile = dict(profile, release=debian_release)
+        keys = [name for name in profile["surface"] if name != "surface-linux-source"]
+    else:
+        keys = list(profile.get("native", [])) or [profile["kernel"]]
+        keys += profile.get("surface", [])
     if "dtbs" in profile:
         keys.append(profile["dtbs"])
-    keys += profile.get("gpu", []) + profile.get("boot", []) + profile.get("surface", [])
+    keys += profile.get("gpu", []) + profile.get("boot", [])
+    if "romulus" in profile:
+        keys += profile["romulus"] if board_tools else ["surface-snapdragon-addresses"]
     output.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     provenance = {name: lock["inputs"][name] for name in keys}
@@ -256,7 +276,11 @@ def build(lock, platform, cache, output):
         out = work / "out"
         out.mkdir()
         source = dict(inputs(lock, keys, cache, work))
-        if "native" in profile:
+        if debian_release:
+            from surface_laptop7 import build_surface
+
+            build_surface(profile, source, provenance, work, out, package, debian=True)
+        elif "native" in profile:
             for kind, key in zip(("image", "headers"), profile["native"], strict=True):
                 artifact = source[key]
                 arch = subprocess.check_output(["dpkg-deb", "-f", artifact, "Architecture"], text=True).strip()
@@ -270,6 +294,10 @@ def build(lock, platform, cache, output):
                 build_surface(profile, source, provenance, work, out, package)
         else:
             kernel_package(profile, source, provenance, work, out)
+            if "romulus" in profile:
+                from surface_laptop7 import snapdragon_packages
+
+                snapdragon_packages(source, provenance, work, out, package, unpack)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)
             if "boot" in profile:
@@ -292,12 +320,21 @@ def main():
     parser.add_argument("--describe", action="store_true", help="print architecture, kernel release and optional boot arguments")
     parser.add_argument("--cache", type=Path, default=ROOT / "build/platform-kernels/cache")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--debian-kernel", metavar="RELEASE",
+                        help="build the Intel driver pack against an installed Debian kernel and its headers")
+    parser.add_argument("--board-tools", action="store_true", help="build native Snapdragon touchpad tools")
     args = parser.parse_args()
+    if args.debian_kernel and (args.platform != "x86-surface-laptop-7-intel" or args.describe
+                               or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64", args.debian_kernel)):
+        parser.error("--debian-kernel requires the Intel Surface profile and a Debian 13 amd64 kernel release")
+    if args.board_tools and args.platform != "aarch64-qualcomm":
+        parser.error("--board-tools requires the aarch64-qualcomm profile")
     profile = lock["platforms"][args.platform]
     if args.describe:
         print(profile["arch"], profile["release"], profile.get("boot_args", ""))
     else:
-        build(lock, args.platform, args.cache, args.output or ROOT / "build/platform-kernels" / args.platform)
+        output = args.output or ROOT / "build/platform-kernels" / (args.debian_kernel or args.platform)
+        build(lock, args.platform, args.cache, output, args.debian_kernel, args.board_tools)
 
 
 if __name__ == "__main__":

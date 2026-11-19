@@ -7,6 +7,9 @@ select_iso_platform() {
     PLATFORM_SUFFIX=
     PLATFORM_BOOT_ARGS=
     if [[ -z ${CLAW_PLATFORM:-} ]]; then
+        if [[ $role == installer && $DEB_ARCH == amd64 && ,$ISO_FEATURES, == *,desktop,* ]]; then
+            ISO_FEATURES=${ISO_FEATURES/,installer,/,surface-drivers,installer,}
+        fi
         return
     fi
     identity=$(python3 "$PROJECT_DIR/scripts/platform_kernels.py" "$CLAW_PLATFORM" --describe) || return 1
@@ -19,10 +22,14 @@ select_iso_platform() {
         echo "error: Apple Silicon needs existing Asahi provisioning; use the live media and separate Asahi boot assets" >&2
         return 1
     fi
-    if [[ $CLAW_PLATFORM == x86-surface-laptop-7-intel && ,$ISO_FEATURES, != *,desktop,* ]]; then
-        ISO_FEATURES="$ISO_FEATURES,desktop"
+    if [[ $role == installer && $CLAW_PLATFORM == @(aarch64-qualcomm|x86-surface-laptop-7-intel) ]]; then
+        ISO_FEATURES=${ISO_FEATURES/,installer,/,kernel-platform,installer,}
+    else
+        if [[ $CLAW_PLATFORM == x86-surface-laptop-7-intel && ,$ISO_FEATURES, != *,desktop,* ]]; then
+            ISO_FEATURES="$ISO_FEATURES,desktop"
+        fi
+        ISO_FEATURES="$ISO_FEATURES,kernel-platform"
     fi
-    ISO_FEATURES="$ISO_FEATURES,kernel-platform"
     PLATFORM_SUFFIX="-$CLAW_PLATFORM"
 }
 

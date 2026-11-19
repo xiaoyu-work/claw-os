@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/dts-v1/;
+/plugin/;
+
+// Romulus13 pin assignments from ItsLucas's tested r15.1 QSPI patch,
+// expressed using the hid-over-spi binding of the pinned Qualcomm kernel.
+&{/} {
+	sl7_pad_supply: regulator-touchpad-5v {
+		compatible = "regulator-fixed";
+		regulator-name = "touchpad-5v";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&tlmm 65 0>;
+		enable-active-high;
+		regulator-boot-on;
+		startup-delay-us = <500000>;
+	};
+};
+
+&gpi_dma2 {
+	status = "okay";
+};
+
+&spi19 {
+	compatible = "qcom,geni-qspi";
+	dmas = <&gpi_dma2 0 3 9>, <&gpi_dma2 1 3 9>;
+	dma-names = "tx", "rx";
+	pinctrl-0 = <&sl7_pad_bus>, <&sl7_pad_cs>, <&sl7_pad_quad>;
+	pinctrl-names = "default";
+	status = "okay";
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	touchpad@0 {
+		compatible = "hid-over-spi";
+		reg = <0>;
+		spi-max-frequency = <20000000>;
+		interrupts-extended = <&tlmm 3 8>;
+		reset-gpios = <&tlmm 120 1>;
+		vdd-supply = <&sl7_pad_supply>;
+		pinctrl-0 = <&sl7_pad_irq>, <&sl7_pad_reset>;
+		pinctrl-names = "default";
+		input-report-header-address = <0x1000>;
+		input-report-body-address = <0x1004>;
+		output-report-address = <0x2000>;
+		read-opcode = /bits/ 8 <0xeb>;
+		write-opcode = /bits/ 8 <0xe2>;
+		hid-over-spi-flags = <0xa000>;
+	};
+};
+
+&tlmm {
+	sl7_pad_bus: touchpad-qspi-state {
+		pins = "gpio76", "gpio77", "gpio78";
+		function = "qup2_se3";
+		drive-strength = <6>;
+		bias-pull-down;
+	};
+
+	sl7_pad_cs: touchpad-cs-state {
+		pins = "gpio79";
+		function = "qup2_se3";
+		drive-strength = <6>;
+		bias-pull-down;
+	};
+
+	sl7_pad_quad: touchpad-data23-state {
+		pins = "gpio66", "gpio67";
+		function = "qup2_se3";
+		drive-strength = <6>;
+		bias-pull-down;
+	};
+
+	sl7_pad_irq: touchpad-irq-state {
+		pins = "gpio3";
+		function = "gpio";
+		output-disable;
+		bias-pull-up;
+	};
+
+	sl7_pad_reset: touchpad-reset-state {
+		pins = "gpio120";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+	};
+};

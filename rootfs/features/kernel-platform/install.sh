@@ -16,19 +16,45 @@ fi
 
 stage=$(mktemp -d "$ROOTFS/tmp/claw-platform.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-python3 "$builder" "$platform" --output "$stage"
+if [[ $platform == aarch64-qualcomm && ,${FEATURES:-}, == *,installer,* ]]; then
+    install -d "$stage"/{scripts,packaging}
+    for file in platform_kernels.py surface_laptop7.py; do
+        install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
+    done
+    install -m0644 "$PROJECT_DIR"/packaging/{platform-kernels.json,surface-romulus13-touchpad.dtso} "$stage/packaging/"
+    chroot "$ROOTFS" apt-get update -qq
+    chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
+        install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
+        gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates </dev/null
+    chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
+        "$platform" --board-tools --output "${stage#"$ROOTFS"}/packages"
+    artifacts="$stage/packages"
+else
+    python3 "$builder" "$platform" --output "$stage"
+    artifacts=$stage
+fi
 chmod 0755 "$stage"
-inside="${stage#"$ROOTFS"}"
+inside="${artifacts#"$ROOTFS"}"
 packages=()
-for file in "$stage"/linux-image-*.deb "$stage"/claw-os-nvidia-platform_*.deb; do
+for file in "$artifacts"/linux-image-*.deb "$artifacts"/claw-os-nvidia-platform_*.deb; do
     [[ -f $file ]] && packages+=("$inside/${file##*/}")
 done
 if [[ $platform == x86-surface-laptop-7-intel ]]; then
-    for file in "$stage"/{claw-os-surface-laptop-7,libcamera*,gstreamer1.0-libcamera}_*.deb; do
+    for file in "$artifacts"/{claw-os-surface-laptop-7,libcamera*,gstreamer1.0-libcamera}_*.deb; do
         test -f "$file"
         packages+=("$inside/${file##*/}")
     done
     packages+=("alsa-ucm-conf/$SUITE-backports" "libspa-0.2-libcamera/$SUITE-backports")
+fi
+if [[ $platform == aarch64-qualcomm ]]; then
+    radio=("$artifacts"/claw-os-surface-snapdragon-radio_*.deb)
+    test -f "${radio[0]}"
+    packages+=("$inside/${radio[0]##*/}")
+    if [[ ,${FEATURES:-}, == *,installer,* ]]; then
+        cache="$ROOTFS/usr/share/cos/driver-cache/surface-laptop-7-snapdragon"
+        install -d "$cache"
+        install -m0644 "$artifacts"/{claw-os-surface-snapdragon-touchpad,alsa-ucm-conf}_*.deb "$cache/"
+    fi
 fi
 chroot "$ROOTFS" apt-get update -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
