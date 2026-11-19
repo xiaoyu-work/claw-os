@@ -228,6 +228,8 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
         app_id: None,
         name: if restoration {
             "App permission restoration"
+        } else if request.context.is_some() {
+            "Claw Agent"
         } else {
             "System capability request"
         }
@@ -300,6 +302,11 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
     } else {
         Vec::new()
     };
+    let desktop_effect = approvals::is_desktop_effect_approval(
+        verb,
+        &request.session,
+        request.operation_digest.as_deref(),
+    );
     let mut context = vec![
         ReviewDetail {
             label: "Technical scope".into(),
@@ -316,7 +323,12 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
     ];
     if !request.reason.trim().is_empty() {
         context.push(ReviewDetail {
-            label: "Requester-supplied reason".into(),
+            label: if desktop_effect {
+                "Requested action"
+            } else {
+                "Requester-supplied reason"
+            }
+            .into(),
             value: request.reason.clone(),
         });
     }
@@ -338,11 +350,7 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
             value: "Restores the existing App policy only; it does not mint execution authority."
                 .into(),
         }]
-    } else if approvals::is_desktop_effect_approval(
-        verb,
-        &request.session,
-        request.operation_digest.as_deref(),
-    ) {
+    } else if desktop_effect {
         vec![if verb == Verb::SYS_POWER {
             ReviewDetail {
                 label: "Single power action".into(),
@@ -358,9 +366,21 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
         [("Once", GrantDuration::Once), ("Session", GrantDuration::Session), ("Reusable", GrantDuration::Forever)]
             .into_iter().map(|(label, duration)| {
                 let (seconds, uses) = duration.limits();
+                let period = if seconds % 86400 == 0 {
+                    format!("{} days", seconds / 86400)
+                } else if seconds % 3600 == 0 {
+                    format!("{} hours", seconds / 3600)
+                } else {
+                    format!("{seconds} seconds")
+                };
+                let uses = if uses == 1 {
+                    "One use".into()
+                } else {
+                    format!("Up to {uses} uses")
+                };
                 ReviewDetail {
                     label: format!("{label} grant ceiling"),
-                    value: format!("At most {uses} uses and {seconds} seconds; exact owner, scope, session and execution bounds still apply. Revocation can end it earlier."),
+                    value: format!("{uses} within {period}. You can end this permission earlier by revoking it."),
                 }
             }).collect()
     };

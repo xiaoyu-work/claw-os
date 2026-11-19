@@ -72,9 +72,12 @@ generates the Debian locales used by the language picker.
 
 The subscriber's `--desktop` mode attaches to the Root login binding. It runs
 post-login configuration only on installed profiles that request it, then starts
-the FileManager1 facade and `cos app desktop-shell --gui`. The graphical review
-window displays the existing broker review; approvals require polkit, while
-denial uses the owner-only cancellation route at the displayed revision.
+the FileManager1 facade and `cos app desktop-shell --gui`.
+The [desktop review presenter](session/claw-desktop-reviews) opens a compact,
+centered window for one pending request. It puts the action, target and choices
+first; full disclosure remains available under **Request details**. Accepting
+still uses the polkit helper; declining uses the owner-only cancellation route
+at the displayed revision.
 Neither the greeter nor the wizard grants App permissions. `stage-desktop.sh`
 installs the session wiring and compiled compositor into the Desktop package.
 The same stage builds the private `claw-lockscreen` executable from pinned

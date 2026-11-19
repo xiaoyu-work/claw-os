@@ -80,6 +80,9 @@ The OS projects authenticated subjects and catalog labels into this contract;
 App-supplied purposes and affected functions remain visibly separate.
 Installation, activation and update confirmations are not capability grants.
 The contract supports headless subjects without a desktop manifest.
+The native desktop window shows the action, its scope and the supported
+decisions for one request at a time. Full technical disclosure remains
+available from the terminal and under **Request details** on the desktop.
 `package_impact` uses the separate `confirm_global_app_stop` action with no
 App subject or permission selections. It confirms only the shown exact
 transaction's all-App stop; Critical package authority, App delivery consent

@@ -10,6 +10,15 @@ hl.config({
     },
 })
 
+hl.window_rule({
+    name = "claw-permission-request",
+    match = { class = "^claw-desktop-reviews$" },
+    float = true,
+    center = true,
+    rounding = 14,
+    border_size = 0,
+})
+
 hl.bind("SUPER + Q", hl.dsp.window.close())
 for _, direction in ipairs({ "left", "right", "up", "down" }) do
     hl.bind("SUPER + " .. direction, hl.dsp.focus({ direction = direction }))

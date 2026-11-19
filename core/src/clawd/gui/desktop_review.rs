@@ -51,19 +51,6 @@ impl Effect {
             Self::Power(_) => Cap::new(Verb::SYS_POWER, Scope::Wild),
         }
     }
-
-    fn review(&self) -> (&'static str, String) {
-        match self {
-            Self::Launch { desktop_id, target } => (
-                DESKTOP_LAUNCH_APPROVAL,
-                format!("Open signed App {} ({desktop_id}) once", target.app_id),
-            ),
-            Self::Power(action) => (
-                DESKTOP_POWER_APPROVAL,
-                format!("Request system {action} once"),
-            ),
-        }
-    }
 }
 
 pub(super) enum Reply {
@@ -249,15 +236,32 @@ impl Window {
                     );
                 }
                 let view = self.live(process, &cap)?;
-                let effect = if verb == Verb::DESKTOP_LAUNCH {
-                    Effect::Launch {
-                        desktop_id: selection.to_owned(),
-                        target: resolve_target(selection)?,
-                    }
+                let (effect, prefix, reason) = if verb == Verb::DESKTOP_LAUNCH {
+                    let (target, name) = resolve_target(selection)?;
+                    (
+                        Effect::Launch {
+                            desktop_id: selection.to_owned(),
+                            target,
+                        },
+                        DESKTOP_LAUNCH_APPROVAL,
+                        format!("Open {name}?"),
+                    )
                 } else {
-                    Effect::Power(selection.to_owned())
+                    let question = match selection {
+                        "suspend" => "Put this computer to sleep?",
+                        "hibernate" => "Hibernate this computer?",
+                        "hybrid-sleep" => "Put this computer into hybrid sleep?",
+                        "suspend-then-hibernate" => "Put this computer to sleep, then hibernate?",
+                        "reboot" => "Restart this computer?",
+                        "poweroff" => "Shut down this computer?",
+                        _ => return Err("invalid desktop power action".into()),
+                    };
+                    (
+                        Effect::Power(selection.to_owned()),
+                        DESKTOP_POWER_APPROVAL,
+                        question.to_owned(),
+                    )
                 };
-                let (prefix, reason) = effect.review();
                 let nonce = Epoch::random().map_err(|e| e.to_string())?.label();
                 let digest = crate::crypto::sha256_hex(
                     &serde_json::to_vec(&(
@@ -325,7 +329,7 @@ impl Window {
                     _ => return Err("the desktop decision is no longer available".into()),
                 }
                 let installed = if let Effect::Launch { desktop_id, target } = &record.effect {
-                    let installed = resolve_target(desktop_id)?;
+                    let (installed, _) = resolve_target(desktop_id)?;
                     if installed.app_id != target.app_id
                         || installed.digest != target.digest
                         || installed.publisher != target.publisher
@@ -429,7 +433,7 @@ fn selected_capability(verb: Verb, selection: &str) -> Result<Cap, String> {
     }
 }
 
-fn resolve_target(desktop_id: &str) -> Result<LaunchTarget, String> {
+fn resolve_target(desktop_id: &str) -> Result<(LaunchTarget, String), String> {
     let resource = format!("resources/usr/share/applications/{desktop_id}.desktop");
     let root = Path::new(INSTALLED_APPS);
     let trust = crate::provenance::trust_store();
@@ -466,24 +470,28 @@ fn resolve_target(desktop_id: &str) -> Result<LaunchTarget, String> {
         if !package.resources().iter().any(|path| path == &resource) {
             continue;
         }
-        if package
+        let Some(manifest) = package
             .manifest_text()
             .ok()
             .and_then(|text| crate::caps::manifest::Manifest::from_json(&text).ok())
-            .is_none_or(|manifest| manifest.id != id || manifest.gui_entry(None).is_err())
-        {
+            .filter(|manifest| manifest.id == id && manifest.gui_entry(None).is_ok())
+        else {
             return Err("the selected signed App has no authenticated default GUI".into());
-        }
+        };
         if found.is_some() {
             return Err("more than one signed App owns the selected desktop entry".into());
         }
+        let name = match manifest.name.current().trim() {
+            "" => id.clone(),
+            name => name.to_owned(),
+        };
         let target = LaunchTarget {
             app_id: id,
             digest: package.content_digest().to_owned(),
             publisher: key_id.to_owned(),
         };
         target.validate().map_err(|error| error.to_string())?;
-        found = Some(target);
+        found = Some((target, name));
     }
     found.ok_or_else(|| "no installed signed Claw App owns that desktop entry".into())
 }

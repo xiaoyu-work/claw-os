@@ -189,6 +189,7 @@ fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
 struct LaunchPlan {
     caps: CapSet,
     missing: Vec<Cap>,
+    app_name: Option<String>,
 }
 
 impl LaunchPlan {
@@ -398,6 +399,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             )
         }
     };
+    plan.app_name = Some(app.manifest.name.current().trim().to_owned());
     plan.require(caller_invoke.clone(), &delegation);
     super::system_review::require_app_review(uid, &app, &delegation.requester)?;
     let mut grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
@@ -921,6 +923,7 @@ fn finalize_prepared_app_service_call(
         app_id,
     )?;
     let invoke = crate::agent::tools::app_gateway::invoke_cap(app_id, tool)?;
+    plan.app_name = Some(app.manifest.name.current().trim().to_owned());
     plan.require(invoke.clone(), delegation);
     super::system_review::require_app_review(uid, app, &delegation.requester)?;
     let authorized = authorize_plan(delegation, plan, &ceiling, app_id)?;
@@ -2106,7 +2109,11 @@ fn authorize_plan(
         Some(delegation.uid),
     ) {
         Ok(true) => Ok(caps),
-        Ok(false) => Err(request_approvals(delegation, &missing)),
+        Ok(false) => Err(request_approvals(
+            delegation,
+            &missing,
+            plan.app_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(app_id),
+        )),
         Err(error) => Err(format!("could not settle approved permission grants: {error}").into()),
     }
 }
@@ -2117,7 +2124,7 @@ fn authorize_plan(
 /// The returned ids are not authority: a sibling that reads them still
 /// cannot make the daemon derive this launcher's identity, and the
 /// grants are matched on that identity plus the exact verb and scope.
-fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
+fn request_approvals(delegation: &Delegation, missing: &[Cap], app_name: &str) -> BrokerError {
     let pending = crate::approvals::list_pending_for_owner(Some(delegation.uid));
     let mut ids = Vec::with_capacity(missing.len());
     let mut failures = Vec::new();
@@ -2148,7 +2155,7 @@ fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
                 cap.verb,
                 cap.scope.clone(),
                 delegation.grant_session.clone(),
-                format!("App launch requires {}:{}", cap.verb.as_str(), cap.scope),
+                format!("{app_name} needs this permission to continue."),
                 Some(delegation.requester.clone()),
                 Some(delegation.uid),
             ),

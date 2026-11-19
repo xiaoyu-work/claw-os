@@ -5,29 +5,199 @@ import json
 import re
 import signal
 import subprocess
+import unicodedata
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, GLib, Gtk
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gio, GLib
+
+GLib.set_prgname("claw-desktop-reviews")
+from gi.repository import Gdk, Gtk, Pango
 
 
 COS = "/usr/local/bin/cos"
 APPROVAL_HELPER = "/usr/local/bin/claw-approval-helper"
 REVIEW_ID = re.compile(r"(?:rv-[a-f0-9]{32}|ap-[a-f0-9]{12}|pg-[a-f0-9]{32})")
-LABELS = {
-    "confirm_activation": "Open App",
-    "confirm_install": "Confirm installation",
-    "confirm_update": "Confirm update",
-    "confirm_global_app_stop": "Confirm stopping Apps",
-    "apply_choices": "Apply choice",
+CONFIRMATIONS = {
+    "confirm_activation": (
+        "Open {name}?", "Open app",
+        "This lets the app start without granting any new access to your data or devices.",
+    ),
+    "confirm_install": (
+        "Install {name}?", "Install app",
+        "This lets Claw OS install the app. It does not grant the app permissions.",
+    ),
+    "confirm_update": (
+        "Update {name}?", "Update app",
+        "This lets Claw OS update the app. It does not grant new permissions.",
+    ),
+    "confirm_global_app_stop": (
+        "Close all apps?", "Close all apps",
+        "This system change needs to close apps for every user. Unsaved work may be lost.",
+    ),
+}
+CHOICES = {
     "allow_once": "Allow once",
     "allow_session": "Allow for this session",
-    "allow_forever": "Allow reusable access",
-    "deny": "Deny",
-    "restore": "Restore permission",
-    "ask": "Ask",
+    "allow_forever": "Allow repeated use",
+    "restore": "Remove block",
 }
+LIMIT_LABELS = {
+    "allow_session": "Session grant ceiling",
+    "allow_forever": "Reusable grant ceiling",
+}
+RESOURCE_COPY = {
+    ("ui.panel", "All resources"): (
+        "Show a desktop panel?",
+        "This lets the requester show a panel above other windows. It does not grant access to your typing, clipboard, or screen.",
+    ),
+    ("ipc.invoke", "desktop.session.lock"): (
+        "Lock this desktop?", "This lets the requester lock the desktop, but not unlock it.",
+    ),
+    ("ipc.subscribe", "notifications.presentation"): (
+        "Read your notifications?", "This lets the requester see notifications shown on your desktop.",
+    ),
+    ("ipc.invoke", "notifications.presentation"): (
+        "Manage desktop notifications?",
+        "This lets the requester dismiss notifications, use their buttons, and change popup settings.",
+    ),
+}
+STYLE = b"""
+.approval, .approval-header {
+    background: mix(@theme_bg_color, @theme_selected_bg_color, 0.055);
+    color: @theme_fg_color;
+}
+.approval-header {
+    background-image: none;
+    box-shadow: none;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.12);
+}
+.approval-title {
+    font-size: 19pt;
+    font-weight: 700;
+}
+.approval-secondary {
+    color: mix(@theme_fg_color, @theme_bg_color, 0.25);
+}
+.approval-count {
+    background: alpha(@theme_fg_color, 0.08);
+    border-radius: 12px;
+    padding: 4px 9px;
+}
+.approval-card {
+    background: alpha(@theme_selected_bg_color, 0.09);
+    border: 1px solid alpha(@theme_fg_color, 0.13);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+.approval-card-title {
+    font-weight: 700;
+}
+.approval-footer button {
+    min-height: 34px;
+    border-radius: 8px;
+    padding: 2px 14px;
+}
+.approval-footer button.suggested-action,
+.approval-footer button.destructive-action {
+    font-weight: 700;
+}
+"""
+
+
+def literal(value):
+    return "".join(
+        ascii(char)[1:-1] if unicodedata.category(char) in {"Cc", "Cf", "Zl", "Zp"} else char
+        for char in value
+    )
+
+
+def label(css=None, *, selectable=False):
+    widget = Gtk.Label(xalign=0, wrap=True, selectable=selectable)
+    if css:
+        widget.get_style_context().add_class(css)
+    # Wrap paths and other long values instead of widening the window.
+    widget.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    widget.set_max_width_chars(55)
+    return widget
+
+
+def section(parent, text, css=None):
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    if css:
+        box.get_style_context().add_class(css)
+    heading = label("approval-card-title")
+    heading.set_text(text)
+    box.pack_start(heading, False, False, 0)
+    value = label(selectable=True)
+    box.pack_start(value, False, False, 0)
+    parent.pack_start(box, False, False, 0)
+    return box, value
+
+
+def actions_for(review):
+    if (review["schema_version"] != 1
+            or review["status"] != "pending" or not REVIEW_ID.fullmatch(review["id"])
+            or type(review["revision"]) is not int or review["revision"] <= 0):
+        return None
+    actions = [action for action in review["actions"] if action != "cancel"]
+    if len(actions) != 1:
+        return None
+    action = actions[0]
+    if action in CONFIRMATIONS:
+        return action, None, []
+    if action != "apply_choices" or len(review["permissions"]) != 1:
+        return None
+    permission = review["permissions"][0]
+    choices = [choice for choice in CHOICES if choice in permission["supported_choices"]]
+    if choices or "cancel" in review["actions"]:
+        return action, permission, choices
+    return None
+
+
+def copy_for(review, action, permission):
+    subject = review["subject"]
+    name = literal(subject["name"])
+    context = {row["label"]: literal(row["value"]) for row in review["context"]}
+    if permission is None:
+        question, _, summary = CONFIRMATIONS[action]
+        scope = literal(review["changes"]["summary"]) if review["changes"] else ""
+        return question.format(name=name), summary, scope, ""
+
+    verb = permission["verb"]
+    target = permission["scope"]["description"]
+    reason = context.get("Requester-supplied reason", "")
+    requested_action = context.get("Requested action", "")
+    if requested_action or any(row["label"] in {"Single launch", "Single power action"}
+                               for row in review["disclosures"]):
+        if verb == "sys.power":
+            summary = "This applies only to the power action you selected. Save any open work first."
+        else:
+            summary = "This lets Claw OS open the selected app once. It does not grant the app permissions."
+        return requested_action or literal(permission["label"]) + "?", summary, (
+            "" if requested_action else reason or literal(target)
+        ), ""
+    if "restore" in permission["supported_choices"]:
+        effect = literal(permission["label"]).rstrip(".?")
+        summary = f"This removes your block on \"{effect}\". It doesn't give the app new access."
+        return f"Remove this block for {name}?", summary, literal(target), ""
+
+    specific = RESOURCE_COPY.get((verb, target))
+    if specific:
+        question, summary = specific
+        target = ""
+    else:
+        question = literal(permission["label"]).rstrip(".?") + "?"
+        summary = literal(permission["blurb"])
+    if subject["app_id"] or "Execution consent context" in context:
+        summary = f"Requested by {name}. {summary}"
+    if reason.startswith("App launch requires "):
+        reason = ""
+    if target == "All resources" and verb == "sys.power":
+        target = ""
+    return question, summary, literal(target), reason
 
 
 class Reviews:
@@ -35,35 +205,64 @@ class Reviews:
         self.pending = None
         self.deferred = {}
         self.busy = False
-        self.window = Gtk.Window(title="Claw OS permission review")
-        self.window.set_default_size(580, 420)
+        self.can_decide = False
+        self.remaining = 0
+        style = Gtk.CssProvider()
+        style.load_from_data(STYLE)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), style, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.window = Gtk.Window(title="Claw OS - Permission request")
+        self.window.get_style_context().add_class("approval")
+        self.window.set_default_size(510, -1)
+        self.window.set_resizable(False)
         self.window.connect("delete-event", self.dismiss)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, border_width=16)
+        self.window.connect("key-press-event", self.key_pressed)
+        header = Gtk.HeaderBar(title="Claw OS", subtitle="Permission request", show_close_button=True)
+        header.get_style_context().add_class("approval-header")
+        self.queue = label("approval-count")
+        header.pack_end(self.queue)
+        self.window.set_titlebar(header)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, border_width=22)
         self.window.add(box)
-        self.title = Gtk.Label(xalign=0, wrap=True)
-        box.pack_start(self.title, False, False, 0)
-        scroll = Gtk.ScrolledWindow()
+        body = Gtk.ScrolledWindow(
+            propagate_natural_height=True, max_content_height=410, overlay_scrolling=False
+        )
+        body.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        body_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=13)
+        body.add(body_box)
+        box.pack_start(body, True, True, 0)
+        self.title = label("approval-title")
+        body_box.pack_start(self.title, False, False, 0)
+        self.summary = label()
+        body_box.pack_start(self.summary, False, False, 0)
+        self.scope_box, self.scope = section(body_box, "What this affects", "approval-card")
+        self.reason_box, self.reason = section(body_box, "Reason from the requester")
+        self.options = Gtk.Expander(label="More choices")
+        self.options_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=8)
+        self.options.add(self.options_box)
+        body_box.pack_start(self.options, False, False, 0)
+        self.details = Gtk.Expander(label="Request details")
+        scroll = Gtk.ScrolledWindow(min_content_height=138, margin_top=8, overlay_scrolling=False)
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.text = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.text.set_left_margin(8)
+        self.text.set_right_margin(8)
         scroll.add(self.text)
-        box.pack_start(scroll, True, True, 0)
-        self.status = Gtk.Label(xalign=0, wrap=True)
+        self.details.add(scroll)
+        body_box.pack_start(self.details, False, False, 0)
+        self.status = label("approval-secondary")
         box.pack_start(self.status, False, False, 0)
-        self.choices = Gtk.ComboBoxText()
-        self.choices.connect("changed", self.buttons)
-        box.pack_start(self.choices, False, False, 0)
+
         buttons = Gtk.Box(spacing=10)
+        buttons.get_style_context().add_class("approval-footer")
         box.pack_start(buttons, False, False, 0)
-        self.later = Gtk.Button(label="Not now")
-        self.later.connect("clicked", self.dismiss)
-        buttons.pack_start(self.later, True, True, 0)
-        self.deny = Gtk.Button(label="Deny")
+        self.deny = Gtk.Button(label="Don't allow")
         self.deny.connect("clicked", lambda *_: self.decide("cancel"))
-        buttons.pack_start(self.deny, True, True, 0)
+        buttons.pack_start(self.deny, False, False, 0)
         self.confirm = Gtk.Button()
-        self.confirm.get_style_context().add_class("suggested-action")
-        self.confirm.connect("clicked", lambda *_: self.decide(self.action))
-        buttons.pack_start(self.confirm, True, True, 0)
+        self.confirm.connect("clicked", lambda *_: self.decide(self.action, self.primary_choice))
+        buttons.pack_end(self.confirm, False, False, 0)
 
     def run(self, args, handler, data=None):
         self.busy = True
@@ -98,49 +297,90 @@ class Reviews:
         rows = json.loads(output)["reviews"]
         now = GLib.get_monotonic_time()
         self.deferred = {key: when for key, when in self.deferred.items() if when > now}
-        for item in rows:
-            key = item["id"], item["revision"]
-            if (item["status"] == "pending" and REVIEW_ID.fullmatch(key[0])
-                    and key not in self.deferred and any(a != "cancel" for a in item["actions"])):
-                self.run([COS, "--json", "review", "show", key[0]], self.present)
-                break
+        actionable = [item for item in rows if actions_for(item)]
+        for item in actionable:
+            if (item["id"], item["revision"]) not in self.deferred:
+                self.remaining = len(actionable) - 1
+                self.run([COS, "--json", "review", "show", item["id"]], self.present)
+                return
+
+    def message(self, text):
+        self.status.set_text(text)
+        self.status.set_visible(bool(text))
 
     def present(self, output, disclosure):
-        if output is None:
-            return
-        review = json.loads(output)
-        actions = [action for action in review["actions"] if action != "cancel"]
-        if review["status"] != "pending" or len(actions) != 1 or actions[0] not in LABELS:
-            return
-        self.action = actions[0]
-        self.permission = None
-        if self.action == "apply_choices":
-            # The existing Root capability decision accepts exactly one selection.
-            permissions = review["permissions"]
-            if len(permissions) != 1 or not permissions[0]["supported_choices"]:
-                return
-            self.permission = permissions[0]
+        review = json.loads(output) if output is not None else None
+        parsed = actions_for(review) if review is not None else None
+        if parsed is None:
+            return False
+        self.action, self.permission, choices = parsed
+        self.primary_choice = choices[0] if choices else None
         self.pending = review
-        self.status.set_text("")
-        self.title.set_text(review["subject"]["name"])
+        self.can_decide = True
+        question, summary, scope, reason = copy_for(review, self.action, self.permission)
+        exact_action = any(row["label"] == "Requested action" for row in review["context"])
+        self.title.set_text(question)
+        self.summary.set_text(summary)
+        self.scope.set_text(scope)
+        self.reason.set_text(reason)
+        self.queue.set_text(f"{self.remaining} more waiting")
         self.text.get_buffer().set_text(disclosure)
-        self.choices.remove_all()
-        if self.permission:
-            for value in self.permission["supported_choices"]:
-                if value in LABELS and not (value == "deny" and "cancel" in review["actions"]):
-                    self.choices.append(value, LABELS[value])
-        self.confirm.set_label(LABELS[self.action])
+        self.details.set_expanded(False)
+        self.options.set_expanded(False)
+        for child in self.options_box.get_children():
+            self.options_box.remove(child)
+        limits = {row["label"]: literal(row["value"]) for row in review["disclosures"]}
+        for choice in choices[1:]:
+            limit = limits.get(LIMIT_LABELS.get(choice))
+            button = Gtk.Button(label=CHOICES[choice], halign=Gtk.Align.START)
+            button.connect("clicked", lambda _, value=choice: self.decide("apply_choices", value))
+            self.options_box.pack_start(button, False, False, 0)
+            if limit:
+                hint = label("approval-secondary")
+                hint.set_text(limit)
+                self.options_box.pack_start(hint, False, False, 0)
+        confirm_label = (
+            CHOICES.get(self.primary_choice, "") if self.permission
+            else CONFIRMATIONS[self.action][1]
+        )
+        if (self.primary_choice == "allow_once" and self.permission["verb"] == "desktop.launch"
+                and exact_action):
+            confirm_label = "Open once"
+        self.confirm.set_label(confirm_label)
+        destructive = self.action == "confirm_global_app_stop"
+        destructive |= self.permission is not None and (
+            self.permission["verb"] == "fs.delete"
+            or (self.permission["verb"] == "sys.power" and exact_action)
+        )
+        style = self.confirm.get_style_context()
+        style.remove_class("suggested-action" if destructive else "destructive-action")
+        style.add_class("destructive-action" if destructive else "suggested-action")
+        self.deny.set_label({
+            "confirm_global_app_stop": "Keep apps open",
+            "confirm_activation": "Don't open",
+            "confirm_install": "Don't install",
+            "confirm_update": "Don't update",
+        }.get(self.action, "Don't allow"))
         self.window.show_all()
-        self.choices.set_visible(self.permission is not None)
+        self.queue.set_visible(self.remaining > 0)
+        self.scope_box.set_visible(bool(scope))
+        self.reason_box.set_visible(bool(reason))
+        self.options.set_visible(len(choices) > 1)
+        self.deny.set_visible("cancel" in review["actions"])
+        self.confirm.set_visible(bool(confirm_label))
+        self.message("")
         self.buttons()
-        self.later.grab_focus()
+        self.details.grab_focus()
+        return True
 
     def buttons(self, *_):
-        ready = self.pending is not None and not self.busy
-        self.later.set_sensitive(ready)
-        self.deny.set_sensitive(ready and "cancel" in self.pending["actions"])
-        self.choices.set_sensitive(ready)
-        self.confirm.set_sensitive(ready and (self.permission is None or self.choices.get_active_id() is not None))
+        ready = self.can_decide and not self.busy
+        self.deny.set_sensitive(ready)
+        self.options_box.set_sensitive(ready)
+        self.confirm.set_sensitive(ready)
+
+    def key_pressed(self, _, event):
+        return self.dismiss() if event.keyval == Gdk.KEY_Escape else False
 
     def dismiss(self, *_):
         if self.pending is not None and not self.busy:
@@ -150,40 +390,41 @@ class Reviews:
             self.window.hide()
         return True
 
-    def decide(self, action):
-        if self.busy or self.pending is None or action not in self.pending["actions"]:
+    def decide(self, action, choice=None):
+        if not self.can_decide or self.busy or self.pending is None or action not in self.pending["actions"]:
             return
         choices = []
         if action == "apply_choices":
-            choice = self.choices.get_active_id()
-            if choice not in self.permission["supported_choices"]:
+            if choice not in CHOICES or choice not in self.permission["supported_choices"]:
                 return
             choices.append({"permission_id": self.permission["id"], "choice": choice})
         review_id = self.pending["id"]
         decision = {"id": review_id, "revision": self.pending["revision"], "action": action, "choices": choices}
 
-        def refresh(output, _):
+        def refresh(_, __):
             self.run([COS, "--json", "review", "show", review_id],
-                     lambda latest, text: self.settle(output is not None, latest, text))
+                     lambda latest, text: self.settle(decision["revision"], latest, text))
 
         if action == "cancel":
-            self.status.set_text("Cancelling the displayed request.")
+            self.message("Declining this request...")
             self.run([COS, "--json", "review", "deny", review_id, str(decision["revision"])], refresh)
         else:
-            self.status.set_text("Authenticate to submit this decision.")
+            self.message("Enter your sign-in password in the system dialog to confirm.")
             self.run(["/usr/bin/pkexec", "--disable-internal-agent", APPROVAL_HELPER,
                       "--system-review-json"], refresh, json.dumps(decision))
         self.buttons()
 
-    def settle(self, submitted, latest, disclosure):
+    def settle(self, revision, latest, disclosure):
         if latest is not None and json.loads(latest)["status"] != "pending":
             self.pending = None
             self.window.hide()
             return
-        if latest is not None:
-            self.present(latest, disclosure)
-        self.status.set_text("The review is still pending." if submitted
-                             else "The decision was not confirmed. Inspect the current request.")
+        if self.present(latest, disclosure):
+            self.message("This request changed. Review it before deciding."
+                         if self.pending["revision"] != revision else "This request is still waiting for a decision.")
+        else:
+            self.can_decide = False
+            self.message("Couldn't check this request. Close this window and try again.")
         self.buttons()
 
 
