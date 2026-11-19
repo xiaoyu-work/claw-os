@@ -104,6 +104,7 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 | Panther Lake Dell XPS 14/16 with the affected Intel Wi-Fi 7 PCI IDs | Disable EHT for those cards to use the working Wi-Fi 6 path. |
 | Lenovo Yoga Pro 7 14IAH10 | Select the SOF HDA codec model that routes audio to both amplifiers. |
 | Intel Macs with the listed Broadcom `brcmfmac` PCI devices | Let the host supplicant handle WPA instead of the affected firmware offload. |
+| Broadcom BCM4331 and BCM4360 (`14e4:4331` and `14e4:43a0`) | Cache and install Debian's STA DKMS driver with the exact stock amd64 kernel headers. Fix the current backport's open-source Linux 7.2 compatibility layer without changing the Broadcom binary. Nonmatching adapters keep their existing drivers. |
 
 `claw-hardware-setup` runs inside the Calamares target, not on the image builder. It applies the last four workarounds only when the target's installed kernel exposes the needed parameters, then rebuilds the initramfs. The x86 initramfs also includes Debian's available Apple SPI and Surface keyboard modules for early input; udev still decides what hardware is present.
 
@@ -127,7 +128,7 @@ or use its private runtime.
 
 The Qualcomm desktop installer uses the same Calamares and first-run flow.
 
-The installer caches model-specific packages when building the ISO. Calamares recognizes the actual machine, installs its matching packages offline before reboot, and removes the remaining cache. It recognizes the Intel Surface Laptop 7 by ACPI `MSHW0551`, the Snapdragon 13.8-inch and 15-inch Surface Laptop 7 by their device-tree compatible IDs, and the Lenovo Yoga Pro 7 14IAH10 by DMI. Boot-critical modules and firmware are already on the media so input and networking do not depend on the wizard.
+The installer caches model-specific packages when building the ISO. Calamares recognizes the actual machine, installs its matching packages offline before reboot, and removes the remaining cache. It recognizes the Intel Surface Laptop 7 by ACPI `MSHW0551`, the Snapdragon 13.8-inch and 15-inch Surface Laptop 7 by their device-tree compatible IDs, and the Lenovo Yoga Pro 7 14IAH10 by DMI. It can select a PCI driver pack alongside a model pack. The Broadcom STA driver is built against the target's Debian kernel; Secure Boot enforcement needs a locally enrolled signing key for the resulting module. Boot-critical modules and firmware are already on the media so input and networking do not depend on the wizard.
 
 If matching Debian packages or Surface Laptop 7 platform firmware is missing, the target leaves a pending job. NetworkManager starts it when it has internet access; the wizard displays the job only after the Network page. An explicit offline or skip choice lets the user finish, and a later connection can retry without restarting setup. Debian packages come from the signed APT repositories, locally built drivers come from the installer cache, and Surface firmware comes directly from the verified Microsoft archives described below.
 

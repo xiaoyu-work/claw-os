@@ -2,6 +2,7 @@
 """Install optional hardware packages selected from the installed machine."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -30,21 +31,27 @@ CAMERA = (
     ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
 )
 SNAPDRAGON = "surface-laptop-7-snapdragon"
+BROADCOM = "broadcom-sta-wifi"
+BROADCOM_DRIVER = "broadcom-sta-dkms"
+BROADCOM_BACKPORT = "6.30.223.271-30~bpo13+1"
+BROADCOM_FIXED = f"{BROADCOM_BACKPORT}+clawos1"
+DEBIAN_AMD64_ABI = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64")
 FIRMWARE_HELPER = "/usr/sbin/claw-import-board-firmware"
 SURFACE_FIRMWARE = "Microsoft Surface audio, graphics, video and compute firmware"
 PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
+    BROADCOM: ((BROADCOM_DRIVER, BROADCOM_FIXED),),
 }
 LOCAL_PACKAGES = {
     "surface-laptop-7-intel": "claw-os-surface-laptop-7",
     SNAPDRAGON: "claw-os-surface-snapdragon-touchpad",
+    BROADCOM: BROADCOM_DRIVER,
 }
 
 
-def detect(sysfs=Path("/sys")):
-    arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
+def detect_board(sysfs, arch):
     if arch == "arm64":
         try:
             compatible = (sysfs / "firmware/devicetree/base/compatible").read_bytes().split(b"\0")
@@ -69,17 +76,47 @@ def detect(sysfs=Path("/sys")):
     return None
 
 
-def missing(pack):
+def broadcom_headers():
+    releases = sorted(path.name.removeprefix("vmlinuz-") for path in Path("/boot").glob("vmlinuz-*")
+                      if DEBIAN_AMD64_ABI.fullmatch(path.name.removeprefix("vmlinuz-")))
+    return [(f"linux-headers-{release}", None) for release in releases]
+
+
+def has_broadcom_sta_wifi(sysfs):
+    for pci in (sysfs / "bus/pci/devices").glob("*"):
+        try:
+            if (pci / "vendor").read_text().strip() == "0x14e4" and (pci / "device").read_text().strip() in {
+                "0x4331", "0x43a0",
+            }:
+                return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
+def detect(sysfs=Path("/sys")):
+    arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
+    board = detect_board(sysfs, arch)
+    packs = [board] if board else []
+    if arch == "amd64" and broadcom_headers() and has_broadcom_sta_wifi(sysfs):
+        packs.append(BROADCOM)
+    return packs
+
+
+def missing(packs):
+    requirements = dict(spec for pack in packs for spec in PACKS[pack])
+    if BROADCOM in packs:
+        requirements.update(broadcom_headers())
     packages = []
-    for package, minimum in PACKS.get(pack, ()):
+    for package, minimum in requirements.items():
         query = subprocess.run(
             ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status} ${Version}", package],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False,
         )
         state, _, version = query.stdout.partition(" ")
-        if state != "installed" or not version or subprocess.run(
+        if state != "installed" or not version or (minimum and subprocess.run(
             ["/usr/bin/dpkg", "--compare-versions", version, "lt", minimum], check=False,
-        ).returncode == 0:
+        ).returncode == 0):
             packages.append(package)
     return packages
 
@@ -94,19 +131,66 @@ def publish(state, pack, packages):
     os.replace(out.name, STATUS)
 
 
-def apt(*args):
+def apt(*args, cwd=None):
     subprocess.run(
-        [*APT, *args], stdin=subprocess.DEVNULL, check=True,
+        [*APT, *args], cwd=cwd, stdin=subprocess.DEVNULL, check=True,
         env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"),
     )
 
 
 def from_archive(packages):
-    return [f"{name}/{BACKPORTS}" for name in packages]
+    return [name if name.startswith("linux-headers-") else f"{name}/{BACKPORTS}" for name in packages]
 
 
-def needs_firmware(pack):
-    return pack == SNAPDRAGON and subprocess.run(
+def fix_broadcom_package(archive):
+    if archive.name != f"{BROADCOM_DRIVER}_{BROADCOM_BACKPORT}_amd64.deb":
+        return archive
+    with tempfile.TemporaryDirectory(dir=archive.parent) as tmp:
+        work = Path(tmp)
+        stage = work / "package"
+        subprocess.run(["/usr/bin/dpkg-deb", "--raw-extract", archive, stage], check=True)
+        source = stage / "usr/src/broadcom-sta-6.30.223.271/src"
+        # Linux 7.2 removed strncpy. Keep Debian's signed input and vendor blob intact.
+        changes = {
+            "shared/linux_osl.c": (
+                ("strncpy(p->file, basename, BCM_MEM_FILENAME_LEN)", "strscpy(p->file, basename, BCM_MEM_FILENAME_LEN)"),
+                ("return (strncpy(d, s, n));", "strscpy_pad(d, s, n);\n\treturn d;"),
+            ),
+            "wl/sys/wl_linux.c": (
+                ("strncpy(dev->name, intf_name, IFNAMSIZ-1)", "strscpy(dev->name, intf_name, IFNAMSIZ)"),
+                ("strncpy(info->version, EPI_VERSION_STR, sizeof(info->version))",
+                 "strscpy(info->version, EPI_VERSION_STR, sizeof(info->version))"),
+                ("strncpy(wlif->dev->name, wlif->name, strlen(wlif->name))",
+                 "strscpy(wlif->dev->name, wlif->name, sizeof(wlif->dev->name))"),
+            ),
+        }
+        for name, replacements in changes.items():
+            path = source / name
+            text = path.read_text()
+            for old, new in replacements:
+                if text.count(old) != 1:
+                    raise ValueError(f"{archive.name}: unexpected Broadcom source in {name}")
+                text = text.replace(old, new)
+            path.write_text(text)
+        metadata = stage / "DEBIAN"
+        control = metadata / "control"
+        control.write_text(control.read_text().replace(f"\nVersion: {BROADCOM_BACKPORT}\n",
+                                                      f"\nVersion: {BROADCOM_FIXED}\n", 1))
+        checksums = []
+        for line in (metadata / "md5sums").read_text().splitlines():
+            _, filename = line.split("  ", 1)
+            digest = hashlib.md5((stage / filename).read_bytes(), usedforsecurity=False).hexdigest()
+            checksums.append(f"{digest}  {filename}\n")
+        (metadata / "md5sums").write_text("".join(checksums))
+        result = archive.with_name(f"{BROADCOM_DRIVER}_{BROADCOM_FIXED}_amd64.deb")
+        subprocess.run(["/usr/bin/dpkg-deb", "--root-owner-group", "--build", stage, work / result.name], check=True)
+        (work / result.name).replace(result)
+    archive.unlink()
+    return result
+
+
+def needs_firmware(packs):
+    return SNAPDRAGON in packs and subprocess.run(
         [FIRMWARE_HELPER, "--romulus-firmware-ready"], check=False,
     ).returncode != 0
 
@@ -114,31 +198,35 @@ def needs_firmware(pack):
 def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
-    for pack in (SNAPDRAGON,) if arch == "arm64" else (
-        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10",
-    ):
+    packs = [SNAPDRAGON] if arch == "arm64" else ["surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10"]
+    if arch == "amd64" and broadcom_headers():
+        packs.append(BROADCOM)
+    for pack in packs:
         directory = CACHE / pack
         local = sorted(directory.glob("*.deb"))
         local_names = {file.name.split("_", 1)[0] for file in local}
-        stock = [name for name in missing(pack) if name not in local_names]
+        stock = [name for name in missing((pack,)) if name not in local_names]
         if not stock and not local:
             continue
         directory.mkdir(parents=True, exist_ok=True)
         apt("-o", f"Dir::Cache::archives={directory}", "install", "-t", BACKPORTS,
             "--download-only", "--no-install-recommends", "--no-remove", "-y",
             *map(str, local), *from_archive(stock))
+        if pack == BROADCOM:
+            for archive in directory.glob(f"{BROADCOM_DRIVER}_*.deb"):
+                fix_broadcom_package(archive)
 
 
-def remove_media_keyboard(pack):
+def remove_media_keyboard(packs):
     directory = CACHE / "surface-laptop-7-intel"
     release_file = directory / "kernel-release"
     if not release_file.is_file():
         return
     release = release_file.read_text().strip()
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64", release):
+    if not DEBIAN_AMD64_ABI.fullmatch(release):
         raise ValueError(f"{release_file}: invalid Debian kernel ABI")
     Path("/etc/modprobe.d/60-claw-surface-media.conf").unlink(missing_ok=True)
-    if pack != "surface-laptop-7-intel":
+    if "surface-laptop-7-intel" not in packs:
         registry = Path(f"/usr/lib/modules/{release}/updates/claw-surface/surface_aggregator_registry.ko")
         registry.unlink(missing_ok=True)
         subprocess.run(["/usr/sbin/depmod", "-a", release], check=True)
@@ -146,15 +234,16 @@ def remove_media_keyboard(pack):
 
 
 def install_offline():
-    pack = detect()
-    packages = missing(pack)
-    remove_media_keyboard(pack)
-    if pack != SNAPDRAGON and Path(
+    packs = detect()
+    remove_media_keyboard(packs)
+    if SNAPDRAGON not in packs and Path(
         "/var/lib/dpkg/info/claw-os-surface-snapdragon-radio.list"
     ).is_file():
         subprocess.run(["/usr/bin/dpkg", "--purge", "claw-os-surface-snapdragon-radio"], check=True)
-    payload = sorted((CACHE / pack).glob("*.deb")) if pack else []
-    if payload:
+    for pack in packs:
+        payload = sorted((CACHE / pack).glob("*.deb"))
+        if not payload:
+            continue
         try:
             apt("-o", "Dir::Etc::sourcelist=/dev/null", "-o", "Dir::Etc::sourceparts=-",
                 "install", "--no-install-recommends", "--no-remove", "-y", *map(str, payload))
@@ -163,12 +252,12 @@ def install_offline():
             if local_package and any(path.name.startswith(local_package + "_") for path in payload):
                 raise
             print("Offline driver installation failed; remaining packages will be retried online.", flush=True)
-        packages = missing(pack)
     if CACHE.is_dir():
         shutil.rmtree(CACHE)
-    if needs_firmware(pack):
+    packages = missing(packs)
+    if needs_firmware(packs):
         packages.append(SURFACE_FIRMWARE)
-    publish("pending" if packages else "ready", pack, packages)
+    publish("pending" if packages else "ready", packs[0] if packs else None, packages)
     if packages:
         PENDING.touch()
     else:
@@ -178,10 +267,11 @@ def install_offline():
 def online():
     if not PENDING.is_file():
         return
-    pack = detect()
-    packages = missing(pack)
-    firmware = needs_firmware(pack)
-    if not firmware and pack == SNAPDRAGON and STATUS.is_file():
+    packs = detect()
+    pack = packs[0] if packs else None
+    packages = missing(packs)
+    firmware = needs_firmware(packs)
+    if not firmware and SNAPDRAGON in packs and STATUS.is_file():
         firmware = SURFACE_FIRMWARE in json.loads(STATUS.read_text()).get("packages", [])
     pending = packages + ([SURFACE_FIRMWARE] if firmware else [])
     if not pending:
@@ -200,14 +290,21 @@ def online():
     try:
         if packages:
             apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
-            apt("install", "-t", BACKPORTS, "--no-install-recommends", "--no-remove", "-y", *from_archive(packages))
+            with tempfile.TemporaryDirectory(prefix="claw-driver-setup-") as tmp:
+                targets = from_archive(packages)
+                if BROADCOM_DRIVER in packages:
+                    request = f"{BROADCOM_DRIVER}/{BACKPORTS}"
+                    apt("download", request, cwd=tmp)
+                    archive, = Path(tmp).glob(f"{BROADCOM_DRIVER}_*.deb")
+                    targets[targets.index(request)] = str(fix_broadcom_package(archive))
+                apt("install", "-t", BACKPORTS, "--no-install-recommends", "--no-remove", "-y", *targets)
         if firmware:
             subprocess.run([FIRMWARE_HELPER, "--surface-laptop-7"], check=True)
     except subprocess.CalledProcessError:
-        publish("failed", pack, missing(pack) + ([SURFACE_FIRMWARE] if firmware else []))
+        publish("failed", pack, missing(packs) + ([SURFACE_FIRMWARE] if firmware else []))
         raise
-    packages = missing(pack)
-    if needs_firmware(pack):
+    packages = missing(packs)
+    if needs_firmware(packs):
         packages.append(SURFACE_FIRMWARE)
     publish("failed" if packages else "ready", pack, packages)
     if not packages:
