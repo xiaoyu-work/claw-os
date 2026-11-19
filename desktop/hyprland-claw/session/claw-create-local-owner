@@ -32,10 +32,10 @@ def request():
     data = json.loads(raw)
     if not isinstance(data, dict) or set(data) != {
         "username", "name", "password", "locale", "keyboard", "zone", "light",
-        "persistentBar", "reader", "scale", "agent",
+        "persistentBar", "agent",
     }:
         raise ValueError("invalidInput")
-    for key in ("username", "name", "password", "locale", "keyboard", "zone", "scale"):
+    for key in ("username", "name", "password", "locale", "keyboard", "zone"):
         if not isinstance(data[key], str):
             raise ValueError("invalidInput")
     if not ACCOUNT.fullmatch(data["username"]):
@@ -45,14 +45,13 @@ def request():
     password = data["password"]
     if not 0 < len(password.encode()) <= 256 or any(c in password for c in "\x00\r\n"):
         raise ValueError("invalidPassword")
-    if any(type(data[key]) is not bool for key in ("light", "persistentBar", "reader")):
+    if any(type(data[key]) is not bool for key in ("light", "persistentBar")):
         raise ValueError("invalidInput")
     layouts = {"us", "gb", "de", "fr", "es", "it", "br", "jp", "ru"}
     locales = system("locale", "-a").stdout.decode().splitlines()
     if data["keyboard"] not in layouts or data["locale"] not in ("", *locales):
         raise ValueError("invalidRegionalSettings")
-    if (data["zone"] and data["zone"] not in available_timezones()
-            or data["scale"] not in ("auto", "1.25", "1.5")):
+    if data["zone"] and data["zone"] not in available_timezones():
         raise ValueError("invalidRegionalSettings")
     agent = data["agent"]
     if agent is not None and (
@@ -85,11 +84,10 @@ def initialize_home(account, data):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
-        if data["keyboard"] != "us" or data["scale"] != "auto":
+        if data["keyboard"] != "us":
             write(config / "hypr/hyprland.lua",
                   'dofile("/etc/xdg/hypr/hyprland.lua")\n'
-                  f'hl.config({{input = {{kb_layout = "{data["keyboard"]}"}}}})\n'
-                  f'hl.monitor({{output = "", mode = "preferred", position = "auto", scale = {json.dumps(data["scale"])}}})\n')
+                  f'hl.config({{input = {{kb_layout = "{data["keyboard"]}"}}}})\n')
         # Set the application theme and the Shell's actual taskbar preference.
         for gtk in ("gtk-3.0", "gtk-4.0"):
             write(config / gtk / "settings.ini",
@@ -97,8 +95,6 @@ def initialize_home(account, data):
         if not data["persistentBar"]:
             write(config / "caelestia/shell.json",
                   json.dumps({"bar": {"persistent": False, "showOnHover": True}}) + "\n")
-        if data["reader"]:
-            write(config / "cos/screen-reader", "")
         if data["agent"] is not None:
             write(config / "cos/config.json", json.dumps(data["agent"]["config"]) + "\n")
             directory = home / ".local/share/cos/credentials/agent"

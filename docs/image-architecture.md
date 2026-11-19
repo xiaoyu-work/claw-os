@@ -110,8 +110,9 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 ### First-run desktop setup
 
 A fresh local desktop VM has no human account. Before sign-in, the Quickshell
-wizard runs in Cage and presents accessibility, network, language, keyboard,
-Agent, account creation, time zone, appearance, layout and desktop tips.
+wizard runs in Cage and starts with network setup, followed by language,
+keyboard, Agent, account creation, time zone, appearance, layout and desktop
+tips. Display selection and scaling use the system defaults without a setup step.
 **Finish** creates the local owner and returns to the normal graphical
 sign-in. This one-time operation is enabled only on the unprovisioned local
 image. Account and model secrets are passed through stdin.

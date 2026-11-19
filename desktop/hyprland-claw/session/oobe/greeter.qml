@@ -150,6 +150,7 @@ ShellRoot {
                     model: root.accounts
                     textRole: "name"
                     Accessible.name: qsTr("Account")
+                    palette.dark: "#c6dcfb"
                     background: Rectangle {
                         color: "#ab141e2c"
                         radius: 11
@@ -161,14 +162,6 @@ ShellRoot {
                         text: accounts.displayText
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
-                    }
-                    indicator: SetupIcon {
-                        x: accounts.width - 28
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 18
-                        height: 18
-                        name: "down"
-                        color: "#c6dcfb"
                     }
                     onActivated: {
                         root.authenticationRejected = false;

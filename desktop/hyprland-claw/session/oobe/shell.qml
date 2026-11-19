@@ -10,7 +10,7 @@ import Quickshell.Io
 ShellRoot {
     id: setup
 
-    property string current: local ? "access" : "network"
+    property string current: "network"
     property string network: ""
     property bool finishing: false
     readonly property bool local: Quickshell.env("CLAW_LOCAL_DESKTOP_SETUP") === "1"
@@ -22,10 +22,8 @@ ShellRoot {
     property string language: ""
     property string keyboard: "us"
     property string zone: ""
-    property string scale: "auto"
     property bool light: false
     property bool persistentBar: true
-    property bool reader: false
     readonly property bool matchingPassword: newPassword !== "" && newPassword === confirmation
     readonly property bool validAccount: fullName.trim() !== "" && !fullName.includes(":")
         && /^[a-z][a-z0-9_-]{0,30}$/.test(username) && matchingPassword
@@ -36,25 +34,24 @@ ShellRoot {
         languages: [], zones: [], finishError: ""
     })
     readonly property var pages: ({
-        access: [qsTr("Accessibility setup"), qsTr("Choose display and reading options for your desktop."), "welcome", accessPage],
-        network: [qsTr("Get connected"), qsTr("Connect to Wi-Fi or plug in an Ethernet cable."), "network", networkPage],
-        language: [qsTr("Select a language"), qsTr("Choose the language your system will use."), "welcome", languagePage],
-        keyboard: [qsTr("Select keyboard layout"), qsTr("This layout takes effect in your desktop session. Setup and sign-in use the current system keyboard."), "keyboard", keyboardPage],
-        agent: [qsTr("Configure your Agent"), qsTr("Connect a model provider now, or set it up later."), "model", modelPage],
-        account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Claw OS."), "account", accountPage],
-        location: [qsTr("Timezone and location"), qsTr("Choose a time zone for this computer."), "location", locationPage],
-        appearance: [qsTr("Personalize appearance"), qsTr("Preview a light or dark look and set the preference for your apps."), "welcome", appearancePage],
-        layout: [qsTr("Layout configuration"), qsTr("Choose how the taskbar appears in the desktop."), "layout", layoutPage],
-        workspaces: [qsTr("Workspaces for your workflow"), qsTr("Keep different sets of apps open on separate workspaces."), "layout", workspacePage],
-        shortcuts: [qsTr("Keyboard shortcuts"), qsTr("Use the Super or Windows key for quick desktop actions."), "keyboard", shortcutsPage],
-        launcher: [qsTr("Find and open apps"), qsTr("Open the launcher from the desktop to search your installed apps."), "model", launcherPage],
-        drivers: [qsTr("Set up graphics and hardware"), qsTr("Claw OS installs only the additional packages that match this computer."), "drivers", driverPage],
+        network: [qsTr("Get connected"), qsTr("Connect to Wi-Fi or plug in an Ethernet cable."), networkPage],
+        language: [qsTr("Select a language"), qsTr("Choose the language your system will use."), languagePage],
+        keyboard: [qsTr("Select keyboard layout"), qsTr("This layout takes effect in your desktop session. Setup and sign-in use the current system keyboard."), keyboardPage],
+        agent: [qsTr("Configure your Agent"), qsTr("Connect a model provider now, or set it up later."), modelPage],
+        account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Claw OS."), accountPage],
+        location: [qsTr("Timezone and location"), qsTr("Choose a time zone for this computer."), locationPage],
+        appearance: [qsTr("Personalize appearance"), qsTr("Preview a light or dark look and set the preference for your apps."), appearancePage],
+        layout: [qsTr("Layout configuration"), qsTr("Choose how the taskbar appears in the desktop."), layoutPage],
+        workspaces: [qsTr("Workspaces for your workflow"), qsTr("Keep different sets of apps open on separate workspaces."), workspacePage],
+        shortcuts: [qsTr("Keyboard shortcuts"), qsTr("Use the Super or Windows key for quick desktop actions."), shortcutsPage],
+        launcher: [qsTr("Find and open apps"), qsTr("Open the launcher from the desktop to search your installed apps."), launcherPage],
+        drivers: [qsTr("Set up graphics and hardware"), qsTr("Claw OS installs only the additional packages that match this computer."), driverPage],
         finish: [qsTr("You're ready"), local ? qsTr("Finish setup, then sign in with the account you just created.")
-            : qsTr("Finish setup to open your Claw OS desktop."), "finish", finishPage]
+            : qsTr("Finish setup to open your Claw OS desktop."), finishPage]
     })
     readonly property var steps: {
         const order = local
-            ? ["access", "network", "language", "keyboard", "agent", "account", "location",
+            ? ["network", "language", "keyboard", "agent", "account", "location",
                 "appearance", "layout", "workspaces", "shortcuts", "launcher"]
             : ["network", "agent"];
         if (state.packages.length > 0)
@@ -101,18 +98,14 @@ ShellRoot {
             send("finish", {
                 username: username, name: fullName.trim(), password: newPassword,
                 locale: language, keyboard: keyboard, zone: zone, light: light,
-                persistentBar: persistentBar, reader: reader, scale: scale
+                persistentBar: persistentBar
             });
         } else {
             send("finish");
         }
     }
 
-    Component.onCompleted: {
-        Quickshell.watchFiles = false;
-        if (current === "network")
-            send("scan");
-    }
+    Component.onCompleted: Quickshell.watchFiles = false
 
     Process {
         id: backend
@@ -126,10 +119,6 @@ ShellRoot {
             if (!setup.state.finished)
                 Qt.exit(1);
         }
-    }
-    Process {
-        running: setup.local && setup.reader
-        command: ["/usr/bin/orca"]
     }
 
     QtObject {
@@ -217,27 +206,12 @@ ShellRoot {
                         width: scroll.availableWidth
                         spacing: 13
 
-                        RowLayout {
+                        Label {
                             Layout.fillWidth: true
-                            spacing: 12
-                            Rectangle {
-                                implicitWidth: 40
-                                implicitHeight: 40
-                                radius: 12
-                                color: theme.selected
-                                SetupIcon {
-                                    anchors.centerIn: parent
-                                    name: setup.pageInfo[2]
-                                    color: theme.accent
-                                }
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: setup.pageInfo[0]
-                                wrapMode: Text.WordWrap
-                                font.pixelSize: window.width >= 680 ? 28 : 23
-                                font.weight: Font.DemiBold
-                            }
+                            text: setup.pageInfo[0]
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: window.width >= 680 ? 28 : 23
+                            font.weight: Font.DemiBold
                         }
                         Label {
                             Layout.fillWidth: true
@@ -249,7 +223,7 @@ ShellRoot {
                         Loader {
                             id: page
                             Layout.fillWidth: true
-                            sourceComponent: setup.pageInfo[3]
+                            sourceComponent: setup.pageInfo[2]
                         }
                     }
                 }
@@ -301,25 +275,6 @@ ShellRoot {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    Component {
-        id: accessPage
-        ColumnLayout {
-            spacing: 10
-            Toggle {
-                text: qsTr("Screen reader")
-                checked: setup.reader
-                onToggled: setup.reader = checked
-            }
-            Picker {
-                Layout.fillWidth: true
-                label: qsTr("Display scaling")
-                model: [qsTr("Automatic display scaling"), "125%", "150%"]
-                selection: model[["auto", "1.25", "1.5"].indexOf(setup.scale)]
-                onActivated: index => setup.scale = ["auto", "1.25", "1.5"][index]
             }
         }
     }
@@ -525,7 +480,6 @@ ShellRoot {
                         border.color: accessPoint.visualFocus ? theme.accent : "transparent"
                     }
                     contentItem: RowLayout {
-                        SetupIcon { name: "network"; color: theme.accent; Layout.preferredWidth: 17; Layout.preferredHeight: 17 }
                         Label { Layout.fillWidth: true; text: accessPoint.modelData.name; elide: Text.ElideRight }
                         Label { text: accessPoint.modelData.secure ? qsTr("Secured") : qsTr("Open"); color: theme.muted; font.pixelSize: 12 }
                     }
@@ -820,18 +774,11 @@ ShellRoot {
         rightPadding: 34
         displayText: selection || label
         Accessible.name: label
+        palette.dark: theme.accent
         background: Rectangle {
             radius: 12
             color: picker.hovered ? theme.hover : theme.card
             border.color: picker.visualFocus ? theme.accent : theme.outline
-        }
-        indicator: SetupIcon {
-            x: picker.width - 28
-            y: (picker.height - height) / 2
-            width: 19
-            height: 19
-            name: "down"
-            color: theme.accent
         }
         contentItem: Label {
             text: picker.displayText

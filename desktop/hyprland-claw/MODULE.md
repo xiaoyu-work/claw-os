@@ -65,6 +65,8 @@ conversation and hands off only to the fixed Hyprland session.
 The wizard and greeter share the original wallpaper and an aligned, softened
 crop behind the glass cards. Cage and Qt Quick render this pre-login UI in
 software; the authenticated desktop retains its normal graphics backend.
+The wizard opens at network setup; it leaves display mode and scaling to
+the system defaults.
 
 The subscriber's `--desktop` mode attaches to the Root login binding. It runs
 post-login configuration only on installed profiles that request it, then starts

@@ -179,7 +179,7 @@ def backend(completed, staging=None):
                 (device, device.connect("notify::last-scan", lambda *_: self.update_wifi()))
                 for device in self.wifi_devices()
             ]
-            self.update_wifi()
+            self.scan()
 
         def scan(self):
             for device in self.wifi_devices():
