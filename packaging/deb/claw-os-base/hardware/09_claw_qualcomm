@@ -47,7 +47,7 @@ for kernel in $(printf '%s\n' /boot/vmlinuz-* | LC_ALL=C sort -Vr); do
     fi
     board_menu_entry "$args $claw_qcom_no_dsp"
     case "$CLAW_QCOM_DTB" in
-        x1e80100-microsoft-romulus13.dtb|x1e80100-microsoft-romulus15.dtb)
+        x1e80100-microsoft-romulus13.dtb|x1e80100-microsoft-romulus13-spi.dtb|x1e80100-microsoft-romulus15.dtb)
             # Keep the no-DSP entry as the default even after importing firmware.
             if [ "${version%-omarchy}" != "$version" ] &&
                 [ -f "${dtb%/*}/claw-boards.list" ] &&

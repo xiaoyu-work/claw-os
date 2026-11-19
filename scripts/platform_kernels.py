@@ -123,6 +123,7 @@ done
 def kernel_package(profile, source, provenance, work, out):
     release = profile["release"]
     name = f"linux-image-{release.lower()}"
+    version = release.lower()
     stage = work / "kernel"
     prefix = f"usr/lib/modules/{release}"
     module_dir = stage / prefix
@@ -149,18 +150,8 @@ def kernel_package(profile, source, provenance, work, out):
         boards = module_dir / "dtb/qcom"
         shutil.move(work / "dtbs" / directory, boards)
         if "romulus" in profile:
-            romulus13 = boards / "x1e80100-microsoft-romulus13.dtb"
-            overlay = work / "romulus13.dtbo"
-            board = ROOT / "packaging/surface-romulus13-touchpad.dtso"
-            subprocess.run(["dtc", "-@", "-I", "dts", "-O", "dtb", "-o", overlay, board], check=True)
-            patched = work / romulus13.name
-            subprocess.run(["fdtoverlay", "-i", romulus13, "-o", patched, overlay], check=True)
-            patched.replace(romulus13)
-            provenance["romulus13-touchpad"] = {
-                "sha256": digest(board),
-                "source": "https://github.com/xiaoyu-work/claw-os/blob/main/packaging/surface-romulus13-touchpad.dtso",
-                "board_reference": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
-            }
+            romulus_trees(boards, work, provenance)
+            version += "+clawos1"
         write_qualcomm_boards(boards)
     if "boot" in profile:
         # Do not expose internal speakers without the matching speaker protection stack.
@@ -168,11 +159,46 @@ def kernel_package(profile, source, provenance, work, out):
         config.parent.mkdir(parents=True)
         config.write_text("blacklist snd_soc_macaudio\ninstall snd_soc_macaudio /bin/false\n", encoding="utf-8")
     package(
-        stage, out, name, release.lower(), profile["arch"], "kmod, initramfs-tools, linux-base",
+        stage, out, name, version, profile["arch"], "kmod, initramfs-tools, linux-base",
         f"Claw OS platform Linux kernel ({release})", provenance,
         f"""[ "$1" = configure ] || exit 0\ndepmod -a '{release}'\n""" + kernel_hooks(release, "postinst"),
         """case "$1" in remove|purge) ;; *) exit 0 ;; esac\n""" + kernel_hooks(release, "postrm"),
     )
+
+
+def romulus_trees(boards, work, provenance):
+    references = {
+        "touchpad": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
+        "touch-i2c": "https://lkml.org/lkml/2026/9/30/518",
+        "touch-spi": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
+        "camera": "https://github.com/bryce-hoehn/linux-surface-laptop-7/blob/af765428493e13b84f06c23bdea4cedd3e58cf72/patches/outgoing/ov02c10/0004-OV02C10-camera-device-tree.patch",
+    }
+    overlays = {}
+    for name, reference in references.items():
+        file = f"surface-romulus13-{name}.dtso"
+        source = ROOT / "packaging" / file
+        overlays[name] = work / f"{name}.dtbo"
+        subprocess.run(["dtc", "-@", "-I", "dts", "-O", "dtb", "-o", overlays[name], source], check=True)
+        provenance[f"romulus13-{name}"] = {
+            "sha256": digest(source),
+            "source": f"https://github.com/xiaoyu-work/claw-os/blob/main/packaging/{file}",
+            "board_reference": reference,
+        }
+
+    original = boards / "x1e80100-microsoft-romulus13.dtb"
+    for transport in ("spi", "i2c"):
+        filename = original.name if transport == "i2c" else original.stem + "-spi.dtb"
+        patched = work / filename
+        subprocess.run(["fdtoverlay", "-i", original, "-o", patched, overlays["touchpad"],
+                        overlays["camera"], overlays[f"touch-{transport}"]], check=True)
+        patched.replace(boards / filename)
+
+    # These USB2 PHYs lose state during sleep. DWC3 fully reinitializes the
+    # host controller at resume if it is not itself a wake source.
+    for model in ("romulus13", "romulus13-spi", "romulus15"):
+        tree = boards / f"x1e80100-microsoft-{model}.dtb"
+        usb = subprocess.check_output(["fdtget", tree, "/__symbols__", "usb_mp"], text=True).strip()
+        subprocess.run(["fdtput", "-d", tree, usb, "wakeup-source"], check=True)
 
 
 def write_qualcomm_boards(directory):
@@ -297,7 +323,7 @@ def build(lock, platform, cache, output, debian_release=None, board_tools=False)
             if "romulus" in profile:
                 from surface_laptop7 import snapdragon_packages
 
-                snapdragon_packages(source, provenance, work, out, package, unpack)
+                snapdragon_packages(profile["release"], source, provenance, work, out, package, unpack)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)
             if "boot" in profile:

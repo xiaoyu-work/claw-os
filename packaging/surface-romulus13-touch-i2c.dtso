@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/dts-v1/;
+/plugin/;
+
+// MSHW0468: https://lkml.org/lkml/2026/9/30/518
+&{/} {
+  model = "Microsoft Surface Laptop 7 (13.8 inch, I2C touchscreen)";
+};
+
+&i2c8 {
+  clock-frequency = <400000>;
+  status = "okay";
+  #address-cells = <1>;
+  #size-cells = <0>;
+
+  touchscreen@34 {
+    compatible = "hid-over-i2c";
+    reg = <0x34>;
+    hid-descr-addr = <0>;
+    interrupts-extended = <&tlmm 38 8>;
+    pinctrl-0 = <&romulus_touch_irq>;
+    pinctrl-names = "default";
+  };
+};
+
+&tlmm {
+  romulus_touch_irq: touchscreen-irq-state {
+    pins = "gpio38";
+    function = "gpio";
+    bias-pull-up;
+  };
+};

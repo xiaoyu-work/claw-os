@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install firmware from an extracted OEM driver directory on this machine."""
+"""Install matching Qualcomm firmware from an OEM driver."""
 
 import argparse
 from collections import Counter
@@ -16,6 +16,12 @@ import tempfile
 DT = Path("/sys/firmware/devicetree/base")
 FIRMWARE = Path("/usr/lib/firmware")
 ROMULUS = {b"microsoft,romulus13", b"microsoft,romulus15"}
+SURFACE_MSI = (
+    "https://download.microsoft.com/download/b7ca2c3f-d320-4795-be0f-529a0117abb4/"
+    "SurfaceLaptop7_ARM_Win11_26100_26.101.6391.0.msi"
+)
+SURFACE_MSI_SIZE = 530989056
+SURFACE_MSI_SHA256 = "4c4640205fa181cc7ac9bc14c35903d3147537cbe2ae8940ba2ade8e7ae25305"
 # SHA-256 values recorded for the OEM files in omarchy-pkgs at 2082b74a.
 ROMULUS_ADSP = {
     "qcadsp8380.mbn": "3a0240f9a1c0c43b657959b1bf10433a1a9793eb5c4af9f6beff8644c174f5a0",
@@ -112,25 +118,85 @@ def install(name, source, expected):
         os.link(staged.name, target)
 
 
+def verified(path, checksum):
+    if not path.is_file():
+        return False
+    with open_firmware(path) as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest() == checksum
+
+
+def audio_ready():
+    return all(verified(FIRMWARE / "updates" / name, checksum) for name, checksum in ROMULUS_ADSP.items())
+
+
+def refresh_initramfs(romulus):
+    subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
+    if romulus and Path("/etc/default/grub.d/60-claw-os-qualcomm.cfg").is_file():
+        subprocess.run(["/usr/sbin/update-grub"], check=True)
+
+
+def surface_audio(msi):
+    requests = firmware_requests()
+    if not ROMULUS_ADSP.keys() <= set(requests):
+        raise ValueError("the official Surface Laptop 7 driver is for Snapdragon Romulus only")
+    pending = []
+    for name, checksum in ROMULUS_ADSP.items():
+        if verified(FIRMWARE / "updates" / name, checksum):
+            continue
+        if existing(name):
+            raise ValueError(f"{name}: refusing to replace existing OEM firmware")
+        pending.append(name)
+
+    if pending:
+        with tempfile.TemporaryDirectory(prefix="claw-surface-firmware-", dir="/var/tmp") as tmp:
+            work = Path(tmp)
+            archive = work / "surface-laptop-7.msi"
+            if msi:
+                with open_firmware(Path(msi)) as stream, archive.open("wb") as target:
+                    if os.fstat(stream.fileno()).st_size != SURFACE_MSI_SIZE:
+                        raise ValueError("unexpected Surface Laptop 7 MSI size")
+                    shutil.copyfileobj(stream, target)
+            else:
+                subprocess.run([
+                    "/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https", "--location",
+                    "--fail", "--silent", "--show-error", "--connect-timeout", "30",
+                    "--max-time", "1200", "--max-filesize", str(SURFACE_MSI_SIZE),
+                    "--output", str(archive), SURFACE_MSI,
+                ], check=True)
+            if not verified(archive, SURFACE_MSI_SHA256):
+                raise ValueError("the Microsoft Surface Laptop 7 MSI checksum does not match")
+            subprocess.run(["/usr/bin/msiextract", "-C", str(work), str(archive)],
+                           stdout=subprocess.DEVNULL, check=True)
+            drivers = work / "SurfaceUpdate/proextadsp8380"
+            for name in pending:
+                if not verified(drivers / PurePosixPath(name).name, ROMULUS_ADSP[name]):
+                    raise ValueError(f"{name}: matching firmware missing from the Microsoft MSI")
+            for name in pending:
+                install(name, drivers / PurePosixPath(name).name, bytes.fromhex(ROMULUS_ADSP[name]))
+                print(f"Installed {name}")
+    refresh_initramfs(romulus=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, nargs="?", help="local directory of OEM driver files")
-    parser.add_argument("--list-missing", action="store_true")
-    parser.add_argument("--romulus-audio-ready", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--list-missing", action="store_true")
+    mode.add_argument("--romulus-audio-ready", action="store_true")
+    mode.add_argument("--surface-laptop-7", metavar="MSI", nargs="?", const="",
+                      help="import Surface Laptop 7 audio firmware from the official MSI, downloading it if not supplied")
     args = parser.parse_args()
+    if args.source is not None and (args.list_missing or args.romulus_audio_ready or args.surface_laptop_7 is not None):
+        parser.error("do not specify a source directory with another operation")
     if args.romulus_audio_ready:
-        if args.list_missing or args.source is not None:
-            parser.error("--romulus-audio-ready does not accept a source directory")
-        for name, expected in ROMULUS_ADSP.items():
-            path = FIRMWARE / "updates" / name
-            if not path.is_file():
-                return 1
-            with open_firmware(path) as stream:
-                if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
-                    return 1
-        return 0
-    if args.list_missing == (args.source is not None):
-        parser.error("use --list-missing or specify one local OEM directory")
+        return 0 if audio_ready() else 1
+    if args.surface_laptop_7 is not None:
+        if os.geteuid() != 0:
+            raise ValueError("import requires root")
+        surface_audio(args.surface_laptop_7)
+        return
+    if not args.list_missing and args.source is None:
+        parser.error("use --list-missing, --surface-laptop-7, or specify an OEM directory")
     requests = firmware_requests()
     missing = [name for name in requests if not existing(name)]
     if args.list_missing:
@@ -146,9 +212,7 @@ def main():
         install(name, file, expected)
         print(f"Installed {name}")
     if any((FIRMWARE / "updates" / name).is_file() for name in requests):
-        subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
-        if ROMULUS_ADSP.keys() <= set(requests) and Path("/etc/default/grub.d/60-claw-os-qualcomm.cfg").is_file():
-            subprocess.run(["/usr/sbin/update-grub"], check=True)
+        refresh_initramfs(romulus=ROMULUS_ADSP.keys() <= set(requests))
     for name in missing:
         if not existing(name):
             print(f"Still missing: {name}")

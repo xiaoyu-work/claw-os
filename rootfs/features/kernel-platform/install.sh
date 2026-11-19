@@ -21,11 +21,13 @@ if [[ $platform == aarch64-qualcomm && ,${FEATURES:-}, == *,installer,* ]]; then
     for file in platform_kernels.py surface_laptop7.py; do
         install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
     done
-    install -m0644 "$PROJECT_DIR"/packaging/{platform-kernels.json,surface-romulus13-touchpad.dtso} "$stage/packaging/"
+    install -m0644 "$PROJECT_DIR"/packaging/platform-kernels.json \
+        "$PROJECT_DIR"/packaging/surface-romulus13-*.dtso "$stage/packaging/"
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
-        gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates </dev/null
+        gpg gpgv zstd device-tree-compiler git patch meson ninja-build cmake ca-certificates \
+        bc libelf-dev libssl-dev </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" --board-tools --output "${stage#"$ROOTFS"}/packages"
     artifacts="$stage/packages"

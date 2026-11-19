@@ -121,16 +121,51 @@ def touchpad(archive, patches, work, stage, *, recipes=None):
     if recipes:
         stage_file(recipes / "surface-laptop-7-15.conf", stage / "usr/share/iptsd/surface-laptop-7-15.conf")
         stage_file(recipes / "iptsd-romulus15-boot", stage / "usr/lib/iptsd/iptsd-romulus15-boot", 0o755)
-        for action, target in (("boot", "multi-user"), ("resume", "suspend")):
-            unit = f"iptsd-romulus15-{action}.service"
+        for action, board, target in (("boot", "romulus15", "multi-user"), ("resume", "romulus", "suspend")):
+            unit = f"iptsd-{board}-{action}.service"
             systemd = stage / "usr/lib/systemd/system"
-            stage_file(recipes / unit, systemd / unit)
+            stage_file(recipes / f"iptsd-romulus15-{action}.service", systemd / unit)
+            if action == "resume":
+                replace(systemd / unit, 'Description=Restart iptsd after resume on the Surface Laptop 7 15"',
+                        "Description=Restart iptsd after resume on the Surface Laptop 7")
+                replace(systemd / unit, "ConditionFirmware=device-tree-compatible(microsoft,romulus15)",
+                        "ConditionFirmware=|device-tree-compatible(microsoft,romulus13)\n"
+                        "ConditionFirmware=|device-tree-compatible(microsoft,romulus13-spi)\n"
+                        "ConditionFirmware=|device-tree-compatible(microsoft,romulus15)")
             wants = systemd / f"{target}.target.wants"
             wants.mkdir(parents=True, exist_ok=True)
             (wants / unit).symlink_to(f"../{unit}")
 
 
-def snapdragon_packages(source, provenance, work, out, package, unpack):
+def romulus_posture(release, source, work, stage, unpack):
+    tree = work / "romulus-ssam"
+    path = "drivers/platform/surface"
+    modules = ("surface_aggregator_registry", "surface_aggregator_tabletsw")
+    for module, key in zip(modules, ("registry", "posture"), strict=True):
+        stage_file(source[f"surface-snapdragon-{key}"], tree / path / f"{module}.c")
+
+    recipes = "pkgbuilds/linux-omarchy-aarch64/"
+    fixes = work / "romulus-kernel-fixes"
+    extract(source["surface-snapdragon-kernel-fixes"], fixes, prefixes=(recipes,))
+    paths = [f"{path}/{module}.c" for module in modules]
+    headers = [f"+++ b/{path}".encode() for path in paths]
+    for change in sorted((fixes / recipes).glob("*.patch")):
+        if any(header in change.read_bytes().splitlines() for header in headers):
+            subprocess.run(["git", "apply", "--whitespace=nowarn", *[f"--include={p}" for p in paths], change],
+                           cwd=tree, check=True)
+    patch(tree, source["surface-snapdragon-posture-fix"])
+    write_file(tree / path / "Kbuild", "obj-m := " + " ".join(f"{module}.o" for module in modules) + "\n")
+
+    prefix = f"usr/lib/modules/{release}/build"
+    unpack(source["surface-snapdragon-headers"], work, lambda item: item.startswith(prefix + "/"))
+    subprocess.run(["make", "-C", work / prefix, f"M={tree / path}", "CONFIG_DEBUG_INFO_BTF_MODULES=", "modules"],
+                   check=True)
+    for module in modules:
+        stage_file(tree / path / f"{module}.ko",
+                   stage / "usr/lib/modules" / release / "updates/claw-surface" / f"{module}.ko")
+
+
+def snapdragon_packages(release, source, provenance, work, out, package, unpack):
     name = "claw-os-surface-snapdragon-radio"
     stage = work / "romulus-radio"
     unpack(source["surface-snapdragon-addresses"], stage, lambda path: path.startswith("usr/"))
@@ -143,10 +178,11 @@ if [[ ! -r "$vendor_path" || "$(<"$vendor_path")" != 'Microsoft Corporation' ]];
 if [[ ! -r $compatible ]] || ! tr '\\\\0' '\\\\n' <"$compatible" |
     grep -Eq '^microsoft,romulus(13|15)$'; then""")
     bt = stage / "usr/lib/systemd/system/surface-bluetooth-address@.service"
-    compatible = "ConditionFirmware=|device-tree-compatible(microsoft,romulus13)\n"
-    compatible += "ConditionFirmware=|device-tree-compatible(microsoft,romulus15)"
+    compatible = ("ConditionFirmware=|device-tree-compatible(microsoft,romulus13)\n"
+                  "ConditionFirmware=|device-tree-compatible(microsoft,romulus13-spi)\n"
+                  "ConditionFirmware=|device-tree-compatible(microsoft,romulus15)")
     replace(bt, 'ConditionFirmware=smbios-field(sys_vendor = "Microsoft Corporation")', compatible)
-    package(stage, out, name, "1-2+clawos1", "arm64", "bash, bluez, iproute2, systemd, udev",
+    package(stage, out, name, "1-2+clawos2", "arm64", "bash, bluez, iproute2, systemd, udev",
             "Wi-Fi and Bluetooth addresses for Snapdragon Surface Laptop 7",
             {"surface-snapdragon-addresses": provenance["surface-snapdragon-addresses"]}, None)
     if "surface-snapdragon-iptsd" not in source:
@@ -157,13 +193,27 @@ if [[ ! -r $compatible ]] || ! tr '\\\\0' '\\\\n' <"$compatible" |
     extract(source["surface-snapdragon-fixes"], fixes, prefixes=("pkgbuilds/iptsd/", "pkgbuilds/alsa-ucm-conf/"))
     stage = work / "romulus-touchpad"
     recipes = fixes / "pkgbuilds/iptsd"
+    romulus_posture(release, source, work, stage, unpack)
     touchpad(source["surface-snapdragon-iptsd"], recipes, work, stage, recipes=recipes)
     name = "claw-os-surface-snapdragon-touchpad"
     stage_file(work / "iptsd/LICENSE", stage / "usr/share/doc" / name / "copyright")
-    package(stage, out, name, "3.1.0-5+clawos1", "arm64",
-            "libc6, libgcc-s1, libstdc++6, systemd, udev",
-            "Touchpad and digitizer support for Snapdragon Surface Laptop 7",
-            {name: provenance[name] for name in ("surface-snapdragon-iptsd", "surface-snapdragon-fixes")}, None)
+    # The OV02C10 black level is 64 in its 10-bit mode; SoftISP uses 16-bit tuning.
+    write_file(stage / "usr/share/libcamera/ipa/simple/ov02c10.yaml", """version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Adjust:
+      gamma: 2.4
+  - Agc:
+""")
+    refresh = f"depmod -a '{release}'\nupdate-initramfs -u -k '{release}'\n"
+    package(stage, out, name, "3.1.0-5+clawos2", "arm64",
+            f"linux-image-{release} (= {release}+clawos1), libc6, libgcc-s1, libstdc++6, systemd, udev, curl, msitools",
+            "Touchpad, digitizer and webcam integration for Snapdragon Surface Laptop 7",
+            {name: spec for name, spec in provenance.items() if name.startswith("surface-snapdragon-")},
+            '[ "$1" = configure ] || exit 0\n' + refresh,
+            f"""[ "$1" = remove ] && [ -d '/lib/modules/{release}' ] || exit 0\n""" + refresh)
     romulus_audio(fixes / "pkgbuilds/alsa-ucm-conf", work, out)
 
 

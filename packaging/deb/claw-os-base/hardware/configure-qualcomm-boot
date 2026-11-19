@@ -27,7 +27,8 @@ version=$(uname -r)
 board=$(claw_qcom_board "$tree" "$version") || fail "unknown device tree: $tree"
 compatible=${board#*|}
 compatible=${compatible%%|*}
-if ! tr '\000' '\n' </sys/firmware/devicetree/base/compatible | grep -Fxq "$compatible"; then
+running=$(tr '\000' '\n' </sys/firmware/devicetree/base/compatible | sed -n '1p')
+if [ "$running" != "$compatible" ]; then
     fail "the running device tree does not match $tree"
 fi
 

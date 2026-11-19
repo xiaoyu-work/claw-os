@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/dts-v1/;
+/plugin/;
+
+// MSHW0461 wiring from ItsLucas, adapted to the pinned hid-over-spi binding.
+&{/} {
+  model = "Microsoft Surface Laptop 7 (13.8 inch, SPI touchscreen)";
+  compatible = "microsoft,romulus13-spi", "microsoft,romulus13", "qcom,x1e80100";
+
+  romulus_touch_supply: regulator-touchscreen {
+    compatible = "regulator-fixed";
+    regulator-name = "touchscreen";
+    gpio = <&tlmm 64 0>;
+    enable-active-high;
+    startup-delay-us = <500000>;
+    pinctrl-0 = <&romulus_touch_power>;
+    pinctrl-names = "default";
+  };
+};
+
+&gpi_dma1 {
+  status = "okay";
+};
+
+&spi10 {
+  compatible = "qcom,geni-qspi";
+  dmas = <&gpi_dma1 0 2 9>, <&gpi_dma1 1 2 9>;
+  dma-names = "tx", "rx";
+  pinctrl-0 = <&qup_spi10_data_clk>, <&qup_spi10_cs>, <&romulus_touch_quad>;
+  pinctrl-names = "default";
+  status = "okay";
+
+  #address-cells = <1>;
+  #size-cells = <0>;
+
+  touchscreen@0 {
+    compatible = "microsoft,g6-touch-digitizer", "hid-over-spi";
+    reg = <0>;
+    spi-max-frequency = <20000000>;
+    interrupts-extended = <&tlmm 51 2>;
+    reset-gpios = <&tlmm 48 1>;
+    vdd-supply = <&romulus_touch_supply>;
+    pinctrl-0 = <&romulus_touch_irq>;
+    pinctrl-names = "default";
+    input-report-header-address = <0x1000>;
+    input-report-body-address = <0x1004>;
+    output-report-address = <0x2000>;
+    read-opcode = /bits/ 8 <0xeb>;
+    write-opcode = /bits/ 8 <0xe2>;
+    hid-over-spi-flags = <0xa000>;
+  };
+};
+
+&tlmm {
+  romulus_touch_quad: touchscreen-qspi-state {
+    pins = "gpio49", "gpio50";
+    function = "qup1_se2";
+    drive-strength = <6>;
+    bias-disable;
+  };
+
+  romulus_touch_power: touchscreen-power-state {
+    pins = "gpio64";
+    function = "gpio";
+    drive-strength = <2>;
+    bias-disable;
+  };
+
+  romulus_touch_irq: touchscreen-irq-state {
+    pins = "gpio51";
+    function = "gpio";
+    input-enable;
+    bias-pull-up;
+  };
+};

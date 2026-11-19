@@ -23,20 +23,23 @@ APT = [
 ]
 BACKPORTS = "trixie-backports"
 AUDIO = ("alsa-ucm-conf", "1.2.16.1-1~bpo13+1")
+CAMERA = (
+    ("libcamera-ipa", "0.7.1-1~bpo13+1"),
+    ("libcamera-tools", "0.7.1-1~bpo13+1"),
+    ("libspa-0.2-libcamera", "1.6.9-2~bpo13+1"),
+    ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
+)
+SNAPDRAGON = "surface-laptop-7-snapdragon"
+FIRMWARE_HELPER = "/usr/sbin/claw-import-board-firmware"
+SURFACE_FIRMWARE = "Microsoft Surface audio firmware"
 PACKS = {
-    "surface-laptop-7-intel": (
-        AUDIO,
-        ("libcamera-ipa", "0.7.1-1~bpo13+1"),
-        ("libcamera-tools", "0.7.1-1~bpo13+1"),
-        ("libspa-0.2-libcamera", "1.6.9-2~bpo13+1"),
-        ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
-    ),
-    "surface-laptop-7-snapdragon": (AUDIO,),
+    "surface-laptop-7-intel": (AUDIO, *CAMERA),
+    SNAPDRAGON: (AUDIO, *CAMERA),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
 }
 LOCAL_PACKAGES = {
     "surface-laptop-7-intel": "claw-os-surface-laptop-7",
-    "surface-laptop-7-snapdragon": "claw-os-surface-snapdragon-touchpad",
+    SNAPDRAGON: "claw-os-surface-snapdragon-touchpad",
 }
 
 
@@ -48,7 +51,7 @@ def detect(sysfs=Path("/sys")):
         except FileNotFoundError:
             return None
         if b"qcom,x1e80100" in compatible and {b"microsoft,romulus13", b"microsoft,romulus15"}.intersection(compatible):
-            return "surface-laptop-7-snapdragon"
+            return SNAPDRAGON
         return None
     if arch != "amd64":
         return None
@@ -102,10 +105,16 @@ def from_archive(packages):
     return [f"{name}/{BACKPORTS}" for name in packages]
 
 
+def needs_firmware(pack):
+    return pack == SNAPDRAGON and subprocess.run(
+        [FIRMWARE_HELPER, "--romulus-audio-ready"], check=False,
+    ).returncode != 0
+
+
 def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
-    for pack in ("surface-laptop-7-snapdragon",) if arch == "arm64" else (
+    for pack in (SNAPDRAGON,) if arch == "arm64" else (
         "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10",
     ):
         directory = CACHE / pack
@@ -140,7 +149,7 @@ def install_offline():
     pack = detect()
     packages = missing(pack)
     remove_media_keyboard(pack)
-    if pack != "surface-laptop-7-snapdragon" and Path(
+    if pack != SNAPDRAGON and Path(
         "/var/lib/dpkg/info/claw-os-surface-snapdragon-radio.list"
     ).is_file():
         subprocess.run(["/usr/bin/dpkg", "--purge", "claw-os-surface-snapdragon-radio"], check=True)
@@ -157,6 +166,8 @@ def install_offline():
         packages = missing(pack)
     if CACHE.is_dir():
         shutil.rmtree(CACHE)
+    if needs_firmware(pack):
+        packages.append(SURFACE_FIRMWARE)
     publish("pending" if packages else "ready", pack, packages)
     if packages:
         PENDING.touch()
@@ -169,7 +180,11 @@ def online():
         return
     pack = detect()
     packages = missing(pack)
-    if not packages:
+    firmware = needs_firmware(pack)
+    if not firmware and pack == SNAPDRAGON and STATUS.is_file():
+        firmware = SURFACE_FIRMWARE in json.loads(STATUS.read_text()).get("packages", [])
+    pending = packages + ([SURFACE_FIRMWARE] if firmware else [])
+    if not pending:
         publish("ready", pack, [])
         PENDING.unlink(missing_ok=True)
         return
@@ -178,17 +193,22 @@ def online():
         env=dict(os.environ, LC_ALL="C"),
     ).strip()
     if connectivity != "full":
-        publish("pending", pack, packages)
+        publish("pending", pack, pending)
         return
 
-    publish("installing", pack, packages)
+    publish("installing", pack, pending)
     try:
-        apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
-        apt("install", "-t", BACKPORTS, "--no-install-recommends", "--no-remove", "-y", *from_archive(packages))
+        if packages:
+            apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
+            apt("install", "-t", BACKPORTS, "--no-install-recommends", "--no-remove", "-y", *from_archive(packages))
+        if firmware:
+            subprocess.run([FIRMWARE_HELPER, "--surface-laptop-7"], check=True)
     except subprocess.CalledProcessError:
-        publish("failed", pack, missing(pack))
+        publish("failed", pack, missing(pack) + ([SURFACE_FIRMWARE] if firmware else []))
         raise
     packages = missing(pack)
+    if needs_firmware(pack):
+        packages.append(SURFACE_FIRMWARE)
     publish("failed" if packages else "ready", pack, packages)
     if not packages:
         PENDING.unlink(missing_ok=True)
