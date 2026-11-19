@@ -42,5 +42,13 @@ if [ -e "$config" ] || [ -L "$config" ]; then
         fail "refusing to replace $config"
     fi
 fi
-printf "%s\nexport CLAW_QCOM_DTB='%s'\nGRUB_DEFAULT=claw-qcom\n" \
-    "$header" "$tree" | install -Dm0644 /dev/stdin "$config"
+resume=
+if claw_qcom_romulus "$tree" && grep -Fxq 'CONFIG_HIBERNATION=y' "/boot/config-$version"; then
+    resume=$(/usr/lib/cos/hw/configure-romulus-resume "$version") || fail "could not configure disk hibernation"
+fi
+{
+    printf "%s\nexport CLAW_QCOM_DTB='%s'\nGRUB_DEFAULT=claw-qcom\n" "$header" "$tree"
+    if [ -n "$resume" ]; then
+        printf "export CLAW_QCOM_RESUME='%s'\nexport CLAW_QCOM_RESUME_KERNEL='%s'\n" "$resume" "$version"
+    fi
+} | install -Dm0644 /dev/stdin "$config"

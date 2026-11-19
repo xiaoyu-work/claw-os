@@ -3,7 +3,11 @@ set -euo pipefail
 
 platform="${CLAW_PLATFORM:?kernel-platform requires CLAW_PLATFORM}"
 builder="$PROJECT_DIR/scripts/platform_kernels.py"
-identity=$(python3 "$builder" "$platform" --describe)
+mode=()
+if [[ $platform == aarch64-qualcomm && ,${FEATURES:-}, == *,installer,* ]]; then
+    mode=(--board-tools)
+fi
+identity=$(python3 "$builder" "$platform" "${mode[@]}" --describe)
 read -r architecture release boot_args <<<"$identity"
 if [[ $architecture != "$DEB_ARCH" ]]; then
     echo "error: $platform requires $architecture target packages, not $DEB_ARCH" >&2
@@ -16,20 +20,21 @@ fi
 
 stage=$(mktemp -d "$ROOTFS/tmp/claw-platform.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-if [[ $platform == aarch64-qualcomm && ,${FEATURES:-}, == *,installer,* ]]; then
+if (( ${#mode[@]} )); then
     install -d "$stage"/{scripts,packaging}
     for file in platform_kernels.py surface_laptop7.py; do
         install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
     done
     install -m0644 "$PROJECT_DIR"/packaging/platform-kernels.json \
-        "$PROJECT_DIR"/packaging/surface-romulus13-*.dtso "$stage/packaging/"
+        "$PROJECT_DIR"/packaging/surface-romulus*.dtso \
+        "$PROJECT_DIR"/packaging/surface-romulus-camss.patch "$stage/packaging/"
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
-        gpg gpgv zstd device-tree-compiler git patch meson ninja-build cmake ca-certificates \
-        bc libelf-dev libssl-dev </dev/null
+        gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates \
+        bc bison flex cpio pahole libdw-dev libelf-dev libssl-dev zlib1g-dev cryptsetup-initramfs </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
-        "$platform" --board-tools --output "${stage#"$ROOTFS"}/packages"
+        "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
     artifacts="$stage/packages"
 else
     python3 "$builder" "$platform" --output "$stage"
@@ -52,7 +57,7 @@ if [[ $platform == aarch64-qualcomm ]]; then
     radio=("$artifacts"/claw-os-surface-snapdragon-radio_*.deb)
     test -f "${radio[0]}"
     packages+=("$inside/${radio[0]##*/}")
-    if [[ ,${FEATURES:-}, == *,installer,* ]]; then
+    if (( ${#mode[@]} )); then
         cache="$ROOTFS/usr/share/cos/driver-cache/surface-laptop-7-snapdragon"
         install -d "$cache"
         install -m0644 "$artifacts"/{claw-os-surface-snapdragon-touchpad,alsa-ucm-conf}_*.deb "$cache/"
@@ -82,6 +87,12 @@ fi
 
 install -d "$ROOTFS/etc/default/grub.d"
 printf 'GRUB_TOP_LEVEL="/boot/vmlinuz-%s"\n' "$release" >"$ROOTFS/etc/default/grub.d/60-claw-os-platform.cfg"
+if (( ${#mode[@]} )); then
+    # Only the matching Surface entries can write or restore a hibernation image.
+    printf '%s\n' 'export CLAW_QCOM_LINUX="${GRUB_CMDLINE_LINUX:-}"' \
+        'GRUB_CMDLINE_LINUX="$CLAW_QCOM_LINUX noresume nohibernate"' \
+        >>"$ROOTFS/etc/default/grub.d/60-claw-os-platform.cfg"
+fi
 if [[ -n $boot_args ]]; then
     printf 'GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX %s"\n' "$boot_args" >>"$ROOTFS/etc/default/grub.d/60-claw-os-platform.cfg"
 fi

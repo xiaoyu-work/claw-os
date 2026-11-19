@@ -709,6 +709,7 @@ install -Dm0755 "$HARDWARE_SRC/claw-os-input-initramfs" \
     "$BASE_STAGE/usr/share/initramfs-tools/hooks/claw-os-input"
 install -Dm0644 "$HARDWARE_SRC/qualcomm-boot.sh" "$BASE_STAGE/usr/lib/cos/hw/qualcomm-boot.sh"
 install -Dm0755 "$HARDWARE_SRC/configure-qualcomm-boot" "$BASE_STAGE/usr/lib/cos/hw/configure-qualcomm-boot"
+install -Dm0755 "$HARDWARE_SRC/configure-romulus-resume" "$BASE_STAGE/usr/lib/cos/hw/configure-romulus-resume"
 install -Dm0755 "$HARDWARE_SRC/09_claw_qualcomm" "$BASE_STAGE/etc/grub.d/09_claw_qualcomm"
 install -Dm0644 "$HARDWARE_SRC/69-claw-os-hardware.rules" \
     "$BASE_STAGE/usr/lib/udev/rules.d/69-claw-os-hardware.rules"

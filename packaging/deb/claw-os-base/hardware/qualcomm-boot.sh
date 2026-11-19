@@ -50,6 +50,13 @@ claw_qcom_tree() {
 claw_qcom_args='acpi=off console=tty0 clk_ignore_unused pd_ignore_unused iommu.passthrough=0'
 claw_qcom_no_dsp='modprobe.blacklist=qcom_q6v5_pas'
 
+claw_qcom_romulus() {
+    case "$1" in
+        x1e80100-microsoft-romulus13.dtb|x1e80100-microsoft-romulus13-spi.dtb|x1e80100-microsoft-romulus15.dtb) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 claw_qcom_nvme_boot() {
     local device
     for device do

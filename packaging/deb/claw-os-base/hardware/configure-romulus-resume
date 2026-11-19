@@ -1,0 +1,86 @@
+#!/usr/bin/python3
+"""Configure hibernation from a persistent swap partition chosen in Calamares."""
+
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+
+
+def rows(path):
+    return [line.partition("#")[0].split() for line in path.read_text().splitlines()]
+
+
+def query(*args):
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def storage(spec):
+    if re.fullmatch(r"UUID=[0-9a-fA-F-]{36}", spec):
+        device = "/dev/disk/by-uuid/" + spec[5:]
+    elif re.fullmatch(r"/dev/mapper/[A-Za-z0-9_.+-]+", spec):
+        device = spec
+    else:
+        return None
+    try:
+        if not stat.S_ISBLK(os.stat(device).st_mode):
+            return None
+    except FileNotFoundError:
+        return None
+    parents = [line.split() for line in query("/usr/bin/lsblk", "-snro", "TYPE,TRAN", device).splitlines()]
+    if {tuple(fields) for fields in parents if fields[:1] == ["disk"]} != {("disk", "nvme")}:
+        return None
+    return device, any(fields[:1] == ["crypt"] for fields in parents)
+
+
+def resume_partition(fstab, crypttab, meminfo):
+    root = [row[0] for row in rows(fstab) if len(row) >= 3 and row[1] == "/"]
+    swap = [row[0] for row in rows(fstab) if len(row) >= 4 and row[2] == "swap"
+            and "noauto" not in row[3].split(",")]
+    if len(root) != 1 or len(swap) != 1:
+        return None
+    root_disk, resume_disk = storage(root[0]), storage(swap[0])
+    if root_disk is None or resume_disk is None:
+        return None
+    device, encrypted = resume_disk
+    if root_disk[1] and not encrypted:
+        return None
+    if encrypted:
+        if not swap[0].startswith("/dev/mapper/") or not crypttab.is_file():
+            return None
+        mapping = Path(swap[0]).name
+        if not any(len(row) >= 4 and row[0] == mapping and row[2] in ("none", "-")
+                   and "luks" in row[3].split(",") and "swap" not in row[3].split(",")
+                   for row in rows(crypttab)):
+            return None
+    if query("/usr/sbin/blkid", "-p", "-s", "TYPE", "-o", "value", device) != "swap":
+        return None
+    size = query("/usr/sbin/blockdev", "--getsize64", device)
+    memory = re.search(r"^MemTotal:\s+(\d+) kB$", meminfo.read_text(), re.MULTILINE)
+    if not size.isdecimal() or not memory or int(size) < 1024 * int(memory[1]):
+        return None
+    return swap[0]
+
+
+def main(version):
+    if os.geteuid() != 0:
+        raise SystemExit("disk hibernation setup requires root")
+    resume = resume_partition(Path("/etc/fstab"), Path("/etc/crypttab"), Path("/proc/meminfo"))
+    initramfs = Path("/etc/initramfs-tools/conf.d/zz-claw-romulus-resume")
+    initramfs.write_text(f"RESUME={resume or 'none'}\n")
+    sleep = Path("/etc/systemd/sleep.conf.d/60-claw-romulus.conf")
+    sleep.parent.mkdir(parents=True, exist_ok=True)
+    sleep.write_text(f"[Sleep]\nAllowHibernation={'yes' if resume else 'no'}\nHibernateMode=shutdown\n"
+                     "AllowHybridSleep=no\nAllowSuspendThenHibernate=no\n")
+    subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", version], stdout=sys.stderr, check=True)
+    if resume:
+        print(resume)
+    else:
+        print("Disk hibernation needs a persistent NVMe swap partition at least as large as RAM.", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])

@@ -79,25 +79,15 @@
       "sha256": "e5eca90cbe82167a1bf43c1e99c9da28a1e19f66db46df018154cef70874716f",
       "source": "https://github.com/omacom/omarchy-pkgs/tree/2082b74a83403217413d97576ff930f01320effd/pkgbuilds"
     },
-    "surface-snapdragon-headers": {
-      "file": "linux-omarchy-headers-7.3-72-aarch64.pkg.tar.zst",
-      "sha256": "8a6addab48f3f1e28368bff8812362eb8224c0454b1746758541c65c793d3a64",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
+    "omarchy-linux-source": {
+      "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.tar.xz",
+      "sha256": "87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953",
+      "source": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v7.3"
     },
     "surface-snapdragon-kernel-fixes": {
       "url": "https://codeload.github.com/omacom/omarchy-pkgs/tar.gz/b0ff9ed3b6b2b8a237a0266541b670e7faec7883",
       "sha256": "f918f4c24933c6ea7c9d1a27e60e07c06d7172a900186f824d70415203dbe189",
       "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
-    },
-    "surface-snapdragon-registry": {
-      "url": "https://raw.githubusercontent.com/torvalds/linux/v7.3/drivers/platform/surface/surface_aggregator_registry.c",
-      "sha256": "4c022cc1481ecc49bd4749c7974376774e9258e195ba95c11af7293d1b7b54a4",
-      "source": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/platform/surface/surface_aggregator_registry.c?h=v7.3"
-    },
-    "surface-snapdragon-posture": {
-      "url": "https://raw.githubusercontent.com/torvalds/linux/v7.3/drivers/platform/surface/surface_aggregator_tabletsw.c",
-      "sha256": "90874804c21a5a3caf4eaefff1f6a3442bfac9b059a3e2b71113d496aacf90a0",
-      "source": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/platform/surface/surface_aggregator_tabletsw.c?h=v7.3"
     },
     "surface-snapdragon-posture-fix": {
       "url": "https://raw.githubusercontent.com/ItsLucas/surface-laptop-7-ubuntu-kernel/2ce3083fa76855225465f809760dc7185c74a80c/patches/0020-surface-aggregator-sl7-pos-events.patch",
@@ -167,12 +157,12 @@
     "aarch64-qualcomm": {
       "arch": "arm64",
       "release": "7.3.0-72-omarchy",
+      "installer_release": "7.3.0-72-claw-omarchy",
       "kernel": "omarchy-kernel",
       "dtbs": "omarchy-dtbs",
       "romulus": [
         "surface-snapdragon-addresses", "surface-snapdragon-iptsd", "surface-snapdragon-fixes",
-        "surface-snapdragon-headers", "surface-snapdragon-kernel-fixes", "surface-snapdragon-registry",
-        "surface-snapdragon-posture", "surface-snapdragon-posture-fix"
+        "omarchy-linux-source", "surface-snapdragon-kernel-fixes", "surface-snapdragon-posture-fix"
       ]
     },
     "aarch64-n1x": {

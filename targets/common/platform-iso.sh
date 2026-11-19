@@ -2,6 +2,7 @@
 
 select_iso_platform() {
     local role=$1 identity architecture
+    local -a mode=()
     ISO_FEATURES=$2
     PLATFORM_RELEASE=
     PLATFORM_SUFFIX=
@@ -12,7 +13,10 @@ select_iso_platform() {
         fi
         return
     fi
-    identity=$(python3 "$PROJECT_DIR/scripts/platform_kernels.py" "$CLAW_PLATFORM" --describe) || return 1
+    if [[ $role == installer && $CLAW_PLATFORM == "aarch64-qualcomm" ]]; then
+        mode=(--board-tools)
+    fi
+    identity=$(python3 "$PROJECT_DIR/scripts/platform_kernels.py" "$CLAW_PLATFORM" "${mode[@]}" --describe) || return 1
     read -r architecture PLATFORM_RELEASE PLATFORM_BOOT_ARGS <<<"$identity"
     if [[ $architecture != "$DEB_ARCH" ]]; then
         echo "error: $CLAW_PLATFORM requires $architecture, not $DEB_ARCH" >&2
@@ -54,6 +58,9 @@ finalize_iso_platform() {
     if [[ ${1:-live} == installer && ,$ISO_FEATURES, == *,desktop,* ]]; then
         # Calamares uses tty1 on the USB. Keep greetd enabled on the target.
         boot_args="${boot_args:+$boot_args }systemd.mask=greetd.service"
+    fi
+    if [[ ${1:-live} == installer && ${CLAW_PLATFORM:-} == aarch64-qualcomm ]]; then
+        boot_args="$boot_args noresume nohibernate"
     fi
     if [[ -n $boot_args ]]; then
         sed -i "s|boot=live components|boot=live components $boot_args|" "$ISO_BUILD/boot/grub/grub.cfg"

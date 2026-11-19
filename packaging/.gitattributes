@@ -1,0 +1,2 @@
+# A unified diff prefix before kernel-source tabs is part of the patch.
+surface-romulus-camss.patch whitespace=-space-before-tab

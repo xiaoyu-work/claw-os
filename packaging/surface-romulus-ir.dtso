@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/dts-v1/;
+/plugin/;
+
+// MSHW0472: VD55G0 on CCI0/CSIPHY0. Keep OEM rail voltages and leave the IR emitter disconnected.
+&apps_rsc {
+  regulators-8 {
+    romulus_ir_core: ldo2 {
+      regulator-name = "vreg_l2m_1p2";
+      regulator-min-microvolt = <1200000>;
+      regulator-max-microvolt = <1200000>;
+      regulator-initial-mode = <3>;
+    };
+
+    romulus_ir_io: ldo4 {
+      regulator-name = "vreg_l4m_1p8";
+      regulator-min-microvolt = <1800000>;
+      regulator-max-microvolt = <1800000>;
+      regulator-initial-mode = <3>;
+    };
+
+    romulus_ir_analog: ldo6 {
+      regulator-name = "vreg_l6m_1p8";
+      regulator-min-microvolt = <1800000>;
+      regulator-max-microvolt = <1800000>;
+      regulator-initial-mode = <3>;
+    };
+  };
+};
+
+&camss {
+  ports {
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    port@0 {
+      reg = <0>;
+
+      romulus_ir_in: endpoint {
+        clock-lanes = <7>;
+        data-lanes = <0>;
+        remote-endpoint = <&romulus_ir_out>;
+      };
+    };
+  };
+};
+
+&cci0 {
+  status = "okay";
+};
+
+&cci0_i2c0 {
+  #address-cells = <1>;
+  #size-cells = <0>;
+  clock-frequency = <400000>;
+
+  camera@10 {
+    compatible = "st,vd55g0";
+    reg = <0x10>;
+    orientation = <0>;
+    reset-gpios = <&tlmm 109 1>;
+    pinctrl-0 = <&romulus_ir_pins>;
+    pinctrl-names = "default";
+    clocks = <&camcc 71>; // CAM_CC_MCLK0_CLK
+    assigned-clocks = <&camcc 71>;
+    assigned-clock-rates = <19200000>;
+    VCORE-supply = <&romulus_ir_core>;
+    VDDIO-supply = <&romulus_ir_io>;
+    VANA-supply = <&romulus_ir_analog>;
+
+    port {
+      romulus_ir_out: endpoint {
+        data-lanes = <1>;
+        link-frequencies = /bits/ 64 <402000000>; // Rate programmed by the VD55G0 driver.
+        remote-endpoint = <&romulus_ir_in>;
+      };
+    };
+  };
+};
+
+&tlmm {
+  romulus_ir_pins: camera-ir-state {
+    mclk-pins {
+      pins = "gpio96";
+      function = "cam_mclk";
+      drive-strength = <16>;
+      bias-disable;
+    };
+
+    reset-pins {
+      pins = "gpio109";
+      function = "gpio";
+      drive-strength = <2>;
+      bias-disable;
+    };
+  };
+};

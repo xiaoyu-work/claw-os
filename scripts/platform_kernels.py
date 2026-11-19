@@ -120,6 +120,45 @@ done
 """
 
 
+def prepare_qualcomm_kernel(tree, recipes, release, posture):
+    from surface_laptop7 import patch
+
+    recipe = (recipes / "PKGBUILD").read_text().split("\nsource=(\n", 1)[1].split("\n)\n", 1)[0]
+    series = re.findall(r"^  (\d[^\s{}]+\.patch)(?:\{,\.sig\})?$", recipe, flags=re.MULTILINE)
+    if not series or set(series) != {file.name for file in recipes.glob("[0-9]*.patch")}:
+        raise ValueError("the vendor kernel patch series does not match the pinned recipe")
+    for name in series:
+        patch(tree, recipes / name)
+    patch(tree, posture)
+    patch(tree, ROOT / "packaging/surface-romulus-camss.patch")
+    config = tree / ".config"
+    copy_required(recipes / "config.aarch64", config)
+    subprocess.run([tree / "scripts/config", "--file", config, "--set-str", "LOCALVERSION",
+                    "-" + release.split("-", 1)[1], "--enable", "HIBERNATION",
+                    "--enable", "DEBUG_INFO_COMPRESSED_ZSTD"], check=True)
+
+
+def build_qualcomm_kernel(release, source, work, stage):
+    from surface_laptop7 import extract
+
+    tree = work / "linux"
+    recipe = Path("pkgbuilds/linux-omarchy-aarch64")
+    extract(source["omarchy-linux-source"], tree)
+    extract(source["surface-snapdragon-kernel-fixes"], work, prefixes=(f"{recipe}/",))
+    prepare_qualcomm_kernel(tree, work / recipe, release, source["surface-snapdragon-posture-fix"])
+    make = ["make", "-C", tree]
+    subprocess.run([*make, "olddefconfig"], check=True)
+    config = tree / ".config"
+    actual_release = subprocess.check_output([*make, "-s", "kernelrelease"], text=True).strip()
+    if actual_release != release or "CONFIG_HIBERNATION=y" not in config.read_text().splitlines():
+        raise ValueError("Qualcomm kernel release or hibernation config does not match the installer")
+    subprocess.run([*make, f"-j{len(os.sched_getaffinity(0))}", "Image", "modules"], check=True)
+    subprocess.run([*make, f"INSTALL_MOD_PATH={stage / 'usr'}", "INSTALL_MOD_STRIP=1", "modules_install"], check=True)
+    (stage / f"usr/lib/modules/{release}/build").unlink(missing_ok=True)
+    copy_required(tree / "arch/arm64/boot/Image", stage / f"boot/vmlinuz-{release}")
+    copy_required(config, stage / f"boot/config-{release}")
+
+
 def kernel_package(profile, source, provenance, work, out):
     release = profile["release"]
     name = f"linux-image-{release.lower()}"
@@ -127,22 +166,31 @@ def kernel_package(profile, source, provenance, work, out):
     stage = work / "kernel"
     prefix = f"usr/lib/modules/{release}"
     module_dir = stage / prefix
-    unpack(
-        source[profile["kernel"]],
-        stage,
-        lambda p: p.startswith((f"{prefix}/kernel/", f"{prefix}/dtbs/"))
-        or p in {f"{prefix}/{name}" for name in ("vmlinuz", "modules.builtin", "modules.builtin.modinfo", "modules.order")},
-    )
+    source_build = "omarchy-linux-source" in source
+    if source_build:
+        build_qualcomm_kernel(release, source, work, stage)
+        patch = ROOT / "packaging/surface-romulus-camss.patch"
+        provenance[patch.stem] = {
+            "sha256": digest(patch),
+            "source": f"https://github.com/xiaoyu-work/claw-os/blob/main/packaging/{patch.name}",
+        }
+    else:
+        unpack(
+            source[profile["kernel"]],
+            stage,
+            lambda p: p.startswith((f"{prefix}/kernel/", f"{prefix}/dtbs/"))
+            or p in {f"{prefix}/{name}" for name in ("vmlinuz", "modules.builtin", "modules.builtin.modinfo", "modules.order")},
+        )
+        copy_required(module_dir / "vmlinuz", stage / f"boot/vmlinuz-{release}")
+        (module_dir / "vmlinuz").unlink()
+        image = (stage / f"boot/vmlinuz-{release}").read_bytes()
+        start = image.find(b"IKCFG_ST\x1f\x8b\x08")
+        if start >= 0:
+            end = image.find(b"IKCFG_ED", start)
+            if end > start:
+                (stage / f"boot/config-{release}").write_bytes(gzip.decompress(image[start + 8:end]))
     if not (module_dir / "modules.builtin").is_file() or not (module_dir / "kernel").is_dir():
         raise ValueError(f"incomplete modules for {release}")
-    copy_required(module_dir / "vmlinuz", stage / f"boot/vmlinuz-{release}")
-    (module_dir / "vmlinuz").unlink()
-    image = (stage / f"boot/vmlinuz-{release}").read_bytes()
-    start = image.find(b"IKCFG_ST\x1f\x8b\x08")
-    if start >= 0:
-        end = image.find(b"IKCFG_ED", start)
-        if end > start:
-            (stage / f"boot/config-{release}").write_bytes(gzip.decompress(image[start + 8:end]))
     if "dtbs" in profile:
         directory = "boot/dtbs/linux-omarchy/qcom"
         unpack(source[profile["dtbs"]], work / "dtbs", lambda p: p.startswith(directory + "/") and p.endswith(".dtb"))
@@ -150,8 +198,8 @@ def kernel_package(profile, source, provenance, work, out):
         boards = module_dir / "dtb/qcom"
         shutil.move(work / "dtbs" / directory, boards)
         if "romulus" in profile:
-            romulus_trees(boards, work, provenance)
-            version += "+clawos1"
+            romulus_trees(boards, work, provenance, source_build)
+            version += "+clawos2" if source_build else "+clawos1"
         write_qualcomm_boards(boards)
     if "boot" in profile:
         # Do not expose internal speakers without the matching speaker protection stack.
@@ -166,32 +214,41 @@ def kernel_package(profile, source, provenance, work, out):
     )
 
 
-def romulus_trees(boards, work, provenance):
+def romulus_trees(boards, work, provenance, include_ir):
     references = {
         "touchpad": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
         "touch-i2c": "https://lkml.org/lkml/2026/9/30/518",
         "touch-spi": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
         "camera": "https://github.com/bryce-hoehn/linux-surface-laptop-7/blob/af765428493e13b84f06c23bdea4cedd3e58cf72/patches/outgoing/ov02c10/0004-OV02C10-camera-device-tree.patch",
     }
+    if include_ir:
+        references["ir"] = "https://github.com/qBitnaut/omarchy-dragon-sl7/blob/de20e9ba631c44fa9ca218bd94fd5888a08d427c/pkgs/linux-sl7/patches/0044-arm64-dts-qcom-x1e80100-romulus13-Add-the-IR-camera.patch"
     overlays = {}
     for name, reference in references.items():
-        file = f"surface-romulus13-{name}.dtso"
+        file = "surface-romulus-ir.dtso" if name == "ir" else f"surface-romulus13-{name}.dtso"
         source = ROOT / "packaging" / file
         overlays[name] = work / f"{name}.dtbo"
         subprocess.run(["dtc", "-@", "-I", "dts", "-O", "dtb", "-o", overlays[name], source], check=True)
-        provenance[f"romulus13-{name}"] = {
+        provenance[Path(file).stem] = {
             "sha256": digest(source),
             "source": f"https://github.com/xiaoyu-work/claw-os/blob/main/packaging/{file}",
             "board_reference": reference,
         }
 
+    ir = [overlays["ir"]] if include_ir else []
     original = boards / "x1e80100-microsoft-romulus13.dtb"
     for transport in ("spi", "i2c"):
         filename = original.name if transport == "i2c" else original.stem + "-spi.dtb"
         patched = work / filename
         subprocess.run(["fdtoverlay", "-i", original, "-o", patched, overlays["touchpad"],
-                        overlays["camera"], overlays[f"touch-{transport}"]], check=True)
+                        overlays["camera"], overlays[f"touch-{transport}"], *ir], check=True)
         patched.replace(boards / filename)
+
+    if include_ir:
+        romulus15 = boards / "x1e80100-microsoft-romulus15.dtb"
+        patched = work / romulus15.name
+        subprocess.run(["fdtoverlay", "-i", romulus15, "-o", patched, *ir], check=True)
+        patched.replace(romulus15)
 
     # These USB2 PHYs lose state during sleep. DWC3 fully reinitializes the
     # host controller at resume if it is not itself a wake source.
@@ -281,19 +338,20 @@ def apple_boot(profile, source, work, out):
     shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
 
 
-def build(lock, platform, cache, output, debian_release=None, board_tools=False):
-    profile = lock["platforms"][platform]
+def build(lock, profile, cache, output, debian_release=None, board_tools=False):
     if debian_release:
         profile = dict(profile, release=debian_release)
         keys = [name for name in profile["surface"] if name != "surface-linux-source"]
+    elif board_tools:
+        keys = list(profile["romulus"])
     else:
         keys = list(profile.get("native", [])) or [profile["kernel"]]
         keys += profile.get("surface", [])
     if "dtbs" in profile:
         keys.append(profile["dtbs"])
     keys += profile.get("gpu", []) + profile.get("boot", [])
-    if "romulus" in profile:
-        keys += profile["romulus"] if board_tools else ["surface-snapdragon-addresses"]
+    if "romulus" in profile and not board_tools:
+        keys.append("surface-snapdragon-addresses")
     output.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     provenance = {name: lock["inputs"][name] for name in keys}
@@ -312,7 +370,7 @@ def build(lock, platform, cache, output, debian_release=None, board_tools=False)
                 arch = subprocess.check_output(["dpkg-deb", "-f", artifact, "Architecture"], text=True).strip()
                 name = subprocess.check_output(["dpkg-deb", "-f", artifact, "Package"], text=True).strip()
                 if arch != profile["arch"] or name != f"linux-{kind}-{profile['release']}":
-                    raise ValueError(f"{artifact.name}: package does not match {platform}")
+                    raise ValueError(f"{artifact.name}: package does not match {profile['arch']} {profile['release']}")
                 shutil.copyfile(artifact, out / artifact.name)
             if "surface" in profile:
                 from surface_laptop7 import build_surface
@@ -348,7 +406,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--debian-kernel", metavar="RELEASE",
                         help="build the Intel driver pack against an installed Debian kernel and its headers")
-    parser.add_argument("--board-tools", action="store_true", help="build native Snapdragon touchpad tools")
+    parser.add_argument("--board-tools", action="store_true", help="build the native Snapdragon installer kernel and board tools")
     args = parser.parse_args()
     if args.debian_kernel and (args.platform != "x86-surface-laptop-7-intel" or args.describe
                                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64", args.debian_kernel)):
@@ -356,11 +414,18 @@ def main():
     if args.board_tools and args.platform != "aarch64-qualcomm":
         parser.error("--board-tools requires the aarch64-qualcomm profile")
     profile = lock["platforms"][args.platform]
+    if args.board_tools:
+        profile = dict(profile, release=profile["installer_release"])
     if args.describe:
         print(profile["arch"], profile["release"], profile.get("boot_args", ""))
     else:
-        output = args.output or ROOT / "build/platform-kernels" / (args.debian_kernel or args.platform)
-        build(lock, args.platform, args.cache, output, args.debian_kernel, args.board_tools)
+        if args.board_tools and subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip() != "arm64":
+            parser.error("--board-tools requires a native arm64 build environment")
+        name = args.debian_kernel or args.platform
+        if args.board_tools:
+            name += "-installer"
+        output = args.output or ROOT / "build/platform-kernels" / name
+        build(lock, profile, args.cache, output, args.debian_kernel, args.board_tools)
 
 
 if __name__ == "__main__":
