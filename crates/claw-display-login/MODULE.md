@@ -1,8 +1,8 @@
 # Root Display Login Handoff
 
 The OS-only PAM module is loaded by the `claw-desktop` greetd service for
-authenticated user sessions. The text greeter has a separate PAM service
-and does not start a compositor. The module checks the PAM account against
+authenticated user sessions. The graphical greeter has a separate PAM service
+and does not start the protected Hyprland compositor. The module checks the PAM account against
 the kernel audit UID/session established by `pam_loginuid`, captures the
 exact Root PAM worker, and starts only the protected display supervisor.
 

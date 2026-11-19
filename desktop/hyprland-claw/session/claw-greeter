@@ -1,0 +1,144 @@
+#!/usr/bin/python3
+"""Graphical PAM conversation for greetd's fixed Claw desktop session."""
+
+import json
+import os
+import socket
+import struct
+from threading import Thread
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
+
+
+class Greeter:
+    def __init__(self):
+        self.connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.connection.settimeout(180)
+        self.connection.connect(os.environ["GREETD_SOCK"])
+        self.wire = self.connection.makefile("rb")
+        self.active = False
+        self.answer = None
+
+        style = Gtk.CssProvider()
+        style.load_from_data(b"""
+            window { background-image: linear-gradient(135deg, #192632, #101418); color: #e5edf6; }
+            #card { background: #171e25; border: 1px solid #384858; border-radius: 24px; padding: 28px; }
+            #title { font-size: 28px; font-weight: bold; }
+            #status { color: #ffb4ab; }
+            entry { background: #232e3a; color: #e5edf6; padding: 10px; }
+            button { background: #232e3a; color: #e5edf6; border-radius: 10px; padding: 9px 16px; }
+            button.suggested-action { background: #9ccbfb; color: #0e2b45; }
+        """)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), style, 800)
+        self.window = Gtk.Window(title="Claw OS")
+        self.window.set_decorated(False)
+        self.window.connect("delete-event", lambda *_: True)
+        self.window.fullscreen()
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        card.set_name("card")
+        card.set_halign(Gtk.Align.CENTER)
+        card.set_valign(Gtk.Align.CENTER)
+        self.window.add(card)
+        logo = GdkPixbuf.Pixbuf.new_from_file_at_scale("/usr/share/claw-os/oobe/logo.png", 72, 72, True)
+        card.pack_start(Gtk.Image.new_from_pixbuf(logo), False, False, 0)
+        title = Gtk.Label(label="Claw OS")
+        title.set_name("title")
+        card.pack_start(title, False, False, 0)
+        self.prompt = Gtk.Label()
+        self.prompt.set_line_wrap(True)
+        self.prompt.set_max_width_chars(38)
+        card.pack_start(self.prompt, False, False, 0)
+        self.entry = Gtk.Entry(max_length=256, width_chars=26)
+        self.entry.connect("activate", self.submit)
+        card.pack_start(self.entry, False, False, 0)
+        self.status = Gtk.Label()
+        self.status.set_name("status")
+        self.status.set_line_wrap(True)
+        self.status.set_max_width_chars(38)
+        card.pack_start(self.status, False, False, 0)
+        buttons = Gtk.Box(spacing=10)
+        card.pack_start(buttons, False, False, 0)
+        self.cancel = Gtk.Button(label="Cancel")
+        self.cancel.connect("clicked", lambda *_: self.send("cancel_session"))
+        buttons.pack_start(self.cancel, True, True, 0)
+        self.continue_button = Gtk.Button(label="Continue")
+        self.continue_button.get_style_context().add_class("suggested-action")
+        self.continue_button.connect("clicked", self.submit)
+        buttons.pack_start(self.continue_button, True, True, 0)
+        self.window.show_all()
+        self.question("Sign in with your username", "visible")
+
+    def question(self, prompt, answer):
+        self.answer = answer
+        self.prompt.set_text(prompt)
+        self.entry.set_text("")
+        self.entry.set_visible(answer in ("visible", "secret"))
+        self.entry.set_visibility(answer != "secret")
+        self.entry.set_input_purpose(Gtk.InputPurpose.PASSWORD if answer == "secret" else Gtk.InputPurpose.FREE_FORM)
+        self.entry.set_sensitive(True)
+        self.cancel.set_sensitive(self.active)
+        self.continue_button.set_sensitive(True)
+        (self.entry if self.entry.get_visible() else self.continue_button).grab_focus()
+
+    def submit(self, *_):
+        if not self.continue_button.get_sensitive():
+            return
+        text = self.entry.get_text()
+        if not self.active:
+            if text.strip():
+                self.status.set_text("")
+                self.active = True
+                self.send("create_session", username=text.strip())
+        else:
+            self.send("post_auth_message_response", response=text if self.answer in ("visible", "secret") else None)
+
+    def send(self, operation, **arguments):
+        self.entry.set_text("")
+        self.entry.set_sensitive(False)
+        self.cancel.set_sensitive(False)
+        self.continue_button.set_sensitive(False)
+
+        def exchange():
+            try:
+                body = json.dumps({"type": operation, **arguments}).encode("utf-8")
+                self.connection.sendall(struct.pack("=I", len(body)) + body)
+                size, = struct.unpack("=I", self.wire.read(4))
+                if not 0 < size <= 65536:
+                    raise ValueError("invalid PAM message size")
+                reply = json.loads(self.wire.read(size))
+                if not isinstance(reply, dict):
+                    raise ValueError("invalid PAM reply")
+            except (OSError, ValueError, struct.error):
+                reply = None
+            GLib.idle_add(self.response, operation, reply)
+        Thread(target=exchange, daemon=True).start()
+
+    def response(self, operation, reply):
+        if reply is None:
+            self.status.set_text("The sign-in service disconnected.")
+            Gtk.main_quit()
+        elif operation == "cancel_session" and reply.get("type") == "success":
+            self.active = False
+            self.question("Sign in with your username", "visible")
+        elif reply.get("type") == "error" and operation != "cancel_session":
+            self.status.set_text("Sign-in did not complete. Try again.")
+            self.send("cancel_session")
+        elif reply.get("type") == "auth_message":
+            self.question(reply["auth_message"], reply["auth_message_type"])
+        elif reply.get("type") == "success":
+            if operation == "start_session":
+                Gtk.main_quit()
+            else:
+                self.send("start_session", cmd=["/usr/bin/systemd-cat", "--identifier=claw-desktop",
+                                               "/usr/local/bin/claw-display-session", "--desktop"],
+                          env=["XDG_SESSION_TYPE=wayland"])
+        else:
+            Gtk.main_quit()
+
+
+if __name__ == "__main__":
+    Greeter()
+    Gtk.main()

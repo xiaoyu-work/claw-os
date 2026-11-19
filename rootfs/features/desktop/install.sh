@@ -48,6 +48,8 @@ for package in claw-os-desktop claw-app-desktop-shell; do
 done
 test -x "$ROOTFS/usr/libexec/claw-hyprland/Hyprland"
 test -x "$ROOTFS/usr/libexec/claw-hyprland/claw-lockscreen"
+test -x "$ROOTFS/usr/libexec/claw-greeter"
+test -x "$ROOTFS/usr/libexec/claw-desktop-reviews"
 test -f "$ROOTFS/etc/pam.d/claw-desktop-lock"
 test -f "$ROOTFS/usr/lib/cos/apps/desktop-shell/app.json"
 test -f "$ROOTFS/usr/share/wayland-sessions/claw.desktop"

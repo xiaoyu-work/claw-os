@@ -4,6 +4,9 @@ hl.config({
     misc = {
         disable_hyprland_logo = true,
         disable_splash_rendering = true,
+        -- The Claw OS supervisor owns compositor lifetime and the OS owns dialogs.
+        disable_watchdog_warning = true,
+        disable_hyprland_guiutils_check = true,
     },
 })
 

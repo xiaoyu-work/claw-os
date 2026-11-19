@@ -86,10 +86,18 @@ install -Dm0755 "$CARGO_TARGET_DIR/release/claw-os-applet-provider" \
 install -Dm0644 "$project/desktop/services/claw-applet-services/LICENSE" "$license/applet-services.LICENSE"
 
 session="$work/hyprland-claw/session"
+security="$stage/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/security"
+install -d "$security"
+/usr/bin/cc -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now,-z,defs \
+    "$session/claw-first-password.c" -lpam -o "$security/pam_claw_first_password.so"
+chmod 0644 "$security/pam_claw_first_password.so"
 install -Dm0644 "$session/claw.desktop" "$stage/usr/share/wayland-sessions/claw.desktop"
 install -Dm0644 "$session/hyprland.lua" "$stage/etc/xdg/hypr/hyprland.lua"
 install -Dm0644 "$session/claw-desktop-session.target" "$stage/usr/lib/systemd/user/claw-desktop-session.target"
 install -Dm0644 "$session/claw-desktop.pam" "$stage/etc/pam.d/claw-desktop"
+install -Dm0644 "$session/claw-first-password.pam" "$stage/etc/pam.d/claw-first-password"
+install -Dm0755 "$session/claw-greeter" "$stage/usr/libexec/claw-greeter"
+install -Dm0755 "$session/claw-desktop-reviews" "$stage/usr/libexec/claw-desktop-reviews"
 install -Dm0644 "$session/greetd.toml" "$stage/etc/greetd/claw-desktop.toml"
 install -Dm0644 "$session/greetd.conf" "$stage/usr/lib/systemd/system/greetd.service.d/claw-desktop.conf"
 install -Dm0644 "$session/hyprland-portals.conf" "$stage/usr/share/xdg-desktop-portal/hyprland-portals.conf"
@@ -110,7 +118,7 @@ for library in "${libraries[@]}"; do
     objdump -p "$library" | sed -nE 's/^[[:space:]]+SONAME[[:space:]]+(.+)\.so\.(.+)$/\1 \2 claw-os-desktop/p'
 done >debian/shlibs.local
 dpkg-shlibdeps -O -l"$native/lib" -xclaw-os-desktop "$native/Hyprland" "${libraries[@]}" \
-    "$native/claw-lockscreen" \
+    "$native/claw-lockscreen" "$security/pam_claw_first_password.so" \
     "$stage/usr/local/bin/cos-agent-ui" "$stage/usr/local/bin/cos-agent-bridge" \
     "$stage/usr/local/bin/cos-ask-claw-launcher" "$stage/usr/libexec/claw-os-applet-provider" \
     | sed -n 's/^shlibs:Depends=//p' >"$work/runtime-depends"

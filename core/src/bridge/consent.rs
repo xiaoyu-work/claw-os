@@ -24,7 +24,7 @@ pub(super) fn register_with_wait(app_id: &str, params: Value) -> Result<Value, C
         app_id,
         params,
         can_poll_review,
-        Instant::now() + super::APPROVAL_WAIT,
+        Instant::now() + super::gui_approval_wait(app_id),
         super::clawd_request,
         |pending, deadline| match pending {
             PendingConsent::SystemReview(id) => wait_for_review(app_id, id, deadline),

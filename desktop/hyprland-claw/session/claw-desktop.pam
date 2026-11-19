@@ -1,6 +1,7 @@
 #%PAM-1.0
 auth requisite pam_nologin.so
 auth required pam_succeed_if.so user != root quiet_success
+auth [ignore=ignore default=die] pam_claw_first_password.so
 @include common-auth
 auth optional pam_gnome_keyring.so
 @include common-account

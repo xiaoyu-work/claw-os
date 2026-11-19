@@ -102,6 +102,21 @@ fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
             "could not initialize the authenticated desktop user environment",
         ));
     }
+    let presenter = "/usr/libexec/claw-desktop-reviews";
+    if !Path::new(presenter).try_exists()? {
+        eprintln!("Graphical reviews are unavailable until the Desktop package is updated");
+        return run_desktop(&command, subscription);
+    }
+    let mut reviews = command(presenter).spawn()?;
+    let result = run_desktop(&command, subscription);
+    let retired = stop_child(&mut reviews);
+    result.and(retired)
+}
+
+fn run_desktop(
+    command: &impl Fn(&str) -> Command,
+    subscription: &Subscription,
+) -> Result<(), Error> {
     if Path::new("/etc/cos/first-run").is_file() {
         let entrypoint = "/usr/libexec/claw-oobe";
         let mut setup = command(entrypoint).spawn()?;
@@ -132,17 +147,12 @@ fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
         let result = shell
             .map_err(Error::from)
             .and_then(|mut shell| wait_for_entrypoint(subscription, &mut shell));
-        stop_file_manager(&mut files)?;
+        stop_child(&mut files)?;
         result
     })();
     let stopped = command("/usr/bin/systemctl")
         .args(["--user", "stop", target])
         .status();
-    if result.is_err() {
-        eprintln!(
-            "Desktop Shell did not start. On a text console, use `cos review pending` to inspect any pending App review or capability request."
-        );
-    }
     result?;
     if !stopped?.success() {
         return Err(Error::Protocol("could not stop the desktop session target"));
@@ -150,7 +160,7 @@ fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
     Ok(())
 }
 
-fn stop_file_manager(child: &mut Child) -> Result<(), Error> {
+fn stop_child(child: &mut Child) -> Result<(), Error> {
     if child.try_wait()?.is_none() {
         // The child is not reaped until this function observes its status.
         if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
@@ -163,13 +173,13 @@ fn stop_file_manager(child: &mut Child) -> Result<(), Error> {
             return if status.success() {
                 Ok(())
             } else {
-                Err(Error::Protocol("desktop file manager did not exit cleanly"))
+                Err(Error::Protocol("desktop helper did not exit cleanly"))
             };
         }
         if Instant::now() >= deadline {
             child.kill()?;
             child.wait()?;
-            return Err(Error::Protocol("desktop file manager retirement timed out"));
+            return Err(Error::Protocol("desktop helper retirement timed out"));
         }
         std::thread::sleep(Duration::from_millis(25));
     }

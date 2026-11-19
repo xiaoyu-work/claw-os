@@ -23,17 +23,22 @@ See [the Azure build](building-azure.md) for a generalized Gen2 VHD.
 
 ## Login
 
-On the local VM, set the locked `cos` account's password at the first console
-prompt. Log in using greetd on VT7. There is no default password or automatic
-App permission approval. Use the independent text console and
-`cos review pending` to inspect any Desktop Shell review raised on first
-launch. Headless `cos` does not require the desktop.
+On the local VM, enter `cos` at the graphical sign-in screen. PAM asks for a
+new password on the first sign-in, then authenticates normally. Complete the
+graphical setup wizard before opening the desktop. There is no default
+password or automatic App permission approval. Review Desktop Shell requests
+in the graphical OS review window. Headless VM password setup still uses the
+serial console and does not require a desktop.
+
+On an installed machine, the greeter and desktop use the connected display's
+preferred mode as reported by its graphics driver. The setup wizard fits that
+screen and uses a compact layout on narrow displays. A VM uses the mode its
+virtual display advertises; resizing the viewer window is hypervisor-specific.
 
 Selecting an installed signed App from the desktop menu creates one
-`desktop.launch` review. Confirm it in Claw OS reviews or on the independent
-console with `cos review approve <review-id>`. That confirmation is spent on
-the selected App only; it does not skip the App's own activation or approval
-prompts.
+`desktop.launch` review. Confirm it in the graphical OS review window. That
+confirmation is spent on the selected App only; it does not skip the App's
+own activation or approval prompts.
 
 Shutdown and restart from the session menu use the same protected review UI.
 Approval is only for the selected action in this login, not a reusable power

@@ -307,11 +307,31 @@ pub(super) fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         }
         return Ok(Some(value.to_string()));
     }
-    if args.len() != 2 || !matches!(command, "show" | "approve" | "deny") {
-        return Err("usage: cos review pending | show <id> | approve <id> | deny <id>".into());
-    }
+    let displayed_revision = match (command, args.len()) {
+        ("show" | "approve" | "deny", 2) => None,
+        ("deny", 3) => Some(
+            args[2]
+                .parse::<u64>()
+                .ok()
+                .filter(|revision| *revision != 0)
+                .ok_or("invalid displayed review revision")?,
+        ),
+        _ => {
+            return Err(
+                "usage: cos review pending | show <id> | approve <id> | deny <id> [revision]"
+                    .into(),
+            );
+        }
+    };
     let value = request(Command::SystemReviewShow, json!({"id":args[1]}))?;
     let review = parse_review(value.clone())?;
+    if displayed_revision
+        .is_some_and(|revision| review.id != args[1] || revision != review.revision)
+    {
+        return Err(
+            "the displayed review is stale; inspect its current state before deciding".into(),
+        );
+    }
     present(&review)?;
     if command == "show" {
         return Ok(Some(value.to_string()));

@@ -150,10 +150,14 @@ if [ "$1" = "configure" ]; then
             systemd-tmpfiles --create || true
         fi
         generate_default_locales
-        command -v plymouth-set-default-theme >/dev/null 2>&1 && \
-            plymouth-set-default-theme claw || true
     fi
     commit_security_floor
+    if [ -z "$DPKG_ROOT" ]; then
+        plymouth-set-default-theme claw
+        if command -v update-initramfs >/dev/null 2>&1; then
+            dpkg-trigger --no-await update-initramfs
+        fi
+    fi
 fi
 
 exit 0

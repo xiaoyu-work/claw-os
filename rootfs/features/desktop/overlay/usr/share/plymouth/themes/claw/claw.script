@@ -9,13 +9,21 @@ Window.SetBackgroundTopColor(0.0588, 0.0588, 0.1020);
 Window.SetBackgroundBottomColor(0.0588, 0.0588, 0.1020);
 
 logo.image = Image("watermark.png");
+scale = Window.GetHeight() * 0.5 / logo.image.GetHeight();
+width_scale = Window.GetWidth() * 0.6 / logo.image.GetWidth();
+if (width_scale < scale)
+    scale = width_scale;
+if (scale < 1)
+    logo.image = logo.image.Scale(Math.Int(logo.image.GetWidth() * scale), Math.Int(logo.image.GetHeight() * scale));
 logo.sprite = Sprite(logo.image);
-logo.sprite.SetX(Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2);
-logo.sprite.SetY(Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2 - 40);
+logo_x = Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2;
+logo_y = Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2 - 20;
+logo.sprite.SetX(logo_x);
+logo.sprite.SetY(logo_y);
 
 dot_count = 5;
 dot_spacing = 24;
-dot_y = Window.GetY() + (Window.GetHeight() + logo.image.GetHeight()) / 2 + 16;
+dot_y = logo_y + logo.image.GetHeight() + 16;
 dot_x0 = Window.GetX() + (Window.GetWidth() - dot_count * dot_spacing) / 2;
 
 for (i = 0; i < dot_count; i++) {

@@ -27,6 +27,12 @@ nor that bus authorizes a GUI instance.
 | `runtime.rs` | Root-created instance sockets; protected backend versus traversable credential-checking fronts |
 | `client.rs` | Unprivileged `--watch`, `--exec`, and installed `--desktop` attachment |
 
+The desktop attachment starts the graphical OS review presenter in the PAM
+login. First-run profiles run the OS setup wizard before submitting the signed
+Shell through the normal GUI Host. The presenter independently reads broker
+reviews. Confirmation uses polkit; denial uses the owner-only cancellation
+route with the displayed revision.
+
 The shared closed protocol is
 [`claw-display-control`](../../../crates/claw-display-control/MODULE.md), an
 unpublished OS dependency, not public SDK 1.0.0. GUI rights and supervised App

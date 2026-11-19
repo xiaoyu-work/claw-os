@@ -34,8 +34,9 @@ Examples:
 - `kernel` installs the Debian kernel and initramfs tooling.
 - `grub-disk` installs disk-boot configuration.
 - `vm` configures generic virtual-machine console and power behavior.
-- `local-user` creates a locked `cos` account and requires one-time password
-  setup on the serial console for headless VMs or VT7 for desktop VMs.
+- `local-user` creates a locked `cos` account. Headless VMs set the initial
+  password on the serial console; desktop VMs set it through the graphical
+  PAM greeter and enable the existing first-run wizard.
 - `cloud-init` adds provider-neutral first-boot provisioning.
 - `azure` requires `cloud-init`, restricts it to the Azure datasource, configures
   Azure Linux Agent integration, forces Hyper-V storage/network modules into
@@ -63,7 +64,7 @@ feature combinations. Targets use these defaults but continue to accept a
 
 | Profile | Identity model | Platform integration |
 | --- | --- | --- |
-| Local VM | One-time console password setup for locked `cos` | Generic VM; optional VMware Tools |
+| Local VM | One-time password setup for locked `cos`, graphical on desktop | Generic VM; optional VMware Tools |
 | Azure | User, hostname, and SSH key supplied per instance | cloud-init, WALinuxAgent, Hyper-V |
 | WSL | User created interactively by the WSL first-launch OOBE | Modern `.wsl` package conventions |
 | Docker | User name and numeric identity supplied at container creation | Container/systemd conventions |
@@ -108,7 +109,7 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 
 ### First-run desktop setup
 
-The default amd64 installer includes the signed Desktop Shell and keeps the generic Debian kernel. On the USB, Calamares still uses its own installer session. After installation, the first authenticated graphical login opens **Welcome → Network → Drivers (if needed) → Agent model → Finish** before starting the normal Shell. The Caelestia-style wizard uses Debian's Quickshell package as a regular Wayland window; it does not start the signed Desktop Shell App or use its private runtime. The graphical model form calls `cos agent setup text` as the installed user and passes secrets through stdin. Only Finish records completion. Existing desktops, WSL, Docker and VM images without the installer marker do not enter this flow.
+The default amd64 installer includes the signed Desktop Shell and keeps the generic Debian kernel. On the USB, Calamares still uses its own installer session. An installed desktop or a fresh local desktop VM starts the same wizard after its first authenticated graphical login: **Welcome → Network → Drivers (if needed) → Agent model → Finish**. The wizard uses Debian's Quickshell as a regular Wayland window without starting the signed Desktop Shell App or using its private runtime. The model form passes secrets to `cos agent setup text` through stdin. Only Finish records completion. Images without the first-run marker do not enter this flow.
 
 The installer prefetches selected Debian backports packages into an offline cache. Calamares recognizes the actual machine, installs only its matching optional packages before reboot, and removes the remaining cache from the installed system. The first rules match the Intel Surface Laptop 7 (camera userspace and audio profiles) and Lenovo Yoga Pro 7 14IAH10 (audio profiles). The optional packages are distinct from the kernel modules and firmware needed to boot or establish the first connection, which must already be on the media.
 

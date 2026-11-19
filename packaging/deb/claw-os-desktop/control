@@ -10,11 +10,11 @@ XB-Claw-Os-Abi: __ABI__
 Provides: claw-os-applet-services-v1 (= 1)
 Depends: claw-os-base (>= __MIN_BASE__), claw-os-abi-__ABI__, claw-os-app-runtime-v1 (>= __APP_RUNTIME_VERSION__), claw-os-display-session-v2, claw-app-desktop-shell, claw-os-file-manager-v1 (= 1), claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, claw-os-calendar-read-v1, claw-os-nearby-v1, adduser,
  __NATIVE_DEPS__,
- greetd, kbd, gnome-keyring, libpam-gnome-keyring, polkitd, pkexec, dbus,
+ greetd, cage, gir1.2-gtk-3.0, mate-polkit, kbd, gnome-keyring, libpam-gnome-keyring, polkitd, pkexec, dbus,
  pipewire, pipewire-pulse, pipewire-alsa, wireplumber, libspa-0.2-libcamera, alsa-utils,
  network-manager, iwd, wpasupplicant, bluez, bluez-tools, udev,
  python3-gi, gir1.2-nm-1.0, quickshell (>= 0.3.0~), qt6-wayland,
- qml6-module-qtquick-window, qml6-module-qtquick-templates, qml6-module-qtquick-shapes,
+ qml6-module-qtquick-controls, qml6-module-qtquick-window, qml6-module-qtquick-templates, qml6-module-qtquick-shapes,
  qml6-module-qtqml-workerscript,
  upower, power-profiles-daemon, accountsservice, xdg-user-dirs,
  libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1,

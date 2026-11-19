@@ -59,7 +59,7 @@ pub(crate) fn launch(
         let parameters = serde_json::json!({
             "session_id": session.id(), "handle": handle, "args": args, "presentation": presentation,
         });
-        let deadline = std::time::Instant::now() + super::APPROVAL_WAIT;
+        let deadline = std::time::Instant::now() + super::gui_approval_wait(launch.app_id());
         let mut waited = std::collections::BTreeSet::new();
         let started = loop {
             match super::clawd_request(super::ClawdCommand::AppGuiLaunch, parameters.clone()) {

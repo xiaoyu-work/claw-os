@@ -249,7 +249,10 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                 CommandSchema {
                     command: "deny",
                     description: "Cancel an owner-scoped system review without granting authority",
-                    params: vec![Param::positional("id", "string", true, "System review ID")],
+                    params: vec![
+                        Param::positional("id", "string", true, "System review ID"),
+                        Param::positional("revision", "string", false, "Exact decimal revision displayed to the owner"),
+                    ],
                     example: "cos review deny rv-0123456789abcdef0123456789abcdef",
                 },
             ],

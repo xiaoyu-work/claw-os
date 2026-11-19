@@ -5,12 +5,11 @@
 #  - Configure GRUB for serial-console-friendly boot:
 #      GRUB_TERMINAL="serial console"
 #      GRUB_SERIAL_COMMAND="serial --speed=115200 ..."
-#      GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8 video=1920x1080"
+#      GRUB_CMDLINE_LINUX_DEFAULT="quiet splash console=tty0 console=ttyS0,115200n8"
 #    Without GRUB_TERMINAL the menu would render on tty0 only — qemu
 #    -nographic would appear to hang at the GRUB countdown.
-#    video=1920x1080 forces a sane default mode so the greeter fills the
-#    window — VMware/QEMU otherwise default to 1024x768 and guest auto-resize
-#    only kicks in after login, leaving the login screen letterboxed.
+#    Desktop uses the virtual monitor's advertised mode and keeps routine
+#    audit and boot messages out of the graphical login console.
 #  - Enable serial-getty@ttyS0 so headless deploys have a login on
 #    the serial port.
 #
@@ -53,10 +52,17 @@ fi
 # `splash` is kept from 50-claw-os.cfg: it is what starts plymouth, which
 # covers the boot-to-greeter transition.
 mkdir -p "$ROOTFS/etc/default/grub.d"
-cat > "$ROOTFS/etc/default/grub.d/60-claw-os-vm.cfg" <<'EOF'
+if [[ -f "$ROOTFS/etc/greetd/claw-desktop.toml" ]]; then
+    cat > "$ROOTFS/etc/default/grub.d/60-claw-os-vm.cfg" <<'EOF'
+# Keep the serial console for recovery, without Plymouth switching to text.
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3 audit=1 console=tty0 console=ttyS0,115200n8 plymouth.ignore-serial-consoles"
+EOF
+else
+    cat > "$ROOTFS/etc/default/grub.d/60-claw-os-vm.cfg" <<'EOF'
 # Claw OS VM overrides. Sorts after 50-claw-os.cfg, so this wins.
 GRUB_CMDLINE_LINUX_DEFAULT="quiet splash console=tty0 console=ttyS0,115200n8 video=1920x1080"
 EOF
+fi
 
 # 2. Enable serial-getty on ttyS0 for headless login.
 mkdir -p "$ROOTFS/etc/systemd/system/getty.target.wants"

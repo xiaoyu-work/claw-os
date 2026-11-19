@@ -354,6 +354,14 @@ restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed. A Root-managed graphical session is an
 interruption boundary: see [display lifetime](#root-managed-desktop-session-lifetime).
 
+The Desktop package uses the graphical greetd configuration for new logins.
+An upgrade does not reset local passwords, add a first-password marker, or
+turn an installed system back into a first-run image. Until the matching
+Desktop package installs the graphical review presenter, approval remains
+available through the existing `cos review` interface.
+On systems with initramfs-tools, Desktop configuration requests an initramfs
+update so the Claw boot theme is included on the next boot.
+
 The Agent package also installs `pkexec` and its polkit runtime. Protected
 Web/native review decisions and `cos review` use the installed
 `claw-approval-helper` through this path, including on headless Ubuntu and WSL.

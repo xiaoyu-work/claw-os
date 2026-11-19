@@ -7,5 +7,5 @@ source_profile = false
 
 [default_session]
 service = "greetd-greeter"
-command = "/usr/sbin/agreety -c '/usr/local/bin/claw-display-session --desktop'"
+command = "/usr/bin/systemd-cat --identifier=claw-greeter /usr/bin/cage -s -- /usr/libexec/claw-greeter"
 user = "_greetd"

@@ -38,7 +38,7 @@ packaging/
 |---|---|---|---|
 | `claw-os-agent` | `cos` with the Claw-owned TUI, `clawd`, `claw-agentd`, browser/semantic binaries, skills, SDK/runtime, trust roots, Agent system/user units and App channel configuration; no App payloads | `amd64`, `arm64` | Debian/Ubuntu runtime libraries, `systemd`, and `pkexec`; recommends `claw-apps-agent` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy, and model-specific udev/libinput rules | `all` | `claw-os-agent` |
-| `claw-os-desktop` | Protected Hyprland, greetd/PAM session, graphical Agent UI/bridge and system services; no product-native payloads | `amd64`, `arm64` | `claw-os-base`, `claw-os-display-session-v2`, signed `claw-app-desktop-shell`; recommends `claw-apps-desktop` |
+| `claw-os-desktop` | Protected Hyprland, graphical greetd/PAM greeter, first-run and review windows, graphical Agent UI/bridge and system services; no product-native payloads | `amd64`, `arm64` | `claw-os-base`, `claw-os-display-session-v2`, signed `claw-app-desktop-shell`; recommends `claw-apps-desktop` |
 
 Keep the [hardware workarounds](../docs/image-architecture.md#hardware-enablement) in `deb/claw-os-base/hardware/`. Base stages the system udev and libinput data; Desktop stages the same libinput quirk source into Hyprland's private libinput database. Both packages use the existing signed release path.
 

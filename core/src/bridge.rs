@@ -1489,6 +1489,15 @@ fn app_registration_params(
 const APPROVAL_WAIT: Duration = Duration::from_secs(120);
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
 
+fn gui_approval_wait(app_id: &str) -> Duration {
+    // The desktop cannot start until the owner reads and authenticates each of its startup reviews.
+    if app_id == "desktop-shell" {
+        Duration::from_secs(600)
+    } else {
+        APPROVAL_WAIT
+    }
+}
+
 /// Abandon an in-flight approval wait.
 ///
 /// The launcher blocks in its own process so its authenticated identity
@@ -1599,10 +1608,7 @@ fn check_approval_wait(deadline: Instant) -> Result<(), String> {
         return Err("waiting for App launch approval was cancelled".to_string());
     }
     if Instant::now() >= deadline {
-        return Err(format!(
-            "timed out after {}s waiting for App launch authorization",
-            APPROVAL_WAIT.as_secs()
-        ));
+        return Err("timed out waiting for App launch authorization".into());
     }
     Ok(())
 }
