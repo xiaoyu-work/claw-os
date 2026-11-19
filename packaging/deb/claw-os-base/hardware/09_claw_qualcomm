@@ -24,7 +24,7 @@ root_device=${GRUB_DEVICE:?}
 if [ -n "${GRUB_DEVICE_UUID:-}" ] && [ "${GRUB_DISABLE_LINUX_UUID:-false}" != true ]; then
     root_device=UUID=$GRUB_DEVICE_UUID
 fi
-args=$claw_qcom_args
+args="$claw_qcom_args $(claw_qcom_board_args "$CLAW_QCOM_DTB")"
 if [ "${GRUB_FS:-}" = btrfs ]; then
     subvolume=$(make_system_path_relative_to_its_root /)
     [ "$subvolume" = / ] || args="$args rootflags=subvol=${subvolume#/}"

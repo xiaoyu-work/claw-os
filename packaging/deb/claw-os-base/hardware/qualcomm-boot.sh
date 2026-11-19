@@ -50,6 +50,33 @@ claw_qcom_tree() {
 claw_qcom_args='acpi=off console=tty0 clk_ignore_unused pd_ignore_unused iommu.passthrough=0'
 claw_qcom_no_dsp='modprobe.blacklist=qcom_q6v5_pas'
 
+claw_qcom_board_args() {
+    case "$1" in
+        x1e80100-samsung-galaxy-book4-edge-14.dtb)
+            echo 'qcom_aoss.prevent_aoss_sleep=1'
+            ;;
+        glymur-asus-zenbook-a16-ux3607oa.dtb)
+            echo 'plymouth.enable=0'
+            ;;
+        x1e80100-lenovo-yoga-slim7x.dtb)
+            echo 'initcall_blacklist=simpledrm_platform_driver_init'
+            ;;
+    esac
+}
+
+claw_qcom_board_sleep() {
+    case "$1" in
+        glymur-asus-zenbook-a16-ux3607oa.dtb)
+            echo 'AllowSuspend=no'
+            ;;
+        x1p42100-asus-zenbook-14-ux3480qa.dtb)
+            echo 'MemorySleepMode=s2idle'
+            ;;
+        *) return 0 ;;
+    esac
+    printf '%s\n' 'AllowHibernation=no' 'AllowSuspendThenHibernate=no' 'AllowHybridSleep=no'
+}
+
 claw_qcom_romulus() {
     case "$1" in
         x1e80100-microsoft-romulus13.dtb|x1e80100-microsoft-romulus13-spi.dtb|x1e80100-microsoft-romulus15.dtb) return 0 ;;
@@ -71,15 +98,16 @@ claw_qcom_nvme_boot() {
 # Do not call the private selector *.dtb: the EFI stub also scans for dtb=.
 claw_qcom_iso_menu() {
     local rootfs=$1 media=$2 version=$3 label=$4
-    local entries tree _compatible model source
+    local entries tree _compatible model source board_args
     entries=$(
         claw_qcom_boards "$rootfs" "$version" | while IFS='|' read -r tree _compatible model; do
             source=$(claw_qcom_tree "$rootfs" "$version" "$tree") || continue
             install -Dm0644 "$source" "$media/live/dtb/qcom/$tree" || exit 1
+            board_args=$(claw_qcom_board_args "$tree")
             cat <<MENU
     menuentry '$model' {
         if devicetree /live/dtb/qcom/$tree; then
-            linux /live/vmlinuz boot=live components $claw_qcom_args $claw_qcom_no_dsp claw.board_tree=$tree
+            linux /live/vmlinuz boot=live components $claw_qcom_args $board_args $claw_qcom_no_dsp claw.board_tree=$tree
             initrd /live/initrd.img
         fi
     }

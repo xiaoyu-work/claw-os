@@ -24,7 +24,12 @@ case "$arch" in
             phy_qcom_qmp_combo qrtr qcom_pd_mapper pmic_glink pmic_glink_altmode \
             ps883x gpio_sbu_mux display_connector simple_bridge i2c_hid_of \
             spi_qcom_qspi spi_hid_of surface_aggregator surface_aggregator_registry surface_aggregator_tabletsw surface_hid \
-            pinctrl_glymur gpucc_glymur gxclkctl_kaanapali thunderbolt_qcom \
+            pinctrl_x1e80100 qnoc_x1e80100 pinctrl_glymur qnoc_glymur \
+            spmi_pmic_arb pinctrl_spmi_gpio i2c_qcom_geni reset_gpio gpio_shared_proxy \
+            qcom_hwspinlock smem smp2p socinfo nvmem_qfprom nvmem_qcom_spmi_sdam \
+            qcom_cpucp_mbox pci_pwrctrl_pwrseq pwrseq_qcom_wcn dwc3_qcom rtc_pm8xxx \
+            qcom_pon pm8941_pwrkey icc_bwmon qcom_tsens qcom_spmi_temp_alarm \
+            hid_asus asus_glymur_ec phy_nxp_ptn3222 gpucc_glymur gxclkctl_kaanapali thunderbolt_qcom \
             i2c_mt65xx i2c_hid_acpi nvidia nvidia_modeset nvidia_drm nvidia_uvm \
             nvme nvme_apple apple_pmp pwm_apple leds_pwm
         ;;
@@ -39,13 +44,15 @@ done
 if [ "$arch" = arm64 ]; then
     for blob in gen70500_sqe.fw gen70500_gmu.bin gen71500_sqe.fw gen71500_gmu.bin gen80100_sqe.fw gen80100_gmu.bin; do
         for suffix in '' .zst .xz; do
-            firmware=/usr/lib/firmware/qcom/$blob$suffix
-            if [ -f "$firmware" ]; then
-                if [ ! -e "$DESTDIR$firmware" ]; then
-                    copy_file firmware "$firmware"
+            for directory in /usr/lib/firmware/updates /usr/lib/firmware; do
+                firmware=$directory/qcom/$blob$suffix
+                if [ -f "$firmware" ]; then
+                    if [ ! -e "$DESTDIR$firmware" ]; then
+                        copy_file firmware "$firmware"
+                    fi
+                    break 2
                 fi
-                break
-            fi
+            done
         done
     done
     if [ -d /usr/lib/firmware/updates/qcom ]; then

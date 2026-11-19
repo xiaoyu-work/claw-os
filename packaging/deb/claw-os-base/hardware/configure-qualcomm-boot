@@ -36,12 +36,16 @@ claw_qcom_tree '' "$version" "$tree" >/dev/null || fail "installed kernel $versi
 [ -s "/boot/initrd.img-$version" ] || fail "missing initramfs for $version"
 
 config=/etc/default/grub.d/60-claw-os-qualcomm.cfg
+sleep_config=/etc/systemd/sleep.conf.d/60-claw-os-qualcomm-board.conf
 header='# Managed by Claw OS Snapdragon installer.'
-if [ -e "$config" ] || [ -L "$config" ]; then
-    if [ -L "$config" ] || [ ! -f "$config" ] || [ "$(head -n 1 "$config")" != "$header" ]; then
-        fail "refusing to replace $config"
+sleep_settings=$(claw_qcom_board_sleep "$tree")
+for managed in "$config" "$sleep_config"; do
+    if [ -e "$managed" ] || [ -L "$managed" ]; then
+        if [ -L "$managed" ] || [ ! -f "$managed" ] || [ "$(head -n 1 "$managed")" != "$header" ]; then
+            fail "refusing to replace $managed"
+        fi
     fi
-fi
+done
 resume=
 if claw_qcom_romulus "$tree" && grep -Fxq 'CONFIG_HIBERNATION=y' "/boot/config-$version"; then
     resume=$(/usr/lib/cos/hw/configure-romulus-resume "$version") || fail "could not configure disk hibernation"
@@ -52,3 +56,10 @@ fi
         printf "export CLAW_QCOM_RESUME='%s'\nexport CLAW_QCOM_RESUME_KERNEL='%s'\n" "$resume" "$version"
     fi
 } | install -Dm0644 /dev/stdin "$config"
+
+if [ -n "$sleep_settings" ]; then
+    printf '%s\n[Sleep]\n%s\n' "$header" "$sleep_settings" |
+        install -Dm0644 /dev/stdin "$sleep_config"
+else
+    rm -f -- "$sleep_config"
+fi
