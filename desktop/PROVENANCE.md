@@ -23,6 +23,10 @@ source pinned in [`build-locker.sh`](hyprland-claw/build-locker.sh). Its
 original notice ships with the binary. The local patch requires the
 dedicated PAM service for unlock and removes non-PAM recovery paths.
 
+The [original Claw OS mountain wallpaper](../assets/brand/wallpaper/NOTICE)
+is restored unchanged for setup and sign-in under its existing CC BY-SA 4.0
+license. No COSMIC greeter or compositor code is used for these pages.
+
 ## Shared App framework
 
 These are retained to support existing standalone products and the Agent UI.

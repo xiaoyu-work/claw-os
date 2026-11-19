@@ -23,12 +23,14 @@ See [the Azure build](building-azure.md) for a generalized Gen2 VHD.
 
 ## Login
 
-On the local VM, enter `cos` at the graphical sign-in screen. PAM asks for a
-new password on the first sign-in, then authenticates normally. Complete the
-graphical setup wizard before opening the desktop. There is no default
-password or automatic App permission approval. Review Desktop Shell requests
-in the graphical OS review window. Headless VM password setup still uses the
-serial console and does not require a desktop.
+The local desktop VM opens the graphical setup wizard without asking you to
+sign in. Create your account in the wizard and select **Finish**. Choose your
+account at the sign-in screen and enter its password. Both screens use the
+original Claw OS wallpaper and frosted-glass panels.
+
+There is no default account password or automatic App permission approval.
+Review Desktop Shell requests in the graphical OS review window. The
+headless VM still sets up its `cos` account on the serial console.
 
 On an installed machine, the greeter and desktop use the connected display's
 preferred mode as reported by its graphics driver. The setup wizard fits that

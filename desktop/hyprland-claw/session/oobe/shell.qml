@@ -10,54 +10,109 @@ import Quickshell.Io
 ShellRoot {
     id: setup
 
-    property int step: 0
+    property string current: local ? "access" : "network"
     property string network: ""
     property bool finishing: false
+    readonly property bool local: Quickshell.env("CLAW_LOCAL_DESKTOP_SETUP") === "1"
+    property string fullName: ""
+    property string username: ""
+    property bool usernameEdited: false
+    property string newPassword: ""
+    property string confirmation: ""
+    property string language: ""
+    property string keyboard: "us"
+    property string zone: ""
+    property string scale: "auto"
+    property bool light: false
+    property bool persistentBar: true
+    property bool reader: false
+    readonly property bool matchingPassword: newPassword !== "" && newPassword === confirmation
+    readonly property bool validAccount: fullName.trim() !== "" && !fullName.includes(":")
+        && /^[a-z][a-z0-9_-]{0,30}$/.test(username) && matchingPassword
     property var state: ({
         networkState: "checking", wifiState: "idle", wifiName: "", hasWifi: false, networks: [],
         driverState: "checking", packages: [], agentState: "idle", providers: [],
-        savedModel: "", userCode: "", signedIn: false, copilotModels: [], finished: false
+        savedModel: "", userCode: "", signedIn: false, copilotModels: [], finished: false,
+        languages: [], zones: [], finishError: ""
     })
-    readonly property var steps: [
-        { icon: "welcome", label: qsTr("Welcome"), title: qsTr("Welcome to Claw OS"),
-          description: qsTr("Connect to the internet, finish setting up your hardware, and choose a model for your Agent.") },
-        { icon: "network", label: qsTr("Network"), title: qsTr("Connect to the internet"),
-          description: qsTr("Choose a Wi-Fi network or connect an Ethernet cable.") },
-        { icon: "drivers", label: qsTr("Drivers"), title: qsTr("Set up your hardware"),
-          description: qsTr("Claw OS installs only the additional packages that match this computer.") },
-        { icon: "model", label: qsTr("Agent"), title: qsTr("Choose your Agent model"),
-          description: qsTr("Connect a model provider now, or configure your Agent later.") },
-        { icon: "finish", label: qsTr("Finish"), title: qsTr("You're ready"),
-          description: qsTr("Finish setup to open your Claw OS desktop.") }
-    ]
+    readonly property var pages: ({
+        access: [qsTr("Accessibility setup"), qsTr("Choose display and reading options for your desktop."), "welcome", accessPage],
+        network: [qsTr("Get connected"), qsTr("Connect to Wi-Fi or plug in an Ethernet cable."), "network", networkPage],
+        language: [qsTr("Select a language"), qsTr("Choose the language your system will use."), "welcome", languagePage],
+        keyboard: [qsTr("Select keyboard layout"), qsTr("This layout takes effect in your desktop session. Setup and sign-in use the current system keyboard."), "keyboard", keyboardPage],
+        agent: [qsTr("Configure your Agent"), qsTr("Connect a model provider now, or set it up later."), "model", modelPage],
+        account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Claw OS."), "account", accountPage],
+        location: [qsTr("Timezone and location"), qsTr("Choose a time zone for this computer."), "location", locationPage],
+        appearance: [qsTr("Personalize appearance"), qsTr("Preview a light or dark look and set the preference for your apps."), "welcome", appearancePage],
+        layout: [qsTr("Layout configuration"), qsTr("Choose how the taskbar appears in the desktop."), "layout", layoutPage],
+        workspaces: [qsTr("Workspaces for your workflow"), qsTr("Keep different sets of apps open on separate workspaces."), "layout", workspacePage],
+        shortcuts: [qsTr("Keyboard shortcuts"), qsTr("Use the Super or Windows key for quick desktop actions."), "keyboard", shortcutsPage],
+        launcher: [qsTr("Find and open apps"), qsTr("Open the launcher from the desktop to search your installed apps."), "model", launcherPage],
+        drivers: [qsTr("Set up graphics and hardware"), qsTr("Claw OS installs only the additional packages that match this computer."), "drivers", driverPage],
+        finish: [qsTr("You're ready"), local ? qsTr("Finish setup, then sign in with the account you just created.")
+            : qsTr("Finish setup to open your Claw OS desktop."), "finish", finishPage]
+    })
+    readonly property var steps: {
+        const order = local
+            ? ["access", "network", "language", "keyboard", "agent", "account", "location",
+                "appearance", "layout", "workspaces", "shortcuts", "launcher"]
+            : ["network", "agent"];
+        if (state.packages.length > 0)
+            order.push("drivers");
+        order.push("finish");
+        return order;
+    }
+    readonly property int step: steps.indexOf(current)
+    readonly property var pageInfo: pages[current]
 
     function send(action: string, values: var): void {
         backend.write(JSON.stringify(Object.assign({ action: action }, values ?? {})) + "\n");
     }
 
     function go(next: int): void {
-        step = next;
+        current = steps[Math.max(0, Math.min(steps.length - 1, next))];
         scroll.contentItem.contentY = 0;
-        if (next === 1)
+        if (current === "network")
             send("scan");
-        if (next === 3)
+        if (current === "agent")
             send("models");
     }
 
     function receive(message: var): void {
         state = Object.assign({}, state, message);
-        if (message.finishError)
+        if (message.finishError) {
             finishing = false;
+            if (["invalidUsername", "invalidName", "invalidPassword", "usernameTaken"].includes(message.finishError))
+                go(steps.indexOf("account"));
+        }
         if (state.finished) {
+            newPassword = "";
+            confirmation = "";
             Qt.quit();
-        } else if (step === 2 && state.driverState === "ready") {
-            go(3);
-        } else if (step === 3 && message.agentState === "saved") {
-            go(4);
+        } else if (current === "agent" && message.agentState === "saved") {
+            go(step + 1);
         }
     }
 
-    Component.onCompleted: Quickshell.watchFiles = false
+    function finish(): void {
+        finishing = true;
+        state = Object.assign({}, state, {finishError: ""});
+        if (local) {
+            send("finish", {
+                username: username, name: fullName.trim(), password: newPassword,
+                locale: language, keyboard: keyboard, zone: zone, light: light,
+                persistentBar: persistentBar, reader: reader, scale: scale
+            });
+        } else {
+            send("finish");
+        }
+    }
+
+    Component.onCompleted: {
+        Quickshell.watchFiles = false;
+        if (current === "network")
+            send("scan");
+    }
 
     Process {
         id: backend
@@ -72,22 +127,25 @@ ShellRoot {
                 Qt.exit(1);
         }
     }
+    Process {
+        running: setup.local && setup.reader
+        command: ["/usr/bin/orca"]
+    }
 
     QtObject {
         id: theme
-        readonly property color background: "#101418"
-        readonly property color panel: "#171e25"
-        readonly property color rail: "#202a34"
-        readonly property color card: "#232e3a"
-        readonly property color hover: "#2b3a49"
-        readonly property color outline: "#384858"
-        readonly property color text: "#e5edf6"
-        readonly property color muted: "#a9bacc"
-        readonly property color accent: "#9ccbfb"
-        readonly property color accentInk: "#0e2b45"
-        readonly property color selected: "#2a465e"
-        readonly property color good: "#a9ddc9"
-        readonly property color error: "#ffb4ab"
+        readonly property color panel: setup.light ? "#dcf2f6fe" : "#c9182132"
+        readonly property color rail: setup.light ? "#edf3fe" : "#232d42"
+        readonly property color card: setup.light ? "#a4ffffff" : "#a32e3b52"
+        readonly property color hover: setup.light ? "#f8fbff" : "#3c4d69"
+        readonly property color outline: setup.light ? "#9baec9" : "#58718f"
+        readonly property color text: setup.light ? "#172842" : "#f1f5ff"
+        readonly property color muted: setup.light ? "#3d526e" : "#ccd8ec"
+        readonly property color accent: setup.light ? "#315eac" : "#b3d1ff"
+        readonly property color accentInk: setup.light ? "#ffffff" : "#14253f"
+        readonly property color selected: setup.light ? "#cfdef8" : "#486387"
+        readonly property color good: setup.light ? "#235d47" : "#aee6c9"
+        readonly property color error: setup.light ? "#942e2a" : "#ffc5bb"
         readonly property string font: "Inter"
     }
 
@@ -98,232 +156,148 @@ ShellRoot {
         visibility: Window.FullScreen
         width: 1100
         height: 700
-        color: theme.background
-        onClosing: {
-            if (!setup.state.finished)
-                Qt.exit(1);
-        }
-
-        Rectangle {
+        color: "#161d2c"
+        onClosing: event => event.accepted = setup.state.finished
+        GlassBackdrop {
+            id: background
             anchors.fill: parent
-            gradient: Gradient {
-                GradientStop { position: 0; color: "#192632" }
-                GradientStop { position: 1; color: theme.background }
-            }
         }
 
-        Rectangle {
+        GlassCard {
             id: mainPanel
             anchors.centerIn: parent
-            width: Math.min(1100, window.width - (window.width < 720 ? 24 : 64))
-            height: Math.min(688, window.height - (window.height < 630 ? 24 : 64))
-            radius: 30
-            color: theme.panel
-            border.color: theme.outline
+            width: Math.min(698, window.width - 30)
+            height: Math.min(590, window.height - 30)
+            wallpaper: background.wallpaper
+            tint: theme.panel
 
-            RowLayout {
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 0
+                anchors.margins: window.width < 640 ? 20 : 32
+                spacing: 18
 
+                RowLayout {
+                    spacing: 11
+                    BrandMark {}
+                    ColumnLayout {
+                        spacing: 1
+                        Label { text: "Claw OS"; font.pixelSize: 19; font.weight: Font.DemiBold }
+                        Label { text: qsTr("First-run setup"); color: theme.muted; font.pixelSize: 12 }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        text: qsTr("%1 of %2").arg(setup.step + 1).arg(setup.steps.length)
+                        color: theme.muted
+                        font.pixelSize: 12
+                    }
+                }
                 Rectangle {
-                    id: rail
-                    visible: window.width >= 800
-                    Layout.preferredWidth: 236
+                    Layout.fillWidth: true
+                    implicitHeight: 3
+                    radius: 2
+                    color: theme.outline
+                    Rectangle {
+                        width: parent.width * (setup.step + 1) / setup.steps.length
+                        height: parent.height
+                        radius: 2
+                        color: theme.accent
+                        Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                    }
+                }
+
+                Controls.ScrollView {
+                    id: scroll
+                    Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: theme.rail
-                    radius: 23
+                    contentWidth: availableWidth
+                    clip: true
+                    Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 18
-                        spacing: 8
+                        width: scroll.availableWidth
+                        spacing: 13
 
                         RowLayout {
-                            Layout.bottomMargin: 30
+                            Layout.fillWidth: true
                             spacing: 12
                             Rectangle {
                                 implicitWidth: 40
                                 implicitHeight: 40
-                                radius: 13
-                                color: theme.accent
-                                Image {
-                                    anchors.centerIn: parent
-                                    width: 28
-                                    height: 28
-                                    source: "logo.png"
-                                }
-                            }
-                            Label {
-                                text: "Claw OS"
-                                font.pixelSize: 21
-                                font.weight: Font.DemiBold
-                            }
-                        }
-
-                        Label {
-                            Layout.leftMargin: 9
-                            Layout.bottomMargin: 6
-                            text: qsTr("FIRST-RUN SETUP")
-                            color: theme.muted
-                            font.pixelSize: 11
-                            font.letterSpacing: 1.8
-                            font.weight: Font.DemiBold
-                        }
-
-                        Repeater {
-                            model: setup.steps
-                            delegate: Rectangle {
-                                id: tile
-                                required property int index
-                                required property var modelData
-                                Layout.fillWidth: true
-                                implicitHeight: 46
-                                radius: 15
-                                color: index === setup.step ? theme.selected : "transparent"
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 12
-                                    anchors.rightMargin: 12
-                                    spacing: 12
-                                    SetupIcon {
-                                        name: tile.modelData.icon
-                                        color: tile.index === setup.step ? theme.accent : theme.muted
-                                        Layout.preferredWidth: 19
-                                        Layout.preferredHeight: 19
-                                    }
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: tile.modelData.label
-                                        color: tile.index === setup.step ? theme.text : theme.muted
-                                        font.weight: tile.index === setup.step ? Font.DemiBold : Font.Normal
-                                    }
-                                }
-                            }
-                        }
-                        Item { Layout.fillHeight: true }
-                    }
-                }
-
-                ColumnLayout {
-                    id: content
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.margins: window.width < 640 ? 12 : 26
-                    spacing: 18
-
-                    RowLayout {
-                        spacing: 6
-                        Repeater {
-                            model: setup.steps.length
-                            delegate: Rectangle {
-                                required property int index
-                                implicitWidth: index === setup.step ? 32 : 12
-                                implicitHeight: 6
-                                radius: 3
-                                color: index === setup.step ? theme.accent : theme.outline
-                            }
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: qsTr("Step %1 of %2").arg(setup.step + 1).arg(setup.steps.length)
-                            color: theme.muted
-                            font.pixelSize: 12
-                        }
-                    }
-
-                    Controls.ScrollView {
-                        id: scroll
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        contentWidth: availableWidth
-                        clip: true
-                        Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
-
-                        ColumnLayout {
-                            width: scroll.availableWidth
-                            spacing: 13
-
-                            Rectangle {
-                                Layout.topMargin: 3
-                                implicitWidth: 48
-                                implicitHeight: 48
-                                radius: 16
+                                radius: 12
                                 color: theme.selected
                                 SetupIcon {
                                     anchors.centerIn: parent
-                                    name: setup.steps[setup.step].icon
+                                    name: setup.pageInfo[2]
                                     color: theme.accent
                                 }
                             }
                             Label {
                                 Layout.fillWidth: true
-                                text: setup.steps[setup.step].title
-                                wrapMode: Text.Wrap
-                                font.pixelSize: window.width >= 800 ? 34 : 27
+                                text: setup.pageInfo[0]
+                                wrapMode: Text.WordWrap
+                                font.pixelSize: window.width >= 680 ? 28 : 23
                                 font.weight: Font.DemiBold
                             }
-                            Label {
-                                Layout.fillWidth: true
-                                Layout.bottomMargin: 8
-                                text: setup.steps[setup.step].description
-                                color: theme.muted
-                                wrapMode: Text.Wrap
-                            }
-                            Loader {
-                                id: page
-                                Layout.fillWidth: true
-                                sourceComponent: [welcomePage, networkPage, driverPage, modelPage, finishPage][setup.step]
-                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.bottomMargin: 5
+                            text: setup.pageInfo[1]
+                            color: theme.muted
+                            wrapMode: Text.Wrap
+                        }
+                        Loader {
+                            id: page
+                            Layout.fillWidth: true
+                            sourceComponent: setup.pageInfo[3]
                         }
                     }
+                }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        implicitHeight: 1
-                        color: theme.outline
-                    }
-
-                    RowLayout {
-                        spacing: 10
-                        Item { Layout.fillWidth: true }
-                        ActionButton {
-                            visible: setup.step >= 1 && setup.step <= 3
-                            enabled: setup.step === 1
-                                || (setup.step === 2 && setup.state.driverState !== "installing")
-                                || (setup.step === 3 && setup.state.agentState !== "saving")
-                            text: [ "", qsTr("Continue offline"), qsTr("Continue without drivers"), qsTr("Set up later") ][setup.step] ?? ""
-                            onClicked: {
-                                if (setup.step === 3) {
-                                    setup.send("cancelSignIn");
-                                    setup.go(4);
-                                } else {
-                                    setup.go(3);
-                                }
-                            }
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 1
+                    color: theme.outline
+                }
+                RowLayout {
+                    spacing: 8
+                    ActionButton {
+                        text: qsTr("Back")
+                        visible: setup.step > 0
+                        enabled: !setup.finishing && setup.state.agentState !== "saving"
+                        onClicked: {
+                            if (setup.current === "agent")
+                                setup.send("cancelSignIn");
+                            setup.go(setup.step - 1);
                         }
-                        ActionButton {
-                            primary: true
-                            visible: setup.step !== 2
-                            enabled: setup.step === 0
-                                || (setup.step === 1 && setup.state.networkState === "online")
-                                || (setup.step === 3 && page.item && page.item.canContinue)
-                                || (setup.step === 4 && !setup.finishing)
-                            text: setup.step === 4 ? qsTr("Finish") : setup.step === 3 && !setup.state.savedModel
-                                ? qsTr("Save and continue") : qsTr("Next")
-                            onClicked: {
-                                if (setup.step === 0)
-                                    setup.go(1);
-                                else if (setup.step === 1)
-                                    setup.go(setup.state.driverState === "ready" ? 3 : 2);
-                                else if (setup.step === 3)
-                                    page.item.advance();
-                                else if (setup.step === 4) {
-                                    setup.finishing = true;
-                                    setup.send("finish");
-                                }
-                            }
+                    }
+                    Item { Layout.fillWidth: true }
+                    ActionButton {
+                        visible: (setup.current === "network" && setup.state.networkState !== "online")
+                            || setup.current === "agent"
+                        enabled: setup.state.agentState !== "saving"
+                        text: setup.current === "network" ? qsTr("Continue offline") : qsTr("Set up later")
+                        onClicked: {
+                            if (setup.current === "agent")
+                                setup.send("cancelSignIn");
+                            setup.go(setup.step + 1);
+                        }
+                    }
+                    ActionButton {
+                        primary: true
+                        visible: setup.current !== "network" || setup.state.networkState === "online"
+                        enabled: !setup.finishing
+                            && (setup.current !== "account" || setup.validAccount)
+                            && (setup.current !== "agent" || !!page.item?.canContinue)
+                        text: setup.current === "finish" ? (setup.finishing ? qsTr("Saving…") : qsTr("Finish"))
+                            : setup.current === "agent" && !setup.state.savedModel ? qsTr("Save and continue") : qsTr("Next")
+                        onClicked: {
+                            if (setup.current === "agent")
+                                page.item.advance();
+                            else if (setup.current === "finish")
+                                setup.finish();
+                            else
+                                setup.go(setup.step + 1);
                         }
                     }
                 }
@@ -332,44 +306,166 @@ ShellRoot {
     }
 
     Component {
-        id: welcomePage
+        id: accessPage
         ColumnLayout {
-            spacing: 7
-            Repeater {
-                model: [
-                    { icon: "network", title: qsTr("Network"), detail: qsTr("Connect by Wi-Fi or Ethernet.") },
-                    { icon: "drivers", title: qsTr("Hardware"), detail: qsTr("Install any missing packages for this computer.") },
-                    { icon: "model", title: qsTr("Agent"), detail: qsTr("Choose a provider and a model.") }
-                ]
-                delegate: Rectangle {
-                    id: summary
-                    required property var modelData
-                    Layout.fillWidth: true
-                    implicitHeight: summaryContent.implicitHeight + 20
-                    radius: 15
-                    color: theme.card
-                    RowLayout {
-                        id: summaryContent
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 12
-                        SetupIcon { name: summary.modelData.icon; color: theme.accent }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-                            Label { text: summary.modelData.title; font.weight: Font.DemiBold }
-                            Label {
-                                Layout.fillWidth: true
-                                text: summary.modelData.detail
-                                color: theme.muted
-                                font.pixelSize: 13
-                                wrapMode: Text.Wrap
-                            }
-                        }
-                    }
-                }
+            spacing: 10
+            Toggle {
+                text: qsTr("Screen reader")
+                checked: setup.reader
+                onToggled: setup.reader = checked
+            }
+            Picker {
+                Layout.fillWidth: true
+                label: qsTr("Display scaling")
+                model: [qsTr("Automatic display scaling"), "125%", "150%"]
+                selection: model[["auto", "1.25", "1.5"].indexOf(setup.scale)]
+                onActivated: index => setup.scale = ["auto", "1.25", "1.5"][index]
             }
         }
+    }
+
+    Component {
+        id: languagePage
+        Picker {
+            label: qsTr("System language")
+            model: [qsTr("Keep system default"), ...setup.state.languages]
+            selection: setup.language || model[0]
+            onActivated: index => setup.language = index === 0 ? "" : setup.state.languages[index - 1]
+        }
+    }
+
+    Component {
+        id: keyboardPage
+        Picker {
+            readonly property var layouts: ["us", "gb", "de", "fr", "es", "it", "br", "jp", "ru"]
+            label: qsTr("Keyboard layout")
+            model: [qsTr("English (US)"), qsTr("English (UK)"), qsTr("German"), qsTr("French"),
+                    qsTr("Spanish"), qsTr("Italian"), qsTr("Portuguese (Brazil)"), qsTr("Japanese"), qsTr("Russian")]
+            selection: model[layouts.indexOf(setup.keyboard)]
+            onActivated: index => setup.keyboard = layouts[index]
+        }
+    }
+
+    Component {
+        id: accountPage
+        ColumnLayout {
+            spacing: 8
+            Field {
+                Layout.fillWidth: true
+                placeholderText: qsTr("Full name")
+                maximumLength: 48
+                text: setup.fullName
+                onTextEdited: {
+                    setup.fullName = text;
+                    if (!setup.usernameEdited)
+                        setup.username = text.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 31);
+                }
+            }
+            Field {
+                Layout.fillWidth: true
+                placeholderText: qsTr("Username")
+                maximumLength: 31
+                text: setup.username
+                onTextEdited: {
+                    setup.usernameEdited = true;
+                    setup.username = text;
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Use lowercase letters, digits, hyphens or underscores. Start with a letter.")
+                color: theme.muted
+                font.pixelSize: 12
+                wrapMode: Text.Wrap
+            }
+            Field {
+                Layout.fillWidth: true
+                placeholderText: qsTr("Password")
+                maximumLength: 256
+                echoMode: TextInput.Password
+                text: setup.newPassword
+                onTextEdited: setup.newPassword = text
+            }
+            Field {
+                Layout.fillWidth: true
+                placeholderText: qsTr("Confirm password")
+                maximumLength: 256
+                echoMode: TextInput.Password
+                text: setup.confirmation
+                onTextEdited: setup.confirmation = text
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: (setup.confirmation !== "" && !setup.matchingPassword) || setup.state.finishError !== ""
+                color: theme.error
+                text: setup.confirmation !== "" && !setup.matchingPassword ? qsTr("Passwords don't match.")
+                    : setup.state.finishError === "usernameTaken" ? qsTr("That username is already in use.")
+                    : qsTr("Check the account and setup fields, then try again.")
+                wrapMode: Text.Wrap
+            }
+        }
+    }
+
+    Component {
+        id: locationPage
+        ColumnLayout {
+            Field {
+                id: filterZone
+                Layout.fillWidth: true
+                placeholderText: qsTr("Search time zones")
+            }
+            Picker {
+                Layout.fillWidth: true
+                label: qsTr("Time zone")
+                model: [qsTr("Keep system default"), ...setup.state.zones.filter(item =>
+                    item.toLowerCase().includes(filterZone.text.toLowerCase()))]
+                selection: setup.zone || model[0]
+                onActivated: index => setup.zone = index === 0 ? "" : model[index]
+            }
+        }
+    }
+
+    Component {
+        id: appearancePage
+        RowLayout {
+            spacing: 12
+            ActionButton {
+                Layout.fillWidth: true
+                primary: !setup.light
+                text: qsTr("Dark")
+                onClicked: setup.light = false
+            }
+            ActionButton {
+                Layout.fillWidth: true
+                primary: setup.light
+                text: qsTr("Light")
+                onClicked: setup.light = true
+            }
+        }
+    }
+
+    Component {
+        id: layoutPage
+        Toggle {
+            text: qsTr("Keep the taskbar visible")
+            checked: setup.persistentBar
+            onToggled: setup.persistentBar = checked
+        }
+    }
+
+    Component {
+        id: workspacePage
+        Status { text: qsTr("Switch workspaces in the left taskbar or with Super + 1–9.") }
+    }
+
+    Component {
+        id: shortcutsPage
+        Status { text: qsTr("Super + Q closes a window. Super + Shift + a number moves it to that workspace.") }
+    }
+
+    Component {
+        id: launcherPage
+        Status { text: qsTr("Select the launcher at the top of the taskbar and type an app name.") }
     }
 
     Component {
@@ -497,7 +593,7 @@ ShellRoot {
 
             function advance(): void {
                 if (setup.state.savedModel) {
-                    setup.go(4);
+                    setup.go(setup.step + 1);
                     return;
                 }
                 setup.send("saveModel", {
@@ -615,10 +711,17 @@ ShellRoot {
             Status {
                 Layout.fillWidth: true
                 tint: setup.state.finishError ? theme.error : theme.muted
-                text: setup.state.finishError
-                    ? qsTr("Couldn't save setup completion. Check that your home folder is writable.")
-                    : setup.state.savedModel ? qsTr("Your Agent model is set to %1.").arg(setup.state.savedModel)
-                    : qsTr("You can still configure your Agent from Settings.")
+                text: {
+                    if (setup.state.finishError === "busy")
+                        return qsTr("Wait for the current setup operation, then try again.");
+                    if (setup.state.finishError)
+                        return setup.local ? qsTr("Couldn't finish creating the account. Your desktop hasn't been opened. Try again.")
+                            : qsTr("Couldn't save setup completion. Check that your home folder is writable.");
+                    if (setup.local)
+                        return qsTr("Account: %1 (%2)").arg(setup.fullName).arg(setup.username);
+                    return setup.state.savedModel ? qsTr("Your Agent model is set to %1.").arg(setup.state.savedModel)
+                        : qsTr("You can still configure your Agent from Settings.");
+                }
             }
         }
     }
@@ -669,6 +772,19 @@ ShellRoot {
             font: button.font
             color: !button.enabled ? theme.muted : button.primary ? theme.accentInk : theme.text
             horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    component Toggle: Controls.Switch {
+        id: control
+        font.family: theme.font
+        font.pixelSize: 15
+        palette.windowText: theme.text
+        palette.highlight: theme.accent
+        contentItem: Label {
+            text: control.text
+            leftPadding: control.indicator.width + control.spacing
             verticalAlignment: Text.AlignVCenter
         }
     }

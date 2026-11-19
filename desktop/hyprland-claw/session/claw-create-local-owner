@@ -1,0 +1,168 @@
+#!/usr/bin/python3 -I
+"""Commit the local image's one-time account setup, never change an existing user."""
+
+import fcntl
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import subprocess
+import sys
+from zoneinfo import available_timezones
+
+
+MARKER = Path("/etc/cos/local-desktop-setup")
+MAX_REQUEST = 256 * 1024
+ENV = {"PATH": "/usr/sbin:/usr/bin", "LANG": "C.UTF-8"}
+ACCOUNT = re.compile(r"[a-z][a-z0-9_-]{0,30}")
+FIELD = re.compile(r"[a-zA-Z0-9_-]{1,80}\.json")
+
+
+def system(*command, data=None):
+    return subprocess.run(command, input=data, stdin=subprocess.DEVNULL if data is None else None,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ENV, check=True)
+
+
+def request():
+    raw = sys.stdin.buffer.read(MAX_REQUEST + 1)
+    if len(raw) > MAX_REQUEST:
+        raise ValueError("invalidInput")
+    data = json.loads(raw)
+    if not isinstance(data, dict) or set(data) != {
+        "username", "name", "password", "locale", "keyboard", "zone", "light",
+        "persistentBar", "reader", "scale", "agent",
+    }:
+        raise ValueError("invalidInput")
+    for key in ("username", "name", "password", "locale", "keyboard", "zone", "scale"):
+        if not isinstance(data[key], str):
+            raise ValueError("invalidInput")
+    if not ACCOUNT.fullmatch(data["username"]):
+        raise ValueError("invalidUsername")
+    if not 0 < len(data["name"].encode()) <= 96 or not data["name"].isprintable() or ":" in data["name"]:
+        raise ValueError("invalidName")
+    password = data["password"]
+    if not 0 < len(password.encode()) <= 256 or any(c in password for c in "\x00\r\n"):
+        raise ValueError("invalidPassword")
+    if any(type(data[key]) is not bool for key in ("light", "persistentBar", "reader")):
+        raise ValueError("invalidInput")
+    layouts = {"us", "gb", "de", "fr", "es", "it", "br", "jp", "ru"}
+    locales = system("locale", "-a").stdout.decode().splitlines()
+    if data["keyboard"] not in layouts or data["locale"] not in ("", *locales):
+        raise ValueError("invalidRegionalSettings")
+    if (data["zone"] and data["zone"] not in available_timezones()
+            or data["scale"] not in ("auto", "1.25", "1.5")):
+        raise ValueError("invalidRegionalSettings")
+    agent = data["agent"]
+    if agent is not None and (
+        not isinstance(agent, dict) or set(agent) != {"config", "credentials"}
+        or not isinstance(agent["config"], dict)
+        or not isinstance(agent["credentials"], dict)
+        or any(not FIELD.fullmatch(name) or not isinstance(value, dict)
+               for name, value in agent["credentials"].items())
+    ):
+        raise ValueError("invalidAgentSettings")
+    return data
+
+
+def initialize_home(account, data):
+    # All home writes happen as the new UID, never as the provisioning process.
+    pid = os.fork()
+    if pid != 0:
+        if os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) != 0:
+            raise OSError("could not initialize the new home")
+        return
+    try:
+        os.initgroups(account.pw_name, account.pw_gid)
+        os.setgid(account.pw_gid)
+        os.setuid(account.pw_uid)
+        os.umask(0o077)
+        home = Path(account.pw_dir)
+        config = home / ".config"
+
+        def write(path, content):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        if data["keyboard"] != "us" or data["scale"] != "auto":
+            write(config / "hypr/hyprland.lua",
+                  'dofile("/etc/xdg/hypr/hyprland.lua")\n'
+                  f'hl.config({{input = {{kb_layout = "{data["keyboard"]}"}}}})\n'
+                  f'hl.monitor({{output = "", mode = "preferred", position = "auto", scale = {json.dumps(data["scale"])}}})\n')
+        # Set the application theme and the Shell's actual taskbar preference.
+        for gtk in ("gtk-3.0", "gtk-4.0"):
+            write(config / gtk / "settings.ini",
+                  f'[Settings]\ngtk-application-prefer-dark-theme={int(not data["light"])}\n')
+        if not data["persistentBar"]:
+            write(config / "caelestia/shell.json",
+                  json.dumps({"bar": {"persistent": False, "showOnHover": True}}) + "\n")
+        if data["reader"]:
+            write(config / "cos/screen-reader", "")
+        if data["agent"] is not None:
+            write(config / "cos/config.json", json.dumps(data["agent"]["config"]) + "\n")
+            directory = home / ".local/share/cos/credentials/agent"
+            for name, value in data["agent"]["credentials"].items():
+                write(directory / name, json.dumps(value) + "\n")
+    except (OSError, ValueError):
+        os._exit(1)
+    os._exit(0)
+
+
+def create_owner():
+    if (os.getuid() != 0 or os.geteuid() != 0
+            or os.environ.get("PKEXEC_UID") != str(pwd.getpwnam("_greetd").pw_uid)):
+        raise ValueError("notAvailable")
+    fd = os.open(MARKER, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb"):
+        marker = os.fstat(fd)
+        if marker.st_uid != 0 or not stat.S_ISREG(marker.st_mode) or stat.S_IMODE(marker.st_mode) != 0o644:
+            raise ValueError("notAvailable")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if any(1000 <= row.pw_uid < 60000 for row in pwd.getpwall()):
+            raise ValueError("notAvailable")
+        data = request()
+        name = data["username"]
+        home = Path("/home") / name
+        if os.path.lexists(home) or any(row.pw_name == name for row in pwd.getpwall()):
+            raise ValueError("usernameTaken")
+        system("useradd", "--create-home", "--home-dir", str(home), "--shell", "/bin/bash",
+               "--groups", "sudo", "--comment", data["name"], "--", name)
+        try:
+            account = pwd.getpwnam(name)
+            if not (1000 <= account.pw_uid < 60000 and account.pw_dir == str(home)):
+                raise OSError("unexpected local account")
+            initialize_home(account, data)
+            if data["locale"]:
+                system("localectl", "set-locale", "LANG=" + data["locale"])
+            if data["zone"]:
+                system("timedatectl", "set-timezone", data["zone"])
+            # chpasswd uses the OS password stack; the secret never goes in argv.
+            system("chpasswd", data=(name + ":" + data["password"] + "\n").encode())
+        except (OSError, subprocess.SubprocessError):
+            system("userdel", "--remove", "--", name)
+            raise
+        MARKER.unlink()
+    try:
+        system("systemctl", "restart", "cos-home-setup.service")
+    except subprocess.SubprocessError:
+        print("Claw OS: first owner created, but checkpoint home setup did not restart", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    try:
+        create_owner()
+    except ValueError as error:
+        code = str(error)
+        print(json.dumps({"error": code if code in {
+            "notAvailable", "usernameTaken", "invalidInput", "invalidUsername", "invalidName",
+            "invalidPassword", "invalidRegionalSettings", "invalidAgentSettings",
+        } else "invalidInput"}))
+    except subprocess.CalledProcessError as error:
+        print(f"Claw OS: {error.cmd[0]} failed during local owner setup ({error.returncode})", file=sys.stderr)
+        print('{"error":"setupFailed"}')
+    except (KeyError, OSError):
+        print("Claw OS: local owner setup did not complete", file=sys.stderr)
+        print('{"error":"setupFailed"}')
+    else:
+        print('{"finished":true}')

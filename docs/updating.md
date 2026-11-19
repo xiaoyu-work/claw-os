@@ -355,8 +355,8 @@ the system is not normally needed. A Root-managed graphical session is an
 interruption boundary: see [display lifetime](#root-managed-desktop-session-lifetime).
 
 The Desktop package uses the graphical greetd configuration for new logins.
-An upgrade does not reset local passwords, add a first-password marker, or
-turn an installed system back into a first-run image. Until the matching
+An upgrade does not reset local passwords or enable account creation on
+an installed system. Until the matching
 Desktop package installs the graphical review presenter, approval remains
 available through the existing `cos review` interface.
 On systems with initramfs-tools, Desktop configuration requests an initramfs

@@ -25,7 +25,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by the external Terminal product's `@`-trigger AI integration. |
 | `systemd` | Claw OS system services plus `systemd-coredump`, so the system agent can diagnose process crashes on desktop and headless images. |
 | `vm` | Hypervisor-neutral serial console, GRUB command line, serial getty, and VM power defaults. Does not create a user or install a provider agent. |
-| `local-user` | Adds a locked local `cos` account and requires one-time password setup through the graphical greeter on desktop or the serial console on headless images. |
+| `local-user` | Enables graphical owner creation for fresh desktop VMs, or configures one-time serial password setup for the locked headless `cos` account. |
 | `cloud-init` | Provider-neutral cloud provisioning, SSH, root filesystem growth, and locked root account. |
 | `azure` | Azure datasource policy, WALinuxAgent, Hyper-V daemons/initramfs modules, and Azure serial-console settings. Requires `cloud-init`. |
 | `vmware` | Optional VMware Tools guest integration (`open-vm-tools`, `open-vm-tools-desktop`) for VMware Fusion / Workstation / ESXi images. Include only for VMware builds, after `systemd`. |

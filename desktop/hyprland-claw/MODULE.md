@@ -54,16 +54,20 @@ channel, binds opaque IDs to the display epoch and observes effects without
 replaying mutations. It provides the native workspace, output and keyboard
 presentation model without an App-side Hyprland IPC client.
 
-[`session/`](session/) contains login, the first-run wizard and the user
-target. On VT7, Debian's `_greetd` account runs the GTK greeter inside Cage.
-Cage serves only the greeter and exits before the authenticated Hyprland
-session. The greeter forwards PAM prompts and cannot choose a command to run.
-A fresh local desktop VM alone supplies the Root-owned first-password marker
-for its locked `cos` account. The PAM module sets that initial password with
-the system's password stack; normal PAM authentication still follows.
+[`session/`](session/) contains the Quickshell first-run wizard, greeter and
+user target. On a fresh local desktop image, `_greetd` runs the wizard in
+Cage before sign-in. Only an active local greeter can call the fixed
+polkit helper, and it can create only the first owner of a profile carrying
+the Root-owned setup marker. The helper uses the system password stack,
+then consumes the marker. It does not open a user session. Pre-provisioned
+systems go directly to the account picker. The greeter uses the normal PAM
+conversation and hands off only to the fixed Hyprland session.
+The wizard and greeter share the original wallpaper and an aligned, softened
+crop behind the glass cards. Cage and Qt Quick render this pre-login UI in
+software; the authenticated desktop retains its normal graphics backend.
 
 The subscriber's `--desktop` mode attaches to the Root login binding. It runs
-the existing wizard when the installed profile enables first run, then starts
+post-login configuration only on installed profiles that request it, then starts
 the FileManager1 facade and `cos app desktop-shell --gui`. The graphical review
 window displays the existing broker review; approvals require polkit, while
 denial uses the owner-only cancellation route at the displayed revision.

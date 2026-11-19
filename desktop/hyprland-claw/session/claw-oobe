@@ -1,12 +1,16 @@
 #!/usr/bin/python3
-"""First-run setup inside the authenticated desktop session."""
+"""Claw OS first-run setup and local sign-in account list."""
 
 import json
 import os
 from pathlib import Path
+import pwd
 import signal
+import subprocess
 import sys
+import tempfile
 import time
+from zoneinfo import available_timezones
 
 
 SHELL = "/usr/bin/quickshell"
@@ -15,7 +19,7 @@ COS = "/usr/local/bin/cos"
 DRIVERS = Path("/var/lib/cos/driver-setup/status.json")
 
 
-def backend(completed):
+def backend(completed, staging=None):
     import gi
 
     gi.require_version("NM", "1.0")
@@ -43,6 +47,10 @@ def backend(completed):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self.stop)
             self.watch_drivers()
             NM.Client.new_async(None, self.network_ready)
+            if staging is not None:
+                locales = subprocess.check_output(["/usr/bin/locale", "-a"], text=True).splitlines()
+                send(languages=[item for item in locales if item not in ("C", "POSIX")],
+                     zones=sorted(available_timezones()))
             self.read_request()
             try:
                 self.loop.run()
@@ -81,13 +89,50 @@ def backend(completed):
             elif action == "saveModel":
                 self.save_model(message)
             elif action == "finish":
+                self.finish(message)
+
+        def finish(self, message):
+            if self.child is not None:
+                send(finishError="busy")
+                return
+            if staging is None:
                 try:
                     completed.parent.mkdir(parents=True, exist_ok=True)
                     completed.touch(mode=0o600)
                 except OSError:
-                    send(finishError=True)
+                    send(finishError="home")
                 else:
                     send(finished=True)
+                return
+
+            try:
+                profile = staging / "config/config.json"
+                if profile.is_file():
+                    records = (staging / "data/credentials/agent").glob("*.json")
+                    message["agent"] = {
+                        "config": json.loads(profile.read_bytes()),
+                        "credentials": {file.name: json.loads(file.read_bytes()) for file in records},
+                    }
+                else:
+                    message["agent"] = None
+                flags = Gio.SubprocessFlags
+                launcher = Gio.SubprocessLauncher.new(flags.STDIN_PIPE | flags.STDOUT_PIPE)
+                # The greeter is a service account, not an interactive shell.
+                launcher.unsetenv("SHELL")
+                self.child = launcher.spawnv([
+                    "/usr/bin/pkexec", "--disable-internal-agent", "/usr/libexec/claw-create-local-owner",
+                ])
+            except (OSError, ValueError, GLib.Error):
+                send(finishError="setupFailed")
+                return
+
+            def finish_result(response):
+                if response.get("finished") is True:
+                    send(finished=True)
+                else:
+                    send(finishError=response.get("error", "setupFailed"))
+
+            self.child.communicate_utf8_async(json.dumps(message), None, self.cos_result, finish_result)
 
         def watch_drivers(self):
             self.driver_monitor = None
@@ -185,7 +230,8 @@ def backend(completed):
             identity.props.id = name
             identity.props.uuid = GLib.uuid_string_random()
             identity.props.type = "802-11-wireless"
-            identity.add_permission("user", GLib.get_user_name(), None)
+            if staging is None:
+                identity.add_permission("user", GLib.get_user_name(), None)
             connection.add_setting(identity)
             wireless = NM.SettingWireless.new()
             wireless.props.ssid = access_point.get_ssid()
@@ -240,10 +286,13 @@ def backend(completed):
         def cos(self, args, callback, stdin=""):
             flags = Gio.SubprocessFlags
             try:
-                self.child = Gio.Subprocess.new(
-                    [COS, "agent", "setup", "text", *args],
-                    flags.STDIN_PIPE | flags.STDOUT_PIPE | flags.STDERR_SILENCE,
+                launcher = Gio.SubprocessLauncher.new(
+                    flags.STDIN_PIPE | flags.STDOUT_PIPE | flags.STDERR_SILENCE
                 )
+                if staging is not None:
+                    launcher.setenv("COS_USER_CONFIG_DIR", str(staging / "config"), True)
+                    launcher.setenv("COS_USER_DATA_DIR", str(staging / "data"), True)
+                self.child = launcher.spawnv([COS, "agent", "setup", "text", *args])
             except GLib.Error:
                 callback({})
                 return
@@ -372,10 +421,26 @@ def main():
     config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     completed = config / "cos/first-run-complete"
     args = sys.argv[1:]
+    if args == ["--accounts"]:
+        rows = [
+            {"username": row.pw_name, "name": row.pw_gecos.split(",", 1)[0] or row.pw_name}
+            for row in pwd.getpwall()
+            if 1000 <= row.pw_uid < 60000 and Path(row.pw_shell).name not in ("nologin", "false", "")
+        ]
+        print(json.dumps(sorted(rows, key=lambda row: row["name"].casefold())))
+        return 0
     if args == ["--check-complete"]:
         return int(not completed.is_file())
     if args == ["--backend"]:
-        backend(completed)
+        if os.environ.get("CLAW_LOCAL_DESKTOP_SETUP") == "1":
+            with tempfile.TemporaryDirectory(prefix="claw-oobe-", dir=os.environ["XDG_RUNTIME_DIR"]) as stage:
+                backend(completed, Path(stage))
+        else:
+            backend(completed)
+    elif args == ["--local"]:
+        os.environ["CLAW_LOCAL_DESKTOP_SETUP"] = "1"
+        os.environ["QS_NO_RELOAD_POPUP"] = "1"
+        os.execv(SHELL, [SHELL, "--path", CONFIG])
     elif args:
         return 2
     elif not completed.is_file():

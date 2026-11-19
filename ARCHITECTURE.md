@@ -209,9 +209,10 @@ PAM-authenticated account to the kernel login identity before user startup
 customization. The broker assigns the display epoch; a protected supervisor
 starts the compositor. `claw-display-session --desktop` starts downstream components and
 subscribes to that display rather than creating an owner-authored replacement.
-The pre-login Cage greeter only presents greetd's PAM conversation. It ends
-before the authenticated session, which can run first-run setup and shows
-the broker's existing reviews through polkit.
+Fresh local desktop images run their account wizard in Cage before greetd
+sign-in. A fixed OS helper provisions the one local owner; it grants no
+display or App authority. The Cage greeter hands off through normal PAM.
+The authenticated session shows the broker's existing reviews through polkit.
 The closed control/PAM crates are internal OS interfaces, not public SDK exports.
 
 The [GUI Host](core/src/clawd/gui/MODULE.md) binds signed App execution to the

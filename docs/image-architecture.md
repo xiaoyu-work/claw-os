@@ -34,9 +34,9 @@ Examples:
 - `kernel` installs the Debian kernel and initramfs tooling.
 - `grub-disk` installs disk-boot configuration.
 - `vm` configures generic virtual-machine console and power behavior.
-- `local-user` creates a locked `cos` account. Headless VMs set the initial
-  password on the serial console; desktop VMs set it through the graphical
-  PAM greeter and enable the existing first-run wizard.
+- `local-user` enables graphical account setup on fresh local desktop VMs.
+  Headless VMs create a locked `cos` account and set its password on the
+  serial console.
 - `cloud-init` adds provider-neutral first-boot provisioning.
 - `azure` requires `cloud-init`, restricts it to the Azure datasource, configures
   Azure Linux Agent integration, forces Hyper-V storage/network modules into
@@ -64,7 +64,7 @@ feature combinations. Targets use these defaults but continue to accept a
 
 | Profile | Identity model | Platform integration |
 | --- | --- | --- |
-| Local VM | One-time password setup for locked `cos`, graphical on desktop | Generic VM; optional VMware Tools |
+| Local VM | Graphical account creation on desktop; locked `cos` setup on headless | Generic VM; optional VMware Tools |
 | Azure | User, hostname, and SSH key supplied per instance | cloud-init, WALinuxAgent, Hyper-V |
 | WSL | User created interactively by the WSL first-launch OOBE | Modern `.wsl` package conventions |
 | Docker | User name and numeric identity supplied at container creation | Container/systemd conventions |
@@ -109,7 +109,17 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 
 ### First-run desktop setup
 
-The default amd64 installer includes the signed Desktop Shell and keeps the generic Debian kernel. On the USB, Calamares still uses its own installer session. An installed desktop or a fresh local desktop VM starts the same wizard after its first authenticated graphical login: **Welcome → Network → Drivers (if needed) → Agent model → Finish**. The wizard uses Debian's Quickshell as a regular Wayland window without starting the signed Desktop Shell App or using its private runtime. The model form passes secrets to `cos agent setup text` through stdin. Only Finish records completion. Images without the first-run marker do not enter this flow.
+A fresh local desktop VM has no human account. Before sign-in, the Quickshell
+wizard runs in Cage and presents accessibility, network, language, keyboard,
+Agent, account creation, time zone, appearance, layout and desktop tips.
+**Finish** creates the local owner and returns to the normal graphical
+sign-in. This one-time operation is enabled only on the unprovisioned local
+image. Account and model secrets are passed through stdin.
+
+The amd64 installer keeps Calamares and its account provisioning. Only an
+authenticated account runs its follow-up network, Agent and optional hardware
+configuration. Neither wizard needs to launch the signed Desktop Shell App
+or use its private runtime.
 
 The installer prefetches selected Debian backports packages into an offline cache. Calamares recognizes the actual machine, installs only its matching optional packages before reboot, and removes the remaining cache from the installed system. The first rules match the Intel Surface Laptop 7 (camera userspace and audio profiles) and Lenovo Yoga Pro 7 14IAH10 (audio profiles). The optional packages are distinct from the kernel modules and firmware needed to boot or establish the first connection, which must already be on the media.
 
@@ -161,8 +171,9 @@ Artifacts fall into two identity models.
 **Locally managed artifacts** need a usable account because the runtime has no
 metadata service. The default headless VM creates `cos` in a locked state and
 blocks its normal serial getty with `cos-local-first-login.service` until the
-console user sets a password. The desktop profile moves that password prompt to its local VT. WSL creates
-an account interactively; Docker creates the requested account from `CLAW_USER`,
+console user sets a password. The desktop profile creates the owner in the
+graphical setup wizard before normal sign-in. WSL creates an account
+interactively; Docker creates the requested account from `CLAW_USER`,
 `CLAW_UID`, and `CLAW_GID` when the container starts.
 
 The first-login service writes its completion marker only after `passwd`

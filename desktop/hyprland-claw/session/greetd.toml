@@ -7,5 +7,5 @@ source_profile = false
 
 [default_session]
 service = "greetd-greeter"
-command = "/usr/bin/systemd-cat --identifier=claw-greeter /usr/bin/cage -s -- /usr/libexec/claw-greeter"
+command = "/usr/bin/systemd-cat --identifier=claw-greeter /usr/bin/env WLR_RENDERER=pixman /usr/bin/cage -s -- /usr/libexec/claw-greeter"
 user = "_greetd"

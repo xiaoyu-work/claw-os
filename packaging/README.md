@@ -378,6 +378,9 @@ it. Agent owns `/usr/lib/cos/bin/claw-display-host`,
 `/usr/lib/<GNU-multiarch>/security/pam_claw_display.so`. The executables install
 as `0755`, PAM as `0644`, with Root ownership and protected ancestors. Desktop
 owns the compositor/session and the greetd/PAM activation policy.
+It packages the Quickshell greeter, first-run assets, and the fixed local
+owner-creation helper. Only a fresh local desktop image enables that helper;
+installing the package does not enable account creation on an existing system.
 
 Build the PAM crate for GNU/glibc with `libpam0g-dev`; runtime requires
 `libpam0g`. The Agent workflow builds that native library explicitly, separately

@@ -90,6 +90,14 @@ case "$component" in
     desktop)
         required=(
             usr/libexec/claw-hyprland/Hyprland
+            usr/libexec/claw-greeter
+            usr/libexec/claw-create-local-owner
+            usr/share/claw-os/oobe/greeter.qml
+            usr/share/claw-os/oobe/shell.qml
+            usr/share/claw-os/oobe/wallpaper-blurred.jpg
+            usr/share/backgrounds/claw-os/claw-default.jpg
+            usr/share/polkit-1/actions/org.clawos.local-desktop-setup.policy
+            usr/share/polkit-1/rules.d/claw-local-desktop-setup.rules
             etc/xdg/hypr/hyprland.lua
             usr/share/wayland-sessions/claw.desktop
             etc/pam.d/claw-desktop

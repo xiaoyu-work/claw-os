@@ -1,0 +1,12 @@
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "_greetd" || !subject.local || !subject.active) return;
+    if (action.id !== "org.clawos.local-desktop-setup.create-owner" &&
+        action.id !== "org.freedesktop.NetworkManager.network-control" &&
+        action.id !== "org.freedesktop.NetworkManager.settings.modify.system") return;
+    try {
+        polkit.spawn(["/usr/bin/test", "-f", "/etc/cos/local-desktop-setup"]);
+        return polkit.Result.YES;
+    } catch (error) {
+        return polkit.Result.NO;
+    }
+});

@@ -15,7 +15,7 @@ Depends: claw-os-base (>= __MIN_BASE__), claw-os-abi-__ABI__, claw-os-app-runtim
  network-manager, iwd, wpasupplicant, bluez, bluez-tools, udev,
  python3-gi, gir1.2-nm-1.0, quickshell (>= 0.3.0~), qt6-wayland,
  qml6-module-qtquick-controls, qml6-module-qtquick-window, qml6-module-qtquick-templates, qml6-module-qtquick-shapes,
- qml6-module-qtqml-workerscript,
+ qml6-module-qtqml-workerscript, passwd, sudo, tzdata,
  upower, power-profiles-daemon, accountsservice, xdg-user-dirs,
  libwayland-client0, libwayland-server0, libwayland-cursor0, libwayland-egl1,
  libxkbcommon0 (>= 1.11), libxkbcommon-x11-0 (>= 1.11), libinput10, libdrm2, libgbm1, libegl1, libgles2, libgl1,
