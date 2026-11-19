@@ -94,6 +94,10 @@ install -Dm0644 "$session/greetd.toml" "$stage/etc/greetd/claw-desktop.toml"
 install -Dm0644 "$session/greetd.conf" "$stage/usr/lib/systemd/system/greetd.service.d/claw-desktop.conf"
 install -Dm0644 "$session/hyprland-portals.conf" "$stage/usr/share/xdg-desktop-portal/hyprland-portals.conf"
 install -Dm0755 "$session/claw-oobe" "$stage/usr/libexec/claw-oobe"
+for file in "$session"/oobe/*; do
+    install -Dm0644 "$file" "$stage/usr/share/claw-os/oobe/${file##*/}"
+done
+install -Dm0644 "$project/assets/brand/clawos-icon-192.png" "$stage/usr/share/claw-os/oobe/logo.png"
 install -Dm0644 "$session/claw-driver-online.service" "$stage/usr/lib/systemd/system/claw-driver-online.service"
 install -Dm0755 "$session/70-claw-driver-setup" "$stage/usr/lib/NetworkManager/dispatcher.d/70-claw-driver-setup"
 

@@ -103,8 +103,16 @@ fn desktop_session(subscription: &Subscription) -> Result<(), Error> {
         ));
     }
     if Path::new("/etc/cos/first-run").is_file() {
-        let mut setup = command("/usr/libexec/claw-oobe").spawn()?;
+        let entrypoint = "/usr/libexec/claw-oobe";
+        let mut setup = command(entrypoint).spawn()?;
         wait_for_entrypoint(subscription, &mut setup)?;
+        if !command(entrypoint)
+            .arg("--check-complete")
+            .status()?
+            .success()
+        {
+            return Err(Error::Protocol("first-run setup did not record completion"));
+        }
     }
     let target = "claw-desktop-session.target";
     if !command("/usr/bin/systemctl")

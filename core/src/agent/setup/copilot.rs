@@ -335,7 +335,9 @@ pub(super) fn oauth_poll_cmd(
     let code = device_code
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "oauth-poll requires --device-code <code>".to_string())?;
+        .ok_or_else(|| {
+            "oauth-poll requires a device code (--device-code or --device-code-stdin)".to_string()
+        })?;
     let outcome = block_on(llm::providers::copilot_auth::poll_device_flow(code))?
         .map_err(|e| format!("oauth-poll: {e}"))?;
     use llm::providers::copilot_auth::PollOutcome;

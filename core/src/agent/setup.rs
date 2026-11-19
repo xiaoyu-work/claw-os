@@ -43,7 +43,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     //   apply       --provider X --model Y [--api-key K | --api-key-stdin | --api-key-env E]
     //   test        (alias for --verify-only)
     //   oauth-start --provider copilot
-    //   oauth-poll  --provider copilot --device-code <code>
+    //   oauth-poll  --provider copilot --device-code <code> | --device-code-stdin
     //   models      --provider copilot
     //
     // Bare `cos agent setup` (no positional, no flags) opens an
@@ -61,6 +61,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     let mut apply_base_url: Option<String> = None;
     let mut apply_api_version: Option<String> = None;
     let mut oauth_device_code: Option<String> = None;
+    let mut oauth_device_code_stdin = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -128,6 +129,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 }
                 oauth_device_code = Some(args[i].clone());
             }
+            "--device-code-stdin" => oauth_device_code_stdin = true,
             other => {
                 if let Some(m) = Modality::parse(other) {
                     if let Some(existing) = modality {
@@ -168,8 +170,20 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 .into(),
         );
     }
-    if oauth_device_code.is_some() && sub != Some("oauth-poll") {
-        return Err("--device-code is only valid with the `oauth-poll` subcommand".into());
+    if (oauth_device_code.is_some() || oauth_device_code_stdin) && sub != Some("oauth-poll") {
+        return Err(
+            "--device-code and --device-code-stdin are only valid with `oauth-poll`".into(),
+        );
+    }
+    if oauth_device_code_stdin {
+        if oauth_device_code.is_some() {
+            return Err("specify only one of --device-code or --device-code-stdin".into());
+        }
+        let mut code = String::new();
+        std::io::stdin()
+            .read_line(&mut code)
+            .map_err(|e| format!("read --device-code-stdin: {e}"))?;
+        oauth_device_code = Some(code);
     }
 
     let Some(modality) = modality else {
@@ -359,7 +373,7 @@ pub(crate) fn help_doc() -> Value {
             "test":        "Alias for --verify-only: probe the currently configured provider for this modality.",
             "providers":   "Emit JSON catalogue of providers + sample models for the picked modality (or `all`). Used by the cosmic-settings agent page.",
             "oauth-start": "Begin a device-authorization flow for a provider whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Emits the user code + verification URL the UI should display, plus the device_code the UI passes to `oauth-poll`.",
-            "oauth-poll":  "One-shot poll for an in-flight OAuth flow. Requires --provider X --device-code Z. Emits a `status` of pending | slow_down | ok | expired | denied | error. On `ok` the long-lived credential is stored automatically; the UI then refreshes its model list via `models`.",
+            "oauth-poll": "One-shot poll for an in-flight OAuth flow. Requires --provider X and either --device-code Z or --device-code-stdin. Emits a `status` of pending | slow_down | ok | expired | denied | error. On `ok` the long-lived credential is stored automatically; the UI then refreshes its model list via `models`.",
             "models":      "Fetch usable chat models for providers whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Returns `{ models: [{name, wire_api}, …] }`; non-chat and unsupported endpoint models are excluded.",
         },
         "flags": {
@@ -376,6 +390,7 @@ pub(crate) fn help_doc() -> Value {
             "--base-url URL":   "(apply only) Override the provider's default API endpoint. REQUIRED when --provider azure (Azure has no universal default — point at https://<resource>.openai.azure.com/openai/deployments/<deployment>). Accepted as an advanced override for openai / xai / deepseek / openrouter / ollama.",
             "--api-version V":  "(apply only) Azure REST API version, e.g. 2024-12-01-preview. When set and --base-url has no `?`, gets appended as `?api-version=V`.",
             "--device-code C":  "(oauth-poll only) The opaque device_code returned by `oauth-start`. The UI keeps it private and only forwards it to the kernel.",
+            "--device-code-stdin": "(oauth-poll only) Read the opaque device code from stdin to keep it out of process arguments.",
         },
         "examples": [
             "cos agent setup text                                                 # wizard for conversational text",
