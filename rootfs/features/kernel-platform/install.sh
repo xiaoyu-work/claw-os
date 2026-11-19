@@ -32,6 +32,7 @@ if (( ${#mode[@]} )); then
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
         gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates \
+        autoconf automake libtool libyaml-dev libbsd-dev \
         bc bison flex cpio pahole libdw-dev libelf-dev libssl-dev zlib1g-dev cryptsetup-initramfs </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"

@@ -31,7 +31,7 @@ CAMERA = (
 )
 SNAPDRAGON = "surface-laptop-7-snapdragon"
 FIRMWARE_HELPER = "/usr/sbin/claw-import-board-firmware"
-SURFACE_FIRMWARE = "Microsoft Surface audio firmware"
+SURFACE_FIRMWARE = "Microsoft Surface audio, graphics, video and compute firmware"
 PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
@@ -107,7 +107,7 @@ def from_archive(packages):
 
 def needs_firmware(pack):
     return pack == SNAPDRAGON and subprocess.run(
-        [FIRMWARE_HELPER, "--romulus-audio-ready"], check=False,
+        [FIRMWARE_HELPER, "--romulus-firmware-ready"], check=False,
     ).returncode != 0
 
 

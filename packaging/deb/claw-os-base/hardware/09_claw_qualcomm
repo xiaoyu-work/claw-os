@@ -69,7 +69,11 @@ for kernel in $kernels; do
         claw_qcom_nvme_boot "$GRUB_DEVICE" "$GRUB_DEVICE_BOOT" "$dtb_device" &&
         /usr/sbin/claw-import-board-firmware --romulus-audio-ready; then
         id=claw-qcom-oem-audio-$version
-        model="$model, OEM audio (experimental)"
+        if /usr/sbin/claw-import-board-firmware --romulus-compute-ready; then
+            model="$model, OEM audio and compute (experimental)"
+        else
+            model="$model, OEM audio (experimental)"
+        fi
         board_menu_entry "$args"
     fi
 done

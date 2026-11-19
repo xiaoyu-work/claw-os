@@ -79,6 +79,11 @@
       "sha256": "e5eca90cbe82167a1bf43c1e99c9da28a1e19f66db46df018154cef70874716f",
       "source": "https://github.com/omacom/omarchy-pkgs/tree/2082b74a83403217413d97576ff930f01320effd/pkgbuilds"
     },
+    "surface-snapdragon-fastrpc": {
+      "url": "https://codeload.github.com/qualcomm/fastrpc/tar.gz/89508eaeed55833bcb381fafa91e2224201f4ad7",
+      "sha256": "2bc7872f51479ceb3e15cf8bbae143f62fccb6d20778bdf7e0210a2fc70b4b11",
+      "source": "https://github.com/qualcomm/fastrpc/releases/tag/v1.0.9"
+    },
     "omarchy-linux-source": {
       "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.tar.xz",
       "sha256": "87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953",
@@ -162,7 +167,8 @@
       "dtbs": "omarchy-dtbs",
       "romulus": [
         "surface-snapdragon-addresses", "surface-snapdragon-iptsd", "surface-snapdragon-fixes",
-        "omarchy-linux-source", "surface-snapdragon-kernel-fixes", "surface-snapdragon-posture-fix"
+        "surface-snapdragon-fastrpc", "omarchy-linux-source",
+        "surface-snapdragon-kernel-fixes", "surface-snapdragon-posture-fix"
       ]
     },
     "aarch64-n1x": {

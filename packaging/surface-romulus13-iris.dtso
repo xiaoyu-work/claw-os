@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/dts-v1/;
+/plugin/;
+
+&iris {
+  firmware-name = "qcom/x1e80100/microsoft/Romulus/qcvss8380.mbn";
+  status = "okay";
+};

@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -eq 0 ]; then
+    echo "Usage: claw-qnn-run COMMAND [ARGS...]" >&2
+    exit 2
+fi
+if [ "$(id -u)" -eq 0 ]; then
+    echo "claw-qnn-run: run inference as the active desktop user, not as root" >&2
+    exit 1
+fi
+
+CLAW_QNN_DIR=/opt/claw-os/qnn/2.8.0
+CLAW_QNN_PROVIDER="$CLAW_QNN_DIR/libonnxruntime_providers_qnn.so"
+CLAW_QNN_HTP="$CLAW_QNN_DIR/libQnnHtp.so"
+if [ ! -r "$CLAW_QNN_PROVIDER" ]; then
+    echo "claw-qnn-run: install the optional QNN runtime first" >&2
+    exit 1
+fi
+if [ ! -r /dev/fastrpc-cdsp ] || [ ! -w /dev/fastrpc-cdsp ] ||
+    [ ! -r /dev/dma_heap/system ] || [ ! -w /dev/dma_heap/system ]; then
+    echo "claw-qnn-run: the compute DSP or its DMA heap is not available to the active desktop user" >&2
+    exit 1
+fi
+
+LD_LIBRARY_PATH="$CLAW_QNN_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+DSP_LIBRARY_PATH="$CLAW_QNN_DIR/dsp;/usr/lib/dsp/cdsp"
+export CLAW_QNN_PROVIDER CLAW_QNN_HTP LD_LIBRARY_PATH DSP_LIBRARY_PATH
+exec "$@"

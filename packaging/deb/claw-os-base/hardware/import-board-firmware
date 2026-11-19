@@ -10,20 +10,19 @@ import re
 import shutil
 import stat
 import subprocess
+import tarfile
 import tempfile
 
 
 DT = Path("/sys/firmware/devicetree/base")
 FIRMWARE = Path("/usr/lib/firmware")
+DSP = Path("/usr/lib/dsp/cdsp")
 ROMULUS = {b"microsoft,romulus13", b"microsoft,romulus15"}
-SURFACE_MSI = (
-    "https://download.microsoft.com/download/b7ca2c3f-d320-4795-be0f-529a0117abb4/"
-    "SurfaceLaptop7_ARM_Win11_26100_26.101.6391.0.msi"
-)
-SURFACE_MSI_SIZE = 530989056
-SURFACE_MSI_SHA256 = "4c4640205fa181cc7ac9bc14c35903d3147537cbe2ae8940ba2ade8e7ae25305"
+MICROSOFT = "qcom/x1e80100/microsoft/"
+ROMULUS_PATH = MICROSOFT + "Romulus/"
+CDSP_DRIVER = "qcnspmcdmextcdsp8380"
 # SHA-256 values recorded for the OEM files in omarchy-pkgs at 2082b74a.
-ROMULUS_ADSP = {
+ADSP = {
     "qcadsp8380.mbn": "3a0240f9a1c0c43b657959b1bf10433a1a9793eb5c4af9f6beff8644c174f5a0",
     "adsp_dtbs.elf": "b03f066e2645dbe35a33a08a91312842f5cee3676cac3e111f1f3dabd1cf4e9e",
     "adspua.jsn": "d65dc1aedce2c1131da8ffaed7dcffc05cc9c58da491e0c39acb2ac5b3f4bc1d",
@@ -31,7 +30,66 @@ ROMULUS_ADSP = {
     "adsps.jsn": "19b1396b5e2c0d14fb8a4eb8e47181df7f62989f4af519b439cf0ee45a46f76e",
     "battmgr.jsn": "b8aad1d149128f414eb1fd6fcbb6e0a5b7dabcd2cba001599e1ce9a0e2e291a4",
 }
-ROMULUS_ADSP = {"qcom/x1e80100/microsoft/Romulus/" + name: checksum for name, checksum in ROMULUS_ADSP.items()}
+CDSP = {
+    "cdsp_dtbs.elf": "93941f040da14b8305d39579686d886706d22954a538b03da676c1aaa191797f",
+    "qccdsp8380.mbn": "4a67a03367f2eff2f8a0e867ca25d2bf2fcd5aee3e41e2c9f436c804e257c789",
+}
+# The OEM shells and C++ libraries come from the same package as the cDSP image.
+CDSP_LIBS = {
+    "fastrpc_shell_3": "975b5ccf27d81a5247b2cde613dccd564437a0f659144d8930ef5be6383cca6b",
+    "fastrpc_shell_unsigned_3": "e61c489216a2ef8017e43f33e989b3e9e1796a413040ffcde9bcbaea9e519cb3",
+    "libc++.so.1": "153ad58db0a416802bd541be021e7f7a91472b626814cae62e8ced85838e2dc9",
+    "libc++abi.so.1": "0419222c0b94ab6c031de49fb1d6a8177e7d698ca877963fc18370de2699e89a",
+}
+ARCHIVES = {
+    "surface-laptop-7": (
+        "https://download.microsoft.com/download/b7ca2c3f-d320-4795-be0f-529a0117abb4/"
+        "SurfaceLaptop7_ARM_Win11_26100_26.101.6391.0.msi",
+        530989056,
+        "4c4640205fa181cc7ac9bc14c35903d3147537cbe2ae8940ba2ade8e7ae25305",
+        {
+            **{ROMULUS_PATH + name: (f"proextadsp8380/{name}", checksum) for name, checksum in ADSP.items()},
+            ROMULUS_PATH + "cdspr.jsn": (f"{CDSP_DRIVER}/cdspr.jsn",
+                                        "7e46c515ab1bb012768be6e961eca69b1c8aad9af1cbac886b3b5ae8d4228f64"),
+            ROMULUS_PATH + "qcvss8380.mbn": ("qcdx8380/qcvss8380.mbn",
+                                            "d52c28872ebbaf8087a30bf196d15ee24839fd62a2d91b605edfa73c09bbd8d4"),
+        },
+    ),
+    "surface-pro-11": (
+        "https://download.microsoft.com/download/92821b24-203a-4ce5-9a3a-5df3160a2fe3/"
+        "SurfacePro11_ARM_Win11_26100_26.094.41119.0.msi",
+        647004160,
+        "8b299016027a4a87f50cf168f69ca1fb8dedc9a0612fcd6cff89b9bc64135ec2",
+        {
+            **{ROMULUS_PATH + name: (f"{CDSP_DRIVER}/{name}", checksum) for name, checksum in CDSP.items()},
+            **{name: (f"{CDSP_DRIVER}/CDSP/{name}", checksum) for name, checksum in CDSP_LIBS.items()},
+            MICROSOFT + "qcdxkmsuc8380.mbn": ("qcdx/qcdxkmsuc8380.mbn",
+                                            "c89711a60240f29cb5df13f7b904642b78b7d9d6e614473751f7bf4049fab137"),
+        },
+    ),
+}
+ROMULUS_FILES = {name: checksum for _, _, _, files in ARCHIVES.values()
+                 for name, (_, checksum) in files.items()}
+ROMULUS_COMPUTE = (*(ROMULUS_PATH + name for name in CDSP), ROMULUS_PATH + "cdspr.jsn", *CDSP_LIBS)
+QNN_RUNTIME = Path("/opt/claw-os/qnn/2.8.0")
+QNN_ARCHIVE = (
+    "https://github.com/onnxruntime/onnxruntime-qnn/releases/download/v2.8.0/onnxruntime-qnn-2.8.0-linux-aarch64.tgz",
+    88765662,
+    "a4b695225cecf16402b279ee4a625747ef7a96971c7f0222c5dff2a48832868d",
+)
+QNN_FILES = (
+    "libonnxruntime_providers_qnn.so", "libQnnHtp.so", "libQnnHtpPrepare.so", "libQnnSystem.so",
+    "libQnnHtpV73Stub.so", "libQnnHtpV73Skel.so", "libQnnHtpNetRunExtensions.so", "libQnnIr.so",
+    "LICENSE", "Qualcomm_LICENSE.pdf", "ThirdPartyNotices.txt", "Privacy.md",
+)
+SDK_FILES = ("libc.so", "libgcc.so")
+
+
+def is_romulus():
+    if not (DT / "compatible").is_file():
+        return False
+    names = (DT / "compatible").read_bytes().split(b"\0")
+    return b"qcom,x1e80100" in names and bool(ROMULUS.intersection(names))
 
 
 def firmware_requests():
@@ -51,12 +109,18 @@ def firmware_requests():
                 names.add(name)
     if not names:
         raise ValueError("the running device tree declares no Qualcomm firmware paths")
-    if ROMULUS.intersection(compatible):
-        names.update(ROMULUS_ADSP)
+    if is_romulus():
+        names.update(ROMULUS_FILES)
     return sorted(names)
 
 
+def destination(name):
+    return DSP / name if name in CDSP_LIBS else FIRMWARE / "updates" / name
+
+
 def existing(name):
+    if name in CDSP_LIBS:
+        return destination(name).exists()
     return any(
         (root / f"{name}{suffix}").is_file()
         for root in (FIRMWARE, FIRMWARE / "updates")
@@ -100,13 +164,13 @@ def candidates(source, requests, missing):
         if len(hashes) != 1:
             raise ValueError(f"{name}: multiple different files; supply only the matching OEM driver")
         checksum = hashes.pop()
-        if name in ROMULUS_ADSP and checksum.hex() != ROMULUS_ADSP[name]:
-            raise ValueError(f"{name}: expected the firmware from the verified Surface Laptop 7 driver")
+        if is_romulus() and name in ROMULUS_FILES and checksum.hex() != ROMULUS_FILES[name]:
+            raise ValueError(f"{name}: expected the exact verified Microsoft release")
         yield name, files[0], checksum
 
 
 def install(name, source, expected):
-    target = FIRMWARE / "updates" / name
+    target = destination(name)
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=target.parent) as staged, open_firmware(source) as payload:
         shutil.copyfileobj(payload, staged)
@@ -125,8 +189,8 @@ def verified(path, checksum):
         return hashlib.file_digest(stream, "sha256").hexdigest() == checksum
 
 
-def audio_ready():
-    return all(verified(FIRMWARE / "updates" / name, checksum) for name, checksum in ROMULUS_ADSP.items())
+def ready(names):
+    return all(verified(destination(name), ROMULUS_FILES[name]) for name in names)
 
 
 def refresh_initramfs(romulus):
@@ -135,46 +199,94 @@ def refresh_initramfs(romulus):
         subprocess.run(["/usr/sbin/update-grub"], check=True)
 
 
-def surface_audio(msi):
-    requests = firmware_requests()
-    if not ROMULUS_ADSP.keys() <= set(requests):
-        raise ValueError("the official Surface Laptop 7 driver is for Snapdragon Romulus only")
-    pending = []
-    for name, checksum in ROMULUS_ADSP.items():
-        if verified(FIRMWARE / "updates" / name, checksum):
-            continue
-        if existing(name):
-            raise ValueError(f"{name}: refusing to replace existing OEM firmware")
-        pending.append(name)
+def download(path, url, size, checksum, local=None):
+    if local:
+        with open_firmware(Path(local)) as stream, path.open("wb") as target:
+            if os.fstat(stream.fileno()).st_size != size:
+                raise ValueError(f"{local}: unexpected archive size")
+            shutil.copyfileobj(stream, target)
+    else:
+        subprocess.run([
+            "/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https", "--location",
+            "--fail", "--silent", "--show-error", "--connect-timeout", "30", "--max-time", "1200",
+            "--max-filesize", str(size), "--output", str(path), url,
+        ], check=True)
+    if path.stat().st_size != size or not verified(path, checksum):
+        raise ValueError(f"{url}: unexpected archive checksum")
 
-    if pending:
-        with tempfile.TemporaryDirectory(prefix="claw-surface-firmware-", dir="/var/tmp") as tmp:
-            work = Path(tmp)
-            archive = work / "surface-laptop-7.msi"
-            if msi:
-                with open_firmware(Path(msi)) as stream, archive.open("wb") as target:
-                    if os.fstat(stream.fileno()).st_size != SURFACE_MSI_SIZE:
-                        raise ValueError("unexpected Surface Laptop 7 MSI size")
-                    shutil.copyfileobj(stream, target)
-            else:
-                subprocess.run([
-                    "/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https", "--location",
-                    "--fail", "--silent", "--show-error", "--connect-timeout", "30",
-                    "--max-time", "1200", "--max-filesize", str(SURFACE_MSI_SIZE),
-                    "--output", str(archive), SURFACE_MSI,
-                ], check=True)
-            if not verified(archive, SURFACE_MSI_SHA256):
-                raise ValueError("the Microsoft Surface Laptop 7 MSI checksum does not match")
-            subprocess.run(["/usr/bin/msiextract", "-C", str(work), str(archive)],
-                           stdout=subprocess.DEVNULL, check=True)
-            drivers = work / "SurfaceUpdate/proextadsp8380"
+
+def surface_firmware(sources):
+    if not is_romulus():
+        raise ValueError("the Microsoft firmware mapping is for Snapdragon Surface Laptop 7 only")
+    changed = False
+    try:
+        for label, local in sources.items():
+            url, size, checksum, files = ARCHIVES[label]
+            pending = [name for name in files if not ready((name,))]
             for name in pending:
-                if not verified(drivers / PurePosixPath(name).name, ROMULUS_ADSP[name]):
-                    raise ValueError(f"{name}: matching firmware missing from the Microsoft MSI")
-            for name in pending:
-                install(name, drivers / PurePosixPath(name).name, bytes.fromhex(ROMULUS_ADSP[name]))
-                print(f"Installed {name}")
-    refresh_initramfs(romulus=True)
+                if existing(name):
+                    raise ValueError(f"{name}: refusing to replace existing OEM firmware")
+            if not pending:
+                continue
+            with tempfile.TemporaryDirectory(prefix="claw-surface-firmware-", dir="/var/tmp") as tmp:
+                work = Path(tmp)
+                archive = work / f"{label}.msi"
+                download(archive, url, size, checksum, local)
+                subprocess.run(["/usr/bin/msiextract", "-C", str(work), str(archive)],
+                               stdout=subprocess.DEVNULL, check=True)
+                drivers = work / "SurfaceUpdate"
+                for name in pending:
+                    member, digest = files[name]
+                    if not verified(drivers / member, digest):
+                        raise ValueError(f"{name}: matching firmware not found in {label}")
+                for name in pending:
+                    member, digest = files[name]
+                    install(name, drivers / member, bytes.fromhex(digest))
+                    changed = True
+                    print(f"Installed {name}")
+    finally:
+        if changed:
+            refresh_initramfs(romulus=True)
+    if not changed:
+        refresh_initramfs(romulus=True)
+
+
+def copy_hexagon_library(source, target):
+    with open_firmware(source) as stream:
+        header = stream.read(20)
+        if header[:6] != b"\x7fELF\x01\x01" or header[16:20] != b"\x03\x00\xa4\x00":
+            raise ValueError(f"{source}: expected a Hexagon SDK shared library")
+        stream.seek(0)
+        with target.open("xb") as out:
+            shutil.copyfileobj(stream, out)
+
+
+def install_qnn(sdk_libs, local_archive):
+    if not is_romulus() or not ready(ROMULUS_COMPUTE):
+        raise ValueError("install the verified Snapdragon Surface Laptop 7 compute firmware first")
+    if not Path("/usr/lib/aarch64-linux-gnu/libcdsprpc.so").is_file():
+        raise ValueError("install the Claw OS Surface FastRPC driver pack first")
+    if QNN_RUNTIME.exists():
+        print(f"QNN is already installed in {QNN_RUNTIME}")
+        return
+    QNN_RUNTIME.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="qnn-", dir=QNN_RUNTIME.parent) as tmp:
+        work = Path(tmp)
+        result = work / "runtime"
+        dsp = result / "dsp"
+        dsp.mkdir(parents=True)
+        for name in SDK_FILES:
+            copy_hexagon_library(sdk_libs / name, dsp / name)
+        archive = work / "qnn.tgz"
+        download(archive, *QNN_ARCHIVE, local=local_archive)
+        with tarfile.open(archive, "r:gz") as payload:
+            for name in QNN_FILES:
+                member = payload.getmember(name)
+                if not member.isfile():
+                    raise ValueError(f"{name}: expected a regular file in the pinned QNN release")
+                payload.extract(member, dsp if name == "libQnnHtpV73Skel.so" else result, filter="data")
+        result.replace(QNN_RUNTIME)
+    print(f"Installed QNN 2.8.0 in {QNN_RUNTIME}")
 
 
 def main():
@@ -183,17 +295,47 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--list-missing", action="store_true")
     mode.add_argument("--romulus-audio-ready", action="store_true")
+    mode.add_argument("--romulus-firmware-ready", action="store_true")
+    mode.add_argument("--romulus-compute-ready", action="store_true")
     mode.add_argument("--surface-laptop-7", metavar="MSI", nargs="?", const="",
-                      help="import Surface Laptop 7 audio firmware from the official MSI, downloading it if not supplied")
+                      help="provision Romulus OEM firmware; use without a path to download both Microsoft archives")
+    mode.add_argument("--install-qnn", metavar="HEXAGON_V73_LIBDIR", type=Path,
+                      help="install the optional Qualcomm HTP provider using a directory with the official v73 libc.so and libgcc.so")
+    parser.add_argument("--surface-pro-11", metavar="MSI", help="use this verified second MSI together with a local Laptop 7 MSI")
+    parser.add_argument("--accept-qnn-license", action="store_true",
+                        help="confirm that the owner accepts the Qualcomm license distributed with the QNN release")
+    parser.add_argument("--qnn-archive", metavar="TGZ", help="use a local copy of the exact official QNN release")
     args = parser.parse_args()
-    if args.source is not None and (args.list_missing or args.romulus_audio_ready or args.surface_laptop_7 is not None):
+    if args.surface_pro_11 and not args.surface_laptop_7:
+        parser.error("--surface-pro-11 requires a local --surface-laptop-7 MSI")
+    if (args.accept_qnn_license or args.qnn_archive) and args.install_qnn is None:
+        parser.error("--accept-qnn-license and --qnn-archive require --install-qnn")
+    if args.source is not None and any((args.list_missing, args.romulus_audio_ready, args.romulus_firmware_ready,
+                                       args.romulus_compute_ready, args.surface_laptop_7 is not None, args.install_qnn)):
         parser.error("do not specify a source directory with another operation")
     if args.romulus_audio_ready:
-        return 0 if audio_ready() else 1
+        return 0 if ready(ROMULUS_PATH + name for name in ADSP) else 1
+    if args.romulus_firmware_ready:
+        return 0 if is_romulus() and ready(ROMULUS_FILES) else 1
+    if args.romulus_compute_ready:
+        return 0 if ready(ROMULUS_COMPUTE) else 1
+    if args.install_qnn is not None:
+        if os.geteuid() != 0:
+            raise ValueError("QNN installation requires root")
+        if not args.accept_qnn_license:
+            parser.error("review the Qualcomm license in the official QNN 2.8.0 release and pass --accept-qnn-license")
+        install_qnn(args.install_qnn, args.qnn_archive)
+        return
     if args.surface_laptop_7 is not None:
         if os.geteuid() != 0:
             raise ValueError("import requires root")
-        surface_audio(args.surface_laptop_7)
+        if args.surface_laptop_7:
+            sources = {"surface-laptop-7": args.surface_laptop_7}
+            if args.surface_pro_11:
+                sources["surface-pro-11"] = args.surface_pro_11
+        else:
+            sources = dict.fromkeys(ARCHIVES)
+        surface_firmware(sources)
         return
     if not args.list_missing and args.source is None:
         parser.error("use --list-missing, --surface-laptop-7, or specify an OEM directory")
@@ -211,8 +353,8 @@ def main():
     for name, file, expected in matches:
         install(name, file, expected)
         print(f"Installed {name}")
-    if any((FIRMWARE / "updates" / name).is_file() for name in requests):
-        refresh_initramfs(romulus=ROMULUS_ADSP.keys() <= set(requests))
+    if any(destination(name).is_file() for name in requests):
+        refresh_initramfs(romulus=is_romulus())
     for name in missing:
         if not existing(name):
             print(f"Still missing: {name}")
@@ -221,5 +363,5 @@ def main():
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError) as error:
         raise SystemExit(f"claw-import-board-firmware: {error}") from error

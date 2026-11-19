@@ -168,6 +168,7 @@ if [[ ! -r $compatible ]] || ! tr '\\\\0' '\\\\n' <"$compatible" |
     touchpad(source["surface-snapdragon-iptsd"], recipes, work, stage, recipes=recipes)
     name = "claw-os-surface-snapdragon-touchpad"
     stage_file(work / "iptsd/LICENSE", stage / "usr/share/doc" / name / "copyright")
+    romulus_fastrpc(source["surface-snapdragon-fastrpc"], work, stage, name)
     # The OV02C10 black level is 64 in its 10-bit mode; SoftISP uses 16-bit tuning.
     write_file(stage / "usr/share/libcamera/ipa/simple/ov02c10.yaml", """version: 1
 algorithms:
@@ -185,11 +186,35 @@ algorithms:
   }
 ]
 """)
-    package(stage, out, name, "3.1.0-5+clawos3", "arm64",
-            f"linux-image-{release}, libc6, libgcc-s1, libstdc++6, systemd, udev, curl, msitools",
-            "Touchpad, digitizer and webcam integration for Snapdragon Surface Laptop 7",
+    package(stage, out, name, "3.1.0-5+clawos4", "arm64",
+            f"linux-image-{release}, libc6, libgcc-s1, libstdc++6, libbsd0, libyaml-0-2, systemd, udev, curl, msitools",
+            "Input, camera and FastRPC integration for Snapdragon Surface Laptop 7",
             {name: spec for name, spec in provenance.items() if name.startswith("surface-snapdragon-")}, None)
     romulus_audio(fixes / "pkgbuilds/alsa-ucm-conf", work, out)
+
+
+def romulus_fastrpc(archive, work, stage, package_name):
+    tree = work / "fastrpc"
+    extract(archive, tree)
+    replace(tree / "src/Makefile.am", ';/usr/lib/rfsa/adsp;/usr/lib/dsp;',
+            ';/usr/lib/dsp/cdsp;/usr/lib/rfsa/adsp;/usr/lib/dsp;')
+    subprocess.run(["autoreconf", "-fi"], cwd=tree, check=True)
+    libdir = "/usr/lib/aarch64-linux-gnu"
+    subprocess.run([tree / "configure", "--prefix=/usr", f"--libdir={libdir}"], cwd=tree, check=True)
+    subprocess.run(["make", "-C", tree / "src", f"-j{os.cpu_count()}", "libcdsprpc.la"], check=True)
+    subprocess.run(["make", "-C", tree / "test", "fastrpc-healthcheck"], check=True)
+    dest = stage / libdir.lstrip("/")
+    dest.mkdir(parents=True, exist_ok=True)
+    for path in (tree / "src/.libs").glob("libcdsprpc.so*"):
+        shutil.copy2(path, dest / path.name, follow_symlinks=False)
+    if not (dest / "libcdsprpc.so").is_file():
+        raise ValueError("libcdsprpc.so: missing FastRPC build output")
+    stage_file(tree / "test/fastrpc-healthcheck", stage / "usr/bin/fastrpc-healthcheck", 0o755)
+    stage_file(tree / "LICENSE.txt", stage / "usr/share/doc" / package_name / "fastrpc.LICENSE")
+    write_file(stage / "usr/lib/udev/rules.d/70-claw-romulus-fastrpc.rules",
+               'SUBSYSTEM=="misc", KERNEL=="fastrpc-cdsp", TAG+="uaccess"\n'
+               'SUBSYSTEM=="dma_heap", KERNEL=="system", TAG+="uaccess"\n')
+    write_file(stage / "DEBIAN/triggers", "activate-noawait ldconfig\n")
 
 
 def romulus_audio(recipes, work, out):

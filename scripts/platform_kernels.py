@@ -90,7 +90,7 @@ def copy_required(source, target):
 
 def package(stage, out, name, version, arch, depends, description, provenance, postinst, postrm=None):
     metadata = stage / "DEBIAN"
-    metadata.mkdir()
+    metadata.mkdir(exist_ok=True)
     (metadata / "control").write_text(
         f"Package: {name}\nVersion: {version}\nArchitecture: {arch}\n"
         f"Maintainer: Claw OS <noreply@github.com>\nSection: kernel\nPriority: optional\n"
@@ -199,7 +199,7 @@ def kernel_package(profile, source, provenance, work, out):
         shutil.move(work / "dtbs" / directory, boards)
         if "romulus" in profile:
             romulus_trees(boards, work, provenance, source_build)
-            version += "+clawos2" if source_build else "+clawos1"
+            version += "+clawos3" if source_build else "+clawos2"
         write_qualcomm_boards(boards)
     if "boot" in profile:
         # Do not expose internal speakers without the matching speaker protection stack.
@@ -220,6 +220,7 @@ def romulus_trees(boards, work, provenance, include_ir):
         "touch-i2c": "https://lkml.org/lkml/2026/9/30/518",
         "touch-spi": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/tree/25c934e1aab32d578b3fb2b0d52dd3d56221a9bc",
         "camera": "https://github.com/bryce-hoehn/linux-surface-laptop-7/blob/af765428493e13b84f06c23bdea4cedd3e58cf72/patches/outgoing/ov02c10/0004-OV02C10-camera-device-tree.patch",
+        "iris": "https://github.com/omacom/omarchy-pkgs/blob/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-dtbs/0030-arm64-dts-qcom-romulus15-enable-the-Iris-video-codec.patch",
     }
     if include_ir:
         references["ir"] = "https://github.com/qBitnaut/omarchy-dragon-sl7/blob/de20e9ba631c44fa9ca218bd94fd5888a08d427c/pkgs/linux-sl7/patches/0044-arm64-dts-qcom-x1e80100-romulus13-Add-the-IR-camera.patch"
@@ -241,7 +242,7 @@ def romulus_trees(boards, work, provenance, include_ir):
         filename = original.name if transport == "i2c" else original.stem + "-spi.dtb"
         patched = work / filename
         subprocess.run(["fdtoverlay", "-i", original, "-o", patched, overlays["touchpad"],
-                        overlays["camera"], overlays[f"touch-{transport}"], *ir], check=True)
+                        overlays["camera"], overlays["iris"], overlays[f"touch-{transport}"], *ir], check=True)
         patched.replace(boards / filename)
 
     if include_ir:
