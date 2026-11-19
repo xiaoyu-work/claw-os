@@ -92,6 +92,7 @@ case "$component" in
             usr/libexec/claw-hyprland/Hyprland
             usr/libexec/claw-greeter
             usr/libexec/claw-create-local-owner
+            usr/libexec/claw-desktop-locales
             usr/share/claw-os/oobe/greeter.qml
             usr/share/claw-os/oobe/shell.qml
             usr/share/claw-os/oobe/wallpaper-blurred.jpg

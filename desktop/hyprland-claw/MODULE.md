@@ -59,14 +59,16 @@ user target. On a fresh local desktop image, `_greetd` runs the wizard in
 Cage before sign-in. Only an active local greeter can call the fixed
 polkit helper, and it can create only the first owner of a profile carrying
 the Root-owned setup marker. The helper uses the system password stack,
-then consumes the marker. It does not open a user session. Pre-provisioned
-systems go directly to the account picker. The greeter uses the normal PAM
-conversation and hands off only to the fixed Hyprland session.
+then consumes the marker. The wizard uses the just-entered password once
+in the normal greetd/PAM conversation for the fixed Hyprland session. It
+does not store a password or enable persistent auto-login. Later logins
+and pre-provisioned profiles use the account picker.
 The wizard and greeter share the original wallpaper and an aligned, softened
 crop behind the glass cards. Cage and Qt Quick render this pre-login UI in
 software; the authenticated desktop retains its normal graphics backend.
-The wizard opens at network setup; it leaves display mode and scaling to
-the system defaults.
+The wizard skips network setup when already connected and leaves display
+mode, scaling and taskbar layout to the defaults. `claw-desktop-locales`
+generates the Debian locales used by the language picker.
 
 The subscriber's `--desktop` mode attaches to the Root login binding. It runs
 post-login configuration only on installed profiles that request it, then starts

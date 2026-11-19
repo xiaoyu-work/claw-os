@@ -105,25 +105,6 @@ enable_fingerprint_auth() {
     fi
 }
 
-generate_default_locales() {
-    [ -f /etc/locale.gen ] || return 0
-    for entry in \
-        "en_US.UTF-8 UTF-8" \
-        "zh_CN.UTF-8 UTF-8" \
-        "zh_TW.UTF-8 UTF-8" \
-        "ja_JP.UTF-8 UTF-8"; do
-        if grep -q "^# $entry$" /etc/locale.gen; then
-            sed -i "s|^# $entry$|$entry|" /etc/locale.gen
-        elif ! grep -q "^$entry$" /etc/locale.gen; then
-            echo "$entry" >> /etc/locale.gen
-        fi
-    done
-    if command -v locale-gen >/dev/null 2>&1; then
-        locale-gen
-    fi
-    echo "LANG=en_US.UTF-8" > /etc/default/locale
-}
-
 if [ "$1" = "configure" ]; then
     # Desktop integration touches the running system: accounts, PAM,
     # locales, systemd links. Under DPKG_ROOT (an image build, a staged
@@ -149,7 +130,7 @@ if [ "$1" = "configure" ]; then
             # A build-time hiccup must not abort package configuration.
             systemd-tmpfiles --create || true
         fi
-        generate_default_locales
+        /usr/libexec/claw-desktop-locales
     fi
     commit_security_floor
     if [ -z "$DPKG_ROOT" ]; then

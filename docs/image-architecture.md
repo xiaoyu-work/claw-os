@@ -110,12 +110,15 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 ### First-run desktop setup
 
 A fresh local desktop VM has no human account. Before sign-in, the Quickshell
-wizard runs in Cage and starts with network setup, followed by language,
-keyboard, Agent, account creation, time zone, appearance, layout and desktop
-tips. Display selection and scaling use the system defaults without a setup step.
-**Finish** creates the local owner and returns to the normal graphical
-sign-in. This one-time operation is enabled only on the unprovisioned local
-image. Account and model secrets are passed through stdin.
+wizard runs in Cage. It skips network setup when NetworkManager confirms a
+connection, then presents language, keyboard, Agent, account creation, time zone
+and appearance. The language picker shows names for the installed Debian
+UTF-8 locales. The display and taskbar use the system defaults.
+**Finish** creates the local owner from the username and password and signs in
+once through greetd/PAM with that password. Logout and later boots use the
+normal graphical sign-in. Account creation is enabled only on the
+unprovisioned local image. Account and model secrets are passed through stdin
+to the provisioning helper.
 
 The amd64 installer keeps Calamares and its account provisioning. Only an
 authenticated account runs its follow-up network, Agent and optional hardware

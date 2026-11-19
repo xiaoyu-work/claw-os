@@ -93,6 +93,7 @@ install -Dm0644 "$session/claw-screen-reader.service" "$stage/usr/lib/systemd/us
 install -Dm0644 "$session/claw-desktop.pam" "$stage/etc/pam.d/claw-desktop"
 install -Dm0755 "$session/claw-greeter" "$stage/usr/libexec/claw-greeter"
 install -Dm0755 "$session/claw-create-local-owner" "$stage/usr/libexec/claw-create-local-owner"
+install -Dm0755 "$session/claw-desktop-locales" "$stage/usr/libexec/claw-desktop-locales"
 install -Dm0755 "$session/claw-desktop-reviews" "$stage/usr/libexec/claw-desktop-reviews"
 install -Dm0644 "$session/greetd.toml" "$stage/etc/greetd/claw-desktop.toml"
 install -Dm0644 "$session/greetd.conf" "$stage/usr/lib/systemd/system/greetd.service.d/claw-desktop.conf"

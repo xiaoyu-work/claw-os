@@ -49,7 +49,7 @@ def backend(completed, staging=None):
             NM.Client.new_async(None, self.network_ready)
             if staging is not None:
                 locales = subprocess.check_output(["/usr/bin/locale", "-a"], text=True).splitlines()
-                send(languages=[item for item in locales if item not in ("C", "POSIX")],
+                send(languages=[item for item in locales if "_" in item and item.endswith(".utf8")],
                      zones=sorted(available_timezones()))
             self.read_request()
             try:
@@ -158,6 +158,8 @@ def backend(completed, staging=None):
                 return
             self.nm.connect("notify::nm-running", lambda *_: self.update_connectivity())
             self.nm.connect("notify::connectivity", lambda *_: self.update_connectivity())
+            self.nm.connect("notify::state", lambda *_: self.update_connectivity())
+            self.nm.connect("notify::active-connections", lambda *_: self.update_connectivity())
             self.nm.connect("device-added", lambda *_: self.watch_wifi())
             self.nm.connect("device-removed", lambda *_: self.watch_wifi())
             self.update_connectivity()
@@ -165,7 +167,15 @@ def backend(completed, staging=None):
 
         def update_connectivity(self):
             states = {NM.ConnectivityState.FULL: "online", NM.ConnectivityState.PORTAL: "portal"}
-            state = states.get(self.nm.get_connectivity(), "offline") if self.nm.get_nm_running() else "unavailable"
+            state = states.get(self.nm.get_connectivity(), "offline")
+            if not self.nm.get_nm_running():
+                state = "unavailable"
+            elif state == "offline" and any(
+                connection.get_connection_type() == "802-3-ethernet"
+                and connection.get_state() == NM.ActiveConnectionState.ACTIVATED
+                for connection in self.nm.get_active_connections()
+            ):
+                state = "wired"
             send(networkState=state)
 
         def wifi_devices(self):

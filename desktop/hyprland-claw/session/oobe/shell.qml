@@ -6,27 +6,26 @@ import QtQuick.Layouts
 import QtQuick.Window
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Greetd
 
 ShellRoot {
     id: setup
 
     property string current: "network"
     property string network: ""
+    property bool skipNetwork: false
     property bool finishing: false
+    property bool signInFailed: false
     readonly property bool local: Quickshell.env("CLAW_LOCAL_DESKTOP_SETUP") === "1"
-    property string fullName: ""
     property string username: ""
-    property bool usernameEdited: false
     property string newPassword: ""
     property string confirmation: ""
     property string language: ""
     property string keyboard: "us"
     property string zone: ""
     property bool light: false
-    property bool persistentBar: true
     readonly property bool matchingPassword: newPassword !== "" && newPassword === confirmation
-    readonly property bool validAccount: fullName.trim() !== "" && !fullName.includes(":")
-        && /^[a-z][a-z0-9_-]{0,30}$/.test(username) && matchingPassword
+    readonly property bool validAccount: /^[a-z][a-z0-9_-]{0,30}$/.test(username) && matchingPassword
     property var state: ({
         networkState: "checking", wifiState: "idle", wifiName: "", hasWifi: false, networks: [],
         driverState: "checking", packages: [], agentState: "idle", providers: [],
@@ -34,26 +33,23 @@ ShellRoot {
         languages: [], zones: [], finishError: ""
     })
     readonly property var pages: ({
-        network: [qsTr("Get connected"), qsTr("Connect to Wi-Fi or plug in an Ethernet cable."), networkPage],
+        network: [qsTr("Get connected"), state.hasWifi ? qsTr("Connect to Wi-Fi or plug in an Ethernet cable.")
+            : qsTr("Plug in an Ethernet cable or continue offline."), networkPage],
         language: [qsTr("Select a language"), qsTr("Choose the language your system will use."), languagePage],
         keyboard: [qsTr("Select keyboard layout"), qsTr("This layout takes effect in your desktop session. Setup and sign-in use the current system keyboard."), keyboardPage],
         agent: [qsTr("Configure your Agent"), qsTr("Connect a model provider now, or set it up later."), modelPage],
         account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Claw OS."), accountPage],
         location: [qsTr("Timezone and location"), qsTr("Choose a time zone for this computer."), locationPage],
         appearance: [qsTr("Personalize appearance"), qsTr("Preview a light or dark look and set the preference for your apps."), appearancePage],
-        layout: [qsTr("Layout configuration"), qsTr("Choose how the taskbar appears in the desktop."), layoutPage],
-        workspaces: [qsTr("Workspaces for your workflow"), qsTr("Keep different sets of apps open on separate workspaces."), workspacePage],
-        shortcuts: [qsTr("Keyboard shortcuts"), qsTr("Use the Super or Windows key for quick desktop actions."), shortcutsPage],
-        launcher: [qsTr("Find and open apps"), qsTr("Open the launcher from the desktop to search your installed apps."), launcherPage],
         drivers: [qsTr("Set up graphics and hardware"), qsTr("Claw OS installs only the additional packages that match this computer."), driverPage],
-        finish: [qsTr("You're ready"), local ? qsTr("Finish setup, then sign in with the account you just created.")
-            : qsTr("Finish setup to open your Claw OS desktop."), finishPage]
+        finish: [qsTr("You're ready"), qsTr("Finish setup to open your Claw OS desktop."), finishPage]
     })
     readonly property var steps: {
         const order = local
-            ? ["network", "language", "keyboard", "agent", "account", "location",
-                "appearance", "layout", "workspaces", "shortcuts", "launcher"]
-            : ["network", "agent"];
+            ? ["language", "keyboard", "agent", "account", "location", "appearance"]
+            : ["agent"];
+        if (!skipNetwork)
+            order.unshift("network");
         if (state.packages.length > 0)
             order.push("drivers");
         order.push("finish");
@@ -79,16 +75,29 @@ ShellRoot {
         state = Object.assign({}, state, message);
         if (message.finishError) {
             finishing = false;
-            if (["invalidUsername", "invalidName", "invalidPassword", "usernameTaken"].includes(message.finishError))
+            if (["invalidUsername", "invalidPassword", "usernameTaken"].includes(message.finishError))
                 go(steps.indexOf("account"));
         }
-        if (state.finished) {
-            newPassword = "";
+        if (message.finished) {
             confirmation = "";
-            Qt.quit();
+            if (!local)
+                Qt.quit();
+            else if (Greetd.available)
+                Greetd.createSession(username);
+            else
+                cannotSignIn();
+        } else if (!skipNetwork && ["online", "wired"].includes(message.networkState)) {
+            skipNetwork = true;
+            if (current === "network")
+                go(0);
         } else if (current === "agent" && message.agentState === "saved") {
             go(step + 1);
         }
+    }
+
+    function cannotSignIn(): void {
+        newPassword = "";
+        signInFailed = true;
     }
 
     function finish(): void {
@@ -96,9 +105,8 @@ ShellRoot {
         state = Object.assign({}, state, {finishError: ""});
         if (local) {
             send("finish", {
-                username: username, name: fullName.trim(), password: newPassword,
-                locale: language, keyboard: keyboard, zone: zone, light: light,
-                persistentBar: persistentBar
+                username: username, password: newPassword, locale: language,
+                keyboard: keyboard, zone: zone, light: light
             });
         } else {
             send("finish");
@@ -107,11 +115,36 @@ ShellRoot {
 
     Component.onCompleted: Quickshell.watchFiles = false
 
+    Connections {
+        target: setup.local ? Greetd : null
+        enabled: setup.state.finished && !setup.signInFailed
+
+        function onAuthMessage(message, error, responseRequired, echoResponse) {
+            if (!responseRequired)
+                return;
+            if (echoResponse || setup.newPassword === "") {
+                setup.cannotSignIn();
+                Greetd.cancelSession();
+                return;
+            }
+            const password = setup.newPassword;
+            setup.newPassword = "";
+            Greetd.respond(password);
+        }
+        function onAuthFailure(message) { setup.cannotSignIn(); }
+        function onError(message) { setup.cannotSignIn(); }
+        function onReadyToLaunch() {
+            setup.newPassword = "";
+            Greetd.launch(["/usr/bin/systemd-cat", "--identifier=claw-desktop",
+                           "/usr/local/bin/claw-display-session", "--desktop"], ["XDG_SESSION_TYPE=wayland"]);
+        }
+    }
+
     Process {
         id: backend
         running: true
         stdinEnabled: true
-        command: ["/usr/libexec/claw-oobe", "--backend"]
+        command: ["/usr/bin/env", "-u", "GREETD_SOCK", "/usr/libexec/claw-oobe", "--backend"]
         stdout: SplitParser {
             onRead: line => setup.receive(JSON.parse(line))
         }
@@ -247,8 +280,7 @@ ShellRoot {
                     }
                     Item { Layout.fillWidth: true }
                     ActionButton {
-                        visible: (setup.current === "network" && setup.state.networkState !== "online")
-                            || setup.current === "agent"
+                        visible: setup.current === "network" || setup.current === "agent"
                         enabled: setup.state.agentState !== "saving"
                         text: setup.current === "network" ? qsTr("Continue offline") : qsTr("Set up later")
                         onClicked: {
@@ -259,14 +291,18 @@ ShellRoot {
                     }
                     ActionButton {
                         primary: true
-                        visible: setup.current !== "network" || setup.state.networkState === "online"
-                        enabled: !setup.finishing
+                        visible: setup.current !== "network"
+                        enabled: setup.signInFailed || (!setup.finishing
                             && (setup.current !== "account" || setup.validAccount)
-                            && (setup.current !== "agent" || !!page.item?.canContinue)
-                        text: setup.current === "finish" ? (setup.finishing ? qsTr("Saving…") : qsTr("Finish"))
+                            && (setup.current !== "agent" || !!page.item?.canContinue))
+                        text: setup.signInFailed ? qsTr("Go to sign-in")
+                            : setup.state.finished && setup.local ? qsTr("Signing in…")
+                            : setup.current === "finish" ? (setup.finishing ? qsTr("Saving…") : qsTr("Finish"))
                             : setup.current === "agent" && !setup.state.savedModel ? qsTr("Save and continue") : qsTr("Next")
                         onClicked: {
-                            if (setup.current === "agent")
+                            if (setup.signInFailed)
+                                Qt.quit();
+                            else if (setup.current === "agent")
                                 page.item.advance();
                             else if (setup.current === "finish")
                                 setup.finish();
@@ -282,9 +318,13 @@ ShellRoot {
     Component {
         id: languagePage
         Picker {
+            function languageName(code: string): string {
+                const locale = Qt.locale(code.split(".")[0]);
+                return qsTr("%1 (%2)").arg(locale.nativeLanguageName).arg(locale.nativeTerritoryName);
+            }
             label: qsTr("System language")
-            model: [qsTr("Keep system default"), ...setup.state.languages]
-            selection: setup.language || model[0]
+            model: [qsTr("Keep system default"), ...setup.state.languages.map(code => languageName(code))]
+            selection: setup.language ? languageName(setup.language) : model[0]
             onActivated: index => setup.language = index === 0 ? "" : setup.state.languages[index - 1]
         }
     }
@@ -307,24 +347,10 @@ ShellRoot {
             spacing: 8
             Field {
                 Layout.fillWidth: true
-                placeholderText: qsTr("Full name")
-                maximumLength: 48
-                text: setup.fullName
-                onTextEdited: {
-                    setup.fullName = text;
-                    if (!setup.usernameEdited)
-                        setup.username = text.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 31);
-                }
-            }
-            Field {
-                Layout.fillWidth: true
                 placeholderText: qsTr("Username")
                 maximumLength: 31
                 text: setup.username
-                onTextEdited: {
-                    setup.usernameEdited = true;
-                    setup.username = text;
-                }
+                onTextEdited: setup.username = text
             }
             Label {
                 Layout.fillWidth: true
@@ -400,30 +426,6 @@ ShellRoot {
     }
 
     Component {
-        id: layoutPage
-        Toggle {
-            text: qsTr("Keep the taskbar visible")
-            checked: setup.persistentBar
-            onToggled: setup.persistentBar = checked
-        }
-    }
-
-    Component {
-        id: workspacePage
-        Status { text: qsTr("Switch workspaces in the left taskbar or with Super + 1–9.") }
-    }
-
-    Component {
-        id: shortcutsPage
-        Status { text: qsTr("Super + Q closes a window. Super + Shift + a number moves it to that workspace.") }
-    }
-
-    Component {
-        id: launcherPage
-        Status { text: qsTr("Select the launcher at the top of the taskbar and type an app name.") }
-    }
-
-    Component {
         id: networkPage
         ColumnLayout {
             id: networks
@@ -441,6 +443,8 @@ ShellRoot {
                         return qsTr("Connecting to %1…").arg(setup.state.wifiName);
                     if (setup.state.networkState === "online")
                         return qsTr("Connected to the internet");
+                    if (setup.state.networkState === "wired")
+                        return qsTr("Connected by Ethernet");
                     if (setup.state.wifiState === "failed")
                         return qsTr("Couldn't connect. Check the Wi-Fi password and try again.");
                     if (setup.state.wifiState === "passwordRequired")
@@ -664,15 +668,17 @@ ShellRoot {
         ColumnLayout {
             Status {
                 Layout.fillWidth: true
-                tint: setup.state.finishError ? theme.error : theme.muted
+                tint: setup.signInFailed || setup.state.finishError ? theme.error : theme.muted
                 text: {
+                    if (setup.signInFailed)
+                        return qsTr("Your account is ready, but automatic sign-in didn't complete. Sign in with the password you just set.");
                     if (setup.state.finishError === "busy")
                         return qsTr("Wait for the current setup operation, then try again.");
                     if (setup.state.finishError)
                         return setup.local ? qsTr("Couldn't finish creating the account. Your desktop hasn't been opened. Try again.")
                             : qsTr("Couldn't save setup completion. Check that your home folder is writable.");
                     if (setup.local)
-                        return qsTr("Account: %1 (%2)").arg(setup.fullName).arg(setup.username);
+                        return qsTr("Account: %1").arg(setup.username);
                     return setup.state.savedModel ? qsTr("Your Agent model is set to %1.").arg(setup.state.savedModel)
                         : qsTr("You can still configure your Agent from Settings.");
                 }
@@ -726,19 +732,6 @@ ShellRoot {
             font: button.font
             color: !button.enabled ? theme.muted : button.primary ? theme.accentInk : theme.text
             horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-    }
-
-    component Toggle: Controls.Switch {
-        id: control
-        font.family: theme.font
-        font.pixelSize: 15
-        palette.windowText: theme.text
-        palette.highlight: theme.accent
-        contentItem: Label {
-            text: control.text
-            leftPadding: control.indicator.width + control.spacing
             verticalAlignment: Text.AlignVCenter
         }
     }

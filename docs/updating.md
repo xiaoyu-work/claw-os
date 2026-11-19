@@ -359,7 +359,8 @@ interruption boundary: see [display lifetime](#root-managed-desktop-session-life
 
 The Desktop package uses the graphical greetd configuration for new logins.
 An upgrade does not reset local passwords or enable account creation on
-an installed system. Until the matching
+an installed system. It prepares the bundled Debian locales without
+replacing the configured system language. Until the matching
 Desktop package installs the graphical review presenter, approval remains
 available through the existing `cos review` interface.
 On systems with initramfs-tools, Desktop configuration requests an initramfs

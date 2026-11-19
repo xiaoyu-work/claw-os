@@ -6,7 +6,6 @@ ulimit -c 0
 export QT_QPA_PLATFORM=wayland QT_QUICK_BACKEND=software QS_NO_RELOAD_POPUP=1
 marker=/etc/cos/local-desktop-setup
 if [ -f "$marker" ]; then
-    env -u GREETD_SOCK /usr/libexec/claw-oobe --local
-    test ! -e "$marker"
+    exec /usr/libexec/claw-oobe --local
 fi
 exec /usr/bin/quickshell --path /usr/share/claw-os/oobe/greeter.qml
