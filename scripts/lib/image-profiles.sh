@@ -13,9 +13,8 @@ fi
 # Shared non-desktop runtime used by WSL and Docker.
 IMAGE_FEATURES_HEADLESS_RUNTIME="base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding"
 
-# Local virtual-machine profiles. local-user is deliberately separate from
-# vm: local hypervisors cannot inject a login account, while cloud platforms
-# create one per instance through cloud-init.
+# Local virtual-machine profiles. local-user enables first-run setup without
+# preseeded credentials. Cloud platforms create accounts through cloud-init.
 IMAGE_FEATURES_VM="base,cos-core,systemd,kernel,grub-disk,vm,gpu-drivers,apt-source,local-user"
 IMAGE_FEATURES_DESKTOP_VM="base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source,local-user"
 
@@ -27,7 +26,7 @@ IMAGE_FEATURES_AZURE_DESKTOP="base,cos-core,systemd,kernel,desktop,copilot-cli,g
 IMAGE_FEATURES_LIVE="base,cos-core,systemd,kernel,wifi-board-data,live,gpu-drivers,apt-source"
 IMAGE_FEATURES_INSTALLER="base,cos-core,systemd,kernel,wifi-board-data,grub-disk,live,installer,gpu-drivers,apt-source"
 IMAGE_FEATURES_DESKTOP_INSTALLER="base,cos-core,systemd,kernel,wifi-board-data,grub-disk,desktop,live,installer,gpu-drivers,apt-source"
-IMAGE_FEATURES_ASAHI="base,cos-core,systemd,kernel,desktop,grub-disk,apt-source,kernel-platform"
+IMAGE_FEATURES_ASAHI="base,cos-core,systemd,kernel,desktop,grub-disk,apt-source,kernel-platform,local-user"
 
 case ",$IMAGE_FEATURES_VM," in
     *,local-user,*) ;;
