@@ -12,6 +12,12 @@ if [ "$#" -eq 0 ] && [ "$(id -u)" != 0 ]; then
 fi
 
 [ "$(dpkg --print-architecture)" = amd64 ] || exit 0
+if [ "$#" -eq 0 ] && [ -x /usr/sbin/claw-import-t2-firmware ] &&
+    /usr/sbin/claw-import-t2-firmware --detect; then
+    if ! /usr/sbin/claw-import-t2-firmware; then
+        echo "Apple T2 wireless firmware was not imported; a local macOS firmware copy can be supplied later." >&2
+    fi
+fi
 dmi=/sys/class/dmi/id
 [ -r "$dmi/sys_vendor" ] && [ -r "$dmi/product_name" ] || exit 0
 read -r manufacturer <"$dmi/sys_vendor"

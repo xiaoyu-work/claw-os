@@ -1,0 +1,126 @@
+#!/usr/bin/python3
+"""Import Apple wireless firmware from the owner's local macOS files."""
+
+import argparse
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+
+
+SYSFS = Path("/sys/bus/pci/devices")
+FIRMWARE = Path("/usr/lib/firmware")
+CONVERTER = "/usr/lib/cos/hw/t2-firmware-convert.py"
+
+
+def is_t2():
+    for pci in SYSFS.glob("*"):
+        try:
+            if (pci / "vendor").read_text().strip() == "0x106b" and (pci / "device").read_text().strip() in {
+                "0x1801", "0x1802",
+            }:
+                return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
+def convert(source, archive):
+    source = source.resolve(strict=True)
+    if not (source / "wifi").is_dir():
+        raise ValueError(f"{source}: the macOS firmware directory must contain wifi/")
+    for name in ("wifi", "bluetooth"):
+        folder = source / name
+        if not folder.exists():
+            continue
+        for path in (folder, *folder.rglob("*")):
+            if not path.resolve().is_relative_to(source) or not (path.is_file() or path.is_dir()):
+                raise ValueError(f"{path}: unsafe macOS firmware member")
+    subprocess.run(["/usr/bin/python3", CONVERTER, source, archive], check=True)
+
+
+def convert_macos(archive):
+    subprocess.run(["/usr/sbin/modprobe", "apfs"], check=True)
+    devices = subprocess.check_output(["/usr/bin/lsblk", "-nrpo", "PATH,FSTYPE"], text=True).splitlines()
+    partitions = [line.split()[0] for line in devices if re.fullmatch(r"/dev/nvme0n1p[0-9]+ +apfs", line.strip())]
+    mountpoint = Path(tempfile.mkdtemp(prefix="claw-t2-macos-", dir="/var/tmp"))
+    try:
+        for partition in partitions:
+            for volume in range(6):
+                result = subprocess.run(
+                    ["/usr/bin/mount", "-t", "apfs", "-o", f"ro,nodev,nosuid,noexec,vol={volume}", partition, mountpoint],
+                    stderr=subprocess.DEVNULL, check=False,
+                )
+                if result.returncode:
+                    continue
+                try:
+                    source = (mountpoint / "usr/share/firmware").resolve()
+                    if source.is_relative_to(mountpoint) and (source / "wifi").is_dir():
+                        convert(source, archive)
+                        return
+                finally:
+                    subprocess.run(["/usr/bin/umount", mountpoint], check=True)
+    finally:
+        mountpoint.rmdir()
+    raise ValueError("no readable macOS firmware directory on the internal APFS disk")
+
+
+def install(archive):
+    destination = FIRMWARE / "updates/brcm"
+    destination.mkdir(parents=True, exist_ok=True)
+    changed = False
+    with tarfile.open(archive, "r:") as payload:
+        members = payload.getmembers()
+        names = {member.name for member in members if member.isfile() and member.size > 0}
+        if not members:
+            raise ValueError("no supported Apple wireless firmware was found")
+        for member in members:
+            if not re.fullmatch(r"(brcmfmac|brcmbt)43[A-Za-z0-9,_.-]+", member.name):
+                raise ValueError(f"{member.name}: unexpected firmware filename")
+            if not ((member.isfile() and member.name in names) or (member.islnk() and member.linkname in names)):
+                raise ValueError(f"{member.name}: invalid firmware archive member")
+        for member in members:
+            target = destination / member.name
+            if target.is_symlink() or any(
+                (folder / f"{member.name}{suffix}").is_file()
+                for folder in (destination, FIRMWARE / "brcm") for suffix in ("", ".xz", ".zst")
+            ):
+                continue
+            with payload.extractfile(member) as source, tempfile.NamedTemporaryFile(dir=destination) as staged:
+                shutil.copyfileobj(source, staged)
+                staged.flush()
+                os.chmod(staged.name, 0o644)
+                os.link(staged.name, target)
+            changed = True
+    if changed:
+        subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path, nargs="?", help="local macOS usr/share/firmware directory; otherwise read APFS")
+    parser.add_argument("--detect", action="store_true", help="only check for an Apple T2 device")
+    args = parser.parse_args()
+    if args.detect:
+        return 0 if is_t2() else 1
+    if os.geteuid() != 0:
+        raise ValueError("firmware import requires root")
+    if not is_t2():
+        raise ValueError("requires an Apple T2 Mac")
+    with tempfile.TemporaryDirectory(prefix="claw-t2-firmware-", dir="/var/tmp") as tmp:
+        archive = Path(tmp) / "firmware.tar"
+        if args.source is None:
+            convert_macos(archive)
+        else:
+            convert(args.source, archive)
+        install(archive)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, tarfile.TarError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"claw-import-t2-firmware: {error}") from error

@@ -162,13 +162,15 @@ The generic Debian kernel remains the default. Build an opt-in image on a native
 
 | Profile | Native artifact and remaining limits |
 | --- | --- |
-| `x86-t2` | Debian 13 T2 kernel with early virtual USB for internal input. Mac-specific firmware for Wi-Fi and Bluetooth is not bundled. |
+| `x86-t2` | Debian 13 T2 kernel with early virtual USB for internal input, matched Apple ALSA profiles, and a T2-only fan service. The installer tries to import Wi-Fi and Bluetooth firmware from the owner's local macOS system volume; the firmware is not bundled. |
 | `x86-surface-laptop-7-intel` | Desktop ISO for the Surface Laptop for Business 7th Edition with Intel Core Ultra 200V (ACPI `MSHW0551`), not the Snapdragon edition. See the [build and hardware checks](#intel-surface-laptop-7). |
 | `aarch64-qualcomm` | Patched kernel and version-matched retail Snapdragon X/X2 device trees. Choose the exact model and variant in GRUB; the desktop installer selects Surface driver packages automatically. DSP remains off by default. |
 | `aarch64-n1x` / `aarch64-gb10` | Matched NVIDIA open kernel modules, GPU firmware and driver libraries. GB10 disables unsupported system sleep and limits the CPU to shallow idle to avoid the firmware's excessive wake latency. This can increase idle power use. N1x acceleration requires working production GPU firmware. |
 | `aarch64-apple` | Aurora kernel, matching device trees and m1n1/U-Boot stage-two assets. Use `iso-live` for pre-provisioned Asahi UEFI or `sudo ./build.sh asahi-rootfs` for a desktop rootfs archive. Generic Calamares is disabled for this profile: it does not provision macOS recovery, an Apple boot policy or a dedicated Asahi ESP. |
 
 `python3 scripts/platform_kernels.py <profile>` prepares the corresponding Debian packages and boot assets without building the full OS. Kernel and driver inputs are pinned by SHA-256; Omarchy artifacts also require signatures from the pinned archive key. Neither the image nor the install adds an Arch package repository. Generated platform artifacts carry their upstream source references and are not published by the regular Claw OS APT workflow.
+
+Build `x86-t2` on Debian 13 amd64 with Cargo, Rust and a C linker. The T2 installer mounts the recognized internal macOS APFS volume read-only and imports only Broadcom wireless firmware. If the partition was erased, is encrypted, or is otherwise unreadable, use `sudo claw-import-t2-firmware /path/to/macos/usr/share/firmware` with a local copy and reboot. The fan service keeps the upstream firmware limits and returns fans to automatic control when it stops.
 
 Apple provisioning must first create and enroll a dedicated Asahi boot chain without overwriting macOS or recovery. The rootfs archive is for that Linux root and ESP only. It carries the matched stage-two image at `/usr/lib/cos/asahi/boot.bin` (`boot-j700.bin` for MacBook Neo); it does not activate either image or replace an enrolled Apple Stage 1. Internal speaker audio is disabled until the matching speaker protection stack is qualified. Other device-specific OEM firmware and user-space workarounds are not assumed to be covered by the kernel. Do not bundle material from a vendor recovery or Windows image without redistribution rights.
 

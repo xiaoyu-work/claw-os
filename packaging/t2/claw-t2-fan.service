@@ -1,0 +1,17 @@
+[Unit]
+Description=Fan control on Apple T2 Macs
+ConditionKernelVersion=*-t2-trixie
+After=systemd-udev-trigger.service
+
+[Service]
+ExecCondition=/usr/sbin/claw-import-t2-firmware --detect
+ExecStartPre=/usr/sbin/modprobe coretemp
+ExecStart=/usr/bin/t2fanrd
+ExecStopPost=/bin/sh -c '/usr/sbin/claw-import-t2-firmware --detect || exit 0; for fan in /sys/devices/pci*/*/*/*/APP0001:00/fan*_manual; do if [ -w "$$fan" ]; then printf 0 >"$$fan" || :; fi; done'
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

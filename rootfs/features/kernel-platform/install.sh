@@ -47,6 +47,11 @@ packages=()
 for file in "$artifacts"/linux-image-*.deb "$artifacts"/claw-os-nvidia-platform_*.deb; do
     [[ -f $file ]] && packages+=("$inside/${file##*/}")
 done
+if [[ $platform == x86-t2 ]]; then
+    t2=("$artifacts"/claw-os-t2-support_*.deb)
+    test -f "${t2[0]}"
+    packages+=("$inside/${t2[0]##*/}")
+fi
 if [[ $platform == x86-surface-laptop-7-intel ]]; then
     for file in "$artifacts"/{claw-os-surface-laptop-7,libcamera*,gstreamer1.0-libcamera}_*.deb; do
         test -f "$file"
@@ -71,6 +76,10 @@ chroot "$ROOTFS" apt-get update -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
     install -y --no-install-recommends "${packages[@]}" </dev/null
 chroot "$ROOTFS" apt-get clean
+
+if [[ $platform == x86-t2 ]]; then
+    chroot "$ROOTFS" /usr/bin/systemctl enable claw-t2-fan.service
+fi
 
 if [[ $platform == aarch64-apple ]]; then
     install -d "$ROOTFS/usr/lib/cos/asahi"

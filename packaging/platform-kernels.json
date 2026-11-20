@@ -14,6 +14,26 @@
       "sha256": "926f8e46185a6bda8a5455dea05bc15c755ac6e08b7c664eaffe8e3cb152e951",
       "source": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/tree/09a9b830e62942aa78d862ca32a4109b30d9a0f7"
     },
+    "t2-fan": {
+      "url": "https://codeload.github.com/GnomedDev/t2fanrd/tar.gz/48baf962697ec3d4d969c74cf601ee8e15b7aeaa",
+      "sha256": "33cd1644bd7602587b0d486a4396de6bdaae3d704d91e1e762604980beaa6e84",
+      "source": "https://github.com/GnomedDev/t2fanrd/tree/48baf962697ec3d4d969c74cf601ee8e15b7aeaa"
+    },
+    "t2-audio": {
+      "url": "https://codeload.github.com/kaiT2en/KaiT2en-Fedora/tar.gz/0ee536bacc82b460d2dc9e97a716cea31a652ea4",
+      "sha256": "b8c0116a2da3dc0b8f7fc3d5139bc036d62ec3020c3d07b0b12aa16fa706ed7a",
+      "source": "https://github.com/kaiT2en/KaiT2en-Fedora/tree/0ee536bacc82b460d2dc9e97a716cea31a652ea4/modules/t2bce_audio-alsa-ucm-conf"
+    },
+    "t2-firmware-converter": {
+      "url": "https://raw.githubusercontent.com/omacom/omarchy-pkgs/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/apple-bcm-firmware-fetcher/apple-bcm-firmware-fetcher.sh",
+      "sha256": "873f78849627293781c6eb7c7a36d9a621a340ce8aaba292023eefa6aa481ba6",
+      "source": "https://wiki.t2linux.org/guides/wifi-bluetooth/"
+    },
+    "t2-firmware-license": {
+      "url": "https://raw.githubusercontent.com/omacom/omarchy-pkgs/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/apple-bcm-firmware-fetcher/LICENSE",
+      "sha256": "6c903cc39c8e90a40258d8ade6ebad7d8fe92c42affd9ce6d479db9fc55be860",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/apple-bcm-firmware-fetcher"
+    },
     "surface-image": {
       "url": "https://github.com/linux-surface/linux-surface/releases/download/debian-7.3.4-2/linux-image-7.3.4-2-surface_7.3.4-2_amd64.deb",
       "sha256": "3eb631210feeeb3383f78d4c596c3a4e4420c95cf0abf379a7135eb59148973e",
@@ -154,8 +174,9 @@
     "x86-t2": {
       "arch": "amd64",
       "release": "7.3.4-3-t2-trixie",
-      "boot_args": "intel_iommu=on iommu=pt pm_async=off",
-      "native": ["t2-image", "t2-headers"]
+      "boot_args": "intel_iommu=on iommu=pt pm_async=off mem_sleep_default=deep",
+      "native": ["t2-image", "t2-headers"],
+      "t2": ["t2-fan", "t2-audio", "t2-firmware-converter", "t2-firmware-license"]
     },
     "x86-surface-laptop-7-intel": {
       "arch": "amd64",

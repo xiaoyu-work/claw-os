@@ -348,7 +348,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
                 "qualcomm-firmware-update-ca"]
     else:
         keys = list(profile.get("native", [])) or [profile["kernel"]]
-        keys += profile.get("surface", [])
+        keys += profile.get("surface", []) + profile.get("t2", [])
     if "dtbs" in profile:
         keys.append(profile["dtbs"])
     keys += profile.get("gpu", []) + profile.get("boot", [])
@@ -378,6 +378,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
                 from surface_laptop7 import build_surface
 
                 build_surface(profile, source, provenance, work, out, package)
+            if "t2" in profile:
+                from t2_support import t2_package
+
+                t2_package(profile["release"], source, provenance, work, out, package)
         else:
             kernel_package(profile, source, provenance, work, out)
             if "romulus" in profile:
