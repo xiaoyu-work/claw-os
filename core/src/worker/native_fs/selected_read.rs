@@ -209,6 +209,22 @@ pub(crate) struct ReadProvider {
     pub(super) shared: Weak<Shared>,
 }
 
+pub(crate) enum PickerTarget {
+    File { pin: File, stamp: [u64; 8] },
+    Absent { parent: File },
+}
+
+impl PickerTarget {
+    pub(crate) fn matches_file(&self, file: &FileCandidate) -> bool {
+        matches!(self, Self::File { pin, stamp }
+            if backend::identity(pin) == Ok(file.identity()) && *stamp == file.stamp())
+    }
+
+    pub(crate) fn matches_creation(&self, file: &super::CreateCandidate) -> bool {
+        matches!(self, Self::Absent { parent } if backend::identity(parent) == Ok(file.identity()))
+    }
+}
+
 impl ReadProvider {
     pub(super) fn new(shared: Arc<Shared>) -> Result<Self, String> {
         shared.controller()?;
@@ -273,6 +289,38 @@ impl ReadProvider {
                 generation,
             }),
         }))
+    }
+
+    pub(crate) fn pin_picker(&self, relative: &Path, save: bool) -> Result<PickerTarget, String> {
+        let shared = self.shared.upgrade().ok_or("native view has retired")?;
+        shared.controller()?;
+        let _serial = shared.effects.lock().map_err(|_| "native effects poisoned")?;
+        let errno = |code| std::io::Error::from_raw_os_error(code).to_string();
+        match backend::open_relative(&shared, relative, false) {
+            Ok(pin) => {
+                let metadata = pin.metadata().map_err(|error| error.to_string())?;
+                if !metadata.is_file() || metadata.nlink() != 1 {
+                    return Err("file picker target is not a regular file".into());
+                }
+                Ok(PickerTarget::File { pin, stamp: backend::fingerprint(&metadata) })
+            }
+            Err(libc::ENOENT) if save => {
+                let parent = relative.parent().ok_or("save selection has no parent")?;
+                let name = relative.file_name().ok_or("save selection has no filename")?;
+                let parent = backend::open_relative(&shared, parent, false).map_err(errno)?;
+                if !parent.metadata().map_err(|error| error.to_string())?.is_dir() {
+                    return Err("save selection parent is not a directory".into());
+                }
+                let _owner = crate::clawd::client_identity::FsIdentityGuard::enter(shared.owner)
+                    .map_err(|error| error.to_string())?;
+                match crate::clawd::filesystem::open_at(&parent, name, libc::O_PATH | libc::O_NOFOLLOW, 0) {
+                    Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {}
+                    _ => return Err("save target changed before pinning".into()),
+                }
+                Ok(PickerTarget::Absent { parent })
+            }
+            Err(code) => Err(errno(code)),
+        }
     }
 
     pub(crate) fn install(&self, selection: &str, permit: ReadPermit) -> Result<(), String> {

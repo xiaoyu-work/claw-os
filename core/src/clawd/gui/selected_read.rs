@@ -21,6 +21,7 @@ use crate::worker::native_fs::{
     ReadProvider, WriteLeaseCheck, WritePermit,
 };
 
+use super::file_picker::{Mode, PickerConsent, Window};
 use super::inputs::{
     FileReadRequest, FileReadStatusRequest, FileSaveReservationRequest, FileWriteRequest,
     FileWriteStatusRequest, FileCreateRequest, FileCreateStatusRequest,
@@ -138,7 +139,8 @@ struct Status {
     name: Option<String>,
     access: &'static str,
     state: Stage,
-    approval_request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_request_id: Option<String>,
     target_display: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_in_ms: Option<u64>,
@@ -153,7 +155,7 @@ struct Proposal {
     capability: Cap,
     digest: String,
     approval_session: String,
-    approval_request: String,
+    approval_request: Option<String>,
     display: String,
     stage: Stage,
     authority: Option<Arc<SelectionAuthority>>,
@@ -281,6 +283,7 @@ pub(super) struct SelectedReads {
     process: ProcessIdentity,
     containment: InstanceProcess,
     provider: ReadProvider,
+    picker: Arc<Window>,
     metadata_cap: Cap,
     metadata_ceiling: Instant,
     gui: GrantId,
@@ -303,6 +306,7 @@ impl SelectedReads {
         metadata_cap: Cap,
         metadata_ceiling: Instant,
         gui: &GrantView,
+        picker: Arc<Window>,
     ) -> Result<Arc<Self>, String> {
         let containment = InstanceProcess::receive(
             process.pidfd().map_err(|error| error.to_string())?,
@@ -323,6 +327,7 @@ impl SelectedReads {
             process,
             containment,
             provider,
+            picker,
             metadata_cap,
             metadata_ceiling,
             gui: gui.id,
@@ -485,6 +490,29 @@ impl SelectedReads {
             Epoch(self.instance.0).label()
         );
         let display = candidate.display().map_err(BrokerError::authorization)?;
+        let mode = if access == Access::Read { Mode::File } else { Mode::Save };
+        let picker = self.picker.claim(gui, candidate.relative(), mode, |selected| match &candidate {
+            Target::File(file) => selected.matches_file(file),
+            Target::Create(file) => selected.matches_creation(file),
+        }).map_err(BrokerError::authorization)?;
+        let mut proposal = Proposal {
+            access, id: id.clone(), candidate, capability, digest, approval_session,
+            approval_request: None, display, stage: Stage::Pending, authority: None,
+        };
+        if let Some(picker) = picker {
+            self.select(&mut proposal, SelectionDecision::Picker(picker))
+                .map_err(BrokerError::authorization)?;
+            crate::provenance::audit("gui.file.picker.used", serde_json::json!({
+                "owner_uid":self.registration.owner(), "app_id":self.registration.launch.app_id(),
+                "session_id":self.registration.session_id, "access":access.name(),
+                "selection_id":proposal.id, "operation_digest":proposal.digest,
+            }));
+            let result = serde_json::to_value(proposal.status())
+                .map_err(|error| BrokerError::unavailable(error.to_string()))?;
+            proposals.insert(id, proposal);
+            return Ok(result);
+        }
+        let display = &proposal.display;
         let purpose = match access {
             Access::Read => format!("Read ONLY selected file {display}; window {}, native node {node}. No directory, write, delete or execute access", Epoch(self.instance.0).label()),
             Access::Write => format!("Write ONLY selected existing file {display}, including a Root-reserved atomic replacement; window {}, native node {node}. No content read, sibling/directory write, delete or execute access", Epoch(self.instance.0).label()),
@@ -499,12 +527,12 @@ impl SelectedReads {
                     "window selected-file session limit reached",
                 ));
             }
-            sessions.insert(approval_session.clone());
+            sessions.insert(proposal.approval_session.clone());
         }
         let approval_request = crate::approvals::submit_owned_with_context_for_operation(
             access.verb(),
-            capability.scope.clone(),
-            approval_session.clone(),
+            proposal.capability.scope.clone(),
+            proposal.approval_session.clone(),
             purpose,
             Some(format!(
                 "GUI {} {} selected file {}",
@@ -514,21 +542,10 @@ impl SelectedReads {
             )),
             Some(self.registration.owner()),
             None,
-            Some(&digest),
+            Some(&proposal.digest),
         )
         .map_err(BrokerError::unavailable)?;
-        let proposal = Proposal {
-            access,
-            id: id.clone(),
-            candidate,
-            capability,
-            digest,
-            approval_session,
-            approval_request,
-            display,
-            stage: Stage::Pending,
-            authority: None,
-        };
+        proposal.approval_request = Some(approval_request);
         let result = serde_json::to_value(proposal.status())
             .map_err(|error| BrokerError::unavailable(error.to_string()))?;
         proposals.insert(id, proposal);
@@ -556,7 +573,8 @@ impl SelectedReads {
             } else {
                 use crate::approvals::RequestStatus;
                 match crate::approvals::status_for_owner(
-                    &proposal.approval_request,
+                    proposal.approval_request.as_deref()
+                        .ok_or_else(|| BrokerError::unavailable("pending selection has no protected review"))?,
                     Some(self.registration.owner()),
                 ) {
                     RequestStatus::Pending | RequestStatus::Resolving => {}
@@ -580,7 +598,7 @@ impl SelectedReads {
                         .map_err(BrokerError::unavailable)?;
                         match approval {
                             Some(approval) => {
-                                if let Err(error) = self.select(proposal, &approval) {
+                                if let Err(error) = self.select(proposal, SelectionDecision::Review(&approval)) {
                                     tracing::warn!(%error, node, "protected selected-file read was not installed");
                                     proposal.stage = if proposal.candidate.revalidate().is_err() {
                                         Stage::Stale
@@ -626,7 +644,7 @@ impl SelectedReads {
     fn select(
         &self,
         proposal: &mut Proposal,
-        approval: &crate::approvals::ConsumedGrant,
+        decision: SelectionDecision<'_>,
     ) -> Result<(), String> {
         let started = Instant::now();
         let gui = self.fresh()?;
@@ -638,8 +656,7 @@ impl SelectedReads {
         {
             return Err("selected read declaration changed".into());
         }
-        let lifetime = approval
-            .expires_in()
+        let lifetime = decision.expires_in()
             .min(gui.expires_in)
             .min(self.metadata_ceiling.saturating_duration_since(started));
         let deadline = started + lifetime;
@@ -656,10 +673,14 @@ impl SelectedReads {
             operation_digest: &proposal.digest,
             lifetime: remaining,
         };
-        let (grant, authorized) = match proposal.access {
-            Access::Read => authority::authorize_gui_file_read(binding, approval)?,
-            Access::Write => authority::authorize_gui_file(binding, approval)?,
-            Access::Create => authority::authorize_gui_file_create(binding, approval)?,
+        let (grant, authorized) = match decision {
+            SelectionDecision::Review(approval) => match proposal.access {
+                Access::Read => authority::authorize_gui_file_read(binding, approval)?,
+                Access::Write => authority::authorize_gui_file(binding, approval)?,
+                Access::Create => authority::authorize_gui_file_create(binding, approval)?,
+            },
+            SelectionDecision::Picker(consent) =>
+                authority::authorize_picker_file(binding, consent, proposal.access.route())?,
         };
         let deadline = deadline.min(authority_started + grant.expires_in);
         let read = Arc::new(SelectionAuthority {
@@ -672,7 +693,7 @@ impl SelectedReads {
             capability: proposal.capability.clone(),
             candidate: proposal.candidate.clone(),
             approval_session: proposal.approval_session.clone(),
-            generation: approval.generation,
+            generation: u32::try_from(grant.generation).map_err(|_| "invalid selected-file generation")?,
             deadline,
             stopped: self.stopped.clone(),
         });
@@ -951,12 +972,12 @@ impl SelectedReads {
         let decisions = self
             .lock_until(deadline)?
             .values()
-            .map(|proposal| {
-                (
+            .filter_map(|proposal| {
+                Some((
                     proposal.approval_session.clone(),
-                    proposal.approval_request.clone(),
+                    proposal.approval_request.as_ref()?.clone(),
                     proposal.digest.clone(),
-                )
+                ))
             })
             .collect::<Vec<_>>();
         for (session, request, digest) in decisions {
@@ -1044,6 +1065,20 @@ impl SelectedReads {
                     }
                 }
             },
+        }
+    }
+}
+
+enum SelectionDecision<'a> {
+    Review(&'a crate::approvals::ConsumedGrant),
+    Picker(PickerConsent),
+}
+
+impl SelectionDecision<'_> {
+    fn expires_in(&self) -> Duration {
+        match self {
+            Self::Review(approval) => approval.expires_in(),
+            Self::Picker(consent) => consent.expires_in(),
         }
     }
 }

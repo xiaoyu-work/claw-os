@@ -1299,11 +1299,11 @@ fn dispatch_with_stdin_impl(
         let session = env::var("COS_SESSION")
             .map_err(|_| "desktop menu requests require a bound GUI session".to_string())?;
         let params = match args {
-            [_, action, target] if action == "request" =>
+            [_, action, target] if matches!(action.as_str(), "request" | "run") =>
                 json!({"session": session, "action": action, "app_id": target}),
             [_, action, review] if matches!(action.as_str(), "complete" | "cancel") =>
                 json!({"session": session, "action": action, "review_id": review}),
-            _ => return Err("expected __desktop-menu request APP_ID or complete|cancel REVIEW_ID".into()),
+            _ => return Err("expected __desktop-menu run|request APP_ID or complete|cancel REVIEW_ID".into()),
         };
         return Ok(Some(request_wire_clawd(Command::GuiDesktopLaunch, params)?.to_string()));
     }
@@ -1312,11 +1312,11 @@ fn dispatch_with_stdin_impl(
         let session = env::var("COS_SESSION")
             .map_err(|_| "desktop power requests require a bound GUI session".to_string())?;
         let params = match args {
-            [_, action, target] if action == "request" =>
+            [_, action, target] if matches!(action.as_str(), "request" | "run") =>
                 json!({"session": session, "action": action, "power_action": target}),
             [_, action, review] if matches!(action.as_str(), "complete" | "cancel") =>
                 json!({"session": session, "action": action, "review_id": review}),
-            _ => return Err("expected __desktop-power request ACTION or complete|cancel REVIEW_ID".into()),
+            _ => return Err("expected __desktop-power run|request ACTION or complete|cancel REVIEW_ID".into()),
         };
         return Ok(Some(request_wire_clawd(Command::GuiPowerReview, params)?.to_string()));
     }

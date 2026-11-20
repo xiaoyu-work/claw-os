@@ -24,7 +24,7 @@ pub(super) async fn output_state(client: &ClientIdentity) -> Result<Value, Strin
 }
 pub(super) use helper::{authenticated_helper_gate, protected_helper_command};
 mod portal;
-pub(super) use portal::{owner_portal_request, PortalReply, PortalResult};
+pub(super) use portal::{owner_file_chooser_request, owner_portal_request, PortalReply, PortalResult};
 
 pub(super) async fn start_thunderbird(client: &ClientIdentity) -> Result<(), String> {
     let uid = client.require_uid()?;

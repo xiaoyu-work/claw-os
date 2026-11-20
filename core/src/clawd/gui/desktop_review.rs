@@ -1,4 +1,4 @@
-//! One reviewed desktop effect at a time for a bound GUI.
+//! One-shot desktop effects for a bound GUI; the system menu acts for the owner.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,8 +63,9 @@ fn status(state: &'static str) -> Reply {
 }
 
 pub(super) struct PowerDispatch {
-    review: Review,
-    generation: u32,
+    action: String,
+    deadline: Instant,
+    review: Option<(Review, u32)>,
 }
 
 impl PowerDispatch {
@@ -74,45 +75,42 @@ impl PowerDispatch {
         process: ProcessIdentity,
         context: RoutedPathContext,
     ) -> Result<Value, BrokerError> {
-        let Effect::Power(action) = &self.review.effect else {
-            return Err(BrokerError::authorization(
-                "expected a reviewed power effect",
-            ));
-        };
-        let action = action.clone();
+        let action = self.action;
         let locks_before_dispatch = matches!(
             action.as_str(),
             "suspend" | "hibernate" | "hybrid-sleep" | "suspend-then-hibernate"
         );
-        let id = self.review.id.clone();
+        let id = self.review.as_ref().map(|(review, _)| review.id.clone());
+        let lock_review = id.clone();
         let owner = window.registration.owner();
         let session = window.registration.session_id.clone();
-        power::request_power_action(&action, owner, &session, Some(&id), move || {
+        power::request_power_action(&action, owner, &session, id.as_deref(), move || {
             context.scope_sync(|| {
-                let require_confirmation = || {
-                    window
-                        .require_live_confirmation(&process, &self.review, self.generation)
-                        .map_err(BrokerError::authorization)
+                let authorize = || {
+                    if Instant::now() >= self.deadline {
+                        return Err(BrokerError::authorization("desktop power request expired"));
+                    }
+                    match &self.review {
+                        Some((review, generation)) => window.require_live_confirmation(&process, review, *generation),
+                        None => window.owner_menu(&process, &Cap::unscoped(Verb::SYS_POWER)).map(|_| ()),
+                    }.map_err(BrokerError::authorization)
                 };
-                require_confirmation()?;
+                authorize()?;
                 if locks_before_dispatch {
                     let control = &window.registration.control;
-                    let deadline = self
-                        .review
-                        .deadline
-                        .min(Instant::now() + Duration::from_secs(8));
+                    let deadline = self.deadline.min(Instant::now() + Duration::from_secs(8));
                     control.lock(deadline).map_err(|error| {
                         BrokerError::execution(format!(
                             "Desktop sleep requires a confirmed native lock: {error}"
                         ))
                     })?;
-                    require_confirmation()?;
+                    authorize()?;
                     crate::provenance::audit(
                         "desktop.sleep_lock",
                         json!({
                             "owner_uid": owner,
                             "epoch": control.epoch.label(),
-                            "review_id": self.review.id,
+                            "review_id": lock_review,
                         }),
                     );
                 }
@@ -202,6 +200,13 @@ impl Window {
         Ok(view)
     }
 
+    fn owner_menu(&self, process: &ProcessIdentity, cap: &Cap) -> Result<GrantView, String> {
+        if !self.registration.desktop_shell {
+            return Err("direct menu actions require the OS-started desktop shell".into());
+        }
+        self.live(process, cap)
+    }
+
     pub(super) fn request(
         &self,
         process: &ProcessIdentity,
@@ -222,6 +227,37 @@ impl Window {
             return Err("the desktop review window has closed".into());
         }
         match (action, selected, review_id) {
+            ("run", Some(selection), None) => {
+                let cap = selected_capability(verb, selection)?;
+                let view = self.owner_menu(process, &cap)?;
+                match (verb, selection) {
+                    (Verb::SYS_POWER, action) => Ok(Reply::Power(PowerDispatch {
+                        action: action.to_owned(),
+                        deadline: Instant::now() + view.expires_in.min(Duration::from_secs(12)),
+                        review: None,
+                    })),
+                    (Verb::DESKTOP_LAUNCH, desktop_id) => {
+                        let (target, _) = resolve_target(desktop_id)?;
+                        let view = self.owner_menu(process, &cap)?;
+                        let deadline = Instant::now() + view.expires_in.min(Duration::from_secs(2));
+                        let result = self.registration.control.launch(target.clone(), deadline);
+                        crate::provenance::audit("desktop.menu_launch", json!({
+                            "owner_uid": self.registration.owner(),
+                            "source_app": self.registration.launch.app_id(),
+                            "epoch": self.registration.control.epoch.label(),
+                            "desktop_id": desktop_id,
+                            "app_id": target.app_id,
+                            "content_digest": target.digest,
+                            "submitted": result.is_ok(),
+                        }));
+                        result.map_err(|error| {
+                            format!("desktop launch was not confirmed; do not retry automatically: {error}")
+                        })?;
+                        Ok(status("submitted"))
+                    }
+                    _ => Err("unsupported desktop action".into()),
+                }
+            }
             ("request", Some(selection), None) => {
                 let cap = selected_capability(verb, selection)?;
                 if review
@@ -358,13 +394,17 @@ impl Window {
                     return Err("desktop confirmation must be single-use".into());
                 }
                 self.require_live_confirmation(process, &record, approval.generation)?;
+                if let Effect::Power(action) = &record.effect {
+                    return Ok(Reply::Power(PowerDispatch {
+                        action: action.clone(),
+                        deadline: record.deadline,
+                        review: Some((record, approval.generation)),
+                    }));
+                }
                 let (Some(installed), Effect::Launch { desktop_id, target }) =
                     (installed, &record.effect)
                 else {
-                    return Ok(Reply::Power(PowerDispatch {
-                        review: record,
-                        generation: approval.generation,
-                    }));
+                    return Err("expected the verified desktop launch target".into());
                 };
                 let deadline = record.deadline.min(Instant::now() + Duration::from_secs(2));
                 let result = self.registration.control.launch(installed, deadline);
@@ -387,7 +427,7 @@ impl Window {
                 Ok(status("submitted"))
             }
             _ => Err(
-                "expected request with one selection, or complete/cancel with one review ID".into(),
+                "expected run or request with one selection, or complete/cancel with one review ID".into(),
             ),
         }
     }

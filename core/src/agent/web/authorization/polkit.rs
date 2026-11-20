@@ -4,7 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clawd_client::system_review::{ReviewDecision, ReviewStatus, SystemReview};
+use clawd_client::system_review::{ReviewStatus, ReviewSubmission, SystemReview};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
@@ -80,7 +80,7 @@ impl Agent {
 pub(super) async fn authorize(
     session: Arc<Session>,
     review: &SystemReview,
-    decision: &ReviewDecision,
+    decision: &ReviewSubmission,
 ) -> Result<(), Failure> {
     let registered = tokio::time::timeout(BUS_TIMEOUT, register(session.clone()))
         .await
@@ -206,7 +206,7 @@ fn subject() -> Result<(String, HashMap<String, Value<'static>>), Failure> {
 async fn run_helper(
     session: Arc<Session>,
     review: &SystemReview,
-    decision: &ReviewDecision,
+    decision: &ReviewSubmission,
 ) -> Result<(), Failure> {
     if *session.cancel.borrow() {
         return Err(Failure::Cancelled);

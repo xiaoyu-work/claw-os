@@ -157,6 +157,8 @@ pub struct AppPermissions {
     pub permission_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Text<4096>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<Token>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,7 +1138,21 @@ impl<'de> Deserialize<'de> for SystemReviewDecision {
 #[serde(deny_unknown_fields)]
 pub struct TypedSystemReviewDecide {
     pub owner_uid: u32,
-    pub review: SystemReviewDecision,
+    pub review: SystemReviewSubmission,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct SystemReviewSubmission(pub clawd_client::system_review::ReviewSubmission);
+
+impl<'de> Deserialize<'de> for SystemReviewSubmission {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Structured::deserialize(deserializer)?;
+        let bytes = serde_json::to_vec(value.as_value()).map_err(serde::de::Error::custom)?;
+        clawd_client::system_review::ReviewSubmission::decode(&bytes)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

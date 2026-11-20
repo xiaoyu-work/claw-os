@@ -5,8 +5,8 @@ use std::path::Path;
 use std::process::Stdio;
 
 use clawd_client::system_review::{
-    display_text, format_terminal, PendingReviews, PermissionSelection, ReviewAction,
-    ReviewDecision, ReviewKind, ReviewStatus, SystemReview,
+    display_text, format_terminal, AppReviewDecision, PendingReviews, PermissionSelection, ReviewAction,
+    ReviewDecision, ReviewKind, ReviewStatus, ReviewSubmission, SystemReview,
 };
 use serde_json::{json, Value};
 
@@ -141,7 +141,7 @@ fn approval_action(review: &SystemReview) -> Result<ReviewAction, String> {
 }
 
 fn helper_decision(
-    decision: &ReviewDecision,
+    decision: &ReviewSubmission,
     review: &SystemReview,
 ) -> Result<SystemReview, String> {
     let bytes = decision
@@ -182,6 +182,11 @@ fn helper_decision(
 }
 
 fn decide(review: &SystemReview, decision: &ReviewDecision) -> Result<SystemReview, String> {
+    submit(review, decision.clone().into())
+}
+
+fn submit(review: &SystemReview, submission: ReviewSubmission) -> Result<SystemReview, String> {
+    let decision = submission.decision();
     decision
         .validate_for(review)
         .map_err(|error| error.to_string())?;
@@ -191,7 +196,7 @@ fn decide(review: &SystemReview, decision: &ReviewDecision) -> Result<SystemRevi
         if !interactive() {
             return Err("system review decisions require an interactive OS presentation".into());
         }
-        helper_decision(decision, review)
+        helper_decision(&submission, review)
     };
     let refreshed =
         request(Command::SystemReviewShow, json!({"id": review.id})).and_then(parse_review);
@@ -213,6 +218,13 @@ fn decide(review: &SystemReview, decision: &ReviewDecision) -> Result<SystemRevi
             Err(error) => format!("{error}; refresh also failed: {refresh}"),
         }),
     }
+}
+
+fn choose_for_app(review: &SystemReview, confirmation: ReviewDecision) -> Result<ReviewSubmission, String> {
+    let permissions = permission_choices(
+        review, &mut std::io::stdin().lock(), &mut std::io::stderr().lock(),
+    )?;
+    Ok(ReviewSubmission::App(AppReviewDecision { confirmation, permissions }))
 }
 
 fn matches_install(review: &SystemReview, expected: &PackageRef, local: &PermissionReview) -> bool {
@@ -264,15 +276,10 @@ pub(super) fn confirm_install(
                 "App installation was declined; the existing version was not replaced".into(),
             );
         }
-        review = decide(
-            &review,
-            &ReviewDecision {
-                id: review.id.clone(),
-                revision: review.revision,
-                action,
-                choices: Vec::new(),
-            },
-        )?;
+        let submission = choose_for_app(&review, ReviewDecision {
+            id: review.id.clone(), revision: review.revision, action, choices: Vec::new(),
+        })?;
+        review = submit(&review, submission)?;
     }
     if review.status != ReviewStatus::Confirmed || !matches_install(&review, &expected, &local) {
         return Err(format!(
@@ -356,15 +363,13 @@ pub(super) fn dispatch(args: &[String]) -> Result<Option<String>, String> {
     if action != ReviewAction::Cancel && !confirm(action)? {
         return Err("system review confirmation was cancelled".into());
     }
-    let decided = decide(
-        &review,
-        &ReviewDecision {
-            id: review.id.clone(),
-            revision: review.revision,
-            action,
-            choices,
-        },
-    )?;
+    let decision = ReviewDecision { id: review.id.clone(), revision: review.revision, action, choices };
+    let submission = if matches!(action, ReviewAction::ConfirmInstall | ReviewAction::ConfirmActivation | ReviewAction::ConfirmUpdate) {
+        choose_for_app(&review, decision)?
+    } else {
+        decision.into()
+    };
+    let decided = submit(&review, submission)?;
     Ok(Some(serde_json::to_string(&decided).map_err(|error| {
         format!("encode decided review: {error}")
     })?))

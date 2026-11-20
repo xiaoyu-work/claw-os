@@ -1731,7 +1731,8 @@ fn optional_gui_caps(
 ) -> Result<(CapSet, OptionalGuiAuthorization), BrokerError> {
     let plan = gui_plan(app, entry, exec, launcher, &publisher_ceiling())?;
     let mut granted = authorize_plan(launcher, plan, &publisher_ceiling(), &app.manifest.id)?;
-    let optional = authorize_optional_gui_needs(app, entry, launcher, &publisher_ceiling(), &mut granted, false);
+    let optional = authorize_optional_gui_needs(app, entry, launcher, &publisher_ceiling(), &mut granted,
+        false, false, false, &Default::default());
     Ok((granted, optional))
 }
 
@@ -1801,7 +1802,8 @@ fn optional_gui_app_denial_and_package_ceiling_remove_features_without_refusing_
     let launcher = delegation(CapSet::from_caps([management.clone()]));
     assert!(optional_gui_caps(&app, None, "--gui", &launcher).unwrap().0.covers(&management));
     let mut developer_caps = CapSet::new();
-    let developer = authorize_optional_gui_needs(&app, None, &launcher, &developer_ceiling(), &mut developer_caps, false);
+    let developer = authorize_optional_gui_needs(&app, None, &launcher, &developer_ceiling(), &mut developer_caps,
+        false, false, false, &Default::default());
     assert!(developer_caps.is_empty());
     assert_eq!(developer.ungranted, [0, 1]);
     crate::approvals::app_policy::revoke(launcher.uid, &app.manifest.id, management).unwrap();
@@ -1809,7 +1811,8 @@ fn optional_gui_app_denial_and_package_ceiling_remove_features_without_refusing_
     assert!(caps.is_empty());
     assert_eq!(optional.ungranted, [0, 1]);
     let mut caps = CapSet::new();
-    let optional = authorize_optional_gui_needs(&app, None, &launcher, &developer_ceiling(), &mut caps, false);
+    let optional = authorize_optional_gui_needs(&app, None, &launcher, &developer_ceiling(), &mut caps,
+        false, false, false, &Default::default());
     assert!(caps.is_empty());
     assert_eq!(optional.ungranted, [0, 1]);
     assert!(crate::approvals::list_pending_for_owner(Some(launcher.uid)).is_empty());

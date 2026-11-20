@@ -238,7 +238,9 @@ impl Supervised {
         self.process = Some(process.clone());
         if let Some(home) = &self.home {
             let view = self.job.registration.snapshot(&process)?;
-            let selected = home.bind(&self.job.registration, self.job.instance, &process, resources, &view)?;
+            let selected = home.bind(
+                &self.job.registration, self.job.instance, &process, resources, &view, self.broker.picker(),
+            )?;
             self.job.selected_reads.set(selected).map_err(|_| "GUI selected read binding was already used")?;
             resources.release_gui_setup_gate()?;
         }

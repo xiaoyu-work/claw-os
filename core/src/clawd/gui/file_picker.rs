@@ -1,11 +1,11 @@
-//! Human file selection returns metadata, never a filesystem or execution grant.
+//! Return picker metadata; keep exact native-file decisions private to Root.
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,11 +22,12 @@ use crate::clawd::app_sessions::gui::Registration;
 use crate::clawd::authority::Decision;
 use crate::clawd::client_identity::ClientIdentity;
 use crate::clawd::desktop::{
-    authenticated_helper_gate, owner_portal_request, protected_helper_command, DesktopEnvironment,
+    authenticated_helper_gate, owner_file_chooser_request, protected_helper_command, DesktopEnvironment,
     PortalResult,
 };
 use crate::clawd::protocol::BrokerError;
 use crate::clawd::wire::bounded::{Text, Token};
+use crate::worker::native_fs::{PickerTarget, ReadProvider};
 
 const REPORT_BYTES: usize = 16 * 1024;
 static PICKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
@@ -133,6 +134,7 @@ struct Entry {
     active: bool,
     retired: bool,
     report: Option<Report>,
+    selection: Option<Selected>,
     cancelled: Arc<AtomicBool>,
     slot: Option<tokio::sync::SemaphorePermit<'static>>,
 }
@@ -142,6 +144,26 @@ struct Binding {
     generation: u64,
     deadline: Instant,
     cancelled: Arc<AtomicBool>,
+    mode: Mode,
+}
+
+struct Selected {
+    relative: PathBuf,
+    target: PickerTarget,
+    claim_deadline: Instant,
+    lease_deadline: Instant,
+    grant: crate::clawd::authority::GrantRef,
+    generation: u64,
+}
+
+pub(in crate::clawd) struct PickerConsent {
+    expires: Instant,
+}
+
+impl PickerConsent {
+    pub(in crate::clawd) fn expires_in(&self) -> Duration {
+        self.expires.saturating_duration_since(Instant::now())
+    }
 }
 
 pub(crate) struct Window {
@@ -150,6 +172,7 @@ pub(crate) struct Window {
     stopped: AtomicBool,
     cancel: tokio::sync::watch::Sender<u64>,
     entry: Mutex<Option<Entry>>,
+    native_files: OnceLock<ReadProvider>,
 }
 
 tokio::task_local! { static WINDOW: Arc<Window>; }
@@ -170,6 +193,7 @@ impl Window {
             stopped: AtomicBool::new(false),
             cancel,
             entry: Mutex::new(None),
+            native_files: OnceLock::new(),
         })
     }
 
@@ -184,6 +208,37 @@ impl Window {
         self.stopped.store(true, Ordering::Release);
         self.cancel
             .send_modify(|value| *value = value.wrapping_add(1));
+    }
+
+    pub(super) fn bind_native_files(&self, provider: ReadProvider) -> Result<(), String> {
+        self.native_files.set(provider).map_err(|_| "file picker already has a native file view".into())
+    }
+
+    pub(super) fn claim(
+        &self,
+        gui: &crate::clawd::authority::GrantView,
+        relative: &Path,
+        mode: Mode,
+        matches: impl FnOnce(&PickerTarget) -> bool,
+    ) -> Result<Option<PickerConsent>, String> {
+        let mut entry = self.entry.lock().map_err(|_| "file picker custody is poisoned")?;
+        let Some(entry) = entry.as_mut().filter(|entry| entry.options.mode == mode) else {
+            return Ok(None);
+        };
+        let Some(selection) = entry.selection.as_ref().filter(|selection| selection.relative == relative) else {
+            return Ok(None);
+        };
+        if self.stopped.load(Ordering::Acquire)
+            || entry.cancelled.load(Ordering::Acquire)
+            || selection.grant != gui.id.audit_ref()
+            || selection.generation != gui.generation
+            || Instant::now() >= selection.claim_deadline
+            || !matches(&selection.target)
+        {
+            return Err("the selected file changed or expired; choose it again".into());
+        }
+        let selection = entry.selection.take().expect("checked picker selection");
+        Ok(Some(PickerConsent { expires: selection.lease_deadline }))
     }
 
     pub(crate) fn quiescent(&self) -> bool {
@@ -398,6 +453,7 @@ impl Window {
             active: true,
             retired: false,
             report: None,
+            selection: None,
             cancelled: cancelled.clone(),
             slot: Some(slot),
         });
@@ -419,6 +475,7 @@ impl Window {
                         generation,
                         deadline,
                         cancelled,
+                        mode,
                     },
                 )
                 .await;
@@ -493,6 +550,35 @@ impl Window {
             let _ = child.start_kill();
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        let accepted_at = Instant::now();
+        let selection = match (&report.outcome, self.native_files.get(), binding.mode) {
+            (Outcome::Selected { uri }, Some(provider), mode @ (Mode::File | Mode::Save))
+                if report.portal_retired && !binding.cancelled.load(Ordering::Acquire) =>
+            {
+                let uri = uri.as_str().to_owned();
+                let provider = provider.clone();
+                let home = self.registration.home.clone();
+                tokio::task::spawn_blocking(move || {
+                    let path = url::Url::parse(&uri).ok()?.to_file_path().ok()?;
+                    let relative = path.strip_prefix(home).ok()?.to_path_buf();
+                    if relative.as_os_str().is_empty()
+                        || relative.components().any(|part| !matches!(part, Component::Normal(_)))
+                    {
+                        return None;
+                    }
+                    let target = provider.pin_picker(&relative, mode == Mode::Save).ok()?;
+                    Some(Selected {
+                        relative,
+                        target,
+                        claim_deadline: binding.deadline.min(accepted_at + Duration::from_secs(30)),
+                        lease_deadline: binding.deadline,
+                        grant: binding.grant,
+                        generation: binding.generation,
+                    })
+                }).await.ok().flatten()
+            }
+            _ => None,
+        };
         if let Ok(mut entry) = self.entry.lock() {
             if let Some(entry) = entry.as_mut() {
                 crate::provenance::audit(
@@ -512,6 +598,7 @@ impl Window {
                 entry.active = false;
                 entry.retired = report.portal_retired;
                 entry.report = Some(report);
+                entry.selection = selection;
                 if entry.retired {
                     entry.slot.take();
                 }
@@ -579,44 +666,30 @@ pub fn helper(args: &[String]) -> Result<(), String> {
             .map_err(|_| "picker setup timed out")?
             .map_err(|error| error.to_string())?;
             let (mut control, mut output) = gate.into_split();
-            let method = if options.mode == Mode::Save {
-                "SaveFile"
-            } else {
-                "OpenFile"
-            };
-            let minimum_version = if options.mode == Mode::Folder { 3 } else { 1 };
-            let result = owner_portal_request(
-                &mut control,
-                "org.freedesktop.portal.FileChooser",
-                minimum_version,
-                method,
-                |token| {
-                    let mut values = HashMap::from([
-                        ("handle_token", PortalValue::from(token)),
-                        ("modal", PortalValue::from(options.modal)),
-                        ("multiple", PortalValue::from(false)),
-                        ("directory", PortalValue::from(options.mode == Mode::Folder)),
-                    ]);
-                    if let Some(name) = &options.name {
-                        values.insert("current_name", PortalValue::from(name.as_str().to_string()));
-                    }
-                    if options.filter == Some(Filter::Ron) {
-                        values.insert(
-                            "filters",
-                            PortalValue::from(vec![(
-                                options.title.as_str().to_string(),
-                                vec![(0u32, "*.ron".to_string())],
-                            )]),
-                        );
-                    }
-                    (String::new(), options.title.as_str().to_string(), values)
-                },
-            )
-            .await;
+            let mut values = HashMap::from([
+                ("modal", PortalValue::from(options.modal)),
+                ("multiple", PortalValue::from(false)),
+                ("directory", PortalValue::from(options.mode == Mode::Folder)),
+            ]);
+            if let Some(name) = &options.name {
+                values.insert("current_name", PortalValue::from(name.as_str().to_string()));
+            }
+            if options.filter == Some(Filter::Ron) {
+                values.insert(
+                    "filters",
+                    PortalValue::from(vec![(
+                        options.title.as_str().to_string(),
+                        vec![(0u32, "*.ron".to_string())],
+                    )]),
+                );
+            }
+            let result = owner_file_chooser_request(
+                &mut control, options.mode == Mode::Save, options.title.as_str(), values,
+            ).await;
             let outcome = match result.result {
                 PortalResult::Cancelled => Outcome::Cancelled,
-                PortalResult::Failed(_) => {
-                    Report::failed("OS file picker failed", result.portal_retired).outcome
+                PortalResult::Failed(message) => {
+                    Report::failed(&message, result.portal_retired).outcome
                 }
                 PortalResult::Success(mut values) => {
                     let uris = values

@@ -36,7 +36,7 @@ pub struct Display {
 }
 
 impl Display {
-    pub(crate) fn starts_desktop_shell(&self, launcher: &ProcessIdentity) -> Result<bool, Error> {
+    pub(crate) fn starts_gui_launcher(&self, launcher: &ProcessIdentity) -> Result<bool, Error> {
         if parent_pid(launcher)? != self.host.pid() {
             return Ok(false);
         }

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clawd_client::system_review::{
-    PermissionChoice, ReviewAction, ReviewDecision, ReviewStatus, SystemReview,
+    PermissionChoice, ReviewAction, ReviewStatus, ReviewSubmission, SystemReview,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -35,7 +35,7 @@ mod polkit {
     pub(super) async fn authorize(
         _session: Arc<Session>,
         _review: &SystemReview,
-        _decision: &ReviewDecision,
+        _decision: &ReviewSubmission,
     ) -> Result<(), Failure> {
         Err(Failure::Unavailable(
             "Web OS authentication requires Linux polkit.",
@@ -196,15 +196,17 @@ impl Controller {
         caller: &AuthenticatedToken,
         origin: String,
         review: SystemReview,
-        decision: ReviewDecision,
+        submission: impl Into<ReviewSubmission>,
     ) -> Result<Snapshot, String> {
         if super::state::current_owner_uid()? != caller.uid {
             return Err("OS authorization requires the serving account's identity.".into());
         }
         protect_secret_memory()?;
-        decision
-            .validate_for(&review)
+        let submission = submission.into();
+        submission
+            .encode_for(&review)
             .map_err(|_| "The displayed OS review is no longer valid.".to_string())?;
+        let decision = submission.decision();
         let (choice, action, label, target) = match decision.action {
             ReviewAction::ApplyChoices => {
                 let choice = decision
@@ -286,7 +288,7 @@ impl Controller {
             *current = Some(session.clone());
         }
         tokio::spawn(async move {
-            let result = polkit::authorize(session.clone(), &review, &decision).await;
+            let result = polkit::authorize(session.clone(), &review, &submission).await;
             let refreshed = clawd::request(Command::SystemReviewShow, json!({"id": review.id}))
                 .await
                 .map_err(|_| "The authorization outcome could not be confirmed. Refresh the request before trying again.".to_string())

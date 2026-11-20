@@ -50,8 +50,9 @@ Literal fixed/owner-relative file or subtree scopes are supported. A Wild
 declaration can use only already-bound, bounded Path caps; absent Wild bindings
 and argument-bound requests do not invent a Home grant.
 
-Every new selection files a separate ordinary protected owner review naming
-the exact escaped target, read-only access and window. The operation digest
+If the OS picker already pinned the exact file for that instance and access
+mode, Root consumes its selection once. Other requests still need a separate
+ordinary owner review naming the file, operation and window. The operation digest
 binds the raw pathname bytes, retained identity/revision, node, surface, display
 and live GUI authority. Pending, an approval ID and a proposal's display text
 are not content. Another owner, node, window, changed source or consumed/stale

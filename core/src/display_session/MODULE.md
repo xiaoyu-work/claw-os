@@ -55,8 +55,10 @@ from an observed outcome. Desktop launch and shared owner helpers also take
 their Wayland name from the selected Root display, not caller variables or
 owner socket enumeration. The Desktop source path has no old compositor fallback.
 
-Reviewed desktop-menu effects go from the broker to its authenticated Root
-display supervisor on the same epoch. The supervisor starts only a fixed
+Desktop-menu effects go from the broker to its authenticated Root display
+supervisor on the same epoch. Only the live system shell can directly
+submit an owner click; other callers require their normal authorization.
+The supervisor starts only a fixed
 `cos app <id> --gui` as the logged-in user, inside the display workload, and
 pins the selected publisher and content digest. Its acknowledgement says the
 launcher process was submitted, not that the target passed GUI admission.

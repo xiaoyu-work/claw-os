@@ -79,7 +79,7 @@ const LAUNCH_GRANT_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 /// attenuation may never extend an expiry, and leaving headroom keeps
 /// a bind that happens seconds after registration from being refused
 /// for asking for exactly as long as its parent has left.
-const SESSION_GRANT_TTL: Duration = Duration::from_secs(11 * 60 * 60);
+pub(crate) const SESSION_GRANT_TTL: Duration = Duration::from_secs(11 * 60 * 60);
 const TARGET_CALL_GRANT_TTL: Duration = Duration::from_secs(2 * 60);
 
 /// What the launcher asked to run. The kind decides which part of the
@@ -365,6 +365,14 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let desktop_shell = gui_draft.as_ref().is_some_and(|draft| draft.desktop_shell);
     #[cfg(not(target_os = "linux"))]
     let desktop_shell = false;
+    #[cfg(target_os = "linux")]
+    let system_menu_app = gui_draft.as_ref().is_some_and(|draft| draft.system_menu_app);
+    #[cfg(not(target_os = "linux"))]
+    let system_menu_app = false;
+    #[cfg(target_os = "linux")]
+    let owner_settings = gui_draft.as_ref().is_some_and(|draft| draft.owner_settings);
+    #[cfg(not(target_os = "linux"))]
+    let owner_settings = false;
 
     let (command, mut plan, caller_invoke) = match kind {
         LaunchKind::Operation => {
@@ -414,13 +422,26 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
         plan.missing.clear();
     }
-    if !desktop_shell {
+    if !desktop_shell && !system_menu_app {
         super::system_review::require_app_review(uid, &app, &delegation.requester)?;
+    }
+    let policy = crate::approvals::app_policy::InstalledPolicy::from_app(uid, &app, &home)
+        .map_err(BrokerError::authorization)?;
+    policy.require(&plan.caps).map_err(BrokerError::authorization)?;
+    #[cfg(target_os = "linux")]
+    let apply_saved = gui_draft.as_ref().is_some_and(|draft| draft.owner_launch);
+    #[cfg(not(target_os = "linux"))]
+    let apply_saved = false;
+    if apply_saved {
+        // The owner chose this exact App. Its launcher admission is not a
+        // permission the App keeps, nor an Agent-invocation grant.
+        plan.missing.retain(|cap| cap != &caller_invoke && !policy.allows(cap));
     }
     let mut grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
     let optional_gui = if kind == LaunchKind::Gui {
         authorize_optional_gui_needs(
             &app, gui_entry.as_deref(), &delegation, &ceiling, &mut grant_caps, desktop_shell,
+            owner_settings, apply_saved, &policy,
         )
     } else {
         OptionalGuiAuthorization::default()
@@ -952,6 +973,8 @@ fn finalize_prepared_app_service_call(
     plan.app_name = Some(app.manifest.name.current().trim().to_owned());
     plan.require(invoke.clone(), delegation);
     super::system_review::require_app_review(uid, app, &delegation.requester)?;
+    crate::approvals::app_policy::InstalledPolicy::from_app(uid, app, &delegation.paths.home)
+        .and_then(|policy| policy.require(&plan.caps)).map_err(BrokerError::authorization)?;
     let authorized = authorize_plan(delegation, plan, &ceiling, app_id)?;
     let activity = delegation
         .activity
@@ -2318,6 +2341,7 @@ struct OptionalGuiAuthorization {
 /// Optional startup features never enter the mandatory approval plan. Every
 /// accepted cap still passes package, App, Activity, Workspace and resource
 /// policy before using existing parent authority or spending a reusable grant.
+#[allow(clippy::too_many_arguments)]
 fn authorize_optional_gui_needs(
     app: &App,
     gui_entry: Option<&str>,
@@ -2326,6 +2350,10 @@ fn authorize_optional_gui_needs(
     granted: &mut CapSet,
     #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     desktop_shell: bool,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    owner_settings: bool,
+    apply_saved: bool,
+    policy: &crate::approvals::app_policy::InstalledPolicy,
 ) -> OptionalGuiAuthorization {
     let mut result = OptionalGuiAuthorization::default();
     let selected = match app.manifest.gui_entry(gui_entry) {
@@ -2381,6 +2409,7 @@ fn authorize_optional_gui_needs(
             let mut prospective = granted.clone();
             prospective.insert(cap.clone());
             let allowed = ceiling.clamp(&caps).0.covers(&cap)
+                && !policy.denies(&cap)
                 && crate::approvals::app_policy::require(delegation.uid, &app.manifest.id, &caps).is_ok()
                 && delegation.activity.as_ref().is_none_or(|boundary|
                     boundary.approval_needs(&caps).is_ok_and(|needs| needs.is_empty()))
@@ -2391,7 +2420,11 @@ fn authorize_optional_gui_needs(
                 complete = false;
                 continue;
             }
-            if desktop_shell || delegation.ceiling.covers(&cap) {
+            #[cfg(target_os = "linux")]
+            let system_default = desktop_shell || (owner_settings && gui::owner_settings_cap(&cap));
+            #[cfg(not(target_os = "linux"))]
+            let system_default = false;
+            if system_default || (apply_saved && policy.allows(&cap)) || delegation.ceiling.covers(&cap) {
                 granted.insert(cap);
                 continue;
             }

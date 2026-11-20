@@ -24,7 +24,7 @@ pub(crate) use metadata_scope::MetadataRoot;
 mod selected_read;
 mod selected_write;
 mod selected_create;
-pub(crate) use selected_read::{FileCandidate, ReadLeaseCheck, ReadPermit, ReadProvider};
+pub(crate) use selected_read::{FileCandidate, PickerTarget, ReadLeaseCheck, ReadPermit, ReadProvider};
 pub(crate) use selected_write::{WriteLeaseCheck, WritePermit};
 pub(crate) use selected_create::{CreateCandidate, CreatePermit, CreationState};
 

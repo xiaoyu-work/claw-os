@@ -93,7 +93,7 @@ and completed package effects remain separate.
 | `system.review.pending` | `{limit}` | `PendingReviews { reviews }`, including existing capability requests |
 | `system.review.show` | `{id}` | `SystemReview` |
 | `system.review.cancel` | `{review: ReviewDecision}` with `action: cancel` and no choices | Latest `SystemReview`; owner-only and root-peer authenticated, no pkexec |
-| Privileged helper `--system-review-json` | `ReviewDecision` JSON on stdin, at most `MAX_DECISION_BYTES` (64 KiB) | Latest `SystemReview`, or a nonzero failure |
+| Privileged helper `--system-review-json` | `ReviewSubmission` JSON on stdin, at most `MAX_DECISION_BYTES` (64 KiB) | Latest `SystemReview`, or a nonzero failure |
 
 Only the trusted OS helper may submit `system.review.decide`; the normal
 frontend never calls that route directly or serializes capabilities.
@@ -120,9 +120,12 @@ current handled state. A revision or `contract_digest` is comparison data,
 never proof of approval; installation still needs the OS's separate protected
 confirmation/consumption path.
 
-Draft choices start empty, not copied from current grants. Unselected entries
-remain unchanged. Confirmation/cancellation requests cannot contain choices;
-only `apply_choices` may submit explicit supported per-permission selections.
+Draft choices start empty, not copied from current grants. Package confirmation
+and cancellation cannot contain choices. An `AppReviewDecision` carries an
+empty-choice package confirmation plus a separate set of explicit `deny` or
+`allow_always` App-policy decisions at the same displayed revision. Already
+saved choices are not part of a new install decision. Execution `apply_choices`
+continues to use bounded operation grants; it never creates lasting App policy.
 `restore` is labelled "Restore App policy": it applies the existing OS-managed
 non-execution App-policy restoration through the trusted helper, not a new
 restoration-request workflow or an Allow/Forever grant.

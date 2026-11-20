@@ -131,6 +131,7 @@ pub enum PermissionChoice {
     AllowOnce,
     AllowSession,
     AllowForever,
+    AllowAlways,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,6 +166,89 @@ pub struct ReviewDecision {
     pub revision: u64,
     pub action: ReviewAction,
     pub choices: Vec<PermissionSelection>,
+}
+
+/// One authenticated submission from the app review screen. The package
+/// confirmation and the durable permission choices are distinct decisions.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AppReviewDecision {
+    pub confirmation: ReviewDecision,
+    pub permissions: Vec<PermissionSelection>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ReviewSubmission {
+    App(AppReviewDecision),
+    Ordinary(ReviewDecision),
+}
+
+impl From<ReviewDecision> for ReviewSubmission {
+    fn from(decision: ReviewDecision) -> Self {
+        Self::Ordinary(decision)
+    }
+}
+
+impl ReviewSubmission {
+    pub fn decode(bytes: &[u8]) -> Result<Self, ReviewError> {
+        if bytes.len() > MAX_DECISION_BYTES {
+            return Err(ReviewError("decision exceeds the input limit".into()));
+        }
+        serde_json::from_slice(bytes)
+            .map_err(|error| ReviewError(format!("parse decision: {error}")))
+    }
+
+    pub fn decision(&self) -> &ReviewDecision {
+        match self {
+            Self::App(app) => &app.confirmation,
+            Self::Ordinary(decision) => decision,
+        }
+    }
+
+    pub fn encode_for(&self, review: &SystemReview) -> Result<Vec<u8>, ReviewError> {
+        match self {
+            Self::App(app) => app.encode_for(review),
+            Self::Ordinary(decision) => decision.encode_for(review),
+        }
+    }
+}
+
+impl AppReviewDecision {
+    pub fn validate_for(&self, review: &SystemReview) -> Result<(), ReviewError> {
+        self.confirmation.validate_for(review)?;
+        if !matches!(self.confirmation.action,
+            ReviewAction::ConfirmInstall | ReviewAction::ConfirmActivation | ReviewAction::ConfirmUpdate)
+        {
+            return Err(ReviewError("expected an App package confirmation".into()));
+        }
+        let expected = review.permissions.iter().filter(|permission| !permission.supported_choices.is_empty())
+            .map(|permission| permission.id.as_str()).collect::<BTreeSet<_>>();
+        let mut selected = BTreeSet::new();
+        for choice in &self.permissions {
+            if !selected.insert(choice.permission_id.as_str())
+                || !matches!(choice.choice, PermissionChoice::Deny | PermissionChoice::AllowAlways)
+                || !review.permissions.iter().any(|permission|
+                    permission.id == choice.permission_id && permission.supported_choices.contains(&choice.choice))
+            {
+                return Err(ReviewError("invalid lasting App permission choice".into()));
+            }
+        }
+        if selected != expected {
+            return Err(ReviewError("choose Allow or Don't allow for each new permission".into()));
+        }
+        Ok(())
+    }
+
+    pub fn encode_for(&self, review: &SystemReview) -> Result<Vec<u8>, ReviewError> {
+        self.validate_for(review)?;
+        let bytes = serde_json::to_vec(self)
+            .map_err(|error| ReviewError(format!("serialize App decision: {error}")))?;
+        if bytes.len() > MAX_DECISION_BYTES {
+            return Err(ReviewError("decision exceeds the helper input limit".into()));
+        }
+        Ok(bytes)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -404,6 +488,7 @@ pub enum ReviewText {
     AllowOnce,
     AllowSession,
     AllowForever,
+    AllowAlways,
     Low,
     Medium,
     High,
@@ -482,6 +567,7 @@ impl ReviewText {
             Self::AllowOnce => ("review-choice-once", "Allow once"),
             Self::AllowSession => ("review-choice-session", "Allow for this session"),
             Self::AllowForever => ("review-choice-forever", "Allow until revoked"),
+            Self::AllowAlways => ("review-choice-always", "Always allow (change in Settings)"),
             Self::Low => ("review-risk-low", "Low risk"),
             Self::Medium => ("review-risk-medium", "Medium risk"),
             Self::High => ("review-risk-high", "High risk"),
@@ -573,6 +659,7 @@ impl PermissionChoice {
             Self::AllowOnce => ReviewText::AllowOnce,
             Self::AllowSession => ReviewText::AllowSession,
             Self::AllowForever => ReviewText::AllowForever,
+            Self::AllowAlways => ReviewText::AllowAlways,
         }
     }
 }
@@ -696,7 +783,7 @@ pub fn format_terminal_with(
                     .map_or(ReviewText::Unreported, PermissionChoice::text)
             )
         ));
-        if review.actions.contains(&ReviewAction::ApplyChoices) {
+        if review.status == ReviewStatus::Pending {
             for choice in &permission.supported_choices {
                 output.push_str(&format!("  [ ] {}\n", label(choice.text())));
             }

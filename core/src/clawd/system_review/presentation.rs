@@ -1,7 +1,7 @@
 //! Projection into the one OS terminal/desktop review contract.
 
 use crate::approvals::{
-    self, presentation::LegacyReview, system_review::ReviewRecord, GrantDuration,
+    self, presentation::LegacyReview, system_review::{permission_choices, ReviewRecord}, GrantDuration,
 };
 use crate::caps::{catalog, manifest::ScopeBinding, Risk, Verb};
 use crate::provenance::runtime::PackageRef;
@@ -32,11 +32,13 @@ fn stamped(owner: u32, mut review: SystemReview) -> Result<SystemReview, String>
 pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
     use crate::approvals::system_review::{ReviewKind as StoredKind, ReviewState};
 
-    let mut disclosure = record.permission_review()?;
-    if disclosure.permissions.iter().any(|permission| matches!(permission.scope, ScopeBinding::OwnerPath { .. })) {
-        let home = crate::paths::verified_home_for_uid(record.owner_uid)?;
-        disclosure.resolve_owner_paths(&crate::caps::args::PathContext { home, cwd: None })?;
-    }
+    let disclosure = record.resolved_permissions()?;
+    let previous = permission_choices(record.owner_uid, &record.package)?;
+    use crate::provenance::TrustTier;
+    let tier = [TrustTier::Vendor, TrustTier::System, TrustTier::User, TrustTier::Developer]
+        .into_iter().find(|tier| tier.as_str() == record.package.tier)
+        .ok_or("unknown App review trust tier")?;
+    let ceiling = crate::provenance::Ceiling::for_package(tier, record.manifest.id.clone());
     let status = match record.effective_state()? {
         ReviewState::Pending => ReviewStatus::Pending,
         ReviewState::Approved => ReviewStatus::Confirmed,
@@ -50,11 +52,15 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
         StoredKind::AppActivation => ReviewKind::Activation,
     };
     let permissions = disclosure.permissions.iter().map(|permission| {
-        let identity = serde_json::to_vec(&(
-            permission.verb, &permission.scope, &permission.when,
-        )).map_err(|error| format!("encode displayed permission identity: {error}"))?;
+        let id = permission.decision_id()?;
+        let current = record.permission_choices.get(&id).or_else(|| previous.get(&id)).map(|choice| {
+            if *choice { PermissionChoice::AllowAlways } else { PermissionChoice::Deny }
+        });
+        let selectable = status == ReviewStatus::Pending && current.is_none()
+            && record.package.publisher_key_id.is_some()
+            && permission.persistent_cap(&ceiling).is_some();
         Ok(ReviewPermission {
-            id: crate::crypto::sha256_hex(&identity),
+            id,
             verb: permission.verb.as_str().to_string(),
             label: permission.label.clone(),
             blurb: permission.description.clone(),
@@ -66,7 +72,9 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
                     ScopeKind::LateBound
                 },
                 description: match &permission.resolved_scope {
-                    Some(scope) => scope.to_string(),
+                    Some(_) if matches!(&permission.scope, ScopeBinding::OwnerPath { path } if path == "**") =>
+                        "Your home folder".into(),
+                    Some(scope) => scope.human_target(),
                     None => crate::apps::permission_review::scope_description(&permission.scope)?,
                 },
             },
@@ -76,11 +84,13 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
                 function: usage.entry.clone(),
                 purpose: usage.purpose.current().to_string(),
             }).collect(),
-            current: None,
-            supported_choices: Vec::new(),
-            unsupported_reason: Some(
-                "Installation or activation review does not grant or change this permission; resource authorization is separate.".into(),
-            ),
+            current,
+            supported_choices: if selectable { vec![PermissionChoice::AllowAlways, PermissionChoice::Deny] } else { Vec::new() },
+            unsupported_reason: (!selectable).then(|| if current.is_some() {
+                "Your choice is saved. Change it in Settings → Applications.".into()
+            } else {
+                "This permission is not granted at installation. The relevant action still requires its own access.".into()
+            }),
         })
     }).collect::<Result<Vec<_>, String>>()?;
     let mut disclosures = Vec::new();

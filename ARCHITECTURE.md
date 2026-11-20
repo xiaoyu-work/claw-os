@@ -221,9 +221,10 @@ explicit per-GUI needs (or the legacy constrained operation union when omitted)
 do not inherit MCP permissions. Optional default `desktop.entry` and named
 `desktop.entries` preserve separate signed executables under the same App
 identity. `--gui:<name>` selects only declared manifest data; Root retains the
-package/entry/selector binding across approval and launch. Protected review
-discloses each target and its needs without granting them. Selection read and
-write remain independent, and Panel metadata grants nothing.
+package/entry/selector binding across approval and launch. Package confirmation
+alone grants nothing. Separate explicit choices for supported GUI needs persist
+per owner and publisher, and the OS-started Settings window can update them.
+Selection read and write remain independent, and Panel metadata grants nothing.
 `ui.panel` separately admits LayerShell only from the live bound GUI grant.
 Only the supervisor's fixed system shell launch gets the built-in desktop
 defaults; the System Agent and ordinary launchers receive no such authority.

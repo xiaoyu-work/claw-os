@@ -8,7 +8,8 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use clawd_client::system_review::{
-    ReviewAction, ReviewDecision, ReviewKind, ReviewStatus, SystemReview,
+    AppReviewDecision, PermissionSelection, ReviewAction, ReviewDecision, ReviewKind, ReviewStatus,
+    ReviewSubmission, SystemReview,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -122,6 +123,8 @@ pub async fn cancel(Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
 #[serde(deny_unknown_fields)]
 pub struct ConfirmBody {
     revision: String,
+    #[serde(default)]
+    permissions: Vec<PermissionSelection>,
 }
 
 fn app_confirmation_action(kind: ReviewKind) -> Result<ReviewAction, ApiError> {
@@ -158,12 +161,12 @@ pub async fn authorize(
         ));
     }
     let action = app_confirmation_action(review.kind)?;
-    let decision = ReviewDecision {
-        id: review.id.clone(),
-        revision: review.revision,
-        action,
-        choices: Vec::new(),
-    };
+    let decision = ReviewSubmission::App(AppReviewDecision {
+        confirmation: ReviewDecision {
+            id: review.id.clone(), revision: review.revision, action, choices: Vec::new(),
+        },
+        permissions: body.permissions,
+    });
     let snapshot = state
         .inner
         .authorizations

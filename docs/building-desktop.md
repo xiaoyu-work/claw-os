@@ -47,22 +47,17 @@ preferred mode as reported by its graphics driver. The setup wizard fits that
 screen and uses a compact layout on narrow displays. A VM uses the mode its
 virtual display advertises; resizing the viewer window is hypervisor-specific.
 
-Selecting an installed signed App from the desktop menu creates one
-`desktop.launch` review. Confirm it in the graphical OS review window. That
-confirmation is spent on the selected App only; it does not skip the App's
-own activation or approval prompts.
-
-Shutdown and restart from the session menu use the same protected review UI.
-Approval is only for the selected action in this login, not a reusable power
-permission. Save work before approving; the machine can stop before it
-responds.
+With the matching signed Shell, selecting an installed App in the desktop
+menu opens it without a separate launch review. App permissions remain
+separate. Shutdown and restart from the system menu go directly to the OS;
+other Apps and the Agent receive no power permission from a menu click.
 
 The session menu's Lock button uses the OS locker and the login account's
 PAM authentication. The Shell can request a lock but neither sees input on
 the lock screen nor offers an unlock action.
 The session menu's Sleep button also requires the OS to confirm that native
-lock before it sends the approved sleep action to logind. If confirming on
-another console, return promptly to the graphical session so it can present
+lock before it sends sleep to logind. Return to the graphical session after
+resume so it can present
 the lock screen.
 
 Use the [coordinated logout/update procedure](updating.md#root-managed-desktop-session-lifetime)

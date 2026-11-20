@@ -28,6 +28,9 @@ pub(crate) struct Draft {
     control: GuiControl,
     delegation: BoundDelegation,
     pub(super) desktop_shell: bool,
+    pub(super) system_menu_app: bool,
+    pub(super) owner_settings: bool,
+    pub(super) owner_launch: bool,
 }
 
 pub(crate) struct Registration {
@@ -40,6 +43,8 @@ pub(crate) struct Registration {
     pub home: PathBuf,
     pub control: GuiControl,
     pub(crate) desktop_shell: bool,
+    pub(crate) owner_settings: bool,
+    pub(crate) owner_launch: bool,
     pub session_id: String,
     pub caps: CapSet,
     pub optional_needs_ungranted: Vec<usize>,
@@ -80,17 +85,34 @@ impl Draft {
             .map_err(|error| error.to_string())?
             .for_process(&launcher)
             .map_err(|error| error.to_string())?;
-        let desktop_shell = launch.app_id() == SHELL_APP
-            && gui_entry.is_none()
+        let system_launcher = gui_entry.is_none()
             && launcher_authority.parent.is_none()
             && display
                 .lock()
                 .map_err(|_| "display registry lock poisoned")?
-                .starts_desktop_shell(&launcher)
+                .starts_gui_launcher(&launcher)
                 .map_err(|error| error.to_string())?;
+        let desktop_shell = system_launcher && launch.app_id() == SHELL_APP;
         if desktop_shell {
-            verify_system_shell(&launch, &entry, selector)?;
+            if entry != "bin/claw-desktop-shell" || selector != "--gui"
+                || launch.manifest().gui_entry(None)?.legacy_needs
+            {
+                return Err("system desktop shell has an invalid default entry".into());
+            }
+            verify_system_gui(&launch)?;
         }
+        let system_menu_app = system_launcher && !desktop_shell
+            && matches!(launch.app_id(), "cosmic-edit" | "cosmic-files" | "cosmic-launcher"
+                | "cosmic-notifications" | "cosmic-player" | "cosmic-screenshot"
+                | "cosmic-settings" | "cosmic-store" | "cosmic-term")
+            && verify_system_gui(&launch).is_ok();
+        let owner_settings = system_menu_app && launch.app_id() == "cosmic-settings"
+            && entry == "bin/cosmic-settings" && selector == "--gui";
+        let owner_launch = launcher_authority.parent.is_none()
+            && launcher_authority.activity.is_none()
+            && launcher_authority.workspace.is_none()
+            && client.extension_host.is_none()
+            && (system_launcher || client.attended_local);
         let control = GuiControl::of(&display).map_err(|error| error.to_string())?;
         let home = crate::paths::verified_home_for_uid(control.owner_uid)?;
         let generation =
@@ -114,6 +136,9 @@ impl Draft {
             home,
             control,
             desktop_shell,
+            system_menu_app,
+            owner_settings,
+            owner_launch,
             delegation: BoundDelegation {
                 parent: launcher_authority.parent.clone(),
                 session: delegation.grant_session.clone(),
@@ -141,6 +166,8 @@ impl Draft {
             home: self.home,
             control: self.control,
             desktop_shell: self.desktop_shell,
+            owner_settings: self.owner_settings,
+            owner_launch: self.owner_launch,
             session_id,
             caps,
             optional_needs_ungranted,
@@ -152,7 +179,7 @@ impl Draft {
     }
 }
 
-fn verify_system_shell(launch: &AppLaunch, entry: &str, selector: &str) -> Result<(), String> {
+fn verify_system_gui(launch: &AppLaunch) -> Result<(), String> {
     use crate::provenance::{
         envelope::ENVELOPE_FILE, fsec, trust::VENDOR_TRUST_ROOT, TrustSource, TrustTier,
     };
@@ -161,25 +188,41 @@ fn verify_system_shell(launch: &AppLaunch, entry: &str, selector: &str) -> Resul
     let package = launch.package();
     let trust = crate::provenance::trust_store();
     let publisher = Path::new(VENDOR_TRUST_ROOT).join("clawos-app.json");
-    if package.dir() != Path::new("/usr/lib/cos/apps/desktop-shell")
-        || entry != "bin/claw-desktop-shell"
-        || selector != "--gui"
+    if package.dir() != Path::new("/usr/lib/cos/apps").join(launch.app_id())
         || launch.manifest().runtime != crate::caps::manifest::Runtime::Binary
-        || launch.manifest().gui_entry(None)?.legacy_needs
         || package.tier() != TrustTier::Vendor
         || !matches!(package.source(), TrustSource::Publisher { key_id }
             if trust.key(key_id).is_some_and(|key| key.source == publisher))
     {
-        return Err("OS desktop startup requires the installed vendor-signed desktop shell".into());
+        return Err("system desktop role requires the installed vendor-signed GUI".into());
     }
     fsec::require_secure_location(package.dir(), &[0]).map_err(|error| error.to_string())?;
     for path in package.files().map(|file| file.path.as_str()).chain([ENVELOPE_FILE]) {
         let node = fsec::lstat(&package.dir().join(path)).map_err(|error| error.to_string())?;
         if node.uid != 0 || node.is_symlink || node.is_group_or_world_writable() {
-            return Err("system desktop shell contains an unprotected resource".into());
+            return Err("system desktop package contains an unprotected resource".into());
         }
     }
     package.assert_current(&trust).map_err(|error| error.to_string())
+}
+
+pub(super) fn owner_settings_cap(cap: &Cap) -> bool {
+    match (cap.verb, &cap.scope) {
+        (Verb::SYS_PERMISSIONS, Scope::Name(name)) => name == "manage",
+        (Verb::SYS_OBSERVE, Scope::Name(name)) => matches!(name.as_str(),
+            "regional" | "accessibility" | "audio" | "display" | "network" | "bluetooth" | "bluetooth.service" | "power"),
+        (Verb::IPC_SUBSCRIBE | Verb::IPC_INVOKE, Scope::Name(name)) => matches!(name.as_str(),
+            "desktop.power.profile" | "desktop.preferences.compositor" | "desktop.preferences.keyboard-catalog"
+            | "desktop.preferences.workspaces" | "desktop.preferences.appearance" | "desktop.preferences.panels"
+            | "desktop.preferences.idle" | "desktop.preferences.audio" | "desktop.preferences.accessibility"
+            | "desktop.preferences.clock" | "desktop.preferences.shortcuts" | "desktop.preferences.window-rules"
+            | "desktop.preferences.background" | "desktop.preferences.regional"),
+        (Verb::NET_MANAGE, Scope::Name(name)) => matches!(name.as_str(), "ethernet" | "wifi" | "vpn" | "airplane"),
+        _ => desktop_shell_optional_cap(cap)
+            || matches!((cap.verb, &cap.scope),
+                (Verb::UI_ACCESSIBILITY | Verb::DEVICE_BLUETOOTH, Scope::Name(name)) if name == "control")
+            || cap == &Cap::new(Verb::SYS_LANGUAGE, Scope::name("self")),
+    }
 }
 
 pub(super) fn desktop_shell_startup_caps() -> CapSet {

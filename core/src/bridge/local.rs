@@ -74,6 +74,8 @@ pub(super) fn authorize(
             .map_err(String::from)?;
         let caps = local_caps(parent_caps)?;
         crate::approvals::app_policy::require(owner, launch.app_id(), &caps)?;
+        let home = crate::paths::verified_home_for_uid(owner)?;
+        crate::approvals::app_policy::InstalledPolicy::from_app(owner, &app, &home)?.require(&caps)?;
         Ok(caps)
     }
     #[cfg(not(unix))]

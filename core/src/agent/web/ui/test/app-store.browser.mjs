@@ -34,7 +34,7 @@ const app = { id: "kv", name: "Key-Value Store", version: manifest.version, stat
 const review = {
   schema_version: 1, id: reviewId, revision: "9007199254740993", kind: "install", status: "pending",
   subject: { app_id: "kv", name: app.name, version: app.version, publisher: "synthetic public fixture" },
-  permissions: [{ id: "kv-write", label: "Write named key", blurb: "Store the requested value.",
+  permissions: [{ id: "kv-write", label: "Write named key", blurb: "Store the requested value.", current: null, supported_choices: [],
     risk: "low", scope: { description: "Exact requested key" }, condition: null, uses: [] }],
   disclosures: [{ label: "Execution", value: "Authenticated MCP service in the normal App Host" }],
 };

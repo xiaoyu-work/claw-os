@@ -237,6 +237,9 @@ pub(super) fn admit(registration: &Registration, instance: InstanceId) -> Result
     else {
         return Ok(());
     };
+    if saved_metadata(registration, &declaration.cap).map_err(BrokerError::authorization)? {
+        return Ok(());
+    }
     let owner = Some(registration.owner());
     let approved = crate::approvals::has_approved_grant_for_context_operation(
         &registration.session_id,
@@ -276,8 +279,16 @@ pub(super) fn admit(registration: &Registration, instance: InstanceId) -> Result
 
 pub(super) struct Consent {
     declaration: Declaration,
-    approval: ConsumedGrant,
+    approval: Option<ConsumedGrant>,
     ceiling: Instant,
+}
+
+fn saved_metadata(registration: &Registration, cap: &Cap) -> Result<bool, String> {
+    let policy = crate::approvals::app_policy::InstalledPolicy::from_package(
+        registration.owner(), registration.launch.package(), registration.launch.manifest(), &registration.home,
+    )?;
+    policy.require(&CapSet::from_caps([cap.clone()]))?;
+    Ok(registration.owner_launch && policy.allows(cap))
 }
 
 pub(super) fn consume(
@@ -287,6 +298,12 @@ pub(super) fn consume(
     let Some(declaration) = declaration(registration, instance)? else {
         return Ok(None);
     };
+    if saved_metadata(registration, &declaration.cap)? {
+        return Ok(Some(Consent {
+            declaration, approval: None,
+            ceiling: registration.registered_at + crate::clawd::app_sessions::SESSION_GRANT_TTL,
+        }));
+    }
     let approval = crate::approvals::redeem_matching_grant_for_owner_operation(
         &registration.session_id,
         declaration.cap.verb,
@@ -306,7 +323,7 @@ pub(super) fn consume(
         .ok_or("Home metadata consent deadline overflow")?;
     Ok(Some(Consent {
         declaration,
-        approval,
+        approval: Some(approval),
         ceiling,
     }))
 }
@@ -480,24 +497,26 @@ impl HomeMetadata {
     }
 
     fn check(&self, registration: &Registration) -> Result<(), String> {
-        let authorization = &self.consent.approval.authorization;
-        let generation = crate::approvals::generations::current(
-            Some(registration.owner()),
-            &registration.session_id,
-        )?;
-        if generation != self.consent.approval.generation
-            || authorization.owner_uid != Some(registration.owner())
-            || authorization.session != registration.session_id
-            || authorization.capability != self.consent.declaration.cap
-            || authorization.operation_digest.as_deref()
-                != Some(self.consent.declaration.digest.as_str())
-            || authorization.context.is_some()
-            || authorization.execution.is_some()
-            || Instant::now() >= self.consent.ceiling
-            || self.consent.approval.expires_in().is_zero()
+        if Instant::now() >= self.consent.ceiling
             || !registration.caps.covers(&self.consent.declaration.cap)
         {
             return Err("this window's Home metadata consent expired or was revoked".into());
+        }
+        if let Some(approval) = &self.consent.approval {
+            let authorization = &approval.authorization;
+            let generation = crate::approvals::generations::current(
+                Some(registration.owner()), &registration.session_id,
+            )?;
+            if generation != approval.generation
+                || authorization.owner_uid != Some(registration.owner())
+                || authorization.session != registration.session_id
+                || authorization.capability != self.consent.declaration.cap
+                || authorization.operation_digest.as_deref() != Some(self.consent.declaration.digest.as_str())
+                || authorization.context.is_some() || authorization.execution.is_some()
+                || approval.expires_in().is_zero()
+            {
+                return Err("this window's Home metadata consent expired or was revoked".into());
+            }
         }
         self.consent.declaration.source.revalidate()?;
         Ok(())
@@ -510,6 +529,7 @@ impl HomeMetadata {
         process: &ProcessIdentity,
         resources: &LaunchResources,
         grant: &GrantView,
+        picker: Arc<crate::clawd::gui::file_picker::Window>,
     ) -> Result<Arc<crate::clawd::gui::selected_read::SelectedReads>, String> {
         self.check(registration)?;
         let view = self
@@ -518,9 +538,11 @@ impl HomeMetadata {
             .ok_or("GUI Home metadata provider is unavailable")?;
         view.bind(process, resources.gui_cgroup()?)?;
         self.refresh(registration, grant)?;
+        let provider = view.read_provider()?;
+        picker.bind_native_files(provider.clone())?;
         let selected = crate::clawd::gui::selected_read::SelectedReads::new(
             registration.clone(), instance, process.clone(), resources.gui_cgroup()?,
-            view.read_provider()?, self.consent.declaration.cap.clone(), self.consent.ceiling, grant,
+            provider, self.consent.declaration.cap.clone(), self.consent.ceiling, grant, picker,
         )?;
         self.selected_reads.set(selected.clone()).map_err(|_| "selected read endpoint already bound")?;
         Ok(selected)

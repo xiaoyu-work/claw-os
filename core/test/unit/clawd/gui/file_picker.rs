@@ -21,6 +21,7 @@ fn picker_metadata_waits_for_retirement_and_cannot_carry_filesystem_authority() 
             },
             portal_retired: true,
         }),
+        selection: None,
         cancelled: Arc::new(AtomicBool::new(false)),
         slot: None,
     };

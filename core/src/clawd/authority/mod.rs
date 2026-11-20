@@ -770,19 +770,45 @@ fn authorize_gui_file_at(
     route: &'static str,
 ) -> Result<(GrantView, Authorized), String> {
     let owner = binding.gui.owner_uid;
-    let session = binding.gui.subject.session_id.as_deref().ok_or("GUI read has no bound session")?;
     let authorization = &approval.authorization;
-    if !matches!(binding.capability.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE)
-        || matches!(binding.capability.scope, crate::caps::Scope::Wild)
-        || binding.process.uid() != owner || binding.process.pid() as u32 != binding.gui.bound_pid
-        || binding.gui.subject.app_id.is_none()
-        || !binding.gui.audience.contains(Audience::GuiResource)
-        || authorization.owner_uid != Some(owner)
+    if authorization.owner_uid != Some(owner)
         || authorization.session != binding.approval_session
         || authorization.capability != *binding.capability
         || authorization.operation_digest.as_deref() != Some(binding.operation_digest)
         || authorization.context.is_some() || authorization.execution.is_some()
     { return Err("selected read approval does not match the live GUI/owner/capability/operation".into()); }
+    issue_gui_file(binding, route, approval.generation, approval.expires_in())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn authorize_picker_file(
+    binding: GuiFileApproval<'_>,
+    consent: super::gui::file_picker::PickerConsent,
+    route: &'static str,
+) -> Result<(GrantView, Authorized), String> {
+    let generation = crate::approvals::generations::current(
+        Some(binding.gui.owner_uid), binding.approval_session,
+    )?;
+    issue_gui_file(binding, route, generation, consent.expires_in())
+}
+
+#[cfg(target_os = "linux")]
+fn issue_gui_file(
+    binding: GuiFileApproval<'_>, route: &'static str, generation: u32,
+    expires_in: std::time::Duration,
+) -> Result<(GrantView, Authorized), String> {
+    let owner = binding.gui.owner_uid;
+    let session = binding.gui.subject.session_id.as_deref().ok_or("GUI read has no bound session")?;
+    let valid_route = matches!((binding.capability.verb, route),
+        (crate::caps::Verb::FS_READ, "gui.file.read.status")
+        | (crate::caps::Verb::FS_WRITE, "gui.file.write.status" | "gui.file.create.status"));
+    if !valid_route || matches!(binding.capability.scope, crate::caps::Scope::Wild)
+        || binding.process.uid() != owner || binding.process.pid() as u32 != binding.gui.bound_pid
+        || binding.gui.subject.app_id.is_none()
+        || !binding.gui.audience.contains(Audience::GuiResource)
+    {
+        return Err("selected file is outside the live GUI or access kind".into());
+    }
     let presentation = Presentation {
         uid: owner, pid: binding.process.pid() as u32,
         start_time_ticks: Some(binding.process.start_ticks()), audience: Audience::GuiResource,
@@ -792,7 +818,7 @@ fn authorize_gui_file_at(
     if current.id != binding.gui.id || current.generation != binding.gui.generation || current.caps != binding.gui.caps {
         return Err("GUI authority changed before selected read issuance".into());
     }
-    let lifetime = binding.lifetime.min(approval.expires_in()).min(current.expires_in);
+    let lifetime = binding.lifetime.min(expires_in).min(current.expires_in);
     if lifetime.is_zero() { return Err("selected read authority is expired".into()); }
     let principal = Principal::of_process(owner, binding.process.pid() as u32)
         .filter(|principal| principal.start_time_ticks == Some(binding.process.start_ticks()))
@@ -802,10 +828,10 @@ fn authorize_gui_file_at(
         subject: current.subject, audience: AudienceSet::one(Audience::GuiResource),
         caps: CapSet::from_caps([binding.capability.clone()]), lifetime, uses: Uses::Unbounded,
         index_session: false,
-    }, u64::from(approval.generation)).map_err(|error| error.to_string())?;
+    }, u64::from(generation)).map_err(|error| error.to_string())?;
     audit::record_issued(&view, None);
     match crate::approvals::generations::current(Some(owner), binding.approval_session) {
-        Ok(generation) if generation == approval.generation => {}
+        Ok(current) if current == generation => {}
         _ => {
             authority().revoke(view.id);
             return Err("selected read decision changed or became unverifiable during issuance".into());

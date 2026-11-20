@@ -890,11 +890,14 @@ not approval to deploy it or a completed installed-system acceptance result.
 Agent supplies the internal `claw-os-display-session-v2` interface and native
 PAM/display helpers; Desktop supplies the matching protected Hyprland
 executable and greetd/PAM startup configuration. The Agent and Desktop upgrade
-must be coordinated with the signed Desktop Shell App. Reviewed menu launches
+must be coordinated with the signed Desktop Shell App. Direct menu launches
 and power actions require the matching Agent build's private broker routes;
 launches also use its protected display supervisor. There is no raw fallback
 or change to the public App ABI. The new package removes the superseded
 session; it does not migrate or erase owner configuration.
+The installed system Settings GUI also needs the matching signed Settings App
+to change lasting permissions. Older transient or reusable approvals are not
+converted to lasting App permission.
 The Desktop package owns the native locker and its dedicated
 `/etc/pam.d/claw-desktop-lock` service. Both the Agent supervisor and Desktop
 compositor must support the private locker descriptor before exposing Lock.

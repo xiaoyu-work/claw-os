@@ -62,7 +62,8 @@ match owner-bound execution grants or GUI instances. A removed-grant count is
 not resource-retirement completion; the GUI controller separately awaits its
 checked process and transport barrier.
 
-Selected GUI reads likewise consume an exact operation-bound owner decision
+Selected GUI reads likewise consume a protected operation decision or the
+same GUI's exact accepted OS file-picker selection
 before issuing a finite `GuiResource`-only `Issuer::Approval` grant. It retains
 the live GUI's App/session, Activity and Workspace subject, exact process/start
 binding and consent generation, but never replaces the GUI session index or

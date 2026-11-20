@@ -724,7 +724,7 @@ and ship an app
 | `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before publishing into `$COS_APPS_DIR/<id>/`. Ordinary installs require an OS review decision; `--yes` can use existing OS confirmation but cannot replace first review or grant capabilities/AI consent. `--no-consent` only defers AI consent. Copying is skipped only when source and destination are the same directory. `--dev-trust` retains its separate interactive, digest-bound development-trust workflow. |
 | `cos review pending` | List and present the current user's App reviews and existing capability requests using the shared OS review contract. |
 | `cos review show <id>` | Display one owner-scoped review and its authenticated permission disclosure. |
-| `cos review approve <id>` | Present an App confirmation or explicitly choose among a capability request's supported permissions through the interactive OS helper. App confirmation never grants permissions. |
+| `cos review approve <id>` | Confirm an App package and choose any newly requested, supported GUI permissions, or decide a separate capability request through the interactive OS helper. |
 | `cos review deny <id>` | Cancel the current user's pending review through the owner-scoped OS route, without a privilege prompt or capability grant. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
@@ -734,8 +734,8 @@ and ship an app
 
 ### Installation permission review
 
-The OS builds the review from the authenticated manifest, covering both
-`operations.*.needs` and `mcp.tools[].needs`. Capability names, explanations and
+The OS builds the review from the authenticated manifest, covering operations,
+MCP tools and the declared GUI surfaces. Capability names, explanations and
 risk levels come from the OS catalog; the App's explanation is shown separately
 as its reason for requesting access. Conditional requests are disclosed even
 when the corresponding feature is not currently used. Argument-derived scopes
@@ -748,6 +748,14 @@ permission-related contract, including argument constraints, conditions and
 execution surfaces. It excludes the App version and capability-purpose text,
 so changing release numbers or explanations alone does not imply a permission
 change. The digest is a comparison key, **not an approval token or a grant**.
+
+The same install screen asks **Always allow** or **Don't allow** for each
+new supported GUI permission. The choice is separate from the package
+confirmation and remains saved until changed in Settings. An unchanged choice
+for the same publisher is carried forward; broader scopes or new uses need
+their own choice. Optional denied features stay unavailable, and a required
+denial prevents that launch. Argument-bound access, selected file contents,
+AI consent and Agent-run operations do not inherit standing GUI permission.
 
 Signed global directory installation requires Root and creates a protected
 Root-owner OS request before publishing, including `--force`, `--yes`,
@@ -768,8 +776,9 @@ confirmation once against the freshly verified staged package, inside the same
 per-App fence and checked ordinary/GUI/MCP cross-owner retirement used by the
 official Store. A consumed confirmation records the user's
 decision, not proof that a subsequent filesystem publication succeeded.
-`permission_review.permissions_granted` remains `false`; normal capabilities
-and separate AI consent still govern App effects.
+`permission_review.permissions_granted` remains `false`: disclosure does not
+issue a grant. The direct GUI still receives a bounded runtime lease through
+normal signature, capability, sandbox and policy checks.
 
 The installer re-verifies the package after review and rejects a changed
 package before replacing the old installation. Cancelling review leaves the

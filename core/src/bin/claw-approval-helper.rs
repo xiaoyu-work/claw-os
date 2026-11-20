@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use clawd_client::system_review::{ReviewDecision, SystemReview, MAX_DECISION_BYTES};
+use clawd_client::system_review::{ReviewSubmission, SystemReview, MAX_DECISION_BYTES};
 use cos::clawd::protocol::Request;
 use cos::clawd::routes::Command;
 use cos::clawd::{client, config};
@@ -127,13 +127,13 @@ fn main() {
     println!("{result}");
 }
 
-fn read_review_decision(reader: impl Read) -> Result<ReviewDecision, String> {
+fn read_review_decision(reader: impl Read) -> Result<ReviewSubmission, String> {
     let mut bytes = Vec::new();
     reader
         .take(MAX_DECISION_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("read system review decision: {error}"))?;
-    ReviewDecision::decode(&bytes).map_err(|error| error.to_string())
+    ReviewSubmission::decode(&bytes).map_err(|error| error.to_string())
 }
 
 fn set_option(

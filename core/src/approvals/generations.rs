@@ -109,6 +109,8 @@ use serde::{Deserialize, Serialize};
 struct Generations {
     #[serde(default)]
     app_permissions: BTreeMap<String, Vec<super::app_policy::Block>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    installed_choices: BTreeMap<String, BTreeMap<String, bool>>,
     /// `owner -> generation`. Raised by an owner-wide revocation and
     /// used as a floor for every session under that owner.
     #[serde(default)]
@@ -116,6 +118,26 @@ struct Generations {
     /// `owner/session -> generation`.
     #[serde(default)]
     sessions: BTreeMap<String, u32>,
+}
+
+pub(super) fn app_choices(key: &str) -> Result<BTreeMap<String, bool>, String> {
+    Ok(load()?.installed_choices.remove(key).unwrap_or_default())
+}
+
+/// Caller holds the common approvals lock.
+pub(super) fn write_app_choice(
+    key: &str, owner: u32, app: &str, id: String, cap: crate::caps::Cap, allowed: bool,
+) -> Result<(), String> {
+    let mut state = load()?;
+    state.installed_choices.entry(key.to_string()).or_default().insert(id, allowed);
+    if allowed {
+        if let Some(block) = state.app_permissions.get_mut(&format!("{owner}/{app}"))
+            .and_then(|entries| entries.iter_mut().find(|block| block.cap == cap))
+        {
+            block.restored_in_settings = true;
+        }
+    }
+    store(&state)
 }
 
 pub(super) fn app_blocks(uid: u32, app: &str) -> Result<Vec<super::app_policy::Block>, String> {
@@ -131,7 +153,7 @@ pub(super) fn block_app_cap(uid: u32, app: &str, cap: crate::caps::Cap) -> Resul
             .map_or(0, |entry| entry.generation)
             .checked_add(1).ok_or("App permission generation exhausted")?;
         entries.retain(|entry| entry.cap != cap);
-        let block = super::app_policy::Block { cap, generation };
+        let block = super::app_policy::Block { cap, generation, restored_in_settings: false };
         entries.push(block.clone());
         store(&state)?;
         Ok(block)

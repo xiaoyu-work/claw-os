@@ -55,6 +55,10 @@ pub(super) struct Broker {
 }
 
 impl Broker {
+    pub(super) fn picker(&self) -> Arc<super::file_picker::Window> {
+        self.state.picker.clone()
+    }
+
     pub fn start(
         listener: std::os::unix::net::UnixListener,
         registration: Arc<Registration>,
@@ -390,7 +394,23 @@ async fn serve(
             }
         }
         Validated::Provider(request) => {
-            if request.command == Command::GuiPackageIntent {
+            if request.command == Command::SystemAppPermissions
+                && matches!(request.params["action"].as_str(), Some("show_choices" | "allow" | "deny"))
+            {
+                let result = if endpoint.registration.owner_settings
+                    && view.caps.covers(&crate::caps::Cap::new(Verb::SYS_PERMISSIONS, crate::caps::Scope::name("manage")))
+                {
+                    super::super::app_permissions::owner_settings(
+                        request.params, endpoint.registration.owner(), &endpoint.registration.home, &daemon,
+                    ).await
+                } else {
+                    Err("Application permission decisions require the system Settings window".into())
+                };
+                match result {
+                    Ok(value) => Response::ok(request.id, value),
+                    Err(error) => Response::handler_error(request.id, BrokerError::authorization(error)),
+                }
+            } else if request.command == Command::GuiPackageIntent {
                 let bound = endpoint.process.get().expect("authenticated bound GUI process");
                 match crate::clawd::packages::gui::request(
                     &daemon, endpoint.package_intents.clone(), &bound.process, &client, request.params,

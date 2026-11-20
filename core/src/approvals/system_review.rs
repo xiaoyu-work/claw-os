@@ -1,4 +1,4 @@
-//! Root-owned App review decisions. These records never grant capabilities.
+//! Root-owned App confirmations and separately recorded install choices.
 
 use std::path::{Path, PathBuf};
 
@@ -54,6 +54,8 @@ pub struct ReviewRecord {
     pub inherited_from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryReview>,
+    #[serde(default, skip_serializing_if = "super::app_policy::Choices::is_empty")]
+    pub(crate) permission_choices: super::app_policy::Choices,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,6 +98,17 @@ impl DeliveryReview {
 impl ReviewRecord {
     pub fn permission_review(&self) -> Result<PermissionReview, String> {
         PermissionReview::from_manifest(&self.manifest)
+    }
+
+    pub(crate) fn resolved_permissions(&self) -> Result<PermissionReview, String> {
+        let mut review = self.permission_review()?;
+        if review.permissions.iter().any(|permission| matches!(
+            permission.scope, crate::caps::ScopeBinding::OwnerPath { .. }
+        )) {
+            let home = crate::paths::verified_home_for_uid(self.owner_uid)?;
+            review.resolve_owner_paths(&crate::caps::args::PathContext { home, cwd: None })?;
+        }
+        Ok(review)
     }
 
     pub fn effective_state(&self) -> Result<ReviewState, String> {
@@ -266,6 +279,25 @@ fn records(owner: u32) -> Result<Vec<ReviewRecord>, String> {
     Ok(records)
 }
 
+pub(crate) fn permission_choices(owner: u32, package: &PackageRef) -> Result<super::app_policy::Choices, String> {
+    let mut choices = super::app_policy::Choices::new();
+    if package.publisher_key_id.is_none() {
+        return Ok(choices);
+    }
+    for record in records(owner)?.into_iter().filter(|record| {
+        record.state == ReviewState::Consumed
+            && record.package.id == package.id
+            && record.package.publisher_key_id == package.publisher_key_id
+            && record.package.tier == package.tier
+    }) {
+        for (permission, allowed) in record.permission_choices {
+            choices.entry(permission).or_insert(allowed);
+        }
+    }
+    choices.extend(super::app_policy::choices(owner, package)?);
+    Ok(choices)
+}
+
 pub fn pending(owner: u32, limit: usize) -> Result<Vec<ReviewRecord>, String> {
     if limit == 0 {
         return Ok(Vec::new());
@@ -368,6 +400,7 @@ fn submit_with_delivery(
             decided_by: accepted.and_then(|record| record.decided_by),
             inherited_from: accepted.map(|record| record.id.clone()),
             delivery,
+            permission_choices: Default::default(),
         };
         save(&record)?;
         Ok(record)
@@ -390,6 +423,16 @@ pub fn decide(
     approve: bool,
     package: Option<&VerifiedPackage>,
 ) -> Result<ReviewRecord, String> {
+    decide_with_permissions(owner, id, approve, package, Default::default())
+}
+
+pub(crate) fn decide_with_permissions(
+    owner: u32,
+    id: &str,
+    approve: bool,
+    package: Option<&VerifiedPackage>,
+    choices: super::app_policy::Choices,
+) -> Result<ReviewRecord, String> {
     super::ensure_dirs().map_err(|error| format!("approvals directory: {error}"))?;
     crate::filelock::with_exclusive_path_lock(&super::grant_lock_path(), || {
         let mut record = get(owner, id)?;
@@ -397,10 +440,23 @@ pub fn decide(
             return Err("system review is no longer pending; refresh its state".into());
         }
         if approve {
-            require_package(
-                &record,
-                package.ok_or("App review requires fresh package verification")?,
-            )?;
+            let package = package.ok_or("App review requires fresh package verification")?;
+            require_package(&record, package)?;
+            let previous = permission_choices(owner, &record.package)?;
+            let mut required = std::collections::BTreeSet::new();
+            if record.package.publisher_key_id.is_some() {
+                let ceiling = package.ceiling();
+                for permission in record.resolved_permissions()?.permissions {
+                    if permission.persistent_cap(&ceiling).is_some() {
+                        let id = permission.decision_id()?;
+                        if !previous.contains_key(&id) { required.insert(id); }
+                    }
+                }
+            }
+            if !required.iter().eq(choices.keys()) {
+                return Err("Choose Allow or Don't allow for each new permission shown, then confirm the app.".into());
+            }
+            record.permission_choices = choices;
         }
         record.state = if approve {
             ReviewState::Approved

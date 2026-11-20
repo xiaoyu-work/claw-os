@@ -238,6 +238,9 @@ class Reviews:
         body_box.pack_start(self.summary, False, False, 0)
         self.scope_box, self.scope = section(body_box, "What this affects", "approval-card")
         self.reason_box, self.reason = section(body_box, "Reason from the requester")
+        self.app_choices = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        body_box.pack_start(self.app_choices, False, False, 0)
+        self.selections = {}
         self.options = Gtk.Expander(label="More choices")
         self.options_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=8)
         self.options.add(self.options_box)
@@ -318,6 +321,25 @@ class Reviews:
         self.pending = review
         self.can_decide = True
         question, summary, scope, reason = copy_for(review, self.action, self.permission)
+        for child in self.app_choices.get_children():
+            self.app_choices.remove(child)
+        self.selections = {}
+        if self.action in {"confirm_install", "confirm_activation", "confirm_update"}:
+            for entry in review["permissions"]:
+                if "allow_always" not in entry["supported_choices"]:
+                    continue
+                if not self.selections:
+                    summary = "Choose what this app may access. You can change these choices later in Settings."
+                key = entry["id"]
+                self.selections[key] = None
+                card, target = section(self.app_choices, literal(entry["label"]), "approval-card")
+                target.set_text(literal(entry["scope"]["description"]))
+                row = Gtk.Box(spacing=8)
+                card.pack_start(row, False, False, 0)
+                for choice, caption in (("allow_always", "Always allow"), ("deny", "Don't allow")):
+                    button = Gtk.Button(label=caption)
+                    button.connect("clicked", lambda _, k=key, v=choice, r=row: self.select(k, v, r))
+                    row.pack_start(button, False, False, 0)
         exact_action = any(row["label"] == "Requested action" for row in review["context"])
         self.title.set_text(question)
         self.summary.set_text(summary)
@@ -366,6 +388,7 @@ class Reviews:
         self.scope_box.set_visible(bool(scope))
         self.reason_box.set_visible(bool(reason))
         self.options.set_visible(len(choices) > 1)
+        self.app_choices.set_visible(bool(self.selections))
         self.deny.set_visible("cancel" in review["actions"])
         self.confirm.set_visible(bool(confirm_label))
         self.message("")
@@ -373,11 +396,22 @@ class Reviews:
         self.details.grab_focus()
         return True
 
+    def select(self, key, choice, row):
+        self.selections[key] = choice
+        for button, value in zip(row.get_children(), ("allow_always", "deny")):
+            style = button.get_style_context()
+            if value == choice:
+                style.add_class("suggested-action")
+            else:
+                style.remove_class("suggested-action")
+        self.buttons()
+
     def buttons(self, *_):
         ready = self.can_decide and not self.busy
         self.deny.set_sensitive(ready)
         self.options_box.set_sensitive(ready)
-        self.confirm.set_sensitive(ready)
+        self.app_choices.set_sensitive(ready)
+        self.confirm.set_sensitive(ready and all(self.selections.values()))
 
     def key_pressed(self, _, event):
         return self.dismiss() if event.keyval == Gdk.KEY_Escape else False
@@ -400,6 +434,14 @@ class Reviews:
             choices.append({"permission_id": self.permission["id"], "choice": choice})
         review_id = self.pending["id"]
         decision = {"id": review_id, "revision": self.pending["revision"], "action": action, "choices": choices}
+        payload = decision
+        if action in {"confirm_install", "confirm_activation", "confirm_update"}:
+            if not all(self.selections.values()):
+                return
+            payload = {"confirmation": decision, "permissions": [
+                {"permission_id": key, "choice": value}
+                for key, value in self.selections.items()
+            ]}
 
         def refresh(_, __):
             self.run([COS, "--json", "review", "show", review_id],
@@ -411,7 +453,7 @@ class Reviews:
         else:
             self.message("Enter your sign-in password in the system dialog to confirm.")
             self.run(["/usr/bin/pkexec", "--disable-internal-agent", APPROVAL_HELPER,
-                      "--system-review-json"], refresh, json.dumps(decision))
+                      "--system-review-json"], refresh, json.dumps(payload))
         self.buttons()
 
     def settle(self, revision, latest, disclosure):

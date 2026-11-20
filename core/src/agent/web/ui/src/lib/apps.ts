@@ -117,9 +117,12 @@ export type AppReview = {
   id: string; revision: string; kind: "install" | "activation" | "update"; status: string;
   subject: { app_id: string; name: string; version: string | null; publisher: string | null };
   permissions: { id: string; label: string; blurb: string; risk: string;
-    scope: { description: string }; condition: string | null; uses: unknown[] }[];
+    scope: { description: string }; condition: string | null; uses: unknown[];
+    supported_choices: AppPermissionChoice[]; current: AppPermissionChoice | null }[];
   disclosures: { label: string; value: string }[];
 };
+
+export type AppPermissionChoice = "allow_always" | "deny";
 
 export function readAppReview(value: unknown): AppReview {
   if (!record(value) || value.schema_version !== 1 || typeof value.id !== "string" ||
@@ -136,7 +139,11 @@ export function readAppReview(value: unknown): AppReview {
     if (!record(permission) || typeof permission.id !== "string" || typeof permission.label !== "string" ||
         typeof permission.blurb !== "string" || typeof permission.risk !== "string" ||
         !record(permission.scope) || typeof permission.scope.description !== "string" ||
-        !Array.isArray(permission.uses)) throw new Error("The OS App permission disclosure is invalid.");
+        !Array.isArray(permission.uses) || !Array.isArray(permission.supported_choices) ||
+        !permission.supported_choices.every((choice) => choice === "allow_always" || choice === "deny") ||
+        ![null, "allow_always", "deny"].includes(permission.current as AppPermissionChoice | null)) {
+      throw new Error("The OS App permission disclosure is invalid.");
+    }
   }
   for (const disclosure of value.disclosures) {
     if (!record(disclosure) || typeof disclosure.label !== "string" || typeof disclosure.value !== "string") {

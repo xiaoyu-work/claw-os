@@ -11,9 +11,10 @@ selects only the default GUI's own needs; an explicit empty array requests none.
 Without that field, the constrained union of fixed/wild **operation** needs
 retains its legacy semantics. A named `desktop.entries.<name>` always declares
 its own needs, never a union with operations, MCP or another GUI. Fixed needs
-outside launcher delegation use the ordinary
-exact-owner approval flow before registration; a signature or GUI declaration
-grants nothing. Wild needs still inherit only the launcher's bounded scopes.
+outside launcher delegation use the ordinary exact-owner approval flow unless
+the owner already saved a supported exact choice for this verified App and
+launched it directly. A signature or GUI declaration alone grants nothing.
+Wild needs still inherit only the launcher's bounded scopes.
 Argument-bound GUI needs are unsupported/unbound. Explicit conditional GUI
 needs are also unbound, not unconditional grants; the legacy operation union
 still does not evaluate `when`. Neither binds a later file-picker selection.
@@ -24,8 +25,10 @@ and verified vendor-signed default entry qualify for the fixed desktop startup
 policy. That policy covers the declared panel, window controls, notification
 presentation and current-display lock, plus supported optional device controls.
 It still checks App denials, package trust and instance lifetime. It grants no
-power, App-launch, or Agent authority to exercise unrelated effects; opening
-another App or requesting a power action keeps its separate review.
+power, App-launch or Agent capability. The signed system menu dispatches an
+explicit owner click through its private endpoint, pinned display and exact
+signed launch target or logind provider. Other GUIs retain exact per-action
+reviews; sleep still requires an acknowledged native lock.
 
 `desktop.optional_needs` and each `desktop.entries.<name>.optional_needs` are
 independent best-effort feature lists, empty when absent. Missing, denied,
@@ -35,8 +38,9 @@ remain strict, including required `ui.panel`; optional declarations do not
 subtract from them or from the default GUI's legacy operation union.
 
 For ordinary Apps, Root first settles the complete mandatory plan, then
-admits optional caps only from the authenticated parent or a still-live,
-exact owner/session/scope reusable approval. Reusable admission spends one bounded use, never a once
+admits optional caps from the authenticated parent, a supported saved owner
+choice for a direct GUI launch, or a still-live exact reusable approval.
+Reusable admission spends one bounded use, never a once
 grant or a restoration receipt, and retains its expiry and revocation checks.
 Optional Wild requests retain the existing bounded parent-only inheritance;
 they never scan unrelated approved scopes or other GUI/MCP declarations.
@@ -242,21 +246,24 @@ helper exit. A silent thumbnail decoder disables its audio sink instead.
 
 ### Human file picker
 
-`gui.file.picker` presents the original OS FileChooser portal for one live
-authenticated GUI and returns one human-selected local URI as metadata. It
-does not open the file, copy its content, issue a grant or authorize a later
-operation. The selected GUI must explicitly declare and hold `ui.prompt`;
+`gui.file.picker` presents the installed OS GTK file chooser for one live
+authenticated GUI and returns one human-selected local URI as metadata. The
+selected GUI must explicitly declare and hold `ui.prompt`;
 ordinary live authority checks spend that existing presentation capability,
 not a filesystem permission. Public and MCP callers cannot install its
-private instance context. A filename or picker response is never permission.
+private instance context. An App-supplied filename or URI is never permission.
 
 Open/status/cancel retain immutable options and correlation, the original
 GUI lease, eight bounded portal slots and the shared protected installed
 `clawd` helper. Completion requires correlated portal completion or checked
 Close plus observed helper exit; uncertain cleanup remains under Root custody.
-Media subsequently requests its independent selected file read. Settings
-and other consumers retain their own exact operation/secret/file capabilities.
-No App receives an owner-bus connection.
+The helper pins the GTK chooser's bus identity and installed executable.
+The chooser does not wait for screenshot or screencast backends. When this GUI has a
+controlled native view, Root also pins the selected regular file or absent save
+target. The same instance can claim that evidence once for its matching
+declared read, write or create operation. Folder selections do not supply
+content authority. Other consumers retain their separate operation and secret
+requirements. No App receives an owner-bus connection.
 
 ### Filtered Home metadata
 
@@ -265,16 +272,16 @@ authenticated owner's `Home/**` or one literal `Home/subdirectory/**` may select
 the read-only filtered native view. The exact mandatory capability, not a broader
 Home grant or optional declaration, binds that one directory.
 Legacy operation unions, optional needs, App identity and broad parent rights
-do not prove this window's browsing consent. Before changing Reserved to
-Starting, `supervision::admit_home_metadata` uses the ordinary protected
-exact-owner approvals flow under this unique GUI session and a digest of its
-immutable window/surface/display/launcher/Home binding. The CLI waits on the
-existing approval-required response and retries this same registration.
+do not prove this window's browsing consent. A matching saved `fs.meta`
+choice for a direct GUI launch avoids a repeat question; without it,
+`supervision::admit_home_metadata` uses the ordinary protected exact-window
+review and the CLI retries the same registration after consent.
 The manager preflight call is required before Starting; the supervisor's
 second admission check is fail-closed and cannot replace that retry point.
 
-The supervisor spends that decision once and retains its exact authorization,
-expiry and revocation generation. The original GUI capability remains in the
+The supervisor either binds the saved policy within the current GUI lease or
+spends the window decision once and retains its exact expiry and generation.
+The original GUI capability remains in the
 live grant; only raw Home bind derivation is suppressed. The filtered mount
 precedes private App-data binding. When that binding would otherwise sit
 under the filtered root, Root gives the same pinned private directory the
@@ -322,9 +329,10 @@ checked on every use. The retained directory identity and running package
 reference must also match; descriptor pinning is not treated as immutability.
 Only that freshly matched package can validate the retained manifest's needs.
 
-Each proposal creates an ordinary protected exact-owner review naming file,
-read-only access and window, with a digest binding that target, identity,
-revision and live GUI. Only a fresh matching decision can be spent once.
+Only a current OS file-picker selection for the matching instance, mode, path
+and pinned revision can avoid an additional approval. Otherwise the proposal
+uses the ordinary exact-owner review. Both decisions bind one regular file,
+read-only access, the retained identity/revision and the live GUI.
 Root issues a separate finite `Issuer::Approval` read grant, preserving ordinary
 package/denial, Activity and Workspace checks, without changing parent/global
 or immutable GUI startup caps. The Root-held grant is `GuiResource`-only and

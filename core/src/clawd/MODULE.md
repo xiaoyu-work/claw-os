@@ -142,14 +142,19 @@ filters AI child stdout to correlated AI replies. The App child has no raw
 desktop transport or host network. This Host cutover does not establish
 unrelated native resource or full installed-system publication acceptance.
 
-The `system.app-permissions` service accepts any authenticated session holding
-the existing High-risk `sys.permissions:manage` capability for the request's
-owner. Settings is one consumer, not a privileged App class. Default Agent and
-unregistered-launcher ceilings still deny that capability, and worker relays
-cannot invoke the human `permission.apps` or privileged approval routes.
-The service does not execute another App or grant its requested capabilities.
-Target manifests, trust ceilings, supported scopes and checked GUI retirement
-remain enforced; restoration is only a request to the trusted OS presenter.
+An install review can record a separate lasting Allow or Don't allow choice
+for supported, exact GUI needs. Root applies the choice only after consuming
+the verified package confirmation. Choice identity includes owner, App,
+publisher, tier, capability scope and using surfaces. A signed package or
+package confirmation alone grants no runtime access. Direct GUI launches
+can apply the saved policy within their current package, declaration and
+provider bounds. MCP, Agent and background requests retain their own consent.
+
+The private OS-started Settings GUI can change those choices at the shown
+App revision. Disabling access revokes the existing session and waits for
+checked retirement. The generic `system.app-permissions` service and its
+MCP client can still inspect, revoke and request restoration of legacy deny
+gates; `sys.permissions:manage` alone cannot make lasting choices.
 
 Desktop preference resources likewise have no fixed consumer identity.
 `system.desktop-preferences.control` selects a closed OS namespace/version,

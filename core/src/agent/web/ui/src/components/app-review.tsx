@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Loader2, PackageCheck, ShieldCheck } from "lucide-react";
 
 import { api } from "@/lib/api";
-import { type AppReview } from "@/lib/apps";
+import { type AppPermissionChoice, type AppReview } from "@/lib/apps";
 import { readAuthorization, type AuthorizationView } from "@/lib/approvals";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -15,13 +15,18 @@ export function AppReviewDialog({ review, onConfirmed, onCancel, progress }: {
   const [authorization, setAuthorization] = useState<AuthorizationView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [choices, setChoices] = useState<Record<string, AppPermissionChoice>>({});
+  const selectable = review.permissions.filter((permission) => permission.supported_choices.length > 0);
+  const ready = selectable.every((permission) => choices[permission.id]);
 
   async function confirm() {
     setBusy(true);
     setError(null);
     try {
       const value = await api.post(`/api/app-reviews/${encodeURIComponent(review.id)}/authorization`,
-        { revision: review.revision }, { signal: AbortSignal.timeout(15_000) });
+        { revision: review.revision, permissions: selectable.map((permission) => ({
+          permission_id: permission.id, choice: choices[permission.id],
+        })) }, { signal: AbortSignal.timeout(15_000) });
       setAuthorization(readAuthorization(value, {
         review_id: review.id, revision: review.revision, choice: null,
         action: review.kind === "activation" ? "confirm_activation"
@@ -52,15 +57,15 @@ export function AppReviewDialog({ review, onConfirmed, onCancel, progress }: {
       </DialogHeader>
       <div className="rounded-lg border bg-muted/30 p-3 text-xs">
         <p className="flex items-center gap-2 font-medium"><ShieldCheck className="h-4 w-4" />
-          Verified package, separate runtime permissions</p>
+          App permissions</p>
         <p className="mt-2 text-muted-foreground">
-          Confirmation installs or opens this exact package. It does not grant every requested permission,
-          approve AI use, or merge access with another App.
+          Choose what this app may access. Your choices stay in effect until you change them in Settings.
+          AI access and file selections are separate.
         </p>
       </div>
       <div className="grid gap-2">
         {review.permissions.length === 0 && <p className="text-sm text-muted-foreground">No capability requests are declared.</p>}
-        {review.permissions.map((permission) => <div key={permission.id} className="rounded-lg border p-3 text-sm">
+        {selectable.map((permission) => <div key={permission.id} className="rounded-lg border p-3 text-sm">
           <div className="flex justify-between gap-3"><strong>{permission.label}</strong>
             <span className="text-xs text-muted-foreground">{permission.risk}</span></div>
           <p className="mt-1 break-words">{permission.scope.description}</p>
@@ -70,9 +75,18 @@ export function AppReviewDialog({ review, onConfirmed, onCancel, progress }: {
             if (!use || typeof use !== "object") return null;
             const item = use as Record<string, unknown>;
             return <p key={index} className="mt-1 text-xs text-muted-foreground">
-              {[item.surface, item.label, item.purpose].filter((value) => typeof value === "string").join(" · ")}
+              {typeof item.purpose === "string" ? item.purpose : ""}
             </p>;
           })}
+          <div className="mt-2 flex gap-2" role="group" aria-label={permission.label}>
+            {permission.supported_choices.map((choice) =>
+              <Button key={choice} size="sm" type="button" disabled={busy}
+                variant={choices[permission.id] === choice ? "default" : "outline"}
+                aria-pressed={choices[permission.id] === choice}
+                onClick={() => setChoices((current) => ({ ...current, [permission.id]: choice }))}>
+                {choice === "allow_always" ? "Always allow" : "Don't allow"}
+              </Button>)}
+          </div>
         </div>)}
       </div>
       {review.disclosures.length > 0 && <details className="rounded-lg border p-3 text-xs">
@@ -84,7 +98,7 @@ export function AppReviewDialog({ review, onConfirmed, onCancel, progress }: {
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter>
         <Button variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button>
-        <Button disabled={busy || !["pending", "confirmed"].includes(review.status)}
+        <Button disabled={busy || !ready || !["pending", "confirmed"].includes(review.status)}
           onClick={() => review.status === "confirmed" ? onConfirmed() : void confirm()}>
           {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {review.status === "confirmed" ? "Continue reviewed action"

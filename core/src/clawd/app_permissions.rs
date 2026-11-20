@@ -6,6 +6,79 @@ use super::{authority::Decision, client_identity::ClientIdentity};
 use crate::approvals::{self, app_policy};
 use crate::caps::{Cap, Need, Scope, ScopeBinding, Verb};
 
+#[cfg(target_os = "linux")]
+pub(super) async fn owner_settings(
+    params: Value,
+    uid: u32,
+    home: &std::path::Path,
+    state: &super::state::DaemonState,
+) -> Result<Value, String> {
+    let action = super::permissions::required_string(&params, "action")?;
+    let app_id = super::permissions::required_string(&params, "app_id")?;
+    validate_app_id(&app_id)?;
+    crate::paths::with_user_override(uid, home.to_path_buf(), async move {
+        let show = action == "show_choices";
+        if !show && matches!(app_id.as_str(), "cosmic-settings" | "desktop-shell") {
+            return Err("The system Settings window and desktop do not take App permission choices.".into());
+        }
+        let fence = if show { None } else {
+            Some(std::sync::Arc::new(super::app_mutation::fence_owner(&app_id, uid).await?))
+        };
+        let app = super::app_sessions::installed_app(&app_id)?;
+        let package = app.require_verified()?;
+        let binding = crate::provenance::runtime::PackageRef::of(package);
+        let decisions = approvals::system_review::permission_choices(uid, &binding)?;
+        let blocks = app_policy::blocks(uid, &app_id)?;
+        let ceiling = package.ceiling();
+        let mut review = crate::apps::permission_review::PermissionReview::from_manifest(&app.manifest)?;
+        review.resolve_owner_paths(&crate::caps::args::PathContext { home: home.to_path_buf(), cwd: None })?;
+        let revision = crate::crypto::sha256_hex(
+            &serde_json::to_vec(&(&binding, &decisions, &blocks)).map_err(|error| error.to_string())?,
+        );
+        if show {
+            let permissions = review.permissions.into_iter().filter(|permission| {
+                binding.publisher_key_id.is_some() && permission.persistent_cap(&ceiling).is_some()
+                    && !matches!(app_id.as_str(), "cosmic-settings" | "desktop-shell")
+            }).map(|permission| {
+                let id = permission.decision_id()?;
+                let cap = permission.persistent_cap(&ceiling).ok_or("permission changed")?;
+                let enabled = if app_policy::require(uid, &app_id, &crate::caps::CapSet::from_caps([cap.clone()])).is_err() {
+                    Some(false)
+                } else {
+                    decisions.get(&id).copied()
+                };
+                Ok::<_, String>(json!({
+                    "permission_id":id, "label":permission.label, "description":permission.description,
+                    "target":cap.scope.human_target(), "enabled":enabled,
+                }))
+            }).collect::<Result<Vec<_>, _>>()?;
+            return Ok(json!({"app_id":app_id, "permissions":permissions, "revision":revision}));
+        }
+        if params["revision"].as_str() != Some(&revision) {
+            return Err("The app or its permissions changed. Refresh Settings before trying again.".into());
+        }
+        let id = super::permissions::required_string(&params, "permission_id")?;
+        let permission = review.permissions.into_iter()
+            .find(|permission| permission.decision_id().as_deref() == Ok(id.as_str()))
+            .and_then(|permission| permission.persistent_cap(&ceiling))
+            .ok_or("This permission is not available for the current app.")?;
+        let allowed = action == "allow";
+        if !allowed && action != "deny" {
+            return Err("Invalid App permission choice.".into());
+        }
+        app_policy::set_choice(uid, &binding, id.clone(), permission, allowed)?;
+        crate::provenance::audit("app.permission_changed", json!({
+            "owner_uid":uid, "app_id":app_id, "publisher":binding.publisher_key_id,
+            "permission_id":id, "allowed":allowed,
+        }));
+        let fence = fence.expect("permission changes are fenced");
+        super::authority::authority().revoke_app(uid, &app_id);
+        super::app_store::retire_for_owner(state, &app_id, uid, fence).await
+            .map_err(|error| format!("The choice is saved, but the app has not stopped yet: {error}"))?;
+        Ok(json!({"app_id":app_id, "permission_id":id, "enabled":allowed}))
+    }).await
+}
+
 pub async fn control(
     params: Value,
     client: &ClientIdentity,
@@ -18,14 +91,7 @@ pub async fn control(
     }
     if action != "list" {
         let app = super::permissions::required_string(&params, "app_id")?;
-        if app.len() > 128
-            || !app.starts_with(|c: char| c.is_ascii_lowercase())
-            || !app
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'_')
-        {
-            return Err("invalid installed App id".into());
-        }
+        validate_app_id(&app)?;
     }
     if matches!(action.as_str(), "request" | "revoke") {
         let key = super::permissions::required_string(&params, "permission_id")?;
@@ -145,6 +211,15 @@ pub async fn control(
         Ok(json!({"id":id, "status":"pending", "enabled":false, "app_id":app_id,
             "required_duration":"forever", "approval":"trusted human helper; never an MCP tool"}))
     }).await
+}
+
+fn validate_app_id(app: &str) -> Result<(), String> {
+    if app.len() > 128 || !app.starts_with(|c: char| c.is_ascii_lowercase())
+        || !app.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_'))
+    {
+        return Err("invalid installed App id".into());
+    }
+    Ok(())
 }
 
 fn finish_revocation(audit: Result<(), String>, retirement: Result<(), String>) -> Result<(), String> {

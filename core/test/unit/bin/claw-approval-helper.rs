@@ -14,7 +14,7 @@ fn encoded_decision() -> Vec<u8> {
 fn system_review_helper_reads_exact_limit_and_never_reads_beyond_the_extra_byte() {
     let mut bytes = encoded_decision();
     bytes.resize(MAX_DECISION_BYTES, b' ');
-    assert_eq!(read_review_decision(bytes.as_slice()).unwrap().revision, 7);
+    assert_eq!(read_review_decision(bytes.as_slice()).unwrap().decision().revision, 7);
     bytes.resize(MAX_DECISION_BYTES * 2, b' ');
     let mut cursor = std::io::Cursor::new(bytes);
     assert!(read_review_decision(&mut cursor).is_err());

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use clawd_client::system_review::{PermissionChoice, ReviewAction, ReviewDecision, SystemReview};
+use clawd_client::system_review::{PermissionChoice, ReviewAction, ReviewDecision, ReviewSubmission, SystemReview};
 use serde_json::{json, Value};
 
 use crate::approvals::system_review::{self as store, ReviewKind, ReviewRecord};
@@ -161,7 +161,18 @@ pub async fn decide(params: Value, client: &ClientIdentity) -> Result<Value, Bro
     tokio::task::spawn_blocking(move || {
         use super::wire::requests::SystemReviewDecide;
         let review = match body {
-            SystemReviewDecide::Typed(body) => apply_decision(body.owner_uid, &body.review.0)?,
+            SystemReviewDecide::Typed(body) => match body.review.0 {
+                ReviewSubmission::Ordinary(decision) => apply_decision(body.owner_uid, &decision)?,
+                ReviewSubmission::App(decision) => {
+                    let id = &decision.confirmation.id;
+                    let current = presentation::get(body.owner_uid, id)?;
+                    decision.validate_for(&current).map_err(|error| error.to_string())?;
+                    let choices = decision.permissions.into_iter().map(|choice|
+                        (choice.permission_id, choice.choice == PermissionChoice::AllowAlways)
+                    ).collect();
+                    decide_app_permissions(body.owner_uid, id, true, choices)?
+                }
+            },
             SystemReviewDecide::Legacy(body) => {
                 let approve = match body.decision.as_str() {
                     "approve" => true,
@@ -179,6 +190,12 @@ pub async fn decide(params: Value, client: &ClientIdentity) -> Result<Value, Bro
 }
 
 fn decide_app(owner: u32, id: &str, approve: bool) -> Result<SystemReview, String> {
+    decide_app_permissions(owner, id, approve, Default::default())
+}
+
+fn decide_app_permissions(
+    owner: u32, id: &str, approve: bool, choices: crate::approvals::app_policy::Choices,
+) -> Result<SystemReview, String> {
     let current = store::get(owner, id)?;
     let verified = if approve {
         match verify_source(owner, &current.source_dir) {
@@ -197,7 +214,7 @@ fn decide_app(owner: u32, id: &str, approve: bool) -> Result<SystemReview, Strin
     } else {
         None
     };
-    presentation::app(&store::decide(owner, id, approve, verified.as_ref())?)
+    presentation::app(&store::decide_with_permissions(owner, id, approve, verified.as_ref(), choices)?)
 }
 
 fn apply_decision(owner: u32, decision: &ReviewDecision) -> Result<SystemReview, String> {
@@ -234,7 +251,7 @@ fn apply_decision(owner: u32, decision: &ReviewDecision) -> Result<SystemReview,
                     super::app_permissions::validate_approval(&request)?;
                     Some(GrantDuration::Forever)
                 }
-                PermissionChoice::Ask => {
+                PermissionChoice::Ask | PermissionChoice::AllowAlways => {
                     return Err("this request does not support ask policy".into())
                 }
             }
@@ -267,6 +284,10 @@ pub async fn consume(params: Value, client: &ClientIdentity) -> Result<Value, Br
     tokio::task::spawn_blocking(move || {
         let package = verify_source(owner, Path::new(&source))?;
         require_expected(&package, &expected)?;
+        let review = store::get(owner, &id)?;
+        if review.kind == ReviewKind::AppInstall && !review.permission_choices.is_empty() {
+            return Err("App installation choices must be committed by the OS installer".into());
+        }
         view(&store::consume(owner, &id, &package)?)
     })
     .await

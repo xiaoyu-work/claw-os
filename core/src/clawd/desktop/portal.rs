@@ -4,7 +4,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
-use zbus::zvariant::{DynamicType, OwnedObjectPath, OwnedValue};
+use zbus::zvariant::{DynamicType, OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, Proxy};
 
 const SETUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -66,11 +66,7 @@ impl Prepared {
     }
 
     async fn close(&self, result: PortalResult) -> PortalReply {
-        match tokio::time::timeout(CLOSE_TIMEOUT, self.request.call::<_, _, ()>("Close", &())).await {
-            Ok(Ok(())) => PortalReply { result, portal_retired: true },
-            Ok(Err(_)) => PortalReply::failed("OS portal did not acknowledge Close; cleanup is pending", false),
-            Err(_) => PortalReply::failed("OS portal Close timed out; cleanup is pending", false),
-        }
+        close_request(&self.request, result).await
     }
 }
 
@@ -126,5 +122,73 @@ pub(in crate::clawd) async fn owner_portal_request<B: Serialize + DynamicType + 
         Ok((1, _)) => PortalReply::cancelled(),
         Ok((2, _)) => PortalReply::failed("OS portal refused the request", true),
         _ => request.close(PortalResult::Failed("OS portal returned an invalid response".into())).await,
+    }
+}
+
+async fn close_request(request: &Proxy<'_>, result: PortalResult) -> PortalReply {
+    match tokio::time::timeout(CLOSE_TIMEOUT, request.call::<_, _, ()>("Close", &())).await {
+        Ok(Ok(())) => PortalReply { result, portal_retired: true },
+        Ok(Err(_)) => PortalReply::failed("OS portal did not acknowledge Close; cleanup is pending", false),
+        Err(_) => PortalReply::failed("OS portal Close timed out; cleanup is pending", false),
+    }
+}
+
+/// File selection must not wait for unrelated screenshot and screencast backends.
+pub(in crate::clawd) async fn owner_file_chooser_request(
+    control: &mut tokio::net::unix::OwnedReadHalf,
+    save: bool,
+    title: &str,
+    options: HashMap<&str, Value<'_>>,
+) -> PortalReply {
+    const GTK: &str = "org.freedesktop.impl.portal.desktop.gtk";
+    const PROGRAM: &str = "/usr/libexec/xdg-desktop-portal-gtk";
+    let cancellation = async { let _ = control.read_u8().await; };
+    tokio::pin!(cancellation);
+    let prepare = async {
+        let connection = Connection::session().await.map_err(|error| error.to_string())?;
+        let bus = zbus::fdo::DBusProxy::new(&connection).await.map_err(|error| error.to_string())?;
+        let name = zbus::names::WellKnownName::try_from(GTK).expect("fixed chooser service");
+        bus.start_service_by_name(name.clone(), 0).await.map_err(|error| error.to_string())?;
+        let owner = bus.get_name_owner(name.into()).await.map_err(|error| error.to_string())?;
+        let uid = bus.get_connection_unix_user(owner.clone().into()).await.map_err(|error| error.to_string())?;
+        let pid = bus.get_connection_unix_process_id(owner.clone().into()).await.map_err(|error| error.to_string())?;
+        let program = std::path::Path::new(PROGRAM);
+        crate::provenance::fsec::require_secure_location(program, &[0]).map_err(|error| error.to_string())?;
+        if uid != unsafe { libc::geteuid() }
+            || std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|error| error.to_string())? != program
+        {
+            return Err("File chooser is not the installed OS provider for this account".into());
+        }
+        let path = OwnedObjectPath::try_from(format!(
+            "/org/freedesktop/portal/desktop/request/claw_{}", uuid::Uuid::new_v4().simple(),
+        )).map_err(|error| error.to_string())?;
+        let picker = Proxy::new(
+            &connection, owner.clone(), "/org/freedesktop/portal/desktop", "org.freedesktop.impl.portal.FileChooser",
+        ).await.map_err(|error| error.to_string())?;
+        let request = Proxy::new(
+            &connection, owner, path.clone(), "org.freedesktop.impl.portal.Request",
+        ).await.map_err(|error| error.to_string())?;
+        Ok::<_, String>((picker, request, path))
+    };
+    let (picker, request, path) = tokio::select! {
+        biased;
+        _ = &mut cancellation => return PortalReply::cancelled(),
+        prepared = tokio::time::timeout(SETUP_TIMEOUT, prepare) => match prepared {
+            Ok(Ok(prepared)) => prepared,
+            _ => return PortalReply::failed("The system file chooser is unavailable", true),
+        },
+    };
+    let method = if save { "SaveFile" } else { "OpenFile" };
+    let args = (path, "", "", title, options);
+    let reply = picker.call::<_, _, (u32, HashMap<String, OwnedValue>)>(method, &args);
+    tokio::select! {
+        biased;
+        result = reply => match result {
+            Ok((0, values)) => PortalReply { result: PortalResult::Success(values), portal_retired: true },
+            Ok((1, _)) => PortalReply::cancelled(),
+            Ok((_, _)) => PortalReply::failed("The system file chooser refused the request", true),
+            Err(_) => close_request(&request, PortalResult::Failed("The system file chooser did not respond".into())).await,
+        },
+        _ = &mut cancellation => close_request(&request, PortalResult::Cancelled).await,
     }
 }
