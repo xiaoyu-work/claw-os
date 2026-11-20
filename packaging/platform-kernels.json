@@ -220,8 +220,8 @@
       "source": "https://github.com/omacom/m1n1/tree/ba130ffbeeadaa35215ed88b07ebcee3199d0be7"
     },
     "uboot": {
-      "file": "uboot-aurora-2026.07.aurora6-1-aarch64.pkg.tar.zst",
-      "sha256": "bb8c79ee1d361a80e8c1e5e9844f0563fd578494bd467abc1c4549dfa9ef7715",
+      "url": "https://codeload.github.com/aurora-silicon/u-boot/tar.gz/d30213eadcaa886f4206d7661b61bc6cf7837828",
+      "sha256": "67335b3fb832ab68bbde95e9f9b3808ace0fff96438786f34227dd5cdc9fe495",
       "source": "https://github.com/aurora-silicon/u-boot/tree/d30213eadcaa886f4206d7661b61bc6cf7837828"
     },
     "asahi-vulkan": {

@@ -348,26 +348,27 @@ def nvidia_package(profile, source, provenance, work, out):
 
 
 def apple_boot(profile, source, work, out):
+    from asahi_boot import build_uboot
+
     directory = work / "apple-boot"
     m1n1 = "usr/lib/asahi-boot/m1n1.bin"
     neo_stage1 = "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
-    uboot = "usr/lib/asahi-boot/u-boot-nodtb.bin"
-    neo = "usr/lib/asahi-boot-j700/u-boot-nodtb.bin"
     unpack(source["m1n1"], directory, lambda p: p in (m1n1, neo_stage1) or p.startswith("usr/share/licenses/m1n1-aurora/"))
-    unpack(source["uboot"], directory, lambda p: p in (uboot, neo) or p.startswith("usr/share/licenses/uboot-aurora/"))
+    uboot, license_path = build_uboot(source, work)
+    copy_required(license_path, directory / "usr/share/licenses/uboot-aurora/LICENSE")
     dtbs = work / f"kernel/usr/lib/modules/{profile['release']}/dtbs"
     trees = sorted(path for path in dtbs.glob("t*-j*.dtb") if path.is_file())
     if not trees or not any(path.name.endswith("-j700.dtb") for path in trees):
         raise ValueError("the Aurora kernel is missing its Apple bootstrap device trees")
-    for suffix, uboot_path, bundle in (
-        ("", uboot, [p for p in trees if not p.name.endswith("-j700.dtb")]),
-        ("-j700", neo, [p for p in trees if p.name.endswith("-j700.dtb")]),
+    for suffix, bundle in (
+        ("", [p for p in trees if not p.name.endswith("-j700.dtb")]),
+        ("-j700", [p for p in trees if p.name.endswith("-j700.dtb")]),
     ):
         with (out / f"boot{suffix}.bin").open("wb") as boot:
             boot.write((directory / m1n1).read_bytes())
             for tree in bundle:
                 boot.write(tree.read_bytes())
-            boot.write(gzip.compress((directory / uboot_path).read_bytes(), mtime=0))
+            boot.write(gzip.compress(uboot.read_bytes(), mtime=0))
     copy_required(directory / neo_stage1, out / "stage1-j700.bin")
     shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
 
@@ -419,6 +420,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     if profile.get("dtbs"):
         keys += ["arm-kernel-source", "arm-kernel-recipes"]
     keys += profile.get("gpu", []) + profile.get("boot", [])
+    if "boot" in profile:
+        keys.append("arm-kernel-recipes")
     if profile.get("asahi_vulkan"):
         from asahi_vulkan import INPUTS as vulkan_inputs
 

@@ -45,13 +45,14 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
     apple="$PROJECT_DIR/rootfs/features/kernel-platform/apple"
     assets="$stage/rootfs/features/kernel-platform/apple"
     install -d "$stage"/{scripts,packaging} "$assets"
-    install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,asahi_audio,asahi_touch_id,asahi_vulkan}.py "$stage/scripts/"
+    install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,asahi_boot,asahi_audio,asahi_touch_id,asahi_vulkan}.py "$stage/scripts/"
     install -m0644 "$PROJECT_DIR/packaging/platform-kernels.json" "$stage/packaging/"
     install -m0644 "$apple"/{claw-asahi-audio,claw-asahi-fprintd,claw-asahi-touch-id,claw-asahi-touch-id.service} "$assets/"
     install -m0644 "$apple"/{70-claw-asahi-fprintd.conf,80-claw-asahi-touch-id.conf,70-claw-asahi-touch-id.rules,99-claw-asahi-neo.conf} "$assets/"
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config gpg gpgv zstd patch meson ninja-build \
+        bc bison flex swig python3-pyelftools device-tree-compiler libgnutls28-dev \
         "cargo/$SUITE-backports" "rustc/$SUITE-backports" "libasound2-dev/$SUITE-backports" \
         libglib2.0-dev libgusb-dev libpixman-1-dev libssl-dev libudev-dev libgudev-1.0-dev systemd-dev </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
