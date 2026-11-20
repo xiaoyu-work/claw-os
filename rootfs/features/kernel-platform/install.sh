@@ -75,7 +75,7 @@ if [[ $platform == aarch64-qualcomm ]]; then
         install -m0644 "$artifacts"/{claw-os-surface-laptop-8-snapdragon,alsa-ucm-conf}_*.deb "$cache/"
         cache="$ROOTFS/usr/share/cos/driver-cache/surface-pro-11-snapdragon"
         install -d "$cache"
-        install -m0644 "$artifacts"/{claw-os-surface-snapdragon-iptsd,claw-os-surface-pro-11-snapdragon}_*.deb "$cache/"
+        install -m0644 "$artifacts"/{claw-os-surface-snapdragon-iptsd,claw-os-surface-pro-11-snapdragon,alsa-ucm-conf}_*.deb "$cache/"
         cache="$ROOTFS/usr/share/cos/driver-cache/qualcomm-model-audio"
         install -d "$cache"
         install -m0644 "$artifacts"/{claw-os-qualcomm-model-audio,alsa-ucm-conf}_*.deb "$cache/"

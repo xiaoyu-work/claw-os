@@ -84,6 +84,15 @@ def audio_packages(source, provenance, work, out, package):
             {key: provenance[key] for key in ("surface-snapdragon-fixes", "surface-snapdragon-kernel-fixes")}, None)
 
 
+def compile_topology(config, audioreach, topology, expected):
+    conf = topology.with_suffix(".conf")
+    with conf.open("wb") as stream:
+        subprocess.run(["m4", "-I", audioreach, config], stdout=stream, check=True)
+    subprocess.run(["alsatplg", "-c", conf, "-o", topology], check=True)
+    if hashlib.sha256(topology.read_bytes()).hexdigest() != expected:
+        raise ValueError(f"{config.stem}: topology differs from the qualified build")
+
+
 def laptop8_audio_package(release, source, provenance, work, out, package):
     profile_dir = "pkgbuilds/microsoft-surface-laptop-8-support/"
     recipes = work / "laptop8-recipes"
@@ -95,13 +104,9 @@ def laptop8_audio_package(release, source, provenance, work, out, package):
     model = "GLYMUR-Microsoft-Surface-Laptop-8"
     names = ("MicrosoftCorporation-SurfaceLaptop13.8in8thEdSnapdragon-124I00137T000M000000",
              "MicrosoftCorporation-SurfaceLaptop15in8thEdSnapdragon-124I00137T000M0000000F")
-    conf = work / "laptop8-topology.conf"
     topology = work / f"{model}-tplg.bin"
-    with conf.open("wb") as stream:
-        subprocess.run(["m4", "-I", audioreach, profile / f"{model}.m4"], stdout=stream, check=True)
-    subprocess.run(["alsatplg", "-c", conf, "-o", topology], check=True)
-    if hashlib.sha256(topology.read_bytes()).hexdigest() != "4f81077a0d8bb7568bfcd490eeea27cf25ec08357eb0f9c5788413bdd79af28e":
-        raise ValueError(f"{model}: topology differs from the hardware-verified build")
+    compile_topology(profile / f"{model}.m4", audioreach, topology,
+                     "4f81077a0d8bb7568bfcd490eeea27cf25ec08357eb0f9c5788413bdd79af28e")
     stage_file(topology, stage / "usr/lib/firmware/updates/qcom/glymur" / topology.name)
     ucm2 = stage / "usr/share/alsa/ucm2"
     for file in (f"{model}.conf", "HiFi.conf", "SpeakerSeq.conf", "WSAInit.conf"):

@@ -54,7 +54,7 @@ PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
     LAPTOP8: (AUDIO,),
-    PRO11: CAMERA,
+    PRO11: (AUDIO, *CAMERA),
     QCOM_AUDIO: (AUDIO,),
     FRAMEWORK: (),
     DELL_HAPTICS: (),
