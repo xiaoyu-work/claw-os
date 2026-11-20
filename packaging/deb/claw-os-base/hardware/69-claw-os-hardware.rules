@@ -1,6 +1,10 @@
 # Tag the Framework 16 keyboard for active-seat access before 73-seat-late.rules.
 ACTION=="add|change", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="32ac", ATTRS{idProduct}=="0012", TAG+="uaccess"
 
+# Allow the active seat to allocate libcamera software ISP buffers on this ThinkPad.
+ACTION=="add|change", SUBSYSTEM=="dma_heap", KERNEL=="system", \
+  ATTR{[dmi/id]sys_vendor}=="LENOVO", ATTR{[dmi/id]product_name}=="21N[12]*", TAG+="uaccess"
+
 # Pair the detachable touchpad with the internal keyboard for disable-while-typing.
 ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event[0-9]*", ENV{ID_INPUT_TOUCHPAD}=="1", \
   ATTRS{idVendor}=="0b05", ATTRS{idProduct}=="1a30", ATTR{[dmi/id]sys_vendor}=="ASUSTeK COMPUTER INC.", \
