@@ -138,31 +138,44 @@ def romulus_touchpad_configs(recipes, stage):
         (wants / unit).symlink_to(f"../{unit}")
 
 
-def snapdragon_packages(release, source, provenance, work, out, package, unpack):
+def snapdragon_packages(release, source, provenance, work, out, package):
     name = "claw-os-surface-snapdragon-radio"
     stage = work / "romulus-radio"
+    fixes = work / "romulus-fixes"
+    key = "surface-snapdragon-fixes"
+    recipe = "pkgbuilds/microsoft-surface-snapdragon-addresses/"
+    extract(source[key], fixes, prefixes=(recipe,))
+    files = fixes / recipe
+    lib = stage / "usr/lib/surface-snapdragon-addresses"
+    for utility in ("surface-wifi-address", "surface-bluetooth-address"):
+        stage_file(files / utility, lib / utility, 0o755)
+    for rule in ("60-surface-bluetooth-address.rules", "81-surface-wifi-address.rules"):
+        stage_file(files / rule, stage / "usr/lib/udev/rules.d" / rule)
+    unit = "surface-bluetooth-address@.service"
+    bt = stage / "usr/lib/systemd/system" / unit
+    stage_file(files / unit, bt)
+    doc = stage / "usr/share/doc" / name
+    stage_file(files / "README.package.md", doc / "README.md")
+    stage_file(files / "LICENSE", doc / "copyright")
     boards = ("microsoft,romulus13", "microsoft,romulus13-spi", "microsoft,romulus15", "microsoft,denali",
               "microsoft,surface-laptop-8-13p8", "microsoft,surface-laptop-8-15")
-    unpack(source["surface-snapdragon-addresses"], stage, lambda path: path.startswith("usr/"))
-    wifi = stage / "usr/lib/surface-snapdragon-addresses/surface-wifi-address"
+    wifi = lib / "surface-wifi-address"
     replace(wifi, """# The rule matches any ath12k interface; act only on Microsoft machines. The
 # address variable is checked below, unless an override makes it unnecessary.
 vendor_path="${SURFACE_WIFI_DMI:-/sys/class/dmi/id}/sys_vendor"
 if [[ ! -r "$vendor_path" || "$(<"$vendor_path")" != 'Microsoft Corporation' ]]; then""",
             f"""compatible=/sys/firmware/devicetree/base/compatible
 if [[ ! -r $compatible ]] || ! grep -qzxE '{'|'.join(boards)}' "$compatible"; then""")
-    bt = stage / "usr/lib/systemd/system/surface-bluetooth-address@.service"
     compatible = "\n".join(f"ConditionFirmware=|device-tree-compatible({board})" for board in boards)
     replace(bt, 'ConditionFirmware=smbios-field(sys_vendor = "Microsoft Corporation")', compatible)
-    package(stage, out, name, "1-2+clawos4", "arm64", "bash, bluez, iproute2, systemd, udev",
+    package(stage, out, name, "1-2+clawos5", "arm64", "bash, bluez, iproute2, systemd, udev",
             "Wi-Fi and Bluetooth addresses for Snapdragon Surface Laptop 7, Laptop 8 and Pro 11",
-            {"surface-snapdragon-addresses": provenance["surface-snapdragon-addresses"]}, None)
+            {key: provenance[key]}, None)
     if "surface-snapdragon-iptsd" not in source:
         return
     if subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip() != "arm64":
         raise ValueError("build the Snapdragon touchpad package in an arm64 Debian 13 environment")
-    fixes = work / "romulus-fixes"
-    extract(source["surface-snapdragon-fixes"], fixes, prefixes=("pkgbuilds/iptsd/",))
+    extract(source[key], fixes, prefixes=("pkgbuilds/iptsd/",))
     recipes = fixes / "pkgbuilds/iptsd"
     iptsd = "claw-os-surface-snapdragon-iptsd"
     romulus = "claw-os-surface-snapdragon-touchpad"

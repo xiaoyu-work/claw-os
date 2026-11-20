@@ -402,7 +402,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
         keys += ["asahi-libfprint", "asahi-speakersafetyd", "asahi-ucm", "amd64-hardware-recipes",
                  *NEO_INPUTS]
     if "romulus" in profile and not board_tools:
-        keys.append("surface-snapdragon-addresses")
+        keys.append("surface-snapdragon-fixes")
     output.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     provenance = {name: lock["inputs"][name] for name in keys}
@@ -436,7 +436,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
             if "romulus" in profile:
                 from surface_laptop7 import snapdragon_packages
 
-                snapdragon_packages(profile["release"], source, provenance, work, out, package, unpack)
+                snapdragon_packages(profile["release"], source, provenance, work, out, package)
             if board_tools:
                 from qualcomm_audio import audio_packages, laptop8_audio_package
                 from qualcomm_firmware import package_firmware_index

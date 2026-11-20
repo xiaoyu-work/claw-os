@@ -144,11 +144,6 @@
       "sha256": "437475ac9a4266ce481430a6d7868fa3c94f2e3107729713b3df4fa10c1b0d7e",
       "source": "https://sources.debian.org/src/libcamera/0.7.2-1/"
     },
-    "surface-snapdragon-addresses": {
-      "file": "microsoft-surface-snapdragon-addresses-1-2-aarch64.pkg.tar.zst",
-      "sha256": "91101068aa6fa9d953c27b7859f73e882a5a3b5b05e663322022a8084deec076",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/2082b74a83403217413d97576ff930f01320effd/pkgbuilds/microsoft-surface-snapdragon-addresses"
-    },
     "surface-snapdragon-iptsd": {
       "url": "https://codeload.github.com/linux-surface/iptsd/tar.gz/a83bc1232f7096f8b33b50fdbda249cd640de670",
       "sha256": "af64f692c01be4d0c64b8c2f13e4409146184b01668bfc4d76ceb77ab63fb3a8",
@@ -339,7 +334,7 @@
       "kernel": "omarchy-kernel",
       "dtbs": "omarchy-dtbs",
       "romulus": [
-        "surface-snapdragon-addresses", "surface-snapdragon-iptsd", "surface-snapdragon-fixes",
+        "surface-snapdragon-iptsd", "surface-snapdragon-fixes",
         "surface-snapdragon-fastrpc", "omarchy-linux-source",
         "surface-snapdragon-kernel-fixes", "surface-snapdragon-posture-fix"
       ]
