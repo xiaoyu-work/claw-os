@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = prereqs ]; then
+    exit 0
+fi
+
+firmware=/usr/lib/firmware/vendor
+if [ -f "$firmware/.vendorfw.manifest" ]; then
+    mkdir -p "$DESTDIR/usr/lib/firmware/vendor"
+    cp -a "$firmware/." "$DESTDIR/usr/lib/firmware/vendor/"
+fi

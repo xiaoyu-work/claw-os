@@ -88,9 +88,12 @@ if [[ $platform == x86-t2 ]]; then
 fi
 
 if [[ $platform == aarch64-apple ]]; then
+    apple="$PROJECT_DIR/rootfs/features/kernel-platform/apple"
     install -d "$ROOTFS/usr/lib/cos/asahi"
     install -m0644 "$stage"/boot{,-j700}.bin "$stage/platform-sources.json" "$ROOTFS/usr/lib/cos/asahi/"
     cp -a "$stage/boot-licenses" "$ROOTFS/usr/lib/cos/asahi/"
+    install -Dm0755 "$apple/claw-asahi-import-firmware" "$ROOTFS/usr/sbin/claw-asahi-import-firmware"
+    install -Dm0755 "$apple/claw-asahi-vendor-initramfs" "$ROOTFS/usr/share/initramfs-tools/hooks/claw-asahi-vendor"
 fi
 
 if [[ $platform == aarch64-n1x ]]; then

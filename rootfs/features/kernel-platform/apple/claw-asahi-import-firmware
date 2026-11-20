@@ -1,0 +1,96 @@
+#!/usr/bin/python3 -I
+"""Import an owner-local Asahi vendor firmware bundle, without writing the ESP."""
+
+import argparse
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+
+
+DT = Path("/sys/firmware/devicetree/base")
+VENDOR = Path("/usr/lib/firmware/vendor")
+
+
+def firmware_name(name):
+    path = PurePosixPath(name)
+    if (path.is_absolute() or path.as_posix() != name or ".." in path.parts
+            or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._,+/-]*", name)):
+        raise ValueError(f"invalid firmware path: {name}")
+    return name
+
+
+def unpack(bundle, stage):
+    manifest = (bundle / "manifest.txt").read_text(encoding="ascii")
+    files = {}
+    for line in manifest.splitlines():
+        match line.split():
+            case ["FILE", name, "SHA256", digest] if re.fullmatch(r"[a-f0-9]{64}", digest):
+                entry = ("file", digest)
+            case ["LINK", name, target]:
+                entry = ("link", firmware_name(target))
+            case _:
+                raise ValueError("invalid Asahi vendor firmware manifest")
+        if firmware_name(name) in files:
+            raise ValueError(f"{name}: duplicate manifest entry")
+        files[name] = entry
+    if not files:
+        raise ValueError("empty Asahi vendor firmware manifest")
+
+    written = set()
+    with tarfile.open(bundle / "firmware.tar", "r|") as archive:
+        for member in archive:
+            name = member.name
+            if name in written or name not in files:
+                raise ValueError(f"{name}: unexpected entry in the firmware archive")
+            kind, expected = files[name]
+            destination = stage / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "file" and member.isfile():
+                with archive.extractfile(member) as source, destination.open("w+b") as output:
+                    shutil.copyfileobj(source, output)
+                    output.seek(0)
+                    if hashlib.file_digest(output, "sha256").hexdigest() != expected:
+                        raise ValueError(f"{name}: firmware does not match the manifest")
+            elif kind == "link" and member.islnk() and member.linkname == expected and expected in written:
+                os.link(stage / expected, destination)
+            else:
+                raise ValueError(f"{name}: unsupported archive entry or link target")
+            written.add(name)
+    if written != files.keys():
+        raise ValueError("firmware archive is incomplete")
+    (stage / ".vendorfw.manifest").write_text(manifest, encoding="ascii")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("bundle", type=Path, help="directory with Asahi firmware.tar and manifest.txt")
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        raise ValueError("import requires root")
+    if not Path("/usr/lib/cos/asahi/boot.bin").is_file():
+        raise ValueError("the installed system does not have the Claw OS Apple Silicon profile")
+    if (not (DT / "chosen/asahi,efi-system-partition").is_file()
+            or not (DT / "compatible").read_bytes().startswith(b"apple,")):
+        raise ValueError("boot on an enrolled Apple Silicon Asahi installation first")
+    if VENDOR.exists() or VENDOR.is_symlink():
+        raise ValueError(f"refusing to replace existing vendor firmware in {VENDOR}")
+    os.umask(0o022)
+    with tempfile.TemporaryDirectory(prefix="claw-asahi-firmware-", dir=VENDOR.parent) as tmp:
+        stage = Path(tmp) / "vendor"
+        stage.mkdir()
+        unpack(args.bundle, stage)
+        stage.rename(VENDOR)
+    subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
+    print("Imported Asahi vendor firmware. Reboot to use it.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, tarfile.TarError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"claw-asahi-import-firmware: {error}") from error
