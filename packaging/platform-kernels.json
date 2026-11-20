@@ -295,9 +295,14 @@
       "source": "https://download.nvidia.com/XFree86/Linux-aarch64/615.78.08/"
     },
     "n1x-proart-p14-audio": {
-      "file": "asus-proart-p14-audio-1.0.678.52824-1-aarch64.pkg.tar.zst",
-      "sha256": "17b69e77f23174d91b836f21967580b4aca4e134f6a3002efe2ae9ee3e33b4cd",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/asus-proart-p14-audio"
+      "url": "https://dlcdnets.asus.com/pub/ASUS/nb/Image/Driver/Audio/49783/Audio_Driver_ARM_Cirrus_Z_V1.0.678.52824Sub3_49783.exe",
+      "sha256": "01ffa79558813cf9e943d63b4a39289471915ab865c32a1138ffe8382175355f",
+      "source": "https://www.asus.com/laptops/for-creators/proart/proart-p14-h7407/helpdesk_download?model2Name=H7407BA"
+    },
+    "n1x-proart-p14-license": {
+      "url": "https://raw.githubusercontent.com/omacom/omarchy-pkgs/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/asus-proart-p14-audio/LICENSE.cirrus",
+      "sha256": "ff6e5ab98d3e3c50d9e750580059bc23a0663a5613659828d0536db44c38f4e0",
+      "source": "https://github.com/omacom/omarchy-pkgs/blob/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/asus-proart-p14-audio/LICENSE.cirrus"
     }
   },
   "platforms": {

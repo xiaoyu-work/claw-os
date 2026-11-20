@@ -351,28 +351,36 @@ def apple_boot(profile, source, work, out):
 
 def proart_p14_firmware(profile, source, provenance, work, out):
     key = profile["speaker_firmware"]
-    upstream = work / "proart-p14-firmware"
+    license_key = "n1x-proart-p14-license"
     stage = work / "proart-p14-audio"
     name = "claw-os-proart-p14-audio"
     prefix = "cs35l56-b0-dsp1-misc-104333a1"
-    firmware = PurePosixPath("usr/lib/firmware/cirrus")
-    license_path = "usr/share/licenses/asus-proart-p14-audio/LICENSE.cirrus"
-    suffixes = (".wmfw", "-l1u0.bin", "-l1u1.bin")
-    members = {str(firmware / f"{prefix}-spkid0{suffix}") for suffix in suffixes}
-    unpack(source[key], upstream, lambda path: path in members or path == license_path)
+    # ASUS appends the driver as a 7-Zip archive; do not run the Windows installer.
+    carrier = source[key].read_bytes()
+    offset = carrier.find(b"7z\xbc\xaf\x27\x1c")
+    if offset < 0:
+        raise ValueError(f"{source[key].name}: missing embedded driver archive")
+    archive = work / "proart-p14.7z"
+    archive.write_bytes(carrier[offset:])
+    members = {
+        ".wmfw": "XU_Ext/fw/35L56/3.13.4/dflt/b0_dflt_35l56_3.13.4.wmfw",
+        "-l1u0.bin": "XU_Ext/tn/35L56/33A1/dflt/b0_dflt_33a1_lw_l1u0.bin",
+        "-l1u1.bin": "XU_Ext/tn/35L56/33A1/dflt/b0_dflt_33a1_rw_l1u1.bin",
+    }
     target = stage / "usr/lib/firmware/updates/cirrus"
     target.mkdir(parents=True)
-    for suffix in suffixes:
+    for suffix, member in members.items():
         original = f"{prefix}-spkid0{suffix}"
-        payload = (upstream / firmware / original).read_bytes()
+        payload = subprocess.check_output(["7z", "x", "-so", archive, member])
         if not payload:
             raise ValueError(f"{original}: empty ProArt P14 firmware")
         # Keep the original payload and prefer uncompressed native firmware once it is available.
         (target / f"{original}.xz").write_bytes(lzma.compress(payload, check=lzma.CHECK_CRC32))
         (target / f"{prefix}-spkid1{suffix}.xz").symlink_to(f"{original}.xz")
-    copy_required(upstream / license_path, stage / "usr/share/doc" / name / "copyright")
-    package(stage, out, name, "1.0.678.52824-1", profile["arch"], "firmware-cirrus",
-            "ASUS ProArt P14 H7407BA Cirrus amplifier firmware and tuning", {key: provenance[key]}, None)
+    copy_required(source[license_key], stage / "usr/share/doc" / name / "copyright")
+    package(stage, out, name, "1.0.678.52824-1+clawos1", profile["arch"], "firmware-cirrus",
+            "ASUS ProArt P14 H7407BA Cirrus amplifier firmware and tuning",
+            {name: provenance[name] for name in (key, license_key)}, None)
 
 
 def build(lock, profile, cache, output, debian_release=None, board_tools=False, apple_tools=False):
@@ -395,7 +403,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     if "asahi_audio" in profile:
         keys.append(profile["asahi_audio"])
     if "speaker_firmware" in profile:
-        keys.append(profile["speaker_firmware"])
+        keys += [profile["speaker_firmware"], "n1x-proart-p14-license"]
     if apple_tools:
         from asahi_audio import NEO_INPUTS
 
