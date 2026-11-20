@@ -63,3 +63,7 @@ if [ -n "$sleep_settings" ]; then
 else
     rm -f -- "$sleep_config"
 fi
+
+if claw_qcom_laptop8 "$tree"; then
+    /usr/sbin/update-initramfs -u -k "$version"
+fi

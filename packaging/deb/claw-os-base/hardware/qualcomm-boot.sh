@@ -72,7 +72,10 @@ claw_qcom_board_sleep() {
         x1p42100-asus-zenbook-14-ux3480qa.dtb)
             echo 'MemorySleepMode=s2idle'
             ;;
-        *) return 0 ;;
+        *)
+            claw_qcom_laptop8 "$1" || return 0
+            echo 'MemorySleepMode=s2idle'
+            ;;
     esac
     printf '%s\n' 'AllowHibernation=no' 'AllowSuspendThenHibernate=no' 'AllowHybridSleep=no'
 }
@@ -80,6 +83,13 @@ claw_qcom_board_sleep() {
 claw_qcom_romulus() {
     case "$1" in
         x1e80100-microsoft-romulus13.dtb|x1e80100-microsoft-romulus13-spi.dtb|x1e80100-microsoft-romulus15.dtb) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+claw_qcom_laptop8() {
+    case "$1" in
+        glymur-microsoft-surface-laptop8.dtb|glymur-microsoft-surface-laptop8-15.dtb) return 0 ;;
         *) return 1 ;;
     esac
 }

@@ -22,6 +22,20 @@ FIRMWARE = Path("/usr/lib/firmware")
 DSP = Path("/usr/lib/dsp/cdsp")
 OEM_INDEX = Path("/usr/share/cos/qualcomm/firmware.json")
 ROMULUS = {b"microsoft,romulus13", b"microsoft,romulus15"}
+LAPTOP8 = {b"microsoft,surface-laptop-8-13p8", b"microsoft,surface-laptop-8-15"}
+LAPTOP8_SOCCP = {"qcom/glymur/microsoft/surface-laptop8/" + name for name in ("soccp.mbn", "soccp_dtb.mbn")}
+LAPTOP8_ARCHIVE = "microsoft-surfacelaptop8withsnapdragon"
+LAPTOP8_ARCHIVE_SHA256 = "e888288deb0e5f25322a118d2b36522df06b25bd56be952cd6fb7b6ffb4f20a0"
+LAPTOP8_USB4_DRIVER = "SurfaceUpdate/qcusb4filter8480/QcUsb4Filter8480.sys"
+# Both router images are embedded in the pinned Windows driver, not separate MSI files.
+LAPTOP8_USB4 = {
+    "qcom/glymur/surface-laptop8/usb4-router-legacy.bin": (
+        478160, 39152, "0f2eb991490ce26b7d3932f2af44987f61e033f5b689e5bf7642f457a13cbb1d",
+    ),
+    "qcom/glymur/surface-laptop8/usb4-router-v2.bin": (
+        381680, 48268, "2fc59d3dba382135defd85dc303052c85aefb22001f675f33ade0b7f6a52963f",
+    ),
+}
 MICROSOFT = "qcom/x1e80100/microsoft/"
 ROMULUS_PATH = MICROSOFT + "Romulus/"
 CDSP_DRIVER = "qcnspmcdmextcdsp8380"
@@ -101,6 +115,17 @@ def is_romulus():
     return b"qcom,x1e80100" in names and bool(ROMULUS.intersection(names))
 
 
+def is_laptop8(board):
+    return b"qcom,mahua" in board and bool(LAPTOP8.intersection(board))
+
+
+def uefi_starts_soccp(node, names, board):
+    # On these two models the PAS driver attaches to SOCCP already running from UEFI.
+    prop = node / "compatible"
+    return (is_laptop8(board) and set(names) == LAPTOP8_SOCCP and prop.is_file()
+            and prop.read_bytes() == b"qcom,glymur-soccp-pas\0")
+
+
 def enabled(node):
     while node != DT:
         status = node / "status"
@@ -115,15 +140,16 @@ def valid_firmware_name(name):
 
 
 def firmware_requests(*, active_only=False):
-    if not any(entry.startswith(b"qcom,") for entry in compatible()):
+    board = compatible()
+    if not any(entry.startswith(b"qcom,") for entry in board):
         raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
     names = set()
     for prop in DT.rglob("firmware-name"):
         if active_only and not enabled(prop.parent):
             continue
-        for name in prop.read_bytes().decode("ascii").split("\0"):
-            if valid_firmware_name(name):
-                names.add(name)
+        firmware = prop.read_bytes().decode("ascii").rstrip("\0").split("\0")
+        if not uefi_starts_soccp(prop.parent, firmware, board):
+            names.update(filter(valid_firmware_name, firmware))
     if not names and not active_only:
         raise ValueError("the running device tree declares no Qualcomm firmware paths")
     if is_romulus():
@@ -293,18 +319,26 @@ def surface_firmware(sources):
 
 
 def qualcomm_pending():
-    if not OEM_INDEX.is_file() or is_romulus() or not any(name.startswith(b"qcom,") for name in compatible()):
+    board = compatible()
+    if not OEM_INDEX.is_file() or is_romulus() or not any(name.startswith(b"qcom,") for name in board):
         return {}, {}
     index = json.loads(OEM_INDEX.read_text())
     # A matched firmware folder can also supply DSP services not named by the device tree.
-    directories = {name.rsplit("/", 1)[0] for name in firmware_requests(active_only=True)}
+    requested = set(firmware_requests(active_only=True))
+    directories = {name.rsplit("/", 1)[0] for name in requested}
     files = {name: data for name, data in index["files"].items()
              if name.rsplit("/", 1)[0] in directories and not existing(name)}
+    archive = index["archives"].get(LAPTOP8_ARCHIVE)
+    if is_laptop8(board) and archive and archive[2] == LAPTOP8_ARCHIVE_SHA256:
+        for name, (_, size, digest) in LAPTOP8_USB4.items():
+            if name in requested and not existing(name):
+                files[name] = (size, digest, {LAPTOP8_ARCHIVE: LAPTOP8_USB4_DRIVER})
     return files, index["archives"]
 
 
 def qualcomm_dsp_ready():
-    if not any(name.startswith(b"qcom,") for name in compatible()):
+    board = compatible()
+    if not any(name.startswith(b"qcom,") for name in board):
         return False
     requested = set()
     for node in DT.rglob("remoteproc@*"):
@@ -320,7 +354,8 @@ def qualcomm_dsp_ready():
         names = firmware.read_bytes().decode("ascii").strip("\0").split("\0")
         if not all(map(valid_firmware_name, names)):
             return False
-        requested.update(names)
+        if not uefi_starts_soccp(node, names, board):
+            requested.update(names)
     return bool(requested) and all(existing(name) for name in requested)
 
 
@@ -367,13 +402,21 @@ def qualcomm_firmware(files, archives):
                 archive = work / f"drivers.{'exe' if kind == 'inno' else kind}"
                 download(archive, url, size, checksum)
                 extracted = unpack_oem(archive, kind, members.values(), work / "files")
+                verified_files = {}
                 for name, member in members.items():
                     length, digest, _ = files[name]
                     source = extracted[member]
+                    if name in LAPTOP8_USB4 and selected == LAPTOP8_ARCHIVE and checksum == LAPTOP8_ARCHIVE_SHA256:
+                        offset, _, _ = LAPTOP8_USB4[name]
+                        with open_firmware(source) as driver:
+                            driver.seek(offset)
+                            source = work / PurePosixPath(name).name
+                            source.write_bytes(driver.read(length))
                     if source.stat().st_size != length or not verified(source, digest):
                         raise ValueError(f"{name}: matching firmware not found in {selected}")
-                for name, member in members.items():
-                    install(name, extracted[member], bytes.fromhex(files.pop(name)[1]))
+                    verified_files[name] = source
+                for name, source in verified_files.items():
+                    install(name, source, bytes.fromhex(files.pop(name)[1]))
                     changed = True
                     print(f"Installed {name}")
     finally:

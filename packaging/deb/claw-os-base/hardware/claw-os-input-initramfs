@@ -7,8 +7,23 @@ fi
 
 . /usr/share/initramfs-tools/hook-functions
 
+copy_qcom_firmware() {
+    for suffix in '' .zst .xz; do
+        for directory in /usr/lib/firmware/updates /usr/lib/firmware; do
+            firmware=$directory/qcom/$1$suffix
+            if [ -f "$firmware" ]; then
+                if [ ! -e "$DESTDIR$firmware" ]; then
+                    copy_file firmware "$firmware"
+                fi
+                return
+            fi
+        done
+    done
+}
+
 # Include drivers without forcing them to load on other boards.
 arch=$DPKG_ARCH
+laptop8=false
 case "$arch" in
     amd64)
         set -- applespi spi_pxa2xx_platform spi_pxa2xx_pci intel_lpss_pci \
@@ -32,6 +47,12 @@ case "$arch" in
             hid_asus asus_glymur_ec phy_nxp_ptn3222 gpucc_glymur gxclkctl_kaanapali thunderbolt_qcom \
             i2c_mt65xx i2c_hid_acpi nvidia nvidia_modeset nvidia_drm nvidia_uvm \
             nvme nvme_apple apple_pmp pwm_apple leds_pwm
+        config=/etc/default/grub.d/60-claw-os-qualcomm.cfg
+        if [ -r "$config" ] && grep -Eq "^export CLAW_QCOM_DTB='glymur-microsoft-surface-laptop8(-15)?[.]dtb'$" "$config"; then
+            laptop8=true
+            # The panel and USB-C need SOCCP before disk unlock. Do not force PAS past the boot blacklist.
+            set -- "$@" qcom_q6v5_pas ucsi_glink thunderbolt_platform surface_aggregator_hub surface_hid_core
+        fi
         ;;
     *) exit 0 ;;
 esac
@@ -43,18 +64,16 @@ done
 
 if [ "$arch" = arm64 ]; then
     for blob in gen70500_sqe.fw gen70500_gmu.bin gen71500_sqe.fw gen71500_gmu.bin gen80100_sqe.fw gen80100_gmu.bin; do
-        for suffix in '' .zst .xz; do
-            for directory in /usr/lib/firmware/updates /usr/lib/firmware; do
-                firmware=$directory/qcom/$blob$suffix
-                if [ -f "$firmware" ]; then
-                    if [ ! -e "$DESTDIR$firmware" ]; then
-                        copy_file firmware "$firmware"
-                    fi
-                    break 2
-                fi
-            done
-        done
+        copy_qcom_firmware "$blob"
     done
+    if "$laptop8"; then
+        for blob in qcadsp8480.mbn adsp_dtbs.elf qccdsp8480.mbn cdsp_dtbs.elf; do
+            copy_qcom_firmware "glymur/microsoft/mahua/$blob"
+        done
+        for blob in usb4-router-legacy.bin usb4-router-v2.bin; do
+            copy_qcom_firmware "glymur/surface-laptop8/$blob"
+        done
+    fi
     if [ -d /usr/lib/firmware/updates/qcom ]; then
         find /usr/lib/firmware/updates/qcom -type f \
             \( -name '*zap*.mbn' -o -name 'qcdxkmsuc*.mbn' \) | while IFS= read -r firmware; do

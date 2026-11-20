@@ -162,6 +162,8 @@ On other Snapdragon models, the installer carries a pinned OEM index, not the fi
 
 The default boot still leaves the DSP off. For other Snapdragon models on NVMe, GRUB offers **OEM DSP (experimental)** when the running device tree matches and all enabled PAS remote processors have their named firmware. Disconnect USB storage before choosing it. A DSP entry does not imply a matching ALSA speaker profile or a working NPU runtime.
 
+On Snapdragon Surface Laptop 8 (13.8- and 15-inch), UEFI already starts SOCCP; Linux attaches to it rather than requiring OEM files for that processor. The firmware job provisions ADSP, cDSP and both USB4 router images from the same verified Microsoft MSI, including on full-disk installs. It checks each router image after extracting it from the Windows driver without running it or reading the Windows partition. The installer uses suspend-to-idle, and the initramfs carries the board's early display and USB-C dependencies for the OEM DSP entry. The default and USB-storage boot restrictions are unchanged.
+
 Calamares also installs matched ALSA configuration on Acer Aspire 16 AI A16-11M, ASUS ProArt PZ13 HT5306QA, ASUS Zenbook 14 UX3480QA, ASUS Zenbook A16 UX3607OA, and Snapdragon X HP OmniBook 3 14-hz0 and 16-bz0. The OmniBook uses the ThinkPad T14s topology verified for the 14-inch model; the 16-bz0 has the same device-tree audio wiring. This does not cover the SC7280-based 16-ct0. The Zenbook A16 uses software volume and keeps its speaker SoundWire controllers awake to prevent audio dropouts. The package does not change ALSA routing on unrelated machines.
 
 ### Experimental vendor kernels
