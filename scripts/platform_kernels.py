@@ -388,6 +388,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     if "dtbs" in profile:
         keys.append(profile["dtbs"])
     keys += profile.get("gpu", []) + profile.get("boot", [])
+    if profile.get("asahi_vulkan"):
+        from asahi_vulkan import INPUTS as vulkan_inputs
+
+        keys += vulkan_inputs
     if "asahi_audio" in profile:
         keys.append(profile["asahi_audio"])
     if "speaker_firmware" in profile:
@@ -449,6 +453,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
                 proart_p14_firmware(profile, source, provenance, work, out)
             if "boot" in profile:
                 apple_boot(profile, source, work, out)
+            if profile.get("asahi_vulkan"):
+                from asahi_vulkan import build_asahi_vulkan
+
+                build_asahi_vulkan(profile, source, provenance, work, out, package, unpack)
             if "asahi_audio" in profile:
                 from asahi_audio import asahi_audio_package
 
