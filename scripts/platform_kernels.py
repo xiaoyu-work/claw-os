@@ -194,6 +194,22 @@ def build_qualcomm_dtbs(tree, work, boards):
                         "-o", boards / dts.with_suffix(".dtb").name, preprocessed], check=True)
 
 
+def thinkpad_camera_trees(boards, work, provenance):
+    source = ROOT / "packaging/thinkpad-t14s-camera.dtso"
+    overlay = work / "thinkpad-t14s-camera.dtbo"
+    subprocess.run(["dtc", "-@", "-I", "dts", "-O", "dtb", "-o", overlay, source], check=True)
+    for variant in ("", "-oled"):
+        board = boards / f"x1e78100-lenovo-thinkpad-t14s{variant}.dtb"
+        patched = work / board.name
+        subprocess.run(["fdtoverlay", "-i", board, "-o", patched, overlay], check=True)
+        patched.replace(board)
+    provenance[source.stem] = {
+        "sha256": digest(source),
+        "source": "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tree/"
+                  "arch/arm64/boot/dts/qcom/x1e78100-lenovo-thinkpad-t14s.dtsi?id=68d75f0820869e33326712a9547550961795eaaf",
+    }
+
+
 def kernel_package(profile, source, provenance, work, out, *, board_tools=False):
     release = profile["release"]
     name = f"linux-image-{release.lower()}"
@@ -235,7 +251,8 @@ def kernel_package(profile, source, provenance, work, out, *, board_tools=False)
         build_qualcomm_dtbs(tree, work, boards)
         if "romulus" in profile:
             romulus_trees(boards, work, provenance, board_tools)
-            version += "+clawos4" if board_tools else "+clawos3"
+            thinkpad_camera_trees(boards, work, provenance)
+            version += "+clawos5" if board_tools else "+clawos4"
         else:
             version += "+clawos1"
         write_qualcomm_boards(boards)

@@ -29,7 +29,7 @@ if [[ ${mode[0]:-} == --board-tools ]]; then
     done
     install -m0644 "$PROJECT_DIR"/packaging/platform-kernels.json \
         "$PROJECT_DIR"/packaging/surface-romulus*.dtso \
-        "$PROJECT_DIR"/packaging/surface-romulus-camss.patch "$stage/packaging/"
+        "$PROJECT_DIR"/packaging/{surface-romulus-camss.patch,thinkpad-t14s-camera.dtso} "$stage/packaging/"
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
