@@ -1,15 +1,17 @@
 #!/bin/sh
 set -eu
 umask 077
+export LC_ALL=C
 
 fail() {
     printf 'Claw OS: %s\n' "$*" >&2
     exit 1
 }
 
-if [ "$#" -ne 3 ]; then
-    fail "usage: sudo /bin/sh $0 --plan|--install PAYLOAD.zip SHA256"
-fi
+case "$#" in
+    3|6) ;;
+    *) fail "usage: sudo /bin/sh $0 --plan|--install PAYLOAD.zip SHA256 [RESTORE_HELPER RESTORE_SHA256 APPLE_TEAM_ID]" ;;
+esac
 mode=$1
 case "$mode" in
     --plan|--install) ;;
@@ -26,69 +28,56 @@ case "$payload" in
     *) payload="$PWD/$payload" ;;
 esac
 [ -f "$payload" ] || fail "Linux payload is not a regular file"
-digest=$3
-case "$digest" in
-    *[!0-9a-f]*) fail "use the SHA-256 from the trusted Claw OS build" ;;
-esac
-[ "${#digest}" -eq 64 ] || fail "use the SHA-256 from the trusted Claw OS build"
 scripts=$(cd "$(/usr/bin/dirname "$0")" && pwd)
+. "$scripts/macos-restore-source.sh"
+valid_sha256 "$3" || fail "use the SHA-256 from the trusted Claw OS build"
+
+model=$(/usr/sbin/sysctl -n hw.model)
+decoder=
+requirement=
+if [ "$model" = Mac17,5 ]; then
+    [ "$#" -eq 6 ] || fail "MacBook Neo requires the signed Claw OS restore helper, its SHA-256 and Apple Team ID"
+    helper=$4
+    case "$helper" in
+        /*) ;;
+        *) helper="$PWD/$helper" ;;
+    esac
+    [ -f "$helper" ] || fail "restore helper is not a regular file"
+    valid_sha256 "$5" || fail "use the restore helper SHA-256 from the trusted Claw OS build"
+    requirement=$(restore_requirement "$6") || fail "use the Apple Team ID from the trusted Claw OS build"
+else
+    [ "$#" -eq 3 ] || fail "the restore helper is only needed on MacBook Neo"
+fi
 
 work=$(/usr/bin/mktemp -d /private/var/tmp/claw-asahi.XXXXXX)
-restore_mount="$work/restore-app"
-attached=no
-cleanup() {
-    if [ "$attached" = yes ]; then
-        /usr/bin/hdiutil detach "$restore_mount" >/dev/null || return 1
-    fi
-    /bin/rm -rfx -- "$work"
-}
-trap cleanup EXIT
-
-verify() {
-    printf '%s  %s\n' "$1" "$2" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/shasum -a 256 -c - >/dev/null
-}
-
-fetch() {
-    /usr/bin/curl -q -fsSL --proto '=https' --proto-redir '=https' --output "$3" "$1"
-    verify "$2" "$3" || fail "checksum does not match: $1"
-}
-
+trap '/bin/rm -rfx -- "$work"' EXIT
+if [ "$model" = Mac17,5 ]; then
+    decoder="$work/restore-image"
+    /usr/bin/install -m 0700 "$helper" "$decoder"
+    verify_sha256 "$5" "$decoder" || fail "signed restore helper checksum does not match"
+    /usr/bin/codesign --verify --strict "-R=$requirement" "$decoder" || fail "restore helper does not match the Claw OS signing identity"
+fi
 /usr/bin/install -d "$work/os" "$work/runtime"
 /bin/cp "$payload" "$work/os/claw-os.zip"
-verify "$digest" "$work/os/claw-os.zip" || fail "Linux payload checksum does not match"
+verify_sha256 "$3" "$work/os/claw-os.zip" || fail "Linux payload checksum does not match"
 
 # AsahiLinux/asahi-installer v0.9.2, signed source dffbb38ef0c00c0431c609ecd8a00f42deb5b24c.
-fetch https://cdn.asahilinux.org/installer/installer-v0.9.2.tar.gz \
-    484d999e53b4aef27d17c4478e49567e96842f8a6cb35c073a0df5bf0bbe8276 "$work/engine.tar.gz"
+fetch_pinned https://cdn.asahilinux.org/installer/installer-v0.9.2.tar.gz \
+    484d999e53b4aef27d17c4478e49567e96842f8a6cb35c073a0df5bf0bbe8276 "$work/engine.tar.gz" \
+    || fail "could not verify the pinned Asahi installer"
 /usr/bin/tar -oxzf "$work/engine.tar.gz" -C "$work/runtime"
 /bin/mv "$work/runtime/main.py" "$work/runtime/asahi_engine.py"
 /usr/bin/install -m 0600 "$scripts/install-macos.py" "$work/runtime/main.py"
 
-decoder=
-requirement=
-if [ "$(/usr/sbin/sysctl -n hw.model)" = Mac17,5 ]; then
-    revision=f8bad2d2ff1cb3344b4282f44e75a4a25c127ea9
-    fetch "https://codeload.github.com/omacom/omarchy-mac-installer/tar.gz/$revision" \
-        abd5bada89bab9d9b4291b4c2a217e9f2ab1b0c61b73fb078959908321bfe26a "$work/neo-source.tar.gz"
-    archive_root="omarchy-mac-installer-$revision"
-    overlay="$archive_root/Engine/overlay/src"
-    /usr/bin/install -d "$work/neo" "$restore_mount"
-    /usr/bin/tar -oxzf "$work/neo-source.tar.gz" -C "$work/neo" "$overlay" "$archive_root/LICENSE"
+if [ "$model" = Mac17,5 ]; then
+    fetch_pinned "$NEO_SOURCE_URL" "$NEO_SOURCE_SHA256" "$work/neo-source.tar.gz" \
+        || fail "could not verify the pinned Neo installer overlay source"
+    overlay="$NEO_SOURCE_ROOT/Engine/overlay/src"
+    /usr/bin/install -d "$work/neo"
+    /usr/bin/tar -oxzf "$work/neo-source.tar.gz" -C "$work/neo" "$overlay" "$NEO_SOURCE_ROOT/LICENSE"
     /usr/bin/install -m 0600 "$work/neo/$overlay"/omarchy_*.py "$work/runtime/"
-    /usr/bin/install -m 0600 "$work/neo/$archive_root/LICENSE" "$work/runtime/LICENSE.neo"
+    /usr/bin/install -m 0600 "$work/neo/$NEO_SOURCE_ROOT/LICENSE" "$work/runtime/LICENSE.neo"
     /usr/bin/install -m 0600 "$scripts/install-macos-neo.py" "$work/runtime/claw_neo.py"
-
-    fetch "https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.16/Omarchy-Mac-Installer-2.3.16.dmg" \
-        0b70717b0bfa3277f41159b5de4a0cab9f75dda9ba64f13d4b4a02a7860dd027 "$work/restore.dmg"
-    /usr/bin/hdiutil attach -quiet -readonly -nobrowse -mountpoint "$restore_mount" "$work/restore.dmg"
-    attached=yes
-    decoder="$work/restore-image"
-    /usr/bin/install -m 0700 "$restore_mount/Omarchy Installer.app/Contents/Helpers/omarchy-restore-image" "$decoder"
-    /usr/bin/hdiutil detach "$restore_mount" >/dev/null
-    attached=no
-    verify d023dd527f2d5837d0954ed691da904fbdd17b2c4d54914b9efd8e7cd16dc8b2 "$decoder" \
-        || fail "signed restore helper checksum does not match"
-    requirement='anchor apple generic and identifier "org.omarchy.installer.restore-image" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "T2C384FJBD"'
 fi
 
 cd "$work/runtime"
