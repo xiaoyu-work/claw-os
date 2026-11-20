@@ -1,0 +1,2 @@
+ACTION=="add", SUBSYSTEM=="module", KERNEL=="cppc_cpufreq", RUN+="/usr/lib/cos/hw/claw-n1x-setup cpu"
+ACTION=="online", SUBSYSTEM=="cpu", KERNEL=="cpu[0-9]*", TEST=="cpufreq/auto_select", RUN+="/usr/lib/cos/hw/claw-n1x-setup cpu %n"

@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+. /usr/lib/cos/hw/n1x-boot.sh
+
+claw_n1x_present || exit 0
+
+configure_boot() {
+    dmi=/sys/class/dmi/id
+    args=
+    if [ -r "$dmi/sys_vendor" ] && [ "$(cat "$dmi/sys_vendor")" = "ASUSTeK COMPUTER INC." ]; then
+        if grep -Fqs H7407BA "$dmi/product_name" "$dmi/board_name"; then
+            args='pci=hpbussize=0x80,hpmmiosize=32M,hpmmioprefsize=32G'
+        fi
+    fi
+    if [ -r "$dmi/bios_version" ]; then
+        case "$(cat "$dmi/bios_version")" in
+            0.*) args="$args $claw_n1x_no_gpu" ;;
+        esac
+    fi
+
+    config=/etc/default/grub.d/61-claw-os-n1x.cfg
+    header='# Managed by Claw OS NVIDIA N1x setup.'
+    if [ -e "$config" ] || [ -L "$config" ]; then
+        if [ -L "$config" ] || [ ! -f "$config" ] || [ "$(head -n 1 "$config")" != "$header" ]; then
+            echo "Claw OS N1x: refusing to replace $config" >&2
+            return 1
+        fi
+    fi
+    if [ -n "$args" ]; then
+        printf '%s\nGRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX %s"\n' "$header" "$args" |
+            install -Dm0644 /dev/stdin "$config"
+    else
+        rm -f -- "$config"
+    fi
+}
+
+setup_cpu() {
+    for policy do
+        [ -w "$policy/auto_select" ] &&
+            [ -r "$policy/cpuinfo_min_freq" ] && [ -r "$policy/cpuinfo_max_freq" ] &&
+            [ -w "$policy/scaling_min_freq" ] && [ -w "$policy/scaling_max_freq" ] || continue
+        printf '0\n' >"$policy/auto_select"
+        cat "$policy/cpuinfo_max_freq" >"$policy/scaling_max_freq"
+        cat "$policy/cpuinfo_min_freq" >"$policy/scaling_min_freq"
+        printf '1\n' >"$policy/auto_select"
+    done
+}
+
+case "$#:${1:-}" in
+    1:boot) configure_boot ;;
+    1:cpu) setup_cpu /sys/devices/system/cpu/cpufreq/policy* ;;
+    2:cpu)
+        case "$2" in
+            ''|*[!0-9]*) exit 1 ;;
+        esac
+        setup_cpu "/sys/devices/system/cpu/cpu$2/cpufreq"
+        ;;
+    *) exit 2 ;;
+esac

@@ -90,6 +90,15 @@ if [[ $platform == aarch64-apple ]]; then
     cp -a "$stage/boot-licenses" "$ROOTFS/usr/lib/cos/asahi/"
 fi
 
+if [[ $platform == aarch64-n1x ]]; then
+    n1x="$PROJECT_DIR/rootfs/features/kernel-platform/n1x"
+    install -Dm0644 "$n1x/n1x-boot.sh" "$ROOTFS/usr/lib/cos/hw/n1x-boot.sh"
+    install -Dm0755 "$n1x/claw-n1x-setup" "$ROOTFS/usr/lib/cos/hw/claw-n1x-setup"
+    install -Dm0644 "$n1x/70-claw-n1x-cppc.rules" "$ROOTFS/usr/lib/udev/rules.d/70-claw-n1x-cppc.rules"
+    install -Dm0644 "$n1x/claw-n1x-cppc.service" "$ROOTFS/usr/lib/systemd/system/claw-n1x-cppc.service"
+    chroot "$ROOTFS" /usr/bin/systemctl enable claw-n1x-cppc.service
+fi
+
 if [[ $platform == aarch64-gb10 ]]; then
     gb10="$PROJECT_DIR/rootfs/features/kernel-platform/gb10"
     install -Dm0755 "$gb10/claw-gb10-cpuidle" "$ROOTFS/usr/lib/cos/hw/claw-gb10-cpuidle"

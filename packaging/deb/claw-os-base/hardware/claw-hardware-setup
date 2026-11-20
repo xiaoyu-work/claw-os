@@ -11,7 +11,16 @@ if [ "$#" -eq 0 ] && [ "$(id -u)" != 0 ]; then
     exit 1
 fi
 
-[ "$(dpkg --print-architecture)" = amd64 ] || exit 0
+case "$(dpkg --print-architecture)" in
+    arm64)
+        if [ "$#" -eq 0 ] && [ -x /usr/lib/cos/hw/claw-n1x-setup ]; then
+            /usr/lib/cos/hw/claw-n1x-setup boot
+        fi
+        exit 0
+        ;;
+    amd64) ;;
+    *) exit 0 ;;
+esac
 if [ "$#" -eq 0 ] && [ -x /usr/sbin/claw-import-t2-firmware ] &&
     /usr/sbin/claw-import-t2-firmware --detect; then
     if ! /usr/sbin/claw-import-t2-firmware; then

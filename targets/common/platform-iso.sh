@@ -65,6 +65,18 @@ finalize_iso_platform() {
     if [[ -n $boot_args ]]; then
         sed -i "s|boot=live components|boot=live components $boot_args|" "$ISO_BUILD/boot/grub/grub.cfg"
     fi
+    if [[ ${CLAW_PLATFORM:-} == aarch64-n1x ]]; then
+        source "$PROJECT_DIR/rootfs/features/kernel-platform/n1x/n1x-boot.sh"
+        local label="Claw OS Live"
+        [[ ${1:-live} != installer ]] || label="Install Claw OS"
+        cat >>"$ISO_BUILD/boot/grub/grub.cfg" <<EOF
+
+menuentry "$label (N1x firmware framebuffer)" {
+    linux /live/vmlinuz boot=live components $boot_args $claw_n1x_no_gpu
+    initrd /live/initrd.img
+}
+EOF
+    fi
     if [[ ${CLAW_PLATFORM:-} == aarch64-apple ]]; then
         install -d "$ISO_BUILD/asahi"
         cp -a "$ROOTFS/usr/lib/cos/asahi/." "$ISO_BUILD/asahi/"

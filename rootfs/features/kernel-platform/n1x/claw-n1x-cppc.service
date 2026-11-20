@@ -1,0 +1,11 @@
+[Unit]
+Description=Restore NVIDIA N1x CPU frequency ranges
+After=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/cos/hw/claw-n1x-setup cpu
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
