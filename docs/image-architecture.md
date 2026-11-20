@@ -82,7 +82,7 @@ Targets package a profile and may finalize a staged copy of its rootfs:
 - `wsl` emits a modern `.wsl` package with a first-launch OOBE.
 - `docker` builds an OCI container image.
 - `iso-live` and `iso-installer` emit bootable ISO media.
-- `asahi-rootfs` emits a desktop root filesystem archive for a separately provisioned Apple Silicon boot chain.
+- `asahi-rootfs` emits a desktop root filesystem archive for a separately provisioned Apple Silicon boot chain. `asahi-rootfs --installer-payload` emits the Linux partition image and EFI files instead.
 
 Cloud generalization happens only in the staged disk filesystem. It does not
 mutate the composed rootfs and does not affect local VM, WSL, or Docker
@@ -197,6 +197,8 @@ On an N1x with a known factory GPU memory reservation, `sudo /usr/lib/cos/hw/cla
 The N1x image includes the signed ASUS ProArt P14 H7407BA amplifier firmware and speaker tuning, preserving the original Cirrus payloads. The driver selects them only for the CS35L56 SoundWire subsystem `1043:33A1`; an uncompressed kernel firmware match takes precedence when available.
 
 Apple provisioning must first create and enroll a dedicated Asahi boot chain without overwriting macOS or recovery. The rootfs archive is for that Linux root and ESP only. It carries the matched stage-two image at `/usr/lib/cos/asahi/boot.bin` (`boot-j700.bin` for MacBook Neo); it does not activate either image or replace an enrolled Apple Stage 1. On the enrolled Mac, `sudo claw-asahi-import-firmware /path/to/vendorfw` installs that machine's local Asahi `firmware.tar` and `manifest.txt` into the Aurora kernel's vendor firmware directory and rebuilds the initramfs. The importer checks hashes and hard links against the manifest; it does not modify the ESP, overwrite existing firmware, or download from Apple. Do not bundle material from a vendor recovery or Windows image without redistribution rights.
+
+On a native ARM64 Debian build host with `rsync`, `e2fsprogs` and `zip`, `sudo ./build.sh asahi-rootfs --installer-payload` builds `build/claw-os-asahi-arm64-installer.zip`. It contains an unencrypted ext4 `root.img` that grows into a larger Linux partition on boot and an `esp/` tree with ARM64 GRUB and both stage-two images. A compatible installer must select the correct stage two and write it as `m1n1/boot.bin` on the dedicated ESP. The ZIP is the Linux payload, not a macOS installer; it neither repartitions a disk nor authorizes Recovery, and it includes no per-Mac firmware.
 
 After the Linux root boots, the fresh archive opens Claw OS's graphical first-run wizard to set up networking and create the first local owner. It does not ship a default account or password. The live ISO and cloud profiles are not armed for this setup.
 
