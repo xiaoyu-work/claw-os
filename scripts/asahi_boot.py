@@ -8,20 +8,21 @@ import subprocess
 from surface_laptop7 import extract, patch
 
 
-def rust_toolchain(work, version, *options):
+def rust_toolchain(work, version, *options, llvm=22):
     # Debian's rustup conflicts with the Rust packages used by the rest of the image.
     tools = work / "rust-tools"
-    tools.mkdir()
-    subprocess.run(["apt-get", "download", "rustup"], cwd=tools, check=True)
-    archive, = tools.glob("rustup_*.deb")
-    subprocess.run(["dpkg-deb", "-x", archive, tools], check=True)
     rustup = tools / "usr/bin/rustup"
+    if not rustup.is_file():
+        tools.mkdir()
+        subprocess.run(["apt-get", "download", "rustup"], cwd=tools, check=True)
+        archive, = tools.glob("rustup_*.deb")
+        subprocess.run(["dpkg-deb", "-x", archive, tools], check=True)
     env = dict(os.environ, RUSTUP_HOME=str(work / "rustup-home"), CARGO_HOME=str(work / "cargo-home"),
                RUSTUP_DIST_SERVER="https://static.rust-lang.org")
     subprocess.run([rustup, "toolchain", "install", version, "--profile", "minimal", *options], env=env, check=True)
     cargo = Path(subprocess.check_output([rustup, "which", "--toolchain", version, "cargo"], env=env,
                                          text=True).strip())
-    env["PATH"] = os.pathsep.join((str(cargo.parent), "/usr/lib/llvm-22/bin", env["PATH"]))
+    env["PATH"] = os.pathsep.join((str(cargo.parent), f"/usr/lib/llvm-{llvm}/bin", env["PATH"]))
     return env
 
 

@@ -202,7 +202,11 @@ def kernel_package(profile, source, provenance, work, out, *, board_tools=False)
     prefix = f"usr/lib/modules/{release}"
     module_dir = stage / prefix
     tree = prepare_arm_source(source, work) if profile.get("dtbs") else None
-    if board_tools:
+    if "boot" in profile:
+        from asahi_kernel import build_asahi_kernel
+
+        build_asahi_kernel(release, source, work, stage)
+    elif board_tools:
         build_qualcomm_kernel(release, tree, source, work, stage)
         patch = ROOT / "packaging/surface-romulus-camss.patch"
         provenance[patch.stem] = {

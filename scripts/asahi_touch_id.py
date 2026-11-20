@@ -52,7 +52,7 @@ def asahi_touch_id_package(profile, source, provenance, work, out, package):
         ("70-claw-asahi-touch-id.rules", "usr/lib/udev/rules.d"),
     ):
         stage_file(ASSETS / file, stage / target / file)
-    package(stage, out, name, "1-1", "arm64", f"linux-image-{release.lower()} (= {release.lower()}+clawos2), "
+    package(stage, out, name, "1-2", "arm64", f"linux-image-{release.lower()} (= {release.lower()}+clawos2), "
             "fprintd, libglib2.0-0t64, libgudev-1.0-0, libgusb2, libpixman-1-0, libssl3t64, "
             "libgcc-s1, libstdc++6, libc6, kmod, python3, systemd, udev",
             "Explicitly enabled Touch ID on matching Apple Silicon Macs", {k: provenance[k] for k in (key, recipes_key)}, None)

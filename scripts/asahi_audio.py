@@ -168,7 +168,7 @@ ExecStart=/{DAEMON} -c /{THERMAL}/ -m 7
         for model in MODELS:
             (calibration / f"j{model}.conf").symlink_to(f"/usr/share/speakersafetyd/apple/j{model}.conf")
     write_file(stage / "usr/lib/systemd/system/speakersafetyd.service.d/10-claw-asahi.conf", override)
-    version = "1-3+native2" if extended else "1-3+base1"
+    version = "1-3+native3" if extended else "1-3+base2"
     runtime = ", libasound2t64, libgcc-s1, libc6 (>= 2.34)" if extended else ""
     wp = "0.5.12" if extended else "0.5.8"
     package(stage, out, name, version, "arm64", f"linux-image-{release.lower()} (>= {release.lower()}+clawos1), "

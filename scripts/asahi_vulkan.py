@@ -61,7 +61,7 @@ case "$1" in
 esac
 """, 0o755)
     release = profile["release"].lower()
-    package(stage, out, name, "26.3.0~devel20261107+clawos2", "arm64",
+    package(stage, out, name, "26.3.0~devel20261107+clawos3", "arm64",
             f"linux-image-{release} (= {release}+clawos2), "
             "mesa-vulkan-drivers (>= 26.1.6-1~bpo13+1), libvulkan1, libdisplay-info2 (>= 0.2.0), "
             "libc6 (>= 2.38), libstdc++6 (>= 12), libgcc-s1, libdrm2 (>= 2.4.124), libexpat1, libudev1, "

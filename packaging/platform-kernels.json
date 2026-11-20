@@ -210,8 +210,8 @@
       "source": "https://github.com/ItsLucas/surface-laptop-7-ubuntu-kernel/blob/2ce3083fa76855225465f809760dc7185c74a80c/patches/0020-surface-aggregator-sl7-pos-events.patch"
     },
     "aurora-kernel": {
-      "file": "linux-aurora-7.2.11.aurora16-1-aarch64.pkg.tar.zst",
-      "sha256": "d53b5d32b87a00982952e458da567922e237760561fd15ea26458302f570f2c3",
+      "url": "https://codeload.github.com/omacom/linux-aurora/tar.gz/bed544bdf93a496ebf70ba180923bab12b6e01cf",
+      "sha256": "6b9b010ce3d4f1a3ccaab8467db21148abf976429f30240c717db94192dca4ac",
       "source": "https://github.com/omacom/linux-aurora/tree/bed544bdf93a496ebf70ba180923bab12b6e01cf"
     },
     "m1n1": {
@@ -311,7 +311,7 @@
     },
     "aarch64-apple": {
       "arch": "arm64",
-      "release": "7.2.11-16-1-ARCH",
+      "release": "7.2.11-16-claw-apple",
       "kernel": "aurora-kernel",
       "boot": ["m1n1", "uboot"],
       "asahi_vulkan": true,
