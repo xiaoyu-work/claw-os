@@ -299,6 +299,8 @@ pub struct StreamError {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<ErrorCode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
 }
 
 impl StreamError {
@@ -308,6 +310,7 @@ impl StreamError {
             message: message.into(),
             error: None,
             code: None,
+            task_status: None,
         }
     }
 

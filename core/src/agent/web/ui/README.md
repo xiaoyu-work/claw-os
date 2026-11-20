@@ -69,7 +69,11 @@ check is not presented as a successful model request.
 - src/app/globals.css   — OA's oklch tokens (light + dark + sidebar)
 
 Chat, conversations, Tasks, approvals, and Inbox use owner-scoped `clawd`
-routes. Selected PNG/JPEG/GIF/WebP images stay in composer memory until the
+routes. A follow-up acknowledgement clears the submitted text only if the
+composer still contains it; a new draft stays in the composer. Stop freezes the
+reply immediately while its stream waits for the task's durable outcome.
+Follow-ups stay queued and the terminal stream event drives the handoff.
+Selected PNG/JPEG/GIF/WebP images stay in composer memory until the
 authenticated Chat request submits the bounded inline Job snapshot; no browser
 attachment store or path authority exists.
 Chat accepts up to four PNG/JPEG/GIF/WebP originals totalling 20 MiB, without

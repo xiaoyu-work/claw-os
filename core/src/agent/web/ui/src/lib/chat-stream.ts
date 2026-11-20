@@ -57,7 +57,7 @@ function transportFailure(error: unknown): boolean {
     (error instanceof ApiError && [408, 429, 502, 503, 504].includes(error.status));
 }
 
-export async function streamDurableTask(options: StreamOptions): Promise<void> {
+export async function streamDurableTask(options: StreamOptions): Promise<boolean> {
   let task = options.task || null;
   let taskId = task?.taskId || "";
   let sessionId = task?.sessionId || "";
@@ -65,6 +65,7 @@ export async function streamDurableTask(options: StreamOptions): Promise<void> {
   let recovering = false;
   while (!options.signal.aborted) {
     let terminal = false;
+    let jobEnded = false;
     try {
       if (recovering && task) await options.onReplay(task);
       await streamSse(
@@ -88,13 +89,16 @@ export async function streamDurableTask(options: StreamOptions): Promise<void> {
           if (taskId && sessionId) task = { taskId, sessionId };
           options.onFrame(event, data);
           terminal = event === "done" || event === "error";
+          jobEnded = event === "done" || (event === "error" && !!task &&
+            data?.task_id === task.taskId && data?.session_id === task.sessionId &&
+            (data.task_status === "cancelled" || data.task_status === "error"));
         },
         options.signal,
       );
-      if (terminal) return;
+      if (terminal) return jobEnded;
       throw new ApiTransportError("The stream disconnected before task completion was confirmed.");
     } catch (error: unknown) {
-      if (terminal) return;
+      if (terminal) return jobEnded;
       if (options.signal.aborted) throw error;
       if (!task || !transportFailure(error) || attempts >= 5) {
         throw new TaskStreamError(

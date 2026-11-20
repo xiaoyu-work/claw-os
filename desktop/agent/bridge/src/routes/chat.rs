@@ -195,7 +195,7 @@ pub async fn stream_chat(
         let payload = match result.into_done() {
             Ok(payload) => payload,
             Err(error) => {
-                yield Ok(error_event(&error));
+                yield Ok(protocol_event(StreamEvent::Error(error)));
                 return;
             }
         };
@@ -281,7 +281,7 @@ pub async fn stream_task(
         let payload = match result.into_done() {
             Ok(payload) => payload,
             Err(error) => {
-                yield Ok(error_event(&error));
+                yield Ok(protocol_event(StreamEvent::Error(error)));
                 return;
             }
         };

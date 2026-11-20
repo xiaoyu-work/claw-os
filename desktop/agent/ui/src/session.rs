@@ -41,6 +41,7 @@ pub(crate) struct ChatMessage {
     pub(crate) error: Option<String>,
     pub(crate) parsed_markdown: Option<Vec<widget::markdown::Item>>,
     pub(crate) in_progress: bool,
+    interrupted: bool,
 }
 
 impl ChatMessage {
@@ -410,18 +411,42 @@ impl SessionState {
                         })
                     })
                     .collect::<Vec<_>>();
-                session.messages = rows
+                let mut messages: Vec<_> = rows
                     .into_iter()
                     .filter(|row| row.role != "system")
                     .map(Self::history_message)
                     .collect();
                 if response.task_bindings_complete {
                     Self::restore_task_presentations(
-                        &mut session.messages,
+                        &mut messages,
                         &response.jobs,
                         current.as_ref().map(|task| task.id.as_str()),
                     );
                 }
+                for reply in session.messages.drain(..).filter(|reply| reply.interrupted) {
+                    let Some(id) = reply.task_id.clone() else {
+                        continue;
+                    };
+                    if !response.task_bindings_complete
+                        || !response.jobs.iter().any(|job| job.id == id && job.status == "cancelled")
+                    {
+                        continue;
+                    }
+                    let Some(anchor) = messages.iter().rposition(|message| {
+                        message.task_id.as_deref() == Some(id.as_str())
+                    }) else {
+                        continue;
+                    };
+                    messages.insert(anchor + 1, reply);
+                    for index in (0..=anchor).rev() {
+                        if messages[index].role() == ChatRole::Assistant
+                            && messages[index].task_id.as_deref() == Some(id.as_str())
+                        {
+                            messages.remove(index);
+                        }
+                    }
+                }
+                session.messages = messages;
                 if let Some(error) = response.presentation_error
                     && let Some(message) = session.messages.last_mut()
                 {
@@ -718,6 +743,7 @@ impl SessionState {
             message.warnings.push(fl!("interrupted"));
         }
         message.in_progress = false;
+        message.interrupted = interrupted;
         for call in &mut message.tool_calls {
             if !message
                 .tool_results

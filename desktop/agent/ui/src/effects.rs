@@ -405,8 +405,7 @@ pub(crate) fn queue_follow_up_task(
 pub(crate) fn cancel_stream(
     endpoint: BridgeEndpoint,
     task_id: String,
-    session_index: usize,
-    message_index: usize,
+    generation: u64,
 ) -> Task<Message> {
     Task::perform(
         async move {
@@ -415,11 +414,7 @@ pub(crate) fn cancel_stream(
                 .map_err(|error| format!("{error:#}"))
         },
         move |result| {
-            cosmic::Action::App(Message::CancelFinished {
-                session_index,
-                message_index,
-                result,
-            })
+            cosmic::Action::App(Message::CancelFinished { generation, result })
         },
     )
 }

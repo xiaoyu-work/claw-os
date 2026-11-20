@@ -439,6 +439,14 @@ pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> 
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
+    let result: CancelResponse = response.json().await.context("decoding task cancellation")?;
+    if result.id != task_id
+        || (!result.cancelled
+            && !result.cancel_requested
+            && !matches!(result.status.as_str(), "ok" | "error" | "cancelled"))
+    {
+        return Err(anyhow!("Task cancellation was not acknowledged"));
+    }
     Ok(())
 }
 

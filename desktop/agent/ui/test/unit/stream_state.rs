@@ -67,9 +67,22 @@ fn done_is_terminal_and_finalizes_the_assistant() {
     let (mut stream, mut sessions, generation) = active_stream();
     stream.reduce(
         generation,
-        StreamEvent::Delta(DeltaPayload::new("answer")),
+        StreamEvent::Delta(DeltaPayload::new("# Live")),
         &mut sessions,
     );
+    stream.reduce(
+        generation,
+        StreamEvent::Delta(DeltaPayload::new(" answer")),
+        &mut sessions,
+    );
+    let reply = sessions.active().unwrap().messages.last().unwrap();
+    assert!(reply.in_progress);
+    assert_eq!(reply.content, "# Live answer");
+    assert!(matches!(
+        reply.parsed_markdown.as_deref(),
+        Some([markdown::Item::Heading(..)])
+    ));
+
     let reduction = stream.reduce(
         generation,
         StreamEvent::Done(DonePayload {
@@ -179,13 +192,18 @@ fn presentation_events_accumulate_reasoning_usage_and_safe_tool_metrics() {
 }
 
 #[test]
-fn cancellation_waits_for_task_identity_then_rejects_late_events() {
+fn cancellation_freezes_text_until_the_job_confirms_it_stopped() {
     let (mut stream, mut sessions, generation) = active_stream();
+    stream.reduce(
+        generation,
+        StreamEvent::Delta(DeltaPayload::new("first part")),
+        &mut sessions,
+    );
     assert!(matches!(
-        stream.request_cancel(&mut sessions),
+        stream.request_cancel(),
         Some(CancelRequest::AwaitTask)
     ));
-    assert!(stream.request_cancel(&mut sessions).is_none());
+    assert!(stream.request_cancel().is_none());
     assert!(stream.is_cancelling());
     let reduction = stream.reduce(
         generation,
@@ -199,8 +217,6 @@ fn cancellation_waits_for_task_identity_then_rejects_late_events() {
         reduction,
         StreamReduction::CancelRemote {
             ref task_id,
-            session_index: 0,
-            message_index: 1
         } if task_id == "task-1"
     ));
     assert_eq!(
@@ -209,7 +225,7 @@ fn cancellation_waits_for_task_identity_then_rejects_late_events() {
             StreamEvent::Delta(DeltaPayload::new("late")),
             &mut sessions,
         ),
-        StreamReduction::Stale
+        StreamReduction::Applied
     );
     assert!(
         !sessions
@@ -221,8 +237,19 @@ fn cancellation_waits_for_task_identity_then_rejects_late_events() {
             .content
             .contains("late")
     );
-    assert_eq!(stream.cancel_finished(0, 1, Ok(()), &mut sessions), Some(0));
+    assert!(!stream.cancel_finished(generation, Ok(()), &mut sessions));
+    assert!(stream.is_cancelling());
+
+    let mut stopped = cos_agent_protocol::StreamError::new("agent task was cancelled");
+    stopped.task_status = Some("cancelled".into());
+    assert_eq!(
+        stream.reduce(generation, StreamEvent::Error(stopped), &mut sessions),
+        StreamReduction::Terminal
+    );
     assert!(!stream.is_cancelling());
+    let reply = sessions.active().unwrap().messages.last().unwrap();
+    assert_eq!(reply.content, "first part");
+    assert!(!reply.in_progress);
 }
 
 #[test]

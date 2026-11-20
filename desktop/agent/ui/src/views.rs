@@ -780,6 +780,7 @@ impl App {
         };
         let can_submit = !self.voice.is_active()
             && !self.queue_pending
+            && !self.stream.is_cancelling()
             && self.active_history_ready()
             && (!self.stream.is_active() || self.stream.task_id().is_some());
         let voice_active = self.voice.is_active();
@@ -836,7 +837,7 @@ impl App {
             Self::symbolic_button(
                 "audio-input-microphone-symbolic",
                 fl!("microphone"),
-                (!self.stream.is_active()).then_some(Message::ToggleMic),
+                (!self.stream.is_active() && !self.stream.is_cancelling()).then_some(Message::ToggleMic),
                 false,
             )
         };
@@ -872,6 +873,7 @@ impl App {
                 fl!("send"),
                 (!self.input.text().trim().is_empty()
                     && !self.voice.is_active()
+                    && !self.queue_pending
                     && self.active_history_ready())
                 .then_some(Message::Submit),
                 false,
@@ -915,7 +917,9 @@ impl App {
         }
         content = content.push(editor).push(bottom);
         content = content.push(text(fl!("image-attachment-limits")).size(10.0));
-        if self.stream.is_active() { content=content.push(self.queue.view()); }
+        if self.stream.is_active() || self.stream.is_cancelling() {
+            content = content.push(self.queue.view());
+        }
         container(content)
             .padding(spacing.space_s)
             .class(theme::Container::custom(styles::input_card))

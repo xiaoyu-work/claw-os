@@ -179,12 +179,14 @@ The overlay is a single-instance Wayland layer-shell surface:
 - Escape stops/cancels active work before closing the surface.
 
 Chat streams expose task identity, live text, reasoning summaries, tool
-lifecycle, warnings, cumulative per-turn usage, and final metadata. Stop
-explicitly cancels the clawd task. Dropping the client stream only detaches
-that viewer; reopening its canonical conversation uses verified task bindings
+lifecycle, warnings, cumulative per-turn usage, and final metadata. Markdown
+formatting is rendered as text arrives. Stop freezes reply text and waits for
+the durable task result before showing the outcome. Dropping the client stream
+only detaches that viewer. Reopening its canonical conversation uses verified task bindings
 to reconstruct the prompt and replay `task.stream`. While a stream is active,
 follow-ups are durable `after_task_id` Jobs whose session is derived from the
-owner-checked predecessor rather than from UI input.
+owner-checked predecessor rather than from UI input. Stopping the current Job
+leaves follow-ups queued; the terminal event triggers attachment to the next Job.
 
 Native image attachment uses desktop presentation protocol v3. The file chooser
 reads only an explicitly selected PNG/JPEG/GIF/WebP image, enforces the shared

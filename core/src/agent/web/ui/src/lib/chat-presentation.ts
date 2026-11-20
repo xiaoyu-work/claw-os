@@ -96,12 +96,19 @@ export function applyFrame(message: ChatMessage, event: string, data: unknown) {
     case "warning": warning(message, stringifyServerMessage(data, "warning")); break;
     case "done":
       if (payload.evidence != null) evidence(message, payload.evidence);
+      delete message.frozenText;
       message.status = "done";
       markToolsUnconfirmed(message);
       break;
     case "error":
-      message.status = "error";
-      message.error = stringifyServerMessage(data, "stream error");
+      if (payload.task_status === "cancelled") {
+        message.text = message.frozenText ?? message.text;
+        message.status = "interrupted";
+      } else {
+        message.status = "error";
+        message.error = stringifyServerMessage(data, "stream error");
+      }
+      delete message.frozenText;
       markToolsUnconfirmed(message);
       break;
   }

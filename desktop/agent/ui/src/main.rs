@@ -100,8 +100,7 @@ pub enum Message {
     TransportError(u64, String),
     StreamEnded(u64),
     CancelFinished {
-        session_index: usize,
-        message_index: usize,
+        generation: u64,
         result: Result<(), String>,
     },
     EscapePressed,
@@ -453,9 +452,7 @@ impl Application for App {
                             scroll_to_bottom(),
                         ])
                     }
-                    StreamReduction::Cancelled
-                    | StreamReduction::Stale
-                    | StreamReduction::Applied => Task::none(),
+                    StreamReduction::Stale | StreamReduction::Applied => Task::none(),
                     StreamReduction::Terminal | StreamReduction::CancelRemote { .. } => {
                         Task::none()
                     }
@@ -481,24 +478,14 @@ impl Application for App {
                 }
             }
             Message::CancelFinished {
-                session_index,
-                message_index,
+                generation,
                 result,
             } => {
-                if let Some(session_index) = self.stream.cancel_finished(
-                    session_index,
-                    message_index,
-                    result,
-                    &mut self.sessions,
-                ) {
-                    let mut tasks = vec![self.confirm_provisional_session(session_index)];
-                    if self.queued_followups > 0 {
-                        self.sessions.invalidate_history(session_index);
-                        tasks.push(self.maybe_fetch_history(session_index));
-                    } else {
-                        self.queue_tail_task_id = None;
-                    }
-                    Task::batch(tasks)
+                if self
+                    .stream
+                    .cancel_finished(generation, result, &mut self.sessions)
+                {
+                    scroll_to_bottom()
                 } else {
                     Task::none()
                 }
@@ -1236,11 +1223,7 @@ impl App {
             self.overlay.consume_stream_context();
         }
         match reduction {
-            StreamReduction::CancelRemote {
-                task_id,
-                session_index,
-                message_index,
-            } => self.cancel_task(task_id, session_index, message_index),
+            StreamReduction::CancelRemote { task_id } => self.cancel_task(task_id, generation),
             StreamReduction::Failed { session_index } => {
                 let mut tasks = vec![
                     self.confirm_provisional_session(session_index),
@@ -1255,11 +1238,15 @@ impl App {
                 Task::batch(tasks)
             }
             StreamReduction::Terminal => {
+                let confirm = stream_session_index
+                    .map(|index| self.confirm_provisional_session(index))
+                    .unwrap_or_else(Task::none);
                 if self.queued_followups > 0
                     && let Some(session_index) = stream_session_index
                 {
                     self.sessions.invalidate_history(session_index);
                     return Task::batch([
+                        confirm,
                         self.maybe_fetch_history(session_index),
                         scroll_to_bottom(),
                     ]);
@@ -1269,11 +1256,12 @@ impl App {
                 {
                     self.overlay.take_auto_submit();
                     Task::batch([
+                        confirm,
                         Task::done(cosmic::Action::App(Message::Submit)),
                         scroll_to_bottom(),
                     ])
                 } else {
-                    scroll_to_bottom()
+                    Task::batch([confirm, scroll_to_bottom()])
                 }
             }
             StreamReduction::Applied if task_started => Task::batch([
@@ -1281,7 +1269,7 @@ impl App {
                 Task::done(cosmic::Action::App(Message::QueueTick)),
             ]),
             StreamReduction::Applied => scroll_to_bottom(),
-            StreamReduction::Cancelled | StreamReduction::Stale => Task::none(),
+            StreamReduction::Stale => Task::none(),
         }
     }
 
@@ -1290,33 +1278,24 @@ impl App {
     }
 
     fn stop_stream(&mut self) -> Task<Message> {
-        let Some(request) = self.stream.request_cancel(&mut self.sessions) else {
+        let Some(request) = self.stream.request_cancel() else {
             return Task::none();
         };
         self.overlay.consume_stream_context();
         match request {
             CancelRequest::AwaitTask => scroll_to_bottom(),
-            CancelRequest::Remote {
-                task_id,
-                session_index,
-                message_index,
-            } => Task::batch([
-                self.cancel_task(task_id, session_index, message_index),
+            CancelRequest::Remote { task_id, generation } => Task::batch([
+                self.cancel_task(task_id, generation),
                 scroll_to_bottom(),
             ]),
         }
     }
 
-    fn cancel_task(
-        &self,
-        task_id: String,
-        session_index: usize,
-        message_index: usize,
-    ) -> Task<Message> {
+    fn cancel_task(&self, task_id: String, generation: u64) -> Task<Message> {
         let Some(endpoint) = self.bridge.endpoint().cloned() else {
             return Task::none();
         };
-        effects::cancel_stream(endpoint, task_id, session_index, message_index)
+        effects::cancel_stream(endpoint, task_id, generation)
     }
 
     fn start_voice(&mut self) -> Task<Message> {

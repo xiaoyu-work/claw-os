@@ -28,6 +28,7 @@ export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  frozenText?: string;
   attachments: ChatAttachment[];
   tools: ToolCall[];
   reasoning: string[];
@@ -65,6 +66,22 @@ export type ActiveConversationTask = {
   id: string;
   prompt: string;
 };
+
+export function keepStoppedReplies(current: ChatMessage[], restored: ChatMessage[], jobs: RetainedTask[]) {
+  const cancelled = new Set(jobs.filter((job) => job.status === "cancelled").map((job) => job.id));
+  for (const reply of current) {
+    if (reply.role !== "assistant" || reply.status !== "interrupted" || !reply.taskId || !cancelled.has(reply.taskId)) continue;
+    let anchor = restored.length - 1;
+    while (anchor >= 0 && restored[anchor].taskId !== reply.taskId) anchor--;
+    if (anchor < 0) continue;
+    restored = [
+      ...restored.slice(0, anchor + 1).filter((message) => message.role !== "assistant" || message.taskId !== reply.taskId),
+      reply,
+      ...restored.slice(anchor + 1),
+    ];
+  }
+  return restored;
+}
 
 export function appendReasoningSummary(message: ChatMessage, data: any) {
   const summaries = Array.isArray(data?.summary)

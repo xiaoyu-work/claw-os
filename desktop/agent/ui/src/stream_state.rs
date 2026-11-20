@@ -1,54 +1,46 @@
+use cosmic::widget::markdown;
 use futures::future::AbortHandle;
 
 use crate::bridge::{StreamEvent, ToolCallView, ToolPhase, ToolResultView};
 use crate::fl;
-use crate::session::SessionState;
+use crate::session::{ChatMessage, SessionState};
 
 struct ActiveStream {
     generation: u64,
     session_index: usize,
     task_id: Option<String>,
     abort: Option<AbortHandle>,
+    markdown: markdown::Content,
+    pending_stop: Option<String>,
 }
 
-struct PendingCancel {
-    generation: u64,
-    session_index: usize,
-    message_index: usize,
-    abort: Option<AbortHandle>,
+impl ActiveStream {
+    fn append_text(&mut self, message: &mut ChatMessage, delta: &str) {
+        message.content.push_str(delta);
+        self.markdown.push_str(delta);
+        let items = self.markdown.items();
+        message.parsed_markdown = (!items.is_empty()).then(|| items.to_vec());
+    }
 }
 
 enum StreamPhase {
     Idle,
     Active(ActiveStream),
-    Cancelling(PendingCancel),
     Terminal,
-    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StreamReduction {
     Applied,
     Terminal,
-    Failed {
-        session_index: usize,
-    },
-    CancelRemote {
-        task_id: String,
-        session_index: usize,
-        message_index: usize,
-    },
-    Cancelled,
+    Failed { session_index: usize },
+    CancelRemote { task_id: String },
     Stale,
 }
 
 pub(crate) enum CancelRequest {
     AwaitTask,
-    Remote {
-        task_id: String,
-        session_index: usize,
-        message_index: usize,
-    },
+    Remote { task_id: String, generation: u64 },
 }
 
 pub(crate) struct StreamState {
@@ -67,28 +59,24 @@ impl Default for StreamState {
 
 impl StreamState {
     pub(crate) fn is_active(&self) -> bool {
-        matches!(self.phase, StreamPhase::Active(_))
+        matches!(&self.phase, StreamPhase::Active(active) if active.pending_stop.is_none())
     }
 
     pub(crate) fn is_cancelling(&self) -> bool {
-        matches!(self.phase, StreamPhase::Cancelling(_))
+        matches!(&self.phase, StreamPhase::Active(active) if active.pending_stop.is_some())
     }
 
     pub(crate) fn session_index(&self) -> Option<usize> {
         match &self.phase {
             StreamPhase::Active(active) => Some(active.session_index),
-            StreamPhase::Cancelling(cancel) => Some(cancel.session_index),
-            StreamPhase::Idle | StreamPhase::Terminal | StreamPhase::Cancelled => None,
+            StreamPhase::Idle | StreamPhase::Terminal => None,
         }
     }
 
     pub(crate) fn task_id(&self) -> Option<&str> {
         match &self.phase {
             StreamPhase::Active(active) => active.task_id.as_deref(),
-            StreamPhase::Cancelling(_)
-            | StreamPhase::Idle
-            | StreamPhase::Terminal
-            | StreamPhase::Cancelled => None,
+            StreamPhase::Idle | StreamPhase::Terminal => None,
         }
     }
 
@@ -113,6 +101,8 @@ impl StreamState {
             session_index,
             task_id: None,
             abort: Some(abort),
+            markdown: markdown::Content::new(),
+            pending_stop: None,
         });
         generation
     }
@@ -123,29 +113,6 @@ impl StreamState {
         event: StreamEvent,
         sessions: &mut SessionState,
     ) -> StreamReduction {
-        if let StreamPhase::Cancelling(cancel) = &mut self.phase
-            && cancel.generation == generation
-        {
-            if let StreamEvent::TaskStarted(started) = event {
-                sessions.capture_provisional(cancel.session_index, started.session_id.as_deref());
-                if let Some(abort) = cancel.abort.take() {
-                    abort.abort();
-                }
-                self.next_generation = self.next_generation.wrapping_add(1);
-                return StreamReduction::CancelRemote {
-                    task_id: started.task_id,
-                    session_index: cancel.session_index,
-                    message_index: cancel.message_index,
-                };
-            }
-            if matches!(event, StreamEvent::Error(_) | StreamEvent::Done(_)) {
-                self.phase = StreamPhase::Cancelled;
-                self.next_generation = self.next_generation.wrapping_add(1);
-                return StreamReduction::Cancelled;
-            }
-            return StreamReduction::Stale;
-        }
-
         let StreamPhase::Active(active) = &mut self.phase else {
             return StreamReduction::Stale;
         };
@@ -156,16 +123,24 @@ impl StreamState {
 
         match event {
             StreamEvent::TaskStarted(started) => {
+                let needs_cancel = active.pending_stop.is_some() && active.task_id.is_none();
                 active.task_id = (!started.task_id.is_empty()).then_some(started.task_id);
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
                     message.task_id = active.task_id.clone();
                 }
                 sessions.capture_provisional(session_index, started.session_id.as_deref());
+                if needs_cancel
+                    && let Some(task_id) = active.task_id.clone()
+                {
+                    return StreamReduction::CancelRemote { task_id };
+                }
                 StreamReduction::Applied
             }
             StreamEvent::Delta(delta) => {
-                if let Some(message) = sessions.streaming_assistant_mut(session_index) {
-                    message.content.push_str(&delta.text);
+                if let Some(tail) = active.pending_stop.as_mut() {
+                    tail.push_str(&delta.text);
+                } else if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    active.append_text(message, &delta.text);
                 }
                 StreamReduction::Applied
             }
@@ -317,6 +292,9 @@ impl StreamState {
             }
             StreamEvent::Done(done) => {
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
+                    if let Some(tail) = active.pending_stop.take() {
+                        message.content.push_str(&tail);
+                    }
                     if done.evidence.is_some() {
                         message.evidence = done.evidence.clone();
                     }
@@ -327,6 +305,11 @@ impl StreamState {
                 StreamReduction::Terminal
             }
             StreamEvent::Error(error) => {
+                if error.task_status.as_deref() == Some("cancelled") {
+                    sessions.finalize_stream(session_index, None, true);
+                    self.phase = StreamPhase::Terminal;
+                    return StreamReduction::Terminal;
+                }
                 if let Some(message) = sessions.streaming_assistant_mut(session_index) {
                     message.error = Some(error.presented_message());
                 }
@@ -343,14 +326,6 @@ impl StreamState {
         error: String,
         sessions: &mut SessionState,
     ) -> StreamReduction {
-        if matches!(
-            &self.phase,
-            StreamPhase::Cancelling(cancel) if cancel.generation == generation
-        ) {
-            self.phase = StreamPhase::Cancelled;
-            self.next_generation = self.next_generation.wrapping_add(1);
-            return StreamReduction::Cancelled;
-        }
         let StreamPhase::Active(active) = &self.phase else {
             return StreamReduction::Stale;
         };
@@ -366,72 +341,43 @@ impl StreamState {
         StreamReduction::Failed { session_index }
     }
 
-    pub(crate) fn request_cancel(&mut self, sessions: &mut SessionState) -> Option<CancelRequest> {
-        if !matches!(self.phase, StreamPhase::Active(_)) {
+    pub(crate) fn request_cancel(&mut self) -> Option<CancelRequest> {
+        let StreamPhase::Active(active) = &mut self.phase else {
+            return None;
+        };
+        if active.pending_stop.is_some() {
             return None;
         }
-        let StreamPhase::Active(active) = std::mem::replace(&mut self.phase, StreamPhase::Idle)
-        else {
-            unreachable!("active stream phase checked before extraction");
-        };
-        let message_index = sessions
-            .get(active.session_index)
-            .and_then(|session| session.messages.len().checked_sub(1))
-            .unwrap_or(0);
-        sessions.finalize_stream(active.session_index, None, true);
-        let pending = PendingCancel {
-            generation: active.generation,
-            session_index: active.session_index,
-            message_index,
-            abort: active.abort,
-        };
-        if let Some(task_id) = active.task_id {
-            if let Some(abort) = pending.abort.as_ref() {
-                abort.abort();
-            }
-            self.next_generation = self.next_generation.wrapping_add(1);
-            let request = CancelRequest::Remote {
+        active.pending_stop = Some(String::new());
+        Some(match active.task_id.clone() {
+            Some(task_id) => CancelRequest::Remote {
                 task_id,
-                session_index: pending.session_index,
-                message_index,
-            };
-            self.phase = StreamPhase::Cancelling(PendingCancel {
-                abort: None,
-                ..pending
-            });
-            Some(request)
-        } else {
-            self.phase = StreamPhase::Cancelling(pending);
-            Some(CancelRequest::AwaitTask)
-        }
+                generation: active.generation,
+            },
+            None => CancelRequest::AwaitTask,
+        })
     }
 
     pub(crate) fn cancel_finished(
         &mut self,
-        session_index: usize,
-        message_index: usize,
+        generation: u64,
         result: Result<(), String>,
         sessions: &mut SessionState,
-    ) -> Option<usize> {
-        let matches = matches!(
-            &self.phase,
-            StreamPhase::Cancelling(cancel)
-                if cancel.session_index == session_index
-                    && cancel.message_index == message_index
-        );
-        if !matches {
-            return None;
+    ) -> bool {
+        let (StreamPhase::Active(active), Err(error)) = (&mut self.phase, result) else {
+            return false;
+        };
+        if active.generation != generation {
+            return false;
         }
-        if let Err(error) = result
-            && let Some(message) = sessions
-                .get_mut(session_index)
-                .and_then(|session| session.messages.get_mut(message_index))
-            && message.role() == crate::session::ChatRole::Assistant
-        {
-            message.error = Some(error);
+        let Some(tail) = active.pending_stop.take() else {
+            return false;
+        };
+        if let Some(message) = sessions.streaming_assistant_mut(active.session_index) {
+            active.append_text(message, &tail);
+            message.warnings.push(error);
         }
-        self.phase = StreamPhase::Cancelled;
-        Some(session_index)
+        true
     }
 }
 

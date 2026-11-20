@@ -418,15 +418,30 @@ async fn relay_task_stream(
         }
     }
 
-    match final_job.get("status").and_then(Value::as_str) {
+    let task_status = final_job.get("status").and_then(Value::as_str);
+    match task_status {
         Some("ok") => {}
-        Some("cancelled") => return Err("agent task was cancelled".to_string()),
-        Some("error") => {
-            return Err(final_job
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("agent task failed")
-                .to_string());
+        Some(status @ ("cancelled" | "error")) => {
+            let error = if status == "cancelled" {
+                "agent task was cancelled"
+            } else {
+                final_job
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("agent task failed")
+            };
+            let _ = send_frame(
+                tx,
+                sse::encode_event(
+                    "error",
+                    &json!({
+                        "error": error, "task_status": status,
+                        "task_id": task_id, "session_id": session_id,
+                    }),
+                ),
+            )
+            .await;
+            return Ok(());
         }
         Some(status) => return Err(format!("agent task ended in unexpected state: {status}")),
         None => return Err("terminal task has no status".to_string()),

@@ -55,16 +55,25 @@ pub struct CoreJob {
 }
 
 impl CoreJob {
-    pub fn into_done(self) -> Result<DonePayload, String> {
+    pub fn into_done(self) -> Result<DonePayload, cos_agent_protocol::StreamError> {
         match self.status.as_str() {
             "ok" => {}
-            "error" => {
-                return Err(self
-                    .error
-                    .unwrap_or_else(|| "agent task failed".to_string()));
+            "error" | "cancelled" => {
+                let message = if self.status == "cancelled" {
+                    "agent task was cancelled".to_string()
+                } else {
+                    self.error
+                        .unwrap_or_else(|| "agent task failed".to_string())
+                };
+                let mut error = cos_agent_protocol::StreamError::new(message);
+                error.task_status = Some(self.status);
+                return Err(error);
             }
-            "cancelled" => return Err("agent task was cancelled".to_string()),
-            status => return Err(format!("unexpected terminal task state: {status}")),
+            status => {
+                return Err(cos_agent_protocol::StreamError::new(format!(
+                    "unexpected terminal task state: {status}"
+                )));
+            }
         }
         let answer = self.response.clone();
         Ok(DonePayload {

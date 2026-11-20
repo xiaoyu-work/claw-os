@@ -46,6 +46,7 @@ import {
   type PendingImageAttachment,
 } from "@/lib/chat-attachments";
 import {
+  keepStoppedReplies,
   restoreForActiveTask,
   restoreHistoryMessages,
   type ChatMessage,
@@ -89,6 +90,7 @@ export function ChatPage({ meta }: { meta: any }) {
   const [restoring, setRestoring] = useState(false);
   const [blockedByTask, setBlockedByTask] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [queueing, setQueueing] = useState(false);
   const [queuedCount, setQueuedCount] = useState(0);
   const [restoreVersion, setRestoreVersion] = useState(0);
@@ -98,8 +100,7 @@ export function ChatPage({ meta }: { meta: any }) {
   const taskIdRef = useRef<string>("");
   const queueTailTaskIdRef = useRef<string>("");
   const queuedTaskIdsRef = useRef<string[]>([]);
-  const queueWatchersRef = useRef<Map<string, AbortController>>(new Map());
-  const stopRequestedRef = useRef(false);
+  const stopRequestedRef = useRef<"awaiting-id" | "sent" | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // When the server assigns a session id mid-stream we push the URL to
   // `/chat/<id>`. That route change fires the history-load effect below
@@ -112,7 +113,14 @@ export function ChatPage({ meta }: { meta: any }) {
   const replayTask = useCallback(async (task: TaskIdentity, signal: AbortSignal) => {
     const { history, job } = await taskReplay(task, signal);
     if (signal.aborted) return;
-    setMessages(restoreForActiveTask(history.messages || [], job, history.jobs || []));
+    const restored = restoreForActiveTask(history.messages || [], job, history.jobs || []);
+    setMessages((current) => {
+      const liveReply = current[current.length - 1];
+      if (liveReply?.taskId === task.taskId && liveReply.frozenText !== undefined) {
+        restored[restored.length - 1].frozenText = liveReply.frozenText;
+      }
+      return keepStoppedReplies(current, restored, history.jobs || []);
+    });
     taskIdRef.current = task.taskId;
   }, []);
 
@@ -126,11 +134,26 @@ export function ChatPage({ meta }: { meta: any }) {
     });
   }, []);
 
+  const reloadForFollowUps = useCallback(() => {
+    skipReloadFor.current = "";
+    setRestoring(true);
+    setRestoreVersion((version) => version + 1);
+  }, []);
+
+  const finishStream = useCallback((controller: AbortController, jobEnded: boolean) => {
+    if (abortRef.current !== controller) return;
+    setBusy(false);
+    setStopping(false);
+    setReconnecting(null);
+    abortRef.current = null;
+    taskIdRef.current = "";
+    stopRequestedRef.current = null;
+    if (jobEnded && queuedTaskIdsRef.current.length > 0) reloadForFollowUps();
+  }, [reloadForFollowUps]);
+
   useEffect(() => () => {
     attachmentRead.current.generation += 1;
     abortRef.current?.abort();
-    for (const watcher of queueWatchersRef.current.values()) watcher.abort();
-    queueWatchersRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -146,11 +169,10 @@ export function ChatPage({ meta }: { meta: any }) {
     abortRef.current?.abort();
     abortRef.current = null;
     taskIdRef.current = "";
-    stopRequestedRef.current = false;
+    stopRequestedRef.current = null;
     setBusy(false);
+    setStopping(false);
     setReconnecting(null);
-    for (const watcher of queueWatchersRef.current.values()) watcher.abort();
-    queueWatchersRef.current.clear();
     if (!sessionFromRoute) {
       setWorkspace(null);
       setRestoring(false);
@@ -169,6 +191,7 @@ export function ChatPage({ meta }: { meta: any }) {
     queuedTaskIdsRef.current = [];
     setRestoring(true);
     let cancelled = false;
+    let jobEnded = false;
     const controller = new AbortController();
     const restore = async () => {
       try {
@@ -197,7 +220,7 @@ export function ChatPage({ meta }: { meta: any }) {
           if (!Array.isArray(response) && response.presentation_error) {
             restored[restored.length - 1]?.warnings.push(response.presentation_error);
           }
-          setMessages(restored);
+          setMessages((current) => keepStoppedReplies(current, restored, retainedJobs));
           return;
         }
         queueTailTaskIdRef.current =
@@ -227,11 +250,12 @@ export function ChatPage({ meta }: { meta: any }) {
           return;
         }
 
-        setMessages(restoreForActiveTask(rows, activeTask, retainedJobs));
+        const restored = restoreForActiveTask(rows, activeTask, retainedJobs);
+        setMessages((current) => keepStoppedReplies(current, restored, retainedJobs));
         setBusy(true);
         abortRef.current = controller;
         taskIdRef.current = activeTask.id;
-        await streamDurableTask({
+        jobEnded = await streamDurableTask({
           path: `/api/tasks/${encodeURIComponent(activeTask.id)}/stream`,
           body: { cursor: 0 },
           task: { taskId: activeTask.id, sessionId: sessionFromRoute },
@@ -250,14 +274,6 @@ export function ChatPage({ meta }: { meta: any }) {
             });
           },
         });
-        if (
-          !cancelled &&
-          !controller.signal.aborted &&
-          activeTasks.length > 1 &&
-          !queueWatchersRef.current.has(activeTask.id)
-        ) {
-          setRestoreVersion((version) => version + 1);
-        }
       } catch (error: any) {
         if (cancelled) return;
         if (error instanceof TaskStreamError && error.task) {
@@ -302,12 +318,7 @@ export function ChatPage({ meta }: { meta: any }) {
           ];
         });
       } finally {
-        if (!cancelled && abortRef.current === controller) {
-          setBusy(false);
-          setReconnecting(null);
-          abortRef.current = null;
-          taskIdRef.current = "";
-        }
+        if (!cancelled) finishStream(controller, jobEnded);
       }
     };
     void restore();
@@ -319,7 +330,7 @@ export function ChatPage({ meta }: { meta: any }) {
         taskIdRef.current = "";
       }
     };
-  }, [sessionFromRoute, restoreVersion, replayTask, recoveringNotice]);
+  }, [sessionFromRoute, restoreVersion, replayTask, recoveringNotice, finishStream]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -331,18 +342,28 @@ export function ChatPage({ meta }: { meta: any }) {
     async (taskId: string, controller: AbortController) => {
       try {
         const result = await api.post<{
+          id?: string;
+          status?: string;
           cancelled?: boolean;
           cancel_requested?: boolean;
         }>(`/api/tasks/${encodeURIComponent(taskId)}/stop`);
-        if (result.cancelled || result.cancel_requested) {
-          controller.abort();
+        if (result.id !== taskId || (!result.cancelled && !result.cancel_requested &&
+          !["ok", "error", "cancelled"].includes(result.status ?? ""))) {
+          throw new Error("Stop was not acknowledged.");
         }
       } catch (error: any) {
+        if (abortRef.current !== controller || taskIdRef.current !== taskId) return;
+        stopRequestedRef.current = null;
+        setStopping(false);
         setMessages((current) => {
           const copy = current.slice();
           const last = copy[copy.length - 1];
           if (last?.role === "assistant") {
-            last.warnings.push(error?.message || "Failed to stop task");
+            copy[copy.length - 1] = {
+              ...last,
+              frozenText: undefined,
+              warnings: [...last.warnings, error?.message || "Failed to stop task"],
+            };
           }
           return copy;
         });
@@ -382,7 +403,7 @@ export function ChatPage({ meta }: { meta: any }) {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || busy || restoring || blockedByTask || attachmentRead.current.busy) return;
+    if (!text || busy || queueing || restoring || blockedByTask || attachmentRead.current.busy) return;
     setInput("");
     setQueuedCount(0);
     queueTailTaskIdRef.current = "";
@@ -419,9 +440,10 @@ export function ChatPage({ meta }: { meta: any }) {
     setBusy(true);
     const ac = new AbortController();
     abortRef.current = ac;
+    let jobEnded = false;
 
     try {
-      await streamDurableTask({
+      jobEnded = await streamDurableTask({
         path: "/api/chat",
         body: {
           prompt: text,
@@ -449,7 +471,8 @@ export function ChatPage({ meta }: { meta: any }) {
             if (!queueTailTaskIdRef.current) {
               queueTailTaskIdRef.current = taskId;
             }
-            if (stopRequestedRef.current) {
+            if (stopRequestedRef.current === "awaiting-id") {
+              stopRequestedRef.current = "sent";
               void cancelTask(taskId, ac);
             }
           }
@@ -495,18 +518,13 @@ export function ChatPage({ meta }: { meta: any }) {
         return copy;
       });
     } finally {
-      if (abortRef.current === ac) {
-        setBusy(false);
-        setReconnecting(null);
-        abortRef.current = null;
-        taskIdRef.current = "";
-        stopRequestedRef.current = false;
-      }
+      finishStream(ac, jobEnded);
     }
   }, [
     input,
     attachments,
     busy,
+    queueing,
     restoring,
     blockedByTask,
     sessionId,
@@ -514,65 +532,14 @@ export function ChatPage({ meta }: { meta: any }) {
     cancelTask,
     replayTask,
     recoveringNotice,
+    finishStream,
   ]);
-
-  const watchPredecessor = useCallback((predecessorId: string, expectedSessionId: string) => {
-    if (queueWatchersRef.current.has(predecessorId)) return;
-    const controller = new AbortController();
-    queueWatchersRef.current.set(predecessorId, controller);
-    void (async () => {
-      try {
-        while (!controller.signal.aborted) {
-          if (
-            window.location.hash !==
-            `#/chat/${encodeURIComponent(expectedSessionId)}`
-          ) {
-            return;
-          }
-          const task = await api.get<{ status?: string }>(
-            `/api/tasks/${encodeURIComponent(predecessorId)}`,
-            { signal: controller.signal },
-          );
-          if (["ok", "error", "cancelled"].includes(String(task.status || ""))) {
-            if (
-              window.location.hash ===
-              `#/chat/${encodeURIComponent(expectedSessionId)}`
-            ) {
-              if (skipReloadFor.current === expectedSessionId) {
-                skipReloadFor.current = "";
-              }
-              setRestoreVersion((version) => version + 1);
-            }
-            return;
-          }
-          await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-        }
-      } catch (error: any) {
-        if (!controller.signal.aborted) {
-          setMessages((current) => {
-            const copy = current.slice();
-            const last = copy[copy.length - 1];
-            if (last?.role === "assistant") {
-              last.warnings.push(
-                `Follow-up is queued, but automatic monitoring failed: ${
-                  error?.message || "unknown error"
-                }`,
-              );
-            }
-            return copy;
-          });
-        }
-      } finally {
-        queueWatchersRef.current.delete(predecessorId);
-      }
-    })();
-  }, []);
 
   const queueFollowUp = useCallback(async () => {
     const text = input.trim();
     const predecessorId =
       queueTailTaskIdRef.current || taskIdRef.current;
-    if (!text || !busy || !predecessorId || queueing || attachmentRead.current.busy) return;
+    if (!text || !busy || !predecessorId || queueing || stopping || attachmentRead.current.busy) return;
 
     setQueueing(true);
     try {
@@ -596,13 +563,14 @@ export function ChatPage({ meta }: { meta: any }) {
       const taskId = String(task.id || "");
       if (!taskId) throw new Error("Queued task response omitted its id");
       const queuedSessionId = String(task.session_id || sessionId);
+      if (window.location.hash !== `#/chat/${encodeURIComponent(queuedSessionId)}`) return;
       queueTailTaskIdRef.current = taskId;
       queuedTaskIdsRef.current.push(taskId);
       setQueuedCount(queuedTaskIdsRef.current.length);
-      setInput("");
+      setInput((current) => (current === input ? "" : current));
       setAttachments([]);
       setAttachmentError(null);
-      watchPredecessor(predecessorId, queuedSessionId);
+      if (!taskIdRef.current) reloadForFollowUps();
     } catch (error: any) {
       setMessages((current) => {
         const copy = current.slice();
@@ -615,17 +583,21 @@ export function ChatPage({ meta }: { meta: any }) {
     } finally {
       setQueueing(false);
     }
-  }, [attachments, blockedByTask, busy, input, queueing, reconnecting, restoring, sessionId, watchPredecessor]);
+  }, [attachments, blockedByTask, busy, input, queueing, reconnecting, restoring, sessionId, stopping, reloadForFollowUps]);
 
   const stop = useCallback(() => {
     const controller = abortRef.current;
-    if (!controller) return;
+    if (!controller || stopRequestedRef.current) return;
     const taskId = taskIdRef.current;
-    if (!taskId) {
-      stopRequestedRef.current = true;
-      return;
-    }
-    void cancelTask(taskId, controller);
+    stopRequestedRef.current = taskId ? "sent" : "awaiting-id";
+    setStopping(true);
+    setMessages((current) => {
+      const last = current[current.length - 1];
+      return last?.role === "assistant"
+        ? [...current.slice(0, -1), { ...last, frozenText: last.text }]
+        : current;
+    });
+    if (taskId) void cancelTask(taskId, controller);
   }, [cancelTask]);
 
   return (
@@ -747,7 +719,7 @@ export function ChatPage({ meta }: { meta: any }) {
                     size="icon"
                     variant="secondary"
                     onClick={() => void queueFollowUp()}
-                    disabled={queueing || readingAttachments}
+                    disabled={queueing || stopping || readingAttachments}
                     title="Queue follow-up"
                   >
                     {queueing ? (
@@ -757,15 +729,22 @@ export function ChatPage({ meta }: { meta: any }) {
                     )}
                   </Button>
                 )}
-                <Button size="icon" variant="destructive" onClick={stop} title="Stop current task (keeps queued follow-ups)">
-                  <Square className="h-4 w-4" />
+                <Button
+                  size="icon"
+                  variant="destructive"
+                  onClick={stop}
+                  disabled={stopping}
+                  title={stopping ? "Stopping current task" : "Stop current task (keeps queued follow-ups)"}
+                  aria-label={stopping ? "Stopping current task" : "Stop current task"}
+                >
+                  {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
                 </Button>
               </>
             ) : (
               <Button
                 size="icon"
                 onClick={send}
-                disabled={!input.trim() || restoring || blockedByTask !== null || readingAttachments}
+                disabled={!input.trim() || queueing || restoring || blockedByTask !== null || readingAttachments}
                 title={
                   restoring
                     ? "Restoring conversation"
@@ -828,6 +807,7 @@ function Message({ m }: { m: Msg }) {
       </div>
     );
   }
+  const visibleText = m.frozenText ?? m.text;
   return (
     <div className="flex flex-col gap-3">
       {m.reasoning.length > 0 && <ReasoningSummary summaries={m.reasoning} />}
@@ -842,18 +822,19 @@ function Message({ m }: { m: Msg }) {
           </div>
         </Card>
       ))}
-      {m.text && (
+      {visibleText && (
         <div
           className="max-w-none text-sm leading-relaxed [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-3 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_pre>code]:bg-transparent [&_pre>code]:p-0 [&_a]:text-primary [&_a]:underline [&_h1]:my-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-sm [&_h2]:font-semibold [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5"
-          dangerouslySetInnerHTML={{ __html: renderSafeMarkdown(m.text) }}
+          dangerouslySetInnerHTML={{ __html: renderSafeMarkdown(visibleText) }}
         />
       )}
       {m.status === "streaming" && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
-          generating…
+          {m.frozenText === undefined ? "generating…" : "Stopping…"}
         </div>
       )}
+      {m.status === "interrupted" && <p className="text-xs text-muted-foreground">Stopped</p>}
       {m.status === "error" && m.error && (
         <p className="text-xs text-destructive">{m.error}</p>
       )}
