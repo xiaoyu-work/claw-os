@@ -34,6 +34,7 @@ SNAPDRAGON = "surface-laptop-7-snapdragon"
 QCOM_AUDIO = "qualcomm-model-audio"
 FRAMEWORK = "framework-laptop-16"
 DELL_HAPTICS = "dell-xps-haptics"
+CAMLINK = "elgato-camlink-4k"
 BROADCOM = "broadcom-sta-wifi"
 BROADCOM_DRIVER = "broadcom-sta-dkms"
 BROADCOM_BACKPORT = "6.30.223.271-30~bpo13+1"
@@ -49,6 +50,7 @@ PACKS = {
     QCOM_AUDIO: (AUDIO,),
     FRAMEWORK: (),
     DELL_HAPTICS: (),
+    CAMLINK: (),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
     BROADCOM: ((BROADCOM_DRIVER, BROADCOM_FIXED),),
 }
@@ -58,6 +60,7 @@ LOCAL_PACKAGES = {
     QCOM_AUDIO: "claw-os-qualcomm-model-audio",
     FRAMEWORK: "claw-os-framework-qmk-hid",
     DELL_HAPTICS: "claw-os-dell-xps-haptics",
+    CAMLINK: "claw-os-elgato-camlink",
     BROADCOM: BROADCOM_DRIVER,
 }
 
@@ -91,7 +94,12 @@ def detect_board(sysfs, arch):
     return None
 
 
-def broadcom_headers():
+def debian_amd64_headers():
+    profile = Path("/etc/default/grub.d/60-claw-os-platform.cfg")
+    if profile.is_file():
+        selected = re.search(r'^GRUB_TOP_LEVEL="/boot/vmlinuz-([^"]+)"$', profile.read_text(), re.MULTILINE)
+        if selected and not DEBIAN_AMD64_ABI.fullmatch(selected[1]):
+            return []
     releases = sorted(path.name.removeprefix("vmlinuz-") for path in Path("/boot").glob("vmlinuz-*")
                       if DEBIAN_AMD64_ABI.fullmatch(path.name.removeprefix("vmlinuz-")))
     return [(f"linux-headers-{release}", None) for release in releases]
@@ -109,13 +117,26 @@ def has_broadcom_sta_wifi(sysfs):
     return False
 
 
+def has_camlink(sysfs):
+    for usb in (sysfs / "bus/usb/devices").glob("*"):
+        try:
+            if (usb / "idVendor").read_text().strip() == "0fd9" and (usb / "product").read_text().strip() == "Cam Link 4K":
+                return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
 def detect(sysfs=Path("/sys")):
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
     board = detect_board(sysfs, arch)
     packs = [board] if board else []
     if arch == "amd64":
-        if broadcom_headers() and has_broadcom_sta_wifi(sysfs):
-            packs.append(BROADCOM)
+        if debian_amd64_headers():
+            if has_broadcom_sta_wifi(sysfs):
+                packs.append(BROADCOM)
+            if has_camlink(sysfs):
+                packs.append(CAMLINK)
         dmi = sysfs / "class/dmi/id"
         if (dmi / "sys_vendor").is_file():
             vendor = (dmi / "sys_vendor").read_text().strip()
@@ -130,8 +151,8 @@ def detect(sysfs=Path("/sys")):
 
 def missing(packs):
     requirements = dict(spec for pack in packs for spec in PACKS[pack])
-    if BROADCOM in packs:
-        requirements.update(broadcom_headers())
+    if BROADCOM in packs or CAMLINK in packs:
+        requirements.update(debian_amd64_headers())
     packages = []
     for package, minimum in requirements.items():
         query = subprocess.run(
@@ -232,8 +253,8 @@ def stage_offline():
     packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else [
         "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS,
     ]
-    if arch == "amd64" and broadcom_headers():
-        packs.append(BROADCOM)
+    if arch == "amd64" and debian_amd64_headers():
+        packs.extend((BROADCOM, CAMLINK))
     for pack in packs:
         directory = CACHE / pack
         local = sorted(directory.glob("*.deb"))

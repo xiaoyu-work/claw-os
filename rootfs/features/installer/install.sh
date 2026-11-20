@@ -47,6 +47,8 @@ if [ -x "$ROOTFS/usr/libexec/claw-oobe" ]; then
         install -d "$hardware"/{scripts,packaging}
         install -m0644 "$PROJECT_DIR"/scripts/{amd64_hardware,platform_kernels,surface_laptop7}.py "$hardware/scripts/"
         install -m0644 "$PROJECT_DIR/packaging/platform-kernels.json" "$hardware/packaging/"
+        install -d "$hardware/packaging/camlink"
+        install -m0644 "$PROJECT_DIR"/packaging/camlink/* "$hardware/packaging/camlink/"
         chroot "$ROOTFS" apt-get -qq update
         chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
             install -y --no-install-recommends gpg gpgv zstd </dev/null

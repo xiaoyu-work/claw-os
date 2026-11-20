@@ -10,7 +10,11 @@ from surface_laptop7 import extract, replace, stage_file, write_file
 
 
 QMK = "framework-qmk-hid"
-DELL = "dell-xps-haptics"
+RECIPES = "amd64-hardware-recipes"
+LOOPBACK = "elgato-v4l2loopback"
+RELAY = "elgato-v4l2-relayd"
+RELAY_SOURCE = "elgato-v4l2-relayd-source"
+CAMLINK_ASSETS = Path(__file__).resolve().parents[1] / "packaging/camlink"
 
 
 def framework(source, provenance, work, out):
@@ -27,11 +31,11 @@ def framework(source, provenance, work, out):
 
 
 def dell(source, provenance, work, out):
-    dest = out / DELL
+    dest = out / "dell-xps-haptics"
     dest.mkdir(parents=True, exist_ok=True)
     upstream = work / "dell-source"
     prefix = "pkgbuilds/dell-xps-touchpad-haptics/"
-    extract(source[DELL], upstream, prefixes=("LICENSE", prefix))
+    extract(source[RECIPES], upstream, prefixes=("LICENSE", prefix))
     stage = work / "dell"
     name = "claw-os-dell-xps-haptics"
     files = upstream / prefix
@@ -117,7 +121,58 @@ WantedBy=multi-user.target
                'ENV{SYSTEMD_WANTS}+="dell-xps-touchpad-haptics.service"\n')
     package(stage, dest, name, "1.0.0-5+clawos1", "amd64", "python3, bash, systemd, udev",
             "Model-matched Dell XPS Synaptics haptic touchpad support",
-            {DELL: provenance[DELL]}, None)
+            {RECIPES: provenance[RECIPES]}, None)
+
+
+def camlink(source, provenance, work, out):
+    dest = out / "elgato-camlink-4k"
+    dest.mkdir(parents=True, exist_ok=True)
+    loopback = work / "loopback"
+    module = "0.15.4"
+    tree = loopback / "usr/src" / f"v4l2loopback-{module}"
+    extract(source[LOOPBACK], tree)
+    stage_file(tree / "COPYING", loopback / "usr/share/doc/v4l2loopback-dkms/copyright")
+    write_file(loopback / "DEBIAN/prerm", f"""#!/bin/sh
+set -e
+case "$1" in
+    remove|upgrade|deconfigure)
+        if [ -n "$(dkms status -m v4l2loopback -v '{module}')" ]; then
+            dkms remove -m v4l2loopback -v '{module}' --all
+        fi
+        ;;
+esac
+""", 0o755)
+    version = f"{module}-1+clawos1"
+    package(loopback, dest, "v4l2loopback-dkms", version, "all", "dkms (>= 3.0.11)",
+            "V4L2 loopback module compatible with Debian Linux 7.2", {LOOPBACK: provenance[LOOPBACK]},
+            f"""[ "$1" = configure ] || exit 0
+/usr/lib/dkms/common.postinst v4l2loopback '{module}' /usr/share/v4l2loopback-dkms "" "${{2:-}}"
+""")
+
+    stage = work / "camlink"
+    name = "claw-os-elgato-camlink"
+    doc = stage / "usr/share/doc" / name
+    unpack(source[RELAY], stage, lambda path: path == "usr/bin/v4l2-relayd")
+    if not (stage / "usr/bin/v4l2-relayd").is_file():
+        raise ValueError("the signed relay archive is missing v4l2-relayd")
+    relay = work / "relay-source"
+    extract(source[RELAY_SOURCE], relay, prefixes=("LICENSE",))
+    stage_file(relay / "LICENSE", doc / "copyright")
+    stage_file(source[RELAY_SOURCE], doc / "v4l2-relayd-upstream-0.2.0.tar.gz")
+    recipe = "pkgbuilds/v4l2-relayd/"
+    extract(source[RECIPES], relay, prefixes=(recipe,))
+    for path in ("PKGBUILD", "0001-reset-output-on-idle.patch", "0002-escape-optional-splashsrc-expansion.patch"):
+        stage_file(relay / recipe / path, doc / path)
+
+    stage_file(CAMLINK_ASSETS / "71-claw-camlink.rules", stage / "usr/lib/udev/rules.d/71-claw-camlink.rules")
+    for unit in ("claw-camlink-loopback.service", "claw-camlink-relay.service"):
+        stage_file(CAMLINK_ASSETS / unit, stage / "usr/lib/systemd/system" / unit)
+    package(stage, dest, name, "0.2.0-3+clawos1", "amd64",
+            f"v4l2loopback-dkms (>= {version}), v4l2loopback-utils, gstreamer1.0-plugins-base, "
+            "gstreamer1.0-plugins-good, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libglib2.0-0t64, libc6, kmod, systemd, udev",
+            "Fixed-aspect virtual camera for the Elgato Cam Link 4K",
+            {key: provenance[key] for key in (RELAY, RELAY_SOURCE, RECIPES)},
+            None)
 
 
 def main():
@@ -126,7 +181,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lock = json.loads(PIN.read_text())
-    keys = (QMK, DELL)
+    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE)
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -134,6 +189,7 @@ def main():
         source = dict(inputs(lock, keys, args.cache, work))
         framework(source, lock["inputs"], work, args.output)
         dell(source, lock["inputs"], work, args.output)
+        camlink(source, lock["inputs"], work, args.output)
 
 
 if __name__ == "__main__":

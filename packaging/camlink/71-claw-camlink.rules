@@ -1,0 +1,3 @@
+SUBSYSTEM=="video4linux", ENV{ID_VENDOR_ID}=="0fd9", ENV{ID_MODEL}=="Cam_Link_4K", ENV{ID_V4L_CAPABILITIES}==":capture:", \
+    TAG-="uaccess", OWNER="root", GROUP="root", MODE="0600", SYMLINK+="claw-camlink4k", \
+    TAG+="systemd", ENV{SYSTEMD_ALIAS}="/dev/claw-camlink4k", ENV{SYSTEMD_WANTS}+="claw-camlink-relay.service"

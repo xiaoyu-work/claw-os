@@ -10,10 +10,26 @@
       "sha256": "3b190898bf2002ea3b3628234283da3603585e0ac3b87fd51a374f7e494a2c60",
       "source": "https://github.com/FrameworkComputer/qmk_hid/tree/v0.1.13"
     },
-    "dell-xps-haptics": {
+    "amd64-hardware-recipes": {
       "url": "https://codeload.github.com/omacom/omarchy-pkgs/tar.gz/b0ff9ed3b6b2b8a237a0266541b670e7faec7883",
       "sha256": "f918f4c24933c6ea7c9d1a27e60e07c06d7172a900186f824d70415203dbe189",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/dell-xps-touchpad-haptics"
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds"
+    },
+    "elgato-v4l2loopback": {
+      "url": "https://codeload.github.com/v4l2loopback/v4l2loopback/tar.gz/refs/tags/v0.15.4",
+      "sha256": "21a17702648aa6a937b88a93bd71ef9f547815ead28719cafcfcc247396643dc",
+      "source": "https://github.com/v4l2loopback/v4l2loopback/tree/0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4"
+    },
+    "elgato-v4l2-relayd": {
+      "archive": "https://pkgs.omarchy.org/edge/x86_64/",
+      "file": "v4l2-relayd-0.2.0-3-x86_64.pkg.tar.zst",
+      "sha256": "dadcfdb9ad98ac13f39933b6dbdac65d3d97d42b7dee49f5d6044603ee3b1806",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/v4l2-relayd"
+    },
+    "elgato-v4l2-relayd-source": {
+      "url": "https://gitlab.com/vicamo/v4l2-relayd/-/archive/upstream/0.2.0/v4l2-relayd-upstream-0.2.0.tar.gz",
+      "sha256": "0c063edf18dcc6edcdef46e695128cfc2b2d60964ea8538c7e79a2454310c53d",
+      "source": "https://gitlab.com/vicamo/v4l2-relayd/-/tree/upstream/0.2.0"
     },
     "t2-image": {
       "url": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/releases/download/v7.3.4-3/linux-image-7.3.4-3-t2-trixie_7.3.4-3_amd64.deb",

@@ -1,0 +1,19 @@
+[Unit]
+Description=Serve Elgato Cam Link 4K as a 16:9 camera
+ConditionPathExists=/dev/claw-camlink4k
+StopPropagatedFrom=dev-claw\x2dcamlink4k.device
+Requires=claw-camlink-loopback.service
+After=claw-camlink-loopback.service
+
+[Service]
+ExecStart=/bin/sh -c 'device=$$(grep -lx -m1 "Cam Link 4K" /sys/devices/virtual/video4linux/*/name | cut -d/ -f6 | head -n 1); test -n "$$device" && exec /usr/bin/v4l2-relayd -i "v4l2src device=/dev/claw-camlink4k" -o "appsrc name=appsrc caps=video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! videoconvert ! v4l2sink name=v4l2sink sync=false device=/dev/$$device"'
+Restart=on-failure
+RestartSec=2
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+DevicePolicy=closed
+DeviceAllow=char-video4linux rw
