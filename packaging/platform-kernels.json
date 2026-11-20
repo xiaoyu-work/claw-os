@@ -31,6 +31,11 @@
       "sha256": "0c063edf18dcc6edcdef46e695128cfc2b2d60964ea8538c7e79a2454310c53d",
       "source": "https://gitlab.com/vicamo/v4l2-relayd/-/tree/upstream/0.2.0"
     },
+    "intel-lpmd": {
+      "url": "https://codeload.github.com/intel/intel-lpmd/tar.gz/956df747e56aca1739b39bff8cff77e81758af9a",
+      "sha256": "d7613a600e3c596e9edcb1d79bf9645527a2346e09b69ac14607466a17c0406a",
+      "source": "https://github.com/intel/intel-lpmd/tree/956df747e56aca1739b39bff8cff77e81758af9a"
+    },
     "t2-image": {
       "url": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/releases/download/v7.3.4-3/linux-image-7.3.4-3-t2-trixie_7.3.4-3_amd64.deb",
       "sha256": "348ea11aee07d6255f9491adac9bb9b7ec7196440efb1ad536b54f88d2f0ce0e",

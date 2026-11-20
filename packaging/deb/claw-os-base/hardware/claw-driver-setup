@@ -35,6 +35,8 @@ QCOM_AUDIO = "qualcomm-model-audio"
 FRAMEWORK = "framework-laptop-16"
 DELL_HAPTICS = "dell-xps-haptics"
 CAMLINK = "elgato-camlink-4k"
+INTEL_POWER = "intel-hybrid-power"
+CPUINFO = Path("/proc/cpuinfo")
 BROADCOM = "broadcom-sta-wifi"
 BROADCOM_DRIVER = "broadcom-sta-dkms"
 BROADCOM_BACKPORT = "6.30.223.271-30~bpo13+1"
@@ -51,6 +53,7 @@ PACKS = {
     FRAMEWORK: (),
     DELL_HAPTICS: (),
     CAMLINK: (),
+    INTEL_POWER: (),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
     BROADCOM: ((BROADCOM_DRIVER, BROADCOM_FIXED),),
 }
@@ -61,6 +64,7 @@ LOCAL_PACKAGES = {
     FRAMEWORK: "claw-os-framework-qmk-hid",
     DELL_HAPTICS: "claw-os-dell-xps-haptics",
     CAMLINK: "claw-os-elgato-camlink",
+    INTEL_POWER: "claw-os-intel-lpmd",
     BROADCOM: BROADCOM_DRIVER,
 }
 
@@ -127,11 +131,34 @@ def has_camlink(sysfs):
     return False
 
 
+def has_intel_hybrid_battery(sysfs):
+    if not CPUINFO.is_file():
+        return False
+    cpu = {key.strip(): value.strip() for line in CPUINFO.read_text().split("\n\n", 1)[0].splitlines()
+           if ":" in line for key, value in [line.split(":", 1)]}
+    if (cpu.get("vendor_id"), cpu.get("cpu family")) != ("GenuineIntel", "6") or cpu.get("model") not in {
+        "151", "154", "170", "172", "183", "186", "189", "191", "204",
+    }:
+        return False
+    for battery in (sysfs / "class/power_supply").glob("*"):
+        try:
+            if (battery / "type").read_text().strip() != "Battery" or (battery / "present").read_text().strip() != "1":
+                continue
+        except FileNotFoundError:
+            continue
+        scope = battery / "scope"
+        if not scope.is_file() or scope.read_text().strip() != "Device":
+            return True
+    return False
+
+
 def detect(sysfs=Path("/sys")):
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
     board = detect_board(sysfs, arch)
     packs = [board] if board else []
     if arch == "amd64":
+        if has_intel_hybrid_battery(sysfs):
+            packs.append(INTEL_POWER)
         if debian_amd64_headers():
             if has_broadcom_sta_wifi(sysfs):
                 packs.append(BROADCOM)
@@ -251,7 +278,7 @@ def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
     packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else [
-        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS,
+        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS, INTEL_POWER,
     ]
     if arch == "amd64" and debian_amd64_headers():
         packs.extend((BROADCOM, CAMLINK))

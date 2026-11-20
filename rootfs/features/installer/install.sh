@@ -51,7 +51,8 @@ if [ -x "$ROOTFS/usr/libexec/claw-oobe" ]; then
         install -m0644 "$PROJECT_DIR"/packaging/camlink/* "$hardware/packaging/camlink/"
         chroot "$ROOTFS" apt-get -qq update
         chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
-            install -y --no-install-recommends gpg gpgv zstd </dev/null
+            install -y --no-install-recommends gpg gpgv zstd build-essential pkg-config autoconf automake libtool \
+            libglib2.0-dev libxml2-dev libsystemd-dev libnl-3-dev libnl-genl-3-dev libupower-glib-dev </dev/null
         inside=${hardware#"$ROOTFS"}
         chroot "$ROOTFS" python3 -B "$inside/scripts/amd64_hardware.py" \
             --cache "$inside/cache" --output /usr/share/cos/driver-cache

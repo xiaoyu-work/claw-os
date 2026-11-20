@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 
 from platform_kernels import PIN, inputs, package, unpack
@@ -14,6 +16,7 @@ RECIPES = "amd64-hardware-recipes"
 LOOPBACK = "elgato-v4l2loopback"
 RELAY = "elgato-v4l2-relayd"
 RELAY_SOURCE = "elgato-v4l2-relayd-source"
+LPMD = "intel-lpmd"
 CAMLINK_ASSETS = Path(__file__).resolve().parents[1] / "packaging/camlink"
 
 
@@ -175,13 +178,53 @@ esac
             None)
 
 
+def intel_power(source, provenance, work, out):
+    dest = out / "intel-hybrid-power"
+    dest.mkdir(parents=True, exist_ok=True)
+    tree = work / LPMD
+    stage = work / "lpmd-package"
+    name = "claw-os-intel-lpmd"
+    extract(source[LPMD], tree)
+    replace(tree / "configure.ac", "GTK_DOC_CHECK([1.11],[--flavour no-tmpl])\n", "")
+    replace(tree / "Makefile.am", 'install-data-hook:\n\tgzip -f -k "$(DESTDIR)$(mandir)/man8/intel_lpmd.8";\n\tmandb || true\n', "")
+    subprocess.run(["autoreconf", "--install"], cwd=tree, check=True)
+    subprocess.run([tree / "configure", "--prefix=/usr", "--sysconfdir=/etc", "--localstatedir=/var",
+                    "--with-systemdsystemunitdir=/usr/lib/systemd/system", "--with-dbus-sys-dir=/usr/share/dbus-1/system.d",
+                    "--disable-werror"], cwd=tree, check=True)
+    subprocess.run(["make", f"-j{os.cpu_count()}"], cwd=tree, check=True)
+    subprocess.run(["make", f"DESTDIR={stage}", "install"], cwd=tree, check=True)
+    policy = stage / "usr/share/dbus-1/system.d/org.freedesktop.intel_lpmd.conf"
+    replace(policy, """        <!-- Only allow members of the power group to communicate
+             with the daemon -->
+""", "")
+    replace(policy, """        <policy group="power">
+                <allow send_destination="org.freedesktop.intel_lpmd"/>
+                <allow receive_sender="org.freedesktop.intel_lpmd"/>
+        </policy>
+""", "")
+    doc = stage / "usr/share/doc" / name
+    stage_file(tree / "COPYING", doc / "copyright")
+    stage_file(source[LPMD], doc / "intel-lpmd-0.1.0.tar.gz")
+    conf = stage / "etc/intel_lpmd"
+    write_file(stage / "DEBIAN/conffiles", "".join(f"/etc/intel_lpmd/{path.name}\n" for path in sorted(conf.glob("*.xml"))))
+    package(stage, dest, name, "0.1.0-1+clawos1", "amd64",
+            "libc6, libglib2.0-0t64, libxml2, libnl-3-200, libnl-genl-3-200, libsystemd0, "
+            "libupower-glib3, upower, dbus, systemd, init-system-helpers",
+            "Intel low-power mode daemon for supported hybrid laptops", {LPMD: provenance[LPMD]},
+            """[ "$1" = configure ] || exit 0
+deb-systemd-helper enable intel_lpmd.service >/dev/null
+""", """[ "$1" = purge ] || exit 0
+deb-systemd-helper purge intel_lpmd.service >/dev/null
+""")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lock = json.loads(PIN.read_text())
-    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE)
+    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE, LPMD)
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -190,6 +233,7 @@ def main():
         framework(source, lock["inputs"], work, args.output)
         dell(source, lock["inputs"], work, args.output)
         camlink(source, lock["inputs"], work, args.output)
+        intel_power(source, lock["inputs"], work, args.output)
 
 
 if __name__ == "__main__":
