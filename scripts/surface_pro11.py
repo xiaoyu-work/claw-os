@@ -81,7 +81,7 @@ node.software-dsp.rules = [
 
 
 def pro11_package(release, source, provenance, work, out, package):
-    key = "surface-snapdragon-kernel-fixes"
+    key = "arm-kernel-recipes"
     profile_dir = "pkgbuilds/microsoft-surface-pro-11-support/"
     recipes = work / "surface-pro-11-recipes"
     extract(source[key], recipes, prefixes=(profile_dir,))
@@ -118,7 +118,7 @@ def pro11_package(release, source, provenance, work, out, package):
 
 
 def pro11_sensors_package(release, source, provenance, work, out, package):
-    recipe = "surface-snapdragon-kernel-fixes"
+    recipe = "arm-kernel-recipes"
     directory = "pkgbuilds/microsoft-surface-pro-11-sensors/"
     recipes = work / "denali-sensors-recipes"
     extract(source[recipe], recipes, prefixes=(directory, "LICENSE"))

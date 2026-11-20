@@ -194,15 +194,15 @@
       "sha256": "847df6a78497943f27fc72eb93f9a637320a02b561d0a91b09e87a7807ed7c61",
       "source": "https://www.microsoft.com/pkiops/docs/repository.htm"
     },
-    "omarchy-linux-source": {
+    "arm-kernel-source": {
       "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.tar.xz",
       "sha256": "87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953",
       "source": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v7.3"
     },
-    "surface-snapdragon-kernel-fixes": {
+    "arm-kernel-recipes": {
       "url": "https://codeload.github.com/omacom/omarchy-pkgs/tar.gz/b0ff9ed3b6b2b8a237a0266541b670e7faec7883",
       "sha256": "f918f4c24933c6ea7c9d1a27e60e07c06d7172a900186f824d70415203dbe189",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds"
     },
     "surface-snapdragon-posture-fix": {
       "url": "https://raw.githubusercontent.com/ItsLucas/surface-laptop-7-ubuntu-kernel/2ce3083fa76855225465f809760dc7185c74a80c/patches/0020-surface-aggregator-sl7-pos-events.patch",
@@ -279,11 +279,6 @@
       "sha256": "02598130b6ef4cada1735ea4e4a51e26f0af2fac4208da302a43ba4e9560dd5d",
       "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
     },
-    "omarchy-dtbs": {
-      "file": "linux-omarchy-dtbs-7.3-48-aarch64.pkg.tar.zst",
-      "sha256": "25f0510f1aa7842a6f0fef9c7cfd2bfc2ed7d512d485adffcce58cb3e8d62cb1",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-dtbs"
-    },
     "nvidia-modules": {
       "file": "linux-omarchy-nvidia-open-7.3-72-aarch64.pkg.tar.zst",
       "sha256": "e41cb0eb347384bd80628d6235c2514b07dca5c23bc09879fd5d311e8f010f9f",
@@ -337,11 +332,10 @@
       "release": "7.3.0-72-omarchy",
       "installer_release": "7.3.0-72-claw-omarchy",
       "kernel": "omarchy-kernel",
-      "dtbs": "omarchy-dtbs",
+      "dtbs": true,
       "romulus": [
         "surface-snapdragon-iptsd", "surface-snapdragon-fixes",
-        "surface-snapdragon-fastrpc", "omarchy-linux-source",
-        "surface-snapdragon-kernel-fixes", "surface-snapdragon-posture-fix"
+        "surface-snapdragon-fastrpc", "surface-snapdragon-posture-fix"
       ]
     },
     "aarch64-n1x": {
@@ -349,7 +343,7 @@
       "release": "7.3.0-72-omarchy",
       "boot_args": "console=tty0 acpi=nospcr pci=hpbussize=0x20",
       "kernel": "omarchy-kernel",
-      "dtbs": "omarchy-dtbs",
+      "dtbs": true,
       "gpu": ["nvidia-modules", "nvidia-userspace"],
       "speaker_firmware": "n1x-proart-p14-audio"
     },
@@ -357,7 +351,7 @@
       "arch": "arm64",
       "release": "7.3.0-72-omarchy",
       "kernel": "omarchy-kernel",
-      "dtbs": "omarchy-dtbs",
+      "dtbs": true,
       "gpu": ["nvidia-modules", "nvidia-userspace"]
     }
   }

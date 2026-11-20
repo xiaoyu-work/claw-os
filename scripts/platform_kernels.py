@@ -122,32 +122,36 @@ done
 """
 
 
-def prepare_qualcomm_kernel(tree, recipes, release, posture):
-    from surface_laptop7 import patch
-
+def patch_series(recipes):
     recipe = (recipes / "PKGBUILD").read_text().split("\nsource=(\n", 1)[1].split("\n)\n", 1)[0]
     series = re.findall(r"^  (\d[^\s{}]+\.patch)(?:\{,\.sig\})?$", recipe, flags=re.MULTILINE)
     if not series or set(series) != {file.name for file in recipes.glob("[0-9]*.patch")}:
-        raise ValueError("the vendor kernel patch series does not match the pinned recipe")
-    for name in series:
-        patch(tree, recipes / name)
-    patch(tree, posture)
+        raise ValueError(f"{recipes.name}: patch series does not match the pinned recipe")
+    return [recipes / name for name in series]
+
+
+def prepare_arm_source(source, work):
+    from surface_laptop7 import extract, patch
+
+    tree = work / "linux"
+    extract(source["arm-kernel-source"], tree)
+    extract(source["arm-kernel-recipes"], work,
+            prefixes=("pkgbuilds/linux-omarchy-aarch64/", "pkgbuilds/linux-omarchy-dtbs/"))
+    for path in patch_series(work / "pkgbuilds/linux-omarchy-aarch64"):
+        patch(tree, path)
+    return tree
+
+
+def build_qualcomm_kernel(release, tree, source, work, stage):
+    from surface_laptop7 import patch
+
+    patch(tree, source["surface-snapdragon-posture-fix"])
     patch(tree, ROOT / "packaging/surface-romulus-camss.patch")
     config = tree / ".config"
-    copy_required(recipes / "config.aarch64", config)
+    copy_required(work / "pkgbuilds/linux-omarchy-aarch64/config.aarch64", config)
     subprocess.run([tree / "scripts/config", "--file", config, "--set-str", "LOCALVERSION",
                     "-" + release.split("-", 1)[1], "--enable", "HIBERNATION",
                     "--enable", "DEBUG_INFO_COMPRESSED_ZSTD"], check=True)
-
-
-def build_qualcomm_kernel(release, source, work, stage):
-    from surface_laptop7 import extract
-
-    tree = work / "linux"
-    recipe = Path("pkgbuilds/linux-omarchy-aarch64")
-    extract(source["omarchy-linux-source"], tree)
-    extract(source["surface-snapdragon-kernel-fixes"], work, prefixes=(f"{recipe}/",))
-    prepare_qualcomm_kernel(tree, work / recipe, release, source["surface-snapdragon-posture-fix"])
     make = ["make", "-C", tree]
     subprocess.run([*make, "olddefconfig"], check=True)
     config = tree / ".config"
@@ -161,16 +165,45 @@ def build_qualcomm_kernel(release, source, work, stage):
     copy_required(config, stage / f"boot/config-{release}")
 
 
-def kernel_package(profile, source, provenance, work, out):
+def build_qualcomm_dtbs(tree, work, boards):
+    from surface_laptop7 import patch
+
+    dts_dir = tree / "arch/arm64/boot/dts/qcom"
+    original = set(dts_dir.glob("*.dts"))
+    recipe = (work / "pkgbuilds/linux-omarchy-aarch64/PKGBUILD").read_text()
+    targets = re.search(r"local dts=\(arch/arm64/boot/dts/qcom/\{([a-z0-9,-]+)\}\*\.dts\)", recipe)
+    if not targets:
+        raise ValueError("the pinned kernel recipe does not select Qualcomm laptop trees")
+    laptop_prefixes = tuple(targets[1].split(","))
+    # The board recipe starts with the laptop DTS files shipped in the kernel headers.
+    selected = {path for path in original if path.name.startswith(laptop_prefixes)}
+    for path in patch_series(work / "pkgbuilds/linux-omarchy-dtbs"):
+        # A board patch may have landed in the pinned kernel series already.
+        applied = subprocess.run(["patch", "--force", "--reverse", "--fuzz=0", "--dry-run", "-p1", "-i", path],
+                                 cwd=tree, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if applied.returncode != 0:
+            patch(tree, path)
+    boards.mkdir(parents=True)
+    prefixes = tree / "scripts/dtc/include-prefixes"
+    preprocessed = work / "board.pre.dts"
+    current = set(dts_dir.glob("*.dts"))
+    for dts in sorted((selected & current) | (current - original)):
+        subprocess.run(["gcc", "-E", "-nostdinc", "-undef", "-D__DTS__", "-x", "assembler-with-cpp",
+                        "-I", prefixes, "-o", preprocessed, dts], check=True)
+        subprocess.run(["dtc", "-q", "-@", "-O", "dtb", "-b", "0", "-i", dts.parent, "-i", prefixes,
+                        "-o", boards / dts.with_suffix(".dtb").name, preprocessed], check=True)
+
+
+def kernel_package(profile, source, provenance, work, out, *, board_tools=False):
     release = profile["release"]
     name = f"linux-image-{release.lower()}"
     version = release.lower()
     stage = work / "kernel"
     prefix = f"usr/lib/modules/{release}"
     module_dir = stage / prefix
-    source_build = "omarchy-linux-source" in source
-    if source_build:
-        build_qualcomm_kernel(release, source, work, stage)
+    tree = prepare_arm_source(source, work) if profile.get("dtbs") else None
+    if board_tools:
+        build_qualcomm_kernel(release, tree, source, work, stage)
         patch = ROOT / "packaging/surface-romulus-camss.patch"
         provenance[patch.stem] = {
             "sha256": digest(patch),
@@ -193,15 +226,14 @@ def kernel_package(profile, source, provenance, work, out):
                 (stage / f"boot/config-{release}").write_bytes(gzip.decompress(image[start + 8:end]))
     if not (module_dir / "modules.builtin").is_file() or not (module_dir / "kernel").is_dir():
         raise ValueError(f"incomplete modules for {release}")
-    if "dtbs" in profile:
-        directory = "boot/dtbs/linux-omarchy/qcom"
-        unpack(source[profile["dtbs"]], work / "dtbs", lambda p: p.startswith(directory + "/") and p.endswith(".dtb"))
-        (module_dir / "dtb").mkdir()
+    if tree is not None:
         boards = module_dir / "dtb/qcom"
-        shutil.move(work / "dtbs" / directory, boards)
+        build_qualcomm_dtbs(tree, work, boards)
         if "romulus" in profile:
-            romulus_trees(boards, work, provenance, source_build)
-            version += "+clawos3" if source_build else "+clawos2"
+            romulus_trees(boards, work, provenance, board_tools)
+            version += "+clawos4" if board_tools else "+clawos3"
+        else:
+            version += "+clawos1"
         write_qualcomm_boards(boards)
     if "boot" in profile:
         config = stage / "usr/lib/modprobe.d/90-claw-apple-speakers.conf"
@@ -393,8 +425,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     else:
         keys = list(profile.get("native", [])) or [profile["kernel"]]
         keys += profile.get("surface", []) + profile.get("t2", [])
-    if "dtbs" in profile:
-        keys.append(profile["dtbs"])
+    if profile.get("dtbs"):
+        keys += ["arm-kernel-source", "arm-kernel-recipes"]
     keys += profile.get("gpu", []) + profile.get("boot", [])
     if profile.get("asahi_vulkan"):
         from asahi_vulkan import INPUTS as vulkan_inputs
@@ -440,7 +472,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
 
                 t2_package(profile["release"], source, provenance, work, out, package)
         else:
-            kernel_package(profile, source, provenance, work, out)
+            kernel_package(profile, source, provenance, work, out, board_tools=board_tools)
             if "romulus" in profile:
                 from surface_laptop7 import snapdragon_packages
 

@@ -24,7 +24,7 @@ def audio_packages(source, provenance, work, out, package):
     romulus = work / "romulus-ucm"
     recipes = work / "qualcomm-ucm"
     extract(source["surface-snapdragon-fixes"], romulus, prefixes=(profile_dir,))
-    extract(source["surface-snapdragon-kernel-fixes"], recipes, prefixes=(profile_dir, zenbook_dir, "LICENSE"))
+    extract(source["arm-kernel-recipes"], recipes, prefixes=(profile_dir, zenbook_dir, "LICENSE"))
     romulus, boards, zenbook = romulus / profile_dir, recipes / profile_dir, recipes / zenbook_dir
 
     subprocess.run(["apt-get", "download", "alsa-ucm-conf/trixie-backports", "firmware-qcom-soc/trixie-backports"],
@@ -81,7 +81,7 @@ def audio_packages(source, provenance, work, out, package):
                stage / "usr/share/doc" / name / "firmware-qcom-soc.copyright")
     package(stage, out, name, "1-2", "all", f"alsa-ucm-conf (>= {version})",
             "Matched AudioReach topologies for supported Acer, ASUS and HP Snapdragon models",
-            {key: provenance[key] for key in ("surface-snapdragon-fixes", "surface-snapdragon-kernel-fixes")}, None)
+            {key: provenance[key] for key in ("surface-snapdragon-fixes", "arm-kernel-recipes")}, None)
 
 
 def compile_topology(config, audioreach, topology, expected):
@@ -97,7 +97,7 @@ def laptop8_audio_package(release, source, provenance, work, out, package):
     profile_dir = "pkgbuilds/microsoft-surface-laptop-8-support/"
     recipes = work / "laptop8-recipes"
     audioreach = work / "audioreach"
-    extract(source["surface-snapdragon-kernel-fixes"], recipes, prefixes=(profile_dir,))
+    extract(source["arm-kernel-recipes"], recipes, prefixes=(profile_dir,))
     extract(source["qualcomm-audioreach"], audioreach)
     profile = recipes / profile_dir
     stage = work / "laptop8-audio"
@@ -127,4 +127,4 @@ def laptop8_audio_package(release, source, provenance, work, out, package):
     stage_file(audioreach / "LICENSE.BSD-3-Clause", docs / "audioreach.LICENSE")
     package(stage, out, name, "1-1", "arm64", f"linux-image-{release}, alsa-ucm-conf (>= 1.2.16.1-1~bpo13+1), udev",
             "Audio, input and USB suspend integration for Snapdragon Surface Laptop 8",
-            {key: provenance[key] for key in ("qualcomm-audioreach", "surface-snapdragon-kernel-fixes")}, None)
+            {key: provenance[key] for key in ("qualcomm-audioreach", "arm-kernel-recipes")}, None)
