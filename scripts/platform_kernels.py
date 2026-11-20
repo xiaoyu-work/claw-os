@@ -88,13 +88,14 @@ def copy_required(source, target):
     target.chmod(0o644)
 
 
-def package(stage, out, name, version, arch, depends, description, provenance, postinst, postrm=None):
+def package(stage, out, name, version, arch, depends, description, provenance, postinst, postrm=None, *, replaces=None):
     metadata = stage / "DEBIAN"
     metadata.mkdir(exist_ok=True)
+    transition = f"Breaks: {replaces}\nReplaces: {replaces}\n" if replaces else ""
     (metadata / "control").write_text(
         f"Package: {name}\nVersion: {version}\nArchitecture: {arch}\n"
         f"Maintainer: Claw OS <noreply@github.com>\nSection: kernel\nPriority: optional\n"
-        f"Depends: {depends}\nDescription: {description}\n",
+        f"{transition}Depends: {depends}\nDescription: {description}\n",
         encoding="utf-8",
     )
     notices = stage / "usr/share/doc" / name
@@ -391,9 +392,11 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
             if board_tools:
                 from qualcomm_audio import audio_packages, laptop8_audio_package
                 from qualcomm_firmware import package_firmware_index
+                from surface_pro11 import pro11_package
 
                 audio_packages(source, provenance, work, out, package)
                 laptop8_audio_package(profile["release"], source, provenance, work, out, package)
+                pro11_package(profile["release"], source, provenance, work, out, package)
                 package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)

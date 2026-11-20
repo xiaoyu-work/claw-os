@@ -38,7 +38,8 @@ case "$arch" in
             panel_edp panel_samsung_atna33xc20 pwm_bl leds_qcom_lpg qcom_pbs \
             phy_qcom_qmp_combo qrtr qcom_pd_mapper pmic_glink pmic_glink_altmode \
             ps883x gpio_sbu_mux display_connector simple_bridge i2c_hid_of \
-            spi_qcom_qspi spi_hid_of surface_aggregator surface_aggregator_registry surface_aggregator_tabletsw surface_hid \
+            spi_qcom_qspi spi_hid_of surface_aggregator surface_aggregator_registry surface_aggregator_tabletsw \
+            surface_aggregator_hub surface_hid_core surface_hid \
             pinctrl_x1e80100 qnoc_x1e80100 pinctrl_glymur qnoc_glymur \
             spmi_pmic_arb pinctrl_spmi_gpio i2c_qcom_geni reset_gpio gpio_shared_proxy \
             qcom_hwspinlock smem smp2p socinfo nvmem_qfprom nvmem_qcom_spmi_sdam \
@@ -51,7 +52,7 @@ case "$arch" in
         if [ -r "$config" ] && grep -Eq "^export CLAW_QCOM_DTB='glymur-microsoft-surface-laptop8(-15)?[.]dtb'$" "$config"; then
             laptop8=true
             # The panel and USB-C need SOCCP before disk unlock. Do not force PAS past the boot blacklist.
-            set -- "$@" qcom_q6v5_pas ucsi_glink thunderbolt_platform surface_aggregator_hub surface_hid_core
+            set -- "$@" qcom_q6v5_pas ucsi_glink thunderbolt_platform
         fi
         ;;
     *) exit 0 ;;

@@ -99,12 +99,12 @@ def kernel_modules(profile, source, fixes, work, stage, kbuild):
             stage_file(tree / path / filename, destination / filename)
 
 
-def touchpad(archive, patches, work, stage, *, recipes=None):
+def touchpad(archive, patches, work, stage, *, relaxed_probe=False):
     tree = work / "iptsd"
     extract(archive, tree)
     for series_patch in sorted(patches.glob("*.patch")):
         patch(tree, series_patch)
-    if recipes:
+    if relaxed_probe:
         rule = tree / "etc/udev/50-iptsd.rules.in"
         replace(rule, 'ACTION=="add"', 'ACTION!="remove"')
     build = tree / "build"
@@ -117,29 +117,31 @@ def touchpad(archive, patches, work, stage, *, recipes=None):
     subprocess.run(["meson", "install", "-C", build, "--destdir", stage, "--skip-subprojects"], check=True)
     if not any(stage.rglob("iptsd@.service")) or not any(stage.rglob("50-iptsd.rules")):
         raise ValueError("iptsd was built without its systemd and udev integration")
-    if recipes:
-        stage_file(recipes / "surface-laptop-7-15.conf", stage / "usr/share/iptsd/surface-laptop-7-15.conf")
-        stage_file(recipes / "iptsd-romulus15-boot", stage / "usr/lib/iptsd/iptsd-romulus15-boot", 0o755)
-        for action, board, target in (("boot", "romulus15", "multi-user"), ("resume", "romulus", "suspend")):
-            unit = f"iptsd-{board}-{action}.service"
-            systemd = stage / "usr/lib/systemd/system"
-            stage_file(recipes / f"iptsd-romulus15-{action}.service", systemd / unit)
-            if action == "resume":
-                replace(systemd / unit, 'Description=Restart iptsd after resume on the Surface Laptop 7 15"',
-                        "Description=Restart iptsd after resume on the Surface Laptop 7")
-                replace(systemd / unit, "ConditionFirmware=device-tree-compatible(microsoft,romulus15)",
-                        "ConditionFirmware=|device-tree-compatible(microsoft,romulus13)\n"
-                        "ConditionFirmware=|device-tree-compatible(microsoft,romulus13-spi)\n"
-                        "ConditionFirmware=|device-tree-compatible(microsoft,romulus15)")
-            wants = systemd / f"{target}.target.wants"
-            wants.mkdir(parents=True, exist_ok=True)
-            (wants / unit).symlink_to(f"../{unit}")
+
+
+def romulus_touchpad_configs(recipes, stage):
+    stage_file(recipes / "surface-laptop-7-15.conf", stage / "usr/share/iptsd/surface-laptop-7-15.conf")
+    stage_file(recipes / "iptsd-romulus15-boot", stage / "usr/lib/iptsd/iptsd-romulus15-boot", 0o755)
+    for action, board, target in (("boot", "romulus15", "multi-user"), ("resume", "romulus", "suspend")):
+        unit = f"iptsd-{board}-{action}.service"
+        systemd = stage / "usr/lib/systemd/system"
+        stage_file(recipes / f"iptsd-romulus15-{action}.service", systemd / unit)
+        if action == "resume":
+            replace(systemd / unit, 'Description=Restart iptsd after resume on the Surface Laptop 7 15"',
+                    "Description=Restart iptsd after resume on the Surface Laptop 7")
+            replace(systemd / unit, "ConditionFirmware=device-tree-compatible(microsoft,romulus15)",
+                    "ConditionFirmware=|device-tree-compatible(microsoft,romulus13)\n"
+                    "ConditionFirmware=|device-tree-compatible(microsoft,romulus13-spi)\n"
+                    "ConditionFirmware=|device-tree-compatible(microsoft,romulus15)")
+        wants = systemd / f"{target}.target.wants"
+        wants.mkdir(parents=True, exist_ok=True)
+        (wants / unit).symlink_to(f"../{unit}")
 
 
 def snapdragon_packages(release, source, provenance, work, out, package, unpack):
     name = "claw-os-surface-snapdragon-radio"
     stage = work / "romulus-radio"
-    boards = ("microsoft,romulus13", "microsoft,romulus13-spi", "microsoft,romulus15",
+    boards = ("microsoft,romulus13", "microsoft,romulus13-spi", "microsoft,romulus15", "microsoft,denali",
               "microsoft,surface-laptop-8-13p8", "microsoft,surface-laptop-8-15")
     unpack(source["surface-snapdragon-addresses"], stage, lambda path: path.startswith("usr/"))
     wifi = stage / "usr/lib/surface-snapdragon-addresses/surface-wifi-address"
@@ -152,8 +154,8 @@ if [[ ! -r $compatible ]] || ! grep -qzxE '{'|'.join(boards)}' "$compatible"; th
     bt = stage / "usr/lib/systemd/system/surface-bluetooth-address@.service"
     compatible = "\n".join(f"ConditionFirmware=|device-tree-compatible({board})" for board in boards)
     replace(bt, 'ConditionFirmware=smbios-field(sys_vendor = "Microsoft Corporation")', compatible)
-    package(stage, out, name, "1-2+clawos3", "arm64", "bash, bluez, iproute2, systemd, udev",
-            "Wi-Fi and Bluetooth addresses for Snapdragon Surface Laptop 7 and 8",
+    package(stage, out, name, "1-2+clawos4", "arm64", "bash, bluez, iproute2, systemd, udev",
+            "Wi-Fi and Bluetooth addresses for Snapdragon Surface Laptop 7, Laptop 8 and Pro 11",
             {"surface-snapdragon-addresses": provenance["surface-snapdragon-addresses"]}, None)
     if "surface-snapdragon-iptsd" not in source:
         return
@@ -161,11 +163,21 @@ if [[ ! -r $compatible ]] || ! grep -qzxE '{'|'.join(boards)}' "$compatible"; th
         raise ValueError("build the Snapdragon touchpad package in an arm64 Debian 13 environment")
     fixes = work / "romulus-fixes"
     extract(source["surface-snapdragon-fixes"], fixes, prefixes=("pkgbuilds/iptsd/",))
-    stage = work / "romulus-touchpad"
     recipes = fixes / "pkgbuilds/iptsd"
-    touchpad(source["surface-snapdragon-iptsd"], recipes, work, stage, recipes=recipes)
-    name = "claw-os-surface-snapdragon-touchpad"
-    stage_file(work / "iptsd/LICENSE", stage / "usr/share/doc" / name / "copyright")
+    iptsd = "claw-os-surface-snapdragon-iptsd"
+    romulus = "claw-os-surface-snapdragon-touchpad"
+    version = "3.1.0-5+clawos5"
+    common = work / "snapdragon-iptsd"
+    touchpad(source["surface-snapdragon-iptsd"], recipes, work, common, relaxed_probe=True)
+    stage_file(work / "iptsd/LICENSE", common / "usr/share/doc" / iptsd / "copyright")
+    package(common, out, iptsd, version, "arm64",
+            "libc6, libgcc-s1, libstdc++6, libbsd0, libyaml-0-2, systemd, udev",
+            "Touch and pen daemon for Snapdragon Surface digitizers",
+            {key: provenance[key] for key in ("surface-snapdragon-iptsd", "surface-snapdragon-fixes")},
+            None, replaces=f"{romulus} (<< {version})")
+    stage = work / "romulus-touchpad"
+    romulus_touchpad_configs(recipes, stage)
+    name = romulus
     romulus_fastrpc(source["surface-snapdragon-fastrpc"], work, stage, name)
     # The OV02C10 black level is 64 in its 10-bit mode; SoftISP uses 16-bit tuning.
     write_file(stage / "usr/share/libcamera/ipa/simple/ov02c10.yaml", """version: 1
@@ -184,8 +196,8 @@ algorithms:
   }
 ]
 """)
-    package(stage, out, name, "3.1.0-5+clawos4", "arm64",
-            f"linux-image-{release}, libc6, libgcc-s1, libstdc++6, libbsd0, libyaml-0-2, systemd, udev, curl, msitools",
+    package(stage, out, name, version, "arm64",
+            f"linux-image-{release}, {iptsd} (= {version}), libc6, curl, msitools",
             "Input, camera and FastRPC integration for Snapdragon Surface Laptop 7",
             {name: spec for name, spec in provenance.items() if name.startswith("surface-snapdragon-")}, None)
 
