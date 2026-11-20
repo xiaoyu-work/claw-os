@@ -47,10 +47,9 @@ def request():
     layouts = {"us", "gb", "de", "fr", "es", "it", "br", "jp", "ru"}
     locales = system("locale", "-a").stdout.decode().splitlines()
     locale = data["locale"]
-    if data["keyboard"] not in layouts or (locale and
-            ("_" not in locale or not locale.endswith(".utf8") or locale not in locales)):
-        raise ValueError("invalidRegionalSettings")
-    if data["zone"] and data["zone"] not in available_timezones():
+    if (data["keyboard"] not in layouts or "_" not in locale
+            or not locale.endswith(".utf8") or locale not in locales
+            or data["zone"] not in available_timezones()):
         raise ValueError("invalidRegionalSettings")
     agent = data["agent"]
     if agent is not None and (
@@ -125,11 +124,9 @@ def create_owner():
             if not (1000 <= account.pw_uid < 60000 and account.pw_dir == str(home)):
                 raise OSError("unexpected local account")
             initialize_home(account, data)
-            if data["locale"]:
-                locale = data["locale"].removesuffix(".utf8") + ".UTF-8"
-                system("/usr/sbin/update-locale", "LANG=" + locale)
-            if data["zone"]:
-                system("timedatectl", "set-timezone", data["zone"])
+            locale = data["locale"].removesuffix(".utf8") + ".UTF-8"
+            system("/usr/sbin/update-locale", "LANG=" + locale)
+            system("timedatectl", "set-timezone", data["zone"])
             # chpasswd uses the OS password stack; the secret never goes in argv.
             system("chpasswd", data=(name + ":" + data["password"] + "\n").encode())
         except (OSError, subprocess.SubprocessError):

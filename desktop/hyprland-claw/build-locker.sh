@@ -21,7 +21,8 @@ printf '%s  %s\n' "$digest" "$archive" | sha256sum --check
 mkdir "$source"
 (umask 022; tar -xf "$archive" --no-same-owner --no-same-permissions \
     --strip-components=1 -C "$source")
-git -C "$source" apply --unidiff-zero --whitespace=error-all "$here/swaylock-pam-only.patch"
+git -C "$source" apply --unidiff-zero --whitespace=error-all \
+    "$here/swaylock-pam-only.patch" "$here/swaylock-unlock-prompt.patch"
 meson setup --wrap-mode=nodownload --buildtype=release \
     -Dpam=enabled -Dgdk-pixbuf=disabled -Dman-pages=disabled "$build" "$source"
 meson compile -C "$build" -j "$jobs" swaylock

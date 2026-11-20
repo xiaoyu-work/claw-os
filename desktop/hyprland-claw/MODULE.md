@@ -67,8 +67,9 @@ The wizard and greeter share the original wallpaper and an aligned, softened
 crop behind the glass cards. Cage and Qt Quick render this pre-login UI in
 software; the authenticated desktop retains its normal graphics backend.
 The wizard skips network setup when already connected and leaves display
-mode, scaling and taskbar layout to the defaults. `claw-desktop-locales`
-generates the Debian locales used by the language picker.
+mode, scaling and taskbar layout to the defaults. The first owner chooses an
+installed language and a real time zone; the setup helper validates and saves
+both. `claw-desktop-locales` generates the Debian locales used by the picker.
 
 The subscriber's `--desktop` mode attaches to the Root login binding. It runs
 post-login configuration only on installed profiles that request it, starts
@@ -84,6 +85,8 @@ installs the session wiring and compiled compositor into the Desktop package.
 The same stage builds the private `claw-lockscreen` executable from pinned
 Swaylock source, with mandatory PAM and the dedicated `claw-desktop-lock`
 service. This build artifact is not a lock or display authorization.
+The lock screen identifies itself and explains how to unlock with the sign-in
+password; the ring shows keyboard and authentication feedback.
 The Root supervisor admits the locker through its private Wayland descriptor.
 The compositor requires that role for the session-lock protocol and does not
 provide an owner Lua recovery unlock. PAM alone releases a live lock;

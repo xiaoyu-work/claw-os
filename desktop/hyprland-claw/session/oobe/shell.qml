@@ -39,7 +39,7 @@ ShellRoot {
         keyboard: [qsTr("Select keyboard layout"), qsTr("This layout takes effect in your desktop session. Setup and sign-in use the current system keyboard."), keyboardPage],
         agent: [qsTr("Configure your Agent"), qsTr("Connect a model provider now, or set it up later."), modelPage],
         account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Claw OS."), accountPage],
-        location: [qsTr("Timezone and location"), qsTr("Choose a time zone for this computer."), locationPage],
+        location: [qsTr("Select a time zone"), qsTr("Choose the time zone where you use this computer."), locationPage],
         appearance: [qsTr("Personalize appearance"), qsTr("Preview a light or dark look and set the preference for your apps."), appearancePage],
         drivers: [qsTr("Set up graphics and hardware"), qsTr("Claw OS installs only the additional packages that match this computer."), driverPage],
         finish: [qsTr("You're ready"), qsTr("Finish setup to open your Claw OS desktop."), finishPage]
@@ -293,7 +293,9 @@ ShellRoot {
                         primary: true
                         visible: setup.current !== "network"
                         enabled: setup.signInFailed || (!setup.finishing
+                            && (setup.current !== "language" || setup.language !== "")
                             && (setup.current !== "account" || setup.validAccount)
+                            && (setup.current !== "location" || setup.zone !== "")
                             && (setup.current !== "agent" || !!page.item?.canContinue))
                         text: setup.signInFailed ? qsTr("Go to sign-in")
                             : setup.state.finished && setup.local ? qsTr("Signing in…")
@@ -322,10 +324,10 @@ ShellRoot {
                 const locale = Qt.locale(code.split(".")[0]);
                 return qsTr("%1 (%2)").arg(locale.nativeLanguageName).arg(locale.nativeTerritoryName);
             }
-            label: qsTr("System language")
-            model: [qsTr("Keep system default"), ...setup.state.languages.map(code => languageName(code))]
-            selection: setup.language ? languageName(setup.language) : model[0]
-            onActivated: index => setup.language = index === 0 ? "" : setup.state.languages[index - 1]
+            label: qsTr("Choose a language")
+            model: setup.state.languages.map(code => languageName(code))
+            selection: setup.language ? languageName(setup.language) : ""
+            onActivated: index => setup.language = setup.state.languages[index]
         }
     }
 
@@ -390,18 +392,25 @@ ShellRoot {
     Component {
         id: locationPage
         ColumnLayout {
+            id: timeZonePage
+            readonly property var matches: setup.state.zones.filter(zone =>
+                zone.toLowerCase().replace(/_/g, " ").includes(filterZone.text.trim().toLowerCase()))
+
+            function zoneName(zone: string): string {
+                return zone.replace(/_/g, " ");
+            }
+
             Field {
                 id: filterZone
                 Layout.fillWidth: true
-                placeholderText: qsTr("Search time zones")
+                placeholderText: qsTr("Search by city or time zone")
             }
             Picker {
                 Layout.fillWidth: true
-                label: qsTr("Time zone")
-                model: [qsTr("Keep system default"), ...setup.state.zones.filter(item =>
-                    item.toLowerCase().includes(filterZone.text.toLowerCase()))]
-                selection: setup.zone || model[0]
-                onActivated: index => setup.zone = index === 0 ? "" : model[index]
+                label: qsTr("Choose a time zone")
+                model: timeZonePage.matches.map(zone => timeZonePage.zoneName(zone))
+                selection: timeZonePage.zoneName(setup.zone)
+                onActivated: index => setup.zone = timeZonePage.matches[index]
             }
         }
     }
@@ -674,6 +683,8 @@ ShellRoot {
                         return qsTr("Your account is ready, but automatic sign-in didn't complete. Sign in with the password you just set.");
                     if (setup.state.finishError === "busy")
                         return qsTr("Wait for the current setup operation, then try again.");
+                    if (setup.state.finishError === "invalidRegionalSettings")
+                        return qsTr("Go back and choose a language, keyboard layout, and time zone.");
                     if (setup.state.finishError)
                         return setup.local ? qsTr("Couldn't finish creating the account. Your desktop hasn't been opened. Try again.")
                             : qsTr("Couldn't save setup completion. Check that your home folder is writable.");
