@@ -9,7 +9,7 @@ directory=$(realpath -e -- "$(dirname -- "$output")")
 output="$directory/$(basename -- "$output")"
 [[ $release =~ ^[[:alnum:].+-]+$ ]]
 for artifact in "boot/vmlinuz-$release" "boot/initrd.img-$release" \
-    usr/lib/cos/asahi/boot{,-j700}.bin; do
+    usr/lib/cos/asahi/{boot,boot-j700,stage1-j700}.bin; do
     test -s "$rootfs/$artifact"
 done
 test -f "$rootfs/etc/cos/local-desktop-setup"
@@ -50,6 +50,7 @@ chroot "$root" /usr/bin/grub-mkstandalone --format=arm64-efi --locales='' --font
     --output="$inside/BOOTAA64.EFI" "boot/grub/grub.cfg=$inside/config"
 install -m0644 "$grub_work/BOOTAA64.EFI" "$esp/EFI/BOOT/"
 cp "$root/usr/lib/cos/asahi"/boot{,-j700}.bin "$esp/m1n1/"
+mv -- "$root/usr/lib/cos/asahi/stage1-j700.bin" "$work/stage1-j700.bin"
 rm -f -- "$grub_work/config" "$grub_work/BOOTAA64.EFI"
 rmdir -- "$grub_work"
 
@@ -61,7 +62,7 @@ truncate -s "${mib}M" "$work/root.img"
 mkfs.ext4 -q -F -U "$uuid" -N "$(( inodes + inodes / 4 + 1024 ))" -d "$root" "$work/root.img"
 (
     cd "$work"
-    zip -q -r payload.zip root.img esp
+    zip -q -r payload.zip root.img esp stage1-j700.bin
 )
 chmod 0644 "$work/payload.zip"
 mv -fT -- "$work/payload.zip" "$output"

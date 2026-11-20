@@ -327,9 +327,10 @@ def nvidia_package(profile, source, provenance, work, out):
 def apple_boot(profile, source, work, out):
     directory = work / "apple-boot"
     m1n1 = "usr/lib/asahi-boot/m1n1.bin"
+    neo_stage1 = "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
     uboot = "usr/lib/asahi-boot/u-boot-nodtb.bin"
     neo = "usr/lib/asahi-boot-j700/u-boot-nodtb.bin"
-    unpack(source["m1n1"], directory, lambda p: p == m1n1 or p.startswith("usr/share/licenses/m1n1-aurora/"))
+    unpack(source["m1n1"], directory, lambda p: p in (m1n1, neo_stage1) or p.startswith("usr/share/licenses/m1n1-aurora/"))
     unpack(source["uboot"], directory, lambda p: p in (uboot, neo) or p.startswith("usr/share/licenses/uboot-aurora/"))
     dtbs = work / f"kernel/usr/lib/modules/{profile['release']}/dtbs"
     trees = sorted(path for path in dtbs.glob("t*-j*.dtb") if path.is_file())
@@ -344,6 +345,7 @@ def apple_boot(profile, source, work, out):
             for tree in bundle:
                 boot.write(tree.read_bytes())
             boot.write(gzip.compress((directory / uboot_path).read_bytes(), mtime=0))
+    copy_required(directory / neo_stage1, out / "stage1-j700.bin")
     shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
 
 

@@ -15,6 +15,7 @@ PAYLOAD = Path("../os") / PACKAGE
 EFI = "esp/EFI/BOOT/BOOTAA64.EFI"
 STAGE2 = "esp/m1n1/boot.bin"
 LAYOUT = {"root.img", EFI, STAGE2, "esp/m1n1/boot-j700.bin"}
+NEO_STAGE1 = "stage1-j700.bin"
 DIRECTORIES = {"esp/", "esp/EFI/", "esp/EFI/BOOT/", "esp/m1n1/"}
 ESP_BYTES = 500 * 1024**2
 
@@ -53,7 +54,7 @@ def template_for(payload, mac):
     with zipfile.ZipFile(payload) as package:
         members = package.infolist()
         names = {member.orig_filename for member in members}
-        if len(names) != len(members) or not LAYOUT <= names <= LAYOUT | DIRECTORIES:
+        if len(names) != len(members) or not LAYOUT <= names <= LAYOUT | DIRECTORIES | {NEO_STAGE1}:
             raise ValueError("unexpected files in the Claw OS installer payload")
         if any(not package.getinfo(name).file_size for name in LAYOUT):
             raise ValueError("the Claw OS installer payload contains an empty file")
