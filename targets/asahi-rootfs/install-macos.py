@@ -14,7 +14,8 @@ PACKAGE = "claw-os.zip"
 PAYLOAD = Path("../os") / PACKAGE
 EFI = "esp/EFI/BOOT/BOOTAA64.EFI"
 STAGE2 = "esp/m1n1/boot.bin"
-LAYOUT = {"root.img", EFI, STAGE2, "esp/m1n1/boot-j700.bin"}
+NEO_STAGE2 = "esp/m1n1/boot-j700.bin"
+LAYOUT = {"root.img", EFI, STAGE2, NEO_STAGE2}
 NEO_STAGE1 = "stage1-j700.bin"
 DIRECTORIES = {"esp/", "esp/EFI/", "esp/EFI/BOOT/", "esp/m1n1/"}
 ESP_BYTES = 500 * 1024**2
@@ -41,10 +42,18 @@ class ClawInstaller(engine.InstallerMain):
         PAYLOAD.unlink()
         return super().step2(report)
 
+    def bless(self):
+        super().bless()
+        if self.sysinfo.device_class == "j700ap":
+            from claw_neo import check_startup_disk
 
-def template_for(payload, mac):
+            check_startup_disk(self.dutil, self.ins.osi.vgid)
+
+
+def template_for(payload, mac, neo=None):
     device = engine.DEVICES.get(mac.device_class)
-    if not device or device.expert_only or mac.chip_id not in engine.CHIP_MIN_VER:
+    if (not device or device.expert_only or mac.chip_id not in engine.CHIP_MIN_VER
+            or (mac.device_class == "j700ap") != (neo is not None)):
         raise ValueError(f"{mac.device_class}: not supported by this Asahi enrollment engine")
     if mac.boot_mode != "macOS" or not mac.login_user or mac.login_user == "unknown":
         raise ValueError("start in macOS with a user logged in at the local console")
@@ -71,8 +80,10 @@ def template_for(payload, mac):
             raise ValueError("the EFI loader is not for ARM64")
         board = mac.device_class.removesuffix("ap")
         compatible = f"apple,{board}\0apple,t{mac.chip_id:x}\0".encode("ascii")
-        if compatible not in package.read(STAGE2):
+        if compatible not in package.read(NEO_STAGE2 if neo else STAGE2):
             raise ValueError(f"the supplied stage-two image does not match {mac.device_class}")
+        if neo:
+            neo.stage_one(package, NEO_STAGE1)
 
     return {
         "name": "Claw OS",
@@ -80,10 +91,10 @@ def template_for(payload, mac):
         "package": PACKAGE,
         "boot_object": "m1n1.bin",
         "next_object": "m1n1/boot.bin",
-        "supported_fw": ["13.5", "14.8.3"],
+        "supported_fw": ["26.6.2"] if neo else ["13.5", "14.8.3"],
         "partitions": [
             {"type": "EFI", "name": "EFI", "size": f"{ESP_BYTES}B", "format": "fat",
-             "source": "esp", "copy_firmware": True, "copy_installer_data": True},
+             "source": "esp", "copy_firmware": True, "copy_installer_data": neo is None},
             {"type": "Linux", "name": "Root", "size": f"{size}B", "image": "root.img", "expand": True},
         ],
     }
@@ -93,14 +104,24 @@ def run(mode):
     if sys.platform != "darwin" or os.geteuid() != 0:
         raise ValueError("use install-macos.sh from Apple Silicon macOS")
     mac = engine.system.SystemInfo()
-    template = template_for(PAYLOAD, mac)
+    neo = None
+    if mac.device_class == "j700ap":
+        if not Path("claw_neo.py").is_file():
+            raise ValueError("use the MacBook Neo restore environment staged by install-macos.sh")
+        import claw_neo as neo
+
+        neo.select_board(mac)
+    template = template_for(PAYLOAD, mac, neo)
     metadata = {"os_list": [template]}
     Path("installer_data.json").write_text(json.dumps(metadata), encoding="utf-8")
     installer = ClawInstaller(Path("version.tag").read_text().strip())
     installer.sysinfo = mac
     installer.device = engine.DEVICES[mac.device_class]
-    installer.choose_ipsw(template["supported_fw"])
+    ipsw = installer.choose_ipsw(template["supported_fw"])
     size = engine.STUB_SIZE + engine.osinstall.OSInstaller(None, metadata, template).min_recommended_size
+    if neo:
+        neo.check_restore(mac, ipsw)
+        engine.MIN_INSTALL_FREE = max(engine.MIN_INSTALL_FREE, size)
     print(f"{mac.device_class}: Claw OS, dedicated APFS boot stub and ESP, unencrypted Linux root")
     print(f"Recommended free space: {engine.ssize(size)}. Asahi checks the actual partition layout before installation.")
     if mode == "--plan":
@@ -109,6 +130,8 @@ def run(mode):
     print("Back up macOS before proceeding. The installer may shrink its APFS container.")
     if input("Type INSTALL to open the Asahi installation menu: ") != "INSTALL":
         raise ValueError("installation cancelled; no partitions changed")
+    if neo:
+        neo.prepare_install(mac)
     # Asahi collects this file with its install data; keep credentials and local paths out of it.
     Path("installer.log").touch()
     # The workspace stays private, but the new stub must be readable in macOS and Recovery.
@@ -121,7 +144,7 @@ if __name__ == "__main__":
         if sys.argv[1:] not in (["--plan"], ["--install"]):
             raise ValueError("choose --plan or --install")
         run(sys.argv[1])
-    except (OSError, ValueError, zipfile.BadZipFile) as error:
+    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as error:
         raise SystemExit(f"Claw OS: {error}") from None
     except subprocess.CalledProcessError:
         raise SystemExit("Claw OS: an Asahi system operation failed") from None
