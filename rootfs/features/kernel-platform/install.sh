@@ -53,6 +53,7 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config gpg gpgv zstd patch meson ninja-build \
         bc bison flex swig python3-pyelftools device-tree-compiler libgnutls28-dev \
+        clang-22 llvm-22 lld-22 \
         "cargo/$SUITE-backports" "rustc/$SUITE-backports" "libasound2-dev/$SUITE-backports" \
         libglib2.0-dev libgusb-dev libpixman-1-dev libssl-dev libudev-dev libgudev-1.0-dev systemd-dev </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \

@@ -348,14 +348,10 @@ def nvidia_package(profile, source, provenance, work, out):
 
 
 def apple_boot(profile, source, work, out):
-    from asahi_boot import build_uboot
+    from asahi_boot import build_m1n1, build_uboot
 
-    directory = work / "apple-boot"
-    m1n1 = "usr/lib/asahi-boot/m1n1.bin"
-    neo_stage1 = "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
-    unpack(source["m1n1"], directory, lambda p: p in (m1n1, neo_stage1) or p.startswith("usr/share/licenses/m1n1-aurora/"))
-    uboot, license_path = build_uboot(source, work)
-    copy_required(license_path, directory / "usr/share/licenses/uboot-aurora/LICENSE")
+    stage1, stage2, m1n1 = build_m1n1(source, work)
+    uboot, uboot_license = build_uboot(source, work)
     dtbs = work / f"kernel/usr/lib/modules/{profile['release']}/dtbs"
     trees = sorted(path for path in dtbs.glob("t*-j*.dtb") if path.is_file())
     if not trees or not any(path.name.endswith("-j700.dtb") for path in trees):
@@ -365,12 +361,15 @@ def apple_boot(profile, source, work, out):
         ("-j700", [p for p in trees if p.name.endswith("-j700.dtb")]),
     ):
         with (out / f"boot{suffix}.bin").open("wb") as boot:
-            boot.write((directory / m1n1).read_bytes())
+            boot.write(stage2.read_bytes())
             for tree in bundle:
                 boot.write(tree.read_bytes())
             boot.write(gzip.compress(uboot.read_bytes(), mtime=0))
-    copy_required(directory / neo_stage1, out / "stage1-j700.bin")
-    shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
+    copy_required(stage1, out / "stage1-j700.bin")
+    licenses = out / "boot-licenses"
+    shutil.copytree(m1n1 / "3rdparty_licenses", licenses / "m1n1-aurora")
+    copy_required(m1n1 / "LICENSE", licenses / "m1n1-aurora/LICENSE")
+    copy_required(uboot_license, licenses / "uboot-aurora/LICENSE")
 
 
 def proart_p14_firmware(profile, source, provenance, work, out):

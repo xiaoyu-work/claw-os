@@ -215,8 +215,8 @@
       "source": "https://github.com/omacom/linux-aurora/tree/bed544bdf93a496ebf70ba180923bab12b6e01cf"
     },
     "m1n1": {
-      "file": "m1n1-aurora-1.6.1.aurora23-3-aarch64.pkg.tar.zst",
-      "sha256": "3ea63621222be3445a52ae700c69d0ee31440972669d93cf9158ef3afa739c0f",
+      "url": "https://codeload.github.com/omacom/m1n1/tar.gz/ba130ffbeeadaa35215ed88b07ebcee3199d0be7",
+      "sha256": "90c41b41555d39ef15cb37dbd4a74d816aefba6d06f599f74073393462132d5b",
       "source": "https://github.com/omacom/m1n1/tree/ba130ffbeeadaa35215ed88b07ebcee3199d0be7"
     },
     "uboot": {
