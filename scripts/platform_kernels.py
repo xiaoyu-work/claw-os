@@ -320,35 +320,26 @@ def write_qualcomm_boards(directory):
 
 
 def nvidia_package(profile, source, provenance, work, out):
+    from nvidia_platform import stage_nvidia_userspace
+
     release = profile["release"]
     version = "615.78.08"
     stage = work / "nvidia"
     prefix = f"usr/lib/modules/{release}/extramodules/"
     unpack(source["nvidia-modules"], stage, lambda p: p.startswith(prefix) and p.endswith(".ko.zst"))
-    libraries = re.compile(r"usr/lib/(?:libnvidia-[^/]+|libcuda|libnvcuvid|lib(?:EGL|GLX|GLESv[12](?:_CM)?)_nvidia)\.so(?:\.[0-9.]+)?$")
-    data = (
-        f"usr/lib/firmware/nvidia/{version}/",
-        "usr/share/glvnd/egl_vendor.d/10_nvidia.json",
-        "usr/share/vulkan/icd.d/nvidia_icd.json",
-        "usr/share/vulkan/implicit_layer.d/nvidia_layers.json",
-        "usr/share/licenses/nvidia-utils/LICENSE",
-        "usr/bin/nvidia-smi",
-    )
-    unpack(source["nvidia-userspace"], stage, lambda p: bool(libraries.fullmatch(p)) or p.startswith(data))
-    for path in (prefix + "nvidia.ko.zst", "usr/bin/nvidia-smi", f"usr/lib/libcuda.so.{version}",
-                 f"usr/lib/firmware/nvidia/{version}/gsp_ga10x.bin", data[-2]):
-        if not (stage / path).is_file():
-            raise ValueError(f"missing matching NVIDIA driver file: {path}")
     module = stage / (prefix + "nvidia.ko.zst")
+    if not module.is_file():
+        raise ValueError(f"missing matching NVIDIA driver module: {module.name}")
     driver = subprocess.check_output(["modinfo", "-F", "version", module], text=True).strip()
     kernel = subprocess.check_output(["modinfo", "-F", "vermagic", module], text=True).split()[0]
     if driver != version or kernel != release:
         raise ValueError(f"NVIDIA {driver} for {kernel} does not match the pinned driver and kernel")
+    stage_nvidia_userspace(source["nvidia-userspace"], version, work, stage)
     options = stage / "usr/lib/modprobe.d/90-claw-nvidia.conf"
     options.parent.mkdir(parents=True)
     options.write_text("options nvidia_drm modeset=1 fbdev=1\nsoftdep nvidia post: nvidia_drm\n", encoding="utf-8")
     package(
-        stage, out, "claw-os-nvidia-platform", version, profile["arch"],
+        stage, out, "claw-os-nvidia-platform", version + "+clawos1", profile["arch"],
         f"linux-image-{release.lower()}, libglvnd0, libegl1, libgl1, libgbm1, libx11-6, libxext6, libvulkan1, "
         "libnvidia-egl-gbm1, libnvidia-egl-wayland1",
         "Matched NVIDIA platform kernel modules and driver libraries", provenance,

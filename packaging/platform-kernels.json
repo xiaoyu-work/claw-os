@@ -285,8 +285,8 @@
       "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/linux-omarchy-aarch64"
     },
     "nvidia-userspace": {
-      "file": "nvidia-utils-615.78.08-3-aarch64.pkg.tar.zst",
-      "sha256": "651ba16b80f9505ca6577f23fab51cc10c02f6ffc90a9d1619f4a37d9695680c",
+      "url": "https://download.nvidia.com/XFree86/Linux-aarch64/615.78.08/NVIDIA-Linux-aarch64-615.78.08.run",
+      "sha256": "5076011350181e81a031f0fd012fe35fe4be37c7820d651fb7aaa894af447a37",
       "source": "https://download.nvidia.com/XFree86/Linux-aarch64/615.78.08/"
     },
     "n1x-proart-p14-audio": {
