@@ -344,7 +344,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
         profile = dict(profile, release=debian_release)
         keys = [name for name in profile["surface"] if name != "surface-linux-source"]
     elif board_tools:
-        keys = [*profile["romulus"], "qualcomm-firmware-index", "qualcomm-firmware-wudrivers",
+        keys = [*profile["romulus"], "qualcomm-audioreach", "qualcomm-firmware-index", "qualcomm-firmware-wudrivers",
                 "qualcomm-firmware-update-ca"]
     else:
         keys = list(profile.get("native", [])) or [profile["kernel"]]
@@ -389,10 +389,11 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
 
                 snapdragon_packages(profile["release"], source, provenance, work, out, package, unpack)
             if board_tools:
-                from qualcomm_audio import audio_packages
+                from qualcomm_audio import audio_packages, laptop8_audio_package
                 from qualcomm_firmware import package_firmware_index
 
                 audio_packages(source, provenance, work, out, package)
+                laptop8_audio_package(profile["release"], source, provenance, work, out, package)
                 package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)

@@ -82,3 +82,44 @@ def audio_packages(source, provenance, work, out, package):
     package(stage, out, name, "1-2", "all", f"alsa-ucm-conf (>= {version})",
             "Matched AudioReach topologies for supported Acer, ASUS and HP Snapdragon models",
             {key: provenance[key] for key in ("surface-snapdragon-fixes", "surface-snapdragon-kernel-fixes")}, None)
+
+
+def laptop8_audio_package(release, source, provenance, work, out, package):
+    profile_dir = "pkgbuilds/microsoft-surface-laptop-8-support/"
+    recipes = work / "laptop8-recipes"
+    audioreach = work / "audioreach"
+    extract(source["surface-snapdragon-kernel-fixes"], recipes, prefixes=(profile_dir,))
+    extract(source["qualcomm-audioreach"], audioreach)
+    profile = recipes / profile_dir
+    stage = work / "laptop8-audio"
+    model = "GLYMUR-Microsoft-Surface-Laptop-8"
+    names = ("MicrosoftCorporation-SurfaceLaptop13.8in8thEdSnapdragon-124I00137T000M000000",
+             "MicrosoftCorporation-SurfaceLaptop15in8thEdSnapdragon-124I00137T000M0000000F")
+    conf = work / "laptop8-topology.conf"
+    topology = work / f"{model}-tplg.bin"
+    with conf.open("wb") as stream:
+        subprocess.run(["m4", "-I", audioreach, profile / f"{model}.m4"], stdout=stream, check=True)
+    subprocess.run(["alsatplg", "-c", conf, "-o", topology], check=True)
+    if hashlib.sha256(topology.read_bytes()).hexdigest() != "4f81077a0d8bb7568bfcd490eeea27cf25ec08357eb0f9c5788413bdd79af28e":
+        raise ValueError(f"{model}: topology differs from the hardware-verified build")
+    stage_file(topology, stage / "usr/lib/firmware/updates/qcom/glymur" / topology.name)
+    ucm2 = stage / "usr/share/alsa/ucm2"
+    for file in (f"{model}.conf", "HiFi.conf", "SpeakerSeq.conf", "WSAInit.conf"):
+        stage_file(profile / file, ucm2 / "Qualcomm/surface-laptop8" / file)
+    aliases = ucm2 / "conf.d/glymur"
+    aliases.mkdir(parents=True)
+    for name in names:
+        (aliases / f"{name}.conf").symlink_to(f"../../Qualcomm/surface-laptop8/{model}.conf")
+    rules = "60-surface-laptop8-usb-runtime-pm.rules"
+    modalias = "|".join(f"dmi:*svnMicrosoftCorporation:pnSurfaceLaptop{size}in8thEdSnapdragon:*"
+                        for size in ("13.8", "15"))
+    write_file(stage / "usr/lib/udev/rules.d" / rules, (profile / rules).read_text().replace(
+        'ATTR{power/control}="auto"', f'ATTR{{[dmi/id]modalias}}=="{modalias}", ATTR{{power/control}}="auto"'))
+    stage_file(profile / "99-surface-laptop8.quirks", stage / "usr/share/libinput/99-surface-laptop8.quirks")
+    name = "claw-os-surface-laptop-8-snapdragon"
+    docs = stage / "usr/share/doc" / name
+    stage_file(profile / "LICENSE", docs / "copyright")
+    stage_file(audioreach / "LICENSE.BSD-3-Clause", docs / "audioreach.LICENSE")
+    package(stage, out, name, "1-1", "arm64", f"linux-image-{release}, alsa-ucm-conf (>= 1.2.16.1-1~bpo13+1), udev",
+            "Audio, input and USB suspend integration for Snapdragon Surface Laptop 8",
+            {key: provenance[key] for key in ("qualcomm-audioreach", "surface-snapdragon-kernel-fixes")}, None)

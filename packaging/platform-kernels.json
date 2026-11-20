@@ -151,6 +151,11 @@
       "sha256": "2bc7872f51479ceb3e15cf8bbae143f62fccb6d20778bdf7e0210a2fc70b4b11",
       "source": "https://github.com/qualcomm/fastrpc/releases/tag/v1.0.9"
     },
+    "qualcomm-audioreach": {
+      "url": "https://codeload.github.com/linux-msm/audioreach-topology/tar.gz/b4c1510fe6686ab8053715a02c34bec875ca5c6c",
+      "sha256": "15e5ac12fa47414f1f74482bb79d44eec20f6253a50a10128fe74bbd3ddc6747",
+      "source": "https://github.com/linux-msm/audioreach-topology/tree/b4c1510fe6686ab8053715a02c34bec875ca5c6c"
+    },
     "qualcomm-firmware-index": {
       "url": "https://raw.githubusercontent.com/birkskyum/arewearmyet/f673791b98bc4334acf1d0c3d84127de27e804cc/data/firmware-sources.yaml",
       "sha256": "df3377355112c1a52422f7d34376848dfb68b4cb9be11207b2078cff2e1d0e45",

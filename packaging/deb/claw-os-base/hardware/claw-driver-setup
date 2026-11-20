@@ -31,6 +31,7 @@ CAMERA = (
     ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
 )
 SNAPDRAGON = "surface-laptop-7-snapdragon"
+LAPTOP8 = "surface-laptop-8-snapdragon"
 QCOM_AUDIO = "qualcomm-model-audio"
 FRAMEWORK = "framework-laptop-16"
 DELL_HAPTICS = "dell-xps-haptics"
@@ -51,6 +52,7 @@ QCOM_FIRMWARE = "Snapdragon OEM firmware"
 PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
+    LAPTOP8: (AUDIO,),
     QCOM_AUDIO: (AUDIO,),
     FRAMEWORK: (),
     DELL_HAPTICS: (),
@@ -64,6 +66,7 @@ PACKS = {
 LOCAL_PACKAGES = {
     "surface-laptop-7-intel": "claw-os-surface-laptop-7",
     SNAPDRAGON: "claw-os-surface-snapdragon-touchpad",
+    LAPTOP8: "claw-os-surface-laptop-8-snapdragon",
     QCOM_AUDIO: "claw-os-qualcomm-model-audio",
     FRAMEWORK: "claw-os-framework-qmk-hid",
     DELL_HAPTICS: "claw-os-dell-xps-haptics",
@@ -83,6 +86,10 @@ def detect_board(sysfs, arch):
             return None
         if b"qcom,x1e80100" in compatible and {b"microsoft,romulus13", b"microsoft,romulus15"}.intersection(compatible):
             return SNAPDRAGON
+        if b"qcom,mahua" in compatible and {
+            b"microsoft,surface-laptop-8-13p8", b"microsoft,surface-laptop-8-15",
+        }.intersection(compatible):
+            return LAPTOP8
         if b"qcom,x1p42100" in compatible and {
             b"acer,aspire-a16-11m", b"asus,proart-pz13-ht5306qa", b"asus,zenbook-14-ux3480qa",
             b"hp,omnibook-3-lcd", b"hp,omnibook-3-oled", b"hp,omnibook-3-16-bz0",
@@ -292,7 +299,7 @@ def needs_firmware(job):
 def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
-    packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else [
+    packs = [SNAPDRAGON, LAPTOP8, QCOM_AUDIO] if arch == "arm64" else [
         "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS, INTEL_POWER, ASUS_ROG,
     ]
     if arch == "amd64" and debian_amd64_headers():
@@ -332,7 +339,7 @@ def remove_media_keyboard(packs):
 def install_offline():
     packs = detect()
     remove_media_keyboard(packs)
-    if SNAPDRAGON not in packs and Path(
+    if not {SNAPDRAGON, LAPTOP8}.intersection(packs) and Path(
         "/var/lib/dpkg/info/claw-os-surface-snapdragon-radio.list"
     ).is_file():
         subprocess.run(["/usr/bin/dpkg", "--purge", "claw-os-surface-snapdragon-radio"], check=True)

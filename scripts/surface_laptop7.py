@@ -139,22 +139,21 @@ def touchpad(archive, patches, work, stage, *, recipes=None):
 def snapdragon_packages(release, source, provenance, work, out, package, unpack):
     name = "claw-os-surface-snapdragon-radio"
     stage = work / "romulus-radio"
+    boards = ("microsoft,romulus13", "microsoft,romulus13-spi", "microsoft,romulus15",
+              "microsoft,surface-laptop-8-13p8", "microsoft,surface-laptop-8-15")
     unpack(source["surface-snapdragon-addresses"], stage, lambda path: path.startswith("usr/"))
     wifi = stage / "usr/lib/surface-snapdragon-addresses/surface-wifi-address"
     replace(wifi, """# The rule matches any ath12k interface; act only on Microsoft machines. The
 # address variable is checked below, unless an override makes it unnecessary.
 vendor_path="${SURFACE_WIFI_DMI:-/sys/class/dmi/id}/sys_vendor"
 if [[ ! -r "$vendor_path" || "$(<"$vendor_path")" != 'Microsoft Corporation' ]]; then""",
-            """compatible=/sys/firmware/devicetree/base/compatible
-if [[ ! -r $compatible ]] || ! tr '\\\\0' '\\\\n' <"$compatible" |
-    grep -Eq '^microsoft,romulus(13|15)$'; then""")
+            f"""compatible=/sys/firmware/devicetree/base/compatible
+if [[ ! -r $compatible ]] || ! grep -qzxE '{'|'.join(boards)}' "$compatible"; then""")
     bt = stage / "usr/lib/systemd/system/surface-bluetooth-address@.service"
-    compatible = ("ConditionFirmware=|device-tree-compatible(microsoft,romulus13)\n"
-                  "ConditionFirmware=|device-tree-compatible(microsoft,romulus13-spi)\n"
-                  "ConditionFirmware=|device-tree-compatible(microsoft,romulus15)")
+    compatible = "\n".join(f"ConditionFirmware=|device-tree-compatible({board})" for board in boards)
     replace(bt, 'ConditionFirmware=smbios-field(sys_vendor = "Microsoft Corporation")', compatible)
-    package(stage, out, name, "1-2+clawos2", "arm64", "bash, bluez, iproute2, systemd, udev",
-            "Wi-Fi and Bluetooth addresses for Snapdragon Surface Laptop 7",
+    package(stage, out, name, "1-2+clawos3", "arm64", "bash, bluez, iproute2, systemd, udev",
+            "Wi-Fi and Bluetooth addresses for Snapdragon Surface Laptop 7 and 8",
             {"surface-snapdragon-addresses": provenance["surface-snapdragon-addresses"]}, None)
     if "surface-snapdragon-iptsd" not in source:
         return
