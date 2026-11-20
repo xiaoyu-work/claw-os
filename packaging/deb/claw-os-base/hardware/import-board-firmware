@@ -110,6 +110,10 @@ def enabled(node):
     return True
 
 
+def valid_firmware_name(name):
+    return bool(re.fullmatch(r"qcom(?:/[\w.-]+)+", name, re.ASCII)) and ".." not in name.split("/")
+
+
 def firmware_requests(*, active_only=False):
     if not any(entry.startswith(b"qcom,") for entry in compatible()):
         raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
@@ -118,8 +122,7 @@ def firmware_requests(*, active_only=False):
         if active_only and not enabled(prop.parent):
             continue
         for name in prop.read_bytes().decode("ascii").split("\0"):
-            path = PurePosixPath(name)
-            if name.startswith("qcom/") and re.fullmatch(r"[A-Za-z0-9._/-]+", name) and ".." not in path.parts:
+            if valid_firmware_name(name):
                 names.add(name)
     if not names and not active_only:
         raise ValueError("the running device tree declares no Qualcomm firmware paths")
@@ -300,6 +303,27 @@ def qualcomm_pending():
     return files, index["archives"]
 
 
+def qualcomm_dsp_ready():
+    if not any(name.startswith(b"qcom,") for name in compatible()):
+        return False
+    requested = set()
+    for node in DT.rglob("remoteproc@*"):
+        prop = node / "compatible"
+        if not prop.is_file() or not enabled(node):
+            continue
+        if not any(name.startswith(b"qcom,") and name.endswith(b"-pas")
+                   for name in prop.read_bytes().split(b"\0")):
+            continue
+        firmware = node / "firmware-name"
+        if not firmware.is_file():
+            return False
+        names = firmware.read_bytes().decode("ascii").strip("\0").split("\0")
+        if not all(map(valid_firmware_name, names)):
+            return False
+        requested.update(names)
+    return bool(requested) and all(existing(name) for name in requested)
+
+
 def unpack_oem(archive, kind, members, target):
     members = sorted(set(members))
     top = sorted({name.split("!/", 1)[0] for name in members})
@@ -409,6 +433,8 @@ def main():
                       help="install verified OEM firmware for the active Snapdragon device tree")
     mode.add_argument("--qualcomm-oem-ready", action="store_true",
                       help="check for missing firmware supplied by the Snapdragon OEM index")
+    mode.add_argument("--qualcomm-dsp-ready", action="store_true",
+                      help="check that enabled Snapdragon PAS processors have their named firmware")
     mode.add_argument("--surface-laptop-7", metavar="MSI", nargs="?", const="",
                       help="provision Romulus OEM firmware; use without a path to download both Microsoft archives")
     mode.add_argument("--install-qnn", metavar="HEXAGON_V73_LIBDIR", type=Path,
@@ -424,6 +450,7 @@ def main():
         parser.error("--accept-qnn-license and --qnn-archive require --install-qnn")
     if args.source is not None and any((args.list_missing, args.romulus_audio_ready, args.romulus_firmware_ready,
                                        args.romulus_compute_ready, args.qualcomm_oem, args.qualcomm_oem_ready,
+                                       args.qualcomm_dsp_ready,
                                        args.surface_laptop_7 is not None, args.install_qnn)):
         parser.error("do not specify a source directory with another operation")
     if args.romulus_audio_ready:
@@ -435,6 +462,8 @@ def main():
     if args.qualcomm_oem_ready:
         pending, _ = qualcomm_pending()
         return 1 if pending else 0
+    if args.qualcomm_dsp_ready:
+        return 0 if qualcomm_dsp_ready() else 1
     if args.qualcomm_oem:
         if os.geteuid() != 0:
             raise ValueError("import requires root")

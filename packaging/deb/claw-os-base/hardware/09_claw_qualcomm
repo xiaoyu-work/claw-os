@@ -62,19 +62,30 @@ for kernel in $kernels; do
     fi
     board_menu_entry "$args $claw_qcom_no_dsp"
     # Keep the no-DSP entry as the default even after importing firmware.
-    if claw_qcom_romulus "$CLAW_QCOM_DTB" &&
-        [ "${version%-omarchy}" != "$version" ] &&
+    if [ "${version%-omarchy}" != "$version" ] &&
         [ -f "${dtb%/*}/claw-boards.list" ] &&
-        [ -f /usr/share/alsa/ucm2/Qualcomm/x1e80100/SurfaceLaptop7-HiFi.conf ] &&
-        claw_qcom_nvme_boot "$GRUB_DEVICE" "$GRUB_DEVICE_BOOT" "$dtb_device" &&
-        /usr/sbin/claw-import-board-firmware --romulus-audio-ready; then
-        id=claw-qcom-oem-audio-$version
-        if /usr/sbin/claw-import-board-firmware --romulus-compute-ready; then
-            model="$model, OEM audio and compute (experimental)"
-        else
-            model="$model, OEM audio (experimental)"
+        claw_qcom_nvme_boot "$GRUB_DEVICE" "$GRUB_DEVICE_BOOT" "$dtb_device"; then
+        if claw_qcom_romulus "$CLAW_QCOM_DTB"; then
+            if [ -f /usr/share/alsa/ucm2/Qualcomm/x1e80100/SurfaceLaptop7-HiFi.conf ] &&
+                /usr/sbin/claw-import-board-firmware --romulus-audio-ready; then
+                id=claw-qcom-oem-audio-$version
+                if /usr/sbin/claw-import-board-firmware --romulus-compute-ready; then
+                    model="$model, OEM audio and compute (experimental)"
+                else
+                    model="$model, OEM audio (experimental)"
+                fi
+                board_menu_entry "$args"
+            fi
+        elif [ -r /sys/firmware/devicetree/base/compatible ]; then
+            compatible=${board#*|}
+            running=$(tr '\000' '\n' </sys/firmware/devicetree/base/compatible | sed -n '1p')
+            if [ "$running" = "${compatible%%|*}" ] &&
+                /usr/sbin/claw-import-board-firmware --qualcomm-dsp-ready; then
+                id=claw-qcom-oem-dsp-$version
+                model="$model, OEM DSP (experimental)"
+                board_menu_entry "$args"
+            fi
         fi
-        board_menu_entry "$args"
     fi
 done
 
