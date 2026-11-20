@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 
-from platform_kernels import PIN, inputs, package, unpack
+from platform_kernels import PIN, inputs, package
 from surface_laptop7 import extract, patch, replace, stage_file, write_file
 
 
@@ -17,7 +17,8 @@ QMK = "framework-qmk-hid"
 RECIPES = "amd64-hardware-recipes"
 LOOPBACK = "elgato-v4l2loopback"
 RELAY = "elgato-v4l2-relayd"
-RELAY_SOURCE = "elgato-v4l2-relayd-source"
+RELAY_RECIPE = "pkgbuilds/v4l2-relayd/"
+RELAY_PATCHES = ("0001-reset-output-on-idle.patch", "0002-escape-optional-splashsrc-expansion.patch")
 LPMD = "intel-lpmd"
 ROG = "asus-rog"
 TUXEDO = "tuxedo-drivers"
@@ -29,13 +30,15 @@ PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 def framework(source, provenance, work, out):
     dest = out / "framework-laptop-16"
     dest.mkdir(parents=True, exist_ok=True)
+    tree = work / QMK
     stage = work / "framework"
     name = "claw-os-framework-qmk-hid"
-    unpack(source[QMK], stage, lambda path: path in {"usr/bin/qmk_hid", "usr/share/licenses/qmk-hid/LICENSE"})
-    if not (stage / "usr/bin/qmk_hid").is_file():
-        raise ValueError("the signed Framework archive is missing qmk_hid")
-    stage_file(stage / "usr/share/licenses/qmk-hid/LICENSE", stage / "usr/share/doc" / name / "copyright")
-    package(stage, dest, name, "0.1.13-2", "amd64", "libc6, libcap2, libgcc-s1, libudev1",
+    extract(source[QMK], tree)
+    env = dict(os.environ, CARGO_TARGET_DIR=str(tree / "target"))
+    subprocess.run(["cargo", "build", "--locked", "--release", "--jobs", "4"], env=env, cwd=tree, check=True)
+    stage_file(tree / "target/release/qmk_hid", stage / "usr/bin/qmk_hid", 0o755)
+    stage_file(tree / "LICENSE.md", stage / "usr/share/doc" / name / "copyright")
+    package(stage, dest, name, "0.1.13-2+clawos1", "amd64", "libc6, libcap2, libgcc-s1, libudev1",
             "Framework Laptop 16 QMK HID utility", {QMK: provenance[QMK]}, None)
 
 
@@ -133,22 +136,28 @@ WantedBy=multi-user.target
             {RECIPES: provenance[RECIPES]}, None)
 
 
-def stage_relay(source, work, stage, name, executable):
-    binary = work / "relay-binary"
+def build_relay(source, work):
     relay = work / "relay-source"
-    recipe = "pkgbuilds/v4l2-relayd/"
+    extract(source[RELAY], relay)
+    extract(source[RECIPES], relay, prefixes=(RELAY_RECIPE,))
+    for path in RELAY_PATCHES:
+        subprocess.run(["patch", "--batch", "--forward", "--fuzz=0", "-p0", "-i", relay / RELAY_RECIPE / path],
+                       cwd=relay, check=True)
+    subprocess.run([relay / "autogen.sh", "--prefix=/usr", "--sysconfdir=/etc"], cwd=relay, check=True)
+    subprocess.run(["make", "-j4", "src/v4l2-relayd"], cwd=relay, check=True)
+    return relay
+
+
+def stage_relay(relay, source, stage, name, executable):
     doc = stage / "usr/share/doc" / name
-    unpack(source[RELAY], binary, lambda path: path == "usr/bin/v4l2-relayd")
-    stage_file(binary / "usr/bin/v4l2-relayd", stage / executable, 0o755)
-    extract(source[RELAY_SOURCE], relay, prefixes=("LICENSE",))
+    stage_file(relay / "src/v4l2-relayd", stage / executable, 0o755)
     stage_file(relay / "LICENSE", doc / "v4l2-relayd.LICENSE")
-    stage_file(source[RELAY_SOURCE], doc / "v4l2-relayd-upstream-0.2.0.tar.gz")
-    extract(source[RECIPES], relay, prefixes=(recipe,))
-    for path in ("PKGBUILD", "0001-reset-output-on-idle.patch", "0002-escape-optional-splashsrc-expansion.patch"):
-        stage_file(relay / recipe / path, doc / path)
+    stage_file(source[RELAY], doc / "v4l2-relayd-upstream-0.2.0.tar.gz")
+    for path in ("PKGBUILD", *RELAY_PATCHES):
+        stage_file(relay / RELAY_RECIPE / path, doc / path)
 
 
-def camlink(source, provenance, work, out):
+def camlink(source, provenance, work, out, relay):
     dest = out / "elgato-camlink-4k"
     dest.mkdir(parents=True, exist_ok=True)
     loopback = work / "loopback"
@@ -175,21 +184,21 @@ esac
 
     stage = work / "camlink"
     name = "claw-os-elgato-camlink"
-    stage_relay(source, work, stage, name, "usr/bin/v4l2-relayd")
+    stage_relay(relay, source, stage, name, "usr/bin/v4l2-relayd")
     stage_file(stage / "usr/share/doc" / name / "v4l2-relayd.LICENSE", stage / "usr/share/doc" / name / "copyright")
     assets = PACKAGING / "camlink"
     stage_file(assets / "71-claw-camlink.rules", stage / "usr/lib/udev/rules.d/71-claw-camlink.rules")
     for unit in ("claw-camlink-loopback.service", "claw-camlink-relay.service"):
         stage_file(assets / unit, stage / "usr/lib/systemd/system" / unit)
-    package(stage, dest, name, "0.2.0-3+clawos1", "amd64",
+    package(stage, dest, name, "0.2.0-3+clawos2", "amd64",
             f"v4l2loopback-dkms (>= {version}), v4l2loopback-utils, gstreamer1.0-plugins-base, "
             "gstreamer1.0-plugins-good, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libglib2.0-0t64, libc6, kmod, systemd, udev",
             "Fixed-aspect virtual camera for the Elgato Cam Link 4K",
-            {key: provenance[key] for key in (RELAY, RELAY_SOURCE, RECIPES)},
+            {key: provenance[key] for key in (RELAY, RECIPES)},
             None)
 
 
-def intel_ipu7(source, provenance, work, out):
+def intel_ipu7(source, provenance, work, out, relay):
     dest = out / IPU7
     dest.mkdir(parents=True, exist_ok=True)
     loopback, = (out / "elgato-camlink-4k").glob("v4l2loopback-dkms_*.deb")
@@ -283,7 +292,7 @@ def intel_ipu7(source, provenance, work, out):
                                                  for path in sorted(config.rglob("*")) if path.is_file()))
     for firmware in ("ipu7_fw.bin", "ipu7ptl_fw.bin"):
         stage_file(bins / "lib/firmware/intel/ipu" / firmware, stage / "usr/lib/firmware/updates/intel/ipu" / firmware)
-    stage_relay(source, work, stage, name, "usr/lib/cos/ipu7/v4l2-relayd")
+    stage_relay(relay, source, stage, name, "usr/lib/cos/ipu7/v4l2-relayd")
     assets = PACKAGING / "ipu7"
     for unit in ("claw-ipu7-init.service", "claw-ipu7-camera.service"):
         stage_file(assets / unit, stage / "usr/lib/systemd/system" / unit)
@@ -301,13 +310,13 @@ case "$1" in
         ;;
 esac
 """, 0o755)
-    package(stage, dest, name, f"{version}-3+clawos1", "amd64",
+    package(stage, dest, name, f"{version}-3+clawos2", "amd64",
             "dkms (>= 3.0.11), v4l2loopback-dkms (>= 0.15.4-1+clawos1), v4l2loopback-utils, "
             "gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, "
             "libglib2.0-0t64, libstdc++6, libgcc-s1, libexpat1, libdrm2, libdrm-intel1, libjsoncpp26, libc6, "
             "kmod, systemd, udev, init-system-helpers",
             "Intel IPU7/7.5 hardware ISP camera for OV08X40 sensors",
-            {key: provenance[key] for key in (*IPU7_INPUTS, RECIPES, RELAY, RELAY_SOURCE)},
+            {key: provenance[key] for key in (*IPU7_INPUTS, RECIPES, RELAY)},
             f"""[ "$1" = configure ] || exit 0
 /usr/lib/dkms/common.postinst {driver} '{version}' /usr/share/{driver} "" "${{2:-}}"
 deb-systemd-helper enable claw-ipu7-init.service >/dev/null
@@ -440,7 +449,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lock = json.loads(PIN.read_text())
-    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE, LPMD, ROG, TUXEDO, *IPU7_INPUTS)
+    keys = (QMK, RECIPES, LOOPBACK, RELAY, LPMD, ROG, TUXEDO, *IPU7_INPUTS)
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -448,8 +457,9 @@ def main():
         source = dict(inputs(lock, keys, args.cache, work))
         framework(source, lock["inputs"], work, args.output)
         dell(source, lock["inputs"], work, args.output)
-        camlink(source, lock["inputs"], work, args.output)
-        intel_ipu7(source, lock["inputs"], work, args.output)
+        relay = build_relay(source, work)
+        camlink(source, lock["inputs"], work, args.output, relay)
+        intel_ipu7(source, lock["inputs"], work, args.output, relay)
         intel_power(source, lock["inputs"], work, args.output)
         rog(source, lock["inputs"], work, args.output)
         tuxedo(source, lock["inputs"], work, args.output)

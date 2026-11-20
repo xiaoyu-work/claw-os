@@ -52,7 +52,7 @@ if [ -x "$ROOTFS/usr/libexec/claw-oobe" ]; then
         install -m0644 "$PROJECT_DIR"/packaging/ipu7/* "$hardware/packaging/ipu7/"
         chroot "$ROOTFS" apt-get -qq update
         chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
-            install -y --no-install-recommends gpg gpgv zstd build-essential pkg-config autoconf automake libtool \
+            install -y --no-install-recommends build-essential pkg-config autoconf automake libtool patch \
             libglib2.0-dev libxml2-dev libsystemd-dev libnl-3-dev libnl-genl-3-dev libupower-glib-dev \
             cmake ninja-build "libdw-dev/$SUITE-backports" "libelf-dev/$SUITE-backports" \
             libjsoncpp-dev libdrm-dev libexpat1-dev libjpeg62-turbo-dev libyuv-dev \

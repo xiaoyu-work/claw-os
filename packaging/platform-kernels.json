@@ -5,10 +5,9 @@
   "fingerprint": "40DFB630FF42BCFFB047046CF0134EE680CAC571",
   "inputs": {
     "framework-qmk-hid": {
-      "archive": "https://pkgs.omarchy.org/edge/x86_64/",
-      "file": "qmk-hid-0.1.13-2-x86_64.pkg.tar.zst",
-      "sha256": "3b190898bf2002ea3b3628234283da3603585e0ac3b87fd51a374f7e494a2c60",
-      "source": "https://github.com/FrameworkComputer/qmk_hid/tree/v0.1.13"
+      "url": "https://codeload.github.com/FrameworkComputer/qmk_hid/tar.gz/8f02fe5e34e27dc60260ee564e86a11f2dc7ca87",
+      "sha256": "349fa74cd483cb56447b174dd245819019de50f66c7778fd2ffe8267e289a429",
+      "source": "https://github.com/FrameworkComputer/qmk_hid/tree/8f02fe5e34e27dc60260ee564e86a11f2dc7ca87"
     },
     "amd64-hardware-recipes": {
       "url": "https://codeload.github.com/omacom/omarchy-pkgs/tar.gz/b0ff9ed3b6b2b8a237a0266541b670e7faec7883",
@@ -21,12 +20,6 @@
       "source": "https://github.com/v4l2loopback/v4l2loopback/tree/0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4"
     },
     "elgato-v4l2-relayd": {
-      "archive": "https://pkgs.omarchy.org/edge/x86_64/",
-      "file": "v4l2-relayd-0.2.0-3-x86_64.pkg.tar.zst",
-      "sha256": "dadcfdb9ad98ac13f39933b6dbdac65d3d97d42b7dee49f5d6044603ee3b1806",
-      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/v4l2-relayd"
-    },
-    "elgato-v4l2-relayd-source": {
       "url": "https://gitlab.com/vicamo/v4l2-relayd/-/archive/upstream/0.2.0/v4l2-relayd-upstream-0.2.0.tar.gz",
       "sha256": "0c063edf18dcc6edcdef46e695128cfc2b2d60964ea8538c7e79a2454310c53d",
       "source": "https://gitlab.com/vicamo/v4l2-relayd/-/tree/upstream/0.2.0"
