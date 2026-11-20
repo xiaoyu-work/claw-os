@@ -53,7 +53,7 @@ WantedBy=multi-user.target
 """)
     write_file(stage / "usr/lib/systemd/system/speakersafetyd.service.d/10-claw-asahi.conf",
                "[Unit]\nConditionPathExistsGlob=/sys/class/sound/pcmC*D2c\n")
-    package(stage, out, name, "1-1", "arm64", f"linux-image-{release.lower()} (= {release.lower()}+clawos1), "
+    package(stage, out, name, "1-2", "arm64", f"linux-image-{release.lower()} (>= {release.lower()}+clawos1), "
             "alsa-ucm-conf-asahi (>= 8-2+deb13u1), speakersafetyd (>= 1.1.2-4), pipewire (>= 1.4.2), "
             "wireplumber (>= 0.5.8), lsp-plugins-lv2 (>= 1.2.21), bankstown-lv2 (>= 1.1.0), "
             "triforce-lv2 (>= 0.3.2), kmod, systemd, init-system-helpers",

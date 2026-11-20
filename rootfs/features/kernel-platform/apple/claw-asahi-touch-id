@@ -1,0 +1,181 @@
+#!/usr/bin/python3 -I
+"""Manage optional Touch ID on an installed Claw OS Apple Silicon system."""
+
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+from uuid import UUID
+
+
+DT = Path("/sys/firmware/devicetree/base")
+CMDLINE = Path("/proc/cmdline")
+INITRD = Path("/etc/initrd-release")
+STORE = Path("/usr/share/cos/asahi")
+CONSENT = Path("/etc/claw-asahi/touch-id")
+DROP_IN = Path("/etc/systemd/system/fprintd.service.d/80-claw-asahi-touch-id.conf")
+READY = Path("/run/claw-asahi-touch-id/ready")
+FIRMWARE = Path("/usr/lib/firmware")
+SEP = Path("/dev/sep-bio")
+LID = Path("/dev/claw-asahi-touch-id-lid")
+KEYBAG = Path("/var/lib/aurora-sep-keybag.bin")
+DRIVER = Path("/sys/bus/platform/drivers/apple_sep")
+LIBRARY = Path("/usr/lib/cos/asahi/touch-id")
+BOARDS = {
+    "apple,j413": "apple,t8112", "apple,j415": "apple,t8112", "apple,j493": "apple,t8112",
+    "apple,j414s": "apple,t6020", "apple,j416s": "apple,t6020",
+    "apple,j414c": "apple,t6021", "apple,j416c": "apple,t6021",
+    "apple,j613": "apple,t8122", "apple,j615": "apple,t8122",
+}
+
+
+def prop(node, name, default=""):
+    path = node / name
+    return path.read_bytes().rstrip(b"\0").decode("ascii") if path.is_file() else default
+
+
+def eligible():
+    release = (STORE / "touch-id-kernel").read_text().strip()
+    if not (LIBRARY / "libfprint-2.so.2").is_file() or not (STORE / DROP_IN.name).is_file():
+        raise ValueError("the Touch ID driver pack is incomplete")
+    if os.uname().release != release or INITRD.exists() or "boot=live" in CMDLINE.read_text().split():
+        raise ValueError("Touch ID requires the installed, matching Aurora kernel")
+    board, *soc = prop(DT, "compatible").split("\0")
+    if BOARDS.get(board) not in soc:
+        raise ValueError("this Mac does not have a supported Touch ID profile")
+    chosen = DT / "chosen"
+    try:
+        identity = UUID(prop(chosen, "apfs-preboot-uuid"))
+        esp = UUID(prop(chosen, "asahi,efi-system-partition"))
+    except ValueError:
+        raise ValueError("boot from this Mac's enrolled Asahi installation first") from None
+    if not identity.int or not esp.int:
+        raise ValueError("the boot firmware did not provide the Asahi installation identity")
+    for node in (DT / "soc").glob("*/fingerprint@*"):
+        if ("apple,mesa-fingerprint" not in prop(node, "compatible").split("\0")
+                or prop(node, "status", "okay") not in {"okay", "ok"}):
+            continue
+        generic = "apple/mesa_calibration.bin"
+        calibration = prop(node, "firmware-name", generic)
+        if calibration not in {generic, f"apple/mesacal-{board.removeprefix('apple,')}.bin"}:
+            raise ValueError("the device tree does not name this model's calibration")
+        for directory in (FIRMWARE / "vendor", FIRMWARE / "updates", FIRMWARE):
+            path = directory / calibration
+            if path.is_file() and path.stat().st_size:
+                return str(identity)
+        raise ValueError("install this Mac's own Touch ID calibration first")
+    raise ValueError("the running device tree does not expose a Touch ID sensor")
+
+
+def managed_drop_in():
+    return DROP_IN.is_symlink() and DROP_IN.readlink() == STORE / DROP_IN.name
+
+
+def authorized(identity):
+    return (managed_drop_in() and not CONSENT.is_symlink() and CONSENT.is_file()
+            and CONSENT.stat().st_uid == 0 and CONSENT.stat().st_mode & 0o777 == 0o600
+            and CONSENT.read_text().strip() == identity)
+
+
+def require_consent():
+    if not authorized(eligible()):
+        raise ValueError("the owner has not enabled Touch ID on this Asahi installation")
+
+
+def enable():
+    identity = eligible()
+    if authorized(identity):
+        print("Touch ID is already enabled. Reboot if it is not ready.")
+        return
+    if CONSENT.exists() or CONSENT.is_symlink() or DROP_IN.exists() or DROP_IN.is_symlink():
+        raise ValueError("existing Touch ID configuration was not changed; disable it before enabling again")
+    if not sys.stdin.isatty():
+        raise ValueError("enable Touch ID from an interactive terminal")
+    print("Touch ID is experimental. It shares Secure Enclave state with macOS.")
+    print("Back up macOS before enabling it. An incorrect firmware write can prevent macOS from booting.")
+    if input('If you have a backup and accept the risk, type "ENABLE TOUCH ID": ') != "ENABLE TOUCH ID":
+        raise ValueError("Touch ID remains disabled")
+    CONSENT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    DROP_IN.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    DROP_IN.symlink_to(STORE / DROP_IN.name)
+    try:
+        fd = os.open(CONSENT, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as receipt:
+            receipt.write(identity + "\n")
+    except OSError:
+        DROP_IN.unlink()
+        raise
+    print("Touch ID is enabled for the next boot. Reboot, then enroll a fingerprint.")
+
+
+def disable():
+    if (DROP_IN.exists() or DROP_IN.is_symlink()) and not managed_drop_in():
+        raise ValueError("refusing to alter an administrator-managed fprintd drop-in")
+    CONSENT.unlink(missing_ok=True)
+    if managed_drop_in():
+        DROP_IN.unlink()
+    print("Touch ID is disabled for the next boot. Existing enrollments and the Linux keybag were kept.")
+
+
+def wait_device(path):
+    subprocess.run(["/usr/bin/udevadm", "wait", "--timeout=10", path], timeout=12, check=True)
+
+
+def activate():
+    require_consent()
+    wait_device(LID)
+    wait_device(SEP)
+    if not LID.is_char_device() or not SEP.is_char_device():
+        raise ValueError("the lid switch or fingerprint device is not ready")
+    deadline = time.monotonic() + 10
+    while not KEYBAG.is_file() or not KEYBAG.stat().st_size:
+        if time.monotonic() >= deadline:
+            raise ValueError("the Secure Enclave did not create its Linux keybag")
+        time.sleep(0.5)
+    # The first open starts sensor attachment after the kernel has prepared its Linux identity.
+    with SEP.open("rb", buffering=0):
+        pass
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        for diag in DRIVER.glob("*/diag"):
+            readings = tuple((diag / p).read_text().strip() for p in ("touchid", "sensor_attach", "restore", "matching"))
+            touch, sensor, restore, match = readings
+            if touch == "failed" or sensor == "not-ready" or restore == "unproven" or match == "blocked":
+                raise ValueError("the Secure Enclave did not approve Touch ID")
+            if touch == "ready" and sensor == "attached" and restore in {"restored", "empty"} and match in {"usable", "unverified"}:
+                READY.touch()
+                return
+        time.sleep(0.5)
+    raise ValueError("timed out waiting for Touch ID")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("status", "enable", "disable", "check", "load", "activate"))
+    action = parser.parse_args().action
+    if os.geteuid() != 0:
+        raise ValueError("run as root")
+    if action == "status":
+        enabled = authorized(eligible())
+        print("ready" if enabled and READY.is_file() else
+              "enabled; reboot or check the service log" if enabled else "available; disabled")
+    elif action == "enable":
+        enable()
+    elif action == "disable":
+        disable()
+    elif action == "activate":
+        activate()
+    else:
+        require_consent()
+        if action == "load":
+            wait_device("/dev/disk/by-partlabel/iBootSystemContainer")
+            os.execv("/usr/sbin/modprobe", ["/usr/sbin/modprobe", "--ignore-install", "apple_sep"])
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"claw-asahi-touch-id: {error}") from error

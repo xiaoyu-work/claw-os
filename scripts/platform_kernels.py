@@ -208,8 +208,11 @@ def kernel_package(profile, source, provenance, work, out):
         loader = f"/usr/lib/cos/asahi/claw-asahi-audio load '{release}'" if "asahi_audio" in profile else "/bin/false"
         # Keep alias autoload blocked; the install hook admits only calibrated boards.
         config.write_text(f"blacklist snd_soc_macaudio\ninstall snd_soc_macaudio {loader}\n", encoding="utf-8")
+        # This Aurora release can write shared Secure Enclave state. Never probe it before owner consent.
+        config.with_name("90-claw-apple-touch-id.conf").write_text(
+            "blacklist apple_sep\ninstall apple_sep /usr/lib/cos/asahi/claw-asahi-touch-id load\n", encoding="utf-8")
         if "asahi_audio" in profile:
-            version += "+clawos1"
+            version += "+clawos2"
     package(
         stage, out, name, version, profile["arch"], "kmod, initramfs-tools, linux-base",
         f"Claw OS platform Linux kernel ({release})", provenance,
@@ -343,7 +346,7 @@ def apple_boot(profile, source, work, out):
     shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
 
 
-def build(lock, profile, cache, output, debian_release=None, board_tools=False):
+def build(lock, profile, cache, output, debian_release=None, board_tools=False, apple_tools=False):
     if debian_release:
         profile = dict(profile, release=debian_release)
         keys = [name for name in profile["surface"] if name != "surface-linux-source"]
@@ -358,6 +361,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
     keys += profile.get("gpu", []) + profile.get("boot", [])
     if "asahi_audio" in profile:
         keys.append(profile["asahi_audio"])
+    if apple_tools:
+        keys += ["asahi-libfprint", "amd64-hardware-recipes"]
     if "romulus" in profile and not board_tools:
         keys.append("surface-snapdragon-addresses")
     output.mkdir(parents=True, exist_ok=True)
@@ -412,6 +417,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
                 from asahi_audio import asahi_audio_package
 
                 asahi_audio_package(profile, source, provenance, work, out, package)
+            if apple_tools:
+                from asahi_touch_id import asahi_touch_id_package
+
+                asahi_touch_id_package(profile, source, provenance, work, out, package)
         (out / "platform-sources.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
         for artifact in sorted(out.iterdir()):
             target = output / artifact.name
@@ -433,25 +442,30 @@ def main():
     parser.add_argument("--debian-kernel", metavar="RELEASE",
                         help="build the Intel driver pack against an installed Debian kernel and its headers")
     parser.add_argument("--board-tools", action="store_true", help="build the native Snapdragon installer kernel and board tools")
+    parser.add_argument("--apple-tools", action="store_true", help="include the native Apple Silicon Touch ID companion")
     args = parser.parse_args()
     if args.debian_kernel and (args.platform != "x86-surface-laptop-7-intel" or args.describe
                                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64", args.debian_kernel)):
         parser.error("--debian-kernel requires the Intel Surface profile and a Debian 13 amd64 kernel release")
     if args.board_tools and args.platform != "aarch64-qualcomm":
         parser.error("--board-tools requires the aarch64-qualcomm profile")
+    if args.apple_tools and args.platform != "aarch64-apple":
+        parser.error("--apple-tools requires the aarch64-apple profile")
     profile = lock["platforms"][args.platform]
     if args.board_tools:
         profile = dict(profile, release=profile["installer_release"])
     if args.describe:
         print(profile["arch"], profile["release"], profile.get("boot_args", ""))
     else:
-        if args.board_tools and subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip() != "arm64":
-            parser.error("--board-tools requires a native arm64 build environment")
+        if (args.board_tools or args.apple_tools) and subprocess.check_output(
+            ["dpkg", "--print-architecture"], text=True,
+        ).strip() != "arm64":
+            parser.error("native board tools require an arm64 build environment")
         name = args.debian_kernel or args.platform
         if args.board_tools:
             name += "-installer"
         output = args.output or ROOT / "build/platform-kernels" / name
-        build(lock, profile, args.cache, output, args.debian_kernel, args.board_tools)
+        build(lock, profile, args.cache, output, args.debian_kernel, args.board_tools, args.apple_tools)
 
 
 if __name__ == "__main__":

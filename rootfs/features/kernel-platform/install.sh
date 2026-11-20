@@ -6,6 +6,8 @@ builder="$PROJECT_DIR/scripts/platform_kernels.py"
 mode=()
 if [[ $platform == aarch64-qualcomm && ,${FEATURES:-}, == *,installer,* ]]; then
     mode=(--board-tools)
+elif [[ $platform == aarch64-apple ]]; then
+    mode=(--apple-tools)
 fi
 identity=$(python3 "$builder" "$platform" "${mode[@]}" --describe)
 read -r architecture release boot_args <<<"$identity"
@@ -20,7 +22,7 @@ fi
 
 stage=$(mktemp -d "$ROOTFS/tmp/claw-platform.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-if (( ${#mode[@]} )); then
+if [[ ${mode[0]:-} == --board-tools ]]; then
     install -d "$stage"/{scripts,packaging}
     for file in platform_kernels.py surface_laptop7.py surface_pro11.py qualcomm_audio.py qualcomm_firmware.py; do
         install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
@@ -36,6 +38,21 @@ if (( ${#mode[@]} )); then
         libglib2.0-dev libqmi-glib-dev libqrtr-glib-dev libprotobuf-c-dev protobuf-c-compiler protobuf-compiler \
         libgudev-1.0-dev libpolkit-gobject-1-dev \
         bc bison flex cpio pahole libdw-dev libelf-dev libssl-dev zlib1g-dev cryptsetup-initramfs </dev/null
+    chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
+        "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
+    artifacts="$stage/packages"
+elif [[ ${mode[0]:-} == --apple-tools ]]; then
+    apple="$PROJECT_DIR/rootfs/features/kernel-platform/apple"
+    assets="$stage/rootfs/features/kernel-platform/apple"
+    install -d "$stage"/{scripts,packaging} "$assets"
+    install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,asahi_audio,asahi_touch_id}.py "$stage/scripts/"
+    install -m0644 "$PROJECT_DIR/packaging/platform-kernels.json" "$stage/packaging/"
+    install -m0644 "$apple"/{claw-asahi-audio,claw-asahi-fprintd,claw-asahi-touch-id,claw-asahi-touch-id.service} "$assets/"
+    install -m0644 "$apple"/{70-claw-asahi-fprintd.conf,80-claw-asahi-touch-id.conf,70-claw-asahi-touch-id.rules} "$assets/"
+    chroot "$ROOTFS" apt-get update -qq
+    chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
+        install -y --no-install-recommends build-essential pkg-config gpg gpgv zstd patch meson ninja-build \
+        libglib2.0-dev libgusb-dev libpixman-1-dev libssl-dev libudev-dev libgudev-1.0-dev systemd-dev </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
     artifacts="$stage/packages"
@@ -85,8 +102,9 @@ if [[ $platform == aarch64-qualcomm ]]; then
 fi
 if [[ $platform == aarch64-apple ]]; then
     audio=("$artifacts"/claw-os-asahi-audio_*.deb)
-    test -f "${audio[0]}"
-    packages+=("$inside/${audio[0]##*/}" "triforce-lv2/$SUITE-backports")
+    touch_id=("$artifacts"/claw-os-asahi-touch-id_*.deb)
+    test -f "${audio[0]}" && test -f "${touch_id[0]}"
+    packages+=("$inside/${audio[0]##*/}" "$inside/${touch_id[0]##*/}" "triforce-lv2/$SUITE-backports")
 fi
 chroot "$ROOTFS" apt-get update -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
@@ -100,8 +118,8 @@ fi
 if [[ $platform == aarch64-apple ]]; then
     apple="$PROJECT_DIR/rootfs/features/kernel-platform/apple"
     install -d "$ROOTFS/usr/lib/cos/asahi"
-    install -m0644 "$stage"/boot{,-j700}.bin "$stage/platform-sources.json" "$ROOTFS/usr/lib/cos/asahi/"
-    cp -a "$stage/boot-licenses" "$ROOTFS/usr/lib/cos/asahi/"
+    install -m0644 "$artifacts"/boot{,-j700}.bin "$artifacts/platform-sources.json" "$ROOTFS/usr/lib/cos/asahi/"
+    cp -a "$artifacts/boot-licenses" "$ROOTFS/usr/lib/cos/asahi/"
     install -Dm0755 "$apple/claw-asahi-import-firmware" "$ROOTFS/usr/sbin/claw-asahi-import-firmware"
     install -Dm0755 "$apple/claw-asahi-vendor-initramfs" "$ROOTFS/usr/share/initramfs-tools/hooks/claw-asahi-vendor"
     chroot "$ROOTFS" /usr/bin/systemctl enable claw-asahi-audio.service
@@ -137,7 +155,7 @@ fi
 
 install -d "$ROOTFS/etc/default/grub.d"
 printf 'GRUB_TOP_LEVEL="/boot/vmlinuz-%s"\n' "$release" >"$ROOTFS/etc/default/grub.d/60-claw-os-platform.cfg"
-if (( ${#mode[@]} )); then
+if [[ ${mode[0]:-} == --board-tools ]]; then
     # Only the matching Surface entries can write or restore a hibernation image.
     printf '%s\n' 'export CLAW_QCOM_LINUX="${GRUB_CMDLINE_LINUX:-}"' \
         'GRUB_CMDLINE_LINUX="$CLAW_QCOM_LINUX noresume nohibernate"' \

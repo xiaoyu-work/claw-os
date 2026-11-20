@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+unset LD_LIBRARY_PATH
+if [ -c /dev/sep-bio ]; then
+    if [ ! -f /run/claw-asahi-touch-id/ready ] || [ ! -c /dev/claw-asahi-touch-id-lid ] ||
+        ! /usr/lib/cos/asahi/claw-asahi-touch-id check; then
+        # An admin-loaded SEP must not become an authentication device without a successful activation.
+        echo "Touch ID is not ready; reboot to use other fingerprint readers without it." >&2
+        exit 1
+    fi
+    export LD_LIBRARY_PATH=/usr/lib/cos/asahi/touch-id
+fi
+exec /usr/libexec/fprintd "$@"

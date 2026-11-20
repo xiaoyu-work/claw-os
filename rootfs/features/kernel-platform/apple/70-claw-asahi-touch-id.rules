@@ -1,0 +1,2 @@
+SUBSYSTEM=="misc", KERNEL=="sep-bio", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ENV{ID_INPUT_SWITCH}=="1", DEVPATH=="*/macsmc-input*/input/input*/event*", ATTRS{name}=="Apple SMC power/lid events", SYMLINK+="claw-asahi-touch-id-lid"

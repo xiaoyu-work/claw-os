@@ -241,6 +241,11 @@
       "sha256": "bf2e35d13c61c7769e4645f90dc750ed6a3d16a870df8db158cf42cfac9cf91e",
       "source": "https://github.com/AsahiLinux/asahi-audio/tree/f8f20535c9af07fe92ec8fc5f11262fb6671d371"
     },
+    "asahi-libfprint": {
+      "url": "https://gitlab.freedesktop.org/libfprint/libfprint/-/archive/6f9479c3d55f847c1b3769f28ceb99227f9858cf/libfprint-6f9479c3d55f847c1b3769f28ceb99227f9858cf.tar.gz",
+      "sha256": "54752a97e0b65dd06a37a6c6c949902211229847d9e66e77e0e838230c6feaab",
+      "source": "https://gitlab.freedesktop.org/libfprint/libfprint/-/tree/6f9479c3d55f847c1b3769f28ceb99227f9858cf"
+    },
     "omarchy-kernel": {
       "file": "linux-omarchy-7.3-72-aarch64.pkg.tar.zst",
       "sha256": "02598130b6ef4cada1735ea4e4a51e26f0af2fac4208da302a43ba4e9560dd5d",
