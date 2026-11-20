@@ -106,6 +106,11 @@ if [[ $platform == aarch64-apple ]]; then
     test -f "${audio[0]}" && test -f "${touch_id[0]}"
     packages+=("$inside/${audio[0]##*/}" "$inside/${touch_id[0]##*/}" "triforce-lv2/$SUITE-backports")
 fi
+if [[ $platform == aarch64-n1x ]]; then
+    audio=("$artifacts"/claw-os-proart-p14-audio_*.deb)
+    test -f "${audio[0]}"
+    packages+=("$inside/${audio[0]##*/}")
+fi
 chroot "$ROOTFS" apt-get update -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
     install -y --no-install-recommends "${packages[@]}" </dev/null

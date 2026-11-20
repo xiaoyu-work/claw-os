@@ -5,6 +5,7 @@ from collections import Counter
 import gzip
 import hashlib
 import json
+import lzma
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -346,6 +347,32 @@ def apple_boot(profile, source, work, out):
     shutil.copytree(directory / "usr/share/licenses", out / "boot-licenses")
 
 
+def proart_p14_firmware(profile, source, provenance, work, out):
+    key = profile["speaker_firmware"]
+    upstream = work / "proart-p14-firmware"
+    stage = work / "proart-p14-audio"
+    name = "claw-os-proart-p14-audio"
+    prefix = "cs35l56-b0-dsp1-misc-104333a1"
+    firmware = PurePosixPath("usr/lib/firmware/cirrus")
+    license_path = "usr/share/licenses/asus-proart-p14-audio/LICENSE.cirrus"
+    suffixes = (".wmfw", "-l1u0.bin", "-l1u1.bin")
+    members = {str(firmware / f"{prefix}-spkid0{suffix}") for suffix in suffixes}
+    unpack(source[key], upstream, lambda path: path in members or path == license_path)
+    target = stage / "usr/lib/firmware/updates/cirrus"
+    target.mkdir(parents=True)
+    for suffix in suffixes:
+        original = f"{prefix}-spkid0{suffix}"
+        payload = (upstream / firmware / original).read_bytes()
+        if not payload:
+            raise ValueError(f"{original}: empty ProArt P14 firmware")
+        # Keep the original payload and prefer uncompressed native firmware once it is available.
+        (target / f"{original}.xz").write_bytes(lzma.compress(payload, check=lzma.CHECK_CRC32))
+        (target / f"{prefix}-spkid1{suffix}.xz").symlink_to(f"{original}.xz")
+    copy_required(upstream / license_path, stage / "usr/share/doc" / name / "copyright")
+    package(stage, out, name, "1.0.678.52824-1", profile["arch"], "firmware-cirrus",
+            "ASUS ProArt P14 H7407BA Cirrus amplifier firmware and tuning", {key: provenance[key]}, None)
+
+
 def build(lock, profile, cache, output, debian_release=None, board_tools=False, apple_tools=False):
     if debian_release:
         profile = dict(profile, release=debian_release)
@@ -361,6 +388,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     keys += profile.get("gpu", []) + profile.get("boot", [])
     if "asahi_audio" in profile:
         keys.append(profile["asahi_audio"])
+    if "speaker_firmware" in profile:
+        keys.append(profile["speaker_firmware"])
     if apple_tools:
         keys += ["asahi-libfprint", "amd64-hardware-recipes"]
     if "romulus" in profile and not board_tools:
@@ -411,6 +440,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
                 package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)
+            if "speaker_firmware" in profile:
+                proart_p14_firmware(profile, source, provenance, work, out)
             if "boot" in profile:
                 apple_boot(profile, source, work, out)
             if "asahi_audio" in profile:

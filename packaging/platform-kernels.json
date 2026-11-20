@@ -265,6 +265,11 @@
       "file": "nvidia-utils-615.78.08-3-aarch64.pkg.tar.zst",
       "sha256": "651ba16b80f9505ca6577f23fab51cc10c02f6ffc90a9d1619f4a37d9695680c",
       "source": "https://download.nvidia.com/XFree86/Linux-aarch64/615.78.08/"
+    },
+    "n1x-proart-p14-audio": {
+      "file": "asus-proart-p14-audio-1.0.678.52824-1-aarch64.pkg.tar.zst",
+      "sha256": "17b69e77f23174d91b836f21967580b4aca4e134f6a3002efe2ae9ee3e33b4cd",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/asus-proart-p14-audio"
     }
   },
   "platforms": {
@@ -311,7 +316,8 @@
       "boot_args": "console=tty0 acpi=nospcr pci=hpbussize=0x20",
       "kernel": "omarchy-kernel",
       "dtbs": "omarchy-dtbs",
-      "gpu": ["nvidia-modules", "nvidia-userspace"]
+      "gpu": ["nvidia-modules", "nvidia-userspace"],
+      "speaker_firmware": "n1x-proart-p14-audio"
     },
     "aarch64-gb10": {
       "arch": "arm64",
