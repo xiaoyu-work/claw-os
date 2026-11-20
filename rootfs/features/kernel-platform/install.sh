@@ -130,6 +130,11 @@ if [[ $platform == aarch64-apple ]]; then
     install -Dm0755 "$apple/claw-asahi-import-firmware" "$ROOTFS/usr/sbin/claw-asahi-import-firmware"
     install -Dm0755 "$apple/claw-asahi-vendor-initramfs" "$ROOTFS/usr/share/initramfs-tools/hooks/claw-asahi-vendor"
     chroot "$ROOTFS" /usr/bin/systemctl enable claw-asahi-audio.service
+    if [[ ,${FEATURES:-}, == *,local-user,* ]]; then
+        service=claw-asahi-vendor-firmware.service
+        install -Dm0644 "$apple/$service" "$ROOTFS/usr/lib/systemd/system/$service"
+        chroot "$ROOTFS" /usr/bin/systemctl enable "$service"
+    fi
 fi
 
 if [[ $platform == aarch64-n1x ]]; then

@@ -2,6 +2,7 @@
 """Import an owner-local Asahi vendor firmware bundle, without writing the ESP."""
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -10,9 +11,12 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from uuid import UUID
 
 
 DT = Path("/sys/firmware/devicetree/base")
+ESP_ID = DT / "chosen/asahi,efi-system-partition"
+BY_PARTUUID = Path("/dev/disk/by-partuuid")
 VENDOR = Path("/usr/lib/firmware/vendor")
 
 
@@ -66,27 +70,62 @@ def unpack(bundle, stage):
     (stage / ".vendorfw.manifest").write_text(manifest, encoding="ascii")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("bundle", type=Path, help="directory with Asahi firmware.tar and manifest.txt")
-    args = parser.parse_args()
-    if os.geteuid() != 0:
-        raise ValueError("import requires root")
-    if not Path("/usr/lib/cos/asahi/boot.bin").is_file():
-        raise ValueError("the installed system does not have the Claw OS Apple Silicon profile")
-    if (not (DT / "chosen/asahi,efi-system-partition").is_file()
-            or not (DT / "compatible").read_bytes().startswith(b"apple,")):
-        raise ValueError("boot on an enrolled Apple Silicon Asahi installation first")
+@contextmanager
+def esp_bundle():
+    if "boot=live" in Path("/proc/cmdline").read_text().split():
+        raise ValueError("automatic vendor firmware import is for installed systems only")
+    try:
+        value = ESP_ID.read_bytes().removesuffix(b"\0").decode("ascii")
+        identity = UUID(value)
+    except ValueError:
+        raise ValueError("invalid Asahi EFI partition identifier") from None
+    if not identity.int or str(identity) != value.lower():
+        raise ValueError("invalid Asahi EFI partition identifier")
+    device = BY_PARTUUID / str(identity)
+    if not device.is_block_device():
+        raise ValueError(f"Asahi EFI partition {identity} is not available")
+    with tempfile.TemporaryDirectory(prefix="claw-asahi-esp-", dir="/run") as temp:
+        subprocess.run(["/usr/bin/mount", "-n", "-t", "vfat", "-o", "ro,nosuid,nodev,noexec",
+                        "--", device, temp], check=True)
+        try:
+            yield Path(temp) / "vendorfw"
+        finally:
+            subprocess.run(["/usr/bin/umount", "-n", "--", temp], check=True)
+
+
+def install_bundle(bundle):
     if VENDOR.exists() or VENDOR.is_symlink():
         raise ValueError(f"refusing to replace existing vendor firmware in {VENDOR}")
     os.umask(0o022)
     with tempfile.TemporaryDirectory(prefix="claw-asahi-firmware-", dir=VENDOR.parent) as tmp:
         stage = Path(tmp) / "vendor"
         stage.mkdir()
-        unpack(args.bundle, stage)
+        unpack(bundle, stage)
         stage.rename(VENDOR)
-    subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
-    print("Imported Asahi vendor firmware. Reboot to use it.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("bundle", nargs="?", type=Path, help="directory with Asahi firmware.tar and manifest.txt")
+    source.add_argument("--from-esp", action="store_true", help="use this Mac's Asahi EFI partition")
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        raise ValueError("import requires root")
+    if not Path("/usr/lib/cos/asahi/boot.bin").is_file():
+        raise ValueError("the installed system does not have the Claw OS Apple Silicon profile")
+    if not ESP_ID.is_file() or not (DT / "compatible").read_bytes().startswith(b"apple,"):
+        raise ValueError("boot on an enrolled Apple Silicon Asahi installation first")
+    if args.from_esp:
+        if VENDOR.exists() or VENDOR.is_symlink():
+            return
+        with esp_bundle() as bundle:
+            install_bundle(bundle)
+        print("Imported vendor firmware from the Asahi EFI partition.")
+    else:
+        install_bundle(args.bundle)
+        subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
+        print("Imported Asahi vendor firmware. Reboot to use it.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+[Unit]
+Description=Import firmware from this Mac's Asahi EFI partition
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=systemd-modules-load.service systemd-udevd.service systemd-udev-trigger.service sysinit.target shutdown.target
+Conflicts=shutdown.target
+ConditionKernelCommandLine=!boot=live
+ConditionPathExists=/sys/firmware/devicetree/base/chosen/asahi,efi-system-partition
+ConditionPathExists=!/usr/lib/firmware/vendor
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/claw-asahi-import-firmware --from-esp
+PrivateMounts=yes
+TimeoutStartSec=30s
+
+[Install]
+WantedBy=sysinit.target
