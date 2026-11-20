@@ -9,6 +9,8 @@ esac
 compatible=/sys/firmware/devicetree/base/compatible
 [ -r "$compatible" ] || exit 1
 board=$(tr '\000' '\n' <"$compatible" | sed -n '1p')
+daemon=speakersafetyd
+unit=speakersafetyd.service
 case "$board" in
     apple,j274|apple,j293|apple,j313|apple,j314[sc]|apple,j316[sc]|apple,j375[cd]|\
     apple,j413|apple,j414[sc]|apple,j415|apple,j416[sc]|apple,j473|apple,j474s|apple,j475[cd]|apple,j493|\
@@ -16,16 +18,26 @@ case "$board" in
         model=${board#apple,j}
         model=${model%[scdm]}
         ;;
+    apple,j700)
+        tr '\000' '\n' <"$compatible" | grep -Fxq 'apple,t8140' || exit 1
+        [ -s /usr/share/wireplumber/wireplumber.conf.d/99-claw-asahi-neo.conf ] &&
+            [ -s /usr/share/asahi-audio/j700/48.wav ] &&
+            [ -s /usr/lib/udev/rules.d/96-claw-asahi-neo-speakers.rules ] || exit 1
+        daemon=speakerguardd
+        unit=claw-asahi-neo-speaker-guard.service
+        model=700
+        ;;
     *) exit 1 ;;
 esac
+[ "${3:-$daemon}" = "$daemon" ] || exit 1
 for profile in /usr/share/alsa/ucm2/conf.d/macaudio/*" J$model.conf"; do
     [ -s "$profile" ] || exit 1
 done
-[ -x /usr/lib/cos/asahi/speakersafetyd ] &&
+[ -x "/usr/lib/cos/asahi/$daemon" ] &&
     [ -s "/usr/share/cos/asahi/speaker-protection/apple/j$model.conf" ] &&
     [ -s "/usr/share/cos/asahi/speakers/j$model.conf" ] &&
     [ -s /usr/share/wireplumber/wireplumber.conf.d/99-asahi.conf ] || exit 1
-case "$(/usr/bin/systemctl is-enabled speakersafetyd.service 2>/dev/null || true)" in
+case "$(/usr/bin/systemctl is-enabled "$unit" 2>/dev/null || true)" in
     masked|masked-runtime|not-found|"") exit 1 ;;
 esac
 if [ "$1" = load ]; then

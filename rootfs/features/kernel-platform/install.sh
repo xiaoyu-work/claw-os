@@ -48,7 +48,7 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
     install -m0644 "$PROJECT_DIR"/scripts/{platform_kernels,surface_laptop7,asahi_audio,asahi_touch_id}.py "$stage/scripts/"
     install -m0644 "$PROJECT_DIR/packaging/platform-kernels.json" "$stage/packaging/"
     install -m0644 "$apple"/{claw-asahi-audio,claw-asahi-fprintd,claw-asahi-touch-id,claw-asahi-touch-id.service} "$assets/"
-    install -m0644 "$apple"/{70-claw-asahi-fprintd.conf,80-claw-asahi-touch-id.conf,70-claw-asahi-touch-id.rules} "$assets/"
+    install -m0644 "$apple"/{70-claw-asahi-fprintd.conf,80-claw-asahi-touch-id.conf,70-claw-asahi-touch-id.rules,99-claw-asahi-neo.conf} "$assets/"
     chroot "$ROOTFS" apt-get update -qq
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config gpg gpgv zstd patch meson ninja-build \
@@ -105,7 +105,8 @@ if [[ $platform == aarch64-apple ]]; then
     audio=("$artifacts"/claw-os-asahi-audio_*.deb)
     touch_id=("$artifacts"/claw-os-asahi-touch-id_*.deb)
     test -f "${audio[0]}" && test -f "${touch_id[0]}"
-    packages+=("$inside/${audio[0]##*/}" "$inside/${touch_id[0]##*/}" "triforce-lv2/$SUITE-backports")
+    packages+=("$inside/${audio[0]##*/}" "$inside/${touch_id[0]##*/}"
+        "triforce-lv2/$SUITE-backports" "wireplumber/$SUITE-backports")
 fi
 if [[ $platform == aarch64-n1x ]]; then
     audio=("$artifacts"/claw-os-proart-p14-audio_*.deb)

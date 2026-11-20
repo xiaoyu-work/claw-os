@@ -251,6 +251,21 @@
       "sha256": "1970d34124b028ca4c1f6771933884c9ab18c08fd2d3929653ab19d071f9d77e",
       "source": "https://github.com/AsahiLinux/alsa-ucm-conf-asahi/tree/1473329acab595dfef039f38c384ce16674d6b15"
     },
+    "asahi-neo-guard": {
+      "url": "https://codeload.github.com/aurora-silicon/speakerguardd/tar.gz/d1bc5a02752ac01daa52d5ecb84008d7b50caef3",
+      "sha256": "5c9eca46730fb981d9d0f3abfd171312a1c7ed5e0d8c9da0e070c29fda375339",
+      "source": "https://github.com/aurora-silicon/speakerguardd/tree/d1bc5a02752ac01daa52d5ecb84008d7b50caef3"
+    },
+    "asahi-neo-audio": {
+      "url": "https://codeload.github.com/aurora-silicon/asahi-audio/tar.gz/06aec67a8ac866eb5b40f44634652beff454e297",
+      "sha256": "cddc60fee56cbbaad86b8556bb365db3cf5be942267a62712b9fd19a59255b03",
+      "source": "https://github.com/aurora-silicon/asahi-audio/tree/06aec67a8ac866eb5b40f44634652beff454e297"
+    },
+    "asahi-neo-ucm": {
+      "url": "https://codeload.github.com/aurora-silicon/alsa-ucm-conf-asahi/tar.gz/b9b2d0c82cbb46025e586b2dc9f2cae644d29999",
+      "sha256": "e627e2a78edc263696cb2bd9b1b438b49de27af704e55a277e049f699bdb29e8",
+      "source": "https://github.com/aurora-silicon/alsa-ucm-conf-asahi/tree/b9b2d0c82cbb46025e586b2dc9f2cae644d29999"
+    },
     "asahi-libfprint": {
       "url": "https://gitlab.freedesktop.org/libfprint/libfprint/-/archive/6f9479c3d55f847c1b3769f28ceb99227f9858cf/libfprint-6f9479c3d55f847c1b3769f28ceb99227f9858cf.tar.gz",
       "sha256": "54752a97e0b65dd06a37a6c6c949902211229847d9e66e77e0e838230c6feaab",

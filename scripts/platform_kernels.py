@@ -391,7 +391,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     if "speaker_firmware" in profile:
         keys.append(profile["speaker_firmware"])
     if apple_tools:
-        keys += ["asahi-libfprint", "asahi-speakersafetyd", "asahi-ucm", "amd64-hardware-recipes"]
+        from asahi_audio import NEO_INPUTS
+
+        keys += ["asahi-libfprint", "asahi-speakersafetyd", "asahi-ucm", "amd64-hardware-recipes",
+                 *NEO_INPUTS]
     if "romulus" in profile and not board_tools:
         keys.append("surface-snapdragon-addresses")
     output.mkdir(parents=True, exist_ok=True)
