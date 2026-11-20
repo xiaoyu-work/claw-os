@@ -107,7 +107,7 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 | ASUS ExpertBook B9406 with the PixArt `093a:4f05` touchpad | Ignore the pad's binary pressure axes so libinput can retain motion events. |
 | Intel `MacBook8,1`, `MacBook9,1`, `MacBook10,1`, and `MacBookPro13,1`–`14,3` | Prevent the NVMe controller at `0000:01:00.0` from entering D3cold, avoiding a known resume failure. |
 | ASUS ExpertBook B9406 and Zenbook UX5406AA with Panther Lake graphics | Use DPCD backlight control; on the B9406, also disable the panel-replay path that can leave the display stuck. |
-| Panther Lake Dell XPS 14/16 with the affected Intel Wi-Fi 7 PCI IDs | Disable EHT for those cards to use the working Wi-Fi 6 path. |
+| Intel BE200/BE211 (`8086:272b` and `8086:e440`) on amd64 | Temporarily disable EHT to work around receive-rate drops, using Wi-Fi 6 instead. Match the radio, not the laptop model. |
 | Lenovo Yoga Pro 7 14IAH10 | Select the SOF HDA codec model that routes audio to both amplifiers. |
 | Intel Macs with the listed Broadcom `brcmfmac` PCI devices | Let the host supplicant handle WPA instead of the affected firmware offload. |
 | Broadcom BCM4331 and BCM4360 (`14e4:4331` and `14e4:43a0`) | Cache and install Debian's STA DKMS driver with the exact stock amd64 kernel headers. Fix the current backport's open-source Linux 7.2 compatibility layer without changing the Broadcom binary. Nonmatching adapters keep their existing drivers. |

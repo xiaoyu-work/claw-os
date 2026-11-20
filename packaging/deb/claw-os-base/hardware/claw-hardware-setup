@@ -32,12 +32,15 @@ if [ "$#" -eq 0 ] && [ -x /usr/sbin/claw-import-t2-firmware ] &&
     fi
 fi
 dmi=/sys/class/dmi/id
-[ -r "$dmi/sys_vendor" ] && [ -r "$dmi/product_name" ] || exit 0
-read -r manufacturer <"$dmi/sys_vendor"
-read -r model <"$dmi/product_name"
-if [ -r "$dmi/product_family" ]; then
-    read -r family <"$dmi/product_family"
-    model="$model $family"
+manufacturer=
+model=
+if [ -r "$dmi/sys_vendor" ] && [ -r "$dmi/product_name" ]; then
+    read -r manufacturer <"$dmi/sys_vendor"
+    read -r model <"$dmi/product_name"
+    if [ -r "$dmi/product_family" ]; then
+        read -r family <"$dmi/product_family"
+        model="$model $family"
+    fi
 fi
 
 option() {
@@ -79,11 +82,6 @@ settings() {
                 option xe enable_dpcd_backlight 1
             fi
             ;;
-        "Dell Inc.:"*XPS*14*|"Dell Inc.:"*XPS*16*|"Dell Inc.:"*DX14260*|"Dell Inc.:"*DX16260*)
-            if [ "$panther_lake:$intel_wifi7" = yes:yes ]; then
-                option iwlwifi disable_11be Y
-            fi
-            ;;
         LENOVO:*"Yoga Pro 7 14IAH10"*)
             option snd-sof-intel-hda-generic hda_model alc287-yoga9-bass-spk-pin
             ;;
@@ -93,6 +91,10 @@ settings() {
             fi
             ;;
     esac
+    # These radios can stall at the lowest receive rate when EHT is negotiated.
+    if [ "$intel_wifi7" = yes ]; then
+        option iwlwifi disable_11be Y
+    fi
 }
 
 options=$(settings)
