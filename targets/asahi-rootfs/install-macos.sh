@@ -67,17 +67,18 @@ fetch https://cdn.asahilinux.org/installer/installer-v0.9.2.tar.gz \
 decoder=
 requirement=
 if [ "$(/usr/sbin/sysctl -n hw.model)" = Mac17,5 ]; then
-    base=https://github.com/omacom/omarchy-mac-installer/releases/download
-    version=v0.9.2-omarchy.20261106.0f73bea79639
-    fetch "$base/engine-$version/installer-$version.tar.gz" \
-        a60855716be5cea4f2113a368f784a5fe55a7034602f48fac8bb6e79f796fd7a "$work/neo.tar.gz"
+    revision=f8bad2d2ff1cb3344b4282f44e75a4a25c127ea9
+    fetch "https://codeload.github.com/omacom/omarchy-mac-installer/tar.gz/$revision" \
+        abd5bada89bab9d9b4291b4c2a217e9f2ab1b0c61b73fb078959908321bfe26a "$work/neo-source.tar.gz"
+    archive_root="omarchy-mac-installer-$revision"
+    overlay="$archive_root/Engine/overlay/src"
     /usr/bin/install -d "$work/neo" "$restore_mount"
-    /usr/bin/tar -oxzf "$work/neo.tar.gz" -C "$work/neo"
-    /usr/bin/install -m 0600 "$work/neo"/omarchy_*.py "$work/runtime/"
-    /usr/bin/install -m 0600 "$work/neo/main.py" "$work/runtime/neo_engine.py"
+    /usr/bin/tar -oxzf "$work/neo-source.tar.gz" -C "$work/neo" "$overlay" "$archive_root/LICENSE"
+    /usr/bin/install -m 0600 "$work/neo/$overlay"/omarchy_*.py "$work/runtime/"
+    /usr/bin/install -m 0600 "$work/neo/$archive_root/LICENSE" "$work/runtime/LICENSE.neo"
     /usr/bin/install -m 0600 "$scripts/install-macos-neo.py" "$work/runtime/claw_neo.py"
 
-    fetch "$base/v2.3.16/Omarchy-Mac-Installer-2.3.16.dmg" \
+    fetch "https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.16/Omarchy-Mac-Installer-2.3.16.dmg" \
         0b70717b0bfa3277f41159b5de4a0cab9f75dda9ba64f13d4b4a02a7860dd027 "$work/restore.dmg"
     /usr/bin/hdiutil attach -quiet -readonly -nobrowse -mountpoint "$restore_mount" "$work/restore.dmg"
     attached=yes

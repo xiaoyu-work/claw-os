@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import asahi_engine as engine
-import neo_engine
 import omarchy_apple_aea as restore
 import omarchy_asahi as asahi
 
@@ -21,11 +20,15 @@ NEXT = "m1n1/boot.bin"
 def select_board(mac):
     if (mac.device_class, mac.chip_id, mac.board_id, mac.product_type) != (BOARD, 0x8140, 0x64, "Mac17,5"):
         raise ValueError("the MacBook Neo restore environment does not match this board")
-    engine.DEVICES[BOARD] = neo_engine.DEVICES[BOARD]
-    engine.CHIP_MIN_VER[mac.chip_id] = neo_engine.CHIP_MIN_VER[mac.chip_id]
-    engine.IPSW_VERSIONS.append(next(ipsw for ipsw in neo_engine.IPSW_VERSIONS
-                                    if ipsw.version == FIRMWARE and BOARD in ipsw.devices))
-    engine.STUB_SIZE = neo_engine.STUB_SIZE_MACOS26
+    engine.DEVICES[BOARD] = engine.Device("26.6", False)
+    engine.CHIP_MIN_VER[mac.chip_id] = "26.6"
+    engine.IPSW_VERSIONS.append(engine.IPSW(
+        FIRMWARE, "26.0", "mBoot-18000.161.10", "25.7.83.0.0,0", False, ["j613ap", "j615ap", BOARD],
+        "https://updates.cdn-apple.com/2026SummerFCS/fullrestores/140-75212/"
+        "A2A24B94-1FC1-45A3-93F7-C51B02AF1F4D/UniversalMac_26.6.2_25G83_Restore.ipsw",
+    ))
+    # macOS 26 recovery and its two personalized boot objects need the larger stub.
+    engine.STUB_SIZE = engine.align_down(engine.psize("6GB"), engine.PART_ALIGN)
 
 
 def stage_one(package, name, partuuid=asahi.PLACEHOLDER_UUID):
