@@ -131,9 +131,15 @@ fn system_review_named_gui_targets_require_fresh_protected_confirmation() {
         assert!(view.disclosures.iter().any(|detail| detail.label.contains("optional feature")));
         assert!(view.permissions.iter().any(|permission| permission.uses.iter().any(|usage|
             usage.function == "gui:applet:optional" && usage.purpose == "Optional widget account management")));
-        assert!(view.permissions.iter().all(|permission| permission.supported_choices.is_empty()));
+        let permission = view.permissions.iter().find(|permission| permission.verb == "sys.observe").unwrap();
+        assert_eq!(permission.supported_choices, vec![PermissionChoice::AllowAlways, PermissionChoice::Deny]);
+        assert!(view.permissions.iter().filter(|permission| permission.verb != "sys.observe")
+            .all(|permission| permission.supported_choices.is_empty()));
         assert!(approvals::system_review::decide(1001, &record.id, true, Some(&package)).is_err());
-        approvals::system_review::decide(1000, &record.id, true, Some(&package)).unwrap();
+        assert!(approvals::system_review::decide(1000, &record.id, true, Some(&package)).is_err());
+        approvals::system_review::decide_with_permissions(
+            1000, &record.id, true, Some(&package), [(permission.id.clone(), true)].into(),
+        ).unwrap();
         approvals::system_review::consume(1000, &record.id, &package).unwrap();
         assert!(approvals::system_review::has_accepted(1000, &package).unwrap());
 
@@ -145,6 +151,7 @@ fn system_review_named_gui_targets_require_fresh_protected_confirmation() {
         ).unwrap();
         let fresh = app(&fresh).unwrap();
         assert_eq!(fresh.status, ReviewStatus::Pending);
+        assert!(fresh.permissions.iter().all(|permission| permission.supported_choices.is_empty()));
         assert_ne!(fresh.contract_digest, view.contract_digest);
         assert!(fresh.disclosures.iter().any(|detail| detail.label.contains("applet") && detail.value.contains("other.py")));
         assert!(approvals::list_recent(10).is_empty());
@@ -175,7 +182,7 @@ fn protected_gui_review_resolves_owner_path_from_the_record_owner_not_request_da
         let view = app(&record).unwrap();
         let permission = view.permissions.iter().find(|permission| permission.verb == "fs.delete").unwrap();
         assert_eq!(permission.scope.kind, ScopeKind::Fixed);
-        assert_eq!(permission.scope.description, format!("path:{}/owner-path-review/**", home.display()));
+        assert_eq!(permission.scope.description, format!("{}/owner-path-review and everything inside it", home.display()));
         assert_eq!(permission.uses[0].purpose, "Delete the owner's explicitly selected files");
         assert!(permission.supported_choices.is_empty());
         assert_eq!(view.status, ReviewStatus::Pending);

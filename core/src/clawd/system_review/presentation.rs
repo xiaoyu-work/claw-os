@@ -89,7 +89,7 @@ pub(super) fn app(record: &ReviewRecord) -> Result<SystemReview, String> {
             unsupported_reason: (!selectable).then(|| if current.is_some() {
                 "Your choice is saved. Change it in Settings → Applications.".into()
             } else {
-                "This permission is not granted at installation. The relevant action still requires its own access.".into()
+                "Installing the app does not grant this access. It is decided when the relevant action is used.".into()
             }),
         })
     }).collect::<Result<Vec<_>, String>>()?;

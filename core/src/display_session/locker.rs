@@ -131,7 +131,7 @@ impl Locker {
         if self.admitted {
             let mut marker = [0];
             match readiness.read(&mut marker) {
-                Ok(1) if marker == [b'\n'] => {
+                Ok(1) if marker == *b"\n" => {
                     self.readiness = None;
                     return Ok(Status::Locked);
                 }

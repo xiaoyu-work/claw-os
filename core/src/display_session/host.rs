@@ -518,7 +518,7 @@ impl Supervisor {
             let mut index = 0;
             while index < self.launchers.len() {
                 if self.launchers[index].try_wait()?.is_some() {
-                    self.launchers.swap_remove(index);
+                    self.launchers.swap_remove(index).wait()?;
                 } else {
                     index += 1;
                 }

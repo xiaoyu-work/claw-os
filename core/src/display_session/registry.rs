@@ -559,7 +559,7 @@ fn monitor(
                     "GUI control retirement correlation limit reached",
                 ));
             }
-            if !matches!(kind, 6 | 7 | 8) { channel.send(
+            if !matches!(kind, 6..=8) { channel.send(
                 &AuthorityCommand::Gui {
                     command: CompositorCommand::Retire { epoch, instance },
                 },
@@ -656,7 +656,7 @@ fn monitor(
                         message: reply,
                         descriptors: packet.descriptors,
                         sender: packet.sender,
-                    })).is_err() && !matches!(expected, 6 | 7 | 8) {
+                    })).is_err() && !matches!(expected, 6..=8) {
                         tracing::warn!("GUI control requester disappeared; retiring its instance");
                         channel.send(
                             &AuthorityCommand::Gui {

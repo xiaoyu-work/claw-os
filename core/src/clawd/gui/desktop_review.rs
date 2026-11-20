@@ -65,7 +65,7 @@ fn status(state: &'static str) -> Reply {
 pub(super) struct PowerDispatch {
     action: String,
     deadline: Instant,
-    review: Option<(Review, u32)>,
+    review: Option<(Box<Review>, u32)>,
 }
 
 impl PowerDispatch {
@@ -398,7 +398,7 @@ impl Window {
                     return Ok(Reply::Power(PowerDispatch {
                         action: action.clone(),
                         deadline: record.deadline,
-                        review: Some((record, approval.generation)),
+                        review: Some((Box::new(record), approval.generation)),
                     }));
                 }
                 let (Some(installed), Effect::Launch { desktop_id, target }) =
