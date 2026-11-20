@@ -57,7 +57,7 @@ route.
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | Authenticated display lifetime | Root PAM/kernel-login binding, compositor and native locker custody, display epochs and downstream session subscriptions | `core/src/display_session/`, `crates/claw-display-control/`, `crates/claw-display-login/` |
-| GUI App custody | Verified launch, one-use reviews for desktop-menu launches and power actions, existing grant/parent authority, independent selection rights, instance-confined transport and checked teardown | `core/src/clawd/gui/`, `core/src/worker/gui_transport/`, `desktop/hyprland-claw/` |
+| GUI App custody | Verified launch, explicit owner actions from the bound OS desktop, reviewed actions from ordinary Apps, independent selection rights, instance-confined transport and checked teardown | `core/src/clawd/gui/`, `core/src/worker/gui_transport/`, `desktop/hyprland-claw/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | `claw-extension-host` | Purpose-bound isolated-UID process: a task Host runs dynamic App/MCP code and signed Agent extension observers behind independently bounded canonical, event, and priority control lanes and relays authenticated App calls, while an owner/App service Host runs persistent App MCP code behind broker-owned private sockets; only App/MCP children receive the route-filtered broker proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/`, `core/src/clawd/app_services.rs` |
 | Agent extension ABI | Explicit authenticated-package registry, provider-attempt/tool observation FIFO, absolute event deadlines, independently acknowledged detach with supervisor containment escalation, per-extension capability references, and default-deny exact-action mediation | `core/src/agent_extensions/`, `core/src/provenance/`, `core/src/extension_host/abi.rs` |
@@ -187,9 +187,10 @@ App requests and existing capability approvals. The target App's GUI metadata
 selects neither this presentation contract nor approval authority. Root-owned
 presentation revisions bind each action to the snapshot the user saw.
 The privileged helper accepts bounded typed decisions; owner cancellation and
-same-owner denial need no elevation because neither creates authority. App
-confirmation cannot apply choices, and capability grants delegate to the
-existing scope/lifetime/revocation authority.
+same-owner denial need no elevation because neither creates authority. Package
+confirmation alone applies no choices. Explicit lasting GUI choices are stored
+as owner policy, not capability grants. Runtime grants still use the existing
+scope/lifetime/revocation authority.
 The fixed helper's polkit action requires fresh `auth_self` authentication in
 every session category, including WSL processes without a logind seat/session.
 No category gets implicit or cached authorization. Polkit owns the password
@@ -226,8 +227,10 @@ alone grants nothing. Separate explicit choices for supported GUI needs persist
 per owner and publisher, and the OS-started Settings window can update them.
 Selection read and write remain independent, and Panel metadata grants nothing.
 `ui.panel` separately admits LayerShell only from the live bound GUI grant.
-Only the supervisor's fixed system shell launch gets the built-in desktop
-defaults; the System Agent and ordinary launchers receive no such authority.
+Only the supervisor's fixed system shell launch gets the built-in shell
+defaults; the exact system Settings window can apply the signed and
+policy-checked owner settings it declares. The System Agent and ordinary
+launchers receive no such authority.
 Generic owner-path needs resolve
 only Root-authenticated owner home into bounded canonical Path scopes and
 normal exact-owner approval, never environment-derived home or a default grant.

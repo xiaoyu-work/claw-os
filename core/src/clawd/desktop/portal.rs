@@ -185,7 +185,8 @@ pub(in crate::clawd) async fn owner_file_chooser_request(
         biased;
         result = reply => match result {
             Ok((0, values)) => PortalReply { result: PortalResult::Success(values), portal_retired: true },
-            Ok((1, _)) => PortalReply::cancelled(),
+            // The pinned GTK backend reports Cancel as 1 and a closed dialog as 2.
+            Ok((1 | 2, _)) => PortalReply::cancelled(),
             Ok((_, _)) => PortalReply::failed("The system file chooser refused the request", true),
             Err(_) => close_request(&request, PortalResult::Failed("The system file chooser did not respond".into())).await,
         },

@@ -258,9 +258,10 @@ GUI lease, eight bounded portal slots and the shared protected installed
 `clawd` helper. Completion requires correlated portal completion or checked
 Close plus observed helper exit; uncertain cleanup remains under Root custody.
 The helper pins the GTK chooser's bus identity and installed executable.
-The chooser does not wait for screenshot or screencast backends. When this GUI has a
-controlled native view, Root also pins the selected regular file or absent save
-target. The same instance can claim that evidence once for its matching
+The chooser does not wait for screenshot or screencast backends. Cancel and
+closing the dialog end the request without a selection. When this GUI has a
+controlled native view, Root also pins the selected regular file or absent
+save target. The same instance can claim that evidence once for its matching
 declared read, write or create operation. Folder selections do not supply
 content authority. Other consumers retain their separate operation and secret
 requirements. No App receives an owner-bus connection.

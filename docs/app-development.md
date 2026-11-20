@@ -824,10 +824,13 @@ coordination remains separate work. See
 [provenance rollback](extension-provenance.md#operator) for its retained-artifact,
 installed-destination and APT restrictions.
 
-Brokered operation/GUI/native registration and prepared MCP calls also require
-owner review before activation, including preinstalled Apps. Unreviewed
-background services are not warmed automatically. Existing App permission
-denials remain in effect after installation confirmation.
+Brokered operation/GUI/native registration and prepared MCP calls require
+owner review before activation unless this owner already confirmed the package
+or the OS admitted a built-in desktop entry. Confirmation by UID 0 for a manual
+directory installation does not make choices for other owners; they review
+the App on first use. Unreviewed background services are not warmed
+automatically. Existing App permission denials remain in effect after
+installation confirmation.
 
 Both presenters use the same catalog labels, purposes, resource scopes,
 argument constraints, supported choices and state transitions. The broker
@@ -839,13 +842,13 @@ Owner cancellation uses the same typed decision without a privilege prompt.
 The helper reads at most 64 KiB, accepts no caller-supplied owner or grant in
 the decision, and derives the authenticated user from polkit.
 
-App installation and activation confirmations cannot carry permission choices.
-Existing capability requests offer only durations their authority supports,
-with use/time limits disclosed. Fixed brokered App-policy restoration remains
-a separate, non-execution receipt: it removes an existing deny gate but does
-not supply launcher or manifest authority. Unsupported Ask policies and
-direct-resource controls have an explanation rather than a working-looking
-switch.
+Package confirmation by itself carries no permission choices. When the OS
+offers lasting GUI choices, the presenter submits them separately from the
+confirmation for the same displayed review. Existing capability requests still
+offer only durations their authority supports, with use/time limits disclosed.
+Legacy App-policy restoration removes a deny gate but does not supply launcher
+or manifest authority. Unsupported Ask policies and direct-resource controls
+have an explanation rather than a working-looking switch.
 
 Older `permission.*` clients and the legacy capability-helper mode remain
 compatible; other Settings and Agent Web approval callers still need the same
