@@ -82,6 +82,18 @@ fn activity_work_handoff_cannot_become_policy_or_escape_its_fence() {
 }
 
 #[test]
+fn background_brief_stays_model_data_and_cannot_escape_its_fence() {
+    use crate::agent::context::packet::{ContextKind, ContextSection};
+    let brief = ContextSection::new(
+        ContextKind::DelegatedTaskBrief,
+        "background task brief",
+        ESCALATION.to_string(),
+    );
+    assert_eq!(brief.labeled().class(), TrustClass::ModelGenerated);
+    assert_contained(&brief.rendered(), "delegated_task_brief");
+}
+
+#[test]
 fn mcp_tool_description_injection_stays_extension_metadata() {
     // A remote server's *description* is metadata, not policy, and it
     // reaches the model as a tool definition, so it is bounded and

@@ -201,6 +201,14 @@ Exiting does not cancel or lose queued work. The dependency carries no
 capability or durable attendance; normal live presence and approval rules are
 re-evaluated when each Job runs.
 
+For substantial independent work, the Agent can queue a background Job on
+its own without waiting for the user to request background execution. It
+hands off a brief and can finish its current chat turn without waiting for the
+result. The Job uses a separate session in the same Workspace, runs subject
+to the shared worker capacity, and shows up in `/tasks`; its completion
+notification links the originating conversation and the Job. Normal follow-up
+messages still queue in order and do not enter a turn already in progress.
+
 A transient `clawd` disconnect keeps the exact active task and stream cursor.
 The header shows `RECONNECTING`; recovery resumes the same durable stream
 without resubmitting the prompt or inventing task failure.

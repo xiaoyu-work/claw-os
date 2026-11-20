@@ -80,11 +80,14 @@ pub fn prepare(
             Some(redactor) => redactor.redact(context.trim()),
             None => context.trim().to_string(),
         };
-        builder.required(ContextSection::new(
-            ContextKind::Request,
-            "request surface context",
-            content,
-        ))?;
+        let (kind, reference) = if exposure.is_some_and(|context| {
+            context.client().source == crate::session::SessionSource::DelegatedAgent
+        }) {
+            (ContextKind::DelegatedTaskBrief, "background task brief")
+        } else {
+            (ContextKind::Request, "request surface context")
+        };
+        builder.required(ContextSection::new(kind, reference, content))?;
     }
     let reminders = if deps.workspace().is_some(){Vec::new()}else{match deps.paths() {
         Some(paths) => prompt::try_build_turn_context_segments_with(

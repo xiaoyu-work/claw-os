@@ -1560,6 +1560,8 @@ CLI / web UI / bridge
   -> compact tool registry / guardrails / hooks
   -> bridge envelopes resolve to the underlying tool before policy and scheduling
   -> parallel-safe or serial tool execution
+  -> foreground work can hand off a brief over the private worker channel
+     to a separate durable Job; the current turn does not wait for its result
   -> denied capability files an approval and releases the worker
   -> task waits durably in waiting_approval
   -> approval resumes the same task/session; denial ends it

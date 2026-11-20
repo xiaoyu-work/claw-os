@@ -703,7 +703,8 @@ Expired or revoked visibility conservatively requires a new conversation;
 original execution/conversation evidence remains owner-readable.
 
 Upgrade `cos`, `clawd` and `claw-agentd` together for private worker protocol
-20. The native Agent bridge/UI use presentation protocol 4 and must remain
+21, which adds bounded background Job submission from a foreground Agent.
+The native Agent bridge/UI use presentation protocol 4 and must remain
 paired. The release-security policy records these same generations; a mixed
 cohort fails closed. Workspace deletion revokes sharing, stops related
 automatic work and cancels associated Jobs without deleting original files,

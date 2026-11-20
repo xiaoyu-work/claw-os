@@ -7,6 +7,7 @@
 
 pub mod app_gateway;
 pub(crate) mod activity_work;
+pub(crate) mod background;
 pub mod builtin;
 pub mod clarify;
 pub mod cos_apps_session;

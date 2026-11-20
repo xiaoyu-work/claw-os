@@ -27,6 +27,7 @@ pub enum ContextKind {
     Workspace,
     WorkspaceOwnerNote,
     WorkspaceAgentReport,
+    DelegatedTaskBrief,
 }
 
 impl ContextKind {
@@ -40,6 +41,7 @@ impl ContextKind {
             Self::Workspace => SourceKind::WorkspaceContext,
             Self::WorkspaceOwnerNote => SourceKind::WorkspaceOwnerNote,
             Self::WorkspaceAgentReport => SourceKind::WorkspaceAgentReport,
+            Self::DelegatedTaskBrief => SourceKind::DelegatedTaskBrief,
         }
     }
 }

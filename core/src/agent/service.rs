@@ -174,6 +174,9 @@ pub struct Job {
     /// after that exact same-owner/session Job reaches a terminal state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_task_id: Option<String>,
+    /// Origin conversation of a model-delegated Job, not its execution session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_from_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
     /// Root-created automatic-work correlation, never accepted in task.submit.
@@ -324,6 +327,7 @@ impl Job {
             workspace_revision: None,
             session_id,
             after_task_id: None,
+            delegated_from_session_id: None,
             activity_id: None,
             activity_work_generation: None,
             execution_reservation: None,
@@ -360,8 +364,13 @@ impl Job {
         }
     }
 
-    fn preview(&self, max: usize) -> String {
-        let s = self.prompt.replace('\n', " ");
+    pub(crate) fn preview(&self, max: usize) -> String {
+        let text = if self.delegated_from_session_id.is_some() {
+            self.context.as_deref().unwrap_or(&self.prompt)
+        } else {
+            &self.prompt
+        };
+        let s = text.replace('\n', " ");
         if s.chars().count() <= max {
             s
         } else {
@@ -376,6 +385,14 @@ impl Job {
             (Some(reservation), None) => Some(reservation.max_turns),
             (None, requested) => requested,
         }
+    }
+
+    pub(crate) fn can_delegate_background(&self) -> bool {
+        self.client.source == crate::session::SessionSource::BrokerTask
+            && self.session_id.is_some()
+            && !self.plan_only
+            && self.delegated_from_session_id.is_none()
+            && self.activity_id.is_none()
     }
 }
 
@@ -447,7 +464,11 @@ fn pending_priority(
         return Ok(ActivitySchedulingPriority::Standard);
     }
     let Some(activity_id) = job.activity_id else {
-        return Ok(ActivitySchedulingPriority::Standard);
+        return Ok(if job.delegated_from_session_id.is_some() {
+            ActivitySchedulingPriority::Background
+        } else {
+            ActivitySchedulingPriority::Standard
+        });
     };
     let owner_uid = job.owner_uid.ok_or_else(|| {
         io::Error::new(
@@ -3166,7 +3187,10 @@ fn task_notification_draft(
         draft = draft.activity();
     }
     draft.task_id = Some(job.id.clone());
-    draft.session_id = job.session_id.clone();
+    draft.session_id = job
+        .delegated_from_session_id
+        .clone()
+        .or_else(|| job.session_id.clone());
     if let Some(session_id) = job.session_id.as_deref() {
         draft
             .actions
@@ -3203,6 +3227,7 @@ fn job_to_summary(job: &Job) -> Value {
         "activity_id": job.activity_id,
         "workspace": job.workspace,
         "after_task_id": job.after_task_id,
+        "delegated_from_session_id": job.delegated_from_session_id,
         "status": job.status.as_str(),
         "schema_version": job.schema_version,
         "execution_phase": job.execution_phase.as_str(),
@@ -4011,18 +4036,20 @@ pub(crate) async fn execute_job_with_hooks_and_budget(
         Arc<dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController>,
     >,
 ) -> FinishOutcome {
-    execute_job_with_hooks_budget_and_work(
-        job, stream_sink, progress_sink, hooks, monetary_budget, None,
-    ).await
+    execute_job_with_worker_tools(
+        job, stream_sink, progress_sink, hooks, monetary_budget, None, None,
+    )
+    .await
 }
 
-pub(crate) async fn execute_job_with_hooks_budget_and_work(
+pub(crate) async fn execute_job_with_worker_tools(
     job: JobExecution,
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
     hooks: crate::agent::runtime::hooks::HookRegistry,
     monetary_budget: Option<Arc<dyn crate::agent::runtime::monetary_budget::MonetaryBudgetController>>,
     work: Option<Arc<crate::agent::tools::activity_work::WorkCheckpointSlot>>,
+    background: Option<Arc<dyn crate::agent::tools::background::BackgroundSubmitter>>,
 ) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
@@ -4078,6 +4105,11 @@ pub(crate) async fn execute_job_with_hooks_budget_and_work(
     let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     if let Some(slot) = work {
         tools.set_activity_work(slot);
+    }
+    if let Some(submitter) = background {
+        tools.register(Arc::new(crate::agent::tools::background::BackgroundDelegate(
+            submitter,
+        )));
     }
     tools.set_guardrails(guardrails);
     tools.set_approval(loop_::approval_from_cfg(&cfg));

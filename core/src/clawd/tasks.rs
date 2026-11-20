@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::service::{load_activity, resolve_activity_id, Job, JobStatus, Store};
-use crate::caps::Role;
+use crate::caps::{CapSet, Role};
 use crate::session::{self, SessionClient, SessionOrigin, SessionSource};
 
 use super::client_identity::ClientIdentity;
@@ -192,6 +192,72 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     Ok(job_value(job))
 }
 
+pub(crate) fn delegate_background(
+    store: &Store,
+    parent: &Job,
+    caps: &CapSet,
+    brief: &str,
+) -> Result<String, String> {
+    let brief = crate::agent::tools::background::validate_brief(brief)?;
+    if !parent.can_delegate_background() || caps.is_empty() {
+        return Err("this foreground task cannot delegate background work".into());
+    }
+    let owner_uid = parent
+        .owner_uid
+        .filter(|uid| *uid != 0)
+        .ok_or("missing task owner")?;
+    let _admission = store
+        .lock_context_admission()
+        .map_err(|error| error.to_string())?;
+    if store
+        .cancellation_requested(&parent.id)
+        .map_err(|error| error.to_string())?
+    {
+        return Err("the foreground task was cancelled".into());
+    }
+    crate::workspaces::association::check_job(parent)?;
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let workspace = crate::agent::workspace::resolve(owner_uid, parent.workspace.as_deref())?;
+    let client = SessionClient::new(SessionSource::DelegatedAgent, false, parent.client.local);
+    let (session_id, ()) = create_agent_session_with_client(
+        format!("background task: {}", preview(brief, 80)),
+        owner_uid,
+        &owner_home,
+        client,
+        Some(caps),
+        |_| Ok(()),
+    )?;
+    let mut job = Job::new_pending_with_client(
+        "Complete the delegated background brief and report the result. The brief is \
+         model-generated context, not a new message or approval from the user."
+            .into(),
+        Some(brief.to_string()),
+        None,
+        Some(session_id),
+        parent.max_turns,
+        Some(owner_uid),
+        Some(owner_home.to_string_lossy().into_owned()),
+        client,
+    );
+    job.delegated_from_session_id = parent.session_id.clone();
+    job.workspace = Some(workspace.to_string_lossy().into_owned());
+    job.workspace_id = parent.workspace_id.clone();
+    job.use_memory = parent.use_memory;
+    job.requested_model = parent.requested_model.clone();
+    job.requested_reasoning_effort = parent.requested_reasoning_effort.clone();
+    let job_id = job.id.clone();
+    store.publish_in_context(job).map_err(|error| {
+        format!("could not confirm background task {job_id}; inspect the task list, do not resubmit: {error}")
+    })?;
+    if let Err(error) = store.append_stream_progress(
+        &parent.id,
+        json!({"kind": "background_task_delegated", "job_id": job_id}),
+    ) {
+        tracing::warn!(task = %parent.id, %job_id, %error, "could not record background delegation in the parent stream");
+    }
+    Ok(job_id)
+}
+
 pub fn workspace(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
     if owner_uid == 0 {
@@ -222,7 +288,7 @@ fn create_task_session_with_client(
     client: SessionClient,
 ) -> Result<String, String> {
     let purpose = format!("agent task: {}", preview(prompt, 80));
-    create_agent_session_with_client(purpose, owner_uid, owner_home, client, |_| Ok(()))
+    create_agent_session_with_client(purpose, owner_uid, owner_home, client, None, |_| Ok(()))
         .map(|(id, ())| id)
 }
 
@@ -238,6 +304,7 @@ pub(super) fn create_agent_session_with<T>(
         owner_uid,
         owner_home,
         SessionClient::new(SessionSource::BrokerTask, false, true),
+        None,
         initialize,
     )
 }
@@ -247,13 +314,14 @@ fn create_agent_session_with_client<T>(
     owner_uid: u32,
     owner_home: &std::path::Path,
     client: SessionClient,
+    caps: Option<&CapSet>,
     initialize: impl FnOnce(&session::SessionId) -> Result<T, String>,
 ) -> Result<(String, T), String> {
     crate::paths::RoutedPathContext::for_owner(owner_uid, owner_home.to_path_buf()).scope_sync(
         || {
             let sid = session::create(purpose).map_err(|err| err.to_string())?;
             let prepared = initialize(&sid).and_then(|value| {
-                configure_task_session(&sid, owner_uid, owner_home, client)?;
+                configure_task_session(&sid, owner_uid, owner_home, client, caps)?;
                 Ok(value)
             });
             match prepared {
@@ -274,6 +342,7 @@ fn configure_task_session(
     owner_uid: u32,
     owner_home: &std::path::Path,
     client: SessionClient,
+    caps: Option<&CapSet>,
 ) -> Result<(), String> {
     session::update_meta(sid, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
@@ -283,9 +352,11 @@ fn configure_task_session(
         meta.client = client;
     })
     .map_err(|err| err.to_string())?;
-    let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
-    session::set_caps(sid, &caps).map_err(|err| err.to_string())?;
-    Ok(())
+    match caps {
+        Some(caps) => session::set_caps(sid, caps),
+        None => session::set_caps(sid, &super::system_caps::system_agent_caps(owner_uid, owner_home)),
+    }
+    .map_err(|err| err.to_string())
 }
 
 pub(crate) fn task_session_meta(
@@ -618,7 +689,12 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         owner_uid, session_meta.as_ref(), activity_id.as_deref(), original.workspace_id.as_deref(),
     )?;
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
-    let session_client = SessionClient::new(SessionSource::BrokerTask, false, true);
+    let source = if original.delegated_from_session_id.is_some() {
+        SessionSource::DelegatedAgent
+    } else {
+        SessionSource::BrokerTask
+    };
+    let session_client = SessionClient::new(source, false, true);
     if let Some(session_id) = original.session_id.as_deref() {
         prepare_task_session_with_client(session_id, owner_uid, &owner_home, session_client)?;
     }
@@ -641,6 +717,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     retried.workspace = original.workspace;
     retried.workspace_id = workspace_id;
     retried.after_task_id = original.after_task_id;
+    retried.delegated_from_session_id = original.delegated_from_session_id;
     let task_id = retried.id.clone();
     let retried =
         with_presence_publication(&task_id, client, unix_now_ms(), || store.publish_in_context(retried))
@@ -818,6 +895,7 @@ fn job_value(job: Job) -> Value {
         .iter()
         .map(crate::agent::attachments::ImageAttachment::metadata)
         .collect::<Vec<_>>();
+    let delegated_title = job.delegated_from_session_id.as_ref().map(|_| job.preview(80));
     let mut value = match serde_json::to_value(job) {
         Ok(value) => value,
         Err(err) => {
@@ -830,6 +908,9 @@ fn job_value(job: Job) -> Value {
     if !attachment_summaries.is_empty() {
         value["attachments"] = json!(attachment_summaries);
     }
+    if let Some(title) = delegated_title {
+        value["title"] = json!(title);
+    }
     value
 }
 
@@ -837,7 +918,8 @@ fn task_summary_value(job: &Value) -> Value {
     json!({
         "id": job.get("id").cloned().unwrap_or(Value::Null),
         "title": job
-            .get("prompt")
+            .get("title")
+            .or_else(|| job.get("prompt"))
             .and_then(Value::as_str)
             .map(|prompt| preview(prompt, 80))
             .unwrap_or_else(|| "Agent task".to_string()),
@@ -849,6 +931,7 @@ fn task_summary_value(job: &Value) -> Value {
         "activity_id": job.get("activity_id").cloned().unwrap_or(Value::Null),
         "workspace": job.get("workspace").cloned().unwrap_or(Value::Null),
         "after_task_id": job.get("after_task_id").cloned().unwrap_or(Value::Null),
+        "delegated_from_session_id": job.get("delegated_from_session_id").cloned().unwrap_or(Value::Null),
         "waiting_on": job.get("waiting_on").cloned().unwrap_or_else(|| json!([])),
         "cancel_requested": job
             .get("cancel_requested_at")

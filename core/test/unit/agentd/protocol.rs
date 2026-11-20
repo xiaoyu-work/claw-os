@@ -83,9 +83,10 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_RECEIPT,
             ROUTE_MONETARY_BUDGET,
             ROUTE_CONTEXT,
+            ROUTE_BACKGROUND_DELEGATION,
         ]
     );
-    assert_eq!(PROTOCOL_VERSION, 20);
+    assert_eq!(PROTOCOL_VERSION, 21);
     assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
     assert!(!WORKER_ROUTES.contains(&"app_host"));
 }

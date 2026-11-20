@@ -245,6 +245,15 @@ fn standalone_task_notifications_keep_phase_specific_delivery() {
     job.owner_uid = Some(7);
     crate::notifications::set_conversation_view(7, &viewer_id, 2, None).unwrap();
     assert!(task_notification_draft(&job, "completed").is_some());
+
+    job.delegated_from_session_id = Some(session_id.clone());
+    job.session_id = Some("background-session".into());
+    crate::notifications::set_conversation_view(7, &viewer_id, 3, Some(&session_id)).unwrap();
+    let (_, completed) = task_notification_draft(&job, "completed").unwrap();
+    assert_eq!(completed.session_id.as_deref(), Some(session_id.as_str()));
+    assert_eq!(completed.task_id.as_deref(), Some(job.id.as_str()));
+    assert_eq!(completed.actions[0].uri, "clawos://agent/session/background-session");
+    crate::notifications::set_conversation_view(7, &viewer_id, 4, None).unwrap();
 }
 
 fn fresh_activity_root() -> tempfile::TempDir {

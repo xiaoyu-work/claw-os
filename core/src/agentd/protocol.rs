@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -62,10 +62,9 @@ pub const ROUTE_APPROVAL: &str = "approval";
 pub const ROUTE_RECEIPT: &str = "receipt";
 pub const ROUTE_MONETARY_BUDGET: &str = "monetary_budget";
 pub const ROUTE_CONTEXT: &str = "context";
+pub const ROUTE_BACKGROUND_DELEGATION: &str = "background_delegation";
 
-/// The complete route surface a worker grant may carry. Nothing else
-/// exists on this channel, so a leaked descriptor is still only an
-/// authority to report on one task.
+/// The complete route surface a worker grant may carry, all bound to one task.
 pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_PREPARED,
     ROUTE_HELLO,
@@ -78,6 +77,7 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_RECEIPT,
     ROUTE_MONETARY_BUDGET,
     ROUTE_CONTEXT,
+    ROUTE_BACKGROUND_DELEGATION,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
@@ -140,6 +140,17 @@ pub enum BrokerFrame {
         nonce: String,
         reply: ContextReply,
     },
+    BackgroundDelegationReply {
+        correlation_id: u64,
+        reply: BackgroundDelegationReply,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BackgroundDelegationReply {
+    Accepted { job_id: String },
+    Refused { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,6 +476,11 @@ pub enum WorkerFrame {
     Receipt(Box<ReceiptRequest>),
     MonetaryBudget(Box<MonetaryBudgetRequest>),
     Context(Box<ContextRequest>),
+    BackgroundDelegation {
+        task_id: String,
+        correlation_id: u64,
+        brief: String,
+    },
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -484,6 +500,7 @@ impl WorkerFrame {
             WorkerFrame::Receipt(_) => ROUTE_RECEIPT,
             WorkerFrame::MonetaryBudget(_) => ROUTE_MONETARY_BUDGET,
             WorkerFrame::Context(_) => ROUTE_CONTEXT,
+            WorkerFrame::BackgroundDelegation { .. } => ROUTE_BACKGROUND_DELEGATION,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -502,6 +519,7 @@ impl WorkerFrame {
             | WorkerFrame::Audit { task_id, .. }
             | WorkerFrame::Heartbeat { task_id }
             | WorkerFrame::Approval { task_id, .. }
+            | WorkerFrame::BackgroundDelegation { task_id, .. }
             | WorkerFrame::Result { task_id, .. } => Some(task_id.as_str()),
         }
     }

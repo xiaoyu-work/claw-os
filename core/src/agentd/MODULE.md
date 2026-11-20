@@ -25,7 +25,13 @@ executes neither.
 
 ## Key Files
 
-Private worker protocol v20 adds bounded current-domain context/recall/source
+Private worker protocol v21 adds a dedicated background submission exchange.
+Only an ordinary foreground Job can use it, with at most two submissions per
+worker. Root derives the owner, origin conversation, Workspace, and capability
+ceiling; the worker contributes only a bounded brief. A delegated Job has
+its own session and no inherited presence or approval grants.
+
+V20 added bounded current-domain context/recall/source
 reads and reporting over the existing private channel. Root derives owner,
 Workspace, conversation and Job from its lease; no request supplies those
 selectors. Correlation nonce, count/byte limits and cancellation keep this

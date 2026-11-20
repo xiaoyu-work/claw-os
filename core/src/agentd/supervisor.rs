@@ -28,9 +28,9 @@ use crate::clawd::transport::limits::{Admission, Limits};
 
 use super::grant::{GrantClaims, GrantExpectation, GrantSigner, GRANT_AUDIENCE, GRANT_VERSION};
 use super::protocol::{
-    self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, ExecutionCommit, FrameReader,
-    JobSpec, MonetaryBudgetOperation, MonetaryBudgetReply, RuntimeAuditRecord, WorkerFrame,
-    WorkerHello, WorkerOutcome, WorkerPrepared,
+    self, ApprovalAsk, ApprovalReply, Assignment, BackgroundDelegationReply, BrokerFrame,
+    ExecutionCommit, FrameReader, JobSpec, MonetaryBudgetOperation, MonetaryBudgetReply,
+    RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome, WorkerPrepared,
 };
 use super::spawn;
 
@@ -1229,9 +1229,13 @@ async fn pump(
             "could not record the task workspace snapshot: {error}"
         ));
     }
+    let mut claims = claims_for(broker_pid, &lease, config.lease);
+    if !job.can_delegate_background() {
+        claims.routes.retain(|route| route != protocol::ROUTE_BACKGROUND_DELEGATION);
+    }
     let assignment = Assignment {
         protocol: protocol::PROTOCOL_VERSION,
-        grant: signer.issue(claims_for(broker_pid, &lease, config.lease)),
+        grant: signer.issue(claims),
         job: JobSpec {
             id: job.id.clone(),
             prompt: execution_prompt(job),
@@ -1384,6 +1388,7 @@ async fn pump(
     let mut receipts_used: u32 = 0;
     let mut monetary_exchanges: u32 = 0;
     let mut context_exchanges: u32 = 0;
+    let mut delegation_attempts: u32 = 0;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1619,6 +1624,31 @@ async fn pump(
                                 correlation_id:request.correlation_id,nonce:request.nonce,reply,
                             }).await {
                                 return TaskOutcome::Indeterminate(format!("could not acknowledge Root context read: {error}"));
+                            }
+                        }
+                        WorkerFrame::BackgroundDelegation { correlation_id, brief, .. } => {
+                            delegation_attempts = delegation_attempts.saturating_add(1);
+                            let submitted = if !assignment.grant.claims.allows_route(protocol::ROUTE_BACKGROUND_DELEGATION) {
+                                Err("the worker grant does not allow background delegation".into())
+                            } else if cancel_sent || shutdown.load(Ordering::SeqCst) {
+                                Err("the foreground task is shutting down".into())
+                            } else if delegation_attempts > crate::agent::tools::background::MAX_SUBMISSIONS {
+                                Err("the foreground task reached its background delegation limit".into())
+                            } else if let Some(caps) = assignment.session.as_ref().and_then(|session| session.caps.as_ref()) {
+                                crate::clawd::tasks::delegate_background(store, job, caps, &brief)
+                            } else {
+                                Err("the foreground task has no authenticated session".into())
+                            };
+                            let reply = match submitted {
+                                Ok(job_id) => BackgroundDelegationReply::Accepted { job_id },
+                                Err(message) => BackgroundDelegationReply::Refused { message },
+                            };
+                            if let Err(error) = send(&mut writer, &BrokerFrame::BackgroundDelegationReply {
+                                correlation_id, reply,
+                            }).await {
+                                return TaskOutcome::Indeterminate(format!(
+                                    "could not acknowledge background delegation; inspect the task list before retrying: {error}"
+                                ));
                             }
                         }
                         WorkerFrame::Result { outcome, .. } => {
@@ -1913,6 +1943,9 @@ fn accept(
     }
     if frame.task_id() != Some(lease.task_id.as_str()) {
         return Err("frame is addressed to a different task".to_string());
+    }
+    if let WorkerFrame::BackgroundDelegation { correlation_id: 0, .. } = frame {
+        return Err("invalid background delegation correlation".into());
     }
     if let WorkerFrame::Context(request) = frame {
         if request.correlation_id == 0 || request.nonce.len()!=32

@@ -34,6 +34,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::oneshot;
 
 use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::StreamEvent;
@@ -53,7 +54,7 @@ use super::protocol::{
     FrameReader, MonetaryBudgetOperation, MonetaryBudgetReply, MonetaryBudgetRequest,
     ProgressRecord, ReceiptReply, ReceiptRequest, RuntimeAuditRecord, WorkerFrame, WorkerHello,
     WorkerOutcome, WorkerPrepared,
-    ContextReply, ContextRequest,
+    BackgroundDelegationReply, ContextReply, ContextRequest,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -298,6 +299,7 @@ struct ChannelState {
     receipt_waiters: Mutex<HashMap<u64, SyncSender<ReceiptReply>>>,
     monetary_waiters: Mutex<HashMap<u64, SyncSender<MonetaryBudgetReply>>>,
     context_waiters: Mutex<HashMap<u64, (String, SyncSender<ContextReply>)>>,
+    delegation_waiters: Mutex<HashMap<u64, oneshot::Sender<BackgroundDelegationReply>>>,
     pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
@@ -409,6 +411,9 @@ impl ChannelState {
     /// Wake every outstanding waiter so a cancelled or disconnected task
     /// cannot leave a tool call blocked until its timeout.
     fn refuse_all(&self, message: &str) {
+        if let Ok(mut waiters) = self.delegation_waiters.lock() {
+            waiters.clear();
+        }
         if let Ok(mut waiters) = self.context_waiters.lock() {
             for (_, (_,waiter)) in waiters.drain() {
                 let _ = waiter.try_send(ContextReply::Refused { message: message.into() });
@@ -482,6 +487,7 @@ impl ChannelIo {
             receipt_waiters: Mutex::new(HashMap::new()),
             monetary_waiters: Mutex::new(HashMap::new()),
             context_waiters: Mutex::new(HashMap::new()),
+            delegation_waiters: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
@@ -913,6 +919,13 @@ where
                 }
                 state.deliver_context(correlation_id,&nonce,reply);
             }
+            Ok(Some(BrokerFrame::BackgroundDelegationReply { correlation_id, reply })) => {
+                if let Some(waiter) = state.delegation_waiters.lock().ok()
+                    .and_then(|mut waiters| waiters.remove(&correlation_id))
+                {
+                    let _ = waiter.send(reply);
+                }
+            }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => {
                 state.cancelled.store(true, Ordering::SeqCst);
                 crate::agent::runtime::interrupt::signal(&task_id);
@@ -1235,6 +1248,51 @@ impl crate::workspaces::gateway::ContextGateway for ChannelContextGateway {
     }
 }
 
+struct ChannelBackgroundSubmitter {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::tools::background::BackgroundSubmitter for ChannelBackgroundSubmitter {
+    async fn submit(&self, brief: String) -> Result<String, String> {
+        if self.state.cancelled.load(Ordering::SeqCst) {
+            return Err("task is cancelled".into());
+        }
+        let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = oneshot::channel();
+        self.state
+            .delegation_waiters
+            .lock()
+            .map_err(|_| "background delegation reply registry is poisoned")?
+            .insert(correlation_id, sender);
+        let sent = self.state.tx.send(WorkerFrame::BackgroundDelegation {
+            task_id: self.task_id.clone(),
+            correlation_id,
+            brief,
+        });
+        let reply = if sent.is_ok() {
+            tokio::time::timeout(APPROVAL_TIMEOUT, receiver)
+                .await
+                .ok()
+                .and_then(Result::ok)
+        } else {
+            None
+        };
+        if let Ok(mut waiters) = self.state.delegation_waiters.lock() {
+            waiters.remove(&correlation_id);
+        }
+        match reply {
+            Some(BackgroundDelegationReply::Accepted { job_id }) => Ok(job_id),
+            Some(BackgroundDelegationReply::Refused { message }) => Err(message),
+            None => Err(
+                "background submission was not confirmed; inspect the task list, do not resubmit"
+                    .into(),
+            ),
+        }
+    }
+}
+
 async fn execute(
     assignment: Assignment,
     tx: UnboundedSender<WorkerFrame>,
@@ -1300,14 +1358,25 @@ async fn execute(
     let work = job.activity_work.then(|| Arc::new(
         crate::agent::tools::activity_work::WorkCheckpointSlot::default()
     ));
+    let background = assignment
+        .grant
+        .claims
+        .allows_route(protocol::ROUTE_BACKGROUND_DELEGATION)
+        .then(|| {
+            Arc::new(ChannelBackgroundSubmitter {
+                task_id: task_id.clone(),
+                state: state.clone(),
+            }) as Arc<dyn crate::agent::tools::background::BackgroundSubmitter>
+        });
     // Keep the large runtime future out of each task-local wrapper's stack frame.
-    let scoped = Box::pin(crate::agent::service::execute_job_with_hooks_budget_and_work(
+    let scoped = Box::pin(crate::agent::service::execute_job_with_worker_tools(
         request,
         stream_sink,
         progress_sink,
         hooks,
         monetary_budget,
         work.clone(),
+        background,
     ));
     let scoped = reporting::with_recorder(recorder, scoped);
     let scoped = with_session(assignment.session, scoped);

@@ -243,6 +243,59 @@ async fn queued_submission_binds_to_an_owned_predecessor_in_the_same_conversatio
 }
 
 #[tokio::test]
+async fn foreground_delegation_queues_independent_work_without_widening_caps() {
+    let owner_uid = unsafe { libc::geteuid() } as u32;
+    if owner_uid == 0 {
+        return;
+    }
+    let _lock = lock_env();
+    let root = activity_task_root();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", root.path().canonicalize().unwrap());
+    let client = activity_task_client(owner_uid);
+    let submitted = submit(json!({"prompt": "Prepare a report", "use_memory": false}), &client)
+        .await
+        .unwrap();
+    let store = Store::open_default().unwrap();
+    let parent = store.claim_one().unwrap().unwrap();
+    assert_eq!(submitted["id"], parent.id);
+
+    let caps = CapSet::from_caps([crate::caps::Cap::new(
+        crate::caps::Verb::MEMORY_READ,
+        crate::caps::Scope::self_ref("agent"),
+    )]);
+    let id = delegate_background(&store, &parent, &caps, "Summarize the source notes").unwrap();
+    let follow_up = submit(
+        json!({
+            "prompt": "Different question",
+            "session_id": parent.session_id,
+            "after_task_id": parent.id,
+        }),
+        &client,
+    )
+    .await
+    .unwrap();
+
+    let (child, presence) = claim_job_with_presence(&store, Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.id, id);
+    assert_ne!(child.session_id, parent.session_id);
+    assert_eq!(child.delegated_from_session_id, parent.session_id);
+    assert!(child.after_task_id.is_none());
+    assert!(presence.is_none());
+    assert!(!child.use_memory);
+    assert_eq!(child.workspace, parent.workspace);
+    let session_id = child.session_id.as_deref().unwrap().parse().unwrap();
+    assert_eq!(session::get_caps(&session_id).unwrap(), caps);
+    assert!(delegate_background(&store, &child, &caps, "Do not recurse").is_err());
+    assert!(store.claim_one().unwrap().is_none());
+    assert_eq!(
+        store.locate(follow_up["id"].as_str().unwrap()).unwrap().unwrap().1.status,
+        JobStatus::Pending
+    );
+}
+
+#[tokio::test]
 async fn requested_model_is_persisted_with_existing_activity_and_session_contracts() {
     let owner_uid = unsafe { libc::geteuid() } as u32;
     if owner_uid == 0 {

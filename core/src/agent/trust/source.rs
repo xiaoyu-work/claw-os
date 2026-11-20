@@ -178,6 +178,7 @@ pub enum SourceKind {
     WorkspaceAgentReport,
     WorkspaceSharedSource,
     WorkspaceImportedNote,
+    DelegatedTaskBrief,
 }
 
 impl SourceKind {
@@ -222,6 +223,7 @@ impl SourceKind {
         SourceKind::WorkspaceAgentReport,
         SourceKind::WorkspaceSharedSource,
         SourceKind::WorkspaceImportedNote,
+        SourceKind::DelegatedTaskBrief,
     ];
 
     /// Dense index into [`SourceKind::ALL`].
@@ -271,6 +273,7 @@ impl SourceKind {
             Self::WorkspaceAgentReport => 36,
             Self::WorkspaceSharedSource => 37,
             Self::WorkspaceImportedNote => 38,
+            Self::DelegatedTaskBrief => 39,
         }
     }
 
@@ -529,6 +532,13 @@ impl SourceKind {
             Self::WorkspaceAgentReport => ("workspace_agent_report",ModelGenerated,InjectedAuditRow,UserChannelEnvelope,ContentRef),
             Self::WorkspaceSharedSource => ("workspace_shared_source",UntrustedExternalContent,RequestLocal,ToolChannelEnvelope,LabelAndDigest),
             Self::WorkspaceImportedNote => ("workspace_imported_note",UserControlledContext,RequestLocal,ToolChannelEnvelope,LabelAndDigest),
+            Self::DelegatedTaskBrief => (
+                "delegated_task_brief",
+                ModelGenerated,
+                InjectedAuditRow,
+                UserChannelEnvelope,
+                ContentRef,
+            ),
         };
 
         SourceProfile {
