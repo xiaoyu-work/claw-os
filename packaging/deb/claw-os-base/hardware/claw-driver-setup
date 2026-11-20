@@ -37,7 +37,9 @@ BROADCOM_BACKPORT = "6.30.223.271-30~bpo13+1"
 BROADCOM_FIXED = f"{BROADCOM_BACKPORT}+clawos1"
 DEBIAN_AMD64_ABI = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64")
 FIRMWARE_HELPER = "/usr/sbin/claw-import-board-firmware"
+OEM_INDEX = Path("/usr/share/cos/qualcomm/firmware.json")
 SURFACE_FIRMWARE = "Microsoft Surface audio, graphics, video and compute firmware"
+QCOM_FIRMWARE = "Snapdragon OEM firmware"
 PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
@@ -189,10 +191,16 @@ def fix_broadcom_package(archive):
     return result
 
 
-def needs_firmware(packs):
-    return SNAPDRAGON in packs and subprocess.run(
-        [FIRMWARE_HELPER, "--romulus-firmware-ready"], check=False,
-    ).returncode != 0
+def firmware_job(packs):
+    if SNAPDRAGON in packs:
+        return SURFACE_FIRMWARE, "--romulus-firmware-ready", "--surface-laptop-7"
+    if OEM_INDEX.is_file():
+        return QCOM_FIRMWARE, "--qualcomm-oem-ready", "--qualcomm-oem"
+    return None
+
+
+def needs_firmware(job):
+    return job is not None and subprocess.run([FIRMWARE_HELPER, job[1]], check=False).returncode != 0
 
 
 def stage_offline():
@@ -255,8 +263,9 @@ def install_offline():
     if CACHE.is_dir():
         shutil.rmtree(CACHE)
     packages = missing(packs)
-    if needs_firmware(packs):
-        packages.append(SURFACE_FIRMWARE)
+    job = firmware_job(packs)
+    if needs_firmware(job):
+        packages.append(job[0])
     publish("pending" if packages else "ready", packs[0] if packs else None, packages)
     if packages:
         PENDING.touch()
@@ -270,10 +279,11 @@ def online():
     packs = detect()
     pack = packs[0] if packs else None
     packages = missing(packs)
-    firmware = needs_firmware(packs)
-    if not firmware and SNAPDRAGON in packs and STATUS.is_file():
-        firmware = SURFACE_FIRMWARE in json.loads(STATUS.read_text()).get("packages", [])
-    pending = packages + ([SURFACE_FIRMWARE] if firmware else [])
+    job = firmware_job(packs)
+    firmware = needs_firmware(job)
+    if job and not firmware and STATUS.is_file():
+        firmware = job[0] in json.loads(STATUS.read_text()).get("packages", [])
+    pending = packages + ([job[0]] if firmware else [])
     if not pending:
         publish("ready", pack, [])
         PENDING.unlink(missing_ok=True)
@@ -299,13 +309,13 @@ def online():
                     targets[targets.index(request)] = str(fix_broadcom_package(archive))
                 apt("install", "-t", BACKPORTS, "--no-install-recommends", "--no-remove", "-y", *targets)
         if firmware:
-            subprocess.run([FIRMWARE_HELPER, "--surface-laptop-7"], check=True)
+            subprocess.run([FIRMWARE_HELPER, job[2]], check=True)
     except subprocess.CalledProcessError:
-        publish("failed", pack, missing(packs) + ([SURFACE_FIRMWARE] if firmware else []))
+        publish("failed", pack, missing(packs) + ([job[0]] if firmware else []))
         raise
     packages = missing(packs)
-    if needs_firmware(packs):
-        packages.append(SURFACE_FIRMWARE)
+    if needs_firmware(job):
+        packages.append(job[0])
     publish("failed" if packages else "ready", pack, packages)
     if not packages:
         PENDING.unlink(missing_ok=True)

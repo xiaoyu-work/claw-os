@@ -344,7 +344,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
         profile = dict(profile, release=debian_release)
         keys = [name for name in profile["surface"] if name != "surface-linux-source"]
     elif board_tools:
-        keys = list(profile["romulus"])
+        keys = [*profile["romulus"], "qualcomm-firmware-index", "qualcomm-firmware-wudrivers",
+                "qualcomm-firmware-update-ca"]
     else:
         keys = list(profile.get("native", [])) or [profile["kernel"]]
         keys += profile.get("surface", [])
@@ -383,6 +384,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
                 from surface_laptop7 import snapdragon_packages
 
                 snapdragon_packages(profile["release"], source, provenance, work, out, package, unpack)
+            if board_tools:
+                from qualcomm_firmware import package_firmware_index
+
+                package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)
             if "boot" in profile:

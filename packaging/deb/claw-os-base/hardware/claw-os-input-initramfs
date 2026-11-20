@@ -57,7 +57,7 @@ if [ "$arch" = arm64 ]; then
     done
     if [ -d /usr/lib/firmware/updates/qcom ]; then
         find /usr/lib/firmware/updates/qcom -type f \
-            \( -name '*zap*.mbn' -o -name 'qcdxkmsuc8380.mbn' \) | while IFS= read -r firmware; do
+            \( -name '*zap*.mbn' -o -name 'qcdxkmsuc*.mbn' \) | while IFS= read -r firmware; do
             if [ ! -e "$DESTDIR$firmware" ]; then
                 copy_file firmware "$firmware"
             fi

@@ -2,8 +2,10 @@
 """Install matching Qualcomm firmware from an OEM driver."""
 
 import argparse
+from base64 import b64encode
 from collections import Counter
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -12,11 +14,13 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+from urllib.parse import urlsplit
 
 
 DT = Path("/sys/firmware/devicetree/base")
 FIRMWARE = Path("/usr/lib/firmware")
 DSP = Path("/usr/lib/dsp/cdsp")
+OEM_INDEX = Path("/usr/share/cos/qualcomm/firmware.json")
 ROMULUS = {b"microsoft,romulus13", b"microsoft,romulus15"}
 MICROSOFT = "qcom/x1e80100/microsoft/"
 ROMULUS_PATH = MICROSOFT + "Romulus/"
@@ -85,29 +89,39 @@ QNN_FILES = (
 SDK_FILES = ("libc.so", "libgcc.so")
 
 
+def compatible():
+    try:
+        return set((DT / "compatible").read_bytes().split(b"\0"))
+    except FileNotFoundError:
+        return set()
+
+
 def is_romulus():
-    if not (DT / "compatible").is_file():
-        return False
-    names = (DT / "compatible").read_bytes().split(b"\0")
+    names = compatible()
     return b"qcom,x1e80100" in names and bool(ROMULUS.intersection(names))
 
 
-def firmware_requests():
-    if not (DT / "compatible").is_file():
-        raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
-    compatible = set((DT / "compatible").read_bytes().split(b"\0"))
-    if not any(
-        re.match(rb"qcom,(?:x1|glymur|mahua|kalambo)", entry)
-        for entry in compatible
-    ):
+def enabled(node):
+    while node != DT:
+        status = node / "status"
+        if status.is_file() and status.read_bytes().strip(b"\0") not in (b"ok", b"okay"):
+            return False
+        node = node.parent
+    return True
+
+
+def firmware_requests(*, active_only=False):
+    if not any(entry.startswith(b"qcom,") for entry in compatible()):
         raise ValueError("the running kernel does not expose a supported Snapdragon device tree")
     names = set()
     for prop in DT.rglob("firmware-name"):
+        if active_only and not enabled(prop.parent):
+            continue
         for name in prop.read_bytes().decode("ascii").split("\0"):
             path = PurePosixPath(name)
             if name.startswith("qcom/") and re.fullmatch(r"[A-Za-z0-9._/-]+", name) and ".." not in path.parts:
                 names.add(name)
-    if not names:
+    if not names and not active_only:
         raise ValueError("the running device tree declares no Qualcomm firmware paths")
     if is_romulus():
         names.update(ROMULUS_FILES)
@@ -193,10 +207,27 @@ def ready(names):
     return all(verified(destination(name), ROMULUS_FILES[name]) for name in names)
 
 
-def refresh_initramfs(romulus):
+def refresh_initramfs(board_boot):
     subprocess.run(["/usr/sbin/update-initramfs", "-u", "-k", "all"], check=True)
-    if romulus and Path("/etc/default/grub.d/60-claw-os-qualcomm.cfg").is_file():
+    if board_boot and Path("/etc/default/grub.d/60-claw-os-qualcomm.cfg").is_file():
         subprocess.run(["/usr/sbin/update-grub"], check=True)
+
+
+def windows_update_url(url):
+    from wudrivers import wu
+
+    update, revision, sha1 = url.removeprefix("wu://").split("/")
+    digest = b64encode(bytes.fromhex(sha1)).decode("ascii")
+    try:
+        link = wu.Client().file_urls(update, int(revision))[digest]
+    except (KeyError, wu.Error) as error:
+        raise ValueError(f"{url}: Windows Update no longer resolves the pinned cabinet") from error
+    address = urlsplit(link)
+    hosts = ("dl.delivery.mp.microsoft.com", "download.windowsupdate.com")
+    if (address.scheme not in {"https", "http"} or address.netloc != address.hostname
+            or not any(address.hostname == host or address.hostname.endswith("." + host) for host in hosts)):
+        raise ValueError(f"{url}: Windows Update returned a non-Microsoft download URL")
+    return link
 
 
 def download(path, url, size, checksum, local=None):
@@ -206,10 +237,17 @@ def download(path, url, size, checksum, local=None):
                 raise ValueError(f"{local}: unexpected archive size")
             shutil.copyfileobj(stream, target)
     else:
+        if url.startswith("wu://"):
+            source = windows_update_url(url)
+            transport = ["--proto", "=http,https"]
+        else:
+            source = url
+            transport = ["--proto", "=https", "--proto-redir", "=https", "--location"]
         subprocess.run([
-            "/usr/bin/curl", "--proto", "=https", "--proto-redir", "=https", "--location",
-            "--fail", "--silent", "--show-error", "--connect-timeout", "30", "--max-time", "1200",
-            "--max-filesize", str(size), "--output", str(path), url,
+            "/usr/bin/curl", *transport,
+            "--fail", "--silent", "--show-error", "--user-agent", "Mozilla/5.0",
+            "--connect-timeout", "30", "--max-time", "1200",
+            "--max-filesize", str(size), "--output", str(path), source,
         ], check=True)
     if path.stat().st_size != size or not verified(path, checksum):
         raise ValueError(f"{url}: unexpected archive checksum")
@@ -246,9 +284,79 @@ def surface_firmware(sources):
                     print(f"Installed {name}")
     finally:
         if changed:
-            refresh_initramfs(romulus=True)
+            refresh_initramfs(board_boot=True)
     if not changed:
-        refresh_initramfs(romulus=True)
+        refresh_initramfs(board_boot=True)
+
+
+def qualcomm_pending():
+    if not OEM_INDEX.is_file() or is_romulus() or not any(name.startswith(b"qcom,") for name in compatible()):
+        return {}, {}
+    index = json.loads(OEM_INDEX.read_text())
+    # A matched firmware folder can also supply DSP services not named by the device tree.
+    directories = {name.rsplit("/", 1)[0] for name in firmware_requests(active_only=True)}
+    files = {name: data for name, data in index["files"].items()
+             if name.rsplit("/", 1)[0] in directories and not existing(name)}
+    return files, index["archives"]
+
+
+def unpack_oem(archive, kind, members, target):
+    members = sorted(set(members))
+    top = sorted({name.split("!/", 1)[0] for name in members})
+    target.mkdir()
+    if kind == "msi":
+        args = ["/usr/bin/msiextract", "-C", str(target), archive]
+    elif kind == "inno":
+        args = ["/usr/bin/innoextract", "-s", "-d", str(target),
+                *(flag for name in top for flag in ("-I", name)), archive]
+    else:
+        args = ["/usr/bin/7z", "x", "-spd", "-bd", "-bb0", f"-o{target}", archive, "--", *top]
+    subprocess.run(args, stdout=subprocess.DEVNULL, check=True)
+    paths = {}
+    for number, name in enumerate(top):
+        source = target / name
+        if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(target.resolve()):
+            raise ValueError(f"{archive.name}: missing or unsafe OEM member: {name}")
+        if name in members:
+            paths[name] = source
+        nested = [member[len(name) + 2:] for member in members if member.startswith(name + "!/")]
+        if nested:
+            for sub, path in unpack_oem(source, "archive", nested, target / f".nested-{number}").items():
+                paths[f"{name}!/{sub}"] = path
+    return paths
+
+
+def qualcomm_firmware(files, archives):
+    changed = False
+    try:
+        while files:
+            choices = {}
+            for name, (_, _, members) in files.items():
+                for archive, member in members.items():
+                    choices.setdefault(archive, {})[name] = member
+            # Prefer the download that covers the most missing files per byte.
+            selected = min(choices, key=lambda archive: (archives[archive][1] / len(choices[archive]), archive))
+            url, size, checksum, kind = archives[selected]
+            members = choices[selected]
+            with tempfile.TemporaryDirectory(prefix="claw-qualcomm-firmware-", dir="/var/tmp") as tmp:
+                work = Path(tmp)
+                archive = work / f"drivers.{'exe' if kind == 'inno' else kind}"
+                download(archive, url, size, checksum)
+                extracted = unpack_oem(archive, kind, members.values(), work / "files")
+                for name, member in members.items():
+                    length, digest, _ = files[name]
+                    source = extracted[member]
+                    if source.stat().st_size != length or not verified(source, digest):
+                        raise ValueError(f"{name}: matching firmware not found in {selected}")
+                for name, member in members.items():
+                    install(name, extracted[member], bytes.fromhex(files.pop(name)[1]))
+                    changed = True
+                    print(f"Installed {name}")
+    finally:
+        if changed:
+            refresh_initramfs(board_boot=True)
+    if not changed:
+        refresh_initramfs(board_boot=True)
 
 
 def copy_hexagon_library(source, target):
@@ -297,6 +405,10 @@ def main():
     mode.add_argument("--romulus-audio-ready", action="store_true")
     mode.add_argument("--romulus-firmware-ready", action="store_true")
     mode.add_argument("--romulus-compute-ready", action="store_true")
+    mode.add_argument("--qualcomm-oem", action="store_true",
+                      help="install verified OEM firmware for the active Snapdragon device tree")
+    mode.add_argument("--qualcomm-oem-ready", action="store_true",
+                      help="check for missing firmware supplied by the Snapdragon OEM index")
     mode.add_argument("--surface-laptop-7", metavar="MSI", nargs="?", const="",
                       help="provision Romulus OEM firmware; use without a path to download both Microsoft archives")
     mode.add_argument("--install-qnn", metavar="HEXAGON_V73_LIBDIR", type=Path,
@@ -311,7 +423,8 @@ def main():
     if (args.accept_qnn_license or args.qnn_archive) and args.install_qnn is None:
         parser.error("--accept-qnn-license and --qnn-archive require --install-qnn")
     if args.source is not None and any((args.list_missing, args.romulus_audio_ready, args.romulus_firmware_ready,
-                                       args.romulus_compute_ready, args.surface_laptop_7 is not None, args.install_qnn)):
+                                       args.romulus_compute_ready, args.qualcomm_oem, args.qualcomm_oem_ready,
+                                       args.surface_laptop_7 is not None, args.install_qnn)):
         parser.error("do not specify a source directory with another operation")
     if args.romulus_audio_ready:
         return 0 if ready(ROMULUS_PATH + name for name in ADSP) else 1
@@ -319,6 +432,18 @@ def main():
         return 0 if is_romulus() and ready(ROMULUS_FILES) else 1
     if args.romulus_compute_ready:
         return 0 if ready(ROMULUS_COMPUTE) else 1
+    if args.qualcomm_oem_ready:
+        pending, _ = qualcomm_pending()
+        return 1 if pending else 0
+    if args.qualcomm_oem:
+        if os.geteuid() != 0:
+            raise ValueError("import requires root")
+        if is_romulus():
+            raise ValueError("use --surface-laptop-7 on a Snapdragon Surface Laptop 7")
+        pending, archives = qualcomm_pending()
+        if archives:
+            qualcomm_firmware(pending, archives)
+        return
     if args.install_qnn is not None:
         if os.geteuid() != 0:
             raise ValueError("QNN installation requires root")
@@ -354,7 +479,7 @@ def main():
         install(name, file, expected)
         print(f"Installed {name}")
     if any(destination(name).is_file() for name in requests):
-        refresh_initramfs(romulus=is_romulus())
+        refresh_initramfs(board_boot=True)
     for name in missing:
         if not existing(name):
             print(f"Still missing: {name}")

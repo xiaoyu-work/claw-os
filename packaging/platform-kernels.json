@@ -84,6 +84,21 @@
       "sha256": "2bc7872f51479ceb3e15cf8bbae143f62fccb6d20778bdf7e0210a2fc70b4b11",
       "source": "https://github.com/qualcomm/fastrpc/releases/tag/v1.0.9"
     },
+    "qualcomm-firmware-index": {
+      "url": "https://raw.githubusercontent.com/birkskyum/arewearmyet/f673791b98bc4334acf1d0c3d84127de27e804cc/data/firmware-sources.yaml",
+      "sha256": "df3377355112c1a52422f7d34376848dfb68b4cb9be11207b2078cff2e1d0e45",
+      "source": "https://github.com/birkskyum/arewearmyet/blob/f673791b98bc4334acf1d0c3d84127de27e804cc/data/firmware-sources.yaml"
+    },
+    "qualcomm-firmware-wudrivers": {
+      "url": "https://codeload.github.com/birkskyum/wudrivers/tar.gz/refs/tags/v0.1.0",
+      "sha256": "4a96f525c2f396ac6af8d95224f8d546715f38416dc10df9d0b302a14ad83788",
+      "source": "https://github.com/birkskyum/wudrivers/tree/v0.1.0"
+    },
+    "qualcomm-firmware-update-ca": {
+      "url": "https://www.microsoft.com/pki/certs/MicRooCerAut2011_2011_03_22.crt",
+      "sha256": "847df6a78497943f27fc72eb93f9a637320a02b561d0a91b09e87a7807ed7c61",
+      "source": "https://www.microsoft.com/pkiops/docs/repository.htm"
+    },
     "omarchy-linux-source": {
       "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.tar.xz",
       "sha256": "87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953",

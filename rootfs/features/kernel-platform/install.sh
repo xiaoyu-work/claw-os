@@ -22,7 +22,7 @@ stage=$(mktemp -d "$ROOTFS/tmp/claw-platform.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 if (( ${#mode[@]} )); then
     install -d "$stage"/{scripts,packaging}
-    for file in platform_kernels.py surface_laptop7.py; do
+    for file in platform_kernels.py surface_laptop7.py qualcomm_firmware.py; do
         install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
     done
     install -m0644 "$PROJECT_DIR"/packaging/platform-kernels.json \
@@ -32,7 +32,7 @@ if (( ${#mode[@]} )); then
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
         gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates \
-        autoconf automake libtool libyaml-dev libbsd-dev \
+        autoconf automake libtool libyaml-dev libbsd-dev python3-yaml \
         bc bison flex cpio pahole libdw-dev libelf-dev libssl-dev zlib1g-dev cryptsetup-initramfs </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
@@ -59,6 +59,9 @@ if [[ $platform == aarch64-qualcomm ]]; then
     test -f "${radio[0]}"
     packages+=("$inside/${radio[0]##*/}")
     if (( ${#mode[@]} )); then
+        index=("$artifacts"/claw-os-qualcomm-firmware-index_*.deb)
+        test -f "${index[0]}"
+        packages+=("$inside/${index[0]##*/}")
         cache="$ROOTFS/usr/share/cos/driver-cache/surface-laptop-7-snapdragon"
         install -d "$cache"
         install -m0644 "$artifacts"/{claw-os-surface-snapdragon-touchpad,alsa-ucm-conf}_*.deb "$cache/"
