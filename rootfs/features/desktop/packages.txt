@@ -34,6 +34,7 @@ libxcb-res0-dev
 libxcb-xfixes0-dev
 libcairo2-dev
 libpango1.0-dev
+libgdk-pixbuf-2.0-dev
 uuid-dev
 libglib2.0-dev
 libzip-dev

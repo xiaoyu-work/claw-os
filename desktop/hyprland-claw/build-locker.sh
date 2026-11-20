@@ -25,7 +25,7 @@ git -C "$source" apply --unidiff-zero --whitespace=error-all \
     "$here/swaylock-pam-only.patch" "$here/swaylock-password-field.patch"
 install -m0644 "$here/locker-ui.c" "$source/render.c"
 meson setup --wrap-mode=nodownload --buildtype=release \
-    -Dpam=enabled -Dgdk-pixbuf=disabled -Dman-pages=disabled "$build" "$source"
+    -Dpam=enabled -Dgdk-pixbuf=enabled -Dman-pages=disabled "$build" "$source"
 meson compile -C "$build" -j "$jobs" swaylock
 
 install -Dm0755 "$build/swaylock" "$stage/usr/libexec/claw-hyprland/claw-lockscreen"

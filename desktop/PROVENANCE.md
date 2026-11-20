@@ -25,7 +25,7 @@ the upstream indicator. The PAM patch requires the dedicated Claw service
 for unlock and removes non-PAM recovery paths.
 
 The [original Claw OS mountain wallpaper](../assets/brand/wallpaper/NOTICE)
-is restored unchanged for setup and sign-in under its existing CC BY-SA 4.0
+is used unchanged for setup, sign-in and lock under its existing CC BY-SA 4.0
 license. No COSMIC greeter or compositor code is used for these pages.
 
 ## Shared App framework

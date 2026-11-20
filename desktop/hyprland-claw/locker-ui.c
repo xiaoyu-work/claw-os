@@ -1,36 +1,95 @@
 // SPDX-License-Identifier: MIT
+#include <errno.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
+#include <pango/pangocairo.h>
+#include <poll.h>
+#include <pwd.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/timerfd.h>
+#include <time.h>
+#include <unistd.h>
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 
 #include "background-image.h"
 #include "cairo.h"
 #include "log.h"
+#include "loop.h"
 #include "swaylock.h"
 
 enum {
-	FORM_WIDTH = 400, FORM_HEIGHT = 304, MARGIN = 26,
-	FIELD_WIDTH = FORM_WIDTH - 2 * MARGIN, FIELD_Y = 150, FIELD_HEIGHT = 46,
-	BUTTON_Y = 240, BUTTON_HEIGHT = 44,
+	CONTENT_WIDTH = 360,
+	FIELD_WIDTH = 280, FIELD_HEIGHT = 44,
+	FIELD_X = (CONTENT_WIDTH - FIELD_WIDTH) / 2,
+	BUTTON_X = FIELD_X + FIELD_WIDTH - FIELD_HEIGHT,
 };
+
+static const char *account = "Screen locked";
+static cairo_surface_t *wallpaper;
+static cairo_surface_t *logo;
 
 struct layout {
 	int x, y, width, height;
-	double zoom;
+	double zoom, clock_size, field_y;
 };
 
 static struct layout layout(const struct swaylock_surface *surface) {
-	double zoom = fmin(1, fmin(surface->width / (FORM_WIDTH + 24.0),
-			surface->height / (FORM_HEIGHT + 24.0)));
-	int width = ceil(FORM_WIDTH * zoom);
-	int height = ceil(FORM_HEIGHT * zoom);
+	double zoom = fmin(1, fmin(surface->width / 384.0, surface->height / 440.0));
+	double scene_height = surface->height / zoom;
+	int width = ceil(CONTENT_WIDTH * zoom);
+	int top = round(fmin(112, scene_height * 0.09) * zoom);
+	double bottom = fmin(106, fmax(64, round(scene_height * 0.1)));
 	return (struct layout) {
 		.x = (surface->width - width) / 2,
-		.y = (surface->height - height) / 2,
-		.width = width, .height = height, .zoom = zoom,
+		.y = top,
+		.width = width,
+		.height = surface->height - top - floor(zoom * 14),
+		.zoom = zoom,
+		.clock_size = round(fmin(108, scene_height * 0.135)),
+		.field_y = (surface->height - top) / zoom - bottom - FIELD_HEIGHT,
 	};
+}
+
+static bool arm_clock(int fd) {
+	time_t now = time(NULL);
+	struct itimerspec next = {.it_value.tv_sec = now - now % 60 + 60};
+	return timerfd_settime(fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &next, NULL) == 0;
+}
+
+static void clock_tick(int fd, short events, void *data) {
+	uint64_t ticks;
+	if (read(fd, &ticks, sizeof(ticks)) < 0 && errno != ECANCELED) {
+		return;
+	}
+	if (!arm_clock(fd)) {
+		swaylock_log_errno(LOG_ERROR, "Failed to schedule lock clock");
+	}
+	damage_state(data);
+}
+
+void claw_lock_style_start(struct swaylock_state *state) {
+	wallpaper = load_background_image("/usr/share/backgrounds/claw-os/claw-default.jpg");
+	logo = cairo_image_surface_create_from_png("/usr/share/claw-os/oobe/logo.png");
+
+	const struct passwd *owner = getpwuid(getuid());
+	if (owner) {
+		const char *name = owner->pw_gecos;
+		size_t length = name ? strcspn(name, ",") : 0;
+		account = length ? g_utf8_make_valid(name, length) : g_utf8_make_valid(owner->pw_name, -1);
+	}
+
+	// A wall-clock deadline also advances while the machine is suspended.
+	int fd = timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC | TFD_NONBLOCK);
+	if (fd >= 0 && arm_clock(fd)) {
+		loop_add_fd(state->eventloop, fd, POLLIN, clock_tick, state);
+	} else {
+		swaylock_log_errno(LOG_ERROR, "Failed to start lock clock");
+		if (fd >= 0) {
+			close(fd);
+		}
+	}
 }
 
 static bool can_submit(const struct swaylock_state *state) {
@@ -47,73 +106,118 @@ static void rounded(cairo_t *cr, double x, double y, double w, double h, double 
 	cairo_close_path(cr);
 }
 
-static void text(cairo_t *cr, const char *label, double x, double y,
-		int size, uint32_t color, bool bold, bool centered) {
-	cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
-			bold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_font_size(cr, size);
+static void text(cairo_t *cr, const char *label, double x, double y, double width,
+		int size, uint32_t color, bool emphasized, PangoAlignment alignment) {
+	PangoLayout *line = pango_cairo_create_layout(cr);
+	PangoFontDescription *font = pango_font_description_new();
+	pango_font_description_set_family(font, "Inter");
+	pango_font_description_set_weight(font, emphasized ? PANGO_WEIGHT_SEMIBOLD : PANGO_WEIGHT_NORMAL);
+	pango_font_description_set_absolute_size(font, size * PANGO_SCALE);
+	pango_layout_set_font_description(line, font);
+	pango_font_description_free(font);
+	pango_layout_set_text(line, label, -1);
+	pango_layout_set_single_paragraph_mode(line, TRUE);
+	pango_layout_set_width(line, width * PANGO_SCALE);
+	pango_layout_set_ellipsize(line, PANGO_ELLIPSIZE_END);
+	pango_layout_set_alignment(line, alignment);
+	int height;
+	pango_layout_get_pixel_size(line, NULL, &height);
 	cairo_set_source_u32(cr, color);
-	if (centered) {
-		cairo_text_extents_t extents;
-		cairo_text_extents(cr, label, &extents);
-		x -= extents.width / 2 + extents.x_bearing;
-	}
-	cairo_move_to(cr, x, y);
-	cairo_show_text(cr, label);
+	cairo_move_to(cr, x, y - height / 2.0);
+	pango_cairo_show_layout(cr, line);
+	g_object_unref(line);
 }
 
-static void paint_form(cairo_t *cr, enum auth_state auth, size_t characters, bool caps_lock) {
+static void paint_clock(cairo_t *cr, const struct layout *box) {
+	time_t now = time(NULL);
+	struct tm local;
+	if (localtime_r(&now, &local)) {
+		char date[80], time_label[16];
+		strftime(date, sizeof(date), "%A, %B %-d", &local);
+		strftime(time_label, sizeof(time_label), "%H:%M", &local);
+		text(cr, date, 0, 12, CONTENT_WIDTH, 20, 0xf4f8ffff, true, PANGO_ALIGN_CENTER);
+		text(cr, time_label, 0, 23 + box->clock_size / 2, CONTENT_WIDTH,
+				box->clock_size, 0xf4f8ffff, true, PANGO_ALIGN_CENTER);
+	}
+}
+
+static void paint_avatar(cairo_t *cr, double y) {
+	double x = CONTENT_WIDTH / 2.0;
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, x, y, 30.5, 0, 4 * acos(0));
+	cairo_set_source_u32(cr, 0xe7edf4ff);
+	cairo_fill_preserve(cr);
+	cairo_set_source_u32(cr, 0xffffffb3);
+	cairo_set_line_width(cr, 1);
+	cairo_stroke(cr);
+	if (cairo_surface_status(logo) == CAIRO_STATUS_SUCCESS) {
+		cairo_save(cr);
+		cairo_translate(cr, x - 18, y - 18);
+		cairo_scale(cr, 36.0 / cairo_image_surface_get_width(logo),
+				36.0 / cairo_image_surface_get_height(logo));
+		cairo_set_source_surface(cr, logo, 0, 0);
+		cairo_paint(cr);
+		cairo_restore(cr);
+	}
+}
+
+static void paint_form(cairo_t *cr, const struct layout *box, enum auth_state auth,
+		size_t characters, bool caps_lock) {
 	bool checking = auth == AUTH_STATE_VALIDATING;
 	bool rejected = auth == AUTH_STATE_INVALID && !characters;
-	uint32_t border = rejected ? 0xffb6baff : 0xb3d1ffff;
+	bool enabled = !checking && characters > 0;
+	double y = box->field_y, mid = y + FIELD_HEIGHT / 2.0;
+	uint32_t border = rejected ? 0xffc4c0ff : 0xffffffb3;
 
-	rounded(cr, 1, 1, FORM_WIDTH - 2, FORM_HEIGHT - 2, 22);
-	cairo_set_source_u32(cr, 0x20283bff);
+	paint_avatar(cr, y - 79);
+	text(cr, account, FIELD_X, y - 24, FIELD_WIDTH, 18, 0xf4f8ffff, true, PANGO_ALIGN_CENTER);
+
+	rounded(cr, FIELD_X + 0.5, y + 0.5, FIELD_WIDTH - 1, FIELD_HEIGHT - 1, (FIELD_HEIGHT - 1) / 2.0);
+	cairo_set_source_u32(cr, 0x151c26c4);
 	cairo_fill_preserve(cr);
-	cairo_set_source_u32(cr, 0x54637dff);
+	cairo_set_source_u32(cr, checking ? 0xffffff55 : border);
 	cairo_set_line_width(cr, 1);
 	cairo_stroke(cr);
 
-	text(cr, "Claw OS", MARGIN, 39, 15, 0xb3d1ffff, true, false);
-	text(cr, "Screen locked", MARGIN, 75, 28, 0xf1f5ffff, true, false);
-	text(cr, "Use your sign-in password to unlock.", MARGIN, 104, 15, 0xcdd8ecff, false, false);
-	text(cr, "Password", MARGIN, 139, 14, 0xf1f5ffff, true, false);
-
-	rounded(cr, MARGIN, FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT, 10);
-	cairo_set_source_u32(cr, 0x121929ff);
-	cairo_fill_preserve(cr);
-	cairo_set_source_u32(cr, checking ? 0x54637dff : border);
-	cairo_set_line_width(cr, 2);
-	cairo_stroke(cr);
-
-	double x = MARGIN + 15;
-	double mid = FIELD_Y + FIELD_HEIGHT / 2.0;
+	double x = FIELD_X + 17;
+	if (!characters) {
+		text(cr, "Password", x + (checking ? 0 : 7), mid, BUTTON_X - x - 10,
+				15, 0xd7e3efff, false, PANGO_ALIGN_LEFT);
+	}
 	if (!checking) {
-		if (!characters) {
-			text(cr, "Enter password", x + 7, mid + 5, 15, 0xaab8d0ff, false, false);
-		}
-		cairo_set_source_u32(cr, 0xf1f5ffff);
-		for (size_t i = 0; i < characters && x < MARGIN + FIELD_WIDTH - 24; ++i) {
+		cairo_set_source_u32(cr, 0xf4f8ffff);
+		for (size_t i = 0; i < characters && x < BUTTON_X - 13; ++i) {
 			cairo_new_sub_path(cr);
-			cairo_arc(cr, x + 4, mid, 3.5, 0, 4 * acos(0));
+			cairo_arc(cr, x + 4, mid, 3.2, 0, 4 * acos(0));
 			x += 11;
 		}
 		cairo_fill(cr);
-		cairo_rectangle(cr, x, mid - 10, 1.5, 20);
+		cairo_rectangle(cr, x, mid - 9, 1, 18);
 		cairo_fill(cr);
 	}
 
+	double arrow = BUTTON_X + FIELD_HEIGHT / 2.0;
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, arrow, mid, 17, 0, 4 * acos(0));
+	cairo_set_source_u32(cr, enabled ? 0xedf5ffff : 0xffffff24);
+	cairo_fill(cr);
+	cairo_move_to(cr, arrow - 6, mid);
+	cairo_line_to(cr, arrow + 6, mid);
+	cairo_move_to(cr, arrow + 1, mid - 5);
+	cairo_line_to(cr, arrow + 6, mid);
+	cairo_line_to(cr, arrow + 1, mid + 5);
+	cairo_set_source_u32(cr, enabled ? 0x172431ff : 0xb8c5d3ff);
+	cairo_set_line_width(cr, 1.6);
+	cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+	cairo_stroke(cr);
+
 	const char *hint = checking ? "Checking password..."
 		: rejected ? "Password not accepted. Try again."
-		: caps_lock ? "Caps Lock is on."
-		: "Press Enter to unlock";
-	text(cr, hint, MARGIN, 220, 14, rejected ? border : 0xcdd8ecff, false, false);
-	bool enabled = !checking && characters > 0;
-	rounded(cr, MARGIN, BUTTON_Y, FIELD_WIDTH, BUTTON_HEIGHT, 12);
-	cairo_set_source_u32(cr, enabled ? 0xb3d1ffff : 0x374561ff);
-	cairo_fill(cr);
-	text(cr, "Unlock", FORM_WIDTH / 2, BUTTON_Y + 28, 15,
-			enabled ? 0x14253fff : 0xcdd8ecff, true, true);
+		: caps_lock ? "Caps Lock is on." : NULL;
+	if (hint) {
+		text(cr, hint, FIELD_X, y + FIELD_HEIGHT + 16, FIELD_WIDTH, 14,
+				rejected ? border : 0xd7e3efff, false, PANGO_ALIGN_CENTER);
+	}
 }
 
 static bool render_form(struct swaylock_surface *surface) {
@@ -136,7 +240,8 @@ static bool render_form(struct swaylock_surface *surface) {
 	cairo_paint(cr);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 	cairo_scale(cr, box.zoom * scale, box.zoom * scale);
-	paint_form(cr, state->auth_state, state->password.characters, state->xkb.caps_lock);
+	paint_clock(cr, &box);
+	paint_form(cr, &box, state->auth_state, state->password.characters, state->xkb.caps_lock);
 
 	wl_subsurface_set_position(surface->subsurface, box.x, box.y);
 	wl_surface_set_buffer_scale(surface->child, scale);
@@ -171,11 +276,21 @@ void render(struct swaylock_surface *surface) {
 			exit(EXIT_FAILURE);
 		}
 		cairo_t *cr = background.cairo;
-		cairo_set_source_u32(cr, state->args.colors.background);
+		cairo_set_source_u32(cr, state->args.colors.background | 0xffu);
 		cairo_paint(cr);
 		if (surface->image && state->args.mode != BACKGROUND_MODE_SOLID_COLOR) {
 			render_background_image(cr, surface->image, state->args.mode, width, height);
+		} else if (wallpaper) {
+			render_background_image(cr, wallpaper, BACKGROUND_MODE_FILL, width, height);
 		}
+		cairo_pattern_t *scrim = cairo_pattern_create_linear(0, 0, 0, height);
+		cairo_pattern_add_color_stop_rgba(scrim, 0.0, 16/255., 25/255., 35/255., 171/255.);
+		cairo_pattern_add_color_stop_rgba(scrim, 0.3, 16/255., 25/255., 35/255., 99/255.);
+		cairo_pattern_add_color_stop_rgba(scrim, 0.59, 16/255., 25/255., 35/255., 22/255.);
+		cairo_pattern_add_color_stop_rgba(scrim, 1.0, 16/255., 25/255., 35/255., 101/255.);
+		cairo_set_source(cr, scrim);
+		cairo_paint(cr);
+		cairo_pattern_destroy(scrim);
 		wl_surface_attach(surface->surface, background.buffer, 0, 0);
 		wl_surface_damage_buffer(surface->surface, 0, 0, INT32_MAX, INT32_MAX);
 		surface->last_buffer_width = width;
@@ -238,8 +353,8 @@ static bool pointer_on_unlock(const struct swaylock_seat *seat) {
 		struct layout box = layout(surface);
 		double x = (seat->pointer_x - box.x) / box.zoom;
 		double y = (seat->pointer_y - box.y) / box.zoom;
-		return x >= MARGIN && x < MARGIN + FIELD_WIDTH
-			&& y >= BUTTON_Y && y < BUTTON_Y + BUTTON_HEIGHT;
+		return x >= BUTTON_X && x < FIELD_X + FIELD_WIDTH
+			&& y >= box.field_y && y < box.field_y + FIELD_HEIGHT;
 	}
 	return false;
 }

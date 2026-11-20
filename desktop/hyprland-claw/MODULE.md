@@ -65,9 +65,10 @@ then consumes the marker. The wizard uses the just-entered password once
 in the normal greetd/PAM conversation for the fixed Hyprland session. It
 does not store a password or enable persistent auto-login. Later logins
 and pre-provisioned profiles use the account picker.
-The wizard and greeter share the original wallpaper and an aligned, softened
-crop behind the glass cards. Cage and Qt Quick render this pre-login UI in
-software; the authenticated desktop retains its normal graphics backend.
+The wizard keeps its glass panels. The greeter and the in-session locker use
+the original Claw wallpaper full-screen, with a large clock at the top and the
+account and password at the bottom. Cage and Qt Quick render the pre-login UI
+in software; the authenticated desktop retains its normal graphics backend.
 The wizard skips network setup when already connected and leaves display
 mode, scaling and taskbar layout to the defaults. The first owner chooses an
 installed language and a real time zone; the setup helper validates and saves
@@ -88,9 +89,11 @@ The same stage builds the private `claw-lockscreen` executable from pinned
 Swaylock source, with mandatory PAM and the dedicated `claw-desktop-lock`
 service. This build artifact is not a lock or display authorization.
 [`locker-ui.c`](locker-ui.c) replaces the ring with a focused password field
-that masks typed characters. Enter and the Unlock button use the same local
-PAM submission. Authentication feedback and Caps Lock status stay on the
-lock surface; passwords never go to the renderer or the desktop Shell.
+that masks typed characters. Enter and the arrow button use the same local
+PAM submission. The wallpaper is decoded once with GdkPixbuf and painted on an
+opaque backing; a minute change redraws only the clock and account overlay.
+Authentication feedback and Caps Lock status stay on the lock surface;
+passwords never go to the renderer or the desktop Shell.
 The Root supervisor admits the locker through its private Wayland descriptor.
 The compositor requires that role for the session-lock protocol and does not
 provide an owner Lua recovery unlock. PAM alone releases a live lock;
