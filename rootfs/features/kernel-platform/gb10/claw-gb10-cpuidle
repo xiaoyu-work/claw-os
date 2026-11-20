@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+for device in /sys/bus/pci/devices/*; do
+    [ -r "$device/vendor" ] && [ -r "$device/device" ] || continue
+    read -r vendor <"$device/vendor"
+    read -r id <"$device/device"
+    if [ "$vendor:$id" = "0x10de:0x2e12" ]; then
+        break
+    fi
+done
+[ "${vendor:-}:${id:-}" = "0x10de:0x2e12" ] || exit 0
+
+if [ "$#" -eq 0 ]; then
+    set -- /sys/devices/system/cpu/cpu[0-9]*
+else
+    case "$1" in
+        ''|*[!0-9]*) exit 1 ;;
+    esac
+    set -- "/sys/devices/system/cpu/cpu$1"
+fi
+
+for cpu do
+    for state in "$cpu"/cpuidle/state[1-9]*/disable; do
+        [ -w "$state" ] || continue
+        printf '1\n' >"$state"
+    done
+done

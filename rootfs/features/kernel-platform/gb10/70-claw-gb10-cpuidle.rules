@@ -1,0 +1,1 @@
+ACTION=="add|online", SUBSYSTEM=="cpu", KERNEL=="cpu[0-9]*", TEST=="cpuidle/state1/disable", RUN+="/usr/lib/cos/hw/claw-gb10-cpuidle %n"

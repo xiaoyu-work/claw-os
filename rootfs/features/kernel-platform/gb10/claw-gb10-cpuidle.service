@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep NVIDIA GB10 CPUs in the shallow idle state
+After=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/cos/hw/claw-gb10-cpuidle
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

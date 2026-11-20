@@ -79,6 +79,11 @@ if [[ $platform == aarch64-apple ]]; then
 fi
 
 if [[ $platform == aarch64-gb10 ]]; then
+    gb10="$PROJECT_DIR/rootfs/features/kernel-platform/gb10"
+    install -Dm0755 "$gb10/claw-gb10-cpuidle" "$ROOTFS/usr/lib/cos/hw/claw-gb10-cpuidle"
+    install -Dm0644 "$gb10/70-claw-gb10-cpuidle.rules" "$ROOTFS/usr/lib/udev/rules.d/70-claw-gb10-cpuidle.rules"
+    install -Dm0644 "$gb10/claw-gb10-cpuidle.service" "$ROOTFS/usr/lib/systemd/system/claw-gb10-cpuidle.service"
+    chroot "$ROOTFS" /usr/bin/systemctl enable claw-gb10-cpuidle.service
     install -d "$ROOTFS/etc/systemd/sleep.conf.d"
     cat > "$ROOTFS/etc/systemd/sleep.conf.d/60-claw-os-gb10.conf" <<'EOF'
 [Sleep]
