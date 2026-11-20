@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+unit=claw-ipu7-camera.service
+resume=/run/claw-ipu7-resume
+case "$1" in
+    pre)
+        if /usr/bin/systemctl is-active --quiet "$unit"; then
+            /usr/bin/systemctl stop "$unit"
+            touch "$resume"
+        fi
+        ;;
+    post)
+        if [ -f "$resume" ]; then
+            rm -f "$resume"
+            /usr/bin/systemctl start --no-block "$unit"
+        fi
+        ;;
+esac

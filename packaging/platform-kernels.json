@@ -31,6 +31,26 @@
       "sha256": "0c063edf18dcc6edcdef46e695128cfc2b2d60964ea8538c7e79a2454310c53d",
       "source": "https://gitlab.com/vicamo/v4l2-relayd/-/tree/upstream/0.2.0"
     },
+    "intel-ipu7-drivers": {
+      "url": "https://codeload.github.com/intel/ipu7-drivers/tar.gz/a88b19096a738d0708742a78d6540d6d4a3021ff",
+      "sha256": "b2208f4b1b20be7ef0aea75d80ee8f8e6e4cbe559e598511688757d28a86ace0",
+      "source": "https://github.com/intel/ipu7-drivers/tree/a88b19096a738d0708742a78d6540d6d4a3021ff"
+    },
+    "intel-ipu7-camera-bins": {
+      "url": "https://codeload.github.com/intel/ipu7-camera-bins/tar.gz/403c67db6b279dd02752f11db6a34552f31a3ac5",
+      "sha256": "faf152bde831a7f1da7b1c2bbd1bb97ea6ae0e487ec55e9e09d4faa88b5259e8",
+      "source": "https://github.com/intel/ipu7-camera-bins/tree/403c67db6b279dd02752f11db6a34552f31a3ac5"
+    },
+    "intel-ipu7-camera-hal": {
+      "url": "https://codeload.github.com/intel/ipu7-camera-hal/tar.gz/b1f6ebef12111fb5da0133b144d69dd9b001836c",
+      "sha256": "6f20aa7d435ec3f106987eb376a34ee290d73cdbbedcb7e91f4b9a2ec53dfe32",
+      "source": "https://github.com/intel/ipu7-camera-hal/tree/b1f6ebef12111fb5da0133b144d69dd9b001836c"
+    },
+    "intel-icamerasrc": {
+      "url": "https://codeload.github.com/intel/icamerasrc/tar.gz/4fb31db76b618aae72184c59314b839dedb42689",
+      "sha256": "1bd86ee776dd1f9c0f2bb9761ecb82bd2aa3b42c067cd2fafcadb0137388464c",
+      "source": "https://github.com/intel/icamerasrc/tree/4fb31db76b618aae72184c59314b839dedb42689"
+    },
     "intel-lpmd": {
       "url": "https://codeload.github.com/intel/intel-lpmd/tar.gz/956df747e56aca1739b39bff8cff77e81758af9a",
       "sha256": "d7613a600e3c596e9edcb1d79bf9645527a2346e09b69ac14607466a17c0406a",

@@ -1,0 +1,42 @@
+#!/bin/bash
+set -euo pipefail
+
+if [[ $1 == supported ]]; then
+    for pci in /sys/bus/pci/devices/*; do
+        if [[ -r "$pci/vendor" && -r "$pci/device" && $(<"$pci/vendor") == 0x8086 ]]; then
+            case $(<"$pci/device") in
+                0x645d|0xb05d) exit 0 ;;
+            esac
+        fi
+    done
+    exit 1
+fi
+
+name="Hardware ISP Camera"
+output=
+for file in /sys/devices/virtual/video4linux/video*/name; do
+    if [[ -r "$file" && $(<"$file") == "$name" ]]; then
+        node=${file%/name}
+        output=/dev/${node##*/}
+        break
+    fi
+done
+
+case "$1" in
+    prepare)
+        if [[ -z "$output" ]]; then
+            /usr/bin/v4l2loopback-ctl add -n "$name" -x 1
+        fi
+        ;;
+    relay)
+        [[ -c "$output" ]] || exit 1
+        source="icamerasrc device-name=ov08x40-uf fps-range=15~30 gain-range=0~27 color-range=reduced"
+        # Lunar Lake's sensor is mounted upright, unlike the default IPU7 profile.
+        if ! compgen -G '/sys/bus/acpi/devices/INTC10DE:*' >/dev/null; then
+            source+=" ! videoflip method=rotate-180"
+        fi
+        exec /usr/lib/cos/ipu7/v4l2-relayd -i "$source" \
+            -o "appsrc name=appsrc caps=video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! videoconvert ! v4l2sink name=v4l2sink sync=false device=$output"
+        ;;
+    *) exit 2 ;;
+esac

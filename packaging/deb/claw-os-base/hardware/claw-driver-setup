@@ -37,6 +37,7 @@ QCOM_AUDIO = "qualcomm-model-audio"
 FRAMEWORK = "framework-laptop-16"
 DELL_HAPTICS = "dell-xps-haptics"
 CAMLINK = "elgato-camlink-4k"
+IPU7 = "intel-ipu7-camera"
 INTEL_POWER = "intel-hybrid-power"
 ASUS_ROG = "asus-rog"
 TUXEDO = "tuxedo-keyboard"
@@ -59,6 +60,7 @@ PACKS = {
     FRAMEWORK: (),
     DELL_HAPTICS: (),
     CAMLINK: (),
+    IPU7: (),
     INTEL_POWER: (),
     ASUS_ROG: (),
     TUXEDO: (),
@@ -74,6 +76,7 @@ LOCAL_PACKAGES = {
     FRAMEWORK: "claw-os-framework-qmk-hid",
     DELL_HAPTICS: "claw-os-dell-xps-haptics",
     CAMLINK: "claw-os-elgato-camlink",
+    IPU7: "claw-os-intel-ipu7-camera",
     INTEL_POWER: "claw-os-intel-lpmd",
     ASUS_ROG: "claw-os-asus-rog",
     TUXEDO: "tuxedo-drivers-dkms",
@@ -154,6 +157,20 @@ def has_camlink(sysfs):
     return False
 
 
+def has_intel_ipu7_camera(sysfs):
+    if not any((sysfs / "bus/acpi/devices").glob("OVTI08F4:*")):
+        return False
+    for pci in (sysfs / "bus/pci/devices").glob("*"):
+        try:
+            if (pci / "vendor").read_text().strip() == "0x8086" and (pci / "device").read_text().strip() in {
+                "0x645d", "0xb05d",
+            }:
+                return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
 def has_intel_hybrid_battery(sysfs):
     if not CPUINFO.is_file():
         return False
@@ -188,6 +205,8 @@ def detect(sysfs=Path("/sys")):
                 packs.append(BROADCOM)
             if has_camlink(sysfs):
                 packs.append(CAMLINK)
+            if any(name.startswith("linux-headers-7.2.") for name, _ in stock_headers) and has_intel_ipu7_camera(sysfs):
+                packs.append(IPU7)
         dmi = sysfs / "class/dmi/id"
         if (dmi / "sys_vendor").is_file():
             vendor = (dmi / "sys_vendor").read_text().strip()
@@ -207,7 +226,7 @@ def detect(sysfs=Path("/sys")):
 
 def missing(packs):
     requirements = dict(spec for pack in packs for spec in PACKS[pack])
-    if any(pack in packs for pack in (BROADCOM, CAMLINK, TUXEDO)):
+    if any(pack in packs for pack in (BROADCOM, CAMLINK, IPU7, TUXEDO)):
         requirements.update(debian_amd64_headers())
     packages = []
     for package, minimum in requirements.items():
@@ -309,8 +328,11 @@ def stage_offline():
     packs = [SNAPDRAGON, LAPTOP8, PRO11, QCOM_AUDIO] if arch == "arm64" else [
         "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS, INTEL_POWER, ASUS_ROG,
     ]
-    if arch == "amd64" and debian_amd64_headers():
+    headers = debian_amd64_headers() if arch == "amd64" else []
+    if headers:
         packs.extend((BROADCOM, CAMLINK, TUXEDO))
+        if any(name.startswith("linux-headers-7.2.") for name, _ in headers):
+            packs.append(IPU7)
     for pack in packs:
         directory = CACHE / pack
         local = sorted(directory.glob("*.deb"))

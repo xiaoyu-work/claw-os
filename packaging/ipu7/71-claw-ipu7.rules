@@ -1,0 +1,3 @@
+KERNEL=="ipu7-psys[0-9]*", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+ACTION=="add", KERNEL=="ipu7-psys0", SYMLINK+="ipu-psys0", TAG+="systemd", ENV{SYSTEMD_WANTS}+="claw-ipu7-camera.service"
+SUBSYSTEM=="video4linux", ATTR{name}=="Intel IPU7 ISYS Capture *", TAG-="uaccess", TAG-="seat", OWNER:="root", GROUP:="root", MODE:="0600"

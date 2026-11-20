@@ -138,6 +138,8 @@ The installer caches model-specific packages when building the ISO. Calamares re
 
 If matching Debian packages or indexed OEM firmware is missing, the target leaves a pending job. NetworkManager starts it when it has internet access; the wizard displays the job only after the Network page. An explicit offline or skip choice lets the user finish, and a later connection can retry without restarting setup. Debian packages come from the signed APT repositories, locally built drivers come from the installer cache, and OEM firmware comes from the verified archives described below.
 
+On the stock Debian 7.2 amd64 kernel, the installer also matches `OVTI08F4` cameras with Intel IPU7 or IPU7.5. It installs the hardware ISP modules, unmodified Intel firmware and camera libraries, and the GStreamer relay offline. Applications see the processed **Hardware ISP Camera**; direct access to the ISP processing node and its raw capture nodes is restricted to root. The pack uses Debian's native sensor bridge, does not disable libcamera for other devices, and does not apply to IPU8. Secure Boot enforcement requires a locally enrolled DKMS signing key.
+
 ### Experimental Snapdragon X boot
 
 The arm64 live and installer ISOs list recognized Snapdragon X models in a separate GRUB submenu when the selected kernel ships the exact device tree. Choose the exact model and panel/SoC variant; the generic entry is unchanged. The installer records the selected tree only if it matches the running device tree. On disk, GRUB offers only the selected board's tree for each kernel that ships it and has its matching initramfs; older compatible kernels stay available.

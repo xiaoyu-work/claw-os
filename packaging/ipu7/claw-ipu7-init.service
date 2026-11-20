@@ -1,0 +1,18 @@
+[Unit]
+Description=Prepare the Intel IPU7 camera and its virtual output
+ConditionPathExistsGlob=/sys/bus/acpi/devices/OVTI08F4:*
+ConditionKernelVersion=7.2.*+deb13*-amd64
+After=systemd-udev-trigger.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecCondition=/usr/lib/cos/ipu7/claw-ipu7-camera supported
+ExecStart=/usr/sbin/modprobe intel_cvs
+ExecStart=/usr/sbin/modprobe ov08x40
+ExecStart=/usr/sbin/modprobe intel_ipu7_psys
+ExecStart=/usr/sbin/modprobe v4l2loopback devices=0
+ExecStart=/usr/lib/cos/ipu7/claw-ipu7-camera prepare
+
+[Install]
+WantedBy=multi-user.target

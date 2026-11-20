@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 from platform_kernels import PIN, inputs, package, unpack
-from surface_laptop7 import extract, replace, stage_file, write_file
+from surface_laptop7 import extract, patch, replace, stage_file, write_file
 
 
 QMK = "framework-qmk-hid"
@@ -21,7 +21,9 @@ RELAY_SOURCE = "elgato-v4l2-relayd-source"
 LPMD = "intel-lpmd"
 ROG = "asus-rog"
 TUXEDO = "tuxedo-drivers"
-CAMLINK_ASSETS = Path(__file__).resolve().parents[1] / "packaging/camlink"
+IPU7 = "intel-ipu7-camera"
+IPU7_INPUTS = ("intel-ipu7-drivers", "intel-ipu7-camera-bins", "intel-ipu7-camera-hal", "intel-icamerasrc")
+PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 
 
 def framework(source, provenance, work, out):
@@ -131,6 +133,21 @@ WantedBy=multi-user.target
             {RECIPES: provenance[RECIPES]}, None)
 
 
+def stage_relay(source, work, stage, name, executable):
+    binary = work / "relay-binary"
+    relay = work / "relay-source"
+    recipe = "pkgbuilds/v4l2-relayd/"
+    doc = stage / "usr/share/doc" / name
+    unpack(source[RELAY], binary, lambda path: path == "usr/bin/v4l2-relayd")
+    stage_file(binary / "usr/bin/v4l2-relayd", stage / executable, 0o755)
+    extract(source[RELAY_SOURCE], relay, prefixes=("LICENSE",))
+    stage_file(relay / "LICENSE", doc / "v4l2-relayd.LICENSE")
+    stage_file(source[RELAY_SOURCE], doc / "v4l2-relayd-upstream-0.2.0.tar.gz")
+    extract(source[RECIPES], relay, prefixes=(recipe,))
+    for path in ("PKGBUILD", "0001-reset-output-on-idle.patch", "0002-escape-optional-splashsrc-expansion.patch"):
+        stage_file(relay / recipe / path, doc / path)
+
+
 def camlink(source, provenance, work, out):
     dest = out / "elgato-camlink-4k"
     dest.mkdir(parents=True, exist_ok=True)
@@ -158,28 +175,145 @@ esac
 
     stage = work / "camlink"
     name = "claw-os-elgato-camlink"
-    doc = stage / "usr/share/doc" / name
-    unpack(source[RELAY], stage, lambda path: path == "usr/bin/v4l2-relayd")
-    if not (stage / "usr/bin/v4l2-relayd").is_file():
-        raise ValueError("the signed relay archive is missing v4l2-relayd")
-    relay = work / "relay-source"
-    extract(source[RELAY_SOURCE], relay, prefixes=("LICENSE",))
-    stage_file(relay / "LICENSE", doc / "copyright")
-    stage_file(source[RELAY_SOURCE], doc / "v4l2-relayd-upstream-0.2.0.tar.gz")
-    recipe = "pkgbuilds/v4l2-relayd/"
-    extract(source[RECIPES], relay, prefixes=(recipe,))
-    for path in ("PKGBUILD", "0001-reset-output-on-idle.patch", "0002-escape-optional-splashsrc-expansion.patch"):
-        stage_file(relay / recipe / path, doc / path)
-
-    stage_file(CAMLINK_ASSETS / "71-claw-camlink.rules", stage / "usr/lib/udev/rules.d/71-claw-camlink.rules")
+    stage_relay(source, work, stage, name, "usr/bin/v4l2-relayd")
+    stage_file(stage / "usr/share/doc" / name / "v4l2-relayd.LICENSE", stage / "usr/share/doc" / name / "copyright")
+    assets = PACKAGING / "camlink"
+    stage_file(assets / "71-claw-camlink.rules", stage / "usr/lib/udev/rules.d/71-claw-camlink.rules")
     for unit in ("claw-camlink-loopback.service", "claw-camlink-relay.service"):
-        stage_file(CAMLINK_ASSETS / unit, stage / "usr/lib/systemd/system" / unit)
+        stage_file(assets / unit, stage / "usr/lib/systemd/system" / unit)
     package(stage, dest, name, "0.2.0-3+clawos1", "amd64",
             f"v4l2loopback-dkms (>= {version}), v4l2loopback-utils, gstreamer1.0-plugins-base, "
             "gstreamer1.0-plugins-good, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libglib2.0-0t64, libc6, kmod, systemd, udev",
             "Fixed-aspect virtual camera for the Elgato Cam Link 4K",
             {key: provenance[key] for key in (RELAY, RELAY_SOURCE, RECIPES)},
             None)
+
+
+def intel_ipu7(source, provenance, work, out):
+    dest = out / IPU7
+    dest.mkdir(parents=True, exist_ok=True)
+    loopback, = (out / "elgato-camlink-4k").glob("v4l2loopback-dkms_*.deb")
+    shutil.copyfile(loopback, dest / loopback.name)
+    recipes = "pkgbuilds/intel-ipu7-camera/"
+    extract(source[RECIPES], work / "ipu7-recipes", prefixes=(recipes,))
+    fixes = work / "ipu7-recipes" / recipes
+    stage = work / "ipu7-camera"
+    name = "claw-os-intel-ipu7-camera"
+    doc = stage / "usr/share/doc" / name
+    driver = "ipu7-drivers"
+    version = "1.0.6"
+    drivers = stage / "usr/src" / f"{driver}-{version}"
+    extract(source["intel-ipu7-drivers"], drivers)
+    for fix in sorted(fixes.glob("*-ipu7-psys-*.patch")):
+        patch(drivers, fix)
+    # Keep IPU8 on the distribution driver; only IPU7 and IPU7.5 have matching HAL plugins.
+    replace(drivers / "drivers/media/pci/intel/ipu7/ipu7.c", "\t{PCI_DEVICE(PCI_VENDOR_ID_INTEL, IPU8_PCI_ID)},\n", "")
+    config = (fixes / "dkms-ipu7-drivers.conf").read_text()
+    native = config.split('BUILT_MODULE_NAME[3]=', 1)[0].replace("@PKGVER@", version)
+    # Debian 7.2 already provides IPU Bridge, CVS and the OV08X40 sensor.
+    write_file(drivers / "dkms.conf", native + 'BUILD_EXCLUSIVE_KERNEL="^7[.]2[.].*[+]deb13.*-amd64$"\n'
+               'MAKE[0]="make KERNEL_SRC=${kernel_source_dir}"\n'
+               'CLEAN="make KERNEL_SRC=${kernel_source_dir} clean"\n')
+    stage_file(drivers / "LICENSE", doc / "ipu7-drivers.LICENSE")
+
+    bins = work / "ipu7-bins"
+    hal = work / "ipu7-hal"
+    gst = work / "ipu7-gst"
+    build = work / "ipu7-hal-build"
+    sdk = work / "ipu7-sdk"
+    for key, tree in zip(IPU7_INPUTS[1:], (bins, hal, gst), strict=True):
+        extract(source[key], tree)
+        stage_file(tree / "LICENSE", doc / f"{key}.LICENSE")
+    for fix in sorted(fixes.glob("*-camhal-*.patch")):
+        patch(hal, fix)
+    patch(gst, fixes / "0009-icamerasrc-add-an-fps-range-property-for-auto-exposure.patch")
+    replace(gst / "src/gstcamerasrc.cpp", """  int count = get_number_of_cameras();
+  static GEnumValue *method_types = new GEnumValue[count+1];""", """  if (device_type)
+    return device_type;
+
+  int count = get_number_of_cameras();
+  if (count <= 0) {
+    static const GEnumValue empty[] = {
+      {0, "No supported camera", "unavailable"},
+      {0, NULL, NULL},
+    };
+    device_type = g_enum_register_static("GstCamerasrcDeviceName", empty);
+    return device_type;
+  }
+
+  static GEnumValue *method_types = new GEnumValue[count+1];""")
+
+    lib = sdk / "usr/lib"
+    lib.mkdir(parents=True)
+    for file in (bins / "lib").glob("lib*"):
+        if "-ipu7x.so" in file.name or "-ipu75xa.so" in file.name:
+            shutil.copy2(file, lib / file.name, follow_symlinks=False)
+    shutil.copytree(bins / "lib/pkgconfig", lib / "pkgconfig")
+    shutil.copytree(bins / "include", sdk / "usr/include")
+    for pc in (lib / "pkgconfig").glob("*.pc"):
+        path = pc.read_text()
+        write_file(pc, re.sub(r"^prefix=.*$", f"prefix={sdk}/usr", path, flags=re.MULTILINE))
+    env = dict(os.environ, PKG_CONFIG_PATH=str(lib / "pkgconfig"), LIBRARY_PATH=str(lib),
+               LD_LIBRARY_PATH=str(lib), CPATH=str(sdk / "usr/include"))
+    subprocess.run(["cmake", "-G", "Ninja", "-S", hal, "-B", build, "-DCMAKE_BUILD_TYPE=Release",
+                    "-DCMAKE_INSTALL_PREFIX=/usr", "-DCMAKE_INSTALL_LIBDIR=lib", "-DBUILD_CAMHAL_ADAPTOR=ON",
+                    "-DBUILD_CAMHAL_PLUGIN=ON", "-DIPU_VERSIONS=ipu7x;ipu75xa", "-DUSE_STATIC_GRAPH=ON",
+                    "-DUSE_STATIC_GRAPH_AUTOGEN=ON", f"-DCMAKE_PREFIX_PATH={sdk}/usr"], env=env, check=True)
+    subprocess.run(["cmake", "--build", build, "--parallel", "4"], env=env, check=True)
+    subprocess.run(["cmake", "--install", build], env=dict(env, DESTDIR=str(sdk)), check=True)
+    pc = lib / "pkgconfig/libcamhal.pc"
+    write_file(pc, re.sub(r"^prefix=.*$", f"prefix={sdk}/usr", (hal / pc.name).read_text(), flags=re.MULTILINE))
+    env["CHROME_SLIM_CAMHAL"] = "ON"
+    if not (gst / "configure").is_file():
+        subprocess.run(["autoreconf", "-fi"], cwd=gst, env=env, check=True)
+    subprocess.run([gst / "configure", "--prefix=/usr", "--libdir=/usr/lib"], cwd=gst, env=env, check=True)
+    subprocess.run(["make", "-j4"], cwd=gst, env=env, check=True)
+    subprocess.run(["make", "install"], cwd=gst, env=dict(env, DESTDIR=str(sdk)), check=True)
+
+    runtime = stage / "usr/lib/cos/ipu7"
+    runtime.mkdir(parents=True)
+    for pattern in ("libia*.so.*", "libcamhal.so.*", "libgsticamerainterface-1.0.so.*"):
+        for file in lib.glob(pattern):
+            shutil.copy2(file, runtime / file.name, follow_symlinks=False)
+    stage_file(lib / "gstreamer-1.0/libgsticamerasrc.so", runtime / "gstreamer-1.0/libgsticamerasrc.so")
+    shutil.copytree(lib / "libcamhal", stage / "usr/lib/libcamhal")
+    config = stage / "etc/camera"
+    shutil.copytree(sdk / config.relative_to(stage), config)
+    write_file(stage / "DEBIAN/conffiles", "".join(f"/{path.relative_to(stage)}\n"
+                                                 for path in sorted(config.rglob("*")) if path.is_file()))
+    for firmware in ("ipu7_fw.bin", "ipu7ptl_fw.bin"):
+        stage_file(bins / "lib/firmware/intel/ipu" / firmware, stage / "usr/lib/firmware/updates/intel/ipu" / firmware)
+    stage_relay(source, work, stage, name, "usr/lib/cos/ipu7/v4l2-relayd")
+    assets = PACKAGING / "ipu7"
+    for unit in ("claw-ipu7-init.service", "claw-ipu7-camera.service"):
+        stage_file(assets / unit, stage / "usr/lib/systemd/system" / unit)
+    stage_file(assets / "claw-ipu7-camera", runtime / "claw-ipu7-camera", 0o755)
+    stage_file(assets / "claw-ipu7-sleep", stage / "usr/lib/systemd/system-sleep/claw-ipu7-sleep", 0o755)
+    stage_file(assets / "71-claw-ipu7.rules", stage / "usr/lib/udev/rules.d/71-claw-ipu7.rules")
+    write_file(stage / "usr/lib/tmpfiles.d/claw-ipu7.conf", "d /run/camera 0700 root root -\n")
+    write_file(stage / "DEBIAN/prerm", f"""#!/bin/sh
+set -e
+case "$1" in
+    remove|upgrade|deconfigure)
+        if [ -n "$(dkms status -m {driver} -v '{version}')" ]; then
+            dkms remove -m {driver} -v '{version}' --all
+        fi
+        ;;
+esac
+""", 0o755)
+    package(stage, dest, name, f"{version}-3+clawos1", "amd64",
+            "dkms (>= 3.0.11), v4l2loopback-dkms (>= 0.15.4-1+clawos1), v4l2loopback-utils, "
+            "gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, "
+            "libglib2.0-0t64, libstdc++6, libgcc-s1, libexpat1, libdrm2, libdrm-intel1, libjsoncpp26, libc6, "
+            "kmod, systemd, udev, init-system-helpers",
+            "Intel IPU7/7.5 hardware ISP camera for OV08X40 sensors",
+            {key: provenance[key] for key in (*IPU7_INPUTS, RECIPES, RELAY, RELAY_SOURCE)},
+            f"""[ "$1" = configure ] || exit 0
+/usr/lib/dkms/common.postinst {driver} '{version}' /usr/share/{driver} "" "${{2:-}}"
+deb-systemd-helper enable claw-ipu7-init.service >/dev/null
+""", """[ "$1" = purge ] || exit 0
+deb-systemd-helper purge claw-ipu7-init.service >/dev/null
+""")
 
 
 def intel_power(source, provenance, work, out):
@@ -306,7 +440,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lock = json.loads(PIN.read_text())
-    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE, LPMD, ROG, TUXEDO)
+    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE, LPMD, ROG, TUXEDO, *IPU7_INPUTS)
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -315,6 +449,7 @@ def main():
         framework(source, lock["inputs"], work, args.output)
         dell(source, lock["inputs"], work, args.output)
         camlink(source, lock["inputs"], work, args.output)
+        intel_ipu7(source, lock["inputs"], work, args.output)
         intel_power(source, lock["inputs"], work, args.output)
         rog(source, lock["inputs"], work, args.output)
         tuxedo(source, lock["inputs"], work, args.output)
