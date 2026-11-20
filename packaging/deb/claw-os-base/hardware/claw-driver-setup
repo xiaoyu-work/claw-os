@@ -36,6 +36,8 @@ FRAMEWORK = "framework-laptop-16"
 DELL_HAPTICS = "dell-xps-haptics"
 CAMLINK = "elgato-camlink-4k"
 INTEL_POWER = "intel-hybrid-power"
+ASUS_ROG = "asus-rog"
+TUXEDO = "tuxedo-keyboard"
 CPUINFO = Path("/proc/cpuinfo")
 BROADCOM = "broadcom-sta-wifi"
 BROADCOM_DRIVER = "broadcom-sta-dkms"
@@ -54,6 +56,8 @@ PACKS = {
     DELL_HAPTICS: (),
     CAMLINK: (),
     INTEL_POWER: (),
+    ASUS_ROG: (),
+    TUXEDO: (),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
     BROADCOM: ((BROADCOM_DRIVER, BROADCOM_FIXED),),
 }
@@ -65,6 +69,8 @@ LOCAL_PACKAGES = {
     DELL_HAPTICS: "claw-os-dell-xps-haptics",
     CAMLINK: "claw-os-elgato-camlink",
     INTEL_POWER: "claw-os-intel-lpmd",
+    ASUS_ROG: "claw-os-asus-rog",
+    TUXEDO: "tuxedo-drivers-dkms",
     BROADCOM: BROADCOM_DRIVER,
 }
 
@@ -159,7 +165,8 @@ def detect(sysfs=Path("/sys")):
     if arch == "amd64":
         if has_intel_hybrid_battery(sysfs):
             packs.append(INTEL_POWER)
-        if debian_amd64_headers():
+        stock_headers = debian_amd64_headers()
+        if stock_headers:
             if has_broadcom_sta_wifi(sysfs):
                 packs.append(BROADCOM)
             if has_camlink(sysfs):
@@ -173,12 +180,17 @@ def detect(sysfs=Path("/sys")):
                 packs.append(FRAMEWORK)
             if vendor == "Dell Inc." and "XPS" in model and (sysfs / "bus/i2c/devices/i2c-VEN_06CB:00").exists():
                 packs.append(DELL_HAPTICS)
+            family = dmi / "product_family"
+            if vendor == "ASUSTeK COMPUTER INC." and family.is_file() and "ROG" in family.read_text():
+                packs.append(ASUS_ROG)
+            if "tuxedo" in vendor.lower() and stock_headers:
+                packs.append(TUXEDO)
     return packs
 
 
 def missing(packs):
     requirements = dict(spec for pack in packs for spec in PACKS[pack])
-    if BROADCOM in packs or CAMLINK in packs:
+    if any(pack in packs for pack in (BROADCOM, CAMLINK, TUXEDO)):
         requirements.update(debian_amd64_headers())
     packages = []
     for package, minimum in requirements.items():
@@ -278,10 +290,10 @@ def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
     packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else [
-        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS, INTEL_POWER,
+        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS, INTEL_POWER, ASUS_ROG,
     ]
     if arch == "amd64" and debian_amd64_headers():
-        packs.extend((BROADCOM, CAMLINK))
+        packs.extend((BROADCOM, CAMLINK, TUXEDO))
     for pack in packs:
         directory = CACHE / pack
         local = sorted(directory.glob("*.deb"))

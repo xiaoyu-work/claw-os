@@ -52,7 +52,8 @@ if [ -x "$ROOTFS/usr/libexec/claw-oobe" ]; then
         chroot "$ROOTFS" apt-get -qq update
         chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
             install -y --no-install-recommends gpg gpgv zstd build-essential pkg-config autoconf automake libtool \
-            libglib2.0-dev libxml2-dev libsystemd-dev libnl-3-dev libnl-genl-3-dev libupower-glib-dev </dev/null
+            libglib2.0-dev libxml2-dev libsystemd-dev libnl-3-dev libnl-genl-3-dev libupower-glib-dev \
+            "cargo/$SUITE-backports" "rustc/$SUITE-backports" libudev-dev libusb-1.0-0-dev </dev/null
         inside=${hardware#"$ROOTFS"}
         chroot "$ROOTFS" python3 -B "$inside/scripts/amd64_hardware.py" \
             --cache "$inside/cache" --output /usr/share/cos/driver-cache

@@ -100,7 +100,9 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 | Dell XPS with the Synaptics haptic touchpad (`VEN_06CB:00`) | Install the haptic daemon and presets offline. Use `sudo dell-xps-touchpad-haptics set low`, `mid`, or `high` to change the system setting. |
 | Elgato Cam Link 4K on the stock amd64 kernel | With the device connected during install, cache and install the matching loopback module and relay. The camera appears as a fixed 1280×720 virtual device instead of a stretched browser input. |
 | Supported Intel hybrid laptops with a system battery | Install Intel LPMD for the matched CPU family and model. This does not select Intel desktops or computers with only a battery-powered peripheral. |
+| TUXEDO laptops on the stock amd64 kernel | Install the vendor's compatibility-checked DKMS keyboard/backlight modules and matching kernel headers. Claw OS does not disable the vendor's model check or delete existing modules. |
 | ASUS ROG Flow Z13 GZ302 | Classify the detachable keyboard's touchpad as internal so libinput can disable it while typing. |
+| ASUS ROG laptops | Install `asusctl` and its daemon by DMI. The service starts from the matched ASUS WMI device and its control interface is available to administrators. The package does not include ROG Control Center or bundled animation artwork. |
 | ASUS ExpertBook B9406 with the PixArt `093a:4f05` touchpad | Ignore the pad's binary pressure axes so libinput can retain motion events. |
 | Intel `MacBook8,1`, `MacBook9,1`, `MacBook10,1`, and `MacBookPro13,1`–`14,3` | Prevent the NVMe controller at `0000:01:00.0` from entering D3cold, avoiding a known resume failure. |
 | ASUS ExpertBook B9406 and Zenbook UX5406AA with Panther Lake graphics | Use DPCD backlight control; on the B9406, also disable the panel-replay path that can leave the display stuck. |

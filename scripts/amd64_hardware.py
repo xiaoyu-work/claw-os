@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import tempfile
 
@@ -17,6 +19,8 @@ LOOPBACK = "elgato-v4l2loopback"
 RELAY = "elgato-v4l2-relayd"
 RELAY_SOURCE = "elgato-v4l2-relayd-source"
 LPMD = "intel-lpmd"
+ROG = "asus-rog"
+TUXEDO = "tuxedo-drivers"
 CAMLINK_ASSETS = Path(__file__).resolve().parents[1] / "packaging/camlink"
 
 
@@ -218,13 +222,91 @@ deb-systemd-helper purge intel_lpmd.service >/dev/null
 """)
 
 
+def rog(source, provenance, work, out):
+    dest = out / ROG
+    dest.mkdir(parents=True, exist_ok=True)
+    tree = work / "asusctl"
+    stage = work / "rog-package"
+    name = "claw-os-asus-rog"
+    extract(source[ROG], tree)
+    env = dict(os.environ, CARGO_TARGET_DIR=str(tree / "target"))
+    subprocess.run(["cargo", "build", "--locked", "--release", "--jobs", "4", "-p", "asusctl",
+                    "-p", "asusd", "-p", "asusd-user", "-p", "asus-shutdown"], env=env, cwd=tree, check=True)
+    for binary in ("asusctl", "asusd", "asusd-user", "asus-shutdown"):
+        stage_file(tree / "target/release" / binary, stage / "usr/bin" / binary, 0o755)
+    for filename in ("asusd.service", "asus-shutdown.service"):
+        unit = stage / "usr/lib/systemd/system" / filename
+        text = (tree / "data" / filename).read_text()
+        text = text.replace("[Unit]\n", '[Unit]\nConditionFirmware=smbios-field(sys_vendor = "ASUSTeK COMPUTER INC.")\n', 1)
+        write_file(unit, text)
+    rule = stage / "usr/lib/udev/rules.d/99-claw-asusd.rules"
+    write_file(rule, 'ACTION=="add", DRIVER=="asus-nb-wmi", '
+               'ATTR{[dmi/id]sys_vendor}=="ASUSTeK COMPUTER INC.", ATTR{[dmi/id]product_family}=="*ROG*", '
+               'TAG+="systemd", ENV{SYSTEMD_WANTS}+="asusd.service asus-shutdown.service"\n')
+    policy = stage / "usr/share/dbus-1/system.d/asusd.conf"
+    stage_file(tree / "data/asusd.conf", policy)
+    for group in ("adm", "users", "wheel"):
+        replace(policy, f"""    <policy group="{group}">
+        <allow send_destination="xyz.ljones.Asusd"/>
+        <allow receive_sender="xyz.ljones.Asusd"/>
+    </policy>
+""", "")
+    stage_file(tree / "rog-aura/data/aura_support.ron", stage / "usr/share/asusd/aura_support.ron")
+    doc = stage / "usr/share/doc" / name
+    stage_file(tree / "LICENSE", doc / "copyright")
+    package(stage, dest, name, "6.5.0-1+clawos1", "amd64",
+            "libc6, libgcc-s1, libusb-1.0-0, libudev1, dbus, systemd, udev",
+            "ASUS ROG notebook control daemon, shutdown service and CLI", {ROG: provenance[ROG]}, None)
+
+
+def tuxedo(source, provenance, work, out):
+    dest = out / "tuxedo-keyboard"
+    dest.mkdir(parents=True, exist_ok=True)
+    upstream = work / TUXEDO
+    stage = work / "tuxedo-package"
+    name = "tuxedo-drivers-dkms"
+    version = "4.25.0"
+    extract(source[TUXEDO], upstream)
+    modules = re.findall(r"'((?:DEST_MODULE_LOCATION|BUILT_MODULE_NAME|BUILT_MODULE_LOCATION)\[[0-9]+\]=\"[^\"\n]+\")'",
+                         (upstream / "package.yml").read_text())
+    if not any(line.endswith('="tuxedo_compatibility_check"') for line in modules):
+        raise ValueError("the upstream TUXEDO DKMS module list is missing")
+    target = stage / "usr/src" / f"{TUXEDO}-{version}"
+    target.parent.mkdir(parents=True)
+    shutil.copytree(upstream / "src", target)
+    write_file(target / "dkms.conf",
+               f'PACKAGE_NAME="{TUXEDO}"\nPACKAGE_VERSION="{version}"\nAUTOINSTALL="yes"\n'
+               'MAKE[0]="make -C ${kernel_source_dir} M=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}/build modules"\n'
+               'CLEAN="true"\n' + "\n".join(modules) + "\n")
+    for path in (upstream / "files/usr/lib/udev").rglob("*"):
+        if path.is_file():
+            stage_file(path, stage / path.relative_to(upstream / "files"))
+    stage_file(upstream / "LICENSE", stage / "usr/share/doc" / name / "copyright")
+    write_file(stage / "usr/lib/modprobe.d/60-claw-tuxedo-backlight.conf", "blacklist clevo_xsm_wmi\n")
+    write_file(stage / "DEBIAN/prerm", f"""#!/bin/sh
+set -e
+case "$1" in
+    remove|upgrade|deconfigure)
+        if [ -n "$(dkms status -m '{TUXEDO}' -v '{version}')" ]; then
+            dkms remove -m '{TUXEDO}' -v '{version}' --all
+        fi
+        ;;
+esac
+""", 0o755)
+    package(stage, dest, name, f"{version}-1+clawos1", "amd64", "dkms (>= 3.0.11), udev",
+            "Upstream compatibility-checked TUXEDO laptop modules", {TUXEDO: provenance[TUXEDO]},
+            f"""[ "$1" = configure ] || exit 0
+/usr/lib/dkms/common.postinst '{TUXEDO}' '{version}' /usr/share/{name} "" "${{2:-}}"
+""")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lock = json.loads(PIN.read_text())
-    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE, LPMD)
+    keys = (QMK, RECIPES, LOOPBACK, RELAY, RELAY_SOURCE, LPMD, ROG, TUXEDO)
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -234,6 +316,8 @@ def main():
         dell(source, lock["inputs"], work, args.output)
         camlink(source, lock["inputs"], work, args.output)
         intel_power(source, lock["inputs"], work, args.output)
+        rog(source, lock["inputs"], work, args.output)
+        tuxedo(source, lock["inputs"], work, args.output)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,16 @@
       "sha256": "d7613a600e3c596e9edcb1d79bf9645527a2346e09b69ac14607466a17c0406a",
       "source": "https://github.com/intel/intel-lpmd/tree/956df747e56aca1739b39bff8cff77e81758af9a"
     },
+    "asus-rog": {
+      "url": "https://codeload.github.com/OpenGamingCollective/asusctl/tar.gz/refs/tags/6.5.0",
+      "sha256": "edceeab080df670a3851af9815c082949e5c0d14be20fc41216d4a7e84d8fca8",
+      "source": "https://github.com/OpenGamingCollective/asusctl/tree/6.5.0"
+    },
+    "tuxedo-drivers": {
+      "url": "https://gitlab.com/tuxedocomputers/development/packages/tuxedo-drivers/-/archive/v4.25.0/tuxedo-drivers-v4.25.0.tar.gz",
+      "sha256": "96c7f16bf573952cb87d9c3070c1ae532e5018ce52e7fa1d47422f5e2c1e29b9",
+      "source": "https://gitlab.com/tuxedocomputers/development/packages/tuxedo-drivers/-/tree/a929f9ce143316b3b18d5f3fbf9cc54f0c1122e2"
+    },
     "t2-image": {
       "url": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/releases/download/v7.3.4-3/linux-image-7.3.4-3-t2-trixie_7.3.4-3_amd64.deb",
       "sha256": "348ea11aee07d6255f9491adac9bb9b7ec7196440efb1ad536b54f88d2f0ce0e",
