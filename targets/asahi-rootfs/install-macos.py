@@ -110,6 +110,8 @@ def run(mode):
         raise ValueError("installation cancelled; no partitions changed")
     # Asahi collects this file with its install data; keep credentials and local paths out of it.
     Path("installer.log").touch()
+    # The workspace stays private, but the new stub must be readable in macOS and Recovery.
+    os.umask(0o022)
     installer.main()
 
 
