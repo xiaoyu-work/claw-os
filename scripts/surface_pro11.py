@@ -1,9 +1,12 @@
 """Build model-specific input, camera, audio and resume support for Surface Pro 11."""
 
+import os
+import shutil
+import subprocess
 from textwrap import dedent
 
 from qualcomm_audio import compile_topology
-from surface_laptop7 import extract, replace, stage_file, write_file
+from surface_laptop7 import extract, patch, replace, stage_file, write_file
 
 
 def pro11_audio(profile, work, stage, source, name):
@@ -112,3 +115,70 @@ def pro11_package(release, source, provenance, work, out, package):
             "lsp-plugins-lv2 (>= 1.2.21)",
             "Input, cameras, audio and resume integration for Snapdragon Surface Pro 11",
             {key: provenance[key], "qualcomm-audioreach": provenance["qualcomm-audioreach"]}, None)
+
+
+def pro11_sensors_package(release, source, provenance, work, out, package):
+    recipe = "surface-snapdragon-kernel-fixes"
+    directory = "pkgbuilds/microsoft-surface-pro-11-sensors/"
+    recipes = work / "denali-sensors-recipes"
+    extract(source[recipe], recipes, prefixes=(directory, "LICENSE"))
+    stage = work / "denali-sensors"
+    name = "claw-os-surface-pro-11-sensors"
+    lib = stage / "usr/lib/surface-pro-11-sensors"
+    docs = stage / "usr/share/doc" / name
+    stage_file(recipes / "LICENSE", docs / "omarchy-pkgs.LICENSE")
+    recipes /= directory
+    pins = {recipe: provenance[recipe]}
+    env = os.environ.copy()
+
+    for project, fix, license_file in (
+        ("hexagonrpc", "0001-apps-std-support-writable-sensor-registry.patch", "COPYING"),
+        ("libssc", "0001-light-use-surface-color-sensor.patch", "LICENSE"),
+        ("iio-sensor-proxy", None, "COPYING"),
+    ):
+        key = f"denali-{project}"
+        pins[key] = provenance[key]
+        tree, build, install = (work / f"denali-{project}{suffix}" for suffix in ("", "-build", "-install"))
+        extract(source[key], tree)
+        if fix:
+            patch(tree, recipes / fix)
+        options = ["-Dssc-support=enabled"] if project == "iio-sensor-proxy" else []
+        subprocess.run(["meson", "setup", build, tree, "--prefix=/usr", "--libdir=lib",
+                        "--libexecdir=libexec", "--buildtype=release", *options], env=env, check=True)
+        subprocess.run(["meson", "compile", "-C", build], check=True)
+        subprocess.run(["meson", "install", "-C", build, "--destdir", install, "--no-rebuild"], check=True)
+        install /= "usr"
+        stage_file(tree / license_file, docs / f"{project}.LICENSE")
+        if project == "libssc":
+            pkgconfig = install / "lib/pkgconfig"
+            replace(pkgconfig / "libssc.pc", "prefix=/usr\n", f"prefix={install}\n")
+            env["PKG_CONFIG_PATH"] = str(pkgconfig)
+        if project != "iio-sensor-proxy":
+            library = "libssc" if project == "libssc" else "libhexagonrpc"
+            lib.mkdir(parents=True, exist_ok=True)
+            for path in (install / "lib").glob(f"{library}.so.*"):
+                shutil.copy2(path, lib / path.name, follow_symlinks=False)
+        if project != "libssc":
+            binary = "bin/hexagonrpcd" if project == "hexagonrpc" else "libexec/iio-sensor-proxy"
+            stage_file(install / binary, lib / binary.split("/")[-1], 0o755)
+
+    unit = stage / "usr/lib/systemd/system/surface-pro-11-sensors.service"
+    stage_file(recipes / unit.name, unit)
+    replace(unit, "Documentation=file:///usr/share/doc/microsoft-surface-pro-11-sensors/README.package.md\n", "")
+    stage_file(recipes / "surface-pro-11-sensors-sleep", stage / "usr/lib/systemd/system-sleep/surface-pro-11-sensors", 0o755)
+    write_file(stage / "usr/lib/systemd/system/iio-sensor-proxy.service.d/10-surface-pro-11-sensors.conf", """[Unit]
+After=surface-pro-11-sensors.service
+
+[Service]
+ExecStart=
+ExecStart=/usr/lib/surface-pro-11-sensors/iio-sensor-proxy
+Environment=LD_LIBRARY_PATH=/usr/lib/surface-pro-11-sensors
+RestrictAddressFamilies=AF_QIPCRTR
+""")
+    write_file(stage / "usr/lib/udev/rules.d/81-surface-pro-11-sensors.rules",
+               'SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", TEST=="/var/lib/surface-pro-11-sensors/root/sensors/sns_reg.conf", '
+               'ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-light", TAG+="systemd", '
+               'ENV{SYSTEMD_WANTS}+="surface-pro-11-sensors.service iio-sensor-proxy.service"\n')
+    package(stage, out, name, "1-1", "arm64", f"linux-image-{release}, iio-sensor-proxy, libc6, libglib2.0-0t64, "
+            "libgudev-1.0-0, libpolkit-gobject-1-0, libqmi-glib5, libprotobuf-c1, systemd, udev",
+            "Qualcomm ambient light sensor service for Snapdragon Surface Pro 11", pins, None)

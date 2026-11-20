@@ -32,7 +32,9 @@ if (( ${#mode[@]} )); then
     chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
         install -y --no-install-recommends build-essential pkg-config systemd-dev libudev-dev \
         gpg gpgv zstd device-tree-compiler patch meson ninja-build cmake ca-certificates alsa-utils m4 \
-        autoconf automake libtool libyaml-dev libbsd-dev python3-yaml \
+        autoconf automake libtool libyaml-dev libbsd-dev python3-yaml python3-dev \
+        libglib2.0-dev libqmi-glib-dev libqrtr-glib-dev libprotobuf-c-dev protobuf-c-compiler protobuf-compiler \
+        libgudev-1.0-dev libpolkit-gobject-1-dev \
         bc bison flex cpio pahole libdw-dev libelf-dev libssl-dev zlib1g-dev cryptsetup-initramfs </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
@@ -75,7 +77,7 @@ if [[ $platform == aarch64-qualcomm ]]; then
         install -m0644 "$artifacts"/{claw-os-surface-laptop-8-snapdragon,alsa-ucm-conf}_*.deb "$cache/"
         cache="$ROOTFS/usr/share/cos/driver-cache/surface-pro-11-snapdragon"
         install -d "$cache"
-        install -m0644 "$artifacts"/{claw-os-surface-snapdragon-iptsd,claw-os-surface-pro-11-snapdragon,alsa-ucm-conf}_*.deb "$cache/"
+        install -m0644 "$artifacts"/{claw-os-surface-snapdragon-iptsd,claw-os-surface-pro-11-snapdragon,claw-os-surface-pro-11-sensors,alsa-ucm-conf}_*.deb "$cache/"
         cache="$ROOTFS/usr/share/cos/driver-cache/qualcomm-model-audio"
         install -d "$cache"
         install -m0644 "$artifacts"/{claw-os-qualcomm-model-audio,alsa-ucm-conf}_*.deb "$cache/"

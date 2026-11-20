@@ -346,7 +346,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
         keys = [name for name in profile["surface"] if name != "surface-linux-source"]
     elif board_tools:
         keys = [*profile["romulus"], "qualcomm-audioreach", "qualcomm-firmware-index", "qualcomm-firmware-wudrivers",
-                "qualcomm-firmware-update-ca"]
+                "qualcomm-firmware-update-ca", "denali-hexagonrpc", "denali-libssc", "denali-iio-sensor-proxy"]
     else:
         keys = list(profile.get("native", [])) or [profile["kernel"]]
         keys += profile.get("surface", []) + profile.get("t2", [])
@@ -392,11 +392,12 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
             if board_tools:
                 from qualcomm_audio import audio_packages, laptop8_audio_package
                 from qualcomm_firmware import package_firmware_index
-                from surface_pro11 import pro11_package
+                from surface_pro11 import pro11_package, pro11_sensors_package
 
                 audio_packages(source, provenance, work, out, package)
                 laptop8_audio_package(profile["release"], source, provenance, work, out, package)
                 pro11_package(profile["release"], source, provenance, work, out, package)
+                pro11_sensors_package(profile["release"], source, provenance, work, out, package)
                 package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)

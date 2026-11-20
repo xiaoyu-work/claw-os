@@ -156,6 +156,21 @@
       "sha256": "15e5ac12fa47414f1f74482bb79d44eec20f6253a50a10128fe74bbd3ddc6747",
       "source": "https://github.com/linux-msm/audioreach-topology/tree/b4c1510fe6686ab8053715a02c34bec875ca5c6c"
     },
+    "denali-hexagonrpc": {
+      "url": "https://codeload.github.com/linux-msm/hexagonrpc/tar.gz/dd9ac70c026e1bad93e8cffa3801255b8ceb551e",
+      "sha256": "575bf34b8e2a51f851b078cc4b87db3c9bb121ce5849be765352b016756d63eb",
+      "source": "https://github.com/linux-msm/hexagonrpc/tree/dd9ac70c026e1bad93e8cffa3801255b8ceb551e"
+    },
+    "denali-libssc": {
+      "url": "https://codeberg.org/DylanVanAssche/libssc/archive/54dd13e36d65c21263cf5b0f4a70c230a77b26bc.tar.gz",
+      "sha256": "ff723a4aa39f692e3a53d6dbf64d5b7831c6a6839eb98a9dfb2acd5de2030357",
+      "source": "https://codeberg.org/DylanVanAssche/libssc/src/commit/54dd13e36d65c21263cf5b0f4a70c230a77b26bc"
+    },
+    "denali-iio-sensor-proxy": {
+      "url": "https://deb.debian.org/debian/pool/main/i/iio-sensor-proxy/iio-sensor-proxy_3.9.orig.tar.bz2",
+      "sha256": "19a4ae99b1b8af603fc789841025f9747bf445418d69ec7389e75adb6c8186bf",
+      "source": "https://gitlab.freedesktop.org/hadess/iio-sensor-proxy/-/tree/3.9"
+    },
     "qualcomm-firmware-index": {
       "url": "https://raw.githubusercontent.com/birkskyum/arewearmyet/f673791b98bc4334acf1d0c3d84127de27e804cc/data/firmware-sources.yaml",
       "sha256": "df3377355112c1a52422f7d34376848dfb68b4cb9be11207b2078cff2e1d0e45",

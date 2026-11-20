@@ -36,6 +36,17 @@ LAPTOP8_USB4 = {
         381680, 48268, "2fc59d3dba382135defd85dc303052c85aefb22001f675f33ade0b7f6a52963f",
     ),
 }
+DENALI_SENSOR_ARCHIVE = "microsoft-surfacepro11"
+DENALI_SENSOR_SHA256 = "8b299016027a4a87f50cf168f69ca1fb8dedc9a0612fcd6cff89b9bc64135ec2"
+DENALI_SENSOR_MEMBER = "SurfaceUpdate/prosnscfgcrd/json.lst"
+DENALI_SENSOR_ROOT = Path("/var/lib/surface-pro-11-sensors/root")
+DENALI_SENSOR_DAEMON = Path("/usr/lib/surface-pro-11-sensors/hexagonrpcd")
+DENALI_SENSOR_SOC = Path("/sys/devices/soc0")
+DENALI_SENSOR_CONFIG = {
+    "json.lst": "386957a9a6d613c081782969e07ead4051accc2bf0eed52ac4d42f0b60bc3e90",
+    "8380_crd_tcs3430_0.json": "68c98cfd3a5533b828ac67bc067933a0c3fd449690c5a8341c2e5f21413a4f15",
+    "sns_surface_color.json": "ee0f236b0a001ba73a7029ca7b08186131f1a7f6ef74855ab84557af964cbc3c",
+}
 MICROSOFT = "qcom/x1e80100/microsoft/"
 ROMULUS_PATH = MICROSOFT + "Romulus/"
 CDSP_DRIVER = "qcnspmcdmextcdsp8380"
@@ -336,6 +347,46 @@ def qualcomm_pending():
     return files, index["archives"]
 
 
+def denali_sensor_pending():
+    board = compatible()
+    return (b"microsoft,denali" in board and b"qcom,x1e80100" in board
+            and bool({b"microsoft,denali-lcd", b"microsoft,denali-oled"}.intersection(board))
+            and DENALI_SENSOR_DAEMON.is_file() and not DENALI_SENSOR_ROOT.exists()
+            and not DENALI_SENSOR_ROOT.is_symlink())
+
+
+def install_denali_sensor_config(source):
+    for name, digest in DENALI_SENSOR_CONFIG.items():
+        if not verified(source / name, digest):
+            raise ValueError(f"{name}: Surface Pro 11 sensor configuration differs from the qualified release")
+    root = DENALI_SENSOR_ROOT
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="denali-sensors-", dir=root.parent) as tmp:
+        stage = Path(tmp) / "root"
+        config = stage / "sensors/config"
+        config.mkdir(parents=True)
+        (stage / "sensors/persist/registry").mkdir(parents=True)
+        soc = stage / "socinfo"
+        soc.mkdir()
+        names = {path.name for path in source.iterdir() if path.suffix in {".json", ".pb", ".bin"}}
+        if not set((source / "json.lst").read_text(encoding="ascii").splitlines()) <= names:
+            raise ValueError("Surface Pro 11 sensor configuration is incomplete")
+        for name in sorted(names | {"json.lst"}):
+            with open_firmware(source / name) as payload, (config / name).open("wb") as target:
+                shutil.copyfileobj(payload, target)
+        with open_firmware(source / "sns_reg_config") as payload:
+            (stage / "sensors/sns_reg.conf").write_bytes(payload.read().replace(b"\r", b""))
+        for directory, fields in ((source, ("hw_platform", "platform_subtype", "platform_subtype_id", "platform_version")),
+                                  (DENALI_SENSOR_SOC, ("soc_id", "revision"))):
+            for name in fields:
+                value = (directory / name).read_text(encoding="ascii").strip()
+                if not value or not value.isprintable():
+                    raise ValueError(f"{name}: expected one Surface Pro 11 platform value")
+                (soc / name).write_text(value + "\n", encoding="ascii")
+        stage.rename(root)
+    print("Installed Surface Pro 11 ambient-light sensor configuration")
+
+
 def qualcomm_dsp_ready():
     board = compatible()
     if not any(name.startswith(b"qcom,") for name in board):
@@ -385,23 +436,27 @@ def unpack_oem(archive, kind, members, target):
     return paths
 
 
-def qualcomm_firmware(files, archives):
+def qualcomm_firmware(files, archives, *, denali_sensor=False):
     changed = False
     try:
-        while files:
+        while files or denali_sensor:
             choices = {}
             for name, (_, _, members) in files.items():
                 for archive, member in members.items():
                     choices.setdefault(archive, {})[name] = member
             # Prefer the download that covers the most missing files per byte.
-            selected = min(choices, key=lambda archive: (archives[archive][1] / len(choices[archive]), archive))
+            selected = (DENALI_SENSOR_ARCHIVE if denali_sensor else
+                        min(choices, key=lambda archive: (archives[archive][1] / len(choices[archive]), archive)))
             url, size, checksum, kind = archives[selected]
-            members = choices[selected]
+            members = choices.get(selected, {})
+            if denali_sensor and checksum != DENALI_SENSOR_SHA256:
+                raise ValueError("Surface Pro 11 sensor configuration requires the pinned Microsoft MSI")
+            extra = (DENALI_SENSOR_MEMBER,) if denali_sensor else ()
             with tempfile.TemporaryDirectory(prefix="claw-qualcomm-firmware-", dir="/var/tmp") as tmp:
                 work = Path(tmp)
                 archive = work / f"drivers.{'exe' if kind == 'inno' else kind}"
                 download(archive, url, size, checksum)
-                extracted = unpack_oem(archive, kind, members.values(), work / "files")
+                extracted = unpack_oem(archive, kind, (*members.values(), *extra), work / "files")
                 verified_files = {}
                 for name, member in members.items():
                     length, digest, _ = files[name]
@@ -415,6 +470,9 @@ def qualcomm_firmware(files, archives):
                     if source.stat().st_size != length or not verified(source, digest):
                         raise ValueError(f"{name}: matching firmware not found in {selected}")
                     verified_files[name] = source
+                if denali_sensor:
+                    install_denali_sensor_config(extracted[DENALI_SENSOR_MEMBER].parent)
+                    denali_sensor = False
                 for name, source in verified_files.items():
                     install(name, source, bytes.fromhex(files.pop(name)[1]))
                     changed = True
@@ -504,7 +562,7 @@ def main():
         return 0 if ready(ROMULUS_COMPUTE) else 1
     if args.qualcomm_oem_ready:
         pending, _ = qualcomm_pending()
-        return 1 if pending else 0
+        return 1 if pending or denali_sensor_pending() else 0
     if args.qualcomm_dsp_ready:
         return 0 if qualcomm_dsp_ready() else 1
     if args.qualcomm_oem:
@@ -514,7 +572,7 @@ def main():
             raise ValueError("use --surface-laptop-7 on a Snapdragon Surface Laptop 7")
         pending, archives = qualcomm_pending()
         if archives:
-            qualcomm_firmware(pending, archives)
+            qualcomm_firmware(pending, archives, denali_sensor=denali_sensor_pending())
         return
     if args.install_qnn is not None:
         if os.geteuid() != 0:
