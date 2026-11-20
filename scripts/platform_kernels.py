@@ -391,7 +391,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
     if "speaker_firmware" in profile:
         keys.append(profile["speaker_firmware"])
     if apple_tools:
-        keys += ["asahi-libfprint", "amd64-hardware-recipes"]
+        keys += ["asahi-libfprint", "asahi-speakersafetyd", "asahi-ucm", "amd64-hardware-recipes"]
     if "romulus" in profile and not board_tools:
         keys.append("surface-snapdragon-addresses")
     output.mkdir(parents=True, exist_ok=True)
@@ -473,7 +473,7 @@ def main():
     parser.add_argument("--debian-kernel", metavar="RELEASE",
                         help="build the Intel driver pack against an installed Debian kernel and its headers")
     parser.add_argument("--board-tools", action="store_true", help="build the native Snapdragon installer kernel and board tools")
-    parser.add_argument("--apple-tools", action="store_true", help="include the native Apple Silicon Touch ID companion")
+    parser.add_argument("--apple-tools", action="store_true", help="include native Apple Silicon speaker protection and Touch ID")
     args = parser.parse_args()
     if args.debian_kernel and (args.platform != "x86-surface-laptop-7-intel" or args.describe
                                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\+deb13(?:\+[0-9]+)?-amd64", args.debian_kernel)):

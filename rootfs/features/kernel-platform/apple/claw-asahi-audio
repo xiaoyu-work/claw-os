@@ -11,17 +11,18 @@ compatible=/sys/firmware/devicetree/base/compatible
 board=$(tr '\000' '\n' <"$compatible" | sed -n '1p')
 case "$board" in
     apple,j274|apple,j293|apple,j313|apple,j314[sc]|apple,j316[sc]|apple,j375[cd]|\
-    apple,j413|apple,j414[sc]|apple,j415|apple,j416[sc]|apple,j473|apple,j474s|apple,j475[cd]|apple,j493)
+    apple,j413|apple,j414[sc]|apple,j415|apple,j416[sc]|apple,j473|apple,j474s|apple,j475[cd]|apple,j493|\
+    apple,j504|apple,j514[scm]|apple,j516[scm]|apple,j575d|apple,j613|apple,j615)
         model=${board#apple,j}
-        model=${model%[scd]}
+        model=${model%[scdm]}
         ;;
     *) exit 1 ;;
 esac
 for profile in /usr/share/alsa/ucm2/conf.d/macaudio/*" J$model.conf"; do
     [ -s "$profile" ] || exit 1
 done
-[ -x /usr/bin/speakersafetyd ] &&
-    [ -s "/usr/share/speakersafetyd/apple/j$model.conf" ] &&
+[ -x /usr/lib/cos/asahi/speakersafetyd ] &&
+    [ -s "/usr/share/cos/asahi/speaker-protection/apple/j$model.conf" ] &&
     [ -s "/usr/share/cos/asahi/speakers/j$model.conf" ] &&
     [ -s /usr/share/wireplumber/wireplumber.conf.d/99-asahi.conf ] || exit 1
 case "$(/usr/bin/systemctl is-enabled speakersafetyd.service 2>/dev/null || true)" in
