@@ -203,10 +203,13 @@ def kernel_package(profile, source, provenance, work, out):
             version += "+clawos3" if source_build else "+clawos2"
         write_qualcomm_boards(boards)
     if "boot" in profile:
-        # Do not expose internal speakers without the matching speaker protection stack.
         config = stage / "usr/lib/modprobe.d/90-claw-apple-speakers.conf"
         config.parent.mkdir(parents=True)
-        config.write_text("blacklist snd_soc_macaudio\ninstall snd_soc_macaudio /bin/false\n", encoding="utf-8")
+        loader = f"/usr/lib/cos/asahi/claw-asahi-audio load '{release}'" if "asahi_audio" in profile else "/bin/false"
+        # Keep alias autoload blocked; the install hook admits only calibrated boards.
+        config.write_text(f"blacklist snd_soc_macaudio\ninstall snd_soc_macaudio {loader}\n", encoding="utf-8")
+        if "asahi_audio" in profile:
+            version += "+clawos1"
     package(
         stage, out, name, version, profile["arch"], "kmod, initramfs-tools, linux-base",
         f"Claw OS platform Linux kernel ({release})", provenance,
@@ -353,6 +356,8 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
     if "dtbs" in profile:
         keys.append(profile["dtbs"])
     keys += profile.get("gpu", []) + profile.get("boot", [])
+    if "asahi_audio" in profile:
+        keys.append(profile["asahi_audio"])
     if "romulus" in profile and not board_tools:
         keys.append("surface-snapdragon-addresses")
     output.mkdir(parents=True, exist_ok=True)
@@ -403,6 +408,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
                 nvidia_package(profile, source, provenance, work, out)
             if "boot" in profile:
                 apple_boot(profile, source, work, out)
+            if "asahi_audio" in profile:
+                from asahi_audio import asahi_audio_package
+
+                asahi_audio_package(profile, source, provenance, work, out, package)
         (out / "platform-sources.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
         for artifact in sorted(out.iterdir()):
             target = output / artifact.name

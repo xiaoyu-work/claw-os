@@ -83,6 +83,11 @@ if [[ $platform == aarch64-qualcomm ]]; then
         install -m0644 "$artifacts"/{claw-os-qualcomm-model-audio,alsa-ucm-conf}_*.deb "$cache/"
     fi
 fi
+if [[ $platform == aarch64-apple ]]; then
+    audio=("$artifacts"/claw-os-asahi-audio_*.deb)
+    test -f "${audio[0]}"
+    packages+=("$inside/${audio[0]##*/}" "triforce-lv2/$SUITE-backports")
+fi
 chroot "$ROOTFS" apt-get update -qq
 chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
     install -y --no-install-recommends "${packages[@]}" </dev/null
@@ -99,6 +104,7 @@ if [[ $platform == aarch64-apple ]]; then
     cp -a "$stage/boot-licenses" "$ROOTFS/usr/lib/cos/asahi/"
     install -Dm0755 "$apple/claw-asahi-import-firmware" "$ROOTFS/usr/sbin/claw-asahi-import-firmware"
     install -Dm0755 "$apple/claw-asahi-vendor-initramfs" "$ROOTFS/usr/share/initramfs-tools/hooks/claw-asahi-vendor"
+    chroot "$ROOTFS" /usr/bin/systemctl enable claw-asahi-audio.service
 fi
 
 if [[ $platform == aarch64-n1x ]]; then
