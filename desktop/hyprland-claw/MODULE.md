@@ -85,8 +85,10 @@ installs the session wiring and compiled compositor into the Desktop package.
 The same stage builds the private `claw-lockscreen` executable from pinned
 Swaylock source, with mandatory PAM and the dedicated `claw-desktop-lock`
 service. This build artifact is not a lock or display authorization.
-The lock screen identifies itself and explains how to unlock with the sign-in
-password; the ring shows keyboard and authentication feedback.
+[`locker-ui.c`](locker-ui.c) replaces the ring with a focused password field
+that masks typed characters. Enter and the Unlock button use the same local
+PAM submission. Authentication feedback and Caps Lock status stay on the
+lock surface; passwords never go to the renderer or the desktop Shell.
 The Root supervisor admits the locker through its private Wayland descriptor.
 The compositor requires that role for the session-lock protocol and does not
 provide an owner Lua recovery unlock. PAM alone releases a live lock;

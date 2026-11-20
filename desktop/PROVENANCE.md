@@ -20,8 +20,9 @@ records its own sources and licenses. No Omarchy source is used.
 
 The independent native locker builds the MIT-licensed Swaylock 1.8.6
 source pinned in [`build-locker.sh`](hyprland-claw/build-locker.sh). Its
-original notice ships with the binary. The local patch requires the
-dedicated PAM service for unlock and removes non-PAM recovery paths.
+original notice ships with the binary. Claw's native password form replaces
+the upstream indicator. The PAM patch requires the dedicated Claw service
+for unlock and removes non-PAM recovery paths.
 
 The [original Claw OS mountain wallpaper](../assets/brand/wallpaper/NOTICE)
 is restored unchanged for setup and sign-in under its existing CC BY-SA 4.0
