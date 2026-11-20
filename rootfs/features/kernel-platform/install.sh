@@ -22,7 +22,7 @@ stage=$(mktemp -d "$ROOTFS/tmp/claw-platform.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 if (( ${#mode[@]} )); then
     install -d "$stage"/{scripts,packaging}
-    for file in platform_kernels.py surface_laptop7.py qualcomm_firmware.py; do
+    for file in platform_kernels.py surface_laptop7.py qualcomm_audio.py qualcomm_firmware.py; do
         install -m0644 "$PROJECT_DIR/scripts/$file" "$stage/scripts/"
     done
     install -m0644 "$PROJECT_DIR"/packaging/platform-kernels.json \
@@ -70,6 +70,9 @@ if [[ $platform == aarch64-qualcomm ]]; then
         cache="$ROOTFS/usr/share/cos/driver-cache/surface-laptop-7-snapdragon"
         install -d "$cache"
         install -m0644 "$artifacts"/{claw-os-surface-snapdragon-touchpad,alsa-ucm-conf}_*.deb "$cache/"
+        cache="$ROOTFS/usr/share/cos/driver-cache/qualcomm-model-audio"
+        install -d "$cache"
+        install -m0644 "$artifacts"/{claw-os-qualcomm-model-audio,alsa-ucm-conf}_*.deb "$cache/"
     fi
 fi
 chroot "$ROOTFS" apt-get update -qq

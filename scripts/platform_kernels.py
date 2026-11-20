@@ -389,8 +389,10 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False):
 
                 snapdragon_packages(profile["release"], source, provenance, work, out, package, unpack)
             if board_tools:
+                from qualcomm_audio import audio_packages
                 from qualcomm_firmware import package_firmware_index
 
+                audio_packages(source, provenance, work, out, package)
                 package_firmware_index(source, provenance, work, out, package)
             if "gpu" in profile:
                 nvidia_package(profile, source, provenance, work, out)

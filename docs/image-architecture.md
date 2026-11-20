@@ -156,6 +156,8 @@ On other Snapdragon models, the installer carries a pinned OEM index, not the fi
 
 The default boot still leaves the DSP off. For other Snapdragon models on NVMe, GRUB offers **OEM DSP (experimental)** when the running device tree matches and all enabled PAS remote processors have their named firmware. Disconnect USB storage before choosing it. A DSP entry does not imply a matching ALSA speaker profile or a working NPU runtime.
 
+Calamares also installs the matched ALSA configuration on Acer Aspire 16 AI A16-11M, ASUS ProArt PZ13 HT5306QA, and ASUS Zenbook 14 UX3480QA. The Acer and ProArt profiles use byte-verified AudioReach topologies and keep the original model-specific speaker gain limits; the Zenbook uses the established two-speaker profile. The package does not change ALSA routing on unrelated machines.
+
 ### Experimental vendor kernels
 
 The generic Debian kernel remains the default. Build an opt-in image on a native Debian host with `sudo env CLAW_PLATFORM=<profile> ./build.sh iso-installer` or `iso-live`. Install the ISO tools plus `python3`, `gnupg`, `gpgv`, `zstd`, `kmod` and `device-tree-compiler` on the build host. The profile uses the exact kernel and matching initramfs for the ISO and the installed system rather than choosing an unrelated kernel by version.

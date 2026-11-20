@@ -31,6 +31,7 @@ CAMERA = (
     ("gstreamer1.0-libcamera", "0.7.1-1~bpo13+1"),
 )
 SNAPDRAGON = "surface-laptop-7-snapdragon"
+QCOM_AUDIO = "qualcomm-model-audio"
 BROADCOM = "broadcom-sta-wifi"
 BROADCOM_DRIVER = "broadcom-sta-dkms"
 BROADCOM_BACKPORT = "6.30.223.271-30~bpo13+1"
@@ -43,12 +44,14 @@ QCOM_FIRMWARE = "Snapdragon OEM firmware"
 PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
+    QCOM_AUDIO: (AUDIO,),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
     BROADCOM: ((BROADCOM_DRIVER, BROADCOM_FIXED),),
 }
 LOCAL_PACKAGES = {
     "surface-laptop-7-intel": "claw-os-surface-laptop-7",
     SNAPDRAGON: "claw-os-surface-snapdragon-touchpad",
+    QCOM_AUDIO: "claw-os-qualcomm-model-audio",
     BROADCOM: BROADCOM_DRIVER,
 }
 
@@ -61,6 +64,10 @@ def detect_board(sysfs, arch):
             return None
         if b"qcom,x1e80100" in compatible and {b"microsoft,romulus13", b"microsoft,romulus15"}.intersection(compatible):
             return SNAPDRAGON
+        if b"qcom,x1p42100" in compatible and {
+            b"acer,aspire-a16-11m", b"asus,proart-pz13-ht5306qa", b"asus,zenbook-14-ux3480qa",
+        }.intersection(compatible):
+            return QCOM_AUDIO
         return None
     if arch != "amd64":
         return None
@@ -206,7 +213,7 @@ def needs_firmware(job):
 def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
-    packs = [SNAPDRAGON] if arch == "arm64" else ["surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10"]
+    packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else ["surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10"]
     if arch == "amd64" and broadcom_headers():
         packs.append(BROADCOM)
     for pack in packs:

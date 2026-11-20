@@ -1,6 +1,5 @@
 """Build model-specific driver packages for Surface Laptop 7."""
 
-import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -162,7 +161,7 @@ if [[ ! -r $compatible ]] || ! tr '\\\\0' '\\\\n' <"$compatible" |
     if subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip() != "arm64":
         raise ValueError("build the Snapdragon touchpad package in an arm64 Debian 13 environment")
     fixes = work / "romulus-fixes"
-    extract(source["surface-snapdragon-fixes"], fixes, prefixes=("pkgbuilds/iptsd/", "pkgbuilds/alsa-ucm-conf/"))
+    extract(source["surface-snapdragon-fixes"], fixes, prefixes=("pkgbuilds/iptsd/",))
     stage = work / "romulus-touchpad"
     recipes = fixes / "pkgbuilds/iptsd"
     touchpad(source["surface-snapdragon-iptsd"], recipes, work, stage, recipes=recipes)
@@ -190,7 +189,6 @@ algorithms:
             f"linux-image-{release}, libc6, libgcc-s1, libstdc++6, libbsd0, libyaml-0-2, systemd, udev, curl, msitools",
             "Input, camera and FastRPC integration for Snapdragon Surface Laptop 7",
             {name: spec for name, spec in provenance.items() if name.startswith("surface-snapdragon-")}, None)
-    romulus_audio(fixes / "pkgbuilds/alsa-ucm-conf", work, out)
 
 
 def romulus_fastrpc(archive, work, stage, package_name):
@@ -215,32 +213,6 @@ def romulus_fastrpc(archive, work, stage, package_name):
                'SUBSYSTEM=="misc", KERNEL=="fastrpc-cdsp", TAG+="uaccess"\n'
                'SUBSYSTEM=="dma_heap", KERNEL=="system", TAG+="uaccess"\n')
     write_file(stage / "DEBIAN/triggers", "activate-noawait ldconfig\n")
-
-
-def romulus_audio(recipes, work, out):
-    subprocess.run(["apt-get", "download", "alsa-ucm-conf/trixie-backports"], cwd=work, check=True)
-    archive, = work.glob("alsa-ucm-conf_*.deb")
-    _, version, _ = archive.name.split("_")
-    version += "+clawos1"
-    stage = work / "romulus-audio"
-    subprocess.run(["dpkg-deb", "--raw-extract", archive, stage], check=True)
-    ucm = stage / "usr/share/alsa/ucm2/Qualcomm/x1e80100"
-    profiles = ("MICROSOFT-Surface-Laptop-7.conf", "SurfaceLaptop7-HiFi.conf")
-    for profile in profiles:
-        stage_file(recipes / profile, ucm / profile)
-    dispatcher = ucm / "x1e80100.conf"
-    replace(dispatcher, "|(Microsoft Corporation.*Surface.*Microsoft Surface Laptop, 7th Edition)", "")
-    with dispatcher.open("a") as stream:
-        stream.write("\n" + (recipes / "x1e80100-microsoft-surface-laptop-7.conf").read_text())
-    control = stage / "DEBIAN/control"
-    replace(control, "\nVersion: " + version.removesuffix("+clawos1") + "\n", f"\nVersion: {version}\n")
-    checksums = []
-    for path in sorted(stage.glob("usr/**/*")):
-        if path.is_file() and not path.is_symlink():
-            checksums.append(f"{hashlib.md5(path.read_bytes(), usedforsecurity=False).hexdigest()}  {path.relative_to(stage)}")
-    write_file(stage / "DEBIAN/md5sums", "\n".join(checksums) + "\n")
-    subprocess.run(["dpkg-deb", "--root-owner-group", "--build", stage,
-                    out / f"alsa-ucm-conf_{version}_all.deb"], check=True)
 
 
 def camera_packages(source, fixes, work, out):
