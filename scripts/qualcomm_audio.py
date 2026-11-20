@@ -7,26 +7,31 @@ from surface_laptop7 import extract, replace, stage_file, write_file
 
 
 TOPOLOGIES = (
-    ("X1P42100-ACER-Aspire-16-AI", "X1E80100-Romulus",
+    ("x1e80100", "X1P42100-ACER-Aspire-16-AI", "X1E80100-Romulus",
      "aa303397750f883ecaeed874d7547da658500596247676a6d405bf1ec43290b5"),
-    ("X1P42100-ASUS-ProArt-PZ13", "X1P42100-Microsoft-Surface-Pro-12in",
+    ("x1e80100", "X1P42100-ASUS-ProArt-PZ13", "X1P42100-Microsoft-Surface-Pro-12in",
      "89b731f3f98fc2b84699bca39a56e390925a44a26d5aea80382cf617e00c08d8"),
+    ("x1e80100", "X1E80100-HP-OMNIBOOK-3", "X1E80100-Romulus",
+     "aa303397750f883ecaeed874d7547da658500596247676a6d405bf1ec43290b5"),
+    ("glymur", "GLYMUR-ASUS-Zenbook-A16-UX3607OA", "GLYMUR-CRD",
+     "ea851335b7e8e13977a597250f2c0f1b6434d68f2248ae85a332e158fd64db57"),
 )
 
 
 def audio_packages(source, provenance, work, out, package):
     profile_dir = "pkgbuilds/alsa-ucm-conf/"
+    zenbook_dir = "pkgbuilds/asus-zenbook-a16-audio/"
     romulus = work / "romulus-ucm"
-    boards = work / "qualcomm-ucm"
+    recipes = work / "qualcomm-ucm"
     extract(source["surface-snapdragon-fixes"], romulus, prefixes=(profile_dir,))
-    extract(source["surface-snapdragon-kernel-fixes"], boards, prefixes=(profile_dir,))
-    romulus, boards = romulus / profile_dir, boards / profile_dir
+    extract(source["surface-snapdragon-kernel-fixes"], recipes, prefixes=(profile_dir, zenbook_dir, "LICENSE"))
+    romulus, boards, zenbook = romulus / profile_dir, recipes / profile_dir, recipes / zenbook_dir
 
     subprocess.run(["apt-get", "download", "alsa-ucm-conf/trixie-backports", "firmware-qcom-soc/trixie-backports"],
                    cwd=work, check=True)
     ucm_deb, = work.glob("alsa-ucm-conf_*.deb")
     _, base_version, _ = ucm_deb.name.split("_")
-    version = f"{base_version}+clawos2"
+    version = f"{base_version}+clawos3"
     ucm_stage = work / "combined-ucm"
     subprocess.run(["dpkg-deb", "--raw-extract", ucm_deb, ucm_stage], check=True)
     ucm2 = ucm_stage / "usr/share/alsa/ucm2"
@@ -37,6 +42,7 @@ def audio_packages(source, provenance, work, out, package):
         stage_file(boards / path, profiles / path)
     dispatcher = profiles / "x1e80100.conf"
     replace(dispatcher, "|(Microsoft Corporation.*Surface.*Microsoft Surface Laptop, 7th Edition)", "")
+    replace(dispatcher, "|(HP.*Omnibook X.*)|", "|(HP.*Omnibook X.*)|(HP.*Omni[Bb]ook 3[ -].*)|")
     with dispatcher.open("a") as stream:
         stream.write("\n" + (romulus / "x1e80100-microsoft-surface-laptop-7.conf").read_text())
         for path in ("x1e80100-acer-aspire-16-ai.conf", "x1e80100-asus-proart-pz13.conf"):
@@ -44,6 +50,9 @@ def audio_packages(source, provenance, work, out, package):
     for model in ("UX3480QA", "UX3480QAB"):
         alias = ucm2 / "conf.d/x1e80100" / f"ASUSTeKCOMPUTERINC.-Zenbook14{model}-1.0-{model}.conf"
         alias.symlink_to("../../Qualcomm/x1e80100/LENOVO-T14s.conf")
+    stage_file(zenbook / "ucm-asus-zenbook-a16.conf",
+               ucm2 / "conf.d/glymur/ASUSTeKCOMPUTERINC.-ZenbookA16UX3607OA-1.0-UX3607OA.conf")
+    stage_file(recipes / "LICENSE", ucm_stage / "usr/share/doc/alsa-ucm-conf/omarchy-pkgs.LICENSE")
     replace(ucm_stage / "DEBIAN/control", f"\nVersion: {base_version}\n", f"\nVersion: {version}\n")
     checksums = []
     for path in sorted(ucm_stage.glob("usr/**/*")):
@@ -58,13 +67,18 @@ def audio_packages(source, provenance, work, out, package):
     subprocess.run(["dpkg-deb", "-x", firmware_deb, firmware], check=True)
     stage = work / "qualcomm-model-audio"
     name = "claw-os-qualcomm-model-audio"
-    for model, stock, expected in TOPOLOGIES:
-        topology = firmware / "usr/lib/firmware/qcom/x1e80100" / f"{stock}-tplg.bin"
+    for family, model, stock, expected in TOPOLOGIES:
+        topology = firmware / "usr/lib/firmware/qcom" / family / f"{stock}-tplg.bin"
         if hashlib.sha256(topology.read_bytes()).hexdigest() != expected:
             raise ValueError(f"{stock}: topology has changed from the qualified board profile")
-        stage_file(topology, stage / "usr/lib/firmware/updates/qcom/x1e80100" / f"{model}-tplg.bin")
+        stage_file(topology, stage / "usr/lib/firmware/updates/qcom" / family / f"{model}-tplg.bin")
+    stage_file(zenbook / "60-asus-zenbook-a16-soundwire.rules",
+               stage / "usr/lib/udev/rules.d/60-asus-zenbook-a16-soundwire.rules")
+    stage_file(zenbook / "60-asus-zenbook-a16-soft-volume.conf",
+               stage / "usr/share/wireplumber/wireplumber.conf.d/60-asus-zenbook-a16-soft-volume.conf")
+    stage_file(recipes / "LICENSE", stage / "usr/share/doc" / name / "omarchy-pkgs.LICENSE")
     stage_file(firmware / "usr/share/doc/firmware-qcom-soc/copyright",
                stage / "usr/share/doc" / name / "firmware-qcom-soc.copyright")
-    package(stage, out, name, "1-1", "all", f"alsa-ucm-conf (>= {version})",
-            "Matched AudioReach topologies for supported Acer and ASUS Snapdragon models",
+    package(stage, out, name, "1-2", "all", f"alsa-ucm-conf (>= {version})",
+            "Matched AudioReach topologies for supported Acer, ASUS and HP Snapdragon models",
             {key: provenance[key] for key in ("surface-snapdragon-fixes", "surface-snapdragon-kernel-fixes")}, None)

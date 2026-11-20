@@ -162,7 +162,7 @@ On other Snapdragon models, the installer carries a pinned OEM index, not the fi
 
 The default boot still leaves the DSP off. For other Snapdragon models on NVMe, GRUB offers **OEM DSP (experimental)** when the running device tree matches and all enabled PAS remote processors have their named firmware. Disconnect USB storage before choosing it. A DSP entry does not imply a matching ALSA speaker profile or a working NPU runtime.
 
-Calamares also installs the matched ALSA configuration on Acer Aspire 16 AI A16-11M, ASUS ProArt PZ13 HT5306QA, and ASUS Zenbook 14 UX3480QA. The Acer and ProArt profiles use byte-verified AudioReach topologies and keep the original model-specific speaker gain limits; the Zenbook uses the established two-speaker profile. The package does not change ALSA routing on unrelated machines.
+Calamares also installs matched ALSA configuration on Acer Aspire 16 AI A16-11M, ASUS ProArt PZ13 HT5306QA, ASUS Zenbook 14 UX3480QA, ASUS Zenbook A16 UX3607OA, and Snapdragon X HP OmniBook 3 14-hz0 and 16-bz0. The OmniBook uses the ThinkPad T14s topology verified for the 14-inch model; the 16-bz0 has the same device-tree audio wiring. This does not cover the SC7280-based 16-ct0. The Zenbook A16 uses software volume and keeps its speaker SoundWire controllers awake to prevent audio dropouts. The package does not change ALSA routing on unrelated machines.
 
 ### Experimental vendor kernels
 
