@@ -49,6 +49,7 @@ setup_cpu() {
 
 case "$#:${1:-}" in
     1:boot) configure_boot ;;
+    1:gpu-memory) exec /usr/lib/cos/hw/claw-n1x-gpu-memory ;;
     1:cpu) setup_cpu /sys/devices/system/cpu/cpufreq/policy* ;;
     2:cpu)
         case "$2" in
@@ -56,5 +57,8 @@ case "$#:${1:-}" in
         esac
         setup_cpu "/sys/devices/system/cpu/cpu$2/cpufreq"
         ;;
-    *) exit 2 ;;
+    *)
+        echo "Usage: claw-n1x-setup boot | cpu [CPU] | gpu-memory" >&2
+        exit 2
+        ;;
 esac

@@ -94,9 +94,12 @@ if [[ $platform == aarch64-n1x ]]; then
     n1x="$PROJECT_DIR/rootfs/features/kernel-platform/n1x"
     install -Dm0644 "$n1x/n1x-boot.sh" "$ROOTFS/usr/lib/cos/hw/n1x-boot.sh"
     install -Dm0755 "$n1x/claw-n1x-setup" "$ROOTFS/usr/lib/cos/hw/claw-n1x-setup"
+    install -Dm0755 "$n1x/claw-n1x-gpu-memory" "$ROOTFS/usr/lib/cos/hw/claw-n1x-gpu-memory"
+    install -Dm0755 "$n1x/claw-n1x-backlight" "$ROOTFS/usr/share/initramfs-tools/scripts/init-premount/claw-n1x-backlight"
     install -Dm0644 "$n1x/70-claw-n1x-cppc.rules" "$ROOTFS/usr/lib/udev/rules.d/70-claw-n1x-cppc.rules"
     install -Dm0644 "$n1x/claw-n1x-cppc.service" "$ROOTFS/usr/lib/systemd/system/claw-n1x-cppc.service"
     chroot "$ROOTFS" /usr/bin/systemctl enable claw-n1x-cppc.service
+    chroot "$ROOTFS" /usr/sbin/update-initramfs -u -k "$release"
 fi
 
 if [[ $platform == aarch64-gb10 ]]; then

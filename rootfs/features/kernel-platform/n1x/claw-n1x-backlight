@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+[ "${1:-}" != prereqs ] || exit 0
+
+backlight=/sys/class/backlight/nvidia_0
+[ -w "$backlight/brightness" ] && [ -r "$backlight/max_brightness" ] || exit 0
+read -r level <"$backlight/brightness"
+read -r maximum <"$backlight/max_brightness"
+case "$level:$maximum" in
+    *[!0-9:]*) exit 0 ;;
+esac
+[ -n "$level" ] && [ -n "$maximum" ] || exit 0
+if [ "$level" -lt 60 ]; then
+    if [ "$maximum" -lt 60 ]; then
+        limit=$maximum
+    else
+        limit=60
+    fi
+    [ "$level" -ge "$limit" ] || printf '%s\n' "$limit" >"$backlight/brightness"
+fi

@@ -1,0 +1,68 @@
+#!/usr/bin/python3
+"""Use the documented NVIDIA N1x GPU reservation on supported firmware."""
+
+import os
+from pathlib import Path
+import subprocess
+
+
+VARIABLE = Path("/sys/firmware/efi/efivars/EXPOSED_DISP_FRM-4b086294-0740-4f71-a7b5-85a329c7ec5f")
+LAYOUTS = tuple(bytes.fromhex(layout) for layout in (
+    "00 00 00 20 00 00 00 00 00 00 00 00 01 00 00 00",
+    "00 00 00 40 00 00 00 00 00 00 00 00 01 00 00 00",
+))
+
+
+def new_payload(current):
+    if (len(current) != 25 or current[8:24] not in LAYOUTS or current[24] not in (0, 1)
+            or int.from_bytes(current[4:8], "little") not in (4096, 32768, 64000)):
+        raise ValueError("the firmware variable is not a known NVIDIA N1x layout")
+    return current[:4] + (4096).to_bytes(4, "little") + current[8:24] + b"\x01"
+
+
+def read_variable():
+    with os.fdopen(os.open(VARIABLE, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        return stream.read(26)
+
+
+def write_variable(expected, payload):
+    attributes = subprocess.check_output(["/usr/bin/lsattr", "-d", VARIABLE], text=True)
+    restore = "i" in attributes.split()[0]
+    if restore:
+        subprocess.run(["/usr/bin/chattr", "-i", VARIABLE], check=True)
+    try:
+        if read_variable() != expected:
+            raise ValueError("the firmware variable changed during setup")
+        fd = os.open(VARIABLE, os.O_WRONLY | os.O_NOFOLLOW)
+        try:
+            if os.write(fd, payload) != len(payload):
+                raise OSError("the firmware did not accept the complete variable")
+        finally:
+            os.close(fd)
+    finally:
+        if restore:
+            subprocess.run(["/usr/bin/chattr", "+i", VARIABLE], check=True)
+    if read_variable() != payload:
+        raise OSError("the firmware did not retain the new variable")
+
+
+def main():
+    if os.geteuid() != 0:
+        raise ValueError("GPU memory configuration requires root")
+    filesystem = subprocess.check_output(["/usr/bin/stat", "-f", "-c", "%T", VARIABLE.parent], text=True)
+    if filesystem.strip() != "efivarfs":
+        raise ValueError("EFI variables are not available")
+    current = read_variable()
+    payload = new_payload(current)
+    if current != payload:
+        write_variable(current, payload)
+        print("Set N1x GPU reservation to 4 GiB; reboot to apply.")
+    else:
+        print("N1x GPU reservation is already set to 4 GiB.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"Claw OS N1x: {error}") from error
