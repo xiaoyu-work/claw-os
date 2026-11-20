@@ -489,7 +489,7 @@ def build(lock, profile, cache, output, debian_release=None, board_tools=False, 
             if profile.get("asahi_vulkan"):
                 from asahi_vulkan import build_asahi_vulkan
 
-                build_asahi_vulkan(profile, source, provenance, work, out, package, unpack)
+                build_asahi_vulkan(profile, source, provenance, work, out, package)
             if "asahi_audio" in profile:
                 from asahi_audio import asahi_audio_package
 

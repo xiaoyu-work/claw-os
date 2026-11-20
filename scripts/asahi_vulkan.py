@@ -1,5 +1,6 @@
-"""Package the signed Aurora Vulkan driver without replacing Debian Mesa."""
+"""Build Aurora Honeykrisp from source without replacing Debian Mesa."""
 
+import os
 import shutil
 import subprocess
 from pathlib import PurePosixPath
@@ -7,29 +8,47 @@ from pathlib import PurePosixPath
 from surface_laptop7 import extract, stage_file, write_file
 
 
-INPUTS = ("asahi-vulkan", "asahi-vulkan-source", "asahi-display-info")
+INPUTS = ("asahi-vulkan-source",)
 DRIVER = PurePosixPath("/usr/lib/aarch64-linux-gnu/libvulkan_asahi.so")
 
 
-def build_asahi_vulkan(profile, source, provenance, work, out, package, unpack):
+def compile_honeykrisp(archive, work):
+    upstream = work / "mesa"
+    tools = work / "mesa-tools"
+    build = work / "mesa-build"
+    extract(archive, upstream)
+    env = dict(os.environ, PATH=f"/usr/lib/llvm-19/bin:{os.environ['PATH']}")
+    options = [
+        "--prefix=/usr", "--libdir=lib/aarch64-linux-gnu", "--buildtype=release", "--wrap-mode=nodownload",
+        "-Dplatforms=x11,wayland", "-Dgallium-drivers=", "-Dvulkan-drivers=asahi",
+        "-Degl=disabled", "-Dgbm=disabled", "-Dglx=disabled", "-Dgles1=disabled", "-Dgles2=disabled",
+        "-Ddisplay-info=enabled", "-Dexpat=enabled", "-Dzstd=enabled",
+        "-Dlibunwind=disabled", "-Dvalgrind=disabled", "-Dbuild-tests=false",
+    ]
+    shader_tools = {
+        "mesa_clc": "src/compiler/clc/mesa_clc",
+        "vtn_bindgen2": "src/compiler/spirv/vtn_bindgen2",
+        "asahi_clc": "src/asahi/clc/asahi_clc",
+    }
+    subprocess.run(["meson", "setup", tools, upstream, *options, "-Dllvm=enabled"], env=env, check=True)
+    subprocess.run(["ninja", "-C", tools, "-j8", *shader_tools.values()], env=env, check=True)
+    native = work / "mesa-tools.ini"
+    native.write_text("[binaries]\n" + "".join(f"{name} = '{tools / path}'\n" for name, path in shader_tools.items()))
+    # The OpenCL/LLVM tools compile shaders at build time, not on the installed system.
+    subprocess.run(["meson", "setup", build, upstream, *options, "--native-file", native, "-Dllvm=disabled",
+                    "-Dspirv-tools=disabled", "-Dmesa-clc=system", "-Dprecomp-compiler=system"], env=env, check=True)
+    driver = "src/asahi/vulkan/libvulkan_asahi.so"
+    subprocess.run(["ninja", "-C", build, "-j8", driver], env=env, check=True)
+    return upstream, build / driver
+
+
+def package_honeykrisp(profile, upstream, driver, provenance, work, out, package):
     name = "claw-os-asahi-vulkan"
     stage = work / name
-    upstream = work / "asahi-vulkan"
-    member = "usr/lib/libvulkan_asahi.so"
-    unpack(source["asahi-vulkan"], upstream, lambda path: path == member)
-    stage_file(upstream / member, stage / DRIVER.relative_to("/"))
-    extract(source["asahi-vulkan-source"], upstream, prefixes=("docs/license.rst", "licenses/"))
+    stage_file(driver, stage / DRIVER.relative_to("/"))
     doc = stage / "usr/share/doc" / name
     stage_file(upstream / "docs/license.rst", doc / "copyright")
     shutil.copytree(upstream / "licenses", doc / "licenses")
-
-    display = source["asahi-display-info"]
-    fields = subprocess.check_output(
-        ["dpkg-deb", "-f", display, "Package", "Version", "Architecture"], text=True
-    ).splitlines()
-    if fields != ["Package: libdisplay-info3", "Version: 0.3.0-1", "Architecture: arm64"]:
-        raise ValueError("the Vulkan display-info dependency does not match the pinned Debian ARM64 package")
-    stage_file(display, out / "libdisplay-info3_0.3.0-1_arm64.deb")
 
     # Debian's ICD already loads this SONAME. Keep the diverted copy out of
     # ldconfig's scan so it cannot compete with the installed driver.
@@ -42,16 +61,21 @@ case "$1" in
 esac
 """, 0o755)
     release = profile["release"].lower()
-    package(stage, out, name, "26.3.0~devel20261107+clawos1", "arm64",
+    package(stage, out, name, "26.3.0~devel20261107+clawos2", "arm64",
             f"linux-image-{release} (= {release}+clawos2), "
-            "mesa-vulkan-drivers (>= 26.1.6-1~bpo13+1), libvulkan1, libdisplay-info3 (= 0.3.0-1), "
+            "mesa-vulkan-drivers (>= 26.1.6-1~bpo13+1), libvulkan1, libdisplay-info2 (>= 0.2.0), "
             "libc6 (>= 2.38), libstdc++6 (>= 12), libgcc-s1, libdrm2 (>= 2.4.124), libexpat1, libudev1, "
             "libwayland-client0 (>= 1.26.0), libx11-xcb1, libxcb1, libxcb-dri3-0 (>= 1.17), "
             "libxcb-present0 (>= 1.17), libxcb-xfixes0, libxcb-sync1, libxcb-randr0, "
             "libxcb-shm0, libxcb-keysyms1, libxshmfence1, zlib1g, libzstd1",
             "Aurora Honeykrisp Vulkan for the matching Apple Silicon kernel",
-            {key: provenance[key] for key in INPUTS}, None,
+            {"asahi-vulkan-source": provenance["asahi-vulkan-source"]}, None,
             f"""case "$1" in
     remove|abort-install) {divert} --remove {DRIVER} ;;
 esac
 """)
+
+
+def build_asahi_vulkan(profile, source, provenance, work, out, package):
+    upstream, driver = compile_honeykrisp(source["asahi-vulkan-source"], work)
+    package_honeykrisp(profile, upstream, driver, provenance, work, out, package)

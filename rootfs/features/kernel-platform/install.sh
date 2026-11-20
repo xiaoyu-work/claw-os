@@ -55,7 +55,13 @@ elif [[ ${mode[0]:-} == --apple-tools ]]; then
         bc bison flex swig python3-pyelftools device-tree-compiler libgnutls28-dev \
         clang-22 llvm-22 lld-22 \
         "cargo/$SUITE-backports" "rustc/$SUITE-backports" "libasound2-dev/$SUITE-backports" \
-        libglib2.0-dev libgusb-dev libpixman-1-dev libssl-dev libudev-dev libgudev-1.0-dev systemd-dev </dev/null
+        libglib2.0-dev libgusb-dev libpixman-1-dev libssl-dev libudev-dev libgudev-1.0-dev systemd-dev \
+        cmake python3-mako python3-yaml python3-packaging \
+        llvm-19-dev clang-19 libclang-19-dev libclang-cpp19-dev libllvmspirvlib-19-dev spirv-tools glslang-tools \
+        libdrm-dev libexpat1-dev libvulkan-dev libdisplay-info-dev zlib1g-dev libzstd-dev libelf-dev \
+        "libwayland-dev/$SUITE-backports" "wayland-protocols/$SUITE-backports" \
+        libx11-xcb-dev libxcb-dri3-dev libxcb-present-dev libxcb-xfixes0-dev libxcb-randr0-dev libxcb-sync-dev \
+        libxcb-keysyms1-dev libxcb-shm0-dev libxrandr-dev libxshmfence-dev </dev/null
     chroot "$ROOTFS" env PYTHONDONTWRITEBYTECODE=1 python3 "${stage#"$ROOTFS"}/scripts/platform_kernels.py" \
         "$platform" "${mode[@]}" --output "${stage#"$ROOTFS"}/packages"
     artifacts="$stage/packages"
@@ -104,7 +110,7 @@ if [[ $platform == aarch64-qualcomm ]]; then
     fi
 fi
 if [[ $platform == aarch64-apple ]]; then
-    for file in "$artifacts"/{claw-os-asahi-audio,claw-os-asahi-touch-id,claw-os-asahi-vulkan,libdisplay-info3}_*.deb; do
+    for file in "$artifacts"/{claw-os-asahi-audio,claw-os-asahi-touch-id,claw-os-asahi-vulkan}_*.deb; do
         test -f "$file"
         packages+=("$inside/${file##*/}")
     done

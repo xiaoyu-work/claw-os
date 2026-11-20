@@ -224,20 +224,10 @@
       "sha256": "67335b3fb832ab68bbde95e9f9b3808ace0fff96438786f34227dd5cdc9fe495",
       "source": "https://github.com/aurora-silicon/u-boot/tree/d30213eadcaa886f4206d7661b61bc6cf7837828"
     },
-    "asahi-vulkan": {
-      "file": "vulkan-aurora-1:26.3.0_devel.20261107.231485.b7b03c5b3b8-3-aarch64.pkg.tar.zst",
-      "sha256": "02be6c560c4f69a35eafb92502ea9cdf7ce74311c732ee5cd5e5479d4306c93b",
-      "source": "https://github.com/omacom/mesa/tree/b7b03c5b3b8abe1e040d6056dc62c01b02d3639c"
-    },
     "asahi-vulkan-source": {
       "url": "https://codeload.github.com/omacom/mesa/tar.gz/b7b03c5b3b8abe1e040d6056dc62c01b02d3639c",
       "sha256": "924e5a7b57f61c6ccee4b538959a3d66d21a299f8346a9b576626c682a77ca5b",
       "source": "https://github.com/omacom/mesa/tree/b7b03c5b3b8abe1e040d6056dc62c01b02d3639c"
-    },
-    "asahi-display-info": {
-      "url": "https://snapshot.debian.org/file/cdaac79bcadd2e49cbd2678a8a8afb906aba7c30",
-      "sha256": "a8b779f0f772b553b1d8e6290c21fffcded6c769a1b796edd0cfdde0fff34a1a",
-      "source": "https://snapshot.debian.org/package/libdisplay-info/0.3.0-1/"
     },
     "asahi-audio": {
       "url": "https://codeload.github.com/AsahiLinux/asahi-audio/tar.gz/f8f20535c9af07fe92ec8fc5f11262fb6671d371",
