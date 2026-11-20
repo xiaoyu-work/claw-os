@@ -32,6 +32,8 @@ CAMERA = (
 )
 SNAPDRAGON = "surface-laptop-7-snapdragon"
 QCOM_AUDIO = "qualcomm-model-audio"
+FRAMEWORK = "framework-laptop-16"
+DELL_HAPTICS = "dell-xps-haptics"
 BROADCOM = "broadcom-sta-wifi"
 BROADCOM_DRIVER = "broadcom-sta-dkms"
 BROADCOM_BACKPORT = "6.30.223.271-30~bpo13+1"
@@ -45,6 +47,8 @@ PACKS = {
     "surface-laptop-7-intel": (AUDIO, *CAMERA),
     SNAPDRAGON: (AUDIO, *CAMERA),
     QCOM_AUDIO: (AUDIO,),
+    FRAMEWORK: (),
+    DELL_HAPTICS: (),
     "lenovo-yoga-pro-7-14iah10": (AUDIO,),
     BROADCOM: ((BROADCOM_DRIVER, BROADCOM_FIXED),),
 }
@@ -52,6 +56,8 @@ LOCAL_PACKAGES = {
     "surface-laptop-7-intel": "claw-os-surface-laptop-7",
     SNAPDRAGON: "claw-os-surface-snapdragon-touchpad",
     QCOM_AUDIO: "claw-os-qualcomm-model-audio",
+    FRAMEWORK: "claw-os-framework-qmk-hid",
+    DELL_HAPTICS: "claw-os-dell-xps-haptics",
     BROADCOM: BROADCOM_DRIVER,
 }
 
@@ -107,8 +113,18 @@ def detect(sysfs=Path("/sys")):
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
     board = detect_board(sysfs, arch)
     packs = [board] if board else []
-    if arch == "amd64" and broadcom_headers() and has_broadcom_sta_wifi(sysfs):
-        packs.append(BROADCOM)
+    if arch == "amd64":
+        if broadcom_headers() and has_broadcom_sta_wifi(sysfs):
+            packs.append(BROADCOM)
+        dmi = sysfs / "class/dmi/id"
+        if (dmi / "sys_vendor").is_file():
+            vendor = (dmi / "sys_vendor").read_text().strip()
+            model = " ".join(path.read_text().strip() for path in
+                             (dmi / "product_name", dmi / "product_family") if path.is_file())
+            if vendor == "Framework" and "Laptop 16" in model:
+                packs.append(FRAMEWORK)
+            if vendor == "Dell Inc." and "XPS" in model and (sysfs / "bus/i2c/devices/i2c-VEN_06CB:00").exists():
+                packs.append(DELL_HAPTICS)
     return packs
 
 
@@ -213,7 +229,9 @@ def needs_firmware(job):
 def stage_offline():
     apt("update", "-qq", "-o", "APT::Update::Error-Mode=any")
     arch = subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip()
-    packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else ["surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10"]
+    packs = [SNAPDRAGON, QCOM_AUDIO] if arch == "arm64" else [
+        "surface-laptop-7-intel", "lenovo-yoga-pro-7-14iah10", FRAMEWORK, DELL_HAPTICS,
+    ]
     if arch == "amd64" and broadcom_headers():
         packs.append(BROADCOM)
     for pack in packs:

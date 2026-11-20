@@ -4,6 +4,17 @@
   "key_sha256": "15d6aac44df688165b2ea35fe0b23af239bbc66a6909c10a5c219e8d94b707de",
   "fingerprint": "40DFB630FF42BCFFB047046CF0134EE680CAC571",
   "inputs": {
+    "framework-qmk-hid": {
+      "archive": "https://pkgs.omarchy.org/edge/x86_64/",
+      "file": "qmk-hid-0.1.13-2-x86_64.pkg.tar.zst",
+      "sha256": "3b190898bf2002ea3b3628234283da3603585e0ac3b87fd51a374f7e494a2c60",
+      "source": "https://github.com/FrameworkComputer/qmk_hid/tree/v0.1.13"
+    },
+    "dell-xps-haptics": {
+      "url": "https://codeload.github.com/omacom/omarchy-pkgs/tar.gz/b0ff9ed3b6b2b8a237a0266541b670e7faec7883",
+      "sha256": "f918f4c24933c6ea7c9d1a27e60e07c06d7172a900186f824d70415203dbe189",
+      "source": "https://github.com/omacom/omarchy-pkgs/tree/b0ff9ed3b6b2b8a237a0266541b670e7faec7883/pkgbuilds/dell-xps-touchpad-haptics"
+    },
     "t2-image": {
       "url": "https://github.com/t2linux/T2-Debian-and-Ubuntu-Kernel/releases/download/v7.3.4-3/linux-image-7.3.4-3-t2-trixie_7.3.4-3_amd64.deb",
       "sha256": "348ea11aee07d6255f9491adac9bb9b7ec7196440efb1ad536b54f88d2f0ce0e",

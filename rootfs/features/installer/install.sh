@@ -41,6 +41,19 @@ EOF
 chmod 0440 "$ROOTFS/etc/sudoers.d/cos-installer"
 
 if [ -x "$ROOTFS/usr/libexec/claw-oobe" ]; then
+    if [ "$DEB_ARCH" = amd64 ]; then
+        hardware=$(mktemp -d "$ROOTFS/tmp/claw-amd64-hardware.XXXXXX")
+        trap 'rm -rf -- "$hardware"' EXIT
+        install -d "$hardware"/{scripts,packaging}
+        install -m0644 "$PROJECT_DIR"/scripts/{amd64_hardware,platform_kernels,surface_laptop7}.py "$hardware/scripts/"
+        install -m0644 "$PROJECT_DIR/packaging/platform-kernels.json" "$hardware/packaging/"
+        chroot "$ROOTFS" apt-get -qq update
+        chroot "$ROOTFS" env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Use-Pty=0 \
+            install -y --no-install-recommends gpg gpgv zstd </dev/null
+        inside=${hardware#"$ROOTFS"}
+        chroot "$ROOTFS" python3 -B "$inside/scripts/amd64_hardware.py" \
+            --cache "$inside/cache" --output /usr/share/cos/driver-cache
+    fi
     chroot "$ROOTFS" /usr/lib/cos/hw/claw-driver-setup --stage-offline
 fi
 

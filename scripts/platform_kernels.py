@@ -48,7 +48,7 @@ def inputs(lock, names, cache, stage):
     for name in names:
         spec = lock["inputs"][name]
         archive = "file" in spec
-        url = lock["archive"] + spec["file"] if archive else spec["url"]
+        url = spec.get("archive", lock["archive"]) + spec["file"] if archive else spec["url"]
         path = fetch(url, cache, stage, spec["sha256"])
         if archive:
             signature = fetch(url + ".sig", cache, stage)

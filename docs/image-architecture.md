@@ -96,7 +96,8 @@ The following workarounds are adapted from [Omarchy's hardware setup and udev ru
 
 | Hardware | Workaround |
 | --- | --- |
-| Framework Laptop 16 keyboard (`32ac:0012`) | Let the active local seat access the keyboard's QMK HID device. This does not install a QMK utility. |
+| Framework Laptop 16 keyboard (`32ac:0012`) | Let the active local seat access the keyboard's QMK HID device. The matched installer pack adds `qmk_hid`. |
+| Dell XPS with the Synaptics haptic touchpad (`VEN_06CB:00`) | Install the haptic daemon and presets offline. Use `sudo dell-xps-touchpad-haptics set low`, `mid`, or `high` to change the system setting. |
 | ASUS ROG Flow Z13 GZ302 | Classify the detachable keyboard's touchpad as internal so libinput can disable it while typing. |
 | ASUS ExpertBook B9406 with the PixArt `093a:4f05` touchpad | Ignore the pad's binary pressure axes so libinput can retain motion events. |
 | Intel `MacBook8,1`, `MacBook9,1`, `MacBook10,1`, and `MacBookPro13,1`–`14,3` | Prevent the NVMe controller at `0000:01:00.0` from entering D3cold, avoiding a known resume failure. |
