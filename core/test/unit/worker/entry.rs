@@ -135,7 +135,7 @@ fn generic_admission_never_uses_the_legacy_native_mcp_table() {
         "cosmic-store",
         "cosmic-settings",
         "cosmic-term",
-        "cosmic-launcher",
+        "claw-launcher",
         "cosmic-player",
         "cosmic-screenshot",
         "cosmic-notifications",

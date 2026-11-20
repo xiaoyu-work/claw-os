@@ -10,7 +10,7 @@ fn every_fixed_row_names_exactly_its_system_program() {
         ("cosmic-store", "/usr/bin/cosmic-store"),
         ("cosmic-settings", "/usr/bin/cosmic-settings"),
         ("cosmic-term", "/usr/bin/cosmic-term"),
-        ("cosmic-launcher", "/usr/bin/cosmic-launcher"),
+        ("claw-launcher", "/usr/bin/claw-launcher"),
         ("cosmic-player", "/usr/bin/cosmic-player"),
         ("cosmic-screenshot", "/usr/bin/cosmic-screenshot"),
         ("cosmic-notifications", "/usr/bin/cosmic-notifications"),

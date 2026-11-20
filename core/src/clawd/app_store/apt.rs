@@ -556,6 +556,18 @@ pub(crate) async fn prepare_packages(
     if !found {
         return Err("APT did not download the authenticated selected App package".into());
     }
+    let mut replaced_apps = BTreeSet::new();
+    for package in packages.iter().filter_map(|package| package.inventory.as_ref()) {
+        if package.package == "claw-app-launcher-desktop" && package.apps == ["claw-launcher"] {
+            let prior = apps_root().join("cosmic-launcher/app.json");
+            let qualified = format!("{}:{}", package.package, package.architecture);
+            if crate::clawd::packages::query_package_owners(&prior).await?
+                .iter().any(|owner| owner == &package.package || owner == &qualified)
+            {
+                replaced_apps.insert("cosmic-launcher".to_string());
+            }
+        }
+    }
     let digest = store::sha256(&match context {
         Some(context) => serde_json::to_vec(&(&before, &packages, context)),
         None => serde_json::to_vec(&(&before, &packages)),
@@ -590,8 +602,8 @@ pub(crate) async fn prepare_packages(
             package: package_ref,
         });
     }
-    let mut affected: BTreeSet<String> =
-        reviews.iter().map(|review| review.app_id.clone()).collect();
+    let mut affected = replaced_apps;
+    affected.extend(reviews.iter().map(|review| review.app_id.clone()));
     if all_apps {
         affected.extend(crate::apps::discover_all(&apps_root()).verified.into_keys());
         affected.extend(

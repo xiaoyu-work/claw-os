@@ -43,6 +43,7 @@ pub(crate) struct Registration {
     pub home: PathBuf,
     pub control: GuiControl,
     pub(crate) desktop_shell: bool,
+    pub(crate) desktop_launcher: bool,
     pub(crate) owner_settings: bool,
     pub(crate) owner_launch: bool,
     pub session_id: String,
@@ -102,7 +103,7 @@ impl Draft {
             verify_system_gui(&launch)?;
         }
         let system_menu_app = system_launcher && !desktop_shell
-            && matches!(launch.app_id(), "cosmic-edit" | "cosmic-files" | "cosmic-launcher"
+            && matches!(launch.app_id(), "cosmic-edit" | "cosmic-files" | "claw-launcher"
                 | "cosmic-notifications" | "cosmic-player" | "cosmic-screenshot"
                 | "cosmic-settings" | "cosmic-store" | "cosmic-term")
             && verify_system_gui(&launch).is_ok();
@@ -156,6 +157,11 @@ impl Draft {
         optional_needs_ungranted: Vec<usize>,
         optional_approval_expiry: Option<u64>,
     ) -> Result<Registration, String> {
+        let desktop_launcher = self.system_menu_app
+            && self.launch.app_id() == "claw-launcher"
+            && self.gui_entry.is_none()
+            && self.entry == "bin/claw-launcher"
+            && self.selector == "--gui";
         Ok(Registration {
             launch: self.launch,
             gui_entry: self.gui_entry,
@@ -166,6 +172,7 @@ impl Draft {
             home: self.home,
             control: self.control,
             desktop_shell: self.desktop_shell,
+            desktop_launcher,
             owner_settings: self.owner_settings,
             owner_launch: self.owner_launch,
             session_id,

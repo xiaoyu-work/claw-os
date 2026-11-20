@@ -335,6 +335,11 @@ pub enum AuthorityCommand {
         expires_monotonic_ms: u64,
         target: LaunchTarget,
     },
+    ShowAgent {
+        epoch: Epoch,
+        request: InstanceId,
+        expires_monotonic_ms: u64,
+    },
 }
 
 impl Packet for AuthorityCommand {

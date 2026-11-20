@@ -185,6 +185,23 @@ impl Manager {
         }
     }
 
+    pub(crate) fn launcher_running(&self, owner: u32, epoch: Epoch) -> Result<bool, String> {
+        let jobs = self.jobs.lock().map_err(|_| "GUI registry lock poisoned")?;
+        for job in jobs.values() {
+            if job.registration.owner() == owner
+                && job.registration.control.epoch == epoch
+                && job.registration.launch.app_id() == "claw-launcher"
+                && !job.stopping()
+            {
+                let state = job.state.lock().map_err(|_| "GUI status lock poisoned")?;
+                if state.phase == Phase::Running && state.layer_shell {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn media_window(
         &self, owner: u32, app: &str,
     ) -> Result<Arc<crate::clawd::media_player::gui::Window>, String> {

@@ -56,12 +56,14 @@ their Wayland name from the selected Root display, not caller variables or
 owner socket enumeration. The Desktop source path has no old compositor fallback.
 
 Desktop-menu effects go from the broker to its authenticated Root display
-supervisor on the same epoch. Only the live system shell can directly
-submit an owner click; other callers require their normal authorization.
-The supervisor starts only a fixed
-`cos app <id> --gui` as the logged-in user, inside the display workload, and
-pins the selected publisher and content digest. Its acknowledgement says the
-launcher process was submitted, not that the target passed GUI admission.
+supervisor on the same epoch. The live system shell can submit owner
+clicks directly; the OS-started Claw Launcher can submit ordinary signed
+App selections only. Other callers require their normal authorization.
+The supervisor starts `cos app <id> --gui` as the logged-in user, inside the
+display workload, and pins the selected publisher and content digest. The
+reserved Claw AI menu entry instead opens the protected `cos-agent-ui` with no
+arguments in that display as the same owner. It does not record audio or send
+an Agent request. Submission does not prove a window appeared.
 
 Lock requests carry no executable, password or owner selector. The supervisor
 links the fixed native locker to its compositor by a Root-held Wayland

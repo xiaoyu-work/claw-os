@@ -55,7 +55,7 @@ struct GuiCall {
 }
 
 struct LaunchCall {
-    target: LaunchTarget,
+    target: Option<LaunchTarget>,
     reply: SyncSender<Result<bool, Error>>,
     deadline: Instant,
 }
@@ -143,6 +143,14 @@ impl GuiControl {
 
     pub(crate) fn launch(&self, target: LaunchTarget, deadline: Instant) -> Result<(), Error> {
         target.validate()?;
+        self.submit_launch(Some(target), deadline)
+    }
+
+    pub(crate) fn show_agent(&self, deadline: Instant) -> Result<(), Error> {
+        self.submit_launch(None, deadline)
+    }
+
+    fn submit_launch(&self, target: Option<LaunchTarget>, deadline: Instant) -> Result<(), Error> {
         let (reply, result) = mpsc::sync_channel(1);
         self.launcher
             .try_send(LaunchCall { target, reply, deadline })
@@ -495,16 +503,13 @@ fn monitor(
                 if ready && !remaining.is_zero() {
                     let request = InstanceId::random()?;
                     let expires_monotonic_ms = monotonic_ms()?.saturating_add(remaining.as_millis().min(2000) as u64);
-                    channel.send(
-                        &AuthorityCommand::Launch {
-                            epoch,
-                            request,
-                            expires_monotonic_ms,
-                            target: call.target.clone(),
+                    let command = match &call.target {
+                        Some(target) => AuthorityCommand::Launch {
+                            epoch, request, expires_monotonic_ms, target: target.clone(),
                         },
-                        &[],
-                        call.deadline,
-                    )?;
+                        None => AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms },
+                    };
+                    channel.send(&command, &[], call.deadline)?;
                     launch_pending = Some((request, call));
                 } else {
                     let _ = call.reply.send(Err(Error::Protocol("desktop launch expired or display ended")));

@@ -72,7 +72,7 @@ if [[ $# == 14 && ( "${13}" == --native-editor-only || "${13}" == --native-files
         native_app=panel-clipboard
     elif [[ "${13}" == --native-launcher-only ]]; then
         native_product=launcher
-        native_app=cosmic-launcher
+        native_app=claw-launcher
     elif [[ "${13}" == --native-settings-only ]]; then
         native_product=settings
         native_app=cosmic-settings

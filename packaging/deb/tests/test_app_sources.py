@@ -1386,7 +1386,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
 @pytest.mark.parametrize(("product", "app_id"), [
     ("calendar", "panel-calendar"), ("clipboard", "panel-clipboard"),
     ("desktop-widgets", "widget-rail"),
-    ("launcher", "cosmic-launcher"),
+    ("launcher", "claw-launcher"),
     ("editor", "cosmic-edit"),
     ("files", "cosmic-files"),
     ("terminal", "cosmic-term"),

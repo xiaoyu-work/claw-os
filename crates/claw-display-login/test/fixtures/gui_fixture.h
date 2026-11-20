@@ -96,7 +96,7 @@ static int gui_entry(int count, char **arguments) {
     int clipboard = count == 4 && strcmp(arguments[1], "app") == 0
         && strcmp(arguments[2], "panel-clipboard") == 0 && strcmp(arguments[3], "--gui") == 0;
     int launcher = count == 4 && strcmp(arguments[1], "app") == 0
-        && strcmp(arguments[2], "cosmic-launcher") == 0 && strcmp(arguments[3], "--gui") == 0;
+        && strcmp(arguments[2], "claw-launcher") == 0 && strcmp(arguments[3], "--gui") == 0;
     int settings = count == 4 && strcmp(arguments[1], "app") == 0
         && strcmp(arguments[2], "cosmic-settings") == 0 && strcmp(arguments[3], "--gui") == 0;
     int notifications = count == 4 && strcmp(arguments[1], "app") == 0
@@ -307,7 +307,7 @@ static int gui_fixture(void) {
                                      scenario == 29 ? "cosmic-store" :
                                      scenario == 30 ? "widget-rail" :
                                      scenario == 31 ? "panel-clipboard" :
-                                     scenario == 32 ? "cosmic-launcher" : "cosmic-settings",
+                                     scenario == 32 ? "claw-launcher" : "cosmic-settings",
                               "--gui", (char *)NULL);
                         _exit(123);
                     }

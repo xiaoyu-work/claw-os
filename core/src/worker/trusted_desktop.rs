@@ -108,8 +108,8 @@ const ALLOWLIST: &[Row] = &[
         transports: NO_TRANSPORT,
     },
     Row {
-        app_id: "cosmic-launcher",
-        system_program: "/usr/bin/cosmic-launcher",
+        app_id: "claw-launcher",
+        system_program: "/usr/bin/claw-launcher",
         transports: NO_TRANSPORT,
     },
     Row {

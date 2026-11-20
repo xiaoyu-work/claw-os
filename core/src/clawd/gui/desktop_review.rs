@@ -22,6 +22,7 @@ use crate::provenance::{PackageKind, TrustSource, VerifyOptions};
 
 const REVIEW_LIFETIME: Duration = Duration::from_secs(120);
 const INSTALLED_APPS: &str = "/usr/lib/cos/apps";
+const AGENT_DESKTOP_ID: &str = "com.clawos.Agent";
 
 struct Review {
     id: String,
@@ -201,8 +202,11 @@ impl Window {
     }
 
     fn owner_menu(&self, process: &ProcessIdentity, cap: &Cap) -> Result<GrantView, String> {
-        if !self.registration.desktop_shell {
-            return Err("direct menu actions require the OS-started desktop shell".into());
+        let launcher_click = self.registration.desktop_launcher
+            && cap.verb == Verb::DESKTOP_LAUNCH
+            && cap.scope != Scope::name(AGENT_DESKTOP_ID);
+        if !self.registration.desktop_shell && !launcher_click {
+            return Err("direct menu actions require the OS-started desktop Shell or Launcher".into());
         }
         self.live(process, cap)
     }
@@ -236,8 +240,24 @@ impl Window {
                         deadline: Instant::now() + view.expires_in.min(Duration::from_secs(12)),
                         review: None,
                     })),
+                    (Verb::DESKTOP_LAUNCH, AGENT_DESKTOP_ID) => {
+                        let deadline = Instant::now() + view.expires_in.min(Duration::from_secs(2));
+                        let result = self.registration.control.show_agent(deadline);
+                        crate::provenance::audit("desktop.menu_launch", json!({
+                            "owner_uid": self.registration.owner(),
+                            "source_app": self.registration.launch.app_id(),
+                            "epoch": self.registration.control.epoch.label(),
+                            "desktop_id": AGENT_DESKTOP_ID,
+                            "submitted": result.is_ok(),
+                        }));
+                        result.map_err(|error| format!("Claw AI did not confirm opening: {error}"))?;
+                        Ok(status("submitted"))
+                    }
                     (Verb::DESKTOP_LAUNCH, desktop_id) => {
                         let (target, _) = resolve_target(desktop_id)?;
+                        if self.registration.desktop_launcher && target.app_id == "claw-launcher" {
+                            return Err("the Launcher cannot open another copy of itself".into());
+                        }
                         let view = self.owner_menu(process, &cap)?;
                         let deadline = Instant::now() + view.expires_in.min(Duration::from_secs(2));
                         let result = self.registration.control.launch(target.clone(), deadline);

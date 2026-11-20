@@ -27,8 +27,13 @@ presentation and current-display lock, plus supported optional device controls.
 It still checks App denials, package trust and instance lifetime. It grants no
 power, App-launch or Agent capability. The signed system menu dispatches an
 explicit owner click through its private endpoint, pinned display and exact
-signed launch target or logind provider. Other GUIs retain exact per-action
-reviews; sleep still requires an acknowledged native lock.
+signed launch target or logind provider. The default vendor-signed `claw-launcher`
+window started by that supervisor may submit a selected signed desktop entry
+through the same gate; it cannot start the Agent, issue power actions, or
+spawn itself. Its overlay still requires its own `ui.panel` admission. The
+Shell's desktop snapshot shows whether that Launcher has a running panel job
+in the same display epoch. Other GUIs retain exact per-action reviews;
+sleep still requires an acknowledged native lock.
 
 `desktop.optional_needs` and each `desktop.entries.<name>.optional_needs` are
 independent best-effort feature lists, empty when absent. Missing, denied,

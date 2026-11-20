@@ -896,6 +896,15 @@ and power actions require the matching Agent build's private broker routes;
 launches also use its protected display supervisor. There is no raw fallback
 or change to the public App ABI. The new package removes the superseded
 session; it does not migrate or erase owner configuration.
+The Quiet Shell's Claw AI button needs the matching Agent supervisor, which
+starts the existing native Agent UI in the current authenticated display.
+The Launcher also needs the matching signed `claw-app-launcher-desktop`
+package. That package keeps its Debian name and `com.clawos.Launcher`
+desktop entry but replaces the AppID and command with `claw-launcher`.
+The separate `launcher` MCP App keeps its identity. The renamed App does not
+inherit old GUI permissions or private data; the old data is not deleted.
+The Store retires the installed old identity before replacing the launcher
+package. The new identity goes through its own protected permission review.
 The installed system Settings GUI also needs the matching signed Settings App
 to change lasting permissions. Older transient or reusable approvals are not
 converted to lasting App permission.

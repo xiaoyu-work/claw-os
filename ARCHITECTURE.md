@@ -505,8 +505,8 @@ bounded records through their unchanged public SDK protocol. Headless and
 desktop consumers use the same broker service; no App call, source checkout
 at runtime or second Calendar data store is introduced.
 The complete standalone native Launcher is also owned by
-`clawos-app/products/launcher` and built from `build/native-apps/cosmic-launcher`.
-Its executable/resources and `cosmic-launcher` descriptor stay in the desktop
+`clawos-app/products/launcher` and built from `build/native-apps/claw-launcher`.
+Its executable/resources and `claw-launcher` descriptor stay in the desktop
 package. Native MCP embeds the canonical product Python backend and adapter
 inside the verified binary; it uses the OS Python SDK and exact policy/typed
 desktop launch service instead of forwarding to another App. The normal UI
@@ -682,7 +682,7 @@ Launcher owns the Python `launcher` App's five MCP tools, XDG catalog parsing,
 search and existing recent-history logic. Exact AppID/file grants and brokered
 native launching are preserved; desktop session validation and execution remain
 OS-owned. Recent history stays at its existing App data path, not automatically
-shared with the shell. Native `cosmic-launcher` UI/build/resources, its legacy
+shared with the shell. Native `claw-launcher` UI/build/resources, its legacy
 `cos app launcher` forwarding and shared catalog/history integration remain
 pending. This source move does not introduce App-to-App calls or complete the
 native Launcher migration.

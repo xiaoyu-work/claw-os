@@ -1649,7 +1649,7 @@ const SHIPPED_NATIVE_MCP_APPS: &[&str] = &[
     "cosmic-store",
     "cosmic-settings",
     "cosmic-term",
-    "cosmic-launcher",
+    "claw-launcher",
     "cosmic-player",
     "cosmic-screenshot",
     "cosmic-notifications",

@@ -172,10 +172,10 @@ pub(super) const CLIPBOARD: Product = Product {
 };
 pub(super) const LAUNCHER: Product = Product {
     name: "launcher",
-    app: "cosmic-launcher",
+    app: "claw-launcher",
     case: 32,
     desktop_id: "com.clawos.Launcher",
-    entries: &["bin/cosmic-launcher"],
+    entries: &["bin/claw-launcher"],
     ungranted: &[],
     home_metadata: false,
     selector: "--gui",

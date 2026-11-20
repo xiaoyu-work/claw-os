@@ -26,7 +26,7 @@ PRODUCTS = {
     "store": ("cosmic-store", "com.clawos.Store", ()),
     "desktop-widgets": ("widget-rail", "com.clawos.AppletWidgetRail", ()),
     "clipboard": ("panel-clipboard", "com.clawos.AppletClipboard", ()),
-    "launcher": ("cosmic-launcher", "com.clawos.Launcher", ()),
+    "launcher": ("claw-launcher", "com.clawos.Launcher", ()),
     "settings": ("cosmic-settings", "com.clawos.Settings", ()),
     "capture": ("cosmic-screenshot", "com.clawos.Screenshot", ()),
     "notifications": ("cosmic-notifications", "com.clawos.Notifications", ()),

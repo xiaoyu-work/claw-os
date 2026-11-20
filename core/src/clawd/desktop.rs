@@ -106,7 +106,12 @@ pub async fn control(
         if action == "list" {
             let authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
             let display = windows::target(uid, peer_pid)?;
-            return windows::request(&display, "list", None, None, None, &authorized).await;
+            let mut state = windows::request(&display, "list", None, None, None, &authorized).await?;
+            if authority.app_id() == Some(crate::display_session::SHELL_APP) {
+                state["launcher_running"] =
+                    crate::clawd::gui::Manager::get()?.launcher_running(uid, display.epoch)?.into();
+            }
+            return Ok(state);
         }
         if action == "launch" {
             let _authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;

@@ -147,7 +147,8 @@ impl Controllers {
                 AuthorityCommand::Gui { .. } if retired => {
                     // This workload is already dead. Queued requests cannot run or renew it.
                 }
-                AuthorityCommand::Launch { epoch, .. } if retired && epoch == self.epoch => {}
+                AuthorityCommand::Launch { epoch, .. } | AuthorityCommand::ShowAgent { epoch, .. }
+                    if retired && epoch == self.epoch => {}
                 AuthorityCommand::Heartbeat {
                     epoch,
                     expires_monotonic_ms,
@@ -356,30 +357,12 @@ impl Supervisor {
                 AuthorityCommand::Launch { epoch, request, expires_monotonic_ms, target }
                     if epoch == self.controllers.epoch =>
                 {
-                    let now = monotonic_ms()?;
-                    let submitted = if !self.display.is_empty()
-                        && self.launchers.len() < MAX_APP_LAUNCHERS
-                        && target.app_id != SHELL_APP
-                        && expires_monotonic_ms > now && expires_monotonic_ms <= now.saturating_add(2000)
-                    {
-                        match spawn_app_launcher(&self.controllers, &self.containment, &self.display, Some(target)) {
-                            Ok(child) => {
-                                self.launchers.push(child);
-                                true
-                            }
-                            Err(error) => {
-                                log_failure(c"desktop App launcher refused: %s", &error);
-                                false
-                            }
-                        }
-                    } else {
-                        false
-                    };
-                    self.controllers.authority.send(
-                        &AuthorityReply::Launch { epoch, request, submitted },
-                        &[],
-                        self.controllers.live_io_deadline()?,
-                    )?;
+                    self.launch(request, expires_monotonic_ms, DesktopProcess::App(target))?;
+                }
+                AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms }
+                    if epoch == self.controllers.epoch =>
+                {
+                    self.launch(request, expires_monotonic_ms, DesktopProcess::Agent)?;
                 }
                 _ => {
                     return Err(Error::Protocol(
@@ -389,6 +372,33 @@ impl Supervisor {
             }
         }
         Ok(())
+    }
+
+    fn launch(&mut self, request: claw_display_control::InstanceId, expires: u64, process: DesktopProcess) -> Result<(), Error> {
+        let now = monotonic_ms()?;
+        let submitted = if !self.display.is_empty()
+            && self.launchers.len() < MAX_APP_LAUNCHERS
+            && !matches!(&process, DesktopProcess::App(target) if target.app_id == SHELL_APP)
+            && expires > now && expires <= now.saturating_add(2000)
+        {
+            match spawn_desktop_process(&self.controllers, &self.containment, &self.display, process) {
+                Ok(child) => {
+                    self.launchers.push(child);
+                    true
+                }
+                Err(error) => {
+                    log_failure(c"desktop launcher refused: %s", &error);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        self.controllers.authority.send(
+            &AuthorityReply::Launch { epoch: self.controllers.epoch, request, submitted },
+            &[],
+            self.controllers.live_io_deadline()?,
+        )
     }
 
     fn lock(&mut self, instance: claw_display_control::InstanceId, expires: u64) -> Result<(), Error> {
@@ -611,7 +621,7 @@ impl Supervisor {
         }
         containment::protected_executable(CLIENT)?;
         self.shell_started = true;
-        match spawn_app_launcher(&self.controllers, &self.containment, &self.display, None) {
+        match spawn_desktop_process(&self.controllers, &self.containment, &self.display, DesktopProcess::Shell) {
             Ok(child) => self.shell = Some((subscriber.process.clone(), child)),
             Err(error) => {
                 log_failure(c"system desktop shell launcher refused: %s", &error);
@@ -772,24 +782,30 @@ fn io_timeout(error: Error, phase: &'static str) -> Error {
     }
 }
 
-fn spawn_app_launcher(
+enum DesktopProcess {
+    Shell,
+    App(LaunchTarget),
+    Agent,
+}
+
+fn spawn_desktop_process(
     controllers: &Controllers,
     containment: &Containment,
     display: &str,
-    target: Option<LaunchTarget>,
+    process: DesktopProcess,
 ) -> Result<Child, Error> {
     const COS: &str = "/usr/local/bin/cos";
-    containment::protected_executable(COS)?;
+    const AGENT: &str = "/usr/local/bin/cos-agent-ui";
+    let executable = if matches!(&process, DesktopProcess::Agent) { AGENT } else { COS };
+    containment::protected_executable(executable)?;
     let uid = controllers.login.owner_uid;
     let (gid, name, home) = containment::account(uid)?;
     let username = name.to_str().map_err(|_| Error::Identity)?;
     let runtime = format!("/run/user/{uid}");
     let membership = containment.compositor_membership().as_raw_fd();
     let parent = unsafe { libc::getpid() };
-    let mut command = Command::new(COS);
-    let app_id = target.as_ref().map_or(SHELL_APP, |target| target.app_id.as_str());
+    let mut command = Command::new(executable);
     command
-        .args(["app", app_id, "--gui"])
         .env_clear()
         .envs(controllers.locale.iter())
         .env("HOME", &home)
@@ -805,13 +821,19 @@ fn spawn_app_launcher(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
-    if let Some(target) = target {
-        command
-            .env(MENU_LAUNCH_DIGEST, target.digest)
-            .env(MENU_LAUNCH_PUBLISHER, target.publisher);
-    } else {
-        // The CLI prints structured errors to stdout. Keep them in the login log.
-        command.stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
+    match process {
+        DesktopProcess::App(target) => {
+            command.args(["app", &target.app_id, "--gui"])
+                .env(MENU_LAUNCH_DIGEST, target.digest)
+                .env(MENU_LAUNCH_PUBLISHER, target.publisher);
+        }
+        DesktopProcess::Shell => {
+            command.args(["app", SHELL_APP, "--gui"])
+                .stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
+        }
+        DesktopProcess::Agent => {
+            command.env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={runtime}/bus"));
+        }
     }
     unsafe {
         command.pre_exec(move || {
