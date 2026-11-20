@@ -231,9 +231,15 @@ impl Window {
             return Err("the desktop review window has closed".into());
         }
         match (action, selected, review_id) {
-            ("run", Some(selection), None) => {
+            ("run" | "activate", Some(selection), None) => {
                 let cap = selected_capability(verb, selection)?;
                 let view = self.owner_menu(process, &cap)?;
+                let activate = action == "activate";
+                if activate && (verb != Verb::DESKTOP_LAUNCH || !self.registration.desktop_shell
+                    || selection == AGENT_DESKTOP_ID)
+                {
+                    return Err("Dock activation requires a desktop App selected in the system Shell".into());
+                }
                 match (verb, selection) {
                     (Verb::SYS_POWER, action) => Ok(Reply::Power(PowerDispatch {
                         action: action.to_owned(),
@@ -259,8 +265,24 @@ impl Window {
                             return Err("the Launcher cannot open another copy of itself".into());
                         }
                         let view = self.owner_menu(process, &cap)?;
+                        if activate && super::Manager::get()?.reopen_desktop_app(
+                            self.registration.owner(), self.registration.control.epoch, &target,
+                        )? {
+                            crate::provenance::audit("desktop.menu_reopen", json!({
+                                "owner_uid": self.registration.owner(),
+                                "source_app": self.registration.launch.app_id(),
+                                "epoch": self.registration.control.epoch.label(),
+                                "desktop_id": desktop_id,
+                                "app_id": target.app_id,
+                            }));
+                            return Ok(status("submitted"));
+                        }
                         let deadline = Instant::now() + view.expires_in.min(Duration::from_secs(2));
-                        let result = self.registration.control.launch(target.clone(), deadline);
+                        let result = if activate {
+                            self.registration.control.launch_from_dock(target.clone(), deadline)
+                        } else {
+                            self.registration.control.launch(target.clone(), deadline)
+                        };
                         crate::provenance::audit("desktop.menu_launch", json!({
                             "owner_uid": self.registration.owner(),
                             "source_app": self.registration.launch.app_id(),
@@ -472,18 +494,19 @@ impl Window {
     }
 }
 
+fn valid_desktop_id(id: &str) -> bool {
+    id.len() <= 255 && id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+pub(super) fn exported_desktop_id(resource: &str) -> Option<&str> {
+    resource.strip_prefix("resources/usr/share/applications/")?
+        .strip_suffix(".desktop").filter(|id| valid_desktop_id(id))
+}
+
 fn selected_capability(verb: Verb, selection: &str) -> Result<Cap, String> {
     match verb {
-        Verb::DESKTOP_LAUNCH
-            if selection.len() <= 255
-                && selection
-                    .bytes()
-                    .next()
-                    .is_some_and(|b| b.is_ascii_alphanumeric())
-                && selection
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')) =>
-        {
+        Verb::DESKTOP_LAUNCH if valid_desktop_id(selection) => {
             Ok(Cap::new(verb, Scope::name(selection)))
         }
         Verb::SYS_POWER if power::power_methods(selection).is_some() => {

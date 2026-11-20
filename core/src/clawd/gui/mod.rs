@@ -3,6 +3,8 @@
 #[cfg(target_os = "linux")]
 mod broker;
 #[cfg(target_os = "linux")]
+mod desktop_events;
+#[cfg(target_os = "linux")]
 mod desktop_review;
 #[cfg(target_os = "linux")]
 pub(crate) mod audio;

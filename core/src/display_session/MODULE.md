@@ -51,7 +51,10 @@ These Root service effects never acquire a GUI instance lifetime from their
 correlation IDs. The public window provider selects this owner/kernel-login
 binding and projects opaque identifiers containing the display epoch. A
 mutation is sent once; read-only queries distinguish a requested focus/close
-from an observed outcome. Desktop launch and shared owner helpers also take
+from an observed outcome. The compositor sends coalesced window-state changes
+on this same channel after the Shell's first authenticated Observe request.
+The broker wakes only subscribers of that epoch; the signal carries no
+window data or rights. Desktop launch and shared owner helpers also take
 their Wayland name from the selected Root display, not caller variables or
 owner socket enumeration. The Desktop source path has no old compositor fallback.
 

@@ -33,6 +33,7 @@ struct BoundProcess {
 }
 
 struct State {
+    job: Arc<super::manager::Job>,
     registration: Arc<Registration>,
     package_intents: Arc<crate::clawd::packages::gui::WindowIntents>,
     capture: Arc<crate::clawd::capture::gui::Window>,
@@ -61,12 +62,11 @@ impl Broker {
 
     pub fn start(
         listener: std::os::unix::net::UnixListener,
-        registration: Arc<Registration>,
+        job: Arc<super::manager::Job>,
         daemon: DaemonState,
         admission: Arc<Admission>,
         executor: &tokio::runtime::Handle,
         home_metadata: bool,
-        media: Arc<crate::clawd::media_player::gui::Window>,
     ) -> Result<Self, String> {
         listener
             .set_nonblocking(true)
@@ -75,14 +75,16 @@ impl Broker {
         let _runtime = executor.enter();
         let listener = UnixListener::from_std(listener).map_err(|error| error.to_string())?;
         let (shutdown, mut ended) = tokio::sync::watch::channel(false);
+        let registration = job.registration.clone();
         let state = Arc::new(State {
             package_intents: crate::clawd::packages::gui::WindowIntents::new(registration.clone()),
             capture: crate::clawd::capture::gui::Window::new(registration.clone()),
-            media,
+            media: job.media.clone(),
             audio: super::audio::Window::new(registration.clone()),
             picker: super::file_picker::Window::new(registration.clone()),
             notifications: crate::clawd::notifications::gui::Window::new(registration.clone()),
             desktop_review: Arc::new(DesktopReview::new(registration.clone())),
+            job,
             registration,
             process: OnceLock::new(),
             stopped: AtomicBool::new(false),
@@ -394,7 +396,13 @@ async fn serve(
             }
         }
         Validated::Provider(request) => {
-            if request.command == Command::SystemAppPermissions
+            if request.command == Command::GuiDesktopEvents {
+                let process = &endpoint.process.get().expect("authenticated bound GUI process").process;
+                Box::pin(super::desktop_events::serve(
+                    stream, &endpoint.job, process, request.id, shutdown,
+                )).await;
+                return;
+            } else if request.command == Command::SystemAppPermissions
                 && matches!(request.params["action"].as_str(), Some("show_choices" | "allow" | "deny"))
             {
                 let result = if endpoint.registration.owner_settings
@@ -521,21 +529,22 @@ async fn fault(stream: &mut PeerStream, id: RequestId, fault: Fault) {
     respond(stream, Response::error(id, fault.code(), fault.message())).await;
 }
 
-async fn respond(stream: &mut PeerStream, response: Response) {
+pub(super) async fn respond(stream: &mut PeerStream, response: Response) -> bool {
     let body = match encode_response(&response) {
         Ok(body) if body.len() <= MAX_RESPONSE_BYTES => body,
         Ok(_) => {
             tracing::error!("GUI broker response exceeded the wire bound");
-            return;
+            return false;
         }
         Err(error) => {
             tracing::error!(%error, "GUI broker response encoding failed");
-            return;
+            return false;
         }
     };
     match tokio::time::timeout(IO_TIMEOUT, stream.write_response(&body)).await {
-        Ok(Ok(())) => {}
+        Ok(Ok(())) => return true,
         Ok(Err(error)) => tracing::debug!(%error, "GUI broker response recipient closed"),
         Err(_) => tracing::warn!("GUI broker response deadline elapsed"),
     }
+    false
 }

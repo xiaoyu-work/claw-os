@@ -263,6 +263,17 @@ fn main() {
         process::exit(1);
     }
     let (raw_args, fmt) = extract_format(raw_args);
+    if raw_args.as_slice() == ["__desktop-events"] {
+        if wire_v1 {
+            eprintln!("desktop events are a JSON line stream and do not support --wire=1");
+            process::exit(1);
+        }
+        if let Err(error) = router::dispatch(&raw_args) {
+            eprintln!("cos desktop events: {error}");
+            process::exit(1);
+        }
+        return;
+    }
     if raw_args.as_slice() == ["__gui-audio", "--pcm-stdin"] {
         if wire_v1 {
             eprintln!("GUI audio is an opaque PCM transport and does not support --wire=1");

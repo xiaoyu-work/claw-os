@@ -37,6 +37,7 @@ namespace Claw {
         bool       attach(wl_display* display, SBackend backend);
         bool       ready(std::string_view display);
         void       detach();
+        void       desktopChanged();
         uint32_t   rights(const wl_client* client) const;
         bool       claimContext(wl_client* client, SOrigin& result);
         bool       addListener(SOrigin origin);
@@ -52,6 +53,7 @@ namespace Claw {
         SDisplayWatch                                                  m_watch{};
         SBackend                                                       m_backend{};
         bool                                                           m_stopping = false;
+        bool                                                           m_desktopChanged = false;
         std::optional<SOrigin>                                         m_pendingOrigin;
         std::unordered_map<const wl_client*, std::unique_ptr<SClient>> m_clients;
 
@@ -247,9 +249,18 @@ namespace Claw {
     int CController::tick(void* data) {
         auto* self = static_cast<CController*>(data);
         self->dispatch();
+        if (!self->m_stopping && self->m_desktopChanged) {
+            self->m_desktopChanged = false;
+            if (!claw_compositor_desktop_changed(self->m_handle))
+                self->fail();
+        }
         if (!self->m_stopping && self->m_timer)
             wl_event_source_timer_update(self->m_timer, 10);
         return 0;
+    }
+
+    void CController::desktopChanged() {
+        m_desktopChanged = true;
     }
 
     void CController::dispatch() {
@@ -330,6 +341,11 @@ namespace Claw {
 
     bool ready(std::string_view display) {
         return controller() && controller()->ready(display);
+    }
+
+    void desktopChanged() {
+        if (controller())
+            controller()->desktopChanged();
     }
 
     void shutdown() {

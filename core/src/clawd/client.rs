@@ -181,6 +181,33 @@ pub(crate) fn request_gui_provider_blocking(_request: Request) -> Result<Respons
     Err(ClientError::before_dispatch("private GUI provider transport requires Linux"))
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn desktop_events() -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream as StdUnixStream;
+    use std::time::Duration;
+
+    let socket = crate::worker::linux::SANDBOX_BROKER_SOCKET;
+    let mut stream = StdUnixStream::connect(socket).map_err(|error| error.to_string())?;
+    stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|error| error.to_string())?;
+    let request = Request::build(super::routes::Command::GuiDesktopEvents, serde_json::json!({}));
+    let body = encode_request(&request).map_err(|error| error.to_string())?;
+    frame::write_request_blocking(&mut stream, &body).map_err(|error| error.to_string())?;
+    let mut output = std::io::stdout().lock();
+    loop {
+        let body = frame::read_response_blocking(&mut stream, MAX_RESPONSE_BYTES)
+            .map_err(transport_error)?;
+        let response = check(&request, decode(&body)?)?;
+        if !response.ok {
+            return Err(response.error.map(|error| error.message)
+                .unwrap_or_else(|| "The desktop event connection was refused".to_string()));
+        }
+        let value = response.result.ok_or("Desktop event omitted its value")?;
+        serde_json::to_writer(&mut output, &value).map_err(|error| error.to_string())?;
+        output.write_all(b"\n").and_then(|()| output.flush()).map_err(|error| error.to_string())?;
+    }
+}
+
 #[cfg(unix)]
 fn request_blocking_inner(
     socket_path: &Path, request: Request, private_gui: bool,

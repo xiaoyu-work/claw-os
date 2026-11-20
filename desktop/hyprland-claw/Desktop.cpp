@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "Hyprland.hpp"
+#include "Claw.hpp"
 #include "../hyprland/src/config/shared/actions/ConfigActions.hpp"
 #include "../hyprland/src/desktop/state/FocusState.hpp"
 #include "../hyprland/src/desktop/state/WindowState.hpp"
 #include "../hyprland/src/desktop/view/window/Window.hpp"
 #include "../hyprland/src/desktop/view/window/WindowMetadata.hpp"
 #include "../hyprland/src/devices/IKeyboard.hpp"
+#include "../hyprland/src/event/EventBus.hpp"
 #include "../hyprland/src/managers/fullscreen/FullscreenController.hpp"
 #include "../hyprland/src/managers/input/InputManager.hpp"
 #include "../hyprland/src/output/Monitor.hpp"
 #include "../hyprland/src/state/MonitorState.hpp"
 #include "../hyprland/src/state/WorkspaceState.hpp"
 #include <algorithm>
+#include <array>
 #include <glaze/json.hpp>
 #include <sstream>
 #include <vector>
 
 namespace Claw {
+    static bool watching = false;
+
     struct SGeometry {
         double x;
         double y;
@@ -94,6 +99,36 @@ namespace Claw {
         return window && window->mapped() && !window->backend().traits().overrideRedirect;
     }
 
+    static void watchDesktop() {
+        auto& events = Event::bus()->m_events;
+        const auto changed = [] { desktopChanged(); };
+        [[maybe_unused]] static const std::array listeners{
+            events.window.openLate.listen(changed),
+            events.window.close.listen(changed),
+            events.window.active.listen(changed),
+            events.window.title.listen(changed),
+            events.window.class_.listen(changed),
+            events.window.urgent.listen(changed),
+            events.window.pin.listen(changed),
+            events.window.fullscreen.listen(changed),
+            events.window.floating.listen(changed),
+            events.window.minimize.listen(changed),
+            events.window.moveToWorkspace.listen(changed),
+            events.workspace.active.listen(changed),
+            events.workspace.specialActive.listen(changed),
+            events.workspace.createdLate.listen(changed),
+            events.workspace.removed.listen(changed),
+            events.workspace.renamed.listen(changed),
+            events.workspace.moveToMonitor.listen(changed),
+            events.monitor.added.listen(changed),
+            events.monitor.removed.listen(changed),
+            events.monitor.focused.listen(changed),
+            events.monitor.layoutChanged.listen(changed),
+            events.input.keyboard.layout.listen(changed),
+            events.config.reloaded.listen(changed),
+        };
+    }
+
     static std::optional<SKeyboard> currentKeyboard() {
         for (const auto& keyboard : g_pInputManager->m_keyboards) {
             if (!keyboard->m_active || !keyboard->m_xkbState)
@@ -158,7 +193,11 @@ namespace Claw {
             else
                 result.error = "compositor refused the requested desktop action";
         };
-        if (request.kind == CLAW_DESKTOP_LIST) {
+        if (request.kind == CLAW_DESKTOP_OBSERVE && !watching) {
+            watchDesktop();
+            watching = true;
+        }
+        if (request.kind == CLAW_DESKTOP_LIST || request.kind == CLAW_DESKTOP_OBSERVE) {
             result.keyboard = currentKeyboard();
             for (const auto& ws : State::workspaceState()->workspacesCopy())
                 result.workspaces.push_back({selector(ws), ws->displayName(), ws->numberedID(), ws->monitorID(), ws->hasUrgentWindow()});
@@ -218,6 +257,8 @@ namespace Claw {
                 result.windows.push_back(describe(window));
         }
         result.count       = result.windows.size();
+        if (watching && result.requested)
+            desktopChanged();
         const auto encoded = glz::write_json(result);
         if (!encoded)
             return std::nullopt;

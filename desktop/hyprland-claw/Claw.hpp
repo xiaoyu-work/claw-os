@@ -30,6 +30,7 @@ namespace Claw {
     bool attach(wl_display* display, SBackend backend);
     bool ready(std::string_view display);
     void shutdown();
+    void desktopChanged();
     bool globalAllowed(const wl_client* client, const wl_global* global, bool privileged);
     bool permitted(const wl_client* client, uint32_t right);
     bool contextOrigin(wl_client* client, SOrigin& result);

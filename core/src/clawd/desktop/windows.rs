@@ -231,6 +231,19 @@ fn values(windows: &[Window], epoch: Epoch) -> Vec<Value> {
         .collect()
 }
 
+pub(crate) async fn list(control: &GuiControl, observe: bool) -> Result<Value, String> {
+    let command = if observe { Command::Observe } else { Command::List };
+    let state = snapshot(control, command).await?;
+    Ok(json!({
+        "windows": values(&state.windows, control.epoch),
+        "count": state.count,
+        "capabilities": ["close", "activate"],
+        "workspaces": state.workspaces,
+        "outputs": state.outputs,
+        "keyboard": state.keyboard,
+    }))
+}
+
 pub(super) async fn request(
     control: &GuiControl,
     action: &str,
@@ -239,11 +252,13 @@ pub(super) async fn request(
     workspace: Option<&str>,
     _authorized: &Authorized,
 ) -> Result<Value, String> {
+    if action == "list" {
+        return list(control, false).await;
+    }
     let id = identifier
         .map(|value| bound_identifier(value, control.epoch))
         .transpose()?;
     let command = match action {
-        "list" => Command::List,
         "focus" => Command::Focus {
             identifier: id.ok_or("focus requires a window identifier")?,
         },
@@ -273,16 +288,6 @@ pub(super) async fn request(
         _ => return Err("unsupported native desktop action".into()),
     };
     let mut state = snapshot(control, command).await?;
-    if action == "list" {
-        return Ok(json!({
-            "windows": values(&state.windows, control.epoch),
-            "count": state.count,
-            "capabilities": ["close", "activate"],
-            "workspaces": state.workspaces,
-            "outputs": state.outputs,
-            "keyboard": state.keyboard,
-        }));
-    }
     if !matches!(action, "focus" | "close" | "close-app") {
         return Ok(json!({ "action": action, "action_applied": state.requested == 1 }));
     }

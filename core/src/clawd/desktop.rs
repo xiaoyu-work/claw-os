@@ -16,6 +16,8 @@ use super::client_identity::ClientIdentity;
 mod settings;
 mod helper;
 mod windows;
+#[cfg(target_os = "linux")]
+pub(super) use windows::list as window_snapshot;
 
 pub(super) async fn output_state(client: &ClientIdentity) -> Result<Value, String> {
     let uid = client.require_uid()?;
@@ -106,12 +108,7 @@ pub async fn control(
         if action == "list" {
             let authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;
             let display = windows::target(uid, peer_pid)?;
-            let mut state = windows::request(&display, "list", None, None, None, &authorized).await?;
-            if authority.app_id() == Some(crate::display_session::SHELL_APP) {
-                state["launcher_running"] =
-                    crate::clawd::gui::Manager::get()?.launcher_running(uid, display.epoch)?.into();
-            }
-            return Ok(state);
+            return windows::request(&display, "list", None, None, None, &authorized).await;
         }
         if action == "launch" {
             let _authorized = authorize_caller(authority, &action, app_id.as_deref(), &uris)?;

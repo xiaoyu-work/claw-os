@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -43,6 +43,9 @@ pub(super) struct Job {
     pub state: Mutex<JobState>,
     pub selected_reads: OnceLock<Arc<super::selected_read::SelectedReads>>,
     pub media: Arc<crate::clawd::media_player::gui::Window>,
+    pub(super) desktop_ids: Vec<String>,
+    pub(super) desktop_feed: AtomicBool,
+    pub(super) reopen: tokio::sync::watch::Sender<()>,
 }
 
 impl Job {
@@ -57,15 +60,28 @@ impl Job {
         }
         state.layer_shell = layer_shell;
         state.phase = Phase::Running;
+        drop(state);
+        self.desktop_changed();
         Ok(())
     }
 
     pub fn retiring(&self, error: Option<String>) {
         if let Ok(mut state) = self.state.lock() {
+            let was_running = state.phase == Phase::Running;
             state.phase = Phase::Retiring;
             state.retirement_error = error;
+            drop(state);
+            if was_running {
+                self.desktop_changed();
+            }
         } else {
             tracing::error!("GUI status lock poisoned during retirement");
+        }
+    }
+
+    fn desktop_changed(&self) {
+        if !self.desktop_ids.is_empty() {
+            self.registration.control.desktop_changed();
         }
     }
 
@@ -154,6 +170,10 @@ impl Manager {
         let instance = InstanceId::random().map_err(|error| error.to_string())?;
         let registration = Arc::new(registration);
         let media = crate::clawd::media_player::gui::Window::new(registration.clone());
+        let desktop_ids = registration.launch.package().resources().iter()
+            .filter_map(|path| super::desktop_review::exported_desktop_id(path))
+            .map(str::to_owned)
+            .collect();
         jobs.insert(
             session,
             Arc::new(Job {
@@ -162,6 +182,9 @@ impl Manager {
                 stopped: AtomicBool::new(false),
                 selected_reads: OnceLock::new(),
                 media,
+                desktop_ids,
+                desktop_feed: AtomicBool::new(false),
+                reopen: tokio::sync::watch::channel(()).0,
                 state: Mutex::new(JobState {
                     phase: Phase::Reserved,
                     layer_shell: false,
@@ -185,21 +208,50 @@ impl Manager {
         }
     }
 
-    pub(crate) fn launcher_running(&self, owner: u32, epoch: Epoch) -> Result<bool, String> {
+    pub(super) fn running_desktop_ids(&self, owner: u32, epoch: Epoch) -> Result<BTreeSet<String>, String> {
         let jobs = self.jobs.lock().map_err(|_| "GUI registry lock poisoned")?;
+        let mut ids = BTreeSet::new();
         for job in jobs.values() {
             if job.registration.owner() == owner
                 && job.registration.control.epoch == epoch
-                && job.registration.launch.app_id() == "claw-launcher"
-                && !job.stopping()
+                && !job.desktop_ids.is_empty()
             {
                 let state = job.state.lock().map_err(|_| "GUI status lock poisoned")?;
-                if state.phase == Phase::Running && state.layer_shell {
-                    return Ok(true);
+                if state.phase == Phase::Running {
+                    ids.extend(job.desktop_ids.iter().cloned());
                 }
             }
         }
-        Ok(false)
+        Ok(ids)
+    }
+
+    pub(super) fn reopen_desktop_app(
+        &self, owner: u32, epoch: Epoch, target: &claw_display_control::wire::LaunchTarget,
+    ) -> Result<bool, String> {
+        let jobs = self.jobs.lock().map_err(|_| "GUI registry lock poisoned")?;
+        let mut running = None;
+        for job in jobs.values().filter(|job| {
+            job.registration.owner() == owner && job.registration.control.epoch == epoch
+                && job.registration.launch.app_id() == target.app_id
+        }) {
+            let state = job.state.lock().map_err(|_| "GUI status lock poisoned")?;
+            if state.phase == Phase::Finished {
+                continue;
+            }
+            if state.phase != Phase::Running || job.stopping() {
+                return Err("The application is still starting or closing".into());
+            }
+            let package = job.registration.launch.package();
+            if job.registration.gui_entry.is_some() || package.content_digest() != target.digest
+                || !matches!(package.source(), crate::provenance::TrustSource::Publisher { key_id } if key_id == &target.publisher)
+                || running.replace(job).is_some()
+            {
+                return Err("The running application does not have one matching default GUI".into());
+            }
+        }
+        let Some(job) = running else { return Ok(false); };
+        job.reopen.send(()).map_err(|_| "The running application does not support reopening from the Dock")?;
+        Ok(true)
     }
 
     pub(crate) fn media_window(

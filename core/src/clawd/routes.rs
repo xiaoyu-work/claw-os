@@ -2555,6 +2555,17 @@ routes! {
         run: |_c| Err(BrokerError::authorization(
             "screen locking requires the exact Root-held private GUI endpoint")),
     }
+    GuiDesktopEvents {
+        name: "gui.desktop.events",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::GuiResource),
+        body: body::DesktopEvents,
+        audit: &[("session", FieldRule::Token)],
+        run: |_c| Err(BrokerError::authorization(
+            "desktop events require the exact Root-held private GUI endpoint")),
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

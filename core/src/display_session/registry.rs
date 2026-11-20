@@ -32,6 +32,7 @@ pub struct Display {
     pub workload: Option<Arc<Workload>>,
     control: SyncSender<GuiCall>,
     launch: SyncSender<LaunchCall>,
+    desktop_changes: tokio::sync::watch::Sender<()>,
     verified_retired: Arc<AtomicBool>,
 }
 
@@ -56,6 +57,7 @@ struct GuiCall {
 
 struct LaunchCall {
     target: Option<LaunchTarget>,
+    from_dock: bool,
     reply: SyncSender<Result<bool, Error>>,
     deadline: Instant,
 }
@@ -68,6 +70,7 @@ pub(crate) struct GuiControl {
     pub workload: Arc<Workload>,
     sender: SyncSender<GuiCall>,
     launcher: SyncSender<LaunchCall>,
+    desktop_changes: tokio::sync::watch::Sender<()>,
     verified_retired: Arc<AtomicBool>,
 }
 
@@ -137,23 +140,37 @@ impl GuiControl {
             workload: display.workload.clone().ok_or(Error::Identity)?,
             sender: display.control.clone(),
             launcher: display.launch.clone(),
+            desktop_changes: display.desktop_changes.clone(),
             verified_retired: display.verified_retired.clone(),
         })
     }
 
+    pub(crate) fn desktop_updates(&self) -> tokio::sync::watch::Receiver<()> {
+        self.desktop_changes.subscribe()
+    }
+
+    pub(crate) fn desktop_changed(&self) {
+        self.desktop_changes.send_replace(());
+    }
+
     pub(crate) fn launch(&self, target: LaunchTarget, deadline: Instant) -> Result<(), Error> {
         target.validate()?;
-        self.submit_launch(Some(target), deadline)
+        self.submit_launch(Some(target), false, deadline)
+    }
+
+    pub(crate) fn launch_from_dock(&self, target: LaunchTarget, deadline: Instant) -> Result<(), Error> {
+        target.validate()?;
+        self.submit_launch(Some(target), true, deadline)
     }
 
     pub(crate) fn show_agent(&self, deadline: Instant) -> Result<(), Error> {
-        self.submit_launch(None, deadline)
+        self.submit_launch(None, false, deadline)
     }
 
-    fn submit_launch(&self, target: Option<LaunchTarget>, deadline: Instant) -> Result<(), Error> {
+    fn submit_launch(&self, target: Option<LaunchTarget>, from_dock: bool, deadline: Instant) -> Result<(), Error> {
         let (reply, result) = mpsc::sync_channel(1);
         self.launcher
-            .try_send(LaunchCall { target, reply, deadline })
+            .try_send(LaunchCall { target, from_dock, reply, deadline })
             .map_err(|_| Error::Protocol("desktop launcher is unavailable or busy"))?;
         if !result
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
@@ -336,6 +353,7 @@ impl Registry {
             workload: None,
             control,
             launch,
+            desktop_changes: tokio::sync::watch::channel(()).0,
             verified_retired: Arc::new(AtomicBool::new(false)),
         }));
         self.insert_display(login.session_id, display.clone())?;
@@ -468,6 +486,7 @@ fn monitor(
     launches: &Receiver<LaunchCall>,
 ) -> Result<(), Error> {
     let started = Instant::now();
+    let desktop_changes = display.lock().map_err(|_| Error::Identity)?.desktop_changes.clone();
     let mut pending = HashMap::<InstanceId, (u8, GuiCall)>::new();
     let mut timed_out = std::collections::HashSet::new();
     let mut launch_pending: Option<(InstanceId, LaunchCall)> = None;
@@ -506,6 +525,7 @@ fn monitor(
                     let command = match &call.target {
                         Some(target) => AuthorityCommand::Launch {
                             epoch, request, expires_monotonic_ms, target: target.clone(),
+                            from_dock: call.from_dock,
                         },
                         None => AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms },
                     };
@@ -626,6 +646,11 @@ fn monitor(
                             let _ = call.reply.send(Ok(submitted));
                         }
                     }
+                }
+                AuthorityReply::Gui { reply: CompositorReply::DesktopChanged { epoch: received } }
+                    if ready && received == epoch =>
+                {
+                    desktop_changes.send_replace(());
                 }
                 AuthorityReply::Gui { reply } => {
                     let (instance, kind) = reply_target(&reply, epoch)?;

@@ -188,6 +188,9 @@ pub enum CompositorReply {
         epoch: Epoch,
         instance: InstanceId,
     },
+    DesktopChanged {
+        epoch: Epoch,
+    },
     LockerReady {
         epoch: Epoch,
         instance: InstanceId,
@@ -334,6 +337,8 @@ pub enum AuthorityCommand {
         request: InstanceId,
         expires_monotonic_ms: u64,
         target: LaunchTarget,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        from_dock: bool,
     },
     ShowAgent {
         epoch: Epoch,
@@ -412,6 +417,7 @@ impl Packet for AuthorityReply {
                     | CompositorReply::Refreshed { .. }
                     | CompositorReply::SelectionSet { .. }
                     | CompositorReply::DesktopResult { .. }
+                    | CompositorReply::DesktopChanged { .. }
                     | CompositorReply::Locked { .. }
                     | CompositorReply::Retired { .. }
                     | CompositorReply::InstanceEnded { .. }

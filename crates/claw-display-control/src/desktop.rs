@@ -17,6 +17,7 @@ const SEALS: i32 = libc::F_SEAL_WRITE | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW 
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Command {
     List,
+    Observe,
     Focus { identifier: u64 },
     Close { identifier: u64 },
     CloseApp { identifier: u64, app_id: String },
@@ -48,7 +49,7 @@ pub fn valid_workspace(value: &str) -> bool {
 impl Command {
     pub fn validate(&self) -> Result<(), Error> {
         let identifier = match self {
-            Self::List => return Ok(()),
+            Self::List | Self::Observe => return Ok(()),
             Self::Focus { identifier }
             | Self::Close { identifier }
             | Self::ToggleFloating { identifier }

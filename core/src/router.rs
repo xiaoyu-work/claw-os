@@ -1299,13 +1299,26 @@ fn dispatch_with_stdin_impl(
         let session = env::var("COS_SESSION")
             .map_err(|_| "desktop menu requests require a bound GUI session".to_string())?;
         let params = match args {
-            [_, action, target] if matches!(action.as_str(), "request" | "run") =>
+            [_, action, target] if matches!(action.as_str(), "request" | "run" | "activate") =>
                 json!({"session": session, "action": action, "app_id": target}),
             [_, action, review] if matches!(action.as_str(), "complete" | "cancel") =>
                 json!({"session": session, "action": action, "review_id": review}),
-            _ => return Err("expected __desktop-menu run|request APP_ID or complete|cancel REVIEW_ID".into()),
+            _ => return Err("expected __desktop-menu run|activate|request APP_ID or complete|cancel REVIEW_ID".into()),
         };
         return Ok(Some(request_wire_clawd(Command::GuiDesktopLaunch, params)?.to_string()));
+    }
+
+    if name == "__desktop-events" {
+        if args.len() != 1 || env::var("COS_APP_GUI").as_deref() != Ok("1") {
+            return Err("desktop events require a managed GUI and take no arguments".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            crate::clawd::client::desktop_events()?;
+            return Ok(None);
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("desktop events require Linux".into());
     }
 
     if name == "__desktop-power" {

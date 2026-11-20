@@ -581,7 +581,7 @@ pub(crate) fn provider_route(command: super::Command) -> Result<&'static super::
         | super::Command::GuiMediaExchange | super::Command::GuiAudioControl
         | super::Command::GuiFilePicker | super::Command::GuiNotificationExchange
         | super::Command::GuiDesktopLaunch | super::Command::GuiPowerReview
-        | super::Command::GuiDesktopLock) {
+        | super::Command::GuiDesktopLock | super::Command::GuiDesktopEvents) {
         return Ok(command.route());
     }
     super::relayable_route(command)

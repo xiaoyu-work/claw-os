@@ -172,7 +172,7 @@ struct Supervisor {
     display: String,
     listener: Option<Listener>,
     subscribers: Vec<Subscriber>,
-    launchers: Vec<Child>,
+    launchers: Vec<(Option<String>, Child)>,
     shell_started: bool,
     shell: Option<(ProcessIdentity, Child)>,
     locker: Option<Locker>,
@@ -354,15 +354,15 @@ impl Supervisor {
                         .send(&command, &descriptors, self.controllers.live_io_deadline()?)
                         .map_err(|error| io_timeout(error, "timed out forwarding compositor command"))?;
                 }
-                AuthorityCommand::Launch { epoch, request, expires_monotonic_ms, target }
+                AuthorityCommand::Launch { epoch, request, expires_monotonic_ms, target, from_dock }
                     if epoch == self.controllers.epoch =>
                 {
-                    self.launch(request, expires_monotonic_ms, DesktopProcess::App(target))?;
+                    self.launch(request, expires_monotonic_ms, DesktopProcess::App(target), from_dock)?;
                 }
                 AuthorityCommand::ShowAgent { epoch, request, expires_monotonic_ms }
                     if epoch == self.controllers.epoch =>
                 {
-                    self.launch(request, expires_monotonic_ms, DesktopProcess::Agent)?;
+                    self.launch(request, expires_monotonic_ms, DesktopProcess::Agent, false)?;
                 }
                 _ => {
                     return Err(Error::Protocol(
@@ -374,22 +374,31 @@ impl Supervisor {
         Ok(())
     }
 
-    fn launch(&mut self, request: claw_display_control::InstanceId, expires: u64, process: DesktopProcess) -> Result<(), Error> {
+    fn launch(&mut self, request: claw_display_control::InstanceId, expires: u64, process: DesktopProcess, from_dock: bool) -> Result<(), Error> {
         let now = monotonic_ms()?;
+        let app_id = match &process {
+            DesktopProcess::App(target) => Some(target.app_id.clone()),
+            _ => None,
+        };
         let submitted = if !self.display.is_empty()
-            && self.launchers.len() < MAX_APP_LAUNCHERS
             && !matches!(&process, DesktopProcess::App(target) if target.app_id == SHELL_APP)
             && expires > now && expires <= now.saturating_add(2000)
         {
-            match spawn_desktop_process(&self.controllers, &self.containment, &self.display, process) {
-                Ok(child) => {
-                    self.launchers.push(child);
-                    true
+            if from_dock && app_id.is_some() && self.launchers.iter().any(|(id, _)| id == &app_id) {
+                true
+            } else if self.launchers.len() < MAX_APP_LAUNCHERS {
+                match spawn_desktop_process(&self.controllers, &self.containment, &self.display, process) {
+                    Ok(child) => {
+                        self.launchers.push((app_id, child));
+                        true
+                    }
+                    Err(error) => {
+                        log_failure(c"desktop launcher refused: %s", &error);
+                        false
+                    }
                 }
-                Err(error) => {
-                    log_failure(c"desktop launcher refused: %s", &error);
-                    false
-                }
+            } else {
+                false
             }
         } else {
             false
@@ -467,6 +476,7 @@ impl Supervisor {
                         | CompositorReply::Refreshed { .. }
                         | CompositorReply::SelectionSet { .. }
                         | CompositorReply::DesktopResult { .. }
+                        | CompositorReply::DesktopChanged { .. }
                         | CompositorReply::Retired { .. }
                         | CompositorReply::InstanceEnded { .. }
                         | CompositorReply::Rejected { .. }
@@ -527,8 +537,8 @@ impl Supervisor {
             }
             let mut index = 0;
             while index < self.launchers.len() {
-                if self.launchers[index].try_wait()?.is_some() {
-                    self.launchers.swap_remove(index).wait()?;
+                if self.launchers[index].1.try_wait()?.is_some() {
+                    self.launchers.swap_remove(index).1.wait()?;
                 } else {
                     index += 1;
                 }
@@ -676,7 +686,7 @@ impl Supervisor {
             ));
         }
         self.compositor.wait()?;
-        for mut launcher in self.launchers.drain(..) {
+        for (_, mut launcher) in self.launchers.drain(..) {
             launcher.wait()?;
         }
         if let Some((_, mut shell)) = self.shell.take() {

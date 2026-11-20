@@ -896,6 +896,11 @@ and power actions require the matching Agent build's private broker routes;
 launches also use its protected display supervisor. There is no raw fallback
 or change to the public App ABI. The new package removes the superseded
 session; it does not migrate or erase owner configuration.
+The event-driven Dock requires the matching Agent, compositor and signed
+Shell. Install them together and sign in again; it does not fall back to
+window polling. Files needs its matching App build to remain running after
+its last window closes and reopen from the Dock. An App that exits or does
+not implement reopening keeps its own lifecycle.
 The Quiet Shell's Claw AI button needs the matching Agent supervisor, which
 starts the existing native Agent UI in the current authenticated display.
 The Launcher also needs the matching signed `claw-app-launcher-desktop`

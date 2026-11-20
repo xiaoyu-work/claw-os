@@ -240,6 +240,14 @@ impl Authority {
         Ok(())
     }
 
+    pub fn desktop_changed(&self) -> Result<(), Error> {
+        let binding = self.link.binding();
+        if !self.ready || !binding.active()? {
+            return Err(Error::Closed);
+        }
+        self.link.reply(&CompositorReply::DesktopChanged { epoch: binding.epoch() })
+    }
+
     pub fn rights(&self, origin: Origin) -> Result<u32, Error> {
         if origin == Origin::Locker && !self.locker_attached {
             return Ok(0);

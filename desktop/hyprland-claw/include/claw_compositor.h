@@ -48,6 +48,7 @@ enum ClawDesktopKind {
     CLAW_DESKTOP_MOVE_WINDOW     = 7,
     CLAW_DESKTOP_TOGGLE_FLOATING = 8,
     CLAW_DESKTOP_TOGGLE_PIN      = 9,
+    CLAW_DESKTOP_OBSERVE         = 10,
 };
 
 typedef struct ClawDesktopRequest {
@@ -74,6 +75,7 @@ typedef struct ClawCommand {
 ClawCompositor* claw_compositor_open(void);
 void            claw_compositor_close(ClawCompositor* handle);
 bool            claw_compositor_ready(ClawCompositor* handle, const uint8_t* display, size_t length);
+bool            claw_compositor_desktop_changed(ClawCompositor* handle);
 int32_t         claw_compositor_next(ClawCompositor* handle, ClawCommand* command);
 bool            claw_compositor_acknowledge(ClawCompositor* handle, uint64_t serial, bool accepted);
 int32_t         claw_compositor_take_descriptor(ClawCompositor* handle, uint64_t serial);

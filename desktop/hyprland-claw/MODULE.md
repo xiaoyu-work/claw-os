@@ -45,8 +45,10 @@ listeners, standard/primary/data-control selections, layer-shell, focus grabs
 and checked shutdown. Selection and drag-and-drop offers retain distinct roles.
 XWayland focus never supplies a selection grant: its unleased clipboard bridge
 is refused, independently of drag-and-drop and window rendering.
-`Desktop.cpp` handles only the closed Root list/focus/close operations against
-native stable window IDs. Neither the App nor the Agent receives a raw
+`Desktop.cpp` handles the closed Root list/observe/focus/close operations
+against native stable window IDs. On native window, workspace and output
+events it marks the view as changed, without opening a second socket.
+Neither the App nor the Agent receives a raw
 Hyprland control socket. The existing display supervisor forwards authenticated
 response descriptors without interpreting them as grants. The
 [public window provider](../../core/src/clawd/desktop/windows.rs) uses this

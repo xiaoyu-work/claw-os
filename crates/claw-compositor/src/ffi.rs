@@ -134,6 +134,14 @@ unsafe extern "C" fn claw_compositor_ready(
 }
 
 #[no_mangle]
+unsafe extern "C" fn claw_compositor_desktop_changed(handle: *mut ClawCompositor) -> bool {
+    boundary(false, || unsafe {
+        with_authority(handle, |authority| authority.desktop_changed())?;
+        Ok(true)
+    })
+}
+
+#[no_mangle]
 unsafe extern "C" fn claw_compositor_next(
     handle: *mut ClawCompositor,
     command: *mut ClawCommand,
@@ -189,6 +197,7 @@ unsafe extern "C" fn claw_compositor_take_desktop(
         with_authority(handle, |authority| {
             match authority.take_desktop(serial)? {
                 DesktopCommand::List => output.kind = 1,
+                DesktopCommand::Observe => output.kind = 10,
                 DesktopCommand::Focus { identifier } => {
                     output.kind = 2;
                     output.identifier = identifier;

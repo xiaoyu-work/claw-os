@@ -68,6 +68,8 @@ pub struct DesktopLock {
     pub session: Token,
 }
 
+pub type DesktopEvents = DesktopLock;
+
 pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;
 pub use crate::clawd::gui::inputs::{FileReadRequest as GuiFileReadRequest, FileReadStatusRequest as GuiFileReadStatusRequest};
 pub use crate::clawd::gui::inputs::{

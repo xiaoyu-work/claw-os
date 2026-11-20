@@ -30,10 +30,19 @@ explicit owner click through its private endpoint, pinned display and exact
 signed launch target or logind provider. The default vendor-signed `claw-launcher`
 window started by that supervisor may submit a selected signed desktop entry
 through the same gate; it cannot start the Agent, issue power actions, or
-spawn itself. Its overlay still requires its own `ui.panel` admission. The
-Shell's desktop snapshot shows whether that Launcher has a running panel job
-in the same display epoch. Other GUIs retain exact per-action reviews;
-sleep still requires an acknowledged native lock.
+spawn itself. Its overlay still requires its own `ui.panel` admission. Other
+GUIs retain exact per-action reviews; sleep still requires an acknowledged
+native lock.
+
+The private `gui.desktop.events` connection sends the system Shell one initial
+window/workspace snapshot, then a new snapshot when the compositor or GUI Host
+reports a change. Only the live Shell with `sys.observe:desktop` can see this
+view. Running Dock entries come from managed GUI instances and their verified
+desktop-entry resources on the same display epoch, not from a window count.
+Other GUI clients of this connection receive only their own `reopen` event.
+A Dock click can ask an already running, listening default GUI of the exact
+signed target to reopen; it cannot start a second copy, send arguments to
+that instance, or carry authority into a different session.
 
 `desktop.optional_needs` and each `desktop.entries.<name>.optional_needs` are
 independent best-effort feature lists, empty when absent. Missing, denied,

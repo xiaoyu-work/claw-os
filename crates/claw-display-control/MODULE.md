@@ -41,6 +41,8 @@ authenticated compositor account, not an oversized control frame or a raw
 App-accessible Hyprland socket. Receivers verify owner/seals and read by offset,
 so a sender cannot change the payload or its interpretation through a shared
 file position. The data descriptor supplies no window-control authority.
+`Observe` starts epoch-bound change signals on the existing channel. These
+signals carry no payload or descriptors; one-shot `List` does not enable them.
 
 Production consumers must bind an expected process using their Root-owned
 child/parent or kernel peer, not a PID parsed from App JSON. Inherited socket
