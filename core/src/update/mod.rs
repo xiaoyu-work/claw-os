@@ -80,7 +80,7 @@ pub const SECURITY_EPOCH: u64 = 1;
 /// which would make phased publication impossible.
 pub const ABI: u32 = 1;
 /// Paired Root/worker gateway contract, tracked by release policy.
-pub const AGENTD_CONTEXT_PROTOCOL: u32 = 21;
+pub const AGENTD_CONTEXT_PROTOCOL: u32 = 22;
 const _: () = assert!(AGENTD_CONTEXT_PROTOCOL == crate::agentd::protocol::PROTOCOL_VERSION);
 
 /// Authoritative floor state. A compiled-in absolute path: never

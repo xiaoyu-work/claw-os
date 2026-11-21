@@ -17,7 +17,7 @@ mod settings;
 mod helper;
 mod windows;
 #[cfg(target_os = "linux")]
-pub(super) use windows::list as window_snapshot;
+pub(crate) use windows::{list as window_snapshot, parse_identifier as parse_window_identifier};
 
 pub(super) async fn output_state(client: &ClientIdentity) -> Result<Value, String> {
     let uid = client.require_uid()?;

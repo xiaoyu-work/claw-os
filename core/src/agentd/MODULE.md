@@ -25,7 +25,12 @@ executes neither.
 
 ## Key Files
 
-Private worker protocol v21 adds a dedicated background submission exchange.
+Private worker protocol v22 carries the foreground [desktop visual tool](../../../docs/desktop-vision.md).
+Root binds the authenticated display before exposing the route. Its per-window
+review and one-use observation stay in the current task; only the authorized
+image goes to the worker. Neither the task stream nor the journal stores pixels.
+
+The dedicated background submission exchange is separate.
 Only an ordinary foreground Job can use it, with at most two submissions per
 worker. Root derives the owner, origin conversation, Workspace, and capability
 ceiling; the worker contributes only a bounded brief. A delegated Job has
@@ -55,6 +60,7 @@ wire representation.
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, lease-renewal and permission-mediation types |
 | `receipts.rs` | Reporting-only Activity receipt association from the authenticated lease and broker-owned Job |
 | `context.rs`, `../clawd/workspaces/reads.rs` | Root current-domain context gateway, scoped memory/source retrieval and sourced reporting; no management or authority selectors |
+| `visual.rs` | Exact desktop window review, bounded image custody and single-use click dispatch |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 | `../extension_host/` | Dynamic App/MCP host, task-bound control, route-filtered broker proxy, cleanup |

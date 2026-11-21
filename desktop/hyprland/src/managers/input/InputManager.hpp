@@ -135,6 +135,7 @@ class CInputManager {
     bool               isConstrained();
     bool               isLocked();
     bool               hasHeldButtons();
+    bool               clickVisualWindow(const PHLWINDOW& window, const Vector2D& point);
 
     bool               anyHidHasCap(eHIDCapabilityType type);
 
@@ -271,7 +272,13 @@ class CInputManager {
 
     uint32_t           m_capabilities = 0;
 
-    void               mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt, bool pointerOnly = false);
+    struct SVisualHit {
+        PHLWINDOW               window;
+        SP<CWLSurfaceResource>  surface;
+        Vector2D                local;
+    };
+    void mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt,
+                          bool pointerOnly = false, SVisualHit* visualHit = nullptr);
     void               recheckMouseWarpOnMouseInput();
 
     SP<CTabletTool>    ensureTabletToolPresent(SP<Aquamarine::ITabletTool>);

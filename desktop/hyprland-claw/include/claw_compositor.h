@@ -49,6 +49,8 @@ enum ClawDesktopKind {
     CLAW_DESKTOP_TOGGLE_FLOATING = 8,
     CLAW_DESKTOP_TOGGLE_PIN      = 9,
     CLAW_DESKTOP_OBSERVE         = 10,
+    CLAW_DESKTOP_VISUAL_CAPTURE  = 11,
+    CLAW_DESKTOP_VISUAL_CLICK    = 12,
 };
 
 typedef struct ClawDesktopRequest {
@@ -56,6 +58,12 @@ typedef struct ClawDesktopRequest {
     uint64_t identifier;
     uint8_t  app_id[256];
     uint8_t  workspace[80];
+    uint8_t  observation[33];
+    uint64_t expires_ms;
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
 } ClawDesktopRequest;
 
 typedef struct ClawCommand {

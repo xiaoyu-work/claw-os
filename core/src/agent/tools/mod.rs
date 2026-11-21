@@ -14,6 +14,7 @@ pub mod cos_apps_session;
 pub mod cos_help;
 pub mod cos_proxy;
 pub mod delegate;
+pub(crate) mod desktop_vision;
 pub mod exposure;
 pub mod guardrails;
 pub mod mcp;

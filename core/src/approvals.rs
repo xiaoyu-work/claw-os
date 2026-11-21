@@ -1003,6 +1003,12 @@ fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization,
 pub(crate) const DESKTOP_LAUNCH_APPROVAL: &str = "desktop-launch:";
 pub(crate) const DESKTOP_POWER_APPROVAL: &str = "desktop-power:";
 
+pub(crate) fn is_desktop_visual_approval(capability: &Cap, operation_digest: Option<&str>) -> bool {
+    capability.verb == Verb::DESKTOP_WINDOW
+        && operation_digest.is_some()
+        && matches!(&capability.scope, Scope::Name(name) if name.starts_with("visual:"))
+}
+
 pub(crate) fn is_desktop_effect_approval(
     verb: Verb,
     session: &str,
@@ -1020,11 +1026,12 @@ fn validate_duration(
     authorization: &ApprovalAuthorization,
     duration: GrantDuration,
 ) -> Result<(), String> {
-    if is_desktop_effect_approval(
+    if (is_desktop_effect_approval(
         authorization.capability.verb,
         &authorization.session,
         authorization.operation_digest.as_deref(),
-    ) && duration != GrantDuration::Once
+    ) || is_desktop_visual_approval(&authorization.capability, authorization.operation_digest.as_deref()))
+        && duration != GrantDuration::Once
     {
         return Err("desktop effects can only be approved once".into());
     }

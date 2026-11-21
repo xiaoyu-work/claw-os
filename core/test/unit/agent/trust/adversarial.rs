@@ -94,6 +94,19 @@ fn background_brief_stays_model_data_and_cannot_escape_its_fence() {
 }
 
 #[test]
+fn desktop_frame_is_request_local_data_not_policy() {
+    let label = crate::agent::tools::desktop_vision::frame_label(ESCALATION);
+    assert_eq!(label.class(), TrustClass::UntrustedExternalContent);
+    assert_eq!(label.kind().persistence(), Persistence::RequestLocal);
+    let projection = PromptProjection::new().with(label);
+    assert!(projection.system_text().is_empty());
+    assert_contained(
+        &projection.prelude_segments()[0].render_fenced(envelope::process_seal()),
+        "desktop_visual_frame",
+    );
+}
+
+#[test]
 fn mcp_tool_description_injection_stays_extension_metadata() {
     // A remote server's *description* is metadata, not policy, and it
     // reaches the model as a tool definition, so it is bounded and

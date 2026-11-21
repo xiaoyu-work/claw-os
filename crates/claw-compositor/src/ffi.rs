@@ -39,6 +39,12 @@ struct ClawDesktopRequest {
     identifier: u64,
     app_id: [u8; 256],
     workspace: [u8; 80],
+    observation: [u8; 33],
+    expires_ms: u64,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
 }
 
 impl Default for ClawDesktopRequest {
@@ -48,6 +54,12 @@ impl Default for ClawDesktopRequest {
             identifier: 0,
             app_id: [0; 256],
             workspace: [0; 80],
+            observation: [0; 33],
+            expires_ms: 0,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
         }
     }
 }
@@ -195,7 +207,9 @@ unsafe extern "C" fn claw_compositor_take_desktop(
         let output = request.as_mut().ok_or(Error::Identity)?;
         *output = ClawDesktopRequest::default();
         with_authority(handle, |authority| {
-            match authority.take_desktop(serial)? {
+            let (command, expires_ms) = authority.take_desktop(serial)?;
+            output.expires_ms = expires_ms;
+            match command {
                 DesktopCommand::List => output.kind = 1,
                 DesktopCommand::Observe => output.kind = 10,
                 DesktopCommand::Focus { identifier } => {
@@ -234,6 +248,24 @@ unsafe extern "C" fn claw_compositor_take_desktop(
                 DesktopCommand::TogglePin { identifier } => {
                     output.kind = 9;
                     output.identifier = identifier;
+                }
+                DesktopCommand::VisualCapture { identifier, observation, region } => {
+                    output.kind = 11;
+                    output.identifier = identifier;
+                    output.observation[..32].copy_from_slice(observation.as_bytes());
+                    if let Some(region) = region {
+                        output.x = region.x;
+                        output.y = region.y;
+                        output.width = region.width;
+                        output.height = region.height;
+                    }
+                }
+                DesktopCommand::VisualClick { identifier, observation, x, y } => {
+                    output.kind = 12;
+                    output.identifier = identifier;
+                    output.observation[..32].copy_from_slice(observation.as_bytes());
+                    output.x = x;
+                    output.y = y;
                 }
             }
             Ok(())

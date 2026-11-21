@@ -44,6 +44,7 @@ use crate::agent::runtime::hooks::{
 };
 use crate::agent::runtime::progress::ProgressSink;
 use crate::agent::service::{FinishOutcome, JobExecution};
+use crate::agent::tools::desktop_vision;
 use crate::audit_policy;
 use crate::caps::approval_gateway::{ApprovalGateway, PendingApproval};
 use crate::caps::{ConsentContext, Scope, Verb};
@@ -300,6 +301,7 @@ struct ChannelState {
     monetary_waiters: Mutex<HashMap<u64, SyncSender<MonetaryBudgetReply>>>,
     context_waiters: Mutex<HashMap<u64, (String, SyncSender<ContextReply>)>>,
     delegation_waiters: Mutex<HashMap<u64, oneshot::Sender<BackgroundDelegationReply>>>,
+    visual_waiters: Mutex<HashMap<u64, oneshot::Sender<desktop_vision::Reply>>>,
     pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
@@ -414,6 +416,9 @@ impl ChannelState {
         if let Ok(mut waiters) = self.delegation_waiters.lock() {
             waiters.clear();
         }
+        if let Ok(mut waiters) = self.visual_waiters.lock() {
+            waiters.clear();
+        }
         if let Ok(mut waiters) = self.context_waiters.lock() {
             for (_, (_,waiter)) in waiters.drain() {
                 let _ = waiter.try_send(ContextReply::Refused { message: message.into() });
@@ -488,6 +493,7 @@ impl ChannelIo {
             monetary_waiters: Mutex::new(HashMap::new()),
             context_waiters: Mutex::new(HashMap::new()),
             delegation_waiters: Mutex::new(HashMap::new()),
+            visual_waiters: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
@@ -926,6 +932,13 @@ where
                     let _ = waiter.send(reply);
                 }
             }
+            Ok(Some(BrokerFrame::DesktopVisualReply { correlation_id, reply })) => {
+                if let Some(waiter) = state.visual_waiters.lock().ok()
+                    .and_then(|mut waiters| waiters.remove(&correlation_id))
+                {
+                    let _ = waiter.send(reply);
+                }
+            }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => {
                 state.cancelled.store(true, Ordering::SeqCst);
                 crate::agent::runtime::interrupt::signal(&task_id);
@@ -1253,6 +1266,34 @@ struct ChannelBackgroundSubmitter {
     state: Arc<ChannelState>,
 }
 
+struct ChannelDesktopVision {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+#[async_trait::async_trait]
+impl desktop_vision::Gateway for ChannelDesktopVision {
+    async fn request(&self, operation: desktop_vision::Operation) -> Result<desktop_vision::Reply, String> {
+        if self.state.cancelled.load(Ordering::SeqCst) {
+            return Err("Desktop visual task was cancelled".into());
+        }
+        let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = oneshot::channel();
+        self.state.visual_waiters.lock().map_err(|_| "Desktop visual reply registry is unavailable")?
+            .insert(correlation_id, sender);
+        let sent = self.state.tx.send(WorkerFrame::DesktopVisual {
+            task_id: self.task_id.clone(), correlation_id, operation,
+        });
+        let reply = if sent.is_ok() {
+            tokio::time::timeout(desktop_vision::REQUEST_TIMEOUT, receiver).await.ok().and_then(Result::ok)
+        } else { None };
+        if let Ok(mut waiters) = self.state.visual_waiters.lock() {
+            waiters.remove(&correlation_id);
+        }
+        reply.ok_or_else(|| "Desktop visual exchange was not confirmed. Observe again before any new click.".into())
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::agent::tools::background::BackgroundSubmitter for ChannelBackgroundSubmitter {
     async fn submit(&self, brief: String) -> Result<String, String> {
@@ -1368,6 +1409,9 @@ async fn execute(
                 state: state.clone(),
             }) as Arc<dyn crate::agent::tools::background::BackgroundSubmitter>
         });
+    let visual = assignment.grant.claims.allows_route(protocol::ROUTE_DESKTOP_VISUAL).then(|| {
+        Arc::new(ChannelDesktopVision { task_id: task_id.clone(), state: state.clone() }) as Arc<dyn desktop_vision::Gateway>
+    });
     // Keep the large runtime future out of each task-local wrapper's stack frame.
     let scoped = Box::pin(crate::agent::service::execute_job_with_worker_tools(
         request,
@@ -1379,6 +1423,7 @@ async fn execute(
         background,
     ));
     let scoped = reporting::with_recorder(recorder, scoped);
+    let scoped = desktop_vision::scope(visual, scoped);
     let scoped = with_session(assignment.session, scoped);
     let scoped = crate::config::with_snapshot(config, scoped);
     // The same per-owner scoping the in-process worker installed, so

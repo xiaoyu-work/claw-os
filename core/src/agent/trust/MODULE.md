@@ -18,6 +18,8 @@ per-segment metadata field, so role alone cannot tell those apart.
 - Define a closed, ordered trust lattice independent of chat role.
 - Label resumed Activity work handoffs as `ActivityWorkCheckpoint`: untrusted
   caller reports in a fenced user prelude, never policy or a fresh owner command.
+- Label approved window images as `DesktopVisualFrame`: untrusted, request-local
+  image data with a bounded digest, never a policy or history segment.
 - Enumerate every model-input source and its declared behaviour in one place.
 - Guarantee trust never rises under concatenation, summarisation, truncation,
   storage, replay or re-serialisation.

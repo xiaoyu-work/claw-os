@@ -105,7 +105,9 @@ pub fn journal_segment_kind(kind: SourceKind) -> crate::session::journal::Segmen
         | SourceKind::BuiltinToolMetadata
         | SourceKind::AppToolMetadata
         | SourceKind::McpToolMetadata => SegmentKind::ToolResult,
-        SourceKind::MediaTranscript | SourceKind::UserReference => SegmentKind::Attachment,
+        SourceKind::MediaTranscript | SourceKind::UserReference | SourceKind::DesktopVisualFrame => {
+            SegmentKind::Attachment
+        }
         SourceKind::ModelCompressionSummary => SegmentKind::Compression,
         _ => SegmentKind::SystemContext,
     }
@@ -129,6 +131,7 @@ pub fn journal_origin(kind: SourceKind) -> crate::session::journal::Origin {
         | SourceKind::BuiltinToolMetadata
         | SourceKind::WebPageContent
         | SourceKind::MediaTranscript
+        | SourceKind::DesktopVisualFrame
         | SourceKind::HookOutput => Origin::Tool,
         _ => Origin::System,
     }

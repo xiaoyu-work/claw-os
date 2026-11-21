@@ -382,12 +382,14 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
     let fallback_exposure = ToolExposureContext::isolated(tools.guardrails().clone());
     let exposure = exposure.unwrap_or(&fallback_exposure);
     check_interrupted(interrupt)?;
+    use crate::agent::tools::desktop_vision;
+    let visual_model = desktop_vision::Model::selected(provider.as_ref(), model);
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
         system: Some(system.to_string()),
         tools: if allow_tools {
-            llm_tools.to_vec()
+            llm_tools.iter().filter(|tool| visual_model.is_some() || tool.name != desktop_vision::TOOL).cloned().collect()
         } else {
             Vec::new()
         },
@@ -406,6 +408,10 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
     };
     if let Some(reasoning_effort) = reasoning_effort {
         request.extra["_cos_reasoning_effort"] = serde_json::json!(reasoning_effort);
+    }
+    if let Some(image) = desktop_vision::take(visual_model.as_ref()) {
+        request.messages.push(image);
+        request.extra["_cos_desktop_visual"] = serde_json::json!(true);
     }
 
     // Prompt-cache markers are no-ops for providers that don't support
@@ -621,7 +627,9 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
     // Tools that opt into [`Tool::parallel_safe`] run concurrently
     // via `dispatch_calls`; others serialise. See that helper for the
     // ordering guarantees.
-    let (result_blocks, pending_stop) = dispatch_calls(
+    let (result_blocks, pending_stop) = desktop_vision::VISION_MODEL.scope(
+        desktop_vision::Model::selected(provider.as_ref(), model),
+        dispatch_calls(
         tools,
         exposure,
         hook_ctx,
@@ -629,7 +637,7 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
         session_id,
         progress.as_ref(),
         interrupt,
-    )
+    ))
     .await?;
     messages.push(Message {
         role: Role::User,
@@ -1114,7 +1122,14 @@ async fn dispatch_calls(
     let resolved = tool_calls
         .iter()
         .map(|call| {
-            if tool_calls.len() > 1
+            if tool_calls.len() > 1 && call.name == crate::agent::tools::desktop_vision::TOOL {
+                ResolvedToolCall {
+                    call: call.clone(),
+                    kind: ResolvedToolKind::Rejected(
+                        "A desktop visual action must be the only tool call in its response.".into(),
+                    ),
+                }
+            } else if tool_calls.len() > 1
                 && call.name == crate::agent::tools::activity_work::CHECKPOINT_TOOL
             {
                 ResolvedToolCall {

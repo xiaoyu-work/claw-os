@@ -317,6 +317,7 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
         &request.session,
         request.operation_digest.as_deref(),
     );
+    let desktop_visual = approvals::is_desktop_visual_approval(&capability, request.operation_digest.as_deref());
     let mut context = vec![
         ReviewDetail {
             label: "Technical scope".into(),
@@ -359,6 +360,11 @@ pub(super) fn legacy(owner: u32, review: LegacyReview) -> Result<SystemReview, S
             label: "Restoration".into(),
             value: "Restores the existing App policy only; it does not mint execution authority."
                 .into(),
+        }]
+    } else if desktop_visual {
+        vec![ReviewDetail {
+            label: "One window for this task".into(),
+            value: "The selected model can receive images of this window and left-click its currently visible pixels for up to five minutes, ending sooner when the task ends or you revoke access.".into(),
         }]
     } else if desktop_effect {
         vec![if verb == Verb::SYS_POWER {

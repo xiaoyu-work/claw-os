@@ -22,6 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;
 
 use crate::agent::service::{FinishOutcome, Job, Store};
+use crate::agent::tools::desktop_vision;
 use crate::caps::ConsentContext;
 use crate::clawd::state::DaemonState;
 use crate::clawd::transport::limits::{Admission, Limits};
@@ -1230,6 +1231,12 @@ async fn pump(
         ));
     }
     let mut claims = claims_for(broker_pid, &lease, config.lease);
+    let mut desktop = super::visual::State::for_job(
+        job, lease.owner_uid, lease.presence.map_or(lease.worker_pid, |presence| presence.pid),
+    );
+    if desktop.is_none() {
+        claims.routes.retain(|route| route != protocol::ROUTE_DESKTOP_VISUAL);
+    }
     if !job.can_delegate_background() {
         claims.routes.retain(|route| route != protocol::ROUTE_BACKGROUND_DELEGATION);
     }
@@ -1389,12 +1396,27 @@ async fn pump(
     let mut monetary_exchanges: u32 = 0;
     let mut context_exchanges: u32 = 0;
     let mut delegation_attempts: u32 = 0;
+    type VisualExchange<'a> = std::pin::Pin<Box<dyn std::future::Future<
+        Output = (u64, super::visual::State, desktop_vision::Reply),
+    > + Send + 'a>>;
+    let mut visual_exchange: Option<VisualExchange<'_>> = None;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
+            (correlation_id, state, reply) = async {
+                visual_exchange.as_mut().expect("guarded desktop visual exchange").await
+            }, if visual_exchange.is_some() => {
+                visual_exchange = None;
+                desktop = Some(state);
+                if let Err(error) = send(&mut writer, &BrokerFrame::DesktopVisualReply { correlation_id, reply }).await {
+                    return TaskOutcome::Indeterminate(format!(
+                        "Desktop visual outcome could not be delivered; do not replay it: {error}"
+                    ));
+                }
+            }
             frame = frames.next_frame::<WorkerFrame>() => match frame {
                 Ok(Some(frame)) => {
                     last_progress = Instant::now();
@@ -1651,6 +1673,24 @@ async fn pump(
                                 ));
                             }
                         }
+                        WorkerFrame::DesktopVisual { correlation_id, operation, .. } => {
+                            if cancel_sent || shutdown.load(Ordering::SeqCst)
+                                || !assignment.grant.claims.allows_route(protocol::ROUTE_DESKTOP_VISUAL)
+                                || desktop.is_none()
+                            {
+                                let reply = desktop_vision::Reply::Refused {
+                                    message: "Desktop vision is unavailable or busy in this task".into(),
+                                };
+                                if send(&mut writer, &BrokerFrame::DesktopVisualReply { correlation_id, reply }).await.is_err() {
+                                    return TaskOutcome::Indeterminate("Desktop visual acknowledgement was lost".into());
+                                }
+                            } else if let Some(mut state) = desktop.take() {
+                                visual_exchange = Some(Box::pin(async move {
+                                    let reply = state.request(store, job, operation).await;
+                                    (correlation_id, state, reply)
+                                }));
+                            }
+                        }
                         WorkerFrame::Result { outcome, .. } => {
                             if let Err(error) = crate::workspaces::association::check_job(job) {
                                 return TaskOutcome::Failed(error);
@@ -1764,6 +1804,8 @@ async fn pump(
                         || execution_stop_reason.is_some())
                 {
                     cancel_sent = true;
+                    visual_exchange = None;
+                    desktop = None;
                     extension_lease.close();
                     cancelled_at = Some(Instant::now());
                     crate::clawd::audit::record_extension_host_event(
@@ -1944,8 +1986,10 @@ fn accept(
     if frame.task_id() != Some(lease.task_id.as_str()) {
         return Err("frame is addressed to a different task".to_string());
     }
-    if let WorkerFrame::BackgroundDelegation { correlation_id: 0, .. } = frame {
-        return Err("invalid background delegation correlation".into());
+    if matches!(frame, WorkerFrame::BackgroundDelegation { correlation_id: 0, .. }
+        | WorkerFrame::DesktopVisual { correlation_id: 0, .. })
+    {
+        return Err("invalid task action correlation".into());
     }
     if let WorkerFrame::Context(request) = frame {
         if request.correlation_id == 0 || request.nonce.len()!=32

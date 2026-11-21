@@ -179,6 +179,8 @@ pub enum SourceKind {
     WorkspaceSharedSource,
     WorkspaceImportedNote,
     DelegatedTaskBrief,
+    /// Pixels observed from an approved foreground window, not owner instructions.
+    DesktopVisualFrame,
 }
 
 impl SourceKind {
@@ -224,6 +226,7 @@ impl SourceKind {
         SourceKind::WorkspaceSharedSource,
         SourceKind::WorkspaceImportedNote,
         SourceKind::DelegatedTaskBrief,
+        SourceKind::DesktopVisualFrame,
     ];
 
     /// Dense index into [`SourceKind::ALL`].
@@ -274,6 +277,7 @@ impl SourceKind {
             Self::WorkspaceSharedSource => 37,
             Self::WorkspaceImportedNote => 38,
             Self::DelegatedTaskBrief => 39,
+            Self::DesktopVisualFrame => 40,
         }
     }
 
@@ -538,6 +542,13 @@ impl SourceKind {
                 InjectedAuditRow,
                 UserChannelEnvelope,
                 ContentRef,
+            ),
+            Self::DesktopVisualFrame => (
+                "desktop_visual_frame",
+                UntrustedExternalContent,
+                RequestLocal,
+                UserChannelEnvelope,
+                LabelAndDigest,
             ),
         };
 

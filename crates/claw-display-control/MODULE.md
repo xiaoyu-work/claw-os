@@ -43,6 +43,14 @@ so a sender cannot change the payload or its interpretation through a shared
 file position. The data descriptor supplies no window-control authority.
 `Observe` starts epoch-bound change signals on the existing channel. These
 signals carry no payload or descriptors; one-shot `List` does not enable them.
+The two visual commands carry a bounded native-pixel crop or one observation
+ID and pixel coordinate. The Root broker owns consent; the event-thread
+compositor checks image freshness and the actual input target before clicking.
+Both the PNG response and the click acknowledgement use the same sealed
+descriptor contract and expire independently of GUI-App leases.
+The broker only sends a first visual command to a compositor whose ordinary
+window state includes `visual-ready`; otherwise it leaves the existing
+display connection untouched.
 
 Production consumers must bind an expected process using their Root-owned
 child/parent or kernel peer, not a PID parsed from App JSON. Inherited socket

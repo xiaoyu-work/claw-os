@@ -11,21 +11,78 @@ use serde_json::Value;
 use crate::Error;
 
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_VISUAL_EDGE: u32 = 640;
+pub const MAX_WINDOW_EDGE: u32 = 4096;
+pub const VISUAL_FRAME_TTL_MS: u64 = 90_000;
 const SEALS: i32 = libc::F_SEAL_WRITE | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PixelRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl PixelRegion {
+    pub fn valid(self) -> bool {
+        (1..=MAX_VISUAL_EDGE).contains(&self.width)
+            && (1..=MAX_VISUAL_EDGE).contains(&self.height)
+            && self.x <= MAX_WINDOW_EDGE - self.width
+            && self.y <= MAX_WINDOW_EDGE - self.height
+    }
+}
+
+pub fn valid_observation(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Command {
     List,
     Observe,
-    Focus { identifier: u64 },
-    Close { identifier: u64 },
-    CloseApp { identifier: u64, app_id: String },
-    FocusWorkspace { workspace: String },
-    ToggleSpecial { workspace: String },
-    MoveWindow { identifier: u64, workspace: String },
-    ToggleFloating { identifier: u64 },
-    TogglePin { identifier: u64 },
+    Focus {
+        identifier: u64,
+    },
+    Close {
+        identifier: u64,
+    },
+    CloseApp {
+        identifier: u64,
+        app_id: String,
+    },
+    FocusWorkspace {
+        workspace: String,
+    },
+    ToggleSpecial {
+        workspace: String,
+    },
+    MoveWindow {
+        identifier: u64,
+        workspace: String,
+    },
+    ToggleFloating {
+        identifier: u64,
+    },
+    TogglePin {
+        identifier: u64,
+    },
+    VisualCapture {
+        identifier: u64,
+        observation: String,
+        region: Option<PixelRegion>,
+    },
+    VisualClick {
+        identifier: u64,
+        observation: String,
+        x: u32,
+        y: u32,
+    },
 }
 
 pub fn valid_workspace(value: &str) -> bool {
@@ -54,6 +111,24 @@ impl Command {
             | Self::Close { identifier }
             | Self::ToggleFloating { identifier }
             | Self::TogglePin { identifier } => *identifier,
+            Self::VisualCapture {
+                identifier,
+                observation,
+                region,
+            } if valid_observation(observation) && region.is_none_or(PixelRegion::valid) => {
+                *identifier
+            }
+            Self::VisualClick {
+                identifier,
+                observation,
+                x,
+                y,
+            } if valid_observation(observation) && *x < MAX_VISUAL_EDGE && *y < MAX_VISUAL_EDGE => {
+                *identifier
+            }
+            Self::VisualCapture { .. } | Self::VisualClick { .. } => {
+                return Err(Error::Protocol("invalid desktop visual request"));
+            }
             Self::FocusWorkspace { workspace } if valid_workspace(workspace) => return Ok(()),
             Self::ToggleSpecial { workspace }
                 if workspace.starts_with("special:") && valid_workspace(workspace) =>

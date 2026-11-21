@@ -1048,6 +1048,7 @@ pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
         deps.paths.system_skills_origin,
     )));
     r.register(Arc::new(super::cos_help::CosHelp));
+    r.register(Arc::new(super::desktop_vision::DesktopVision));
     super::cos_proxy::register_all_with_notes(&mut r, deps.runtime.notes().clone());
     super::cos_apps_session::register_manifests(&mut r, &deps.paths.apps_dir, &deps.app_sessions);
     super::media::register_default_media_tools_with_outputs_dir(

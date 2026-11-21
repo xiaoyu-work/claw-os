@@ -125,7 +125,7 @@ pub(super) fn target(owner: u32, pid: u32) -> Result<GuiControl, String> {
         .map_err(|error| format!("authenticated desktop target: {error}"))
 }
 
-pub(super) fn parse_identifier(value: &str) -> Result<(Epoch, u64), String> {
+pub(crate) fn parse_identifier(value: &str) -> Result<(Epoch, u64), String> {
     let invalid = || "window identifier must contain a display epoch and native ID".to_string();
     let (label, number) = value.split_once(':').ok_or_else(invalid)?;
     if label.len() != 32

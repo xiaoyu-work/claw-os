@@ -3364,6 +3364,37 @@ SP<IFramebuffer> IHyprRenderer::makeSnapshotFB(PHLWINDOW pWindow) {
     return makeSnapshotFB(pWindow, eSceneMode::MONITOR);
 }
 
+SP<IFramebuffer> IHyprRenderer::renderVisualWindow(PHLWINDOW window, PHLMONITOR monitor, const Vector2D& pixels) {
+    if (m_context.active() || window->effects().hasActiveTransformers())
+        return nullptr;
+
+    const auto frame = createFB("Claw visual window");
+    if (!frame || !frame->alloc(pixels.x, pixels.y, DRM_FORMAT_ABGR8888))
+        return nullptr;
+    frame->setImageDescription(DEFAULT_SRGB_IMAGE_DESCRIPTION);
+    const auto presentation = window->presentation().renderPresentation(nullptr);
+    if (presentation.floatingOffset != Vector2D{} || presentation.workspaceOffset != Vector2D{})
+        return nullptr;
+
+    SRenderOptions options;
+    options.sceneResources = makeShared<CSceneResources>(
+        createFB("Claw visual isolation"), SSceneBufferDescription{.format = DRM_FORMAT_ABGR8888, .imageDescription = DEFAULT_SRGB_IMAGE_DESCRIPTION});
+    CRegion damage{CBox{{}, pixels}};
+    if (!beginRender(monitor, damage, RENDER_MODE_FULL_FAKE, nullptr, frame, true, options))
+        return nullptr;
+
+    m_context.m_data.blockScreenShader = true;
+    m_context.m_data.transformDamage   = false;
+    m_context.m_renderingCapture       = true;
+    m_context.m_blockSurfaceFeedback   = true;
+    setViewport(0, 0, pixels.x, pixels.y);
+    draw(m_context, CClearPassElement::SClearData{{0, 0, 0, 1}}, damage);
+    startRenderPass(m_context);
+    renderWindow(m_context, window, monitor, presentation, Time::steadyNow(), false, RENDER_PASS_ALL, true, true);
+    endRender();
+    return frame;
+}
+
 SP<IFramebuffer> IHyprRenderer::makeSnapshotFB(PHLWINDOW pWindow, eSceneMode mode) {
     if (m_context.active())
         return nullptr;

@@ -246,7 +246,7 @@ void CInputManager::sendMotionEventsToFocused() {
     g_pSeatManager->setPointerFocus(surface, local);
 }
 
-void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos, bool pointerOnly) {
+void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos, bool pointerOnly, SVisualHit* visualHit) {
     if (!pointerOnly)
         m_lastInputMouse = mouse;
 
@@ -430,7 +430,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         g_layoutManager->moveMouse(getMouseCoordsInternal());
 
     if (g_layoutManager->dragController()->exclusiveDeviceGrab()) {
-        g_pSeatManager->setPointerFocus(nullptr, {});
+        if (!visualHit)
+            g_pSeatManager->setPointerFocus(nullptr, {});
         return;
     }
 
@@ -583,6 +584,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     }
 
     if (!foundSurface) {
+        if (visualHit)
+            return;
         if (!m_emptyFocusCursorSet) {
             g_pHyprRenderer->setCursorFromName("left_ptr");
             m_emptyFocusCursorSet = true;
@@ -610,7 +613,10 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     }
 
     if (pointerOnly) {
-        g_pSeatManager->setPointerFocus(foundSurface, surfaceLocal);
+        if (visualHit)
+            *visualHit = {pFoundWindow, foundSurface, surfaceLocal};
+        else
+            g_pSeatManager->setPointerFocus(foundSurface, surfaceLocal);
         return;
     }
 
@@ -1937,6 +1943,46 @@ CPointerConstraintController& CInputManager::pointerConstraints() {
 
 bool CInputManager::hasHeldButtons() {
     return !m_currentlyHeldButtons.empty();
+}
+
+bool CInputManager::clickVisualWindow(const PHLWINDOW& window, const Vector2D& point) {
+    if (g_pSessionLockManager->isSessionLocked() || Desktop::focusState()->window() != window || m_forcedFocus ||
+        Desktop::viewState()->query().forceFocus().runWindow() || hasHeldButtons() || !getKeysFromAllKBs().empty() ||
+        g_pSeatManager->m_seatGrab || PROTO::data->dndActive() || PROTO::inputCapture->isCaptured() ||
+        g_layoutManager->dragController()->target() || isConstrained() || isLocked() || Pointer::mgr()->hasTransformers())
+        return false;
+
+    const auto monitor = State::monitorState()->query().vec(point).run();
+    if (!monitor || !monitor->logicalBox().containsPoint(point))
+        return false;
+    for (const auto layer : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP}) {
+        for (const auto& surface : monitor->m_layerSurfaceLayers[layer]) {
+            if (surface && surface->mapped() && (surface->m_geometry.containsPoint(point) ||
+                surface->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT).containsPoint(point)))
+                return false;
+        }
+    }
+
+    const auto time = Time::millis(Time::steadyNow());
+    SVisualHit hit;
+    mouseMoveUnified(time, false, false, point, true, &hit);
+    if (hit.window != window || !hit.surface || !hit.surface->m_mapped ||
+        hit.surface->client() != window->wlSurface()->resource()->client() ||
+        !CBox{{}, hit.surface->m_current.size}.containsPoint(hit.local) ||
+        (!hit.surface->m_current.inputIsInfinite && !hit.surface->m_current.input.containsPoint(hit.local)))
+        return false;
+
+    Pointer::mgr()->warpTo(point);
+    if (Pointer::mgr()->untransformedPosition() != point)
+        return false;
+    g_pSeatManager->setPointerFocus(hit.surface, hit.local);
+    if (g_pSeatManager->m_state.pointerFocus != hit.surface || !g_pSeatManager->m_state.pointerFocusResource)
+        return false;
+    g_pSeatManager->sendPointerMotion(time, hit.local);
+    g_pSeatManager->sendPointerButton(time, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+    g_pSeatManager->sendPointerButton(time, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+    g_pSeatManager->sendPointerFrame();
+    return true;
 }
 
 void CInputManager::updateCapabilities() {

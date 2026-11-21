@@ -826,7 +826,7 @@ pub const CATALOG: &[CapMeta] = &[
         Verb::DESKTOP_WINDOW,
         ScopeKind::Name,
         LocalizedStr::new("Control desktop windows"),
-        LocalizedStr::new("Focus, close, or restart application windows through the compositor."),
+        LocalizedStr::new("Focus, close, or restart application windows. An exact visual window approval also permits screenshots for the selected model and left-clicks in that window for the task."),
         "🗔",
         Risk::High,
     ),

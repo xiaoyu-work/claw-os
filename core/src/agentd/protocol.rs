@@ -29,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -63,6 +63,7 @@ pub const ROUTE_RECEIPT: &str = "receipt";
 pub const ROUTE_MONETARY_BUDGET: &str = "monetary_budget";
 pub const ROUTE_CONTEXT: &str = "context";
 pub const ROUTE_BACKGROUND_DELEGATION: &str = "background_delegation";
+pub const ROUTE_DESKTOP_VISUAL: &str = "desktop_visual";
 
 /// The complete route surface a worker grant may carry, all bound to one task.
 pub const WORKER_ROUTES: &[&str] = &[
@@ -78,6 +79,7 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_MONETARY_BUDGET,
     ROUTE_CONTEXT,
     ROUTE_BACKGROUND_DELEGATION,
+    ROUTE_DESKTOP_VISUAL,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
@@ -143,6 +145,10 @@ pub enum BrokerFrame {
     BackgroundDelegationReply {
         correlation_id: u64,
         reply: BackgroundDelegationReply,
+    },
+    DesktopVisualReply {
+        correlation_id: u64,
+        reply: crate::agent::tools::desktop_vision::Reply,
     },
 }
 
@@ -481,6 +487,11 @@ pub enum WorkerFrame {
         correlation_id: u64,
         brief: String,
     },
+    DesktopVisual {
+        task_id: String,
+        correlation_id: u64,
+        operation: crate::agent::tools::desktop_vision::Operation,
+    },
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -501,6 +512,7 @@ impl WorkerFrame {
             WorkerFrame::MonetaryBudget(_) => ROUTE_MONETARY_BUDGET,
             WorkerFrame::Context(_) => ROUTE_CONTEXT,
             WorkerFrame::BackgroundDelegation { .. } => ROUTE_BACKGROUND_DELEGATION,
+            WorkerFrame::DesktopVisual { .. } => ROUTE_DESKTOP_VISUAL,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -520,6 +532,7 @@ impl WorkerFrame {
             | WorkerFrame::Heartbeat { task_id }
             | WorkerFrame::Approval { task_id, .. }
             | WorkerFrame::BackgroundDelegation { task_id, .. }
+            | WorkerFrame::DesktopVisual { task_id, .. }
             | WorkerFrame::Result { task_id, .. } => Some(task_id.as_str()),
         }
     }

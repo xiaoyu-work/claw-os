@@ -21,6 +21,9 @@
 #include <vector>
 
 namespace Claw {
+    std::string desktopVisual(const ClawDesktopRequest& request, const PHLWINDOW& window);
+    bool visualReady(const PHLWINDOW& window);
+
     static bool watching = false;
 
     struct SGeometry {
@@ -172,6 +175,8 @@ namespace Claw {
         };
         if (Desktop::focusState()->isWindowActive(window))
             result.states.emplace_back("activated");
+        if (visualReady(window))
+            result.states.emplace_back("visual-ready");
         if (Fullscreen::controller()->isFullscreen(window)) {
             result.states.emplace_back(Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN ? "fullscreen" : "maximized");
         }
@@ -214,6 +219,8 @@ namespace Claw {
             applied(Action::toggleSpecial(special == workspaces.end() ? nullptr : *special));
         } else {
             const auto selected = std::ranges::find_if(windows, [&](const auto& window) { return managed(window) && window->metadata().stableID() == request.identifier; });
+            if (request.kind == CLAW_DESKTOP_VISUAL_CAPTURE || request.kind == CLAW_DESKTOP_VISUAL_CLICK)
+                return desktopVisual(request, selected == windows.end() ? nullptr : *selected);
             if (selected == windows.end()) {
                 result.ok    = false;
                 result.error = "desktop window is unavailable";

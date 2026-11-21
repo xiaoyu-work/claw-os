@@ -48,6 +48,11 @@ is refused, independently of drag-and-drop and window rendering.
 `Desktop.cpp` handles the closed Root list/observe/focus/close operations
 against native stable window IDs. On native window, workspace and output
 events it marks the view as changed, without opening a second socket.
+`DesktopVision.cpp` uses that same channel to capture the exact foreground
+window in an isolated GL framebuffer. On click it re-renders the crop,
+checks the window and frame, then uses the compositor's normal hit test
+before delivering one button pair to the target surface. No temporary
+capture file or global input interface is created.
 Neither the App nor the Agent receives a raw
 Hyprland control socket. The existing display supervisor forwards authenticated
 response descriptors without interpreting them as grants. The

@@ -415,6 +415,7 @@ fn every_source_kind_is_produced_by_a_real_builder() {
     from_replay(&mut observed);
     from_root_policy(&mut observed);
     from_workspace_context(&mut observed);
+    record(&mut observed, crate::agent::tools::desktop_vision::frame_label(HOSTILE));
     record(&mut observed,crate::triggers::work::handoff_segment(HOSTILE,None).unwrap());
 
     let missing: Vec<_> = SourceKind::ALL

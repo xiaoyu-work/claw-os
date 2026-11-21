@@ -639,7 +639,7 @@ impl Authority {
         Ok(pending.selection.take().ok_or(Error::Identity)?.payload)
     }
 
-    pub fn take_desktop(&mut self, serial: u64) -> Result<DesktopCommand, Error> {
+    pub fn take_desktop(&mut self, serial: u64) -> Result<(DesktopCommand, u64), Error> {
         let active = self.link.binding().active()?;
         let pending = self
             .pending
@@ -654,6 +654,7 @@ impl Authority {
         pending
             .command
             .take()
+            .map(|command| (command, pending.expires_ms))
             .ok_or(Error::Protocol("desktop command was already dispatched"))
     }
 

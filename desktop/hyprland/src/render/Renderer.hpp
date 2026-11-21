@@ -119,6 +119,7 @@ namespace Render {
         bool                            isMgpu();
         void                            addWindowToRenderUnfocused(PHLWINDOW window);
         SP<IFramebuffer>                makeSnapshotFB(PHLWINDOW);
+        SP<IFramebuffer>                renderVisualWindow(PHLWINDOW, PHLMONITOR, const Vector2D& pixels);
         SP<IFramebuffer>                makeSnapshotFB(PHLWINDOW, eSceneMode mode);
         SP<IFramebuffer>                makeSnapshotFB(PHLLS);
         SP<IFramebuffer>                makeSnapshotFB(WP<Desktop::View::CPopup>);

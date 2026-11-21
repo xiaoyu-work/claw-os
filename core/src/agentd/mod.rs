@@ -91,6 +91,8 @@ mod context;
 #[cfg(unix)]
 mod receipts;
 #[cfg(unix)]
+mod visual;
+#[cfg(unix)]
 pub mod spawn;
 #[cfg(unix)]
 pub mod supervisor;

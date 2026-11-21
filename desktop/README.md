@@ -15,3 +15,4 @@ toolkit without requiring the previous shell.
 - [Build an Azure image](../docs/building-azure.md)
 - [Source origins and licenses](PROVENANCE.md)
 - [Installed login and updates](../core/src/display_session/MODULE.md)
+- [Agent visual window control](../docs/desktop-vision.md)
