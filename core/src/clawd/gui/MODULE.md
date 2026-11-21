@@ -27,17 +27,27 @@ presentation and current-display lock, plus supported optional device controls.
 It still checks App denials, package trust and instance lifetime. It grants no
 power, App-launch or Agent capability. The signed system menu dispatches an
 explicit owner click through its private endpoint, pinned display and exact
-signed launch target or logind provider. The default vendor-signed `claw-launcher`
-window started by that supervisor may submit a selected signed desktop entry
+launch target or logind provider. The default vendor-signed `claw-launcher`
+window started by that supervisor may submit a selected desktop entry
 through the same gate; it cannot start the Agent, issue power actions, or
-spawn itself. Its overlay still requires its own `ui.panel` admission. Other
-GUIs retain exact per-action reviews; sleep still requires an acknowledged
-native lock.
+spawn itself. Its overlay still requires its own `ui.panel` admission.
+Selections owned by a Claw App always require its verified signed target.
+An ordinary Linux desktop entry selected by either system launcher goes to
+the same display supervisor as an entry ID only. It receives no App session,
+managed capabilities or privileged process environment. Other GUIs retain
+exact per-action reviews for signed Apps only; sleep still requires an
+acknowledged native lock.
 
 The OS-started Settings instance can request closed machine settings actions
 through `gui.system-settings`. No other GUI, Agent or ordinary broker endpoint
 can dispatch them. Root resolves the active local desktop and uses fresh
-administrator authentication for boot-login changes and update mutations.
+administrator authentication for account changes, boot-login changes and
+update mutations. Account passwords travel only over the private request and
+helper stdin, not in CLI arguments or audit fields. They are handled by the
+system password policy, separate from the administrator's polkit challenge.
+The Users list authenticates Debian's system bus by the kernel credentials of
+the connected socket. It still checks the exact Root-owned AccountsService
+owner for account details.
 The [Desktop updater](../../../../docs/updating.md#system-updates-in-settings)
 owns the APT transaction outside the GUI and `clawd` lifetimes.
 

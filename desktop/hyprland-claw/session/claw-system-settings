@@ -1,10 +1,12 @@
 #!/usr/bin/python3 -I
 """Administrator authentication for closed actions from the system Settings GUI."""
 
+import grp
 import json
 import os
 from pathlib import Path
 import pwd
+import re
 import subprocess
 import sys
 
@@ -14,6 +16,7 @@ from gi.repository import Gio, GLib
 LOGIN = "/usr/libexec/claw-desktop-login"
 UPDATES = "/usr/libexec/claw-os-updates"
 SERVICE = "org.freedesktop.login1"
+ACCOUNT_ACTIONS = {"create-user", "set-user-password"}
 
 
 def run(*command):
@@ -78,6 +81,75 @@ def status(uid, queued=False):
     print(json.dumps(state))
 
 
+def account_request(action):
+    raw = sys.stdin.buffer.read(4097)
+    if len(raw) > 4096:
+        raise ValueError("Invalid account request")
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise ValueError("Invalid account request") from None
+    if not isinstance(data, dict) or set(data) != {"user", "full_name", "administrator", "uid", "password"}:
+        raise ValueError("Invalid account request")
+    name, password = data["user"], data["password"]
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", name):
+        raise ValueError("Invalid username")
+    if (not isinstance(password, str) or not 0 < len(password.encode()) <= 256
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in password)):
+        raise ValueError("Enter a non-empty password of up to 256 bytes")
+    uid, full_name, admin = data["uid"], data["full_name"], data["administrator"]
+    if action == "create-user":
+        if (uid is not None or type(admin) is not bool or not isinstance(full_name, str)
+                or len(full_name) > 128
+                or any(char in ":," or ord(char) < 32 or 127 <= ord(char) <= 159 for char in full_name)):
+            raise ValueError("Invalid new user details")
+    elif type(uid) is not int or not 1000 <= uid < 60000 or full_name is not None or admin is not None:
+        raise ValueError("Invalid password reset target")
+    return data
+
+
+def local_account(name):
+    return next((int(fields[2]) for line in Path("/etc/passwd").read_text().splitlines()
+                 if (fields := line.split(":"))[0] == name), None)
+
+
+def manage_account(action, data):
+    name = data["user"]
+    if action == "create-user":
+        home = f"/home/{name}"
+        if os.path.lexists(home) or any(row.pw_name == name for row in pwd.getpwall()):
+            raise ValueError("That username or home directory already exists")
+        groups = ["claw-desktop-users"]
+        if data["administrator"]:
+            groups.append("sudo")
+        for group in groups:
+            grp.getgrnam(group)
+        run("/usr/sbin/useradd", "--create-home", "--user-group", "--home-dir", home,
+            "--shell", "/bin/bash", "--comment", data["full_name"],
+            "--groups", ",".join(groups), "-K", "HOME_MODE=0700",
+            "-K", "UID_MIN=1000", "-K", "UID_MAX=59999", "--", name)
+        uid = local_account(name)
+        if uid is None or not 1000 <= uid < 60000 or pwd.getpwnam(name).pw_dir != home:
+            raise ValueError("Account was created but could not be verified; refresh Users")
+    else:
+        uid = data["uid"]
+        if local_account(name) != uid:
+            raise ValueError("The selected local account changed; refresh Users")
+    # PAM receives only the new user's password; the admin password is handled by polkit.
+    try:
+        subprocess.run(
+            ["/usr/sbin/chpasswd"], input=f"{name}:{data.pop('password')}\n".encode(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        message = ("The account was created but its password was not confirmed. Refresh Users."
+                   if action == "create-user" else "The password was not confirmed. Check the password policy.")
+        raise ValueError(message) from None
+    if local_account(name) != uid:
+        raise ValueError("The password outcome could not be verified; refresh Users")
+    print(json.dumps({"action": action, "status": "applied", "user": name, "uid": uid}))
+
+
 def main(action, uid):
     jobs = {"check-updates": "check", "prepare-updates": "prepare"}
     update_actions = {
@@ -92,17 +164,22 @@ def main(action, uid):
     if action == "status":
         status(uid)
         return
-    if action not in {*jobs, *update_actions, "restart-for-updates", "enable-automatic-login",
+    if action not in {*jobs, *update_actions, *ACCOUNT_ACTIONS, "restart-for-updates", "enable-automatic-login",
                        "disable-automatic-login"}:
         raise ValueError("Invalid system settings action")
+    account = account_request(action) if action in ACCOUNT_ACTIONS else None
     bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
     session = active_session(bus, uid)
     if action != "check-updates":
-        policy = "automatic-login" if action.endswith("-automatic-login") else "system-updates"
+        policy = ("accounts" if account is not None else
+                  "automatic-login" if action.endswith("-automatic-login") else "system-updates")
         authorize(uid, session, policy)
         if active_session(bus, uid) != session:
             raise PermissionError("The desktop session changed")
-    if action in jobs:
+    if account is not None:
+        manage_account(action, account)
+        return
+    elif action in jobs:
         run("/usr/bin/systemctl", "start", "--no-block",
             f"claw-os-update-{jobs[action]}.service")
     elif action in update_actions:

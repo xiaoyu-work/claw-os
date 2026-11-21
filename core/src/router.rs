@@ -1350,9 +1350,13 @@ fn dispatch_with_stdin_impl(
         };
         let session = env::var("COS_SESSION")
             .map_err(|_| "machine settings require the OS-started Settings window")?;
-        let value = request_gui_resource(
-            Command::GuiSystemSettings, json!({"session": session, "action": action}),
-        )?;
+        let mut params = if action == "--request-stdin" {
+            parse_internal_request_object(stdin_data.as_deref(), 4096, "account settings")?
+        } else {
+            json!({"action": action}).as_object().unwrap().clone()
+        };
+        params.insert("session".into(), json!(session));
+        let value = request_gui_resource(Command::GuiSystemSettings, Value::Object(params))?;
         return Ok(Some(value.to_string()));
     }
 

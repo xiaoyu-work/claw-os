@@ -84,6 +84,8 @@ pub enum SystemSettingsAction {
     EnableAutomaticRestart,
     DisableAutomaticRestart,
     RestartForUpdates,
+    CreateUser,
+    SetUserPassword,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +93,24 @@ pub enum SystemSettingsAction {
 pub struct SystemSettings {
     pub session: Token,
     pub action: SystemSettingsAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<SystemSettingsAccount>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemSettingsAccount {
+    pub user: Text<32>,
+    pub password: Text<256>,
+    pub full_name: Option<Text<512>>,
+    pub administrator: Option<bool>,
+    pub uid: Option<u32>,
+}
+
+impl std::fmt::Debug for SystemSettingsAccount {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SystemSettingsAccount([redacted])")
+    }
 }
 
 pub use crate::clawd::desktop_preferences::Request as DesktopPreferencesControl;

@@ -23,4 +23,14 @@
       <allow_active>auth_admin</allow_active>
     </defaults>
   </action>
+  <action id="org.clawos.desktop.accounts">
+    <description>Manage local user passwords and accounts</description>
+    <message>Administrator authentication is required to change local user accounts</message>
+    <message xml:lang="zh-CN">更改本地用户账号需要管理员验证</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
 </policyconfig>

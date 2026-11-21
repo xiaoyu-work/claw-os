@@ -78,10 +78,16 @@ On Desktop, Claw's User Manager gives new users the supplemental
 additional ACL admits the desktop App lifecycle and a closed set of providers;
 normal Root/owner/App checks still apply. Machine settings require the exact
 OS-started Settings instance and a separate administrator decision.
+Settings Users can create a standard or administrator account with a
+password, or reset the password of a selected local account. The OS keeps
+that input out of the App credential store and process arguments.
 The wizard keeps its glass panels. The greeter and the in-session locker use
 the original Claw wallpaper full-screen, with a large clock at the top and the
 account and password at the bottom. Cage and Qt Quick render the pre-login UI
 in software; the authenticated desktop retains its normal graphics backend.
+Before greetd starts, the OS hides the text cursor on its configured graphics
+VT only. Mode changes can still briefly blank the display; the login PAM path
+and the ordinary text consoles keep their normal behavior.
 The wizard skips network setup when already connected and leaves display
 mode, scaling and taskbar layout to the defaults. The first owner chooses an
 installed language and a real time zone; the setup helper validates and saves

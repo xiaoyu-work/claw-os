@@ -26,6 +26,15 @@ const MIN_MANAGED_ID: u32 = 1000;
 const MAX_MANAGED_ID: u32 = 60000;
 static USER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
+pub(super) async fn lock_mutations() -> Result<tokio::sync::MutexGuard<'static, ()>, BrokerError> {
+    tokio::time::timeout(
+        LOCK_TIMEOUT,
+        USER_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
+    )
+    .await
+    .map_err(|_| BrokerError::unavailable("identity provider is busy; no change was dispatched"))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct UserRecord {
     name: String,
@@ -459,12 +468,7 @@ async fn account_apply(
             "identity actions require root clawd",
         ));
     }
-    let _guard = tokio::time::timeout(
-        LOCK_TIMEOUT,
-        USER_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
-    )
-    .await
-    .map_err(|_| BrokerError::unavailable("identity provider is busy; no change was dispatched"))?;
+    let _guard = lock_mutations().await?;
     authority
         .ensure_current()
         .map_err(BrokerError::authorization)?;
@@ -593,25 +597,21 @@ struct AccountsBackend {
 impl AccountsBackend {
     async fn system() -> Result<Self, BrokerError> {
         let connection = account_before("connect system bus", async {
-            zbus::connection::Builder::address("unix:path=/run/dbus/system_bus_socket")?
-                .build()
-                .await
+            let stream = tokio::net::UnixStream::connect("/run/dbus/system_bus_socket").await?;
+            // Debian's systemd listener is Root-owned even when dbus-daemon
+            // drops to messagebus. Authenticate the actual connected socket.
+            if stream.peer_cred()?.uid() != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "identity provider requires the root-owned system bus listener",
+                ).into());
+            }
+            zbus::connection::Builder::unix_stream(stream).build().await
         })
         .await?;
         let bus = zbus::fdo::DBusProxy::new(&connection)
             .await
             .map_err(account_unavailable)?;
-        let bus_uid = account_before("authenticate system bus", async {
-            bus.get_connection_unix_user(zbus::names::BusName::try_from("org.freedesktop.DBus")?)
-                .await
-                .map_err(Into::into)
-        })
-        .await?;
-        if bus_uid != 0 {
-            return Err(BrokerError::unavailable(
-                "identity provider requires the root-owned system bus",
-            ));
-        }
         let name = zbus::names::WellKnownName::try_from("org.freedesktop.Accounts")
             .map_err(account_unavailable)?;
         let service = account_before("identify AccountsService", async {

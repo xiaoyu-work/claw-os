@@ -218,7 +218,7 @@ pub(super) fn owner_settings_cap(cap: &Cap) -> bool {
     match (cap.verb, &cap.scope) {
         (Verb::SYS_PERMISSIONS, Scope::Name(name)) => name == "manage",
         (Verb::SYS_OBSERVE, Scope::Name(name)) => matches!(name.as_str(),
-            "regional" | "accessibility" | "audio" | "display" | "network" | "bluetooth" | "bluetooth.service" | "power"),
+            "identities" | "regional" | "accessibility" | "audio" | "display" | "network" | "bluetooth" | "bluetooth.service" | "power"),
         (Verb::IPC_SUBSCRIBE | Verb::IPC_INVOKE, Scope::Name(name)) => matches!(name.as_str(),
             "desktop.power.profile" | "desktop.preferences.compositor" | "desktop.preferences.keyboard-catalog"
             | "desktop.preferences.workspaces" | "desktop.preferences.appearance" | "desktop.preferences.panels"
