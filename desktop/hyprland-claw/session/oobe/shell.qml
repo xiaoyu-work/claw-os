@@ -39,11 +39,11 @@ ShellRoot {
         language: [qsTr("Select a language"), qsTr("Choose the language your system will use."), languagePage],
         keyboard: [qsTr("Select keyboard layout"), qsTr("This layout takes effect in your desktop session. Setup and sign-in use the current system keyboard."), keyboardPage],
         agent: [qsTr("Configure your Agent"), qsTr("Connect a model provider now, or set it up later."), modelPage],
-        account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Claw OS."), accountPage],
+        account: [qsTr("Create your account"), qsTr("You'll use this account and password to sign in to Yu OS."), accountPage],
         location: [qsTr("Select a time zone"), qsTr("Choose the time zone where you use this computer."), locationPage],
         appearance: [qsTr("Personalize appearance"), qsTr("Preview a light or dark look and set the preference for your apps."), appearancePage],
-        drivers: [qsTr("Set up graphics and hardware"), qsTr("Claw OS installs only the additional packages that match this computer."), driverPage],
-        finish: [qsTr("You're ready"), qsTr("Finish setup to open your Claw OS desktop."), finishPage]
+        drivers: [qsTr("Set up graphics and hardware"), qsTr("Yu OS installs only the additional packages that match this computer."), driverPage],
+        finish: [qsTr("You're ready"), qsTr("Finish setup to open your Yu OS desktop."), finishPage]
     })
     readonly property var steps: {
         const order = local
@@ -174,7 +174,7 @@ ShellRoot {
 
     Controls.ApplicationWindow {
         id: window
-        title: qsTr("Set up Claw OS")
+        title: qsTr("Set up Yu OS")
         flags: Qt.FramelessWindowHint
         visibility: Window.FullScreen
         width: 1100
@@ -204,7 +204,7 @@ ShellRoot {
                     BrandMark {}
                     ColumnLayout {
                         spacing: 1
-                        Label { text: "Claw OS"; font.pixelSize: 19; font.weight: Font.DemiBold }
+                        Label { text: "Yu OS"; font.pixelSize: 19; font.weight: Font.DemiBold }
                         Label { text: qsTr("First-run setup"); color: theme.muted; font.pixelSize: 12 }
                     }
                     Item { Layout.fillWidth: true }
@@ -679,7 +679,7 @@ ShellRoot {
                     if (setup.state.driverState === "installing")
                         return qsTr("Downloading and installing the matched packages…");
                     if (setup.state.driverState === "failed")
-                        return qsTr("Installation didn't finish. Claw OS will retry on a new connection.");
+                        return qsTr("Installation didn't finish. Yu OS will retry on a new connection.");
                     return qsTr("Waiting for the driver installer…");
                 }
             }

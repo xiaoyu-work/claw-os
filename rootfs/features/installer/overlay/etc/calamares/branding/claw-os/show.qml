@@ -15,7 +15,7 @@ Presentation {
     Slide {
         Text {
             anchors.centerIn: parent
-            text: "Installing Claw OS..."
+            text: "Installing Yu OS..."
             wrapMode: Text.WordWrap
             width: parent.width
             horizontalAlignment: Text.Center
@@ -25,7 +25,7 @@ Presentation {
     Slide {
         Text {
             anchors.centerIn: parent
-            text: "Claw OS is an agent-native operating system.\n\nThe `cos` supervisor is a single Rust binary that orchestrates apps, skills, and a built-in browser engine."
+            text: "Yu OS is an agent-native operating system.\n\nThe `cos` supervisor is a single Rust binary that orchestrates apps, skills, and a built-in browser engine."
             wrapMode: Text.WordWrap
             width: parent.width
             horizontalAlignment: Text.Center
@@ -35,7 +35,7 @@ Presentation {
     Slide {
         Text {
             anchors.centerIn: parent
-            text: "After install, run:\n\n  sudo apt update && sudo apt upgrade\n\nto pick up newer Claw OS releases from the official apt repository."
+            text: "After install, run:\n\n  sudo apt update && sudo apt upgrade\n\nto pick up newer Yu OS releases from the official apt repository."
             wrapMode: Text.WordWrap
             width: parent.width
             horizontalAlignment: Text.Center

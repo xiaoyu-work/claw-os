@@ -1,5 +1,5 @@
 [Unit]
-Description=Download checked Claw OS updates
+Description=Download checked Yu OS updates
 After=network-online.target
 
 [Service]

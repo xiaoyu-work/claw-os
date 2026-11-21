@@ -151,8 +151,8 @@ export function AppStorePage() {
 
   return <div className="flex h-full flex-col overflow-y-auto p-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h1 className="text-xl font-semibold">App Store</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Claw Apps you can use in this browser. Find Linux software in the desktop App Store.</p></div>
+      <div><h1 className="text-xl font-semibold">Yu OS Store</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Yu Apps you can use in this browser. Find Linux software in the desktop Yu OS Store.</p></div>
       <Button variant="outline" disabled={loading || !!busy} onClick={() => void load()}>
         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
       </Button>

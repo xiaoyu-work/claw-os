@@ -23,7 +23,7 @@ if [ -d "$FEATURE_DIR/overlay" ]; then
 fi
 branding="$ROOTFS/etc/calamares/branding/claw-os"
 install -m0644 "$PROJECT_DIR/assets/brand/clawos-icon-192.png" "$branding/logo.png"
-install -m0644 "$PROJECT_DIR/assets/brand/clawos-wordmark.png" "$branding/welcome.png"
+install -m0644 "$PROJECT_DIR/assets/brand/yuos-wordmark.svg" "$branding/welcome.svg"
 
 # 2. Mark the autostart hook + Xstartup script executable.
 chmod 755 "$ROOTFS/etc/profile.d/cos-installer.sh"

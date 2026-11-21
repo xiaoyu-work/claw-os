@@ -44,7 +44,7 @@ fi
 
 cat <<EOF
 
-Claw OS first-login setup
+Yu OS first-login setup
 
 This local VM has no default password. Set a password for the pre-created
 '$ACCOUNT' administrator account before normal login is enabled.

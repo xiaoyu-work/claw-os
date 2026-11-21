@@ -2,7 +2,7 @@
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
   "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
-  <vendor>Claw OS</vendor>
+  <vendor>Yu OS</vendor>
   <action id="org.clawos.desktop.automatic-login">
     <description>Change automatic login</description>
     <message>Administrator authentication is required to change automatic login</message>
@@ -14,9 +14,9 @@
     </defaults>
   </action>
   <action id="org.clawos.desktop.system-updates">
-    <description>Manage Claw OS updates</description>
-    <message>Administrator authentication is required to manage Claw OS updates</message>
-    <message xml:lang="zh-CN">管理 Claw OS 系统更新需要管理员验证</message>
+    <description>Manage Yu OS updates</description>
+    <message>Administrator authentication is required to manage Yu OS updates</message>
+    <message xml:lang="zh-CN">管理 Yu OS 系统更新需要管理员验证</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>

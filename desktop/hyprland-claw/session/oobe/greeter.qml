@@ -104,7 +104,7 @@ ShellRoot {
 
     Controls.ApplicationWindow {
         id: window
-        title: "Claw OS"
+        title: "Yu OS"
         visibility: Window.FullScreen
         flags: Qt.FramelessWindowHint
         color: "#101923"

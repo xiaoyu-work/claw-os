@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "ClawOS Agent — native libcosmic UI (replaces the React + WebView app)."
+description = "Yu OS Agent — native libcosmic UI (replaces the React + WebView app)."
 
 [[bin]]
 name = "cos-agent-ui"

@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Version=1.5
-Name=ClawOS Agent
+Name=Yu OS Agent
 GenericName=AI Assistant
-Comment=Chat with the ClawOS system Agent
+Comment=Chat with the Yu OS system Agent
 Exec=/usr/local/bin/cos-agent-ui
 Icon=clawos-agent
 Terminal=false

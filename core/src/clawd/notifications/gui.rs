@@ -780,7 +780,7 @@ fn present(handle: u32, entry: &Entry) -> Value {
     let record = &entry.record;
     let presentation = record.presentation.as_ref();
     json!({"kind":"present","handle":handle,"token":entry.token,"replaces":entry.replaces,
-        "app_name":presentation.map_or("Claw OS Agent", |value| value.app_name.as_str()),
+        "app_name":presentation.map_or("Yu OS Agent", |value| value.app_name.as_str()),
         "icon":presentation.map_or("com.clawos.Agent", |value| value.icon.as_str()),
         "summary":record.title,"body":record.body,
         "urgency":match record.severity { notifications::Severity::Critical | notifications::Severity::Error => 2,

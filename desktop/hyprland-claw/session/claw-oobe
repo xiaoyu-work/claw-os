@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Claw OS first-run setup and local sign-in account list."""
+"""Yu OS first-run setup and local sign-in account list."""
 
 import json
 import os

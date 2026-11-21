@@ -78,7 +78,7 @@ const NAV_ITEMS: Array<{
   href: string;
 }> = [
   { key: "apps", label: "Apps", icon: Package, href: "/apps" },
-  { key: "app-store", label: "App Store", icon: ShoppingBag, href: "/app-store" },
+  { key: "app-store", label: "Yu OS Store", icon: ShoppingBag, href: "/app-store" },
   { key: "activities", label: "Activities", icon: Target, href: "/activities" },
   { key: "workspaces", label: "Workspaces", icon: MessageSquare, href: "/workspaces" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
@@ -260,7 +260,7 @@ export function CosSidebar({ meta }: { meta: any }) {
           <div className="flex items-center gap-2">
             <Logo />
             <div className="grid leading-tight">
-              <span className="text-sm font-semibold tracking-tight">Claw OS</span>
+              <span className="text-sm font-semibold tracking-tight">Yu OS</span>
               <span className="text-[11px] text-muted-foreground">
                 {meta?.hostname || "localhost"}
               </span>

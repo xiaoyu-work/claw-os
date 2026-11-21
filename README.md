@@ -1,10 +1,10 @@
-# Claw OS
+# Yu OS
 
 <p align="center">
   <img src="assets/brand/clawos-symbol.png" alt="" width="140">
 </p>
 <p align="center">
-  <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="240">
+  <img src="assets/brand/yuos-wordmark.svg" alt="Yu OS" width="240">
 </p>
 
 <p align="center"><strong>The world’s first agent-native operating system from the future.</strong></p>
@@ -16,9 +16,9 @@
   <a href="https://github.com/xiaoyu-work/claw-os/releases"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoyu-work/claw-os?include_prereleases&style=flat-square"></a>
 </p>
 
-> **Claw OS is under active development; its architecture, APIs, and behavior may change significantly.**
+> **Yu OS is under active development; its architecture, APIs, and behavior may change significantly.**
 
-## Why Claw OS is agent-native
+## Why Yu OS is agent-native
 
 Agent-native is the whole bet: the next operating system is one where the
 assistant is not a tab you open but the layer the system runs through. Here
@@ -44,7 +44,7 @@ that means:
   yourself. It's your memory; you can review it and forget any of it, down to a
   single app.
 - **Every app can use the system's models.** Apps call the built-in model layer
-  through the Claw OS SDK, whether the model runs locally or through a configured
+  through the Yu OS SDK, whether the model runs locally or through a configured
   cloud provider. Developers can build AI-powered apps without embedding a
   model or rebuilding provider integration, credentials, consent, budgets,
   safety, and logging.
@@ -72,7 +72,7 @@ one integrated agent-native OS layer.
 Application products are developed in
 [`clawos-app`](https://github.com/xiaoyu-work/clawos-app) and composed into signed
 OS packages from an immutable source pin. Native Notifications now lives there
-with its complete UI/MCP/config/util source; Claw OS retains notification
+with its complete UI/MCP/config/util source; Yu OS retains notification
 authority, durable state and delivery. The [migration plan](docs/app-product-redesign.md)
 distinguishes source ownership from pending legacy data and visual cutovers.
 
@@ -168,7 +168,7 @@ with no default password. Then log in as `cos` with the password you just set;
 <summary><strong>Desktop / ISO / VM — experimental</strong></summary>
 
 Build a bootable desktop VM disk image and load it in VMware — see
-[Building the Claw OS Desktop Image](docs/building-desktop.md) for the steps on
+[Building the Yu OS Desktop Image](docs/building-desktop.md) for the steps on
 Windows (WSL2), macOS, and Linux.
 
 </details>
@@ -193,7 +193,7 @@ desktop builds and publishing commands.
 
 Package-level fixes to `cos`, `clawd`, bundled apps, browser automation, and
 systemd units do **not** require reinstalling the operating system or replacing
-its image. Claw OS uses the same signed APT update path across WSL, installed
+its image. Yu OS uses the same signed APT update path across WSL, installed
 desktop/VM systems, Azure instances, and long-running containers:
 
 ```bash
@@ -201,7 +201,7 @@ sudo apt update
 sudo apt full-upgrade
 ```
 
-See [Updating Claw OS](docs/updating.md) for repository checks, setup for older
+See [Updating Yu OS](docs/updating.md) for repository checks, setup for older
 images, service restart behavior, container guidance, and the exceptional cases
 that require a new image.
 
@@ -223,5 +223,5 @@ cos agent chat  # interactive REPL with cross-app memory
 
 ## License
 
-Apache-2.0 for original Claw OS components. See the [`NOTICE`](NOTICE) for
+Apache-2.0 for original Yu OS components. See the [`NOTICE`](NOTICE) for
 vendored sources and their upstream licenses.

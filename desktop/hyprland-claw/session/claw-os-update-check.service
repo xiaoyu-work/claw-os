@@ -1,5 +1,5 @@
 [Unit]
-Description=Check the signed Claw OS update channel
+Description=Check the signed Yu OS update channel
 After=network-online.target
 
 [Service]

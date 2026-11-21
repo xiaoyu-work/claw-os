@@ -1,4 +1,4 @@
-//! Native ClawOS Agent chat UI.
+//! Native Yu OS Agent chat UI.
 
 use std::env;
 use std::str::FromStr;
@@ -1375,7 +1375,7 @@ fn flags_from_arguments(parsed: cos_runtime::ask_claw::UiArguments) -> Flags {
     let activation = match parsed.activation_from_process_socket() {
         Ok(activation) => activation,
         Err(error) => {
-            eprintln!("failed to read Ask Claw activation: {error}");
+            eprintln!("failed to read Ask Yu activation: {error}");
             std::process::exit(2);
         }
     };

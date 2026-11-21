@@ -223,7 +223,7 @@ async fn post(
     ]);
     proxy
         .notify(
-            presentation.map_or("Claw OS Agent", |value| &value.app_name),
+            presentation.map_or("Yu OS Agent", |value| &value.app_name),
             replaces,
             presentation.map_or("com.clawos.Agent", |value| &value.icon),
             &notification.title,

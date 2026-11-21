@@ -1,5 +1,5 @@
 [Unit]
-Description=Claw OS screen reader
+Description=Yu OS screen reader
 PartOf=claw-desktop-session.target
 ConditionPathExists=%h/.config/cos/screen-reader
 

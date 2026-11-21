@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claw OS shell profile — sourced on agent login.
+# Yu OS shell profile — sourced on agent login.
 export COS_VERSION="0.1.0"
 # COS_HOME is the agent's writable workspace. Defaults to $HOME so each
 # user gets their own home (Linux-native); admins can override here.

@@ -27,11 +27,11 @@ CONFIRMATIONS = {
     ),
     "confirm_install": (
         "Install {name}?", "Install app",
-        "This lets Claw OS install the app. It does not grant the app permissions.",
+        "This lets Yu OS install the app. It does not grant the app permissions.",
     ),
     "confirm_update": (
         "Update {name}?", "Update app",
-        "This lets Claw OS update the app. It does not grant new permissions.",
+        "This lets Yu OS update the app. It does not grant new permissions.",
     ),
     "confirm_global_app_stop": (
         "Close all apps?", "Close all apps",
@@ -175,7 +175,7 @@ def copy_for(review, action, permission):
         if verb == "sys.power":
             summary = "This applies only to the power action you selected. Save any open work first."
         else:
-            summary = "This lets Claw OS open the selected app once. It does not grant the app permissions."
+            summary = "This lets Yu OS open the selected app once. It does not grant the app permissions."
         return requested_action or literal(permission["label"]) + "?", summary, (
             "" if requested_action else reason or literal(target)
         ), ""
@@ -211,13 +211,13 @@ class Reviews:
         style.load_from_data(STYLE)
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), style, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        self.window = Gtk.Window(title="Claw OS - Permission request")
+        self.window = Gtk.Window(title="Yu OS - Permission request")
         self.window.get_style_context().add_class("approval")
         self.window.set_default_size(510, -1)
         self.window.set_resizable(False)
         self.window.connect("delete-event", self.dismiss)
         self.window.connect("key-press-event", self.key_pressed)
-        header = Gtk.HeaderBar(title="Claw OS", subtitle="Permission request", show_close_button=True)
+        header = Gtk.HeaderBar(title="Yu OS", subtitle="Permission request", show_close_button=True)
         header.get_style_context().add_class("approval-header")
         self.queue = label("approval-count")
         header.pack_end(self.queue)

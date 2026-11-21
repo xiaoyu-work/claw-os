@@ -16,8 +16,6 @@ use crate::{App, CHAT_SCROLL_ID, EDITOR_ID, Message};
 
 static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/clawos-symbol.png");
 static SYMBOL_DARK: &[u8] = include_bytes!("../assets/clawos-symbol-dark.png");
-static WORDMARK_LIGHT: &[u8] = include_bytes!("../assets/clawos-wordmark.png");
-static WORDMARK_DARK: &[u8] = include_bytes!("../assets/clawos-wordmark-dark.png");
 
 const SIDEBAR_WIDTH: f32 = 220.0;
 
@@ -405,14 +403,7 @@ impl App {
             .spacing(spacing.space_s)
             .align_x(Alignment::Center);
         if !compact {
-            column = column.push(
-                widget::image(if Self::is_dark() {
-                    widget::image::Handle::from_bytes(WORDMARK_DARK)
-                } else {
-                    widget::image::Handle::from_bytes(WORDMARK_LIGHT)
-                })
-                .height(Length::Fixed(40.0)),
-            );
+            column = column.push(text("Yu OS").size(40.0));
         }
         column = column
             .push(

@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Claw OS
-Comment=Claw OS desktop
+Name=Yu OS
+Comment=Yu OS desktop
 Exec=/usr/local/bin/claw-display-session --desktop
 TryExec=/usr/local/bin/claw-display-session
 Type=Application

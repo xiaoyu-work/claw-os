@@ -1,5 +1,5 @@
 [Unit]
-Description=Install verified Claw OS updates before sign-in
+Description=Install verified Yu OS updates before sign-in
 DefaultDependencies=no
 Requires=sysinit.target
 After=sysinit.target local-fs.target

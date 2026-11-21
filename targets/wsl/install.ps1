@@ -42,7 +42,7 @@ if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
 }
 $wslHelp = (& wsl.exe --help 2>&1 | Out-String) -replace "`0", ""
 if ($wslHelp -notmatch "--from-file") {
-    Write-Error "Claw OS requires WSL 2.4.4 or newer. Run 'wsl --update' first."
+    Write-Error "Yu OS requires WSL 2.4.4 or newer. Run 'wsl --update' first."
     exit 1
 }
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Install pending Claw OS hardware packages
+Description=Install pending Yu OS hardware packages
 After=NetworkManager.service
 ConditionPathExists=/var/lib/cos/driver-setup/pending
 

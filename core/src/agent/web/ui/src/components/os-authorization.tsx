@@ -104,7 +104,7 @@ export function OsAuthorizationDialog({ initial, onFinished }: {
             <LockKeyhole className="h-4 w-4" /> OS authorization
           </DialogTitle>
           <DialogDescription>
-            Verify with your Claw OS account password, not your GitHub password.
+            Verify with your Yu OS account password, not your GitHub password.
             It is sent only to OS authentication, never to the Agent or saved as a credential.
           </DialogDescription>
         </DialogHeader>

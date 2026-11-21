@@ -1,8 +1,8 @@
-# ClawOS Plymouth boot splash.
+# Yu OS Plymouth boot splash.
 #
 # Plymouth's "script" module evaluates this in its tiny scripting language.
 # We avoid math features (no Math.Sin) for portability; the result is a
-# static logo centred over the ClawOS deep-indigo background, plus a row of
+# static logo centred over the Yu OS deep-indigo background, plus a row of
 # pulsing dots driven by the refresh callback.
 
 Window.SetBackgroundTopColor(0.0588, 0.0588, 0.1020);

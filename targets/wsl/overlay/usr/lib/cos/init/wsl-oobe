@@ -21,7 +21,7 @@ trap 'rollback; exit 130' INT
 trap 'rollback; exit 143' TERM
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo "error: Claw OS first-launch setup must run as root" >&2
+    echo "error: Yu OS first-launch setup must run as root" >&2
     exit 1
 fi
 
@@ -35,7 +35,7 @@ if [ -n "$existing" ]; then
             ;;
     esac
     /usr/lib/cos/init/setup-home.sh "$home"
-    echo "Claw OS account '$username' is already configured."
+    echo "Yu OS account '$username' is already configured."
     exit 0
 fi
 
@@ -45,7 +45,7 @@ if [ ! -t 0 ]; then
     exit 1
 fi
 
-echo "Create your Claw OS UNIX account."
+echo "Create your Yu OS UNIX account."
 echo "The username does not need to match your Windows username."
 echo
 
@@ -101,4 +101,4 @@ created_group=""
 trap - ERR INT TERM
 
 echo
-echo "Claw OS account '$username' is ready."
+echo "Yu OS account '$username' is ready."

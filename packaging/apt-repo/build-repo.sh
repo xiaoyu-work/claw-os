@@ -91,7 +91,7 @@ for a in "${binary_arches[@]}"; do
 done
 mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-all"
 mkdir -p "$REPO_DIR/assets/brand"
-cp "$BRAND_ASSETS_DIR/clawos-wordmark.png" \
+cp "$BRAND_ASSETS_DIR/yuos-wordmark.svg" \
    "$BRAND_ASSETS_DIR/clawos-symbol.png" \
    "$BRAND_ASSETS_DIR/clawos-favicon-64.png" \
    "$BRAND_ASSETS_DIR/clawos-icon-192.png" \

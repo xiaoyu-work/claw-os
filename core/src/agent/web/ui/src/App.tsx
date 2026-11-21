@@ -79,7 +79,7 @@ function Header() {
 }
 
 function routeTitle(route: string): string {
-  if (route.startsWith("/app-store")) return "App Store";
+  if (route.startsWith("/app-store")) return "Yu OS Store";
   if (route.startsWith("/apps")) return "Apps";
   if (route.startsWith("/workspaces")) return "Workspaces";
   if (route.startsWith("/nearby")) return "Nearby Sharing";

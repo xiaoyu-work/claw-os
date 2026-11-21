@@ -7,6 +7,6 @@
 #   - when XDG_VTNR is unset OR is "1" (covers consoles that don't set tty)
 
 if [ -z "${DISPLAY:-}" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
-    echo "Starting Claw OS installer..."
+    echo "Starting Yu OS installer..."
     exec startx /etc/cos/installer-xstartup -- vt1 >/dev/null 2>&1
 fi

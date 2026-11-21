@@ -1,6 +1,6 @@
 [Plymouth Theme]
 Name=Claw
-Description=ClawOS boot splash
+Description=Yu OS boot splash
 ModuleName=script
 
 [script]

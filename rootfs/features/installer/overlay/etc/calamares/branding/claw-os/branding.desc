@@ -1,4 +1,4 @@
-# Claw OS branding for Calamares. The installer feature supplies the images.
+# Yu OS branding for Calamares. The installer feature supplies the images.
 
 ---
 componentName:  claw-os
@@ -10,13 +10,13 @@ windowSize:         800px,520px
 windowPlacement:    center
 
 strings:
-    productName:         "Claw OS"
-    shortProductName:    "Claw OS"
+    productName:         "Yu OS"
+    shortProductName:    "Yu OS"
     version:             "0.1"
     shortVersion:        "0.1"
-    versionedName:       "Claw OS 0.1"
-    shortVersionedName:  "ClawOS 0.1"
-    bootloaderEntryName: "Claw OS"
+    versionedName:       "Yu OS 0.1"
+    shortVersionedName:  "Yu OS 0.1"
+    bootloaderEntryName: "Yu OS"
     productUrl:          "https://github.com/xiaoyu-work/claw-os"
     supportUrl:          "https://github.com/xiaoyu-work/claw-os/issues"
     releaseNotesUrl:     "https://github.com/xiaoyu-work/claw-os/releases"
@@ -25,7 +25,7 @@ strings:
 images:
     productLogo:      "logo.png"
     productIcon:      "logo.png"
-    productWelcome:   "welcome.png"
+    productWelcome:   "welcome.svg"
 
 slideshow: "show.qml"
 

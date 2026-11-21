@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Prepare and install only authenticated Claw OS packages, before user login."""
+"""Prepare and install only authenticated Yu OS packages, before user login."""
 
 from datetime import datetime, timezone
 import fcntl
@@ -88,7 +88,7 @@ def apt_options():
         entries[0] if len(entries) == 1 else "",
     )
     if not match or f"signed-by={KEY}" not in match[1].split() or not Path(KEY).is_file():
-        raise ValueError("The signed Claw OS APT channel is not configured")
+        raise ValueError("The signed Yu OS APT channel is not configured")
     source = ROOT / "channel.list"
     source.write_text(f"deb [signed-by={KEY} check-valid-until=yes] {match[2]} {match[3]} main\n")
     source.chmod(0o644)
@@ -171,7 +171,7 @@ def plan(state, options):
         ):
             raise ValueError("This update needs a separate administrator APT transaction")
     if unpack != expected:
-        raise ValueError("The APT plan changes packages outside the checked Claw OS release")
+        raise ValueError("The APT plan changes packages outside the checked Yu OS release")
     return args, expected
 
 
@@ -252,7 +252,7 @@ def other_sessions(allowed):
 
 def reboot(allowed=None):
     if not ours() or read(STATE, {}).get("phase") != "ready":
-        raise ValueError("No offline Claw OS update is ready")
+        raise ValueError("No offline Yu OS update is ready")
     if other_sessions(allowed):
         raise ValueError("Other users are signed in; restart after they have signed out")
     # systemctl would count the already-confirmed requester as another user.
@@ -298,7 +298,7 @@ def offline(state, options):
 
 def main(action, argument=None):
     if os.getuid() != 0:
-        raise PermissionError("Claw OS updates require root")
+        raise PermissionError("Yu OS updates require root")
     if action == "offline-pending":
         sys.exit(0 if ours() else 1)
     if action == "finish-offline":
@@ -355,7 +355,7 @@ def main(action, argument=None):
                     write(STATE, state)
                     raise ValueError(state["error"])
             if action == "prepare" and state.get("phase") != "available":
-                raise ValueError("Check the signed Claw OS channel before preparing updates")
+                raise ValueError("Check the signed Yu OS channel before preparing updates")
             try:
                 options = apt_options()
                 if action == "offline":
@@ -369,13 +369,13 @@ def main(action, argument=None):
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 state.update(phase="install-failed" if action == "offline" else "failed",
                              error=str(error) if isinstance(error, ValueError)
-                             else "See the Claw OS update service journal for details")
+                             else "See the Yu OS update service journal for details")
                 write(STATE, state)
                 raise
             if action == "automatic":
                 automatic_restart(settings)
         else:
-            raise ValueError("Invalid Claw OS update action")
+            raise ValueError("Invalid Yu OS update action")
 
 
 if __name__ == "__main__":

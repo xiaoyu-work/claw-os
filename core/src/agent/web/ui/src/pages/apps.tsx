@@ -21,7 +21,7 @@ export function AppsPage() {
   return <div className="h-full overflow-y-auto p-6">
     <div className="flex justify-between gap-3"><div><h1 className="text-xl font-semibold">Apps</h1>
       <p className="mt-1 text-sm text-muted-foreground">Installed Claw Web Apps. Ordinary operations do not require an AI task.</p></div>
-      <Button onClick={() => navigate("/app-store")}><ShoppingBag className="mr-2 h-4 w-4" /> App Store</Button></div>
+      <Button onClick={() => navigate("/app-store")}><ShoppingBag className="mr-2 h-4 w-4" /> Yu OS Store</Button></div>
     {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}
     {!apps && !error && <Loader2 className="mt-6 h-5 w-5 animate-spin" />}
     <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{apps?.map((app) => <Card key={app.id} className="p-4">
@@ -31,6 +31,6 @@ export function AppsPage() {
         onClick={() => navigate(`/apps/${app.id}`)}><ExternalLink className="mr-2 h-4 w-4" /> Open App</Button>
     </Card>)}</div>
     {apps?.length === 0 && <div className="mt-8 rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-      No Apps are installed. Choose a signed release in the App Store.</div>}
+      No Apps are installed. Choose a signed release in Yu OS Store.</div>}
   </div>;
 }

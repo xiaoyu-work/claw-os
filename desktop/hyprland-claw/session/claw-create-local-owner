@@ -153,7 +153,7 @@ def create_owner():
     try:
         system("systemctl", "restart", "cos-home-setup.service")
     except subprocess.SubprocessError:
-        print("Claw OS: first owner created, but checkpoint home setup did not restart", file=sys.stderr)
+        print("Yu OS: first owner created, but checkpoint home setup did not restart", file=sys.stderr)
 
 
 if __name__ == "__main__":
@@ -166,10 +166,10 @@ if __name__ == "__main__":
             "invalidPassword", "invalidAvatar", "invalidRegionalSettings", "invalidAgentSettings",
         } else "invalidInput"}))
     except subprocess.CalledProcessError as error:
-        print(f"Claw OS: {error.cmd[0]} failed during local owner setup ({error.returncode})", file=sys.stderr)
+        print(f"Yu OS: {error.cmd[0]} failed during local owner setup ({error.returncode})", file=sys.stderr)
         print('{"error":"setupFailed"}')
     except (KeyError, OSError):
-        print("Claw OS: local owner setup did not complete", file=sys.stderr)
+        print("Yu OS: local owner setup did not complete", file=sys.stderr)
         print('{"error":"setupFailed"}')
     else:
         print('{"finished":true}')

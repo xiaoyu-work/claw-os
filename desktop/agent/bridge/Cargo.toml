@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Local HTTP+SSE bridge between the ClawOS Agent UI (com.clawos.Agent) and the system Agent kernel (cos agent)."
+description = "Local HTTP+SSE bridge between the Yu OS Agent UI and the system Agent."
 
 [[bin]]
 name = "cos-agent-bridge"

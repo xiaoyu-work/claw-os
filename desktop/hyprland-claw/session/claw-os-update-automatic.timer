@@ -1,5 +1,5 @@
 [Unit]
-Description=Check daily for opted-in Claw OS updates
+Description=Check daily for opted-in Yu OS updates
 
 [Timer]
 OnCalendar=daily
