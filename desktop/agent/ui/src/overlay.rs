@@ -113,7 +113,7 @@ impl OverlayState {
             keyboard_interactivity: KeyboardInteractivity::Exclusive,
             anchor: Anchor::TOP,
             output: Default::default(),
-            namespace: "clawos-agent".into(),
+            namespace: "yuos-agent".into(),
             margin: IcedMargin {
                 top: 72,
                 ..Default::default()

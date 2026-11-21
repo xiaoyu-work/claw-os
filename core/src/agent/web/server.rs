@@ -26,8 +26,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/index.html", get(assets::index))
         .route("/favicon.ico", get(assets::favicon))
         .route("/favicon.png", get(assets::favicon))
-        .route("/clawos-symbol.png", get(assets::brand_symbol_light))
-        .route("/clawos-symbol-dark.png", get(assets::brand_symbol_dark))
+        .route("/yuos-symbol.png", get(assets::brand_symbol_light))
+        .route("/yuos-symbol-dark.png", get(assets::brand_symbol_dark))
         .route("/assets/{file}", get(assets::asset))
         .route("/app-ui/{id}/{*file}", get(routes::apps::resource))
         // JSON API.

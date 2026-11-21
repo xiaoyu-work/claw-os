@@ -58,7 +58,7 @@ test -x "$ROOTFS/usr/libexec/claw-hyprland/claw-lockscreen"
 test -x "$ROOTFS/usr/libexec/claw-greeter"
 test -x "$ROOTFS/usr/libexec/claw-create-local-owner"
 test -x "$ROOTFS/usr/libexec/claw-desktop-reviews"
-test -s "$ROOTFS/usr/share/backgrounds/claw-os/claw-default.jpg"
+test -s "$ROOTFS/usr/share/backgrounds/claw-os/yuos-default.jpg"
 test -f "$ROOTFS/etc/pam.d/claw-desktop-lock"
 shell_manifest=/usr/lib/cos/apps/desktop-shell/app.json
 test "$(chroot "$ROOTFS" dpkg-query -S "$shell_manifest")" = "claw-os-desktop: $shell_manifest"

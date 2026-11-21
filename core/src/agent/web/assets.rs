@@ -140,11 +140,11 @@ pub async fn favicon() -> Response {
 /// `assets::asset` only handles `assets/<file>`; the public-folder files
 /// need their own handlers.
 pub async fn brand_symbol_light() -> Response {
-    serve_file("clawos-symbol.png")
+    serve_file("yuos-symbol.png")
 }
 
 pub async fn brand_symbol_dark() -> Response {
-    serve_file("clawos-symbol-dark.png")
+    serve_file("yuos-symbol-dark.png")
 }
 
 /// Catch-all for `/assets/<file>` — serves hashed Vite chunks.

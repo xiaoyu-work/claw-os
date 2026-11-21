@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Request/response header used to negotiate the presentation protocol.
-pub const PROTOCOL_VERSION_HEADER: &str = "x-clawos-agent-protocol-version";
+pub const PROTOCOL_VERSION_HEADER: &str = "x-yuos-agent-protocol-version";
 /// Response header advertising the oldest protocol accepted after refusal.
-pub const PROTOCOL_MIN_VERSION_HEADER: &str = "x-clawos-agent-min-protocol-version";
+pub const PROTOCOL_MIN_VERSION_HEADER: &str = "x-yuos-agent-min-protocol-version";
 pub const CURRENT_PROTOCOL_VERSION: u16 = 4;
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 4;
 pub const CURRENT_PROTOCOL_VERSION_HEADER_VALUE: &str = "4";

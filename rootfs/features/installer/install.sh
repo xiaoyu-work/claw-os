@@ -22,7 +22,7 @@ if [ -d "$FEATURE_DIR/overlay" ]; then
     cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
 fi
 branding="$ROOTFS/etc/calamares/branding/claw-os"
-install -m0644 "$PROJECT_DIR/assets/brand/clawos-icon-192.png" "$branding/logo.png"
+install -m0644 "$PROJECT_DIR/assets/brand/yuos-icon-192.png" "$branding/logo.png"
 install -m0644 "$PROJECT_DIR/assets/brand/yuos-wordmark.svg" "$branding/welcome.svg"
 
 # 2. Mark the autostart hook + Xstartup script executable.

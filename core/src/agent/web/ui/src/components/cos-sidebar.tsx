@@ -526,12 +526,12 @@ function Logo() {
   return (
     <span className="relative grid h-7 w-7 place-items-center">
       <img
-        src="/clawos-symbol.png"
+        src="/yuos-symbol.png"
         alt=""
         className="h-6 w-6 object-contain dark:hidden"
       />
       <img
-        src="/clawos-symbol-dark.png"
+        src="/yuos-symbol-dark.png"
         alt=""
         className="hidden h-6 w-6 object-contain dark:block"
       />

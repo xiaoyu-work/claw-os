@@ -103,7 +103,7 @@ case "$component" in
             usr/share/claw-os/oobe/greeter.qml
             usr/share/claw-os/oobe/shell.qml
             usr/share/claw-os/oobe/wallpaper-blurred.jpg
-            usr/share/backgrounds/claw-os/claw-default.jpg
+            usr/share/backgrounds/claw-os/yuos-default.jpg
             usr/share/polkit-1/actions/org.yuos.local-desktop-setup.policy
             usr/share/polkit-1/rules.d/claw-local-desktop-setup.rules
             etc/xdg/hypr/hyprland.lua

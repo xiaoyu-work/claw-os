@@ -14,8 +14,8 @@ use crate::session::{ChatMessage, ChatRole, HistoryState, LocalSession, TokenUsa
 use crate::styles;
 use crate::{App, CHAT_SCROLL_ID, EDITOR_ID, Message};
 
-static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/clawos-symbol.png");
-static SYMBOL_DARK: &[u8] = include_bytes!("../assets/clawos-symbol-dark.png");
+static SYMBOL_LIGHT: &[u8] = include_bytes!("../assets/yuos-symbol.png");
+static SYMBOL_DARK: &[u8] = include_bytes!("../assets/yuos-symbol-dark.png");
 
 const SIDEBAR_WIDTH: f32 = 220.0;
 

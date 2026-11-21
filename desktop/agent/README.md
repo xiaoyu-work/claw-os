@@ -522,7 +522,7 @@ The native UI reads this file and attaches the token to every bridge request.
 
 ## Protocol compatibility
 
-Protocol v1 uses the `x-clawos-agent-protocol-version` request and response
+Protocol v1 uses the `x-yuos-agent-protocol-version` request and response
 header. Discovery also publishes `min_protocol_version` and
 `protocol_version`. Missing, malformed, or unsupported versions fail with HTTP
 426 and a typed

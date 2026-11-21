@@ -9,7 +9,7 @@ Item {
     Image {
         id: photo
         anchors.fill: parent
-        source: "file:///usr/share/backgrounds/claw-os/claw-default.jpg"
+        source: "file:///usr/share/backgrounds/claw-os/yuos-default.jpg"
         fillMode: Image.PreserveAspectCrop
         sourceSize.width: Math.min(3200, Math.max(1280, Math.ceil(width * 1.5)))
         asynchronous: true

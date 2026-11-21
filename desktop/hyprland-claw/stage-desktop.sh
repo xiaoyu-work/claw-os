@@ -124,9 +124,9 @@ done
 for file in "$project"/assets/brand/avatars/*.png; do
     install -Dm0644 "$file" "$stage/usr/share/claw-os/avatars/${file##*/}"
 done
-install -Dm0644 "$project/assets/brand/clawos-icon-192.png" "$stage/usr/share/claw-os/oobe/logo.png"
-install -Dm0644 "$project/assets/brand/wallpaper/claw-default.jpg" "$stage/usr/share/backgrounds/claw-os/claw-default.jpg"
-install -Dm0644 "$project/assets/brand/wallpaper/claw-default-blurred.jpg" "$stage/usr/share/claw-os/oobe/wallpaper-blurred.jpg"
+install -Dm0644 "$project/assets/brand/yuos-icon-192.png" "$stage/usr/share/claw-os/oobe/logo.png"
+install -Dm0644 "$project/assets/brand/wallpaper/yuos-default.jpg" "$stage/usr/share/backgrounds/claw-os/yuos-default.jpg"
+install -Dm0644 "$project/assets/brand/wallpaper/yuos-default-blurred.jpg" "$stage/usr/share/claw-os/oobe/wallpaper-blurred.jpg"
 install -Dm0644 "$project/assets/brand/wallpaper/NOTICE" "$license/wallpaper.NOTICE"
 install -Dm0644 "$project/assets/brand/wallpaper/LICENSE" "$license/wallpaper.LICENSE"
 install -Dm0644 "$session/claw-driver-online.service" "$stage/usr/lib/systemd/system/claw-driver-online.service"

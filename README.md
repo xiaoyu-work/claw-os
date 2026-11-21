@@ -1,7 +1,7 @@
 # Yu OS
 
 <p align="center">
-  <img src="assets/brand/clawos-symbol.png" alt="" width="140">
+  <img src="assets/brand/yuos-symbol.png" alt="" width="140">
 </p>
 <p align="center">
   <img src="assets/brand/yuos-wordmark.svg" alt="Yu OS" width="240">

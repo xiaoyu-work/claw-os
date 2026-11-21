@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT = REPO_ROOT / "assets" / "brand" / "og.png"
-SYMBOL = REPO_ROOT / "assets" / "brand" / "clawos-symbol.png"
+SYMBOL = REPO_ROOT / "assets" / "brand" / "yuos-symbol.png"
 
 W, H = 1200, 630
 MARGIN = 80

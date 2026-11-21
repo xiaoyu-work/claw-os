@@ -292,8 +292,8 @@ pub async fn require_token(
         "/" | "/index.html"
             | "/favicon.ico"
             | "/favicon.png"
-            | "/clawos-symbol.png"
-            | "/clawos-symbol-dark.png"
+            | "/yuos-symbol.png"
+            | "/yuos-symbol-dark.png"
             | "/apple-touch-icon.png"
     ) || path.starts_with("/assets/")
         || path.starts_with("/app-ui/")
