@@ -255,7 +255,14 @@ def reboot(allowed=None):
         raise ValueError("No offline Claw OS update is ready")
     if other_sessions(allowed):
         raise ValueError("Other users are signed in; restart after they have signed out")
-    run("/usr/bin/systemctl", "--check-inhibitors=yes", "--no-block", "reboot", timeout=8)
+    # systemctl would count the already-confirmed requester as another user.
+    # Flag 1 keeps logind's inhibitor check in force for the Root service.
+    try:
+        run("/usr/bin/busctl", "--system", "--timeout=8s", "--allow-interactive-authorization=no",
+            "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager", "RebootWithFlags", "t", "1", timeout=10)
+    except subprocess.CalledProcessError:
+        raise ValueError("The system blocked the restart. Check for apps preventing restart.") from None
 
 
 def automatic_restart(settings):

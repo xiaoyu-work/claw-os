@@ -975,6 +975,8 @@ Claw OS packages with newer versions, including any administrator holds.
 **Download and prepare** asks for administrator authentication, downloads the
 checked versions, and schedules installation at the next restart. Use
 **Restart and install** after saving your work, or **Cancel scheduled install**.
+The restart allows the authenticated requester, but not other signed-in
+sessions, and still respects systemd-logind inhibitors.
 The offline service runs before sign-in, verifies the result, and reboots
 normally. An interrupted package transaction is not replayed unattended.
 Removing the Desktop package cancels its pending offline install.
